@@ -27,7 +27,7 @@ qrcode = { version = "0.14", default-features = false }
 # Free disk space for the status feed.
 fs4 = { version = "1", default-features = false, features = ["sync"] }
 # Pairing codes and tokens.
-getrandom = "0.3"
+getrandom = "0.4"
 # The PC's name.
 gethostname = "1"
 # The remote mix stream's codec (pure Rust, no C toolchain).

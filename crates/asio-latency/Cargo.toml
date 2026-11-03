@@ -16,7 +16,7 @@ asio = ["dep:asio-sys"]
 # The one copy of the SDK's `asio.lib` (with the driver state cpal's ASIO host loads): the same
 # asio-sys cpal uses (Cargo unifies 0.2.x to one version). The shim links against it.
 [target.'cfg(windows)'.dependencies]
-asio-sys = { version = "0.2.6", optional = true }
+asio-sys = { version = "0.4.0", optional = true }
 
 [build-dependencies]
 cc = "1"
