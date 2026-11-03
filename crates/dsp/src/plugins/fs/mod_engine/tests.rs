@@ -706,6 +706,14 @@ fn link_want(depth: f32) -> f32 {
     0.9 + (0.4 - 0.9) * link_weight(depth)
 }
 
+/// Level is `link_want(depth)` to within a few ULPs: the engine's `powf` runs at run time, the
+/// one in these tests may be constant-folded, and the two differ in the last bit on some
+/// platforms (macOS).
+fn assert_level(s: &ModEngine, depth: f32, what: &str) {
+    let (got, want) = (s.param("level"), link_want(depth));
+    assert!(got.is_some_and(|l| (l - want).abs() <= 1e-6), "{what}: level {got:?}, want {want}");
+}
+
 fn linked() -> ModEngine {
     let mut s = prepared();
     s.set_param("link", 1.0);
@@ -723,14 +731,14 @@ fn automated_depth_moves_level_as_the_command_path_does() {
     for depth in [0.9f32, 0.2, 0.65] {
         s.set_param("depth", depth);
         link_block(&mut s);
-        assert_eq!(s.param("level"), Some(link_want(depth)), "depth {depth}");
+        assert_level(&s, depth, &format!("depth {depth}"));
         assert!(s.engine().smoothers().0.iter().all(|v| v.is_finite()));
     }
     // Link off: Level stays.
     s.set_param("link", 0.0);
     s.set_param("depth", 0.1);
     link_block(&mut s);
-    assert_eq!(s.param("level"), Some(link_want(0.65)));
+    assert_level(&s, 0.65, "Link off");
 }
 
 #[test]
@@ -749,7 +757,7 @@ fn a_level_lane_or_a_host_level_wins_over_link() {
     assert_eq!(s.param("level"), Some(0.33), "a Level sent with the Depth wins that block");
     s.set_param("depth", 0.8);
     link_block(&mut s);
-    assert_eq!(s.param("level"), Some(link_want(0.8)), "then Link follows Depth again");
+    assert_level(&s, 0.8, "then Link follows Depth again");
 }
 
 #[test]
@@ -770,7 +778,7 @@ fn a_reset_keeps_the_stored_level_unless_a_listened_lane_drives_link() {
     s.set_param("depth", 0.85);
     s.reset();
     link_block(&mut s);
-    assert_eq!(s.param("level"), Some(link_want(0.85)));
+    assert_level(&s, 0.85, "level");
     // And the Level smoother starts at that Level: no glide after the reset.
     let (got, want) = s.engine().smoothers();
     assert_eq!(got[6], want[6]);

@@ -29,8 +29,9 @@ description: |-
 overrides:
   deb:
     depends:
-      - libc6 (>= 2.35)
+      - libc6 (>= 2.39)
       - libgcc-s1
+      - libstdc++6 (>= 13)
       - libasound2 | libasound2t64
       - libxkbcommon0
       - libvulkan1 | libegl1
@@ -47,6 +48,7 @@ overrides:
   rpm:
     depends:
       - alsa-lib
+      - libstdc++
       - libxkbcommon
       - (vulkan-loader or libglvnd-egl)
     recommends:

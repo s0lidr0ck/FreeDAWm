@@ -56,9 +56,8 @@
           <Extension Id="fdawm" ContentType="application/x-freedawm-session">
             <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
           </Extension>
-          <Extension Id="scraft" ContentType="application/x-soundcraft-session">
-            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
-          </Extension>
+          <!-- No Verb of its own: the ProgId's open verb (above) serves both extensions. -->
+          <Extension Id="scraft" ContentType="application/x-soundcraft-session" />
         </ProgId>
         <!-- Audio and MIDI files: offered under "Open with" (imported into a session), never forced
              as the default. -->

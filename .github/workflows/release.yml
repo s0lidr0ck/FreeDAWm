@@ -57,8 +57,9 @@ jobs:
   linux:
     name: Linux x86_64
     needs: version
-    # The oldest supported Ubuntu runner: the binaries need glibc >= the build host's (2.35).
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04, not 22.04: ONNX Runtime's prebuilt static library (ort-sys) needs the
+    # libstdc++ of GCC 13+. The binaries need glibc >= the build host's (2.39).
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +89,8 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: macOS universal
+    # Apple silicon only: ONNX Runtime (ort-sys) has no prebuilt x86_64-apple-darwin library.
+    name: macOS arm64
     needs: version
     runs-on: macos-15
     timeout-minutes: 150
@@ -96,7 +98,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin
           rustup default "$RUST_TOOLCHAIN"
       - uses: Swatinem/rust-cache@v2
         with:
@@ -104,10 +106,10 @@ jobs:
       - name: Build and package (ad-hoc signed, not notarized)
         # No MACOS_SIGN_IDENTITY: package.sh signs ad-hoc, so the DMG opens after the one-time
         # Gatekeeper approval described in docs/releasing.md.
-        run: packaging/macos/package.sh --arch universal
+        run: packaging/macos/package.sh --arch aarch64
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-universal
+          name: macos-arm64
           path: dist/release/*
           if-no-files-found: error
 
@@ -168,8 +170,8 @@ jobs:
           Unsigned builds made by GitHub Actions from ${GITHUB_SHA::12}.
 
           - **Windows x64**: \`.msi\` installer or \`-portable.zip\`. The files are not code-signed, so SmartScreen may say "Windows protected your PC": choose *More info › Run anyway*. Audio goes through WASAPI (no ASIO in these builds).
-          - **macOS 11+ (Apple silicon and Intel)**: open the \`.dmg\` and drag FreeDAWm to Applications. The app is not notarized: the first time, right-click (Control-click) FreeDAWm in Applications and choose *Open*, then *Open* again. On macOS 15 and later, if there is no *Open* button, go to *System Settings › Privacy & Security* and click *Open Anyway* under the FreeDAWm message (or run \`xattr -dr com.apple.quarantine /Applications/FreeDAWm.app\`).
-          - **Linux x86_64** (glibc 2.35+): \`.AppImage\` (\`chmod +x\` and run), \`.deb\`, \`.rpm\` or \`.tar.gz\`.
+          - **macOS 11+ on Apple silicon** (no Intel build yet): open the \`.dmg\` and drag FreeDAWm to Applications. The app is not notarized: the first time, right-click (Control-click) FreeDAWm in Applications and choose *Open*, then *Open* again. On macOS 15 and later, if there is no *Open* button, go to *System Settings › Privacy & Security* and click *Open Anyway* under the FreeDAWm message (or run \`xattr -dr com.apple.quarantine /Applications/FreeDAWm.app\`).
+          - **Linux x86_64** (glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 40 or newer): \`.AppImage\` (\`chmod +x\` and run), \`.deb\`, \`.rpm\` or \`.tar.gz\`.
 
           Check downloads against \`SHA256SUMS.txt\`.
           EOF
