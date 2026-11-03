@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: System packages
         # ALSA (cpal, MIDI), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
