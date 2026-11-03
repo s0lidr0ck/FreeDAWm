@@ -55,10 +55,14 @@ fn host_timers_fire_from_idle() {
     let mut ed = p.editor().expect("editor handle");
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert_eq!(p.live_value("15"), Some(0.0), "timers only fire from idle");
+    let start = std::time::Instant::now();
     for _ in 0..40 {
         assert!(ed.idle().is_empty());
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // Sleeps overshoot on busy machines (CI runners): bound the count by the time that passed.
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
     let ticks = p.live_value("15").expect("the Ticks param");
-    assert!((5.0..=25.0).contains(&ticks), "a 20 ms timer over 400 ms of frames ticked {ticks} times");
+    let most = elapsed_ms / 20.0 + 2.0;
+    assert!((5.0..=most).contains(&f64::from(ticks)), "a 20 ms timer over {elapsed_ms:.0} ms of frames ticked {ticks} times");
 }

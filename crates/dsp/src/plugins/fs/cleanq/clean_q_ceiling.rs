@@ -1409,22 +1409,8 @@ mod tests {
         }
         assert_eq!(f64::from(frames), want["frames"][0][0]);
 
-        let grid = smooth_to_grid(avg.bins(), 48_000.0, FFT_SIZE, 3.0);
-        assert_eq!(grid, col("grid"), "the averaged, smoothed capture");
-        let c = auto_ceiling(&grid);
-        let nodes: Vec<Vec<f64>> = c.pts.iter().map(|p| vec![p.hz, p.db]).collect();
-        assert_eq!(nodes, want["node"], "the learned nodes");
-        let curve: Vec<f64> = (0..GRID_N).map(|i| c.at(grid_hz(i))).collect();
-        assert_eq!(curve, col("curve"), "the learned ceiling on the curve, sample for sample");
-        assert_eq!(c.to_grid(), curve, "and what the dynamic ceiling is handed");
-
-        let mut d = c.clone();
-        let db = d.pts[9].db - 6.0;
-        move_node(&mut d, 9, db, false);
-        // Conform three ways: onto the learned ceiling with one node down (the defaults), and onto
-        // a pink line through the capture at 70 %, 8 bells, +/-6 dB, then cuts only. The target
-        // is exact; the bells' gains iterate (Gauss-Newton over sums of 256 responses), so they
-        // and everything after them match to 1e-9.
+        // To 1e-9 rather than bit for bit: the reference was written on Windows, and other
+        // platforms' C maths libraries (log10, pow, exp) differ from it in the last bit.
         let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
         let same = |got: &[f64], want: &[f64], what: &str| {
             assert_eq!(got.len(), want.len(), "{what}");
@@ -1432,10 +1418,28 @@ mod tests {
                 assert!(near(*a, *b), "{what}: {a} vs {b}");
             }
         };
+        let grid = smooth_to_grid(avg.bins(), 48_000.0, FFT_SIZE, 3.0);
+        same(&grid, &col("grid"), "the averaged, smoothed capture");
+        let c = auto_ceiling(&grid);
+        let nodes: Vec<Vec<f64>> = c.pts.iter().map(|p| vec![p.hz, p.db]).collect();
+        assert_eq!(nodes.len(), want["node"].len(), "the learned nodes");
+        for (got, want) in nodes.iter().zip(&want["node"]) {
+            same(got, want, "the learned nodes");
+        }
+        let curve: Vec<f64> = (0..GRID_N).map(|i| c.at(grid_hz(i))).collect();
+        same(&curve, &col("curve"), "the learned ceiling on the curve, sample for sample");
+        assert_eq!(c.to_grid(), curve, "and what the dynamic ceiling is handed");
+
+        let mut d = c.clone();
+        let db = d.pts[9].db - 6.0;
+        move_node(&mut d, 9, db, false);
+        // Conform three ways: onto the learned ceiling with one node down (the defaults), and onto
+        // a pink line through the capture at 70 %, 8 bells, +/-6 dB, then cuts only (all to 1e-9;
+        // the bells' gains iterate, Gauss-Newton over sums of 256 responses).
         let band_rows = |r: &ConformResult| -> Vec<Vec<f64>> { r.bands.iter().map(|b| vec![f64::from(b.type_), b.hz, b.db, b.q]).collect() };
         let r = conform(&grid, &d, &ConformSettings::default());
-        assert_eq!(r.target, col("target"), "Conform's correction");
-        assert_eq!(r.weight, col("weight"), "and its weights");
+        same(&r.target, &col("target"), "Conform's correction");
+        same(&r.weight, &col("weight"), "and its weights");
         let bands = band_rows(&r);
         assert_eq!(bands.len(), want["band"].len(), "Conform's bands");
         for (got, want) in bands.iter().zip(&want["band"]) {
@@ -1454,7 +1458,7 @@ mod tests {
             let ps = ConformSettings { amount: 0.7, max_bands: 8, max_db: 6.0, cuts_only: cuts, input_peak_db, ..ConformSettings::default() };
             let r = conform(&grid, &pink, &ps);
             assert_eq!(r.makeup_capped, cuts, "{tag}: the hot one is held, the quiet one is not");
-            assert_eq!(r.target, col(&format!("{tag}_target")), "{tag}: the correction");
+            same(&r.target, &col(&format!("{tag}_target")), &format!("{tag}: the correction"));
             let rows = band_rows(&r);
             let want_rows = &want[format!("{tag}_band").as_str()];
             assert_eq!(rows.len(), want_rows.len(), "{tag}: bands");
