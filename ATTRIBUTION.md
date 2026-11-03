@@ -46,7 +46,7 @@ available (never redistributed).
 | `assets/app-icon/freedawm.ico` | the FreeDAWm owner | rendered from `freedawm-logo-source.png` by `packaging/icons.py` | as the source |
 | `crates/ui-egui/assets/brand/` | the FreeDAWm owner | the bird and the wordmark for the About box and menu bar, rendered from `assets/app-icon/freedawm-*-source.png` by `packaging/icons.py` | as the sources |
 | `assets/app-icon/hicolor/` | the FreeDAWm owner | rendered from `freedawm-logo-source.png` by `packaging/icons.py` (16–512 px PNGs) | as the source |
-| `docs/images/` | SoundCraft contributors | screenshots of FreeDAWm rendered from the synthesised demo session | MIT OR Apache-2.0 |
+| `docs/images/` | SoundCraft and FreeDAWm contributors | screenshots of FreeDAWm rendered by `ui_shot` from the synthesised demo session (the Vocal Editor shot uses its synthetic sung line) | MIT OR Apache-2.0 |
 | `crates/ui-egui/assets/browser-thumbs/` | SoundCraft contributors | original: the plugin browser's card pictures, rendered by the app from its own built-in and FireStation editors (`cargo xtask browser-thumbs`) | MIT OR Apache-2.0 |
 | `crates/dsp/src/plugins/fs/sat/presets/` | the FireStation owner | FireStation `Engine 8 - Sat/Presets/Factory/` (written by its `Tools/export-sat-presets.py`), copied verbatim | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |
 | `crates/dsp/src/plugins/fs/tape/presets/` | the FireStation owner | FireStation `Engine 9 - Tape/Presets/Factory/` (written by its `Tools/export-tape-presets.py`), copied verbatim | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |
