@@ -1,8 +1,8 @@
 # The pull-request gate: `cargo xtask ci` (fmt check, clippy -D warnings, the workspace tests,
-# the asset and layering checks and the WebAssembly check) on Linux.
+# the asset and layering checks and the WebAssembly check) on Linux, plus a build-and-test of the
+# workspace on macOS and Windows.
 #
-# No secrets: release and signing workflows are not part of this repository yet (see
-# docs/release-playbook.md).
+# No secrets. Release builds are in release.yml.
 name: CI
 
 on:
@@ -21,10 +21,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Pinned so a new stable release's lints can't turn the gate red on an unchanged tree. Raise it
+  # deliberately (and fix the new clippy findings) in its own pull request.
+  RUST_TOOLCHAIN: "1.97.1"
 
 jobs:
   ci:
-    name: cargo xtask ci
+    name: cargo xtask ci (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -41,10 +44,37 @@ jobs:
 
       - name: Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
-          rustup default stable
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
 
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo xtask ci
         run: cargo xtask ci
+
+  test:
+    # The workspace's own tests on the two other desktop platforms (no clippy/fmt: Linux has those).
+    name: cargo test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+          - name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --workspace --locked

@@ -1,21 +1,27 @@
 version: 2
 updates:
-  # Maintain Rust / Cargo dependencies
+  # Rust / Cargo dependencies: minor and patch updates in one grouped PR. Semver-major updates
+  # (new APIs, e.g. symphonia 0.5 -> 0.6) are ignored here: they need code changes, so do them by
+  # hand in their own PR.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"
       time: "06:00"
       timezone: "America/New_York"
-    # Consolidate updates into a single PR rather than one PR per crate
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-dependencies:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
-  # Maintain GitHub Actions workflows
+  # GitHub Actions: minor/patch in one PR, major versions in a separate grouped PR (they can drop
+  # runner or Node versions, so review them on their own).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -26,5 +32,10 @@ updates:
       actions:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      actions-major:
+        patterns:
+          - "*"
+        update-types: ["major"]
     commit-message:
       prefix: "ci(deps)"
