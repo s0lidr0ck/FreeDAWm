@@ -154,11 +154,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          # Not `assets/`: that is a folder of the checkout.
+          path: release-assets
           merge-multiple: true
       - name: Checksums
         run: |
-          cd assets
+          set -o pipefail
+          cd release-assets
+          ls -l
           sha256sum -- * | tee SHA256SUMS.txt
       - name: Create or update the release
         run: |
@@ -181,10 +184,10 @@ jobs:
               echo "::error::release $tag is already published; bump the version first"
               exit 1
             fi
-            gh release upload "$tag" assets/* --clobber
+            gh release upload "$tag" release-assets/* --clobber
             gh release edit "$tag" --notes-file "$notes" --target "$GITHUB_SHA"
           else
-            gh release create "$tag" assets/* --draft --title "FreeDAWm $tag" --notes-file "$notes" --target "$GITHUB_SHA" "${prerelease[@]}"
+            gh release create "$tag" release-assets/* --draft --title "FreeDAWm $tag" --notes-file "$notes" --target "$GITHUB_SHA" "${prerelease[@]}"
           fi
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             gh release edit "$tag" --draft=false

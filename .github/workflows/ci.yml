@@ -77,4 +77,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --exclude soundcraft-playback
+
+      - name: cargo test (soundcraft-playback, one test at a time)
+        # Its device tests talk to the real audio system (WASAPI, CoreAudio), which the hosted
+        # runners only stub; one at a time, so a failure names its test.
+        run: cargo test --locked -p soundcraft-playback -- --test-threads=1

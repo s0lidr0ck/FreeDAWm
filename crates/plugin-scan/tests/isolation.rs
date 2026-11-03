@@ -232,7 +232,9 @@ fn the_cache_lock_keeps_a_second_scanner_out() {
     // Saving through a per-process temporary file leaves no temporary behind.
     let cache: ScanCache<Fake> = ScanCache::default();
     cache.save(&dir.join("vst3.json")).unwrap();
-    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    // read_dir's order is the file system's (sorted on NTFS, not on ext4 or APFS).
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
     assert_eq!(names, vec!["vst3.json".to_string(), "vst3.lock".to_string()]);
     let _ = std::fs::remove_dir_all(&dir);
 }
