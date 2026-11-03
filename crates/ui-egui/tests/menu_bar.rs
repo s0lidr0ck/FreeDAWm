@@ -568,9 +568,12 @@ fn the_wordmark_is_four_fifths_of_the_menu_text_height() {
     assert_eq!(menus::wordmark_size(15.0, 5.12), egui::vec2(12.0 * 5.12, 12.0));
     let h = harness(demo_app());
     let text_h = h.ctx.global_style().text_styles.get(&egui::TextStyle::Button).map(|f| h.ctx.fonts_mut(|fonts| fonts.row_height(f))).unwrap();
-    let pad = h.ctx.global_style().spacing.button_padding.y;
+    let spacing = h.ctx.global_style().spacing.clone();
     let wordmark = h.get_by_role_and_label(egui::accesskit::Role::Button, "FreeDAWm").rect();
-    assert!((wordmark.height() - (menus::WORDMARK_SCALE * text_h + 2.0 * pad)).abs() < 1.0, "{wordmark:?}, text {text_h}");
+    // A button is never shorter than the interact height: with a small menu font (egui's own,
+    // where the system UI font isn't found, as on Linux) that is what sets the height.
+    let want = (menus::WORDMARK_SCALE * text_h + 2.0 * spacing.button_padding.y).max(spacing.interact_size.y);
+    assert!((wordmark.height() - want).abs() < 1.0, "{wordmark:?}, text {text_h}, want {want}");
     // Centred on the line of the menu titles next to it.
     let file = h.get_by_role_and_label(egui::accesskit::Role::Button, "File").rect();
     assert!((wordmark.center().y - file.center().y).abs() < 1.0, "{wordmark:?} vs {file:?}");

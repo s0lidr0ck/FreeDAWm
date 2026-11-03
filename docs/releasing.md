@@ -221,3 +221,7 @@ old nightingale and names the old volume: regenerate it with `packaging/macos/dm
 and Windows for every pull request. `release.yml` also runs (build and package, no release) on
 pull requests that change `packaging/`, the app icons or the workflow. Both pin the Rust
 toolchain (`RUST_TOOLCHAIN`), so a new stable release's lints can't break an unchanged tree.
+On Windows, CI skips the DSP `silence_tail_is_cheap` timing tests: on some hosted runners the
+silent tail runs 4 to 10 times slower than the signal (likely denormal arithmetic on those
+CPUs), which deserves a look on Intel machines; `soundcraft-playback`'s tests run one at a
+time there.
