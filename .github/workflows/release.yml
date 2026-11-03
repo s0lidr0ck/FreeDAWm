@@ -7,6 +7,8 @@
 #                             `[workspace.package] version` in Cargo.toml.
 #   Actions › Release › Run   build everything and create or update a *draft* release
 #                             `v<version>` (nobody sees it until a maintainer publishes it)
+#   pull request touching     build and package everything as a check; no release
+#   packaging or this file
 #
 # Only GITHUB_TOKEN is used. See docs/releasing.md.
 name: Release
@@ -14,6 +16,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [ci-bringup]
+  pull_request:
+    paths: [".github/workflows/release.yml", "packaging/**", "assets/app-icon/**"]
   workflow_dispatch:
 
 permissions:
@@ -136,6 +141,7 @@ jobs:
   release:
     name: GitHub Release
     needs: [version, linux, macos, windows]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
