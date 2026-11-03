@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Mix Bus Console",
+  "group": "Bus & Master",
+  "tags": "Desk · Vintage",
+  "desc": "Every channel through one slow console.",
+  "values": {
+    "circuit": "Desk",
+    "variant": "B",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

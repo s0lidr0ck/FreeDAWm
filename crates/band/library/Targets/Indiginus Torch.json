@@ -1,0 +1,26 @@
+{
+ "format": 1,
+ "name": "Indiginus Torch",
+ "slot": 27,
+ "driver": "evolution",
+ "instruments": [ "Guitar" ],
+ "help": "Indiginus Torch Electric Guitar. In Kontakt: StrumMaker OFF, Sequencer OFF, Articulations = Off (or Up Slides if you want hard accents to slide, then raise noteVelocity[1] above 109), Mutes ON (low velocity = mute). Torch has no keyswitches; we play the notes. Our notes stay between velocity 50 and 105 so the high-velocity articulation layer never fires; chops and ghost notes use velocity 30-38 (the Mutes layer). Narrow \"range\" to the keys Kontakt colours as playable.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "range": [ 40, 86 ],
+  "articulations": {},
+  "stringKeys": [],
+  "stringCount": 6,
+  "droneKey": -1,
+  "droneNote": -1,
+  "perfFx": {},
+  "vibratoCC": -1,
+  "legatoST": 2,
+  "slideRange": 2,
+  "bypassLegatoKey": -1,
+  "strumKeys": [ -1, -1 ],
+  "strumEngine": false,
+  "noteVelocity": [ 50, 105 ],
+  "bendBlues": false
+ }
+}

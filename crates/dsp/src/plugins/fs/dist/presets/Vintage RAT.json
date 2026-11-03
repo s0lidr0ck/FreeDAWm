@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Vintage RAT",
+  "group":  "Distortion",
+  "tags":   "RAT · Vintage",
+  "desc":   "LM308, silicon, Distortion at 5, Filter at 5. The reference.",
+  "values": {
+    "drive": 0.5,
+    "tone": 0.5,
+    "circuit": "RAT",
+    "ratModel": "Vintage",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

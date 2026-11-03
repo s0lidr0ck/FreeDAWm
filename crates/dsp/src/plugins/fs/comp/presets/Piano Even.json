@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Piano Even",
+  "group": "Keys + Acoustic",
+  "tags": "LA-2A · Opto",
+  "desc": "Gentle optical ride that keeps a dynamic piano in the mix.",
+  "values": {
+    "style": "LA-2A",
+    "amount": 0.4,
+    "ratio": 0,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.3,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

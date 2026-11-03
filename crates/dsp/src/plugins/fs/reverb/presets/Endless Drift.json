@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Endless Drift",
+  "group": "Ambient",
+  "tags": "Cloud · 25 s",
+  "desc": "Twenty-five seconds. Play one note a bar.",
+  "values": {
+    "machine": "Cloud",
+    "decay": 0.96361,
+    "mix": 0.36,
+    "size": 0.9,
+    "preDelay": 0.28284,
+    "lowCut": 0.45801,
+    "highCut": 0.82948,
+    "damping": 0.53724,
+    "bass": 0.5,
+    "character": 0.85,
+    "diffusion": 0.7,
+    "modRate": 0.27315,
+    "modDepth": 0.6,
+    "width": 0.8,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

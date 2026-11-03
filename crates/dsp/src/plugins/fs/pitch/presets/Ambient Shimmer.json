@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Ambient Shimmer",
+  "group": "Worship",
+  "tags": "POG · +1 +2",
+  "desc": "Bright octaves with a little swell. Feed it into a big reverb for shimmer.",
+  "values": {
+    "style": "POG",
+    "dry": 0.63021,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.50059,
+    "oct2Up": 0.39764,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.35,
+    "lpf": 0.66991,
+    "reso": 0.0,
+    "voice": 0.59496,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 1.0,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

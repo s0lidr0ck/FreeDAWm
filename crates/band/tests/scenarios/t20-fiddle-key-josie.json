@@ -1,0 +1,36 @@
+{
+  "name": "t20-fiddle-key-josie",
+  "pending": false,
+  "description": "Task 20 (test Library fiddle-key): Josie on Indiginus The Fiddle with articulationReturn key 39 (a latched key returned by the return key), Natural, Energy 3.",
+  "library_overlay": "fiddle-key",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Josie",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Indiginus The Fiddle",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_energy": 3
+  }
+}

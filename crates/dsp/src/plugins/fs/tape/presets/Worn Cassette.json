@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Worn Cassette",
+  "group": "Cassette",
+  "tags": "Cassette · Type I",
+  "desc": "A tired deck, a misaligned bias and a tape that has been played a hundred times.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.3,
+    "flutter": 1.0,
+    "hiss": 0.714286,
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,19 @@
+# Export venv (Python 3.12). torch/torchaudio from the CPU index:
+#   uv pip install torch==2.14.1 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+#   uv pip install -r tools/ml-export/requirements.txt
+# omegaconf is not needed. onnxruntime-directml goes in a second venv (bench.py only).
+numpy==2.5.4
+scipy==1.18.1
+soundfile==0.14.0
+onnx==1.23.2
+onnxruntime==1.31.0
+onnxscript==0.7.2
+demucs==4.1.0
+pyyaml==6.0.3
+einops==0.8.2
+huggingface-hub==2.2.0
+requests==2.34.2
+ml-collections==1.1.0
+beartype==0.23.1
+rotary-embedding-torch==0.9.1
+librosa==1.0.0

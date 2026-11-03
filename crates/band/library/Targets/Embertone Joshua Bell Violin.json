@@ -1,0 +1,60 @@
+{
+ "format": 1,
+ "name": "Embertone Joshua Bell Violin",
+ "slot": 11,
+ "driver": "swam",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Solo violin, one line (pick it with Voice). For the author's control preset: dynamics on velocity (kept 18-118 so it never slides), CC1 vibrato, Sustain C1 / Staccato D#1 / Pizzicato F#1 / Tremolo C#1 / Harmonic G1. Natural feel: real vibrato on held notes (CC1 set before each note), portamento on wide slow intervals, rebows on long notes, CC64 on fast runs. For double stops turn on Intuition → Multi-Stop Attacks. Optional, with keys added to your control preset: spiccato, attack styles, swells, dramatic releases.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "family": "strings",
+  "instruments": [
+   {
+    "name": "Violin",
+    "low": 55,
+    "high": 103
+   }
+  ],
+  "dynamics": "velocity",
+  "velocityRange": [
+   18,
+   118
+  ],
+  "expressionCC": -1,
+  "vibratoCC": 1,
+  "keyswitches": false,
+  "articulations": {
+   "sustain": {
+    "key": 36,
+    "mode": "latch"
+   },
+   "staccato": {
+    "key": 39,
+    "mode": "latch"
+   },
+   "pizzicato": {
+    "key": 42,
+    "mode": "latch"
+   },
+   "tremolo": {
+    "key": 37,
+    "mode": "instant"
+   },
+   "harmonic": {
+    "key": 43,
+    "mode": "instant"
+   }
+  }
+ }
+}

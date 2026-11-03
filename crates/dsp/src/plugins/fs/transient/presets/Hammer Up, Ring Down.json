@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Hammer Up, Ring Down",
+  "group": "Start Here",
+  "tags": "Piano",
+  "desc": "The piano case: the hammer accented and most of the ring pulled away soon after it.",
+  "values": {
+    "source": "Piano",
+    "attack": 0.666667,
+    "sustain": 0.125,
+    "attackTime": 0.5,
+    "sustainTime": 0.25,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

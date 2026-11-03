@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Broadcast Voice",
+  "group": "Vocals",
+  "tags": "33609 · Diode",
+  "desc": "Three-to-one diode bridge on a voice. Dense and close without sounding squeezed.",
+  "values": {
+    "style": "33609",
+    "amount": 0.44,
+    "ratio": 0.4,
+    "attack": 0,
+    "release": 0.2,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.467268,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

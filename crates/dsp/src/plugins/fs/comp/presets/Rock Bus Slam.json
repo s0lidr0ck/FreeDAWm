@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Rock Bus Slam",
+  "group": "Mix Bus",
+  "tags": "G Bus · SSL",
+  "desc": "Faster and deeper. The mix leans forward on every downbeat.",
+  "values": {
+    "style": "G Bus",
+    "amount": 0.36,
+    "ratio": 0.5,
+    "attack": 0.6,
+    "release": 0.25,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.467268,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

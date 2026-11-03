@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Blues Breaker",
+  "group":  "Overdrive",
+  "tags":   "Blues Breaker",
+  "desc":   "Stock BB at 6. Low gain, soft, transparent.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.6,
+    "circuit": "Blues Breaker",
+    "bbGain": "Stock"
+  }
+}

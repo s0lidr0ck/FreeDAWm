@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "AC30 Jumpered",
+  "group": "Edge",
+  "tags": "AC30 · Both channels",
+  "desc": "Both inputs jumpered, the Normal adding body under the Top Boost's chime.",
+  "values": {
+    "amp": "AC30 Top Boost '64",
+    "acChannel": "Both",
+    "acBrilliant": 0.4,
+    "acNormal": 0.35,
+    "acTreble": 0.55,
+    "acBass": 0.4,
+    "acCut": 0.3,
+    "acCab": "Built-in"
+  }
+}

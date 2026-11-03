@@ -1,0 +1,38 @@
+{
+  "name": "t20-ample-lead-lark",
+  "pending": false,
+  "description": "Task 20 (test Library ample-melodic): Lark (melodic, Winds) on Ample Guitar M 4, Ample Notes: the lead vibrato on held notes, Natural, Energy 3.",
+  "library_overlay": "ample-melodic",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Lark",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_instrument": 8,
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_ample": 2,
+    "m1_energy": 3
+  }
+}

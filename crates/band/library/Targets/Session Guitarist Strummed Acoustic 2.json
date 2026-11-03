@@ -1,0 +1,24 @@
+{
+ "format": 1,
+ "name": "Session Guitarist Strummed Acoustic 2",
+ "slot": 12,
+ "driver": "ujamPhrase",
+ "instruments": [
+  "Guitar",
+  "Folk"
+ ],
+ "help": "NI pattern guitar: holds the chord (E3 and up), picks pattern 1-6 (C1-F1) by Energy - load them calm to busy - adds slash bass (E2-D#3); a song's Ending plays G#1-C2. Set Latch to 'Stop within...' and Sync to host. C3 = middle C.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "phraseKeys": [36, 37, 38, 39, 40, 41],
+  "additions": [-1, -1, -1, -1],
+  "energyBase": [0, 1, 3, 5],
+  "stopKey": -1,
+  "playBase": 64,
+  "playHigh": 88,
+  "bassBase": 52,
+  "bassMode": "slash",
+  "modCC": -1,
+  "endingKeys": [44, 45, 46, 47, 48]
+ }
+}

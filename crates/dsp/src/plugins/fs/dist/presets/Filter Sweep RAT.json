@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Filter Sweep RAT",
+  "group":  "Edge & Boost",
+  "tags":   "RAT · Vintage",
+  "desc":   "Low distortion, filter closed. A woolly boost.",
+  "values": {
+    "drive": 0.15,
+    "tone": 1,
+    "circuit": "RAT",
+    "ratModel": "Vintage",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

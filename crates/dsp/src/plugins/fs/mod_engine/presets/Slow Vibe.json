@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Slow Vibe",
+  "group": "Phaser",
+  "tags": "Phase · Uni-Vibe · ~1 Hz stock",
+  "desc": "Lamp speed down where the thermal lag does the work. Let chords ring.",
+  "values": {
+    "circuit": "Uni-Vibe",
+    "variant": "A",
+    "depth": 0.6,
+    "rate": 0.22,
+    "mix": 0.55,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

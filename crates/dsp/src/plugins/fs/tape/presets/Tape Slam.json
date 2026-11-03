@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Tape Slam",
+  "group": "Character",
+  "tags": "Multitrack · Vintage · 7.5 ips",
+  "desc": "Vintage oxide at slow speed driven 15 dB past its ceiling. Thick, squashed, dark.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "C",
+    "speed": "7.5 ips",
+    "drive": 0.866667,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

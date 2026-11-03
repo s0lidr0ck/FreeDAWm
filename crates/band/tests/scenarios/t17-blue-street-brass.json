@@ -1,0 +1,34 @@
+{
+  "name": "t17-blue-street-brass",
+  "pending": false,
+  "description": "Task 17: Duke on Indiginus Blue Street Brass, Natural.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    null,
+    "Duke",
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    null,
+    "Indiginus Blue Street Brass",
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 1,
+    "m6_enabled": 0
+  }
+}

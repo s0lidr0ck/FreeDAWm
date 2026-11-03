@@ -1,0 +1,18 @@
+{
+ "format": 1,
+ "name": "Indiginus The Fiddle",
+ "slot": 15,
+ "driver": "fiddle",
+ "instruments": [ "Piano", "Synth", "Bass", "Electric Keys", "Harp & Mallets", "Guitar", "Strings", "Winds", "Ethnic", "Brass" ],
+ "help": "Solo fiddle, one line (pick it with Voice). In Kontakt: Legato on, velocity zones off, Harmony and Repetitions off, Exp CC 11, Key Velocity Amt about 25, VIB VEL SPLIT 50, LEG VEL SPLIT 16, Sustains Natural, Round Robins on; set Master Key to the song's key. Velocity picks the character (plain / vibrato / slide), CC11 the loudness; double stops and shuffle bowing are played as notes. Articulation keys are momentary (confirmed 2026-10-06): the driver holds a key for the ornamented note only. Vibrato is in the samples (it cannot bloom late); chop is approximated.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "range": [ 55, 91 ],
+  "expressionCC": 11,
+  "splits": { "vibrato": 50, "portamento": 16, "slur": 61 },
+  "articulations": { "tremolo": 36, "scoop": 37, "staccato": 38, "graceUp": 41, "graceDown": 42, "trillUp": 43, "graceSlideUp": 44, "trillDown": 45, "graceSlideDown": 46 },
+  "portamentoKey": 50,
+  "articulationReturn": { "mode": "hold" },
+  "bowSeconds": 3.0
+ }
+}

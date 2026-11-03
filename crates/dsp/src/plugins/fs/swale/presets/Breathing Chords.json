@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Breathing Chords",
+  "group": "Worship & Ambient",
+  "tags": "Rhythmic · 1 bar",
+  "desc": "Hold a chord: it breathes in and out once a bar, peak on the downbeat.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.5,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "S-Curve",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.75,
+    "bloom": 0.5,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/2",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 1.0,
+    "relNote": "1/2",
+    "rate": "1/1",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

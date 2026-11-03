@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Master Iron",
+  "group": "Bus & Master",
+  "tags": "Iron · Nickel",
+  "desc": "Output transformer on the master: weight you can't point to.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "A",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

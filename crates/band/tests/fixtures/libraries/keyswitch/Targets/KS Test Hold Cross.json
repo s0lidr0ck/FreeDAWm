@@ -1,0 +1,45 @@
+{
+ "format": 1,
+ "name": "KS Test Hold Cross",
+ "slot": 30,
+ "driver": "keyswitch",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Test target (Task 20): two held articulations with a long key lead (the next key goes down before the last note ends).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "articulations": {
+   "a": {
+    "key": 10,
+    "mode": "hold"
+   },
+   "b": {
+    "key": 11,
+    "mode": "hold",
+    "minLen": 400
+   }
+  },
+  "use": {
+   "long": "a",
+   "short": "b"
+  },
+  "default": "a",
+  "keyLeadMs": 40,
+  "low": 36,
+  "high": 96,
+  "vibratoCC": 1,
+  "vibratoDepth": 1,
+  "dynamicsCC": 11,
+  "expressionCC": -1
+ }
+}

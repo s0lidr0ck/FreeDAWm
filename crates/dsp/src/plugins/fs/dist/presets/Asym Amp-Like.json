@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Asym Amp-Like",
+  "group":  "Overdrive",
+  "tags":   "Tube Screamer · Mod",
+  "desc":   "Boutique mod, asymmetric clipping. Even harmonics, more amp than pedal.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.5,
+    "circuit": "Tube Screamer",
+    "tsModel": "Mod",
+    "tsDiode": "Asym"
+  }
+}

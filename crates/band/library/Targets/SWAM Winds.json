@@ -1,0 +1,53 @@
+{
+ "format": 1,
+ "name": "SWAM Winds",
+ "slot": 7,
+ "driver": "swam",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "One solo wind per musician: CC11 expression, vibrato, breath gaps, fall keyswitch (24).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "family": "winds",
+  "instruments": [
+   {
+    "name": "Winds",
+    "low": 60,
+    "high": 96
+   },
+   {
+    "name": "Clarinet",
+    "low": 50,
+    "high": 91
+   },
+   {
+    "name": "Oboe",
+    "low": 58,
+    "high": 91
+   },
+   {
+    "name": "Bassoon",
+    "low": 34,
+    "high": 75
+   },
+   {
+    "name": "Alto Sax",
+    "low": 49,
+    "high": 81
+   }
+  ],
+  "expressionCC": 11,
+  "vibratoCC": 1,
+  "keyswitchOffset": 24
+ }
+}

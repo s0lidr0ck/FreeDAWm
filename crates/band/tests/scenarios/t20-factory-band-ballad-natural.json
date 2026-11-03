@@ -1,0 +1,10 @@
+{
+  "name": "t20-factory-band-ballad-natural",
+  "pending": false,
+  "description": "Task 20: the factory band playing Ballad with Intro and Ending, Natural.",
+  "bars": 32,
+  "song": "Ballad with Intro and Ending",
+  "feel": {
+    "natural": true
+  }
+}

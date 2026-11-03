@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Electric Thicken",
+  "group": "Guitars",
+  "tags": "Valve · Triode",
+  "desc": "An amped guitar that sounds like it had one more tube stage.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "A",
+    "drive": 0.6,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

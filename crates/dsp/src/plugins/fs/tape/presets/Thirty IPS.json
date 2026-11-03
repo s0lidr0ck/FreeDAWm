@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Thirty IPS",
+  "group": "Start Here",
+  "tags": "Two-Track · High Output · 30 ips",
+  "desc": "Fast tape: flat and extended, the bump moved up to about 100 Hz, and the top barely compresses at all.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "B",
+    "speed": "30 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

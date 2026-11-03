@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Cello",
+  "group": "Octaves",
+  "tags": "POG · -1",
+  "desc": "Wet only, octave down, dark, slow attack. Bow it with your volume knob.",
+  "values": {
+    "style": "POG",
+    "dry": 0.0,
+    "sub": 0.0,
+    "octDown": 0.70711,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.25,
+    "lpf": 0.50486,
+    "reso": 0.3,
+    "voice": 0.59496,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.35,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

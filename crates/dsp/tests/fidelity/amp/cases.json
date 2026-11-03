@@ -1,0 +1,622 @@
+[
+ {
+  "name": "default",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {}
+ },
+ {
+  "name": "default_44k",
+  "input": "guitar.wav",
+  "sr": 44100,
+  "block": 512,
+  "values": {}
+ },
+ {
+  "name": "default_96k",
+  "input": "guitar.wav",
+  "sr": 96000,
+  "block": 512,
+  "values": {}
+ },
+ {
+  "name": "amp_jtm45",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1
+  }
+ },
+ {
+  "name": "amp_deluxe",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2
+  }
+ },
+ {
+  "name": "amp_super",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 3
+  }
+ },
+ {
+  "name": "amp_princeton",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 4
+  }
+ },
+ {
+  "name": "amp_ac30",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5
+  }
+ },
+ {
+  "name": "amp_orange",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6
+  }
+ },
+ {
+  "name": "twin_4x",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "quality": 1
+  }
+ },
+ {
+  "name": "jtm45_4x",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "quality": 1
+  }
+ },
+ {
+  "name": "orange_4x",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "quality": 1
+  }
+ },
+ {
+  "name": "twin_cab_off",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "cab": 2
+  }
+ },
+ {
+  "name": "jtm45_cab_off_drums",
+  "input": "drums.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmCab": 2
+  }
+ },
+ {
+  "name": "twin_normal_channel",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "channel": 1,
+   "volume": 0.6
+  }
+ },
+ {
+  "name": "twin_pull_boost_vibrato",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "pullBoost": 1,
+   "intensity": 0.8,
+   "speed": 0.6,
+   "reverb": 0.5,
+   "bright": 1
+  }
+ },
+ {
+  "name": "twin_auto_level_off_hot",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "autoLevel": 0,
+   "volume": 0.8,
+   "master": 1.0,
+   "input": 0.75
+  }
+ },
+ {
+  "name": "jtm45_tremolo_dimed",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 1.0,
+   "volume2": 0.7,
+   "jtmIntensity": 0.7,
+   "presence": 0.8
+  }
+ },
+ {
+  "name": "deluxe_normal_cranked",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 1,
+   "dlxVolume": 0.85
+  }
+ },
+ {
+  "name": "super_bright_reverb",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 3,
+   "supBright": 1,
+   "supReverb": 0.7,
+   "supIntensity": 0.5
+  }
+ },
+ {
+  "name": "princeton_bias_trem",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 4,
+   "prnIntensity": 1.0,
+   "prnSpeed": 0.7,
+   "prnVolume": 0.6
+  }
+ },
+ {
+  "name": "ac30_normal",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 1,
+   "acNormal": 0.7
+  }
+ },
+ {
+  "name": "ac30_both_cut",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 2,
+   "acBrilliant": 0.8,
+   "acCut": 0.9
+  }
+ },
+ {
+  "name": "orange_fac5_hf",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orFac": 4,
+   "orHfDrive": 1.0,
+   "orGain": 0.8
+  }
+ },
+ {
+  "name": "orange_auto_off_trim",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orAutoLevel": 0,
+   "orOutput": 0.3,
+   "orInput": 0.6
+  }
+ },
+ {
+  "name": "synthetic_twin",
+  "input": "synthetic.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {}
+ },
+ {
+  "name": "synthetic_jtm45",
+  "input": "synthetic.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 0.8
+  }
+ },
+ {
+  "name": "rhodes_deluxe",
+  "input": "rhodes.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2
+  }
+ },
+ {
+  "name": "ir_twin_r121",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "cab": 1
+  },
+  "props": {
+   "irPathTwin": "Fender/1971 Fender Twin Reverb 2x12 Oxford 12T6-10 - R121 1 - Cap.wav"
+  }
+ },
+ {
+  "name": "ir_jtm45_sm57",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmCab": 1,
+   "jtmVolume": 0.8
+  },
+  "props": {
+   "irPathJtm": "Marshall/gb sm57.wav"
+  }
+ },
+ {
+  "name": "preset_ac30_jumpered",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 2,
+   "acBrilliant": 0.4,
+   "acNormal": 0.35,
+   "acTreble": 0.55,
+   "acBass": 0.4,
+   "acCut": 0.3,
+   "acCab": 0
+  }
+ },
+ {
+  "name": "preset_ac30_normal_channel",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 1,
+   "acNormal": 0.4,
+   "acBrilliant": 0.0,
+   "acCut": 0.2,
+   "acCab": 0
+  }
+ },
+ {
+  "name": "preset_ac30_top_boost_chime",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 0,
+   "acBrilliant": 0.3,
+   "acNormal": 0.0,
+   "acTreble": 0.6,
+   "acBass": 0.4,
+   "acCut": 0.2,
+   "acCab": 0
+  }
+ },
+ {
+  "name": "preset_ac30_top_boost_edge",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 5,
+   "acChannel": 0,
+   "acBrilliant": 0.55,
+   "acNormal": 0.0,
+   "acTreble": 0.5,
+   "acBass": 0.45,
+   "acCut": 0.35,
+   "acCab": 0
+  }
+ },
+ {
+  "name": "preset_deluxe_clean_sparkle",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 0,
+   "dlxVolume": 0.3,
+   "dlxTreble": 0.6,
+   "dlxBass": 0.45,
+   "dlxReverb": 0.25,
+   "dlxIntensity": 0.0,
+   "dlxCab": 0
+  }
+ },
+ {
+  "name": "preset_deluxe_cranked",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 0,
+   "dlxVolume": 0.7,
+   "dlxTreble": 0.5,
+   "dlxBass": 0.45,
+   "dlxReverb": 0.15,
+   "dlxIntensity": 0.0,
+   "dlxCab": 0
+  }
+ },
+ {
+  "name": "preset_deluxe_edge",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 0,
+   "dlxVolume": 0.5,
+   "dlxTreble": 0.55,
+   "dlxBass": 0.5,
+   "dlxReverb": 0.2,
+   "dlxIntensity": 0.0,
+   "dlxCab": 0
+  }
+ },
+ {
+  "name": "preset_deluxe_normal_channel",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 1,
+   "dlxVolume": 0.35,
+   "dlxTreble": 0.5,
+   "dlxBass": 0.5,
+   "dlxCab": 0
+  }
+ },
+ {
+  "name": "preset_deluxe_vibrato_swim",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 2,
+   "dlxChannel": 0,
+   "dlxVolume": 0.3,
+   "dlxTreble": 0.5,
+   "dlxBass": 0.5,
+   "dlxReverb": 0.3,
+   "dlxSpeed": 0.35,
+   "dlxIntensity": 0.65,
+   "dlxCab": 0
+  }
+ },
+ {
+  "name": "preset_jtm45_bluesbreaker",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 0.85,
+   "volume2": 0.35,
+   "jtmTreble": 0.6,
+   "jtmMiddle": 0.7,
+   "jtmBass": 0.4,
+   "presence": 0.5,
+   "jtmIntensity": 0.0,
+   "jtmCab": 0
+  }
+ },
+ {
+  "name": "preset_jtm45_edge_of_breakup",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 0.4,
+   "volume2": 0.0,
+   "jtmTreble": 0.6,
+   "jtmMiddle": 0.55,
+   "jtmBass": 0.45,
+   "presence": 0.4,
+   "jtmIntensity": 0.0,
+   "jtmCab": 0
+  }
+ },
+ {
+  "name": "preset_jtm45_full_tilt",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 1.0,
+   "volume2": 0.8,
+   "jtmTreble": 0.7,
+   "jtmMiddle": 0.8,
+   "jtmBass": 0.45,
+   "presence": 0.6,
+   "jtmIntensity": 0.0,
+   "jtmCab": 0
+  }
+ },
+ {
+  "name": "preset_jtm45_tremolo_rhythm",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 1,
+   "jtmVolume": 0.5,
+   "volume2": 0.2,
+   "jtmTreble": 0.55,
+   "jtmMiddle": 0.6,
+   "jtmBass": 0.45,
+   "presence": 0.35,
+   "jtmSpeed": 0.5,
+   "jtmIntensity": 0.55,
+   "jtmCab": 0
+  }
+ },
+ {
+  "name": "preset_orange_big_clean",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orGain": 0.3,
+   "orFac": 0,
+   "orBass": 0.5,
+   "orTreble": 0.55,
+   "orHfDrive": 0.2,
+   "orCab": 0
+  }
+ },
+ {
+  "name": "preset_orange_edge",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orGain": 0.6,
+   "orFac": 1,
+   "orBass": 0.5,
+   "orTreble": 0.5,
+   "orHfDrive": 0.5,
+   "orCab": 0
+  }
+ },
+ {
+  "name": "preset_orange_pushed",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orGain": 0.8,
+   "orFac": 0,
+   "orBass": 0.45,
+   "orTreble": 0.5,
+   "orHfDrive": 0.7,
+   "orCab": 0
+  }
+ },
+ {
+  "name": "preset_orange_thin_fac",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 6,
+   "orGain": 0.35,
+   "orFac": 4,
+   "orBass": 0.6,
+   "orTreble": 0.5,
+   "orHfDrive": 0.3,
+   "orCab": 0
+  }
+ },
+ {
+  "name": "preset_princeton_cranked",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 4,
+   "prnVolume": 0.7,
+   "prnTreble": 0.5,
+   "prnBass": 0.45,
+   "prnReverb": 0.15,
+   "prnIntensity": 0.0,
+   "prnCab": 0
+  }
+ },
+ {
+  "name": "preset_princeton_edge",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 4,
+   "prnVolume": 0.5,
+   "prnTreble": 0.5,
+   "prnBass": 0.5,
+   "prnReverb": 0.2,
+   "prnIntensity": 0.0,
+   "prnCab": 0
+  }
+ },
+ {
+  "name": "preset_princeton_studio_clean",
+  "input": "guitar.wav",
+  "sr": 48000,
+  "block": 512,
+  "values": {
+   "amp": 4,
+   "prnVolume": 0.3,
+   "prnTreble": 0.55,
+   "prnBass": 0.5,
+   "prnReverb": 0.25,
+   "prnIntensity": 0.0,
+   "prnCab": 0
+  }
+ }
+]

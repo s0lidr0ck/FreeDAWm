@@ -1,0 +1,21 @@
+{
+  "engine": "LevelUp",
+  "name": "Gentle Rider",
+  "group": "Riding",
+  "tags": "Slow, -18 LUFS",
+  "desc": "A slow, polite ride toward -18 LUFS. Evens out a take without anyone hearing it work.",
+  "values": {
+    "attack": 0.4,
+    "release": 0.35,
+    "gate": 0.3,
+    "maxGain": 0.25,
+    "target": 0.7272727272727273,
+    "mode": "Auto",
+    "freeze": false,
+    "ceiling": true,
+    "link": "Off",
+    "platform": "None",
+    "dither": "Off",
+    "shaping": false
+  }
+}

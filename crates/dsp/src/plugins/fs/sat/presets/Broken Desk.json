@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Broken Desk",
+  "group": "Character",
+  "tags": "Desk · Driven",
+  "desc": "A console line amp run far past sensible.",
+  "values": {
+    "circuit": "Desk",
+    "variant": "C",
+    "drive": 0.933333,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

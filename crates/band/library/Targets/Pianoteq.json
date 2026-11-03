@@ -1,0 +1,27 @@
+{
+ "format": 1,
+ "name": "Pianoteq",
+ "slot": 3,
+ "driver": "pianoPedal",
+ "instruments": [
+  "Piano",
+  "Electric Keys"
+ ],
+ "help": "Continuous half-pedal and soft pedal (CC64/CC67). Applies on Piano and E.Keys. In Natural, short staccato stabs press the harmonic pedal (CC 69, Pianoteq's default) so they keep the resonance: check in Pianoteq's Preferences > Pedals that the harmonic pedal is on CC 69.",
+ "ksOctaveDefault": 0,
+ "velocity": {
+  "lo": 18,
+  "hi": 118,
+  "curve": 1.0
+ },
+ "data": {
+  "halfPedal": [
+   24,
+   70,
+   127
+  ],
+  "softPedalCC": 67,
+  "softPedalMaxEnergy": 1,
+  "harmonicPedalCC": 69
+ }
+}

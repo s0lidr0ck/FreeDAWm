@@ -1,0 +1,28 @@
+{
+  "name": "t15-drums-fill-into-section",
+  "pending": false,
+  "description": "Task 15: drums with Fills 100 across the Pop song's section changes.",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "targets": [
+    null,
+    "MODO DRUM",
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_fills": 100,
+    "m2_energy": 3
+  }
+}

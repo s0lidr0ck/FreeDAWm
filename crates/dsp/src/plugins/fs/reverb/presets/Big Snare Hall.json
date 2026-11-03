@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Big Snare Hall",
+  "group": "Mix: Drums + Keys",
+  "tags": "Hall · 1.6 s",
+  "desc": "Send. The 80s power-ballad snare, minus the gate.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.41501,
+    "mix": 1.0,
+    "size": 0.85,
+    "preDelay": 0.28284,
+    "lowCut": 0.58859,
+    "highCut": 0.82948,
+    "damping": 0.69413,
+    "bass": 0.5,
+    "character": 0.4,
+    "diffusion": 0.9,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1980s",
+    "attack": 0.0
+  }
+}

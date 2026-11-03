@@ -1,0 +1,12 @@
+{
+  "name": "t20-meter-54-unsupported",
+  "pending": false,
+  "description": "Task 20: an unsupported 5/4 (plays as 4/4).",
+  "bars": 16,
+  "num": 5,
+  "den": 4,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  }
+}

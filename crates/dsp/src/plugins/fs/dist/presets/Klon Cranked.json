@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Klon Cranked",
+  "group":  "Overdrive",
+  "tags":   "Klon",
+  "desc":   "Gain up, treble tamed. Thick, chewy, still clear.",
+  "values": {
+    "drive": 0.85,
+    "tone": 0.4,
+    "circuit": "Klon",
+    "klonDiode": "Germanium"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Fingerpicked Acoustic",
+  "group": "Keys + Acoustic",
+  "tags": "Clean · Modern",
+  "desc": "Clean three-to-one. Quiet notes come up, nothing else changes.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.44,
+    "ratio": 0.313087,
+    "attack": 0.669679,
+    "release": 0.542562,
+    "makeup": 0.333333,
+    "knee": 0.5,
+    "scHpf": 0.5,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Vintage Master",
+  "group": "Mix Bus",
+  "tags": "Valve · High Output · 15 ips",
+  "desc": "Valve deck with a hint of transport and hiss 12 dB under real. A record that was always on tape.",
+  "values": {
+    "machine": "Valve",
+    "formula": "B",
+    "speed": "15 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.05,
+    "hiss": 0.285714,
+    "mix": 1.0
+  }
+}

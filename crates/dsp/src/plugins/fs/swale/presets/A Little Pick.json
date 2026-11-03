@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "A Little Pick",
+  "group": "Staples",
+  "tags": "Pick · Floor -26 dB",
+  "desc": "Swells, but lets a ghost of the pick through so fast lines keep their timing.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.6,
+    "hold": 0.0,
+    "release": 0.5,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.7,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

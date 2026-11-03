@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Vocal Air",
+  "group": "Vocals",
+  "tags": "Desk · Clean",
+  "desc": "A clean desk and a lot of Air: sheen on top without harshness.",
+  "values": {
+    "circuit": "Desk",
+    "variant": "A",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.4,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

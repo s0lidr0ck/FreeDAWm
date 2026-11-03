@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Drum Bus Thrust",
+  "group": "Drums",
+  "tags": "2500 · Thrust",
+  "desc": "Old (feedback) type, Thrust Loud. The kick punches through and the cymbals get controlled.",
+  "values": {
+    "style": "2500",
+    "amount": 0.36,
+    "ratio": 0.5,
+    "attack": 0.833333,
+    "release": 0.169294,
+    "makeup": 0.333333,
+    "knee": 0.5,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "C",
+    "detMode": "1",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

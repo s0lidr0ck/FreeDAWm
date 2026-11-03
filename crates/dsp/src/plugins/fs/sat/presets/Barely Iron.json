@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Barely Iron",
+  "group": "Start Here",
+  "tags": "Iron · Ferrite",
+  "desc": "The cleanest core. You notice it when you bypass it, not before.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "C",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

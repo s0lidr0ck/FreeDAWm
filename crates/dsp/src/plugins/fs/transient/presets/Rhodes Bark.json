@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Rhodes Bark",
+  "group": "Piano & Keys",
+  "tags": "Piano",
+  "desc": "The tine bark of an electric piano, in the mids, forward.",
+  "values": {
+    "source": "Piano",
+    "attack": 0.666667,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Mid",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

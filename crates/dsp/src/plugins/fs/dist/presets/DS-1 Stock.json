@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "DS-1 Stock",
+  "group":  "Distortion",
+  "tags":   "DS-1",
+  "desc":   "Dist at 7, tone at 5. The 90s buzzsaw.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.5,
+    "circuit": "DS-1",
+    "ds1Diode": "Stock",
+    "ds1Voice": "Stock"
+  }
+}

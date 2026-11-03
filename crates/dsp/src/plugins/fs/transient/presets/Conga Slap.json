@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Conga Slap",
+  "group": "Percussion",
+  "tags": "Percussion",
+  "desc": "The slap on the top of hand drums, forward.",
+  "values": {
+    "source": "Percussion",
+    "attack": 0.722222,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

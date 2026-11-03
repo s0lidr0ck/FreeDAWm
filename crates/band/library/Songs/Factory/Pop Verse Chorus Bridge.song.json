@@ -1,0 +1,193 @@
+{
+ "format": 1,
+ "kind": "song",
+ "app": "MIDIStudio",
+ "name": "Pop Verse Chorus Bridge",
+ "tags": [
+  "pop"
+ ],
+ "template": true,
+ "factory": true,
+ "song": {
+  "format": 1,
+  "sections": [
+   {
+    "id": "A",
+    "name": "Verse",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 80,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   },
+   {
+    "id": "B",
+    "name": "Chorus",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 80,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   },
+   {
+    "id": "C",
+    "name": "Bridge",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 80,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   }
+  ],
+  "arrangement": [
+   "A",
+   "B",
+   "A",
+   "B",
+   "C",
+   "B"
+  ],
+  "key": 0,
+  "scale": 0,
+  "take": 1
+ },
+ "feel": "natural",
+ "tension": true,
+ "players": [],
+ "targets": []
+}

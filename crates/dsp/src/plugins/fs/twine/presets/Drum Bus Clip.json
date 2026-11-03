@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Drum Bus Clip",
+  "group": "Stems",
+  "tags": "Hard clip · Punchy",
+  "desc": "Clipper at the ceiling, hard: flattens the peaks off a drum bus with no ducking.",
+  "values": {
+    "drive": 0.25,
+    "clip": 1.0,
+    "shape": "Hard",
+    "character": "Punchy",
+    "ceiling": 0.75,
+    "release": 0.4346
+  }
+}

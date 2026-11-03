@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Over-Biased",
+  "group": "Character",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Bias all the way over: the cleanest the oxide gets, and noticeably duller up top.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 1.0,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

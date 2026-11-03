@@ -1,0 +1,6 @@
+# Band fidelity: a scenario's `# case` hash is FNV-1a of its bytes on disk, so they must never be converted.
+crates/band/tests/scenarios/*.json -text
+# ... and so is an overlay Library file a scenario names (its bytes are in that hash too).
+crates/band/tests/fixtures/libraries/** -text
+# The Lyrics tab's word data (zlib streams).
+assets/lexicon/*.lex binary

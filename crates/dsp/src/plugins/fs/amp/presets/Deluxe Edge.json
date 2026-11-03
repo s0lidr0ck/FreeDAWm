@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "Deluxe Edge",
+  "group": "Edge",
+  "tags": "Deluxe · Volume 5",
+  "desc": "Where the Deluxe lives: clean when you pick soft, breaking up when you dig in.",
+  "values": {
+    "amp": "Deluxe Reverb '65",
+    "dlxChannel": "Vibrato",
+    "dlxVolume": 0.5,
+    "dlxTreble": 0.55,
+    "dlxBass": 0.5,
+    "dlxReverb": 0.2,
+    "dlxIntensity": 0.0,
+    "dlxCab": "Built-in"
+  }
+}

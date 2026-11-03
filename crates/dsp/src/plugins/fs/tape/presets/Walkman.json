@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Walkman",
+  "group": "Cassette",
+  "tags": "Cassette · Type I",
+  "desc": "Ferric tape on a portable: dull top, audible wow, real hiss.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.266667,
+    "bias": 0.5,
+    "flutter": 0.6,
+    "hiss": 0.571429,
+    "mix": 1.0
+  }
+}

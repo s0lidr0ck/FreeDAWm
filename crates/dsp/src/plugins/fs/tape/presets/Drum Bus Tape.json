@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Drum Bus Tape",
+  "group": "Drums",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "The kit hit past MOL on the 24-track. Transients round off, the bump fattens the kick, the room comes up.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.5,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

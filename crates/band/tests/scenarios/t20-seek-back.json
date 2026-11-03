@@ -1,0 +1,16 @@
+{
+  "name": "t20-seek-back",
+  "pending": false,
+  "description": "Task 20: the factory band seeking back (24 -> 4).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "events": [
+    {
+      "at_ppq": 24.0,
+      "seek_to": 4.0
+    }
+  ]
+}

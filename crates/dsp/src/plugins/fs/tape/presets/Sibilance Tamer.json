@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Sibilance Tamer",
+  "group": "Vocals",
+  "tags": "Multitrack · Standard · 7.5 ips",
+  "desc": "Slow tape compresses the top first, so esses flatten before the voice itself does.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "7.5 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

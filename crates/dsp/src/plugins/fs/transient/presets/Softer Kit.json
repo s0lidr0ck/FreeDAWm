@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Softer Kit",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "Every hit's front rounded off. Brushes-and-blankets without re-recording.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.277778,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

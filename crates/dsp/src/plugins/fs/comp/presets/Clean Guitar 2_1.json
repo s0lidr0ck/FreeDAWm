@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Clean Guitar 2:1",
+  "group": "Guitar",
+  "tags": "EL8 · Distress",
+  "desc": "The very wide two-to-one knee. Compression you feel in your hands more than you hear.",
+  "values": {
+    "style": "EL8",
+    "amount": 0.6,
+    "ratio": 0.142857,
+    "attack": 0.891644,
+    "release": 0.42174,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Ducked Cathedral",
+  "group": "Worship Guitar",
+  "tags": "Hall · 7.0 s",
+  "desc": "Seven seconds that only show up in the gaps.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.70956,
+    "mix": 0.5,
+    "size": 0.95,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.53724,
+    "bass": 0.5,
+    "character": 0.15,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.4,
+    "width": 0.5,
+    "duck": 0.75,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

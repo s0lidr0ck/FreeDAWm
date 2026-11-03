@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Hot Preamp",
+  "group":  "Distortion",
+  "tags":   "Tube Driver · 250 V",
+  "desc":   "Full plate voltage, hot bias, drive at 8. An amp's first stage cranked.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.5,
+    "circuit": "Tube Driver",
+    "tdPlate": "250 V",
+    "tdBias": "Hot"
+  }
+}

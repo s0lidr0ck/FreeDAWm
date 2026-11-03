@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Fat RAT",
+  "group":  "Distortion",
+  "tags":   "RAT · Fat",
+  "desc":   "Fat switch on, filter open. Full low end.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.3,
+    "circuit": "RAT",
+    "ratModel": "Fat",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "On"
+  }
+}

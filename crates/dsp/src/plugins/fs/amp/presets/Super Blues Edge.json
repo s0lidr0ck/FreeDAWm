@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Super Blues Edge",
+  "group": "Edge",
+  "tags": "Super · Volume 5",
+  "desc": "The blues club Super: clean until you dig in, then it bites.",
+  "values": {
+    "amp": "Super Reverb '65",
+    "supChannel": "Vibrato",
+    "supVolume": 0.5,
+    "supBright": 0,
+    "supTreble": 0.5,
+    "supMiddle": 0.65,
+    "supBass": 0.4,
+    "supReverb": 0.2,
+    "supIntensity": 0.0,
+    "supCab": "Built-in"
+  }
+}

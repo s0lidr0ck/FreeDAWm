@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Thrust Mix Bus",
+  "group": "Staples",
+  "tags": "2500 · Thrust",
+  "desc": "Two-to-one, soft knee, Thrust on Loud. The kick and bass stop pumping the whole mix.",
+  "values": {
+    "style": "2500",
+    "amount": 0.32,
+    "ratio": 0.166667,
+    "attack": 1,
+    "release": 0.437618,
+    "makeup": 0.333333,
+    "knee": 1,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "C",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

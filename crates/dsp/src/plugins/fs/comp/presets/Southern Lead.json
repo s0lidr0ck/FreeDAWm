@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Southern Lead",
+  "group": "Guitar",
+  "tags": "1176 · FET",
+  "desc": "FET push with extra colour for a singing, slightly hairy lead.",
+  "values": {
+    "style": "1176",
+    "amount": 0.48,
+    "ratio": 0,
+    "attack": 0.922627,
+    "release": 0.408705,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.7,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

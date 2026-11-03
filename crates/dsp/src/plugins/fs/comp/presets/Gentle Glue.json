@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Gentle Glue",
+  "group": "Staples",
+  "tags": "Clean · Modern",
+  "desc": "Two-to-one with a wide knee. Holds a part together without being heard.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.36,
+    "ratio": 0.221386,
+    "attack": 0.751061,
+    "release": 0.542562,
+    "makeup": 0.333333,
+    "knee": 0.5,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Mix Bus Clip Glue",
+  "group": "Mix Bus",
+  "tags": "Tape clip · Punchy",
+  "desc": "A little tape clipping into a punchy limiter: density without pumping.",
+  "values": {
+    "drive": 0.125,
+    "clip": 0.8,
+    "shape": "Tape",
+    "character": "Punchy",
+    "ceiling": 0.9167,
+    "release": 0.5233
+  }
+}

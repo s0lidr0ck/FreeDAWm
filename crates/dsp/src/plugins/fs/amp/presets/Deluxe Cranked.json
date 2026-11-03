@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "Deluxe Cranked",
+  "group": "Driven",
+  "tags": "Deluxe · Volume 7",
+  "desc": "6V6s working and the GZ34 sagging: thick, compressed, singing.",
+  "values": {
+    "amp": "Deluxe Reverb '65",
+    "dlxChannel": "Vibrato",
+    "dlxVolume": 0.7,
+    "dlxTreble": 0.5,
+    "dlxBass": 0.45,
+    "dlxReverb": 0.15,
+    "dlxIntensity": 0.0,
+    "dlxCab": "Built-in"
+  }
+}

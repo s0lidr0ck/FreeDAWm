@@ -1,0 +1,28 @@
+{
+  "name": "t15-bass-modo-natural-68",
+  "pending": false,
+  "description": "Task 15: the bass on MODO BASS 2, Natural, 6/8.",
+  "bars": 16,
+  "num": 6,
+  "den": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "targets": [
+    null,
+    null,
+    "MODO BASS 2",
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

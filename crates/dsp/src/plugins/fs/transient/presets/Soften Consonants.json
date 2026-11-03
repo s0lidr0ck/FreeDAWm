@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Soften Consonants",
+  "group": "Vocals",
+  "tags": "Vocal",
+  "desc": "Hard consonants eased back, gentler than a de-esser.",
+  "values": {
+    "source": "Vocal",
+    "attack": 0.388889,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

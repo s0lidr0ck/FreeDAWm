@@ -1,0 +1,18 @@
+{
+  "engine": "AmpEngine",
+  "name": "Deluxe Vibrato Swim",
+  "group": "Clean",
+  "tags": "Deluxe · Vibrato",
+  "desc": "The optical throb, slow and deep, with the spring behind it.",
+  "values": {
+    "amp": "Deluxe Reverb '65",
+    "dlxChannel": "Vibrato",
+    "dlxVolume": 0.3,
+    "dlxTreble": 0.5,
+    "dlxBass": 0.5,
+    "dlxReverb": 0.3,
+    "dlxSpeed": 0.35,
+    "dlxIntensity": 0.65,
+    "dlxCab": "Built-in"
+  }
+}

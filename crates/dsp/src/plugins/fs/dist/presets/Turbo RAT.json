@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Turbo RAT",
+  "group":  "Distortion",
+  "tags":   "RAT · Turbo",
+  "desc":   "Red LED clippers. Louder, more open, less compressed.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.5,
+    "circuit": "RAT",
+    "ratModel": "Turbo",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

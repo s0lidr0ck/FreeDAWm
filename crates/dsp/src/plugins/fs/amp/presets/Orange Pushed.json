@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Orange Pushed",
+  "group": "Driven",
+  "tags": "Orange · Gain 8",
+  "desc": "The EL34s working: fat, compressed and very loud in the room.",
+  "values": {
+    "amp": "OR120 Graphic '72",
+    "orGain": 0.8,
+    "orFac": "1",
+    "orBass": 0.45,
+    "orTreble": 0.5,
+    "orHfDrive": 0.7,
+    "orCab": "Built-in"
+  }
+}

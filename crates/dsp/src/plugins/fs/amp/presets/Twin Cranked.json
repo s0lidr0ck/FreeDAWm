@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Twin Cranked",
+  "group": "Edge",
+  "tags": "Twin · Volume up",
+  "desc": "Volume past 6 and the Twin finally breaks up -- big, loud and barely dirty.",
+  "values": {
+    "amp": "Twin Reverb '77",
+    "volume": 0.7,
+    "bright": 0,
+    "treble": 0.55,
+    "middle": 0.6,
+    "bass": 0.35,
+    "reverb": 0.2,
+    "master": 1.0,
+    "pullBoost": 0,
+    "cab": "Built-in"
+  }
+}

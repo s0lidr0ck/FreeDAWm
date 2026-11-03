@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Under-Biased",
+  "group": "Character",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Bias all the way under: grit that shows up even at low level, and a brighter top.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 0.0,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

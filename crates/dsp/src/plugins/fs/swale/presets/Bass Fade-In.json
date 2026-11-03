@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Bass Fade-In",
+  "group": "Mix Tools",
+  "tags": "Pick · 100 ms",
+  "desc": "Bowed-bass notes. Detector low cut is off so low notes trigger reliably.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.45,
+    "hold": 0.0,
+    "release": 0.45,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.0,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

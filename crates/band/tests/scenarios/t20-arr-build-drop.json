@@ -1,0 +1,98 @@
+{
+  "name": "t20-arr-build-drop",
+  "pending": false,
+  "description": "Task 20: Build and Drop sections.",
+  "bars": 24,
+  "song": {
+    "sections": [
+      {
+        "id": "A",
+        "name": "Verse",
+        "chords": [
+          {
+            "slot": 0,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 80,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 48,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 64,
+            "bass": -1,
+            "length": 2
+          }
+        ]
+      },
+      {
+        "id": "B",
+        "name": "Build",
+        "shape": "build",
+        "chords": [
+          {
+            "slot": 48,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 64,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 0,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 80,
+            "bass": -1,
+            "length": 2
+          }
+        ]
+      },
+      {
+        "id": "C",
+        "name": "Drop",
+        "shape": "drop",
+        "chords": [
+          {
+            "slot": 0,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 80,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 48,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 64,
+            "bass": -1,
+            "length": 2
+          }
+        ]
+      }
+    ],
+    "arrangement": [
+      "A",
+      "B",
+      "C"
+    ]
+  },
+  "feel": {
+    "natural": true
+  }
+}

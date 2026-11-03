@@ -1,0 +1,15 @@
+{
+  "engine": "AmpEngine",
+  "name": "Deluxe Normal Channel",
+  "group": "Clean",
+  "tags": "Deluxe · Normal",
+  "desc": "The Normal channel: no reverb, no vibrato, a little fuller and rounder.",
+  "values": {
+    "amp": "Deluxe Reverb '65",
+    "dlxChannel": "Normal",
+    "dlxVolume": 0.35,
+    "dlxTreble": 0.5,
+    "dlxBass": 0.5,
+    "dlxCab": "Built-in"
+  }
+}

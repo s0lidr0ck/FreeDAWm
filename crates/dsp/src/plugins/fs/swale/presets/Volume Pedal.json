@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Volume Pedal",
+  "group": "Staples",
+  "tags": "Pick · 800 ms · S",
+  "desc": "A slow, even pedal sweep on every note or chord.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.76,
+    "hold": 0.0,
+    "release": 0.55,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "S-Curve",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.25,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Phrase"
+  }
+}

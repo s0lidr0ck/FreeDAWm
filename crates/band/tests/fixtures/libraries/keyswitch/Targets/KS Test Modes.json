@@ -1,0 +1,78 @@
+{
+ "format": 1,
+ "name": "KS Test Modes",
+ "slot": 28,
+ "driver": "keyswitch",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Test target (Task 20): every keyswitch mode on one target: hold (minLen), tap, same, latch with a return key; a one-octave range that folds, a never-sent key, init keys, vibrato CC.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "articulations": {
+   "long": {
+    "key": 10,
+    "mode": "hold",
+    "minLen": 250
+   },
+   "short": {
+    "key": 11,
+    "mode": "tap"
+   },
+   "pluck": {
+    "key": 12,
+    "mode": "same"
+   },
+   "trem": {
+    "key": 13,
+    "mode": "latch"
+   },
+   "legato": {
+    "key": 14,
+    "mode": "latch"
+   }
+  },
+  "use": {
+   "long": "long",
+   "short": "short",
+   "pluck": "pluck",
+   "tremolo": "trem",
+   "legatoUp": "legato",
+   "slideIn": "legato"
+  },
+  "default": "long",
+  "return": "key",
+  "returnKey": 15,
+  "low": 60,
+  "high": 71,
+  "velocityRange": [
+   40,
+   90
+  ],
+  "vibratoCC": 21,
+  "vibratoDepth": 0.8,
+  "init": [
+   16,
+   17
+  ],
+  "never": [
+   67
+  ],
+  "dynamicsCC": 1,
+  "expressionCC": 11,
+  "reset": {
+   "dynamics": 64,
+   "expression": 127
+  },
+  "keyLeadMs": 10
+ }
+}

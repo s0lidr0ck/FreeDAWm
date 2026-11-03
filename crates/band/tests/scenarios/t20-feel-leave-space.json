@@ -1,0 +1,11 @@
+{
+  "name": "t20-feel-leave-space",
+  "pending": false,
+  "description": "Task 20: the factory band with leave_space on (Natural).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "leave_space": true
+  }
+}

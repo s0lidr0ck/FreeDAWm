@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Slow Strings Hall",
+  "group": "Staples",
+  "tags": "Hall · 3.5 s",
+  "desc": "Attack at 200 ms: the hall swells in behind each note instead of starting with it.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.57123,
+    "mix": 0.4,
+    "size": 0.7,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.5981,
+    "bass": 0.5,
+    "character": 0.1,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.4,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.8
+  }
+}

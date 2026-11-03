@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Overheads - Between Fills",
+  "group": "Rooms & Overheads",
+  "tags": "Overheads · Wide",
+  "desc": "Not trying to isolate a drum -- trying not to run a room's worth of noise between fills. The widest detector band on the list.",
+  "values": {
+    "instrument": "Overheads",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 0.45,
+    "length": 0.7,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.7,
+    "retrig": 0.2,
+    "debleed": 0.0,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

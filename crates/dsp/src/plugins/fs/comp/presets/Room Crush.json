@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Room Crush",
+  "group": "Drums",
+  "tags": "1176 · FET",
+  "desc": "All buttons on the room mics. The decay explodes between hits.",
+  "values": {
+    "style": "1176",
+    "amount": 0.72,
+    "ratio": 1,
+    "attack": 0.269849,
+    "release": 0.003383,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.8,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

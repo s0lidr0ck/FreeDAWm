@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Organ Drive",
+  "group": "Keys",
+  "tags": "Valve · Pentode",
+  "desc": "Pentode breakup for organ. Clean when soft, snarling when the swell is open.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "B",
+    "drive": 0.8,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

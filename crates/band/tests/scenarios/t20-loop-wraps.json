@@ -1,0 +1,24 @@
+{
+  "name": "t20-loop-wraps",
+  "pending": false,
+  "description": "Task 20: a 4-bar loop wrapping three times (16 -> 0, three times).",
+  "bars": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "seek_to": 0.0
+    },
+    {
+      "at_ppq": 16.0,
+      "seek_to": 0.0
+    },
+    {
+      "at_ppq": 16.0,
+      "seek_to": 0.0
+    }
+  ]
+}

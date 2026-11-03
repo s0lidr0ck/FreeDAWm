@@ -1,0 +1,52 @@
+{
+ "format": 1,
+ "name": "KS Test Same",
+ "slot": 31,
+ "driver": "keyswitch",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Test target (Task 20): the same key before and after each note (long), a tap (short), a narrow range with init and never-sent keys.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "articulations": {
+   "s": {
+    "key": 10,
+    "mode": "same"
+   },
+   "t": {
+    "key": 11,
+    "mode": "tap"
+   }
+  },
+  "use": {
+   "long": "s",
+   "short": "t",
+   "pluck": "t"
+  },
+  "default": "s",
+  "keyLeadMs": 8,
+  "low": 48,
+  "high": 59,
+  "never": [
+   50,
+   55
+  ],
+  "init": [
+   12
+  ],
+  "dynamicsCC": 1,
+  "expressionCC": 11,
+  "vibratoCC": 21,
+  "vibratoDepth": 0.3
+ }
+}

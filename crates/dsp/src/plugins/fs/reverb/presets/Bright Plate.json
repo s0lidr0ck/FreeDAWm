@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Bright Plate",
+  "group": "Staples",
+  "tags": "Plate · 1.6 s",
+  "desc": "Dense and shiny from the first millisecond.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.41501,
+    "mix": 0.3,
+    "size": 0.5,
+    "preDelay": 0.2,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.23888,
+    "bass": 0.5,
+    "character": 0.5,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

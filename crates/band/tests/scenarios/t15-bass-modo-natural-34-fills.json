@@ -1,0 +1,24 @@
+{
+  "name": "t15-bass-modo-natural-34-fills",
+  "pending": false,
+  "description": "Task 15: the bass on MODO BASS 2, Natural, 3/4, Energy 4, Fills 100 (bassFill12, hemiola).",
+  "bars": 24,
+  "num": 3,
+  "den": 4,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": false
+  },
+  "targets": [null, null, "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m3_energy": 4,
+    "m3_fills": 100
+  }
+}

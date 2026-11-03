@@ -1,0 +1,40 @@
+{
+  "name": "t21-modo-e2e",
+  "pending": false,
+  "description": "Task 21: the factory band playing Pop Verse Chorus Bridge, Natural. Jay on MODO DRUM at Energy 2 (cross-stick, pedal hat), then Energy 3 from bar 9 (open-hat barks closed by the pedal hat); Walt (vibrato, let ring, falls) on MODO BASS 2 at Energy 2, Fills 0. crates/mix/tests/band_modo.rs plays the same session through the mix engine.",
+  "sample_rate": 48000,
+  "block": 512,
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    "Jay",
+    "Walt",
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    "MODO DRUM",
+    "MODO BASS 2",
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m2_energy": 2,
+    "m3_energy": 2,
+    "m3_fills": 0
+  },
+  "events": [
+    {
+      "at_ppq": 32,
+      "param": "m2_energy",
+      "value": 3
+    }
+  ]
+}

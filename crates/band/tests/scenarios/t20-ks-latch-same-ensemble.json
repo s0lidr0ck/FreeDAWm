@@ -1,0 +1,46 @@
+{
+  "name": "t20-ks-latch-same-ensemble",
+  "pending": false,
+  "description": "Task 20 (test Library keyswitch): Aria (ensemble, Strings) on KS Test Latch Same, Classic, with a stop mid-phrase and a restart.",
+  "library_overlay": "keyswitch",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": false,
+    "tension": false
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Aria",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "KS Test Latch Same",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  },
+  "events": [
+    {
+      "at_ppq": 22.3,
+      "stop": true
+    },
+    {
+      "stopped_blocks": 4,
+      "play": true
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Blackface",
+  "group": "Tremolo",
+  "tags": "Trem · Opto Trem · ~4 Hz stock",
+  "desc": "Lamp and photocell. Uneven on purpose: it lights faster than it goes dark.",
+  "values": {
+    "circuit": "Opto Trem",
+    "variant": "B",
+    "depth": 0.65,
+    "rate": 0.45,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

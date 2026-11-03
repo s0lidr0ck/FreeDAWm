@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Magnatone Deep",
+  "group": "Vibrato",
+  "tags": "Trem · Magnatone · ~5 Hz stock",
+  "desc": "Full vibrato, no dry path. Real pitch movement, and it is unmistakable.",
+  "values": {
+    "circuit": "Magnatone",
+    "variant": "B",
+    "depth": 0.75,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.6,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

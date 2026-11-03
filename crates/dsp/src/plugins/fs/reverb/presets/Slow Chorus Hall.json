@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Slow Chorus Hall",
+  "group": "Ambient",
+  "tags": "Hall · 6.0 s",
+  "desc": "Deep slow modulation on a big hall: the tail detunes against itself.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.6788,
+    "mix": 0.45,
+    "size": 0.85,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.5981,
+    "bass": 0.5,
+    "character": 0.1,
+    "diffusion": 0.7,
+    "modRate": 0.31712,
+    "modDepth": 0.8,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1980s",
+    "attack": 0.0
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "t20-meter-44",
+  "pending": false,
+  "description": "Task 20: the factory band in 4/4.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  }
+}

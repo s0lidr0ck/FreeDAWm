@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Metal Tape",
+  "group": "Cassette",
+  "tags": "Cassette · Type IV",
+  "desc": "Metal tape: the most headroom a cassette ever had. The best case for the format.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "C",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.15,
+    "hiss": 0.428571,
+    "mix": 1.0
+  }
+}

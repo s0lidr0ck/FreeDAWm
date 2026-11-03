@@ -1,0 +1,10 @@
+{
+  "name": "t20-factory-band-rock-natural",
+  "pending": false,
+  "description": "Task 20: the factory band playing Rock Chorus Builds, Natural.",
+  "bars": 32,
+  "song": "Rock Chorus Builds",
+  "feel": {
+    "natural": true
+  }
+}

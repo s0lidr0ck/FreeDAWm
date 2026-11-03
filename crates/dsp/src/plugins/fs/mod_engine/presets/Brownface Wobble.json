@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Brownface Wobble",
+  "group": "Tremolo",
+  "tags": "Trem · Harmonic · ~3.5 Hz stock",
+  "desc": "The bands swap places instead of the volume moving. Nothing else does this.",
+  "values": {
+    "circuit": "Harmonic",
+    "variant": "B",
+    "depth": 0.8,
+    "rate": 0.4,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.4,
+    "tone": 0.55,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

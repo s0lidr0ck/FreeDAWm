@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Orange Big Clean",
+  "group": "Clean",
+  "tags": "Orange · Gain 3",
+  "desc": "The Graphic clean: thick and warm, with 120 W of headroom behind it.",
+  "values": {
+    "amp": "OR120 Graphic '72",
+    "orGain": 0.3,
+    "orFac": "1",
+    "orBass": 0.5,
+    "orTreble": 0.55,
+    "orHfDrive": 0.2,
+    "orCab": "Built-in"
+  }
+}

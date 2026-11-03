@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Mix Bus Tape",
+  "group": "Start Here",
+  "tags": "Two-Track · Standard · 15 ips",
+  "desc": "Half-inch mastering deck at 15 ips, hit a little over 0 VU. A gentle bump near 50 Hz, the very top softened, under 1 % THD on a sine.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

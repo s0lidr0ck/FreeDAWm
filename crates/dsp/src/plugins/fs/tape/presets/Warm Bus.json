@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Warm Bus",
+  "group": "Mix Bus",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "The 24-track hit at +6: about 2 % THD on a sine, far less on program. Lows fill in, the top rounds.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

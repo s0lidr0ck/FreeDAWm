@@ -1,0 +1,37 @@
+{
+  "name": "t20-ks-latch-same-melodic",
+  "pending": false,
+  "description": "Task 20 (test Library keyswitch): Lark on KS Test Latch Same (two latches returned with the same key, a tap, CC leads, sendOnChangeOnly off), Natural, Energy 2.",
+  "library_overlay": "keyswitch",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Lark",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "KS Test Latch Same",
+    null,
+    null
+  ],
+  "params": {
+    "m4_instrument": 8,
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_energy": 2
+  }
+}

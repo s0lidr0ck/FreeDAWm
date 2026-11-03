@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Stutter Gate",
+  "group": "Fun",
+  "tags": "Trem · Opto Trem · 1/16",
+  "desc": "Sixteenths, full depth, square. A tremolo doing a job it was not hired for.",
+  "values": {
+    "circuit": "Opto Trem",
+    "variant": "B",
+    "depth": 1.0,
+    "rate": 1.0,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Square",
+    "sync": "Sync",
+    "division": "1/16"
+  }
+}

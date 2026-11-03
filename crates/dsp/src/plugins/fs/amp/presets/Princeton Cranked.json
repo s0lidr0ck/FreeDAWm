@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Princeton Cranked",
+  "group": "Driven",
+  "tags": "Princeton · Volume 7",
+  "desc": "Flat out, the little amp compresses and sings.",
+  "values": {
+    "amp": "Princeton Reverb '65",
+    "prnVolume": 0.7,
+    "prnTreble": 0.5,
+    "prnBass": 0.45,
+    "prnReverb": 0.15,
+    "prnIntensity": 0.0,
+    "prnCab": "Built-in"
+  }
+}

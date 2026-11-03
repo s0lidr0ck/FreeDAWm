@@ -1,0 +1,10 @@
+{
+  "name": "t20-factory-band-blues-classic",
+  "pending": false,
+  "description": "Task 20: the factory band playing 12-bar Blues, Classic.",
+  "bars": 32,
+  "song": "12-bar Blues",
+  "feel": {
+    "natural": false
+  }
+}

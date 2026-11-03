@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Punchy Master",
+  "group": "Mastering",
+  "tags": "Hard clip · Punchy",
+  "desc": "The clipper takes the drum tips, the limiter lets go fast between hits.",
+  "values": {
+    "drive": 0.2917,
+    "clip": 0.6,
+    "shape": "Hard",
+    "character": "Punchy",
+    "ceiling": 0.9167,
+    "release": 0.5654
+  }
+}

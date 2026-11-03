@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "Princeton Tremolo",
+  "group": "Clean",
+  "tags": "Princeton · Bias tremolo",
+  "desc": "The bias tremolo at a medium pace: smooth and deep.",
+  "values": {
+    "amp": "Princeton Reverb '65",
+    "prnVolume": 0.35,
+    "prnTreble": 0.5,
+    "prnBass": 0.5,
+    "prnReverb": 0.25,
+    "prnSpeed": 0.45,
+    "prnIntensity": 0.6,
+    "prnCab": "Built-in"
+  }
+}

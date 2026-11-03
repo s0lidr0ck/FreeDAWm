@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Seventies Kit",
+  "group": "Drums",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Under-biased and pushed, with a little transport. Grainier, brighter, and a touch unsteady.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.533333,
+    "bias": 0.35,
+    "flutter": 0.15,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

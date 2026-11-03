@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "OCD Crunch",
+  "group":  "Distortion",
+  "tags":   "OCD · HP",
+  "desc":   "HP mode, drive at 8, tone back. Chunky rhythm.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.4,
+    "circuit": "OCD",
+    "ocdMode": "HP"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Strings on Tape",
+  "group": "Guitars & Keys",
+  "tags": "Two-Track · High Output · 30 ips",
+  "desc": "Fast, clean tape: strings keep their air and gain a little weight.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "B",
+    "speed": "30 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

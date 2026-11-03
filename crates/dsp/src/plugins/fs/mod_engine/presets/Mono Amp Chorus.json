@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Mono Amp Chorus",
+  "group": "Chorus",
+  "tags": "BBD · JC-120 · ~0.9 Hz stock",
+  "desc": "Summed to mono before the effect, both sides identical. For one amp.",
+  "values": {
+    "circuit": "JC-120",
+    "variant": "A",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.55,
+    "width": 0.0,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Mono",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

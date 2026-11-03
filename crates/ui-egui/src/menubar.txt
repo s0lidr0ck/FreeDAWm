@@ -1,0 +1,609 @@
+// The menu bar as shown (after the hand-built FreeDAWm menu), top to bottom. The incumbent's
+// catalog (crates/engine/catalog/menus.txt) stays the parity list; this file decides what is shown
+// and where. Same line format as the catalog, `Menu > Submenu > Item`, extended:
+//
+//   Menu > Sub > Item                 a leaf run through that same catalog/UI path
+//   Menu > Sub > Item = Other > Path  a leaf shown here, run through another catalog/UI path
+//   Menu > Item = @command.id         a leaf that runs a command id directly
+//   Menu > ## Heading                 a small group heading
+//   Menu > ---                        a separator
+//   Menu > Item = soon                shown greyed out, hover "Coming soon: needs its own window"
+//   Menu > Item = soon: Text          shown greyed out, hover "Text"
+//   Menu > Item = !instrument         built by the UI (!instrument, !recent)
+//   ... [desktop]                     left out of the web build
+//
+// Submenus are made by the path; lines of one submenu need not be adjacent, but keep them so.
+// Labels ending in "..." or "…" open a dialog or window (a test checks it).
+
+File > ## Session
+File > New...
+File > New from Template... = @ui.new_from_template
+File > Open > Session...
+File > Open > Open Recent = !recent
+File > Close Session
+File > ---
+File > ## Save
+File > Save Session
+File > Save Session As...
+File > Save Session Copy In...
+File > Save As Template...
+File > Revert Session to Saved...
+File > ---
+File > ## Bring in & send out
+File > Bounce Mix...
+File > Import > Session Data...
+File > Import > Audio...
+File > Import > MIDI...
+File > Import > Video...
+File > Import > Clip Groups...
+File > Import > DAWproject...
+File > Import > Reference... = @ui.scout.import_reference [desktop]
+File > Import > FireStation User Presets = File > Import > FireStation User Presets
+File > Export > MIDI...
+File > Export > Sibelius...
+File > Export > Lyrics (LRC)...
+File > Export > Lyrics as Text...
+File > Export > Session Info as Text...
+File > Export > Selected Tracks as New Session...
+File > Export > DAWproject...
+File > Export > ---
+File > Export > Stems... = @file.bounce_stems
+File > Export > Clips... = @file.export_clips
+File > Export > Clip Groups... = @file.export_clip_groups
+File > ---
+File > ## Score
+File > Score Setup...
+File > Print Score...
+
+Edit > ## Undo
+Edit > Undo = Edit > Can't Undo
+Edit > Redo = Edit > Can't Redo
+Edit > Restore Last Selection
+Edit > ---
+Edit > ## Clipboard
+Edit > Cut
+Edit > Copy
+Edit > Paste
+Edit > Clear
+Edit > Duplicate
+Edit > Repeat...
+Edit > Special > Cut Special > Clip Gain = Edit > Cut Special > Clip Gain
+Edit > Special > Cut Special > Clip Effects = Edit > Cut Special > Clip Effects
+Edit > Special > Cut Special > All Automation = Edit > Cut Special > All Automation
+Edit > Special > Cut Special > Pan Automation = Edit > Cut Special > Pan Automation
+Edit > Special > Cut Special > Plugin Automation = Edit > Cut Special > Plugin Automation
+Edit > Special > Copy Special > Clip Gain = Edit > Copy Special > Clip Gain
+Edit > Special > Copy Special > Clip Effects = Edit > Copy Special > Clip Effects
+Edit > Special > Copy Special > All Automation = Edit > Copy Special > All Automation
+Edit > Special > Copy Special > Pan Automation = Edit > Copy Special > Pan Automation
+Edit > Special > Copy Special > Plugin Automation = Edit > Copy Special > Plugin Automation
+Edit > Special > Copy Special > Audio as MIDI = Edit > Copy Special > Audio as MIDI
+Edit > Special > Paste Special > Merge MIDI = Edit > Paste Special > Merge MIDI
+Edit > Special > Paste Special > Merge Markers = Edit > Paste Special > Merge Markers
+Edit > Special > Paste Special > Repeat to Fill Selection = Edit > Paste Special > Repeat to Fill Selection
+Edit > Special > Paste Special > To Current Automation Type = Edit > Paste Special > To Current Automation Type
+Edit > Special > Clear Special > Clip Gain = Edit > Clear Special > Clip Gain
+Edit > Special > Clear Special > Clip Effects = Edit > Clear Special > Clip Effects
+Edit > Special > Clear Special > All Automation = Edit > Clear Special > All Automation
+Edit > Special > Clear Special > Pan Automation = Edit > Clear Special > Pan Automation
+Edit > Special > Clear Special > Plugin Automation = Edit > Clear Special > Plugin Automation
+Edit > ---
+Edit > ## Select
+Edit > Select All
+Edit > Select Loop Range = @loop.select
+Edit > Clear Loop = @loop.clear
+Edit > Selection > Change Timeline to Match Edit
+Edit > Selection > Change Edit to Match Timeline
+Edit > Selection > Play Edit
+Edit > Selection > Play Timeline
+Edit > Selection > ---
+Edit > Selection > Move Edit Left
+Edit > Selection > Move Edit Right
+Edit > Selection > Halve Edit
+Edit > Selection > Double Edit
+Edit > Selection > Duplicate and Extend Edit
+Edit > Selection > ---
+Edit > Selection > Extend Edit Up
+Edit > Selection > Extend Edit Down
+Edit > Selection > Extend Edit Up to Members
+Edit > Selection > Extend Edit Down to Members
+Edit > Selection > Remove Edit from Top
+Edit > Selection > Remove Edit from Bottom
+Edit > Selection > ---
+Edit > Selection > Move Edit Selection To Marker Lane Above
+Edit > Selection > Move Edit Selection To Marker Lane Below
+Edit > Selection > Extend Edit Selection To Marker Lane Above
+Edit > Selection > Extend Edit Selection To Marker Lane Below
+Edit > ---
+Edit > ## Clip editing
+Edit > Separate > At Selection
+Edit > Separate > On Grid
+Edit > Separate > At Transients
+Edit > Heal Separation
+Edit > Consolidate
+Edit > Split into Files = @edit.split_into_files
+Edit > Mute
+Edit > Strip Silence
+Edit > Shift...
+Edit > Fades > Create...
+Edit > Fades > Delete
+Edit > Fades > Fade to Start
+Edit > Fades > Fade to End
+Edit > ---
+Edit > ## Trim
+Edit > Trim > To Selection
+Edit > Trim > Start to Insertion
+Edit > Trim > End to Insertion
+Edit > Trim > To Fill Selection
+Edit > Trim > To File Boundaries
+Edit > ---
+Edit > ## Playlists
+Edit > Copy Selection to... > Target Playlist
+Edit > Copy Selection to... > New Playlist
+Edit > Copy Selection to... > Duplicate of Main Playlist
+Edit > Move Selection to... > Target Playlist
+Edit > Move Selection to... > New Playlist
+Edit > Move Selection to... > Duplicate of Main Playlist
+Edit > ---
+Edit > ## Automation
+Edit > Automation > Write to Current
+Edit > Automation > Write to All Enabled
+Edit > Automation > Trim to All Enabled
+Edit > Automation > Glide to All Enabled
+Edit > Automation > Glide Pan Only
+Edit > Automation > ---
+Edit > Automation > Thin
+Edit > Automation > Thin All
+Edit > Automation > ---
+Edit > Automation > Convert Volume Automation to Clip Gain
+Edit > Automation > Convert Clip Gain to Volume Automation
+Edit > Automation > Coalesce Volume Automation to Clip Gain
+Edit > Automation > Coalesce Clip Gain to Volume Automation
+Edit > Automation > ---
+Edit > Automation > Copy to Send = Edit > Automation > Copy to Send...
+Edit > ---
+Edit > More > Space Clips = Edit > Space Clips…
+Edit > More > Insert Silence = Edit > Insert Silence
+Edit > More > Snap to Next = Edit > Snap to > Next
+Edit > More > Snap to Previous = Edit > Snap to > Previous
+Edit > More > TCE Edit to Timeline Selection = Edit > TCE Edit to Timeline Selection
+
+View > ## Timeline
+View > Rulers > Bars|Beats
+View > Rulers > Min:Secs
+View > Rulers > Timecode
+View > Rulers > Timecode 2
+View > Rulers > Feet+Frames
+View > Rulers > Samples
+View > Rulers > ---
+View > Rulers > Tempo
+View > Rulers > Tempo Editor = View > Rulers > Tempo > Tempo Editor
+View > Rulers > Meter
+View > Rulers > Key Signature
+View > Rulers > Sections
+View > Rulers > Chords
+View > Rulers > Lyrics
+View > Rulers > ---
+View > Rulers > Markers
+View > Rulers > Markers 2
+View > Rulers > Markers 3
+View > Rulers > Markers 4
+View > Rulers > Markers 5
+View > Rulers > All Marker Rulers
+View > Rulers > Ruler Lines = View > Marker Displays > Ruler Lines
+View > Rulers > ---
+View > Rulers > All
+View > Rulers > Minimal
+View > Main Counter > Bars|Beats
+View > Main Counter > Min:Secs
+View > Main Counter > Timecode
+View > Main Counter > Feet+Frames
+View > Main Counter > Samples
+View > Track Number
+View > ---
+View > ## Edit window
+View > Edit Window Views > Comments
+View > Edit Window Views > Instruments
+View > Edit Window Views > Inserts A-E
+View > Edit Window Views > Inserts F-J
+View > Edit Window Views > Sends A-E
+View > Edit Window Views > Sends F-J
+View > Edit Window Views > I/O
+View > Edit Window Views > ---
+View > Edit Window Views > All
+View > Edit Window Views > Minimal
+View > Clip > Name
+View > Clip > Sync Point
+View > Clip > Rating
+View > Clip > Clip Gain Line
+View > Clip > Clip Gain Info
+View > Clip > Clip Effects Status
+View > Clip > Transparency
+View > Clip > Overlap Shadows
+View > Clip > ---
+View > Clip > Current Time
+View > Clip > Original Time Stamp
+View > Clip > User Time Stamp
+View > Clip > No Time
+View > Waveforms > Peak
+View > Waveforms > Power
+View > Waveforms > ---
+View > Waveforms > Rectified
+View > Waveforms > Outlines
+View > Waveforms > Overlapped Crossfades
+View > ---
+View > ## Mix window
+View > Mix Window Views > Mic Preamps
+View > Mix Window Views > Instruments
+View > Mix Window Views > Inserts A-E
+View > Mix Window Views > Inserts F-J
+View > Mix Window Views > Sends A-E
+View > Mix Window Views > Sends F-J
+View > Mix Window Views > I/O
+View > Mix Window Views > Object
+View > Mix Window Views > Pitch
+View > Mix Window Views > Track Color
+View > Mix Window Views > Comments
+View > Mix Window Views > ---
+View > Mix Window Views > All
+View > Mix Window Views > Minimal
+View > Mix Window Views > ---
+View > Mix Window Views > Plugin Editors as in the VST
+View > Mix Window Views > Slim Plugin Editors
+View > Narrow Mix
+View > Channel Width > Slim = @ui.mix.width.slim
+View > Channel Width > Wide = @ui.mix.width.wide
+View > Channel Width > Auto = @ui.mix.width.auto
+View > Channel Width > ---
+View > Channel Width > All Slim = @ui.mix.width.slim_all
+View > Channel Width > All Wide = @ui.mix.width.wide_all
+View > Channel Width > All Auto = @ui.mix.width.auto_all
+View > Expanded Sends > None
+View > Expanded Sends > All
+View > Expanded Sends > ---
+View > Expanded Sends > Send A
+View > Expanded Sends > Send B
+View > Expanded Sends > Send C
+View > Expanded Sends > Send D
+View > Expanded Sends > Send E
+View > Expanded Sends > Send F
+View > Expanded Sends > Send G
+View > Expanded Sends > Send H
+View > Expanded Sends > Send I
+View > Expanded Sends > Send J
+View > ---
+View > ## Transport
+View > Transport > Counters
+View > Transport > MIDI Controls
+View > Transport > Output Meters
+View > Transport > Expanded
+
+Track > ## Create
+Track > New...
+Track > Duplicate = Track > Duplicate...
+Track > Create Click Track
+Track > ---
+Track > ## Organise
+Track > Rename... = @track.rename
+Track > Color... = @window.color_palette
+Track > Group...
+Track > Move to New Folder = Track > Move to New Folder...
+Track > Convert Aux to Routing Folder
+Track > Hide = @track.hide
+Track > Vocal Track = @track.vocal
+Track > Make Inactive
+Track > Delete
+Track > ---
+Track > ## Channels
+Track > Change Track Width > Mono
+Track > Change Track Width > Stereo
+Track > Change Track Width > LCR
+Track > Change Track Width > Quad
+Track > Change Track Width > 5.1
+Track > Change Track Width > 7.1
+Track > Change Track Width > More > LCRS = Track > Change Track Width > LCRS
+Track > Change Track Width > More > 5.0 = Track > Change Track Width > 5.0
+Track > Change Track Width > More > 6.0 = Track > Change Track Width > 6.0
+Track > Change Track Width > More > 6.1 = Track > Change Track Width > 6.1
+Track > Change Track Width > More > 7.0 = Track > Change Track Width > 7.0
+Track > Change Track Width > More > 7.0 SDDS = Track > Change Track Width > 7.0 SDDS
+Track > Change Track Width > More > 7.1 SDDS = Track > Change Track Width > 7.1 SDDS
+Track > Change Track Width > More > ---
+Track > Change Track Width > More > 5.0.2 = Track > Change Track Width > 5.0.2
+Track > Change Track Width > More > 5.1.2 = Track > Change Track Width > 5.1.2
+Track > Change Track Width > More > 7.0.2 = Track > Change Track Width > 7.0.2
+Track > Change Track Width > More > 7.1.2 = Track > Change Track Width > 7.1.2
+Track > Change Track Width > More > 5.0.4 = Track > Change Track Width > 5.0.4
+Track > Change Track Width > More > 5.1.4 = Track > Change Track Width > 5.1.4
+Track > Change Track Width > More > 7.0.4 = Track > Change Track Width > 7.0.4
+Track > Change Track Width > More > 7.1.4 = Track > Change Track Width > 7.1.4
+Track > Change Track Width > More > 7.0.6 = Track > Change Track Width > 7.0.6
+Track > Change Track Width > More > 7.1.6 = Track > Change Track Width > 7.1.6
+Track > Change Track Width > More > 9.0.4 = Track > Change Track Width > 9.0.4
+Track > Change Track Width > More > 9.1.4 = Track > Change Track Width > 9.1.4
+Track > Change Track Width > More > 9.0.6 = Track > Change Track Width > 9.0.6
+Track > Change Track Width > More > 9.1.6 = Track > Change Track Width > 9.1.6
+Track > Change Track Width > More > ---
+Track > Change Track Width > More > 1st Order Ambisonics = Track > Change Track Width > 1st Order Ambisonics
+Track > Change Track Width > More > 2nd Order Ambisonics = Track > Change Track Width > 2nd Order Ambisonics
+Track > Change Track Width > More > 3rd Order Ambisonics = Track > Change Track Width > 3rd Order Ambisonics
+Track > Change Track Width > More > 4th Order Ambisonics = Track > Change Track Width > 4th Order Ambisonics
+Track > Change Track Width > More > 5th Order Ambisonics = Track > Change Track Width > 5th Order Ambisonics
+Track > Change Track Width > More > 6th Order Ambisonics = Track > Change Track Width > 6th Order Ambisonics
+Track > Change Track Width > More > 7th Order Ambisonics = Track > Change Track Width > 7th Order Ambisonics
+Track > Split into Mono
+Track > Instrument = !instrument
+Track > ---
+Track > ## Freeze & render
+Track > Freeze
+Track > Commit = Track > Commit...
+Track > Bounce = Track > Bounce...
+Track > Extract MIDI to New Track
+Track > ---
+Track > ## Inserts & sends
+Track > Bypass Inserts > All
+Track > Bypass Inserts > Inserts A-E
+Track > Bypass Inserts > Inserts F-J
+Track > Bypass Inserts > ---
+Track > Bypass Inserts > EQ
+Track > Bypass Inserts > Dynamics
+Track > Bypass Inserts > Reverb
+Track > Bypass Inserts > Delay
+Track > Bypass Inserts > Modulation
+Track > Mute Sends > All
+Track > Mute Sends > Sends A-E
+Track > Mute Sends > Sends F-J
+Track > Save Track Preset...
+Track > Load Track Preset... = @track.load_preset
+Track > ---
+Track > ## Playlists
+Track > New Playlist = @track.playlist_new
+Track > Designate as Target Playlist
+Track > Show Target Playlist
+Track > Toggle Recent Playlist
+Track > ---
+Track > More > Write MIDI Real-Time Properties = Track > Write MIDI Real-Time Properties
+Track > More > Set Record Tracks to Input Only = Track > Set Record Tracks to Input Only
+Track > More > Clear All Clip Indicators = Track > Clear All Clip Indicators
+Track > More > ---
+Track > More > Coalesce VCA Controller Automation = Track > Coalesce VCA Controller Automation
+Track > More > Coalesce Trim Automation = Track > Coalesce Trim Automation
+Track > More > Clear Trim Automation = Track > Clear Trim Automation
+
+Clip > ## Create
+Clip > New MIDI Clip
+Clip > Capture = Clip > Capture...
+Clip > Rename...
+Clip > Loop = Clip > Loop...
+Clip > Unloop = Clip > Unloop...
+Clip > ---
+Clip > ## Order & groups
+Clip > Send to Back
+Clip > Bring to Front
+Clip > Group
+Clip > Ungroup
+Clip > Ungroup All
+Clip > Regroup
+Clip > ---
+Clip > ## Lock & rate
+Clip > Edit Lock/Unlock
+Clip > Time Lock/Unlock
+Clip > Rating > none
+Clip > Rating > 1
+Clip > Rating > 2
+Clip > Rating > 3
+Clip > Rating > 4
+Clip > Rating > 5
+Clip > ---
+Clip > ## Gain & effects
+Clip > Clip Gain > Bypass
+Clip > Clip Gain > Render
+Clip > Clip Effects > Bypass
+Clip > Clip Effects > Render
+Clip > ---
+Clip > ## Timing & pitch
+Clip > Quantize to Grid
+Clip > Conform to Tempo
+Clip > Identify Sync Point
+Clip > Elastic Properties
+Clip > Remove > Sync Point = Clip > Remove Sync Point
+Clip > Remove > Warp = Clip > Remove Warp
+Clip > Remove > Pitch Shift = Clip > Remove Pitch Shift
+
+Event > ## Time & tempo
+Event > Time Operations > Time Operations Window
+Event > Time Operations > Change Meter... = soon
+Event > Time Operations > Insert Time = Event > Time Operations > Insert Time...
+Event > Time Operations > Cut Time = Event > Time Operations > Cut Time...
+Event > Tempo Operations Window = Event > Tempo Operations > Tempo Operations Window
+Event > Add Key Change... = soon
+Event > ---
+Event > ## MIDI editing
+Event > MIDI Operations Window = Event > MIDI Operations > MIDI Operations Window
+Event > Quantize... = Event > MIDI Operations > Quantize...
+Event > Transpose... = Event > MIDI Operations > Transpose...
+Event > Change Duration = Event > MIDI Operations > Change Duration...
+Event > Remove Duplicate Notes
+Event > Snap Notes to Scale = @midi.snap_to_scale
+Event > More MIDI > Change Velocity... = @event.change_velocity
+Event > More MIDI > Select/Split Notes = Event > MIDI Operations > Select/Split Notes...
+Event > More MIDI > Input Quantize = Event > MIDI Operations > Input Quantize...
+Event > More MIDI > Step Input = Event > MIDI Operations > Step Input...
+Event > More MIDI > Restore Performance = Event > MIDI Operations > Restore Performance...
+Event > More MIDI > Flatten Performance = Event > MIDI Operations > Flatten Performance...
+Event > More MIDI > ---
+Event > More MIDI > MIDI Track Offsets = Event > MIDI Track Offsets
+Event > More MIDI > MIDI Real-Time Properties = Event > MIDI Real-Time Properties
+Event > ---
+Event > ## Analyse
+Event > Detect Tempo... = @event.tempo_detect
+Event > Beat Detective
+Event > Identify Beat = Event > Identify Beat...
+Event > Extract Chords from Selection
+Event > ---
+Event > ## Panic
+Event > All MIDI Notes Off
+
+Process > ## Tone
+Process > EQ > Channel Strip = AudioSuite > EQ > Channel Strip
+Process > EQ > EQ 1-Band = AudioSuite > EQ > EQ3 1-Band
+Process > EQ > EQ 7-Band = AudioSuite > EQ > EQ3 7-Band
+Process > Dynamics > FET Compressor = AudioSuite > Dynamics > BF-76
+Process > Dynamics > De-Esser = AudioSuite > Dynamics > Dyn3 De-Esser
+Process > Dynamics > Expander / Gate = AudioSuite > Dynamics > Dyn3 Expander/Gate
+Process > Dynamics > Maximizer = AudioSuite > Dynamics > Maxim
+Process > ---
+Process > ## Time & pitch
+Process > Pitch Shift > Pitch Shift = AudioSuite > Pitch Shift > Pitch II
+Process > Pitch Shift > Time Shift = AudioSuite > Pitch Shift > Time Shift
+Process > Pitch Shift > Speed Ramp = AudioSuite > Pitch Shift > Vari-Fi
+Process > ---
+Process > ## Space & colour
+Process > Room Reverb = AudioSuite > Reverb > D-Verb
+Process > Mod Delay = AudioSuite > Delay > Mod Delay III
+Process > Ring Mod = AudioSuite > Modulation > Sci-Fi
+Process > Guitar Amp = AudioSuite > Harmonic > Eleven Lite
+Process > Bit Crusher = AudioSuite > Harmonic > Lo-Fi
+Process > Rectifier = AudioSuite > Harmonic > Recti-Fi
+Process > ---
+Process > ## Utilities
+Process > Normalize = AudioSuite > Other > Normalize
+Process > Gain = AudioSuite > Other > Gain
+Process > Reverse = AudioSuite > Other > Reverse
+Process > Invert = AudioSuite > Other > Invert
+Process > More > DC Offset Removal = AudioSuite > Other > DC Offset Removal
+Process > More > Duplicate = AudioSuite > Other > Duplicate
+Process > More > Signal Generator = AudioSuite > Other > Signal Generator
+
+AI > ## Separate [desktop]
+AI > Separate Stems… [desktop]
+AI > Make Karaoke… [desktop]
+AI > Split Drums… [desktop]
+AI > --- [desktop]
+AI > ## Clean [desktop]
+AI > Clean Vocal… [desktop]
+AI > Clean Vocal > Original / Cleaned = @clip.clean_toggle [desktop]
+AI > Clean Vocal > Amount... = @clip.clean_mix [desktop]
+AI > Clean Vocal > Commit = @clip.clean_commit [desktop]
+AI > Clean Vocal > Remove Cleaned Version = @clip.clean_remove [desktop]
+AI > Tune Vocal… [desktop]
+AI > Tune Vocal > Analyse Now = @vocal.analyse [desktop]
+AI > Tune Vocal > Tuned / Original = @vocal.toggle [desktop]
+AI > Tune Vocal > Commit = @vocal.commit [desktop]
+AI > Tune Vocal > Remove Tuning = @vocal.remove [desktop]
+AI > --- [desktop]
+AI > ## Transcribe [desktop]
+AI > Convert to MIDI… [desktop]
+AI > Detect Chords… [desktop]
+AI > Transcribe Lyrics… [desktop]
+AI > MIDI Cleanup…
+
+Options > ## Recording & playback
+Options > Click
+Options > Loop Playback
+Options > Loop Record
+Options > Pre/Post-Roll... = Options > Pre/Post-Roll
+Options > Low Latency Monitoring
+Options > Video Track Online
+Options > ---
+Options > ## Following & linking
+Options > Link Timeline and Edit Selection
+Options > Insertion Follows Playback
+Options > Automation Follows Edit
+Options > Tab to Transient
+Options > ---
+Options > ## Scrolling & solo
+Options > Edit Window Scrolling > No Scrolling
+Options > Edit Window Scrolling > After Playback
+Options > Edit Window Scrolling > Page
+Options > Edit Window Scrolling > Continuous
+Options > Edit Window Scrolling > Center Playhead
+Options > Solo Mode > SIP (Solo In Place)
+Options > Solo Mode > X-OR (Cancels Previous Solo)
+Options > ---
+Options > ## Timing & keys
+Options > Delay Compensation
+Options > Edit/Tool Mode Keyboard Lock
+Options > ---
+Options > More > Prepare DPE Tracks = Options > Prepare DPE Tracks
+
+Setup > ## Audio
+Setup > Playback Engine...
+Setup > I/O...
+Setup > ---
+Setup > ## Recording & MIDI
+Setup > Click/Countoff... = soon
+Setup > MIDI Input Devices... = @window.midi_inputs
+Setup > Network... = @window.network [desktop]
+Setup > ---
+Setup > ## Session & keys
+Setup > Session
+Setup > Keyboard Shortcuts...
+Setup > Preferences...
+Setup > --- [desktop]
+Setup > ## AI [desktop]
+Setup > ML Models… [desktop]
+
+Window > ## Main windows
+Window > Mix
+Window > Edit
+Window > Mix in Separate Window = @window.mix_separate
+Window > Vocal Editor in Separate Window = @window.vocal_separate
+Window > Teleprompter in Separate Window = @window.teleprompter_separate
+Window > MIDI Editor in Separate Window = @window.midi_editor_separate
+Window > Sync > Sync Selection = @window.sync_selection
+Window > Sync > Scroll to Selected Track = @window.sync_scroll
+Window > Sync > Follow Folder Collapse = @window.sync_folders
+Window > Sync > Sync Track Visibility = @window.sync_visibility
+Window > ---
+Window > ## Editors
+Window > MIDI Editor
+Window > Vocal Editor
+Window > Score Editor
+Window > MIDI Event List
+Window > MIDI Keyboard
+Window > ---
+Window > ## Transport & session
+Window > Transport
+Window > Big Counter
+Window > Memory Locations
+Window > Notes = @window.notes
+Window > Lyrics = @window.lyrics
+Window > Teleprompter = @window.teleprompter
+Window > Automation
+Window > ---
+Window > ## Panels & browsers
+Window > Clip List
+Window > Track List = View > Other Displays > Track List
+Window > Clip Effects
+Window > Plugin Browser
+Window > Workspace Browser = Window > New Workspace > Default
+Window > Undo History
+Window > ---
+Window > ## Band & capture
+Window > Studio
+Window > Scout
+Window > ---
+Window > ## Layout
+Window > Configurations > Window Configuration List
+Window > Configurations > New Configuration = Window > Configurations > New Configuration...
+Window > Configurations > Update Active Configuration
+Window > Configurations > Auto-Update Active Configuration
+Window > Tile = Window > Arrange > Tile
+Window > Reset Panel Layout
+Window > Close Floating Windows = Window > Close Window
+Window > ---
+Window > More > Video = Window > Video
+Window > More > Video Universe = Window > Video Universe
+Window > More > Universe = View > Other Displays > Universe
+Window > More > ---
+Window > More > Search = Window > Pro Tools Search
+Window > More > Renderer = Window > Renderer
+Window > More > Metadata Inspector = Window > Metadata Inspector
+Window > More > Color Palette = Window > Color Palette
+Window > More > UI Customization = Window > UI Customization
+Window > More > ---
+Window > More > Task Manager = Window > Task Manager
+Window > More > Disk Usage = Window > Disk Usage
+Window > More > System Usage = Window > System Usage
+Window > More > Close All Workspaces = Window > Workspaces > Close All Workspaces

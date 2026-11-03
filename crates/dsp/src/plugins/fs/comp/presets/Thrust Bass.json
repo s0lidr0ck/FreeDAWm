@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Thrust Bass",
+  "group": "Bass",
+  "tags": "2500 · Thrust",
+  "desc": "Six-to-one with Thrust on Med so the low notes are not squashed harder than the high ones.",
+  "values": {
+    "style": "2500",
+    "amount": 0.44,
+    "ratio": 0.666667,
+    "attack": 0.666667,
+    "release": 0.338588,
+    "makeup": 0.333333,
+    "knee": 0.5,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

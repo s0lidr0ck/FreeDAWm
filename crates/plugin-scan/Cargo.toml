@@ -1,0 +1,21 @@
+[package]
+name = "soundcraft-plugin-scan"
+description = "SoundCraft plugin scanning out of process: the scan cache, the scanner helper's protocol and crash/hang isolation (shared by the CLAP and VST3 hosts)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true
+
+# The test binary is also the fake scanner helper it starts (a real child process per batch).
+[[test]]
+name = "helper_process"
+harness = false

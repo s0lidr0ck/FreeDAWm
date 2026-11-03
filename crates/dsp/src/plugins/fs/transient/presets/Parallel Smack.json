@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Parallel Smack",
+  "group": "Mix & Bus",
+  "tags": "Drums",
+  "desc": "A big attack boost blended under the dry drums.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.833333,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 0.3
+  }
+}

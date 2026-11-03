@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Room - Gated Eighties",
+  "group": "Rooms & Overheads",
+  "tags": "Room · Gated",
+  "desc": "Hard mute and a fixed close, which is the sound the phrase means.",
+  "values": {
+    "instrument": "Room",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 1.0,
+    "length": 0.3,
+    "closeMode": "Fixed",
+    "lookahead": "2 ms",
+    "hold": 0.45,
+    "retrig": 0.2,
+    "debleed": 0.0,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

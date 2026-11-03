@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Tube Driver 12 V",
+  "group":  "Overdrive",
+  "tags":   "Tube Driver · 12 V",
+  "desc":   "Drive at 4, stock bias. Gilmour's rig, the spongy tube push.",
+  "values": {
+    "drive": 0.4,
+    "tone": 0.5,
+    "circuit": "Tube Driver",
+    "tdPlate": "12 V",
+    "tdBias": "Stock"
+  }
+}

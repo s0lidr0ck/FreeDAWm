@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Magnatone Vibrato",
+  "group": "Stock Settings",
+  "tags": "Trem · Magnatone · ~5 Hz stock",
+  "desc": "Real pitch vibrato from a varistor bridge. No delay line anywhere in it.",
+  "values": {
+    "circuit": "Magnatone",
+    "variant": "A",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

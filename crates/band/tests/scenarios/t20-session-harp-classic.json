@@ -1,0 +1,38 @@
+{
+  "name": "t20-session-harp-classic",
+  "pending": false,
+  "description": "Task 20 (test Library no-harp-players): the Session part (who == 0), Classic, Energy 4.",
+  "library_overlay": "no-harp-players",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": false,
+    "tension": false
+  },
+  "players": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_instrument": 4,
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_energy": 4
+  }
+}

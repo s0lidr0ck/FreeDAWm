@@ -1,0 +1,18 @@
+{
+  "engine": "Twine",
+  "name": "Kick Heavy Master",
+  "group": "Mastering",
+  "tags": "Multiband · Hard clip · Punchy",
+  "desc": "For mixes where the kick drives the limiter: a low split at 110 Hz takes the kick on its own.",
+  "values": {
+    "drive": 0.3333,
+    "clip": 0.5,
+    "shape": "Hard",
+    "character": "Punchy",
+    "ceiling": 0.9167,
+    "release": 0.5455,
+    "multi": 1,
+    "xoverLo": 0.3143,
+    "xoverHi": 0.5943
+  }
+}

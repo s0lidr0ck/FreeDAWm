@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Broken Brigade",
+  "group": "Fun",
+  "tags": "BBD · Brigade · ~0.7 Hz stock",
+  "desc": "Noise floor wide open and the input cooking. It sounds faulty because it is.",
+  "values": {
+    "circuit": "Brigade",
+    "variant": "B",
+    "depth": 1.0,
+    "rate": 0.85,
+    "mix": 1.0,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.8,
+    "noise": 1.0,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Warm Wash",
+  "group": "Chorus",
+  "tags": "BBD · Brigade · ~0.7 Hz stock",
+  "desc": "Dark, noisy and slow. Sounds like a pedal that has been in a gig bag since 1983.",
+  "values": {
+    "circuit": "Brigade",
+    "variant": "B",
+    "depth": 0.7,
+    "rate": 0.3,
+    "mix": 0.65,
+    "width": 1.0,
+    "regen": 0.0,
+    "drive": 0.25,
+    "noise": 0.5,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

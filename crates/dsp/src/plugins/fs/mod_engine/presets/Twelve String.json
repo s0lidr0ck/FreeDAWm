@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Twelve String",
+  "group": "Chorus",
+  "tags": "BBD · Small Clone · ~0.8 Hz stock",
+  "desc": "Deep and slow enough to hear two strings where there is one.",
+  "values": {
+    "circuit": "Small Clone",
+    "variant": "B",
+    "depth": 0.85,
+    "rate": 0.25,
+    "mix": 0.55,
+    "width": 0.65,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Tube Melt",
+  "group": "Fun",
+  "tags": "Vari-Mu · 670",
+  "desc": "Vari-mu pushed far past sensible with the slow auto release.",
+  "values": {
+    "style": "Vari-Mu",
+    "amount": 0.75,
+    "ratio": 0.4,
+    "attack": 0.5,
+    "release": 1,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 1,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

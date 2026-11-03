@@ -1,0 +1,58 @@
+{
+  "name": "t11-smoke-factory-44",
+  "pending": false,
+  "description": "Task 11: the smoke scenario with only m1 enabled.",
+  "sample_rate": 48000,
+  "block": 512,
+  "bpm": 120,
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": true,
+    "bass_lock": false,
+    "fills_yield": false,
+    "leave_space": false,
+    "dynamics": false,
+    "mod_wheel": false
+  },
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_energy": 3
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "param": "m1_energy",
+      "value": 4
+    },
+    {
+      "at_ppq": 30.0,
+      "seek_to": 8.0
+    },
+    {
+      "at_ppq": 40.0,
+      "bpm": 96
+    },
+    {
+      "at_ppq": 44.0,
+      "meter": [
+        3,
+        4
+      ]
+    },
+    {
+      "at_ppq": 52.0,
+      "stop": true
+    },
+    {
+      "stopped_blocks": 4,
+      "play": true
+    }
+  ]
+}

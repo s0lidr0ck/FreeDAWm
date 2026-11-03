@@ -1,0 +1,36 @@
+{
+  "name": "t16-indiginus-mandolin-keys",
+  "pending": false,
+  "description": "Task 16: Monroe (Folk) on Indiginus The Mandolin, pluckchords 1, Natural.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Monroe",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Indiginus The Mandolin",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 12,
+    "m1_pluckchords": 1
+  }
+}

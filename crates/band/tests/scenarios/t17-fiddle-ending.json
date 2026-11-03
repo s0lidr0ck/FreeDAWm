@@ -1,0 +1,34 @@
+{
+  "name": "t17-fiddle-ending",
+  "pending": false,
+  "description": "Task 17: Stuart on Indiginus The Fiddle, Natural, through the Ballad's Ending: fiddlePerform's tag with the hold-keyed portamento (Josie's tag roll misses: 0.94 >= 0.7).",
+  "bars": 40,
+  "song": "Ballad with Intro and Ending",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Stuart",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Indiginus The Fiddle",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

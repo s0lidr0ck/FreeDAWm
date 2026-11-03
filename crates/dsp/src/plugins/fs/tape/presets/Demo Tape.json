@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Demo Tape",
+  "group": "Cassette",
+  "tags": "Cassette · Type I",
+  "desc": "Four-track demo on a ferric tape, recorded too hot. Highs squash, hiss sits on top.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "flutter": 0.5,
+    "hiss": 0.642857,
+    "mix": 1.0
+  }
+}

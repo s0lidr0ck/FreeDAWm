@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "OCD Amp-Like",
+  "group":  "Overdrive",
+  "tags":   "OCD · HP",
+  "desc":   "HP mode, drive at 4. The 'cranked amp' overdrive.",
+  "values": {
+    "drive": 0.4,
+    "tone": 0.55,
+    "circuit": "OCD",
+    "ocdMode": "HP"
+  }
+}

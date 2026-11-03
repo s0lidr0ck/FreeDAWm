@@ -1,0 +1,21 @@
+{
+  "engine": "LevelUp",
+  "name": "Master Check - Streaming",
+  "group": "Mastering",
+  "tags": "Measure, Spotify, 24-bit",
+  "desc": "Last on the master bus, doing nothing to the level: measure integrated loudness and true peak, see what each service will do, preview Spotify, 24-bit dither for the bounce.",
+  "values": {
+    "attack": 0.18367,
+    "release": 0.17949,
+    "gate": 0.24324,
+    "maxGain": 0.5,
+    "target": 0.8181818181818182,
+    "mode": "Static",
+    "freeze": false,
+    "ceiling": false,
+    "link": "Off",
+    "platform": "Spotify",
+    "dither": "24-bit",
+    "shaping": false
+  }
+}

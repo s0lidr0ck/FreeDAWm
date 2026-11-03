@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Electric Tape",
+  "group": "Guitars & Keys",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Amp tone printed hot to the 24-track. The fizz rounds off first.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

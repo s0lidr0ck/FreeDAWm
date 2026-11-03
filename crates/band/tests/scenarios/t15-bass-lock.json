@@ -1,0 +1,19 @@
+{
+  "name": "t15-bass-lock",
+  "pending": false,
+  "description": "Task 15: drums and bass with Bass lock on.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "bass_lock": true
+  },
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

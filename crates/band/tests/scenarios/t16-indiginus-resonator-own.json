@@ -1,0 +1,36 @@
+{
+  "name": "t16-indiginus-resonator-own",
+  "pending": false,
+  "description": "Task 16: Siobhan (Folk) on Indiginus The Resonator, pluckchords 0, Natural.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Siobhan",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Indiginus The Resonator",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 12,
+    "m1_pluckchords": 0
+  }
+}

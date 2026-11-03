@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Snare - Parallel Blend",
+  "group": "Snare",
+  "tags": "Snare Top · Parallel",
+  "desc": "Gate hard, debleed hard, and blend it under the raw track with Mix. The old analog trick, and the one reviewers reach for on Silencer.",
+  "values": {
+    "instrument": "Snare Top",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 1.0,
+    "length": 0.3,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.35,
+    "retrig": 0.2,
+    "debleed": 0.9,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 0.55,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

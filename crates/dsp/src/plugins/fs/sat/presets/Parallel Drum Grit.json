@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Parallel Drum Grit",
+  "group": "Drums",
+  "tags": "Valve · Starved",
+  "desc": "Starved tube dirt under the whole kit, sagging with every hit.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "C",
+    "drive": 0.866667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 0.3,
+    "chanMode": "Stereo"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Opto Mode Vocal",
+  "group": "Vocals",
+  "tags": "EL8 · Distress",
+  "desc": "The 10:1 opto ratio with Dist 2 and the detector high-pass. Thick, held, forward.",
+  "values": {
+    "style": "EL8",
+    "amount": 0.52,
+    "ratio": 0.714286,
+    "attack": 0.828259,
+    "release": 0.326302,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "1",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "RAT Low Gain",
+  "group":  "Distortion",
+  "tags":   "RAT · Vintage",
+  "desc":   "Distortion at 2. The RAT as an overdrive — it does this better than people think.",
+  "values": {
+    "drive": 0.2,
+    "tone": 0.45,
+    "circuit": "RAT",
+    "ratModel": "Vintage",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Mono Thickener",
+  "group": "Doubler",
+  "tags": "H910 · 8 cents apart",
+  "desc": "Both copies centred. For a mono rig.",
+  "values": {
+    "style": "H910",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.15,
+    "attack": 0.0,
+    "lpf": 1.0,
+    "reso": 0.0,
+    "voice": 0.53026,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.0,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Orange Thin FAC",
+  "group": "Clean",
+  "tags": "Orange · FAC 5",
+  "desc": "FAC up the switch: the lows go and a bright, cutting clean is left.",
+  "values": {
+    "amp": "OR120 Graphic '72",
+    "orGain": 0.35,
+    "orFac": "5",
+    "orBass": 0.6,
+    "orTreble": 0.5,
+    "orHfDrive": 0.3,
+    "orCab": "Built-in"
+  }
+}

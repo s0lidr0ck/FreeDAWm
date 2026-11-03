@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Dry Kit",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "Every drum's ring cut soon after the hit. A dead-room sound from a live one.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.583333,
+    "sustain": 0.1875,
+    "attackTime": 0.5,
+    "sustainTime": 0.25,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

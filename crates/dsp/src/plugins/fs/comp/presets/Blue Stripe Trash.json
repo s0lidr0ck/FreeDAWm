@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Blue Stripe Trash",
+  "group": "Fun",
+  "tags": "1176 · FET",
+  "desc": "Rev A pushed until the FET itself is the distortion.",
+  "values": {
+    "style": "1176",
+    "amount": 1,
+    "ratio": 0.75,
+    "attack": 0,
+    "release": 0,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.9,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

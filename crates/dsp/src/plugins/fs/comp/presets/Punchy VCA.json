@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Punchy VCA",
+  "group": "Staples",
+  "tags": "160 · VCA",
+  "desc": "Hard-knee RMS compression. The front of the note stays, the body tightens.",
+  "values": {
+    "style": "160",
+    "amount": 0.48,
+    "ratio": 0.383452,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

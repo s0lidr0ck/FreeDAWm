@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Metal Edge",
+  "group": "Flanger",
+  "tags": "BBD · A/DA · ~0.35 Hz stock",
+  "desc": "Hard, metallic and right on the edge of self-oscillating. Use it on purpose.",
+  "values": {
+    "circuit": "A/DA",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.6,
+    "mix": 0.8,
+    "width": 0.5,
+    "regen": 0.9,
+    "drive": 0.4,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

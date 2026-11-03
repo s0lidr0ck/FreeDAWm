@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "DOD 250",
+  "group":  "Distortion",
+  "tags":   "Dist+ · Si",
+  "desc":   "Silicon diodes, distortion at 6. Harder and louder.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.5,
+    "circuit": "Dist+",
+    "dpDiode": "Silicon"
+  }
+}

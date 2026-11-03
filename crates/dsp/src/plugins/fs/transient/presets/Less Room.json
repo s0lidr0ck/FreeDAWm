@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Less Room",
+  "group": "Vocals",
+  "tags": "Vocal",
+  "desc": "The room behind a vocal pulled down between phrases.",
+  "values": {
+    "source": "Vocal",
+    "attack": 0.5,
+    "sustain": 0.333333,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

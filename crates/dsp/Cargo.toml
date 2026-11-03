@@ -1,0 +1,25 @@
+[package]
+name = "soundcraft-dsp"
+description = "SoundCraft DSP: realtime plugins (EQ, dynamics, reverb, delay, modulation, instruments), meters, loudness, and offline processing (the Process menu)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+rustfft.workspace = true
+
+[features]
+# A probe plugin for host tests (`plugins::test_link`): enabled by dependants' dev-dependencies only.
+test-plugins = []
+
+[dev-dependencies]
+proptest.workspace = true
+soundcraft-audio-io.workspace = true
+
+[lints]
+workspace = true

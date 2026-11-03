@@ -1,0 +1,40 @@
+[package]
+name = "soundcraft-net"
+description = "FreeDAWm on the local network: the service remote web page, pairing, discovery, the status feed and remote recorders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+soundcraft-audio-io.workspace = true
+soundcraft-dsp.workspace = true
+soundcraft-engine.workspace = true
+soundcraft-model.workspace = true
+soundcraft-playback.workspace = true
+soundcraft-time.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+# The network itself is native only (the web build has no sockets).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# DNS-SD over mDNS (`_freedawm._tcp`): pure Rust, no async runtime.
+mdns-sd = "0.21"
+# The page's address as a QR code for the phone (the matrix only; drawn by the UI).
+qrcode = { version = "0.14", default-features = false }
+# Free disk space for the status feed.
+fs4 = { version = "1", default-features = false, features = ["sync"] }
+# Pairing codes and tokens.
+getrandom = "0.3"
+# The PC's name.
+gethostname = "1"
+# The remote mix stream's codec (pure Rust, no C toolchain).
+rusty-opus = "1.0"
+# Over the internet: direct encrypted QUIC between the two PCs (hole punching), relay fallback.
+iroh = { version = "1.4", default-features = false, features = ["tls-ring", "portmapper"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+
+[lints]
+workspace = true

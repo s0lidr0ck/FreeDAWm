@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Guv'nor Smooth",
+  "group":  "Overdrive",
+  "tags":   "Guv'nor · Si+LED",
+  "desc":   "Silicon in the loop, gain at 4. Rounder, more compressed.",
+  "values": {
+    "drive": 0.4,
+    "tone": 0.45,
+    "circuit": "Guv'nor",
+    "govClip": "Si+LED",
+    "govBass": "Flat",
+    "govMid": "Flat"
+  }
+}

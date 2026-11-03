@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Glued and Rounded",
+  "group": "Mix Bus",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Hit near MOL, slightly over-biased so the top stays smooth while the whole mix leans into the oxide.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 0.6,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

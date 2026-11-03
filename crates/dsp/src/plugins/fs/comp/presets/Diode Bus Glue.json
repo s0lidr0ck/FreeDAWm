@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Diode Bus Glue",
+  "group": "Staples",
+  "tags": "33609 · Diode",
+  "desc": "Two-to-one, slow attack, Auto 1. The thick, slightly forward version of bus glue.",
+  "values": {
+    "style": "33609",
+    "amount": 0.32,
+    "ratio": 0.2,
+    "attack": 1,
+    "release": 0.8,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.341303,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

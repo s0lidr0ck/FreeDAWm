@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Tube Sparkle",
+  "group":  "Worship",
+  "tags":   "Tube Driver · 12 V",
+  "desc":   "Drive low, Hi up. Even-harmonic shimmer on cleans.",
+  "values": {
+    "drive": 0.15,
+    "tone": 0.7,
+    "circuit": "Tube Driver",
+    "tdPlate": "12 V",
+    "tdBias": "Stock"
+  }
+}

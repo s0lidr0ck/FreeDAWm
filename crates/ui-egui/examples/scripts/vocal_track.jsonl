@@ -1,0 +1,18 @@
+# The track "waveform + pitch" view as in vocal-tuning-mockups/track.png: Keys, Lead Vox (tuned
+# 5.6-7.8 s, the pitch view, tall) and Bass; the view 0-13 s, the playhead at 6.78 s.
+{"vocal_demo": {"track": "Lead Vox", "view": [0.0, 13.0], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.78, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"method": "engine.execute", "params": {"command": "window.vocal_editor", "params": {}}}
+{"method": "engine.execute", "params": {"command": "track.hide", "params": {"tracks": ["Kick", "Snare", "Hats", "Pad", "Lead", "Verb"], "hidden": true}}}
+{"method": "engine.execute", "params": {"command": "track.move", "params": {"track": "Keys", "to": 3}}}
+{"method": "engine.execute", "params": {"command": "track.move", "params": {"track": "Lead Vox", "to": 4}}}
+{"method": "engine.execute", "params": {"command": "track.height", "params": {"tracks": ["Keys", "Bass"], "height": "large"}}}
+{"method": "engine.execute", "params": {"command": "track.height", "params": {"tracks": ["Lead Vox"], "height": 240}}}
+{"method": "engine.execute", "params": {"command": "track.view", "params": {"track": "Lead Vox", "view": "pitch"}}}
+{"steps": 6}
+{"vocal_view": [0.0, 13.0]}
+{"shot": "target-ml/vocal-track-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"shot": "target-ml/vocal-track-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}

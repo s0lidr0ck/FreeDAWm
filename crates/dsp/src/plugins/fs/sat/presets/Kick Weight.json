@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Kick Weight",
+  "group": "Drums",
+  "tags": "Iron · Steel",
+  "desc": "Steel core, lows driven harder: the kick gets heavier, not louder.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "B",
+    "drive": 0.6,
+    "bias": 0.5,
+    "focus": 0.333333,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

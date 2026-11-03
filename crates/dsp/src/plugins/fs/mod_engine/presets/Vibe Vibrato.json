@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Vibe Vibrato",
+  "group": "Phaser",
+  "tags": "Phase · Uni-Vibe · ~1 Hz stock",
+  "desc": "The other switch position: wet only, no dry to cancel against. Seasick.",
+  "values": {
+    "circuit": "Uni-Vibe",
+    "variant": "B",
+    "depth": 0.75,
+    "rate": 0.45,
+    "mix": 1.0,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

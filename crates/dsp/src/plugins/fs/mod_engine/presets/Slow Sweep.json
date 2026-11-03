@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Slow Sweep",
+  "group": "Flanger",
+  "tags": "BBD · Mistress · ~0.35 Hz stock",
+  "desc": "One pass takes about ten seconds. Patience is the effect.",
+  "values": {
+    "circuit": "Mistress",
+    "variant": "B",
+    "depth": 0.7,
+    "rate": 0.12,
+    "mix": 0.6,
+    "width": 0.5,
+    "regen": 0.35,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

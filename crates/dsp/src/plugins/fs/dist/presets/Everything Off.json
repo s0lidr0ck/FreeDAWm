@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Everything Off",
+  "group":  "Fun",
+  "tags":   "Tube Screamer",
+  "desc":   "Drive 0, tone 5. A slightly warm buffer.",
+  "values": {
+    "drive": 0,
+    "tone": 0.5,
+    "circuit": "Tube Screamer",
+    "tsModel": "TS808",
+    "tsDiode": "Stock"
+  }
+}

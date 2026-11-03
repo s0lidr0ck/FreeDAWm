@@ -1,0 +1,28 @@
+{
+  "name": "t15-drums-modo-natural-34",
+  "pending": false,
+  "description": "Task 15: the drums on MODO DRUM, Natural, 3/4.",
+  "bars": 16,
+  "num": 3,
+  "den": 4,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "targets": [
+    null,
+    "MODO DRUM",
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "t15-drums-modo-natural",
+  "pending": false,
+  "description": "Task 15: Jay (the factory player with the most drums extras set: 7 of 8) on MODO DRUM, Natural.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    "Jay",
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    "MODO DRUM",
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_energy": 3
+  }
+}

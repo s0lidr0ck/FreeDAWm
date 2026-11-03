@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Mix Punch",
+  "group": "Mix & Bus",
+  "tags": "Full Mix",
+  "desc": "A little more front on everything. Keep it small.",
+  "values": {
+    "source": "Full Mix",
+    "attack": 0.583333,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

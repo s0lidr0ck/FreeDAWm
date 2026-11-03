@@ -1,0 +1,58 @@
+{
+  "name": "t16-guitar-ample-notes-seek",
+  "pending": false,
+  "description": "Task 16: Ezra (notes, palm mute, hammer-ons, slides, pops, fx) on Ample Guitar M 4, Natural; Ample mode Strummer at 22.3 and Notes at 26.1 (regenerations), a seek back 30 -> 8, 3/4 from 40.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Ezra",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  },
+  "events": [
+    {
+      "at_ppq": 22.3,
+      "param": "m1_ample",
+      "value": 1
+    },
+    {
+      "at_ppq": 26.1,
+      "param": "m1_ample",
+      "value": 2
+    },
+    {
+      "at_ppq": 30.0,
+      "seek_to": 8.0
+    },
+    {
+      "at_ppq": 40.0,
+      "meter": [
+        3,
+        4
+      ]
+    }
+  ]
+}

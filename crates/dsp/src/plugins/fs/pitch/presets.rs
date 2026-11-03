@@ -1,0 +1,38 @@
+//! Pitch factory presets, embedded from `Engine 3 - Pitch/Presets/Factory/*.json` (copied
+//! verbatim into `presets/`), in file-name order.
+
+/// `(name, json)` for every factory preset.
+pub static PRESETS: &[(&str, &str)] = &[
+    ("12-String", include_str!("presets/12-String.json")),
+    ("Ambient Shimmer", include_str!("presets/Ambient Shimmer.json")),
+    ("Baritone", include_str!("presets/Baritone.json")),
+    ("Bass Sub", include_str!("presets/Bass Sub.json")),
+    ("Both Octaves", include_str!("presets/Both Octaves.json")),
+    ("Cello", include_str!("presets/Cello.json")),
+    ("Choir", include_str!("presets/Choir.json")),
+    ("Detune Pedal", include_str!("presets/Detune Pedal.json")),
+    ("Dive Bomb", include_str!("presets/Dive Bomb.json")),
+    ("Fifths Stack", include_str!("presets/Fifths Stack.json")),
+    ("H910 Double", include_str!("presets/H910 Double.json")),
+    ("Harmony -4th", include_str!("presets/Harmony -4th.json")),
+    ("Harmony 5th", include_str!("presets/Harmony 5th.json")),
+    ("Lead Lift", include_str!("presets/Lead Lift.json")),
+    ("Low Bed", include_str!("presets/Low Bed.json")),
+    ("Micro Both", include_str!("presets/Micro Both.json")),
+    ("Micro Down", include_str!("presets/Micro Down.json")),
+    ("Micro Up", include_str!("presets/Micro Up.json")),
+    ("Micro Wet Up", include_str!("presets/Micro Wet Up.json")),
+    ("Mono Thickener", include_str!("presets/Mono Thickener.json")),
+    ("OC-2 Both", include_str!("presets/OC-2 Both.json")),
+    ("OC-2 Classic", include_str!("presets/OC-2 Classic.json")),
+    ("OC-2 Low Track", include_str!("presets/OC-2 Low Track.json")),
+    ("OC-2 No Direct", include_str!("presets/OC-2 No Direct.json")),
+    ("Octave Down", include_str!("presets/Octave Down.json")),
+    ("Octave Up", include_str!("presets/Octave Up.json")),
+    ("Organ", include_str!("presets/Organ.json")),
+    ("Swell Pad", include_str!("presets/Swell Pad.json")),
+    ("Tight Double", include_str!("presets/Tight Double.json")),
+    ("Whammy +1 Oct", include_str!("presets/Whammy +1 Oct.json")),
+    ("Whammy +2 Oct", include_str!("presets/Whammy +2 Oct.json")),
+    ("Wide Chorus", include_str!("presets/Wide Chorus.json")),
+];

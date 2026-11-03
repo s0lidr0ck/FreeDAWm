@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Cassette Deck",
+  "group": "Start Here",
+  "tags": "Cassette · Type II",
+  "desc": "Chrome cassette at 0 VU, a healthy transport and its real hiss. Dull next to the reels, and that is the point.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "B",
+    "speed": "15 ips",
+    "drive": 0.2,
+    "bias": 0.5,
+    "flutter": 0.3,
+    "hiss": 0.571429,
+    "mix": 1.0
+  }
+}

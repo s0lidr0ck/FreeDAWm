@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Triplet Pulse",
+  "group": "Rhythmic",
+  "tags": "Rhythmic · 1/4 T",
+  "desc": "Swung, rolling.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.5,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/16 T",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 1.0,
+    "relNote": "1/8 T",
+    "rate": "1/4 T",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

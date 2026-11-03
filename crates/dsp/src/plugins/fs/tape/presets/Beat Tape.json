@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Beat Tape",
+  "group": "Cassette",
+  "tags": "Cassette · Type I",
+  "desc": "Drums bounced to cassette and back: the top compresses hard and the transport sways. No hiss.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.533333,
+    "bias": 0.5,
+    "flutter": 0.7,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Mastering Two-Track",
+  "group": "Mix Bus",
+  "tags": "Two-Track · High Output · 30 ips",
+  "desc": "The cleanest machine at its fastest speed. Almost transparent; you hear it as depth rather than colour.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "B",
+    "speed": "30 ips",
+    "drive": 0.266667,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

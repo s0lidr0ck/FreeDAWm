@@ -1,0 +1,27 @@
+{
+ "format": 1,
+ "name": "Evolution Bluegrass Banjo",
+ "slot": 17,
+ "driver": "evolution",
+ "instruments": [ "Folk" ],
+ "help": "Orange Tree Evolution. In Kontakt: set every articulation to Keyswitch (momentary, not latching); Chords mode Disabled (we strum and roll ourselves; never use the pattern or strum keys); Setup: Vibrato CC #1, Legato range 2 ST, Mapping octave Standard. Save a Kontakt snapshot so the auto-assigned keys stop moving. Write the keyswitch test and check each articulation sounds while its key is held: the auto-assigned keys can re-pack when you change trigger types, so re-check the map after converting. Optional: assign a Bypass Legato Key (lets strums ring). Narrow \"range\" to the keys Kontakt colours as playable. Map confirmed by the user (momentary Keyswitch, A0-A#1). Banjo: tuning Open G, Prioritize open strings on (the drone G on the 5th string).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "range": [ 50, 84 ],
+  "articulations": { "powerchord": 33, "octaves": 34, "releaseSlideDown": 35, "slide16": 36, "slide8": 37, "slide4": 38, "velocitySlide": 39, "wsHammer": 40, "wsSlideIn": 41, "buzzTrill": 42, "graceDown": 43, "graceUp": 44, "harmonics": 45, "mute": 46 },
+  "stringKeys": [],
+  "stringCount": 5,
+  "droneKey": -1,
+  "droneNote": 67,
+  "perfFxBase": 96,
+  "perfFx": {},
+  "vibratoCC": 1,
+  "legatoST": 2,
+  "slideRange": 2,
+  "bypassLegatoKey": -1,
+  "strumKeys": [ -1, -1 ],
+  "strumEngine": false,
+  "noteVelocity": [ 30, 124 ],
+  "bendBlues": false
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Let It Ring",
+  "group": "Guitar",
+  "tags": "Guitar",
+  "desc": "Notes sustain longer and fuller, the pick unchanged.",
+  "values": {
+    "source": "Guitar",
+    "attack": 0.5,
+    "sustain": 0.666667,
+    "attackTime": 0.5,
+    "sustainTime": 0.646241,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "t16-guitar-ample-slots",
+  "pending": false,
+  "description": "Task 16: guitar on Ample Guitar M 4, Ample's chord slots (amplechords 1).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Rae",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6,
+    "m1_amplechords": 1
+  }
+}

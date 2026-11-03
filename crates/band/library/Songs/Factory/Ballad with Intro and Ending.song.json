@@ -1,0 +1,234 @@
+{
+ "format": 1,
+ "kind": "song",
+ "app": "MIDIStudio",
+ "name": "Ballad with Intro and Ending",
+ "tags": [
+  "ballad"
+ ],
+ "template": true,
+ "factory": true,
+ "song": {
+  "format": 1,
+  "sections": [
+   {
+    "id": "A",
+    "name": "Intro",
+    "energyShift": 0,
+    "followIdea": false,
+    "role": "intro",
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 4
+     },
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 4
+     }
+    ]
+   },
+   {
+    "id": "B",
+    "name": "Verse",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 80,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   },
+   {
+    "id": "C",
+    "name": "Chorus",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 32,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 80,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   },
+   {
+    "id": "D",
+    "name": "Ending",
+    "energyShift": 0,
+    "followIdea": false,
+    "role": "ending",
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 48,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 64,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 0,
+      "bass": -1,
+      "length": 4
+     }
+    ]
+   }
+  ],
+  "arrangement": [
+   "A",
+   "B",
+   "C",
+   "B",
+   "C",
+   "D"
+  ],
+  "key": 5,
+  "scale": 0,
+  "take": 1
+ },
+ "feel": "natural",
+ "tension": true,
+ "players": [],
+ "targets": []
+}

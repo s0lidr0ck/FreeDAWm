@@ -1,0 +1,18 @@
+{
+  "engine": "AmpEngine",
+  "name": "JTM45 Edge of Breakup",
+  "group": "Edge",
+  "tags": "JTM45 · Volume I at 4",
+  "desc": "Clean when you pick soft, hair when you dig in. Roll the guitar's volume to taste.",
+  "values": {
+    "amp": "JTM45 '66",
+    "jtmVolume": 0.4,
+    "volume2": 0.0,
+    "jtmTreble": 0.6,
+    "jtmMiddle": 0.55,
+    "jtmBass": 0.45,
+    "presence": 0.4,
+    "jtmIntensity": 0.0,
+    "jtmCab": "Built-in"
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "soundcraft-band"
+description = "SoundCraft Band: the MIDI Studio band engine (Library, songs, musicians) ported to Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[dependencies]
+soundcraft-midi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

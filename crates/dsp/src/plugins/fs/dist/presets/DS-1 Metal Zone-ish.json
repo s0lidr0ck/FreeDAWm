@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "DS-1 Metal Zone-ish",
+  "group":  "Distortion",
+  "tags":   "DS-1",
+  "desc":   "Dist maxed, tone scooped low. Chug.",
+  "values": {
+    "drive": 1,
+    "tone": 0.25,
+    "circuit": "DS-1",
+    "ds1Diode": "Stock",
+    "ds1Voice": "Stock"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Tom Tamer",
+  "group": "Drums",
+  "tags": "Clean · Modern",
+  "desc": "Evens out tom hits and extends the sustain a little.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.36,
+    "ratio": 0.442772,
+    "attack": 0.643479,
+    "release": 0.582975,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

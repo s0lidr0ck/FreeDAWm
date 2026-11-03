@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "M/S Master",
+  "group": "Mix Bus",
+  "tags": "G Bus · SSL",
+  "desc": "Mid and side compressed separately (link off). Loud centre hits no longer pull the sides down.",
+  "values": {
+    "style": "G Bus",
+    "amount": 0.32,
+    "ratio": 0,
+    "attack": 0.8,
+    "release": 1,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 0,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Mid-Side",
+    "dry": 0.0
+  }
+}

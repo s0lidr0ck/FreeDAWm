@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Warble",
+  "group": "Character",
+  "tags": "Cassette · Type I",
+  "desc": "The transport at its worst, nothing else overdone.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 1.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Strum Clarity",
+  "group": "Guitar",
+  "tags": "Guitar",
+  "desc": "Each pick in a strum a little more distinct.",
+  "values": {
+    "source": "Guitar",
+    "attack": 0.611111,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

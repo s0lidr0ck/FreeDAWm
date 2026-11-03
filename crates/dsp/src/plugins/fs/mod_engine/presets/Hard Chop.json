@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Hard Chop",
+  "group": "Tremolo",
+  "tags": "Trem · Opto Trem · 1/8",
+  "desc": "Square wave, locked to eighths. On and off, nothing in between.",
+  "values": {
+    "circuit": "Opto Trem",
+    "variant": "B",
+    "depth": 1.0,
+    "rate": 0.62,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Square",
+    "sync": "Sync",
+    "division": "1/8"
+  }
+}

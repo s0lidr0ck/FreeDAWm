@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Bridge Forward",
+  "group": "Start Here",
+  "tags": "Bridge · Germanium",
+  "desc": "Diode-bridge firmness. Pushes a source forward without making it louder.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "A",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

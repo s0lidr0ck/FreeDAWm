@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Bridge Stack",
+  "group":  "Worship",
+  "tags":   "RAT · Vintage",
+  "desc":   "RAT at 6, filter dark. The big chorus push.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.7,
+    "circuit": "RAT",
+    "ratModel": "Vintage",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Iron Weight",
+  "group": "Start Here",
+  "tags": "Iron · Nickel",
+  "desc": "Transformer thickening, almost all of it below 200 Hz. The top end is left alone.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "A",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

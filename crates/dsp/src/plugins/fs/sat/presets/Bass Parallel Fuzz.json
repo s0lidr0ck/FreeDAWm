@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Bass Parallel Fuzz",
+  "group": "Bass",
+  "tags": "Valve · Starved",
+  "desc": "A fuzzy upper layer blended under a clean bass.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "C",
+    "drive": 0.933333,
+    "bias": 0.5,
+    "focus": 0.75,
+    "air": 0.0,
+    "mix": 0.35,
+    "chanMode": "Stereo"
+  }
+}

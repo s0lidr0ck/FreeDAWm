@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "EL8 All-Rounder",
+  "group": "Staples",
+  "tags": "EL8 · Distress",
+  "desc": "Four-to-one with the medium knee. Works on nearly anything; start here and change the ratio.",
+  "values": {
+    "style": "EL8",
+    "amount": 0.44,
+    "ratio": 0.428571,
+    "attack": 0.640048,
+    "release": 0.258589,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

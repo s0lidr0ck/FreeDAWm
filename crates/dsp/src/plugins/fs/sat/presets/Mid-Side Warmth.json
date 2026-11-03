@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Mid/Side Warmth",
+  "group": "Bus & Master",
+  "tags": "Iron · Steel",
+  "desc": "Mid and side saturated separately: the centre thickens without the sides smearing into it.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "B",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "M/S"
+  }
+}

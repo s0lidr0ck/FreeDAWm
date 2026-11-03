@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Tape-ish 1:1",
+  "group": "Fun",
+  "tags": "EL8 · Distress",
+  "desc": "No compression at all, just Dist 3. Use Color as the drive.",
+  "values": {
+    "style": "EL8",
+    "amount": 0,
+    "ratio": 0,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.85,
+    "link": 1,
+    "autoGain": 0,
+    "variant": "C",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "t11-keys-energy-automation",
+  "pending": false,
+  "description": "Task 11: m1_energy 1 -> 4 at bar 5.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Clay",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_energy": 1
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "param": "m1_energy",
+      "value": 4
+    }
+  ]
+}

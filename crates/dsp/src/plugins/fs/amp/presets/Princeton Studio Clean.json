@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Princeton Studio Clean",
+  "group": "Clean",
+  "tags": "Princeton · Volume 3",
+  "desc": "The session amp: small, sweet and clean, with the spring behind it.",
+  "values": {
+    "amp": "Princeton Reverb '65",
+    "prnVolume": 0.3,
+    "prnTreble": 0.55,
+    "prnBass": 0.5,
+    "prnReverb": 0.25,
+    "prnIntensity": 0.0,
+    "prnCab": "Built-in"
+  }
+}

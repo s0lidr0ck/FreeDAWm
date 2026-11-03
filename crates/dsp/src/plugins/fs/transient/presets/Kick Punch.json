@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Kick Punch",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "Beater forward, the boom after it tightened on the lows only.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.722222,
+    "sustain": 0.375,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Low",
+    "mix": 1.0
+  }
+}

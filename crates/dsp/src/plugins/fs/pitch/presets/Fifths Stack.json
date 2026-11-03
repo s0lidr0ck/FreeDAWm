@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Fifths Stack",
+  "group": "Octaves",
+  "tags": "POG · 5th +1",
+  "desc": "Power chords from single notes. Keep to one note at a time.",
+  "values": {
+    "style": "POG",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.44615,
+    "oct2Up": 0.0,
+    "fifth": 0.59496,
+    "fifthMode": "+5th",
+    "detune": 0.25,
+    "attack": 0.0,
+    "lpf": 1.0,
+    "reso": 0.0,
+    "voice": 0.59496,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.35,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

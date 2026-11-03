@@ -1,0 +1,24 @@
+{
+ "format": 1,
+ "name": "Generic",
+ "slot": 0,
+ "driver": "generic",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Drums",
+  "Beat",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass",
+  "Folk"
+ ],
+ "help": "Standard GM notes and on/off pedal.",
+ "ksOctaveDefault": 0,
+ "data": {}
+}

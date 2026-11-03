@@ -1,0 +1,22 @@
+{
+  "name": "t15-drums-modo-ending",
+  "pending": false,
+  "description": "Task 15: Neil (crash alternate 0.8) on MODO DRUM and bass on MODO BASS 2 through the Ballad's intro and Ending, Natural (forced fill, crash alternation, chokes).",
+  "bars": 28,
+  "song": "Ballad with Intro and Ending",
+  "feel": {
+    "natural": true
+  },
+  "players": [null, "Neil", null, null, null, null],
+  "targets": [null, "MODO DRUM", "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_energy": 3,
+    "m3_fills": 0
+  }
+}

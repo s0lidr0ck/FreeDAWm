@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Super Pushed",
+  "group": "Driven",
+  "tags": "Super · Volume 7",
+  "desc": "The 6L6s working into four 10s: thick, tight and loud.",
+  "values": {
+    "amp": "Super Reverb '65",
+    "supChannel": "Vibrato",
+    "supVolume": 0.7,
+    "supBright": 0,
+    "supTreble": 0.5,
+    "supMiddle": 0.7,
+    "supBass": 0.35,
+    "supReverb": 0.15,
+    "supIntensity": 0.0,
+    "supCab": "Built-in"
+  }
+}

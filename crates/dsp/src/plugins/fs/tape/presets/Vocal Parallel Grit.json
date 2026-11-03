@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Vocal Parallel Grit",
+  "group": "Vocals",
+  "tags": "Valve · Vintage · 7.5 ips",
+  "desc": "Hard-driven Vintage tape through valves, tucked under the dry vocal.",
+  "values": {
+    "machine": "Valve",
+    "formula": "C",
+    "speed": "7.5 ips",
+    "drive": 0.733333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 0.3
+  }
+}

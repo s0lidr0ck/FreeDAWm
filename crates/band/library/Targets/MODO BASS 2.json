@@ -1,0 +1,39 @@
+{
+ "format": 1,
+ "name": "MODO BASS 2",
+ "slot": 2,
+ "driver": "keyswitchBass",
+ "instruments": [
+  "Bass"
+ ],
+ "help": "MODO BASS 2 defaults: Finger/Pick/Slap keyswitches, Ghost mode, CC9 muting. In Natural feel also legato slides (CC65), hammer-ons (KS 24), ghost notes in busy grooves, stop-on-detach (KS 32), down-strokes (KS 13) and continuous muting; slides and hammer-ons come more often as Energy and Fills rise. Applies on Bass. Natural also sends vibrato (CC1), let ring (CC64), falls (pitch wheel), a left-hand position per section (CC4, frets 0-24 spread over 0-127) and the pluck position (CC3), as on MODO's Control page. A fall bends by MODO's Slide Range (Control page, 2 by default): set it to 4 for a deeper fall.",
+ "ksOctaveDefault": 0,
+ "velocity": {
+  "lo": 28,
+  "hi": 122,
+  "curve": 0.9
+ },
+ "data": {
+  "finger": 25,
+  "pick": 27,
+  "slap": 30,
+  "ghost": 22,
+  "palmMuteCC": 9,
+  "palmMuteOn": 96,
+  "writtenPitchShift": 12,
+  "minNote": 40,
+  "hammerKS": 24,
+  "stopKS": 32,
+  "downStrokeKS": 13,
+  "legatoCC": 65,
+  "muteRange": [
+   0,
+   110
+  ],
+  "vibratoCC": 1,
+  "letRingCC": 64,
+  "pluckCC": 3,
+  "bendRange": 2,
+  "positionCC": 4
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Snare Crack",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "Stick crack up on the top only, so the snare gets sharper without getting thinner.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.75,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

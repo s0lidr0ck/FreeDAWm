@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Long Plate",
+  "group": "Classics",
+  "tags": "Plate · 4.0 s",
+  "desc": "Plate with the damper pulled right back.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.59787,
+    "mix": 0.3,
+    "size": 0.7,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.15499,
+    "bass": 0.5,
+    "character": 0.65,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

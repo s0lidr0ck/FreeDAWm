@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Funk Rhythm",
+  "group": "Guitar",
+  "tags": "1176 · FET",
+  "desc": "Fast and tight. Sixteenth-note strums all land at the same height.",
+  "values": {
+    "style": "1176",
+    "amount": 0.44,
+    "ratio": 0.25,
+    "attack": 0.451936,
+    "release": 0.055279,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

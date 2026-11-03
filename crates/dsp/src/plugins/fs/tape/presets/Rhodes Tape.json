@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Rhodes Tape",
+  "group": "Guitars & Keys",
+  "tags": "Valve · Standard · 15 ips",
+  "desc": "Valve warmth and a gentle wow on an electric piano.",
+  "values": {
+    "machine": "Valve",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.2,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Rhodes Bark",
+  "group": "Keys",
+  "tags": "Valve · Triode",
+  "desc": "Biased triode: the Rhodes barks when you dig in and stays sweet when you don't.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "A",
+    "drive": 0.666667,
+    "bias": 0.6,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 0.8,
+    "chanMode": "Stereo"
+  }
+}

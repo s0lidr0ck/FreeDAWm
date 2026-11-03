@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Wall",
+  "group": "Fun",
+  "tags": "Clean · Modern",
+  "desc": "Infinite ratio, fastest attack. Nothing gets past the threshold.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.48,
+    "ratio": 1,
+    "attack": 0,
+    "release": 0.251074,
+    "makeup": 0.333333,
+    "knee": 0,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

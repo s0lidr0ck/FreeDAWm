@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Mix Bloom",
+  "group": "Mix & Bus",
+  "tags": "Full Mix",
+  "desc": "A touch more sustain across the mix: fuller, warmer.",
+  "values": {
+    "source": "Full Mix",
+    "attack": 0.5,
+    "sustain": 0.583333,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "LED Muff",
+  "group":  "Fun",
+  "tags":   "Big Muff · LED",
+  "desc":   "LEDs in both stages. Loud, open, almost amp-like.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.6,
+    "circuit": "Big Muff",
+    "muffVer": "Ram's Head",
+    "muffDiode": "LED",
+    "muffMids": "Stock"
+  }
+}

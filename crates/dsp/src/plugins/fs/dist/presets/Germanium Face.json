@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Germanium Face",
+  "group":  "Fuzz",
+  "tags":   "Fuzz Face · Ge",
+  "desc":   "Fuzz at 8, stock bias. Roll Input back and it cleans up.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.6,
+    "circuit": "Fuzz Face",
+    "ffTrans": "Germanium",
+    "ffBias": "Stock"
+  }
+}

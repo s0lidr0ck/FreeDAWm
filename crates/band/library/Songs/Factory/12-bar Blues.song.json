@@ -1,0 +1,120 @@
+{
+ "format": 1,
+ "kind": "song",
+ "app": "MIDIStudio",
+ "name": "12-bar Blues",
+ "tags": [
+  "blues"
+ ],
+ "template": true,
+ "factory": true,
+ "song": {
+  "format": 1,
+  "sections": [
+   {
+    "id": "A",
+    "name": "Blues",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 50,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 50,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 66,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 50,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 2,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 66,
+      "bass": -1,
+      "length": 2
+     }
+    ]
+   }
+  ],
+  "arrangement": [
+   "A"
+  ],
+  "key": 7,
+  "scale": 0,
+  "take": 1
+ },
+ "feel": "natural",
+ "tension": true,
+ "players": [],
+ "targets": []
+}

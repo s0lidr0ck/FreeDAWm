@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Thickener",
+  "group": "Chorus",
+  "tags": "BBD · Dim D · ~0.78 Hz stock",
+  "desc": "Under the threshold of hearing it as an effect. Just wider than it was.",
+  "values": {
+    "circuit": "Dim D",
+    "variant": "A",
+    "depth": 0.35,
+    "rate": 0.5,
+    "mix": 0.35,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

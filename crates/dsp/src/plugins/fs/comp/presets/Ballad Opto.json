@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Ballad Opto",
+  "group": "Vocals",
+  "tags": "LA-2A · Opto",
+  "desc": "Light optical leveling for an intimate, dynamic vocal.",
+  "values": {
+    "style": "LA-2A",
+    "amount": 0.4,
+    "ratio": 0,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.5,
+    "color": 0.4,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

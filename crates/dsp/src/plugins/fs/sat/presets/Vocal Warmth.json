@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Vocal Warmth",
+  "group": "Vocals",
+  "tags": "Valve · Triode",
+  "desc": "Triode with the lower mids driven a little harder, and a touch of Air to keep it open.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "A",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.375,
+    "air": 0.15,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

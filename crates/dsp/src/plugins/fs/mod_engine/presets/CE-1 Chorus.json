@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "CE-1 Chorus",
+  "group": "Stock Settings",
+  "tags": "BBD · CE-1 · ~0.9 Hz stock",
+  "desc": "MN3002, its own preamp, and a noise floor it never apologised for.",
+  "values": {
+    "circuit": "CE-1",
+    "variant": "A",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.45,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

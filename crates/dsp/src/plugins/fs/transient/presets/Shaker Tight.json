@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Shaker Tight",
+  "group": "Percussion",
+  "tags": "Percussion",
+  "desc": "Shakers and tambourines with less smear between strokes.",
+  "values": {
+    "source": "Percussion",
+    "attack": 0.5,
+    "sustain": 0.3125,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

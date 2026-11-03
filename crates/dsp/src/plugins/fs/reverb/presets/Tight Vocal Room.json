@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Tight Vocal Room",
+  "group": "Mix: Vocals",
+  "tags": "Room · 500 ms",
+  "desc": "Send. Puts a dry vocal in a space without sounding like reverb.",
+  "values": {
+    "machine": "Room",
+    "decay": 0.18287,
+    "mix": 1.0,
+    "size": 0.4,
+    "preDelay": 0.28284,
+    "lowCut": 0.51505,
+    "highCut": 0.76862,
+    "damping": 0.5981,
+    "bass": 0.5,
+    "character": 0.7,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

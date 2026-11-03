@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Podcast Voice",
+  "group": "Vocals",
+  "tags": "Clean · Modern",
+  "desc": "Clean, even speech. Nothing to hear except a steadier voice.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.48,
+    "ratio": 0.313087,
+    "attack": 0.595874,
+    "release": 0.52348,
+    "makeup": 0.333333,
+    "knee": 0.4,
+    "scHpf": 0.430677,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

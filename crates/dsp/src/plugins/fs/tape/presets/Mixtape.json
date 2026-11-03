@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Mixtape",
+  "group": "Cassette",
+  "tags": "Cassette · Type II",
+  "desc": "A chrome tape dubbed off the radio. Brighter than Type I, still unmistakably cassette.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "B",
+    "speed": "15 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.35,
+    "hiss": 0.571429,
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Live Mix Safety",
+  "group": "Mix Bus",
+  "tags": "Clean · Modern",
+  "desc": "Does nothing until something jumps out, then holds it. Auto Gain is off on purpose.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.16,
+    "ratio": 0.664159,
+    "attack": 0.270346,
+    "release": 0.450045,
+    "makeup": 0.333333,
+    "knee": 0.2,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 0,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

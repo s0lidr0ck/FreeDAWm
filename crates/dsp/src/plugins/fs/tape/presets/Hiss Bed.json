@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Hiss Bed",
+  "group": "Character",
+  "tags": "Two-Track · Vintage · 15 ips",
+  "desc": "Hiss 12 dB above what the machine really made: a noise bed for sparse arrangements.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "C",
+    "speed": "15 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.1,
+    "hiss": 0.857143,
+    "mix": 1.0
+  }
+}

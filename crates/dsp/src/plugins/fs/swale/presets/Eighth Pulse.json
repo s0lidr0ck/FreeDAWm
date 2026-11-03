@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Eighth Pulse",
+  "group": "Rhythmic",
+  "tags": "Rhythmic · 1/8",
+  "desc": "Twice as fast. Strum whole notes and let it do the rhythm.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.5,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/16",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 1.0,
+    "relNote": "1/16",
+    "rate": "1/8",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

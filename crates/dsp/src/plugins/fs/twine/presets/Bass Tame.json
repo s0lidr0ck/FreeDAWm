@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Bass Tame",
+  "group": "Stems",
+  "tags": "Tape clip · Transparent",
+  "desc": "Tape-clips the note fronts and holds the rest steady, 3 dB down.",
+  "values": {
+    "drive": 0.1667,
+    "clip": 0.5,
+    "shape": "Tape",
+    "character": "Transparent",
+    "ceiling": 0.75,
+    "release": 0.6962
+  }
+}

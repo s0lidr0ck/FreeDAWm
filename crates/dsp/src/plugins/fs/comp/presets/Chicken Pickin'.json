@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Chicken Pickin'",
+  "group": "Guitar",
+  "tags": "Ross · Pedal",
+  "desc": "High sustain, fast attack. Every note pops at the same level.",
+  "values": {
+    "style": "Ross",
+    "amount": 0.8,
+    "ratio": 0.4,
+    "attack": 0.155362,
+    "release": 0.411954,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.55,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

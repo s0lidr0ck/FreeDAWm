@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Kick Tighten",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "A boomy kick shortened: the low ring comes down, the click is left alone.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.5,
+    "sustain": 0.25,
+    "attackTime": 0.5,
+    "sustainTime": 0.371357,
+    "attackFocus": "Full",
+    "sustainFocus": "Low",
+    "mix": 1.0
+  }
+}

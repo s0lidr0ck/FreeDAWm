@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Treble Booster",
+  "group":  "Edge & Boost",
+  "tags":   "Klon · LED",
+  "desc":   "Gain low, treble maxed. Cuts.",
+  "values": {
+    "drive": 0.2,
+    "tone": 1,
+    "circuit": "Klon",
+    "klonDiode": "LED"
+  }
+}

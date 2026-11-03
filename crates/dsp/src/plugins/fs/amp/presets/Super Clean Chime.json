@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Super Clean Chime",
+  "group": "Clean",
+  "tags": "Super · Volume 3",
+  "desc": "Four 10s, clean and wide: sparkle with more punch than a Twin.",
+  "values": {
+    "amp": "Super Reverb '65",
+    "supChannel": "Vibrato",
+    "supVolume": 0.3,
+    "supBright": 1,
+    "supTreble": 0.55,
+    "supMiddle": 0.5,
+    "supBass": 0.4,
+    "supReverb": 0.25,
+    "supIntensity": 0.0,
+    "supCab": "Built-in"
+  }
+}

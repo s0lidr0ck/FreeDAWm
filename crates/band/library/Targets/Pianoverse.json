@@ -1,0 +1,22 @@
+{
+ "format": 1,
+ "name": "Pianoverse",
+ "slot": 4,
+ "driver": "pianoPedal",
+ "instruments": [
+  "Piano",
+  "Electric Keys"
+ ],
+ "help": "Continuous half-pedal and soft pedal (CC64/CC67). Applies on Piano and E.Keys. Natural feel: pedal ramps, legato pedalling, soft pedal at Energy 1, release velocities, velocity kept to 20 to 120 - retune `velocity` in this file to your calibration.",
+ "ksOctaveDefault": 0,
+ "velocity": { "lo": 20, "hi": 120, "curve": 1.0 },
+ "data": {
+  "halfPedal": [
+   24,
+   70,
+   127
+  ],
+  "softPedalCC": 67,
+  "softPedalMaxEnergy": 1
+ }
+}

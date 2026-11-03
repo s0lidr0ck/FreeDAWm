@@ -1,0 +1,48 @@
+{
+ "format": 1,
+ "name": "SWAM Strings",
+ "slot": 5,
+ "driver": "swam",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "One solo string per musician: CC11 expression, CC1 vibrato, legato overlaps, pizz / tremolo / harmonics keyswitches (24–32). Pick a Voice per musician to build a section.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "family": "strings",
+  "instruments": [
+   {
+    "name": "Violin",
+    "low": 55,
+    "high": 103
+   },
+   {
+    "name": "Viola",
+    "low": 48,
+    "high": 96
+   },
+   {
+    "name": "Cello",
+    "low": 36,
+    "high": 89
+   },
+   {
+    "name": "Double Bass",
+    "low": 28,
+    "high": 80
+   }
+  ],
+  "expressionCC": 11,
+  "vibratoCC": 1,
+  "keyswitchOffset": 24
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Chrome Dub",
+  "group": "Cassette",
+  "tags": "Cassette · Type II",
+  "desc": "Chrome, hit a bit hard, hiss backed off 6 dB.",
+  "values": {
+    "machine": "Cassette",
+    "formula": "B",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.25,
+    "hiss": 0.428571,
+    "mix": 1.0
+  }
+}

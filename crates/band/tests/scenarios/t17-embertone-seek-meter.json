@@ -1,0 +1,47 @@
+{
+  "name": "t17-embertone-seek-meter",
+  "pending": false,
+  "description": "Task 17: Ilse on the Embertone Joshua Bell Violin, Natural; a mid-play meter change 4/4 -> 3/4 at bar 5 (regenerateFrom: the drivers' drop paths), then a seek back 30 -> 8 (their resets).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Ilse",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Embertone Joshua Bell Violin",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "meter": [
+        3,
+        4
+      ]
+    },
+    {
+      "at_ppq": 30.0,
+      "seek_to": 8.0
+    }
+  ]
+}

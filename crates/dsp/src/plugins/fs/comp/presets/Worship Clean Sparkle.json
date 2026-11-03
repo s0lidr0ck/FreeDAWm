@@ -1,0 +1,25 @@
+{
+  "engine": "CompEngine",
+  "name": "Worship Clean Sparkle",
+  "group": "Guitar",
+  "tags": "Ross · Pedal",
+  "desc": "Slower attack keeps the pick, the blend keeps it natural. Made for delay-and-reverb cleans.",
+  "values": {
+    "style": "Ross",
+    "amount": 0.57,
+    "ratio": 0.4,
+    "attack": 0.391487,
+    "release": 0.522879,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.35,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.599485,
+    "aLevel": 0.599485
+  }
+}

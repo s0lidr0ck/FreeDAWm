@@ -1,0 +1,36 @@
+{
+  "name": "t11-keys-deacon-68",
+  "pending": false,
+  "description": "Task 11: Deacon on Pianoverse, Natural, the host in 6/8.",
+  "bars": 16,
+  "num": 6,
+  "den": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Deacon",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Pianoverse",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Claps Snap",
+  "group": "Percussion",
+  "tags": "Percussion",
+  "desc": "Claps with a harder front and a shorter tail.",
+  "values": {
+    "source": "Percussion",
+    "attack": 0.666667,
+    "sustain": 0.375,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

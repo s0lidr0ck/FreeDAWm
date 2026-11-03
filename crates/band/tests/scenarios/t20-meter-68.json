@@ -1,0 +1,12 @@
+{
+  "name": "t20-meter-68",
+  "pending": false,
+  "description": "Task 20: the factory band in 6/8.",
+  "bars": 16,
+  "num": 6,
+  "den": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  }
+}

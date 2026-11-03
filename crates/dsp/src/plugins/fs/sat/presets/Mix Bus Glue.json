@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Mix Bus Glue",
+  "group": "Bus & Master",
+  "tags": "Iron · Ferrite",
+  "desc": "The subtlest thing in the bank. Belongs on the mix bus from the first fader move.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "C",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

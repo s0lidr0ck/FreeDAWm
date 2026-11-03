@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Kick In - Tight",
+  "group": "Kick",
+  "tags": "Kick In · Tight",
+  "desc": "The default starting point on an inside kick mic. Short follow, hard mute.",
+  "values": {
+    "instrument": "Kick In",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 1.0,
+    "length": 0.3,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.35,
+    "retrig": 0.3,
+    "debleed": 0.0,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

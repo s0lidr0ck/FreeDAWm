@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Ambient Wash",
+  "group": "Worship & Ambient",
+  "tags": "Pick · 2 s · Wide",
+  "desc": "Everything slow, swells drifting side to side.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.9,
+    "hold": 0.4,
+    "release": 0.9,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "S-Curve",
+    "retrig": 0.5,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.7,
+    "vca": "Clean",
+    "alternate": 0.5,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Phrase"
+  }
+}

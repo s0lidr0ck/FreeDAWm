@@ -1,0 +1,60 @@
+{
+  "name": "t20-ample-lead-seek-meter",
+  "pending": false,
+  "description": "Task 20 (test Library ample-melodic): Lark on Ample Guitar M 4, Ample Notes; Ample mode 1 at 9.95 (40 ms before a generated step: regenerateFrom, ampleDropFrom with a lead vibrato sounding), back to 2 at 22.45, 4/4 -> 3/4 at 26, then a seek back 40 -> 8.",
+  "library_overlay": "ample-melodic",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Lark",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_instrument": 8,
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_ample": 2
+  },
+  "events": [
+    {
+      "at_ppq": 9.95,
+      "param": "m1_ample",
+      "value": 1
+    },
+    {
+      "at_ppq": 22.45,
+      "param": "m1_ample",
+      "value": 2
+    },
+    {
+      "at_ppq": 26.0,
+      "meter": [
+        3,
+        4
+      ]
+    },
+    {
+      "at_ppq": 40.0,
+      "seek_to": 8.0
+    }
+  ]
+}

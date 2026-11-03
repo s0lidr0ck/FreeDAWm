@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Underwater",
+  "group": "Fun",
+  "tags": "Phase · Uni-Vibe · ~1 Hz stock",
+  "desc": "Bias right down, wet only, barely moving. Everything sounds submerged.",
+  "values": {
+    "circuit": "Uni-Vibe",
+    "variant": "B",
+    "depth": 1.0,
+    "rate": 0.15,
+    "mix": 1.0,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.35,
+    "noise": 0.35,
+    "bias": 0.1,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

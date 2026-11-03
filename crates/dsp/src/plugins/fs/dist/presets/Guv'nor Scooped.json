@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Guv'nor Scooped",
+  "group":  "Distortion",
+  "tags":   "Guv'nor · LED",
+  "desc":   "Gain up, mids cut, bass boost. Thrash.",
+  "values": {
+    "drive": 0.85,
+    "tone": 0.6,
+    "circuit": "Guv'nor",
+    "govClip": "LED",
+    "govBass": "Boost",
+    "govMid": "Cut"
+  }
+}

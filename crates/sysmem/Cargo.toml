@@ -1,0 +1,26 @@
+[package]
+name = "soundcraft-sysmem"
+description = "SoundCraft: the computer's physical memory (an isolated unsafe helper crate: one OS call per platform)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+# The isolated unsafe helper crate (craftrules never-crash): this crate opts out of the workspace
+# `unsafe_code = "forbid"` for itself only. It denies unsafe everywhere and allows it solely on the
+# FFI module (`src/ffi.rs`). The rest mirrors `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"

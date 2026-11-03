@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Uni-Vibe",
+  "group": "Stock Settings",
+  "tags": "Phase · Uni-Vibe · ~1 Hz stock",
+  "desc": "One lamp, four LDRs, four different caps. The reason it never sounds like a phaser.",
+  "values": {
+    "circuit": "Uni-Vibe",
+    "variant": "A",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

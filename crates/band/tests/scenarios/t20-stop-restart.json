@@ -1,0 +1,20 @@
+{
+  "name": "t20-stop-restart",
+  "pending": false,
+  "description": "Task 20: stop at bar 3, restart after 4 blocks.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "events": [
+    {
+      "at_ppq": 8.0,
+      "stop": true
+    },
+    {
+      "stopped_blocks": 4,
+      "play": true
+    }
+  ]
+}

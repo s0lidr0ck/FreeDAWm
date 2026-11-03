@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "33609 Master",
+  "group": "Mix Bus",
+  "tags": "33609 · Diode",
+  "desc": "One-and-a-half to one on Auto 2. A dB or two of density across a whole mix.",
+  "values": {
+    "style": "33609",
+    "amount": 0.28,
+    "ratio": 0,
+    "attack": 1,
+    "release": 1,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.284662,
+    "color": 0.4,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

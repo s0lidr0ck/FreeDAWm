@@ -1,0 +1,24 @@
+*~
+plan/
+/target
+/dist
+/corpus
+/log
+.DS_Store
+/.claude/
+/target-*/
+/craft-fonts/
+plans/
+.DS_Store
+# FireStation fidelity audio (inputs and C++ references) stays local: regenerate with
+# `cargo xtask fidelity-inputs` and `cargo xtask fidelity-refs <engine>`.
+crates/dsp/tests/fidelity/**/*.wav
+crates/dsp/tests/fidelity/**/*.hash
+# Band reference events from MIDI Studio's C++ (tools/band-ref): regenerate with `cargo xtask band-refs`.
+crates/band/tests/refs/
+
+# Steinberg ASIO SDK (local only, never committed)
+.asio-sdk/
+
+# Python bytecode (tools/ml-export)
+__pycache__/

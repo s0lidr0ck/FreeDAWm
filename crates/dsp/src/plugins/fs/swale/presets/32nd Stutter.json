@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "32nd Stutter",
+  "group": "Fun",
+  "tags": "Rhythmic · 1/32",
+  "desc": "Machine-gun gate.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.0,
+    "hold": 0.06,
+    "release": 0.05,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/32",
+    "peakBeat": 0.0,
+    "phrase": "Per Note"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "engine": "AmpEngine",
+  "name": "JTM45 Bluesbreaker",
+  "group": "Driven",
+  "tags": "JTM45 · Both volumes up",
+  "desc": "Volume I near full with some Volume II: the 1966 blues sound.",
+  "values": {
+    "amp": "JTM45 '66",
+    "jtmVolume": 0.85,
+    "volume2": 0.35,
+    "jtmTreble": 0.6,
+    "jtmMiddle": 0.7,
+    "jtmBass": 0.4,
+    "presence": 0.5,
+    "jtmIntensity": 0.0,
+    "jtmCab": "Built-in"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Sidechain Pump",
+  "group": "Mix Tools",
+  "tags": "Rhythmic · 1/4 · Floor",
+  "desc": "Ducks on every beat and rises back, like a compressor keyed from the kick. No key input needed.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.0,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Log",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.9,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/8",
+    "holdSync": 1.0,
+    "holdNote": "1/8",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/4",
+    "peakBeat": 0.0,
+    "phrase": "Per Note"
+  }
+}

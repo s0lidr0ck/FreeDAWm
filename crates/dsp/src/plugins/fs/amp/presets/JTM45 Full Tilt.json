@@ -1,0 +1,18 @@
+{
+  "engine": "AmpEngine",
+  "name": "JTM45 Full Tilt",
+  "group": "Driven",
+  "tags": "JTM45 · Everything on 10",
+  "desc": "Dimed. The cathode follower, the KT66s and the GZ34 all giving up together.",
+  "values": {
+    "amp": "JTM45 '66",
+    "jtmVolume": 1.0,
+    "volume2": 0.8,
+    "jtmTreble": 0.7,
+    "jtmMiddle": 0.8,
+    "jtmBass": 0.45,
+    "presence": 0.6,
+    "jtmIntensity": 0.0,
+    "jtmCab": "Built-in"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "Super Normal Channel",
+  "group": "Clean",
+  "tags": "Super · Normal",
+  "desc": "The Normal channel: no reverb, a touch rounder.",
+  "values": {
+    "amp": "Super Reverb '65",
+    "supChannel": "Normal",
+    "supVolume": 0.35,
+    "supBright": 0,
+    "supTreble": 0.5,
+    "supMiddle": 0.5,
+    "supBass": 0.45,
+    "supCab": "Built-in"
+  }
+}

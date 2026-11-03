@@ -1,0 +1,75 @@
+{
+ "format": 1,
+ "kind": "song",
+ "app": "MIDIStudio",
+ "name": "Jazz ii-V-I",
+ "tags": [
+  "jazz"
+ ],
+ "template": true,
+ "factory": true,
+ "song": {
+  "format": 1,
+  "sections": [
+   {
+    "id": "A",
+    "name": "ii-V-I",
+    "energyShift": 0,
+    "followIdea": false,
+    "musicians": [
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     },
+     {
+      "plays": true,
+      "energy": null
+     }
+    ],
+    "chords": [
+     {
+      "slot": 17,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 66,
+      "bass": -1,
+      "length": 2
+     },
+     {
+      "slot": 1,
+      "bass": -1,
+      "length": 4
+     }
+    ]
+   }
+  ],
+  "arrangement": [
+   "A"
+  ],
+  "key": 10,
+  "scale": 0,
+  "take": 1
+ },
+ "feel": "natural",
+ "tension": true,
+ "players": [],
+ "targets": []
+}

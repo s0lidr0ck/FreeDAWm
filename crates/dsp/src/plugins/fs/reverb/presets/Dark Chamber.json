@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Dark Chamber",
+  "group": "Mix: Vocals",
+  "tags": "Hall · 1.4 s",
+  "desc": "Send. Small, dense, dark: the old echo-chamber sound.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.38836,
+    "mix": 1.0,
+    "size": 0.2,
+    "preDelay": 0.24495,
+    "lowCut": 0.35437,
+    "highCut": 0.64956,
+    "damping": 0.41818,
+    "bass": 0.5,
+    "character": 0.7,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1970s",
+    "attack": 0.0
+  }
+}

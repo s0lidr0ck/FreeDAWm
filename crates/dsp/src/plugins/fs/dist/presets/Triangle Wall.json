@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Triangle Wall",
+  "group":  "Fuzz",
+  "tags":   "Big Muff · Triangle",
+  "desc":   "Everything up. Massive, scooped, a little wild.",
+  "values": {
+    "drive": 0.9,
+    "tone": 0.5,
+    "circuit": "Big Muff",
+    "muffVer": "Triangle",
+    "muffDiode": "Stock",
+    "muffMids": "Stock"
+  }
+}

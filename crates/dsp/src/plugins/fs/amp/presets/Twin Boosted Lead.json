@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Twin Boosted Lead",
+  "group": "Driven",
+  "tags": "Twin · Pull Boost",
+  "desc": "Pull Boost and the Volume high: as much drive as a Twin gives.",
+  "values": {
+    "amp": "Twin Reverb '77",
+    "volume": 0.85,
+    "bright": 0,
+    "treble": 0.5,
+    "middle": 0.7,
+    "bass": 0.35,
+    "reverb": 0.2,
+    "master": 1.0,
+    "pullBoost": 1,
+    "cab": "Built-in"
+  }
+}

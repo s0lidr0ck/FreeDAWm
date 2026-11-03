@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "Deluxe Clean Sparkle",
+  "group": "Clean",
+  "tags": "Deluxe · Volume 3",
+  "desc": "The blackface Deluxe clean: glassy, a little reverb, still headroom at 3.",
+  "values": {
+    "amp": "Deluxe Reverb '65",
+    "dlxChannel": "Vibrato",
+    "dlxVolume": 0.3,
+    "dlxTreble": 0.6,
+    "dlxBass": 0.45,
+    "dlxReverb": 0.25,
+    "dlxIntensity": 0.0,
+    "dlxCab": "Built-in"
+  }
+}

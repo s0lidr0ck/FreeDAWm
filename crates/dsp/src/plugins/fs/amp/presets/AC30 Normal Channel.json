@@ -1,0 +1,15 @@
+{
+  "engine": "AmpEngine",
+  "name": "AC30 Normal Channel",
+  "group": "Clean",
+  "tags": "AC30 · Normal",
+  "desc": "The Normal channel: rounder and darker, only the Cut to shape it.",
+  "values": {
+    "amp": "AC30 Top Boost '64",
+    "acChannel": "Normal",
+    "acNormal": 0.4,
+    "acBrilliant": 0.0,
+    "acCut": 0.2,
+    "acCab": "Built-in"
+  }
+}

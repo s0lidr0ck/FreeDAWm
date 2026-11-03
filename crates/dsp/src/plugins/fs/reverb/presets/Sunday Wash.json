@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Sunday Wash",
+  "group": "Worship Guitar",
+  "tags": "Cloud · 6.0 s",
+  "desc": "The pad-under-the-guitar sound. Lows cut so it doesn't fight the bass and keys.",
+  "values": {
+    "machine": "Cloud",
+    "decay": 0.6788,
+    "mix": 0.36,
+    "size": 0.5,
+    "preDelay": 0.28284,
+    "lowCut": 0.51505,
+    "highCut": 0.82948,
+    "damping": 0.53724,
+    "bass": 0.5,
+    "character": 0.45,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.45,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

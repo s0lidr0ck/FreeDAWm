@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Dive Bomb",
+  "group": "Whammy",
+  "tags": "Whammy · -2 Oct pedal",
+  "desc": "Two octaves down, slow glide. Hold a note and push the pedal.",
+  "values": {
+    "style": "Whammy",
+    "dry": 0.0,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.0,
+    "lpf": 1.0,
+    "reso": 0.0,
+    "voice": 0.70711,
+    "interval": "-2 Oct",
+    "pedal": 0.0,
+    "glide": 0.35,
+    "width": 0.35,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

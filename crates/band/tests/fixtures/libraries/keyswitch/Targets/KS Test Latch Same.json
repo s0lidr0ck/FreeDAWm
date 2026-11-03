@@ -1,0 +1,51 @@
+{
+ "format": 1,
+ "name": "KS Test Latch Same",
+ "slot": 29,
+ "driver": "keyswitch",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Test target (Task 20): two latching articulations returned with the same key, a tap, CC leads.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "articulations": {
+   "a": {
+    "key": 10,
+    "mode": "latch"
+   },
+   "b": {
+    "key": 11,
+    "mode": "latch"
+   },
+   "c": {
+    "key": 12,
+    "mode": "tap"
+   }
+  },
+  "use": {
+   "long": "a",
+   "short": "b",
+   "pluck": "c"
+  },
+  "default": "a",
+  "return": "same",
+  "keyLeadMs": 8,
+  "dynamicsCC": 1,
+  "expressionCC": 11,
+  "ccLeadMs": {
+   "dynamics": 30,
+   "expression": 22
+  },
+  "sendOnChangeOnly": false
+ }
+}

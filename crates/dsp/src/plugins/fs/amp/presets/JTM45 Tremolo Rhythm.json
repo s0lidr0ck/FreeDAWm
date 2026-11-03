@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "JTM45 Tremolo Rhythm",
+  "group": "Edge",
+  "tags": "JTM45 · Tremolo",
+  "desc": "Light breakup with the tremolo at a medium pace.",
+  "values": {
+    "amp": "JTM45 '66",
+    "jtmVolume": 0.5,
+    "volume2": 0.2,
+    "jtmTreble": 0.55,
+    "jtmMiddle": 0.6,
+    "jtmBass": 0.45,
+    "presence": 0.35,
+    "jtmSpeed": 0.5,
+    "jtmIntensity": 0.55,
+    "jtmCab": "Built-in"
+  }
+}

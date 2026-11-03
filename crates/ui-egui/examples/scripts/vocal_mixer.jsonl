@@ -1,0 +1,17 @@
+# The Mix window's PITCH section as in vocal-tuning-mockups/mixer.png: Bass, Keys, Verb and Lead Vox
+# (tuned 5.6-7.8 s, a CleanQ insert), the playhead at 6.9 s. The readout shows the tuned offset:
+# the real take sings G#4 -41c there, the mockup's "-41c" is that sung offset before tuning.
+{"vocal_demo": {"track": "Lead Vox", "view": [0.0, 13.0], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.9, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"method": "engine.execute", "params": {"command": "window.vocal_editor", "params": {}}}
+{"method": "engine.execute", "params": {"command": "track.hide", "params": {"tracks": ["Kick", "Snare", "Hats", "Pad", "Lead"], "hidden": true}}}
+{"method": "engine.execute", "params": {"command": "mix.insert", "params": {"track": "Lead Vox", "slot": 0, "plugin": "fs_cleanq"}}}
+{"method": "engine.execute", "params": {"command": "mix.pitch_expanded", "params": {"track": "Lead Vox", "expanded": true}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Lead Vox"], "start": {"seconds": 6.9}, "end": {"seconds": 6.9}}}}
+{"method": "engine.execute", "params": {"command": "window.mix", "params": {}}}
+{"steps": 10}
+{"shot": "target-ml/vocal-mixer-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"shot": "target-ml/vocal-mixer-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}

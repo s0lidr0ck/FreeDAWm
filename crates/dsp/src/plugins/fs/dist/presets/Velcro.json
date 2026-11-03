@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Velcro",
+  "group":  "Fuzz",
+  "tags":   "Fuzz Face · Si · Cold",
+  "desc":   "Cold bias, fuzz up. Gated, sputtering, spitty.",
+  "values": {
+    "drive": 0.9,
+    "tone": 0.5,
+    "circuit": "Fuzz Face",
+    "ffTrans": "Silicon",
+    "ffBias": "Cold"
+  }
+}

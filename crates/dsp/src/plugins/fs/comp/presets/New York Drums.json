@@ -1,0 +1,25 @@
+{
+  "engine": "CompEngine",
+  "name": "New York Drums",
+  "group": "Fun",
+  "tags": "160 · VCA",
+  "desc": "Brutal VCA under the dry signal. The classic parallel trick.",
+  "values": {
+    "style": "160",
+    "amount": 0.76,
+    "ratio": 1,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0,
+    "scHpf": 0,
+    "color": 0.7,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.672549,
+    "aLevel": 0.488561
+  }
+}

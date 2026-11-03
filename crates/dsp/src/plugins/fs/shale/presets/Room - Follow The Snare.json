@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Room - Follow The Snare",
+  "group": "Rooms & Overheads",
+  "tags": "Room · Follow",
+  "desc": "Set Link Role to Follow and put the snare in the same group: the room then opens on the snare instead of on itself. This is the trick room mics are bought for.",
+  "values": {
+    "instrument": "Room",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 0.6,
+    "length": 0.78,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.8,
+    "retrig": 0.2,
+    "debleed": 0.0,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

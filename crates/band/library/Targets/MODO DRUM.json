@@ -1,0 +1,97 @@
+{
+ "format": 1,
+ "name": "MODO DRUM",
+ "slot": 1,
+ "driver": "drumMap",
+ "instruments": [
+  "Drums",
+  "Beat"
+ ],
+ "help": "MODO DRUM factory map: L/R snare and toms, rimshots on hard hits, tight hats on ghost notes. In Natural feel also cymbal chokes at Breaks and the Ending, shank hats on accents, extra-open hats and the ride bell at Energy 4, foot splashes, cross-stick at low Energy, pedal hats, flams, open-hat barks, alternating crashes, china and ride 2. To enable the sloshy hats, set the hi-hat aperture CC number in MODO's Preferences and as hatApertureCC in this file; leave the Snare / Toms Hit Position CCs disabled (enabling them makes all snare keys identical and removes rimshots). Applies on Drums.",
+ "ksOctaveDefault": 0,
+ "velocity": {
+  "lo": 12,
+  "hi": 127,
+  "curve": 1.0
+ },
+ "data": {
+  "rules": [
+   {
+    "note": 38,
+    "minVel": 112,
+    "side": "right",
+    "out": 64
+   },
+   {
+    "note": 38,
+    "minVel": 112,
+    "side": "left",
+    "out": 40
+   },
+   {
+    "note": 38,
+    "minVel": 50,
+    "side": "right",
+    "out": 62
+   },
+   {
+    "note": 42,
+    "maxVel": 44,
+    "out": 29
+   },
+   {
+    "note": 50,
+    "side": "right",
+    "offset": 24
+   },
+   {
+    "note": 48,
+    "side": "right",
+    "offset": 24
+   },
+   {
+    "note": 47,
+    "side": "right",
+    "offset": 24
+   },
+   {
+    "note": 45,
+    "side": "right",
+    "offset": 24
+   },
+   {
+    "note": 43,
+    "side": "right",
+    "offset": 24
+   }
+  ],
+  "chokes": {
+   "49": 66,
+   "57": 68,
+   "55": 70
+  },
+  "hatShank": [
+   30,
+   34
+  ],
+  "hatExtraOpen": 33,
+  "hatFootSplash": 32,
+  "rideBell": 53,
+  "crossStick": 37,
+  "pedalHat": 44,
+  "openHatShank": 34,
+  "crashes": [
+   49,
+   57
+  ],
+  "splash": 55,
+  "hatApertureCC": -1,
+  "hatCCKeys": {
+   "shank": 25,
+   "tip": 27
+  },
+  "china": 52,
+  "ride2": 59,
+  "bellCymbal": -1
+ }
+}

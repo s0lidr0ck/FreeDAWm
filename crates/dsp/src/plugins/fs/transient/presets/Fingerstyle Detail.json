@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Fingerstyle Detail",
+  "group": "Guitar",
+  "tags": "Guitar",
+  "desc": "Finger and nail attack in the mids, brought forward.",
+  "values": {
+    "source": "Guitar",
+    "attack": 0.638889,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Mid",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

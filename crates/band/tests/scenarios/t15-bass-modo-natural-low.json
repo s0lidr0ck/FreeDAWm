@@ -1,0 +1,23 @@
+{
+  "name": "t15-bass-modo-natural-low",
+  "pending": false,
+  "description": "Task 15: Pino (vibrato 0.6, let ring 0.7, high position) on MODO BASS 2, Natural, Energy 2.",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": false
+  },
+  "players": [null, null, "Pino", null, null, null],
+  "targets": [null, null, "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m3_energy": 2,
+    "m3_fills": 50
+  }
+}

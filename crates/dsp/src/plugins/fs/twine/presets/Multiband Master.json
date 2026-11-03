@@ -1,0 +1,18 @@
+{
+  "engine": "Twine",
+  "name": "Multiband Master",
+  "group": "Mastering",
+  "tags": "Multiband · Soft clip · Transparent",
+  "desc": "Three bands, so the low end is limited on its own and the vocal stays put. Streaming level.",
+  "values": {
+    "drive": 0.2917,
+    "clip": 0.4,
+    "shape": "Soft",
+    "character": "Transparent",
+    "ceiling": 0.9167,
+    "release": 0.5998,
+    "multi": 1,
+    "xoverLo": 0.4106,
+    "xoverHi": 0.4881
+  }
+}

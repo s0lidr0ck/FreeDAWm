@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Small Clone",
+  "group": "Stock Settings",
+  "tags": "BBD · Small Clone · ~0.8 Hz stock",
+  "desc": "One knob on the real thing, and this is where it sat. Fat and slow.",
+  "values": {
+    "circuit": "Small Clone",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

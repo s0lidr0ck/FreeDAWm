@@ -1,0 +1,23 @@
+{
+  "name": "t15-drums-modo-heavy",
+  "pending": false,
+  "description": "Task 15: a heavy drummer (Havoc) on MODO DRUM, Natural, Energy 4, Fills 100 (heavy fills and crashes).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": false
+  },
+  "players": [null, "Havoc", null, null, null, null],
+  "targets": [null, "MODO DRUM", null, null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_energy": 4,
+    "m2_fills": 100
+  }
+}

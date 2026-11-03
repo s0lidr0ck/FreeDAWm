@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Electric Picking",
+  "group": "Guitar",
+  "tags": "Guitar",
+  "desc": "Picking detail on a clean electric, and a slightly shorter note.",
+  "values": {
+    "source": "Guitar",
+    "attack": 0.666667,
+    "sustain": 0.4375,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

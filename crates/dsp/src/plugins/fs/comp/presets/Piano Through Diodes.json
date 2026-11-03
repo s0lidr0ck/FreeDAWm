@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Piano Through Diodes",
+  "group": "Keys + Acoustic",
+  "tags": "33609 · Diode",
+  "desc": "Gentle two-to-one that rounds the hammer and fills out the sustain.",
+  "values": {
+    "style": "33609",
+    "amount": 0.4,
+    "ratio": 0.2,
+    "attack": 1,
+    "release": 0.4,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

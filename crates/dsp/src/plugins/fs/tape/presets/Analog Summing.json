@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Analog Summing",
+  "group": "Mix Bus",
+  "tags": "Two-Track · Standard · 15 ips",
+  "desc": "Tape at exactly 0 VU: 0.4 % THD, the bump, a slight top roll-off. The least a machine can do.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.2,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

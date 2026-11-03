@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Dirty RAT",
+  "group":  "Distortion",
+  "tags":   "RAT · Dirty",
+  "desc":   "Germanium clippers. Fuzzy, dark, squashed.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.55,
+    "circuit": "RAT",
+    "ratModel": "Dirty",
+    "ratDiode": "Stock",
+    "ratChip": "Stock",
+    "ratFat": "Off"
+  }
+}

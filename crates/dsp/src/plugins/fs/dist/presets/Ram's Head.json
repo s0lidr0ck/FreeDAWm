@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Ram's Head",
+  "group":  "Fuzz",
+  "tags":   "Big Muff · Ram's Head",
+  "desc":   "Sustain at 7, tone at 4. Comfortably Numb territory.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.4,
+    "circuit": "Big Muff",
+    "muffVer": "Ram's Head",
+    "muffDiode": "Stock",
+    "muffMids": "Stock"
+  }
+}

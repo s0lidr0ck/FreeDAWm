@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Klon Noon",
+  "group":  "Overdrive",
+  "tags":   "Klon",
+  "desc":   "Gain at noon. Clean blend plus germanium hair.",
+  "values": {
+    "drive": 0.5,
+    "tone": 0.5,
+    "circuit": "Klon",
+    "klonDiode": "Germanium"
+  }
+}

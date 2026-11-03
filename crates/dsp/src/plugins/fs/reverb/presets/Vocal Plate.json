@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Vocal Plate",
+  "group": "Mix: Vocals",
+  "tags": "Plate · 1.8 s",
+  "desc": "Send. The standard lead vocal plate: pre-delay keeps the words up front.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.43851,
+    "mix": 1.0,
+    "size": 0.5,
+    "preDelay": 0.4,
+    "lowCut": 0.58859,
+    "highCut": 0.73345,
+    "damping": 0.10353,
+    "bass": 0.5,
+    "character": 0.4,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

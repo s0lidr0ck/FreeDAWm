@@ -1,0 +1,48 @@
+{
+ "format": 1,
+ "name": "SWAM Brass",
+ "slot": 6,
+ "driver": "swam",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "One solo horn per musician: CC11 expression, vibrato, breath gaps, fall / doit keyswitches (25 / 26).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "family": "brass",
+  "instruments": [
+   {
+    "name": "Trumpet",
+    "low": 54,
+    "high": 96
+   },
+   {
+    "name": "Trombone",
+    "low": 40,
+    "high": 85
+   },
+   {
+    "name": "Horn",
+    "low": 35,
+    "high": 81
+   },
+   {
+    "name": "Tuba",
+    "low": 33,
+    "high": 76
+   }
+  ],
+  "expressionCC": 11,
+  "vibratoCC": 1,
+  "keyswitchOffset": 24
+ }
+}

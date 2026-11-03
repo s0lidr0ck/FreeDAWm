@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Throaty",
+  "group": "Phaser",
+  "tags": "Phase · Small Stone · ~0.8 Hz stock",
+  "desc": "Colour on and the resonant path wound up. Vocal, in the way a wah is.",
+  "values": {
+    "circuit": "Small Stone",
+    "variant": "B",
+    "depth": 0.7,
+    "rate": 0.4,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.6,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.35,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

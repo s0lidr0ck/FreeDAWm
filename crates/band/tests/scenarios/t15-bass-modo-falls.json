@@ -1,0 +1,23 @@
+{
+  "name": "t15-bass-modo-falls",
+  "pending": false,
+  "description": "Task 15: Walt (falls 0.1) on MODO BASS 2, Natural, Energy 2, Fills 0, Length 30 (falls: the pitch wheel).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [null, null, "Walt", null, null, null],
+  "targets": [null, null, "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m3_energy": 2,
+    "m3_fills": 0,
+    "m3_length": 30
+  }
+}

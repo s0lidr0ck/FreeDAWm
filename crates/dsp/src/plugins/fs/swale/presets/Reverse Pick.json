@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Reverse Pick",
+  "group": "Reverse",
+  "tags": "One-Shot · 500 ms",
+  "desc": "Not on the grid: each pick plays one reverse-shaped note, then cuts.",
+  "values": {
+    "mode": "One-Shot",
+    "attack": 0.69,
+    "hold": 0.0,
+    "release": 0.0,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Wide Chorus",
+  "group": "Doubler",
+  "tags": "H910 · 25 cents apart",
+  "desc": "Lots of detune, full width. A big 80s clean.",
+  "values": {
+    "style": "H910",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.5,
+    "attack": 0.0,
+    "lpf": 0.78182,
+    "reso": 0.0,
+    "voice": 0.63021,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 1.0,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

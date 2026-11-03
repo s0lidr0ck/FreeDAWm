@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Klon Clean Boost",
+  "group":  "Overdrive",
+  "tags":   "Klon",
+  "desc":   "Gain at 0. The famous transparent push into a driven amp.",
+  "values": {
+    "drive": 0,
+    "tone": 0.55,
+    "circuit": "Klon",
+    "klonDiode": "Germanium"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Worship Leader",
+  "group": "Vocals",
+  "tags": "LA-2A · Opto",
+  "desc": "Keeps a wide-ranging live vocal on top of the band without pumping on the loud lines.",
+  "values": {
+    "style": "LA-2A",
+    "amount": 0.52,
+    "ratio": 0,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.52961,
+    "color": 0.45,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

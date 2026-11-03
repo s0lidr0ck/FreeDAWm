@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Rap Vocal Grit",
+  "group": "Vocals",
+  "tags": "Bridge · Mixed",
+  "desc": "Lopsided diode grit, mostly second harmonic, half in. Cuts through a busy beat.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "C",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "focus": 0.583333,
+    "air": 0.0,
+    "mix": 0.5,
+    "chanMode": "Stereo"
+  }
+}

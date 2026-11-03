@@ -1,0 +1,33 @@
+{
+ "format": 1,
+ "name": "Ample Guitar M 4",
+ "slot": 13,
+ "driver": "ampleGuitar",
+ "instruments": [
+  "Guitar",
+  "Folk"
+ ],
+ "help": "Ample Sound acoustic guitar. Strummers drive Ample's Strummer; pickers play the notes with Ample's techniques (change it with Ample plays, above). The musician sets Ample's modes itself; set Auto Legato to Off in Ample. C3 = middle C. Natural feel: release velocities (leave Auto Off Velocity off), 50 ms onset compensation (Start Time 50 in Settings), hammer-on / slide strum changes, slide-in and harmonic strums, slide-outs, vibrato on held lead notes. Sample Cycle: Separate Cycle for strummers, Round Robin for pickers. Strummer: set Strum Time mode to All (not Each); the sweep speed per stroke comes from this file's strumTimeVelocity - raise lo for quicker strums. Ample's Strum Time = about 1000 ms × (1 − velocity/127); 118 ≈ 70 ms, 124 ≈ 25 ms. Two guitars: give the second a capo in Ample and strumInversion 1 in its player file. Ample chords = Slots: Chord Detect stays off; set Ample's 12 chord slots to the Strummer chord sheet (button) — your voicings, our strokes. A musician on another Idea than the sheet's plays a missing chord from the slot of its root.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "noteRange": [40, 84],
+  "noteVelocity": [40, 124],
+  "articulations": { "sustain": 24, "harmonic": 25, "palmMute": 26, "slideIn": 27, "legatoSlide": 28, "hammerOn": 29 },
+  "openStrings": [40, 45, 50, 55, 59, 64],
+  "modeKeys": { "strumMode": 97, "chordDetect": 86, "positionMode": 107, "openStringsFirst": 104 },
+  "onVelocity": 100,
+  "offVelocity": 20,
+  "chordRange": [36, 59],
+  "rootHigh": 47,
+  "strings": [62, 64, 65, 67, 69, 71],
+  "strokes": { "down": [72, 74], "up": [76, 76], "downMuted": [79, 81], "upMuted": [83, 83] },
+  "strokeVelocity": [45, 127],
+  "strumTimeKey": 85,
+  "strumTimeVelocity": [118, 124],
+  "releaseVelocity": true,
+  "onsetMs": 50,
+  "muteVoices": [77, 78],
+  "strokeNoise": { "down": [93, 95], "up": [94, 96] },
+  "fx": { "hitTop": 101, "hitTopMuted": 102, "strumMute": 92, "slap": 90, "scratch": 89 }
+ }
+}

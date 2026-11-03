@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Infinite Cathedral",
+  "group": "Fun",
+  "tags": "Hall · 30 s",
+  "desc": "Thirty seconds of stone.",
+  "values": {
+    "machine": "Hall",
+    "decay": 1.0,
+    "mix": 0.42,
+    "size": 1.0,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.64956,
+    "bass": 0.5,
+    "character": 0.3,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

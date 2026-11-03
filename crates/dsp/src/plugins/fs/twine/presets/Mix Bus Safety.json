@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Mix Bus Safety",
+  "group": "Mix Bus",
+  "tags": "Soft clip · Transparent",
+  "desc": "No drive, limiter only, just under 0 dBTP: catches the odd peak and nothing else.",
+  "values": {
+    "drive": 0.0,
+    "clip": 0.0,
+    "shape": "Soft",
+    "character": "Transparent",
+    "ceiling": 0.975,
+    "release": 0.6419
+  }
+}

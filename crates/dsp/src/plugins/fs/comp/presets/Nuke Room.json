@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Nuke Room",
+  "group": "Drums",
+  "tags": "EL8 · Distress",
+  "desc": "Brick-wall ratio, fastest times, Dist 3. Room mics turn into a wall of decay.",
+  "values": {
+    "style": "EL8",
+    "amount": 0.68,
+    "ratio": 1,
+    "attack": 0,
+    "release": 0,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.7,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "C",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

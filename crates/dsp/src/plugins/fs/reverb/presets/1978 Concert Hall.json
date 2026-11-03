@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "1978 Concert Hall",
+  "group": "Classics",
+  "tags": "Hall · 3.2 s",
+  "desc": "Color on 1970s: dark, soft-edged, slightly chorused. It sounds like a record, not a room.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.55334,
+    "mix": 0.32,
+    "size": 0.7,
+    "preDelay": 0.31623,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.5981,
+    "bass": 0.68361,
+    "character": 0.3,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.45,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1970s",
+    "attack": 0.0
+  }
+}

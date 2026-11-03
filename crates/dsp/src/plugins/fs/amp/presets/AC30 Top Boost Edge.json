@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "AC30 Top Boost Edge",
+  "group": "Edge",
+  "tags": "AC30 · Top Boost",
+  "desc": "Brilliant up past halfway: the chime gets hair and the EL84s start to bloom.",
+  "values": {
+    "amp": "AC30 Top Boost '64",
+    "acChannel": "Top Boost",
+    "acBrilliant": 0.55,
+    "acNormal": 0.0,
+    "acTreble": 0.5,
+    "acBass": 0.45,
+    "acCut": 0.35,
+    "acCab": "Built-in"
+  }
+}

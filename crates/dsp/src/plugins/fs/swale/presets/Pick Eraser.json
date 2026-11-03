@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Pick Eraser",
+  "group": "Staples",
+  "tags": "Pick · 40 ms",
+  "desc": "Just takes the pick off. Notes still feel immediate.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.3,
+    "hold": 0.0,
+    "release": 0.35,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Log",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

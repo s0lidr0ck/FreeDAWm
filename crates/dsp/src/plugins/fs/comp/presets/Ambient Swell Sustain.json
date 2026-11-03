@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Ambient Swell Sustain",
+  "group": "Guitar",
+  "tags": "Ross · Pedal",
+  "desc": "Maximum sustain, long release. Notes hang on under volume swells.",
+  "values": {
+    "style": "Ross",
+    "amount": 0.92,
+    "ratio": 0.4,
+    "attack": 0.282311,
+    "release": 0.712984,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.4,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Stacked Boost",
+  "group":  "Worship",
+  "tags":   "Klon · LED",
+  "desc":   "LED Klon, gain at 6. A loud, mostly clean lift.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.5,
+    "circuit": "Klon",
+    "klonDiode": "LED"
+  }
+}

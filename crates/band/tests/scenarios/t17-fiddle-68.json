@@ -1,0 +1,36 @@
+{
+  "name": "t17-fiddle-68",
+  "pending": false,
+  "description": "Task 17: Josie (nashville shuffle) on Indiginus The Fiddle in 6/8, Natural (shuffleSplit68, the jig).",
+  "bars": 16,
+  "num": 6,
+  "den": 8,
+  "song": "Rock Chorus Builds",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Josie",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Indiginus The Fiddle",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

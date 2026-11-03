@@ -1,0 +1,11 @@
+{
+  "name": "t20-feel-fills-yield",
+  "pending": false,
+  "description": "Task 20: the factory band with fills_yield on (Natural).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "fills_yield": true
+  }
+}

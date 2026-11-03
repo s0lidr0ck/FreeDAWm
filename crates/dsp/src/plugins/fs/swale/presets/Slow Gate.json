@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Slow Gate",
+  "group": "Mix Tools",
+  "tags": "Pick · 5 ms",
+  "desc": "Opens instantly, hangs on 150 ms, then fades. A gate with manners.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.0,
+    "hold": 0.2,
+    "release": 0.5,
+    "sens": 0.45,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Phrase"
+  }
+}

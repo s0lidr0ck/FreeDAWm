@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Sixties Vocal",
+  "group": "Vocals",
+  "tags": "Valve · Standard · 15 ips",
+  "desc": "Valve deck, a little wow and some hiss. Period colour, not a costume.",
+  "values": {
+    "machine": "Valve",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 0.2,
+    "hiss": 0.428571,
+    "mix": 1.0
+  }
+}

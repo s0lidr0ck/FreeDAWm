@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Shimmer Swells",
+  "group": "Worship Guitar",
+  "tags": "Shimmer · 8.0 s",
+  "desc": "Swell plus shimmer: strum a chord and an organ answers.",
+  "values": {
+    "machine": "Shimmer",
+    "decay": 0.73621,
+    "mix": 0.55,
+    "size": 0.5,
+    "preDelay": 0.28284,
+    "lowCut": 0.56166,
+    "highCut": 0.82948,
+    "damping": 0.62482,
+    "bass": 0.5,
+    "character": 0.6,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.71541,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

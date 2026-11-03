@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Room Bloom",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "For room mics: softer front, much more room behind it.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.416667,
+    "sustain": 0.6875,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

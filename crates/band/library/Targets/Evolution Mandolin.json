@@ -1,0 +1,28 @@
+{
+ "format": 1,
+ "name": "Evolution Mandolin",
+ "slot": 19,
+ "driver": "evolution",
+ "instruments": [ "Folk" ],
+ "help": "Orange Tree Evolution. In Kontakt: set every articulation to Keyswitch (momentary, not latching); Chords mode Disabled (we strum and roll ourselves; never use the pattern or strum keys); Setup: Vibrato CC #1, Legato range 2 ST, Mapping octave Standard. Save a Kontakt snapshot so the auto-assigned keys stop moving. Write the keyswitch test and check each articulation sounds while its key is held: the auto-assigned keys can re-pack when you change trigger types, so re-check the map after converting. Optional: assign a Bypass Legato Key (lets strums ring). Narrow \"range\" to the keys Kontakt colours as playable. Map predicted from the latching capture; play the keyswitch test once to confirm.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "range": [ 55, 88 ],
+  "articulations": { "powerchord": 34, "octaves": 35, "releaseSlideDown": 36, "slide16": 37, "slide8": 38, "slide4": 39, "velocitySlide": 40, "wsHammer": 41, "wsSlideIn": 42, "buzzTrill": 43, "graceDown": 44, "graceUp": 45, "harmonics": 49, "mute": 50, "palmMute": 51, "misfret": 52 },
+  "stringKeys": [ 24, 25, 26, 27 ],
+  "stringCount": 4,
+  "droneKey": -1,
+  "droneNote": -1,
+  "perfFxBase": 96,
+  "perfFx": {},
+  "vibratoCC": 1,
+  "legatoST": 2,
+  "slideRange": 2,
+  "bypassLegatoKey": -1,
+  "strumKeys": [ -1, -1 ],
+  "strumEngine": false,
+  "tremoloKeys": { "in": 47, "on": 48, "out": 46 },
+  "noteVelocity": [ 30, 124 ],
+  "bendBlues": false
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Tube Warmth",
+  "group": "Start Here",
+  "tags": "Valve · Triode",
+  "desc": "Triode colour at a level you feel more than hear. Put it on, forget it's there, miss it when it's gone.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "A",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

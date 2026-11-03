@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Round Bass",
+  "group": "Bass",
+  "tags": "Valve · Standard · 15 ips",
+  "desc": "Valve second harmonic and a soft top. Rounds off pick attack.",
+  "values": {
+    "machine": "Valve",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

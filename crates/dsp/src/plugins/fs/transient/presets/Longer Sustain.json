@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Longer Sustain",
+  "group": "Piano & Keys",
+  "tags": "Piano",
+  "desc": "The ring brought up as each note dies: a bigger, longer piano.",
+  "values": {
+    "source": "Piano",
+    "attack": 0.5,
+    "sustain": 0.6875,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

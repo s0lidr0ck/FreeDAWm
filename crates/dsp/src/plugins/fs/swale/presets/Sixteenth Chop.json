@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Sixteenth Chop",
+  "group": "Rhythmic",
+  "tags": "Rhythmic · 1/16",
+  "desc": "Hard tremolo chop, starts on the grid.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.1,
+    "hold": 0.0,
+    "release": 0.2,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 1.0,
+    "holdNote": "1/32",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/16",
+    "peakBeat": 0.0,
+    "phrase": "Per Note"
+  }
+}

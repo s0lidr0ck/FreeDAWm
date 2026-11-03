@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Fat Clean",
+  "group":  "Edge & Boost",
+  "tags":   "Blues Breaker",
+  "desc":   "Gain at 2, tone open. Barely dirty.",
+  "values": {
+    "drive": 0.2,
+    "tone": 0.8,
+    "circuit": "Blues Breaker",
+    "bbGain": "Stock"
+  }
+}

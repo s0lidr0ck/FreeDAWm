@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Klon Under Delay",
+  "group":  "Worship",
+  "tags":   "Klon",
+  "desc":   "Low gain, treble up. Keeps delay repeats clear.",
+  "values": {
+    "drive": 0.3,
+    "tone": 0.65,
+    "circuit": "Klon",
+    "klonDiode": "Germanium"
+  }
+}

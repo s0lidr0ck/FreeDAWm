@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "All Buttons In",
+  "group": "Fun",
+  "tags": "1176 · FET",
+  "desc": "The famous misuse. Loud, trashy, and alive.",
+  "values": {
+    "style": "1176",
+    "amount": 0.68,
+    "ratio": 1,
+    "attack": 0.269849,
+    "release": 0,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.75,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

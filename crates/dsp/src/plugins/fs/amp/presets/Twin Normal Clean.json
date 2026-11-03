@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Twin Normal Clean",
+  "group": "Clean",
+  "tags": "Twin · Normal channel",
+  "desc": "The Normal channel: one stage shorter than Vibrato, no reverb mixer -- fuller and rounder. Knobs at noon.",
+  "values": {
+    "amp": "Twin Reverb '77",
+    "channel": "Normal",
+    "volume": 0.3,
+    "bright": 0,
+    "treble": 0.5,
+    "middle": 0.5,
+    "bass": 0.5,
+    "master": 0.8,
+    "pullBoost": 0,
+    "cab": "Built-in"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "OCD Low Gain",
+  "group":  "Worship",
+  "tags":   "OCD · LP",
+  "desc":   "LP mode, drive at 3. Sits under delay and reverb.",
+  "values": {
+    "drive": 0.3,
+    "tone": 0.5,
+    "circuit": "OCD",
+    "ocdMode": "LP"
+  }
+}

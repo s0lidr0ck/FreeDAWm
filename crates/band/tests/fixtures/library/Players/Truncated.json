@@ -1,0 +1,111 @@
+{
+ "format": 1,
+ "name": "Truncated",
+ "desc": "Pop · steady 8th roots",
+ "tags": [
+  "pop"
+ ],
+ "seed": 241,
+ "slots": [
+  {
+   "instrument": "Bass",
+   "slot": 7
+  }
+ ],
+ "role": "bass",
+ "style": "none",
+ "flags": {
+  "heavy": false,
+  "slap": false,
+  "artic": 0
+ },
+ "bass": {
+  "vibrato": 0.1,
+  "letRing": 0.2,
+  "falls": 0,
+  "position": "low",
+  "pluck": "mid"
+ },
+ "groove": {
+  "timing": [
+   0,
+   0,
+   -1,
+   0,
+   1,
+   0,
+   -1,
+   0,
+   0,
+   0,
+   -1,
+   0,
+   1,
+   0,
+   -1,
+   0
+  ],
+  "push": 0.3,
+  "pickups": 0.4,
+  "variation": 0.2,
+  "space": 0.05
+ },
+ "feel": {
+  "swingBase": 50,
+  "swingSteps": 4,
+  "timingMs": 0,
+  "laneMs": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "rollMs": 0,
+  "jitterMs": 4,
+  "velVar": 5,
+  "arc": 0.06,
+  "pedalMode": 0,
+  "fillRate": 0.3,
+  "fillCount": 4,
+  "rhLow": 0,
+  "rhHigh": 0,
+  "rhAnchor": 0,
+  "lhLow": 28
+ },
+ "accents": [
+  1.06,
+  0.94,
+  0.97,
+  0.95,
+  1.02,
+  0.94,
+  0.97,
+  0.95,
+  1.04,
+  0.94,
+  0.97,
+  0.95,
+  1.02,
+  0.94,
+  0.97,
+  0.96
+ ],
+ "grids": {
+  "E1": {
+   "lane0": {
+    "barA": [
+     [
+      0,
+      1,
+      100,
+      90,
+      16
+     ]
+    ],
+    "barB": [
+     [
+      0,
+      1,
+      100,
+      90,
+      12

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Sub Tamer",
+  "group": "Bass",
+  "tags": "Two-Track · Standard · 30 ips",
+  "desc": "At 30 ips the response falls away below 40 Hz, about -6 dB at 30. Tightens a boomy bottom octave.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "A",
+    "speed": "30 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

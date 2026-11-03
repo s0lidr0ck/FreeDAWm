@@ -1,0 +1,47 @@
+{
+ "format": 1,
+ "name": "UJAM Symphonic Elements",
+ "slot": 10,
+ "driver": "ujamPhrase",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Phrase player (STRIIIINGS / BRAAASS): this musician holds the chord in the Play Range (C3–B4) and the root in Bass Notes (C2–B2), picks a Style Phrase key (C1–A1) from Energy, fires Additions at phrase ends and rides the mod wheel. Its own patterns are not used. Turn Latch off in UJAM.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "phraseKeys": [
+   24,
+   26,
+   28,
+   29,
+   31,
+   33
+  ],
+  "additions": [
+   25,
+   27,
+   30,
+   32
+  ],
+  "stopKey": 35,
+  "energyBase": [
+   0,
+   2,
+   4,
+   5
+  ],
+  "playBase": 60,
+  "playHigh": 83,
+  "bassBase": 48,
+  "modCC": 1
+ }
+}

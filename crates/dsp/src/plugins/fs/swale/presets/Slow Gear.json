@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Slow Gear",
+  "group": "Staples",
+  "tags": "Pick · Slow Gear",
+  "desc": "The SG-1 move: a quick swell through the FET VCA. Play clean, separated notes.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.5,
+    "hold": 0.0,
+    "release": 0.3,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.6,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Slow Gear",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

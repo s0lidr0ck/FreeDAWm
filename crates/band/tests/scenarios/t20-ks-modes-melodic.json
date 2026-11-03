@@ -1,0 +1,37 @@
+{
+  "name": "t20-ks-modes-melodic",
+  "pending": false,
+  "description": "Task 20 (test Library keyswitch): Lark (melodic, Winds) on KS Test Modes: hold with minLen, tap, same, latch with a return key, a one-octave range folding, a never-sent key, init keys, the vibrato CC; Natural.",
+  "library_overlay": "keyswitch",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Lark",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "KS Test Modes",
+    null,
+    null
+  ],
+  "params": {
+    "m4_instrument": 8,
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_energy": 4
+  }
+}

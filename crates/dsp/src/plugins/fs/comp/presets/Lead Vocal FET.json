@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Lead Vocal FET",
+  "group": "Vocals",
+  "tags": "1176 · FET",
+  "desc": "Present and a little aggressive. Catches consonants without dulling them.",
+  "values": {
+    "style": "1176",
+    "amount": 0.44,
+    "ratio": 0,
+    "attack": 0.874731,
+    "release": 0.311856,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.430677,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

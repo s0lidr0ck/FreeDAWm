@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Opto Tremolo",
+  "group": "Stock Settings",
+  "tags": "Trem · Opto Trem · ~4 Hz stock",
+  "desc": "Blackface amp tremolo: neon lamp striking into a photocell.",
+  "values": {
+    "circuit": "Opto Trem",
+    "variant": "B",
+    "depth": 0.6,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- The project DawProjectTest.createDummyProject(3, all features) writes (github.com/bitwig/dawproject, MIT), transcribed. -->
+<Project version="1.0">
+  <Application name="Test" version="1.0"/>
+  <Structure>
+    <Track contentType="" name="Master" id="id0">
+      <Channel role="master" id="id1">
+        <Devices>
+          <Vst3Plugin deviceName="Limiter" deviceRole="audioFX" id="id2">
+            <State path="plugin-states/12323545.vstpreset"/>
+          </Vst3Plugin>
+        </Devices>
+        <Pan unit="normalized" value="0.5" id="id3"/>
+        <Volume unit="linear" value="1.0" id="id4"/>
+      </Channel>
+    </Track>
+    <Track contentType="notes" name="Track 1" color="#000000" id="id5">
+      <Channel destination="id1" role="regular" id="id6">
+        <Pan unit="normalized" value="0.5" id="id7"/>
+        <Volume unit="linear" value="1.0" id="id8"/>
+      </Channel>
+    </Track>
+    <Track contentType="notes" name="Track 2" color="#111111" id="id9">
+      <Channel destination="id1" role="regular" id="id10">
+        <Pan unit="normalized" value="0.5" id="id11"/>
+        <Volume unit="linear" value="1.0" id="id12"/>
+      </Channel>
+    </Track>
+    <Track contentType="notes" name="Track 3" color="#222222" id="id13">
+      <Channel destination="id1" role="regular" id="id14">
+        <Pan unit="normalized" value="0.5" id="id15"/>
+        <Volume unit="linear" value="1.0" id="id16"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="id17">
+    <Lanes timeUnit="beats" id="id18">
+      <Lanes track="id5" id="id19">
+        <Clips id="id20">
+          <Clip time="0.0" duration="4.0" name="Clip 0">
+            <Notes id="id21">
+              <Note time="0.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="0.5" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="1.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="1.5" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="2.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="2.5" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="3.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="3.5" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+            </Notes>
+          </Clip>
+          <Clip time="32.0" duration="4.0" name="Alias Clip 0" reference="id21"/>
+        </Clips>
+        <Points id="id22">
+          <Target parameter="id8"/>
+          <RealPoint time="0.0" value="0.0" interpolation="linear"/>
+          <RealPoint time="8.0" value="1.0" interpolation="linear"/>
+        </Points>
+      </Lanes>
+      <Lanes track="id9" id="id23">
+        <Clips id="id24">
+          <Clip time="8.0" duration="4.0" name="Clip 1">
+            <Notes id="id25">
+              <Note time="0.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="0.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+              <Note time="1.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="1.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+              <Note time="2.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="2.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+              <Note time="3.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="3.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+            </Notes>
+          </Clip>
+          <Clip time="40.0" duration="4.0" name="Alias Clip 1" reference="id25"/>
+        </Clips>
+      </Lanes>
+      <Lanes track="id13" id="id26">
+        <Clips id="id27">
+          <Clip time="16.0" duration="4.0" name="Clip 2">
+            <Notes id="id28">
+              <Note time="0.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="0.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+              <Note time="1.0" duration="0.5" channel="0" key="60" vel="0.8" rel="0.5"/>
+              <Note time="1.5" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="2.0" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+              <Note time="2.5" duration="0.5" channel="0" key="60" vel="0.8" rel="0.5"/>
+              <Note time="3.0" duration="0.5" channel="0" key="36" vel="0.8" rel="0.5"/>
+              <Note time="3.5" duration="0.5" channel="0" key="48" vel="0.8" rel="0.5"/>
+            </Notes>
+          </Clip>
+          <Clip time="48.0" duration="4.0" name="Alias Clip 2" reference="id28"/>
+        </Clips>
+      </Lanes>
+    </Lanes>
+    <Markers id="id29">
+      <Marker time="0.0" name="Verse"/>
+      <Marker time="24.0" name="Chorus"/>
+    </Markers>
+  </Arrangement>
+  <Scenes/>
+</Project>

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Acoustic Sparkle",
+  "group": "Guitars",
+  "tags": "Desk · Clean",
+  "desc": "Clean desk and Air for the top of the strings.",
+  "values": {
+    "circuit": "Desk",
+    "variant": "A",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.35,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

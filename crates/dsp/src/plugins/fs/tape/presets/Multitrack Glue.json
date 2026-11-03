@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Multitrack Glue",
+  "group": "Start Here",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Two-inch 24-track: the biggest head bump here, about +2.5 dB at 50 Hz. The sound most people mean by tape.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

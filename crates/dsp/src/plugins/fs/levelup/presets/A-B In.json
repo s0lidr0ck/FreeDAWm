@@ -1,0 +1,21 @@
+{
+  "engine": "LevelUp",
+  "name": "A-B In",
+  "group": "A/B",
+  "tags": "IN, before the chain",
+  "desc": "Put this before the chain you are testing. It rides nothing -- it measures what goes in, for the OUT to match.",
+  "values": {
+    "attack": 0.18367,
+    "release": 0.17949,
+    "gate": 0.24324,
+    "maxGain": 0.5,
+    "target": 0.7272727272727273,
+    "mode": "Static",
+    "freeze": false,
+    "ceiling": false,
+    "link": "IN",
+    "platform": "None",
+    "dither": "Off",
+    "shaping": false
+  }
+}

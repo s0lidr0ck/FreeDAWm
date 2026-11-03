@@ -1,0 +1,24 @@
+{
+  "name": "t15-drums-modo-natural-68-fills",
+  "pending": false,
+  "description": "Task 15: the drums on MODO DRUM, Natural, 6/8, Energy 4, Fills 100 (drumFill12 6/8, drumSrc12).",
+  "bars": 24,
+  "num": 6,
+  "den": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": false
+  },
+  "targets": [null, "MODO DRUM", null, null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_energy": 4,
+    "m2_fills": 100
+  }
+}

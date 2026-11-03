@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Snare Crack",
+  "group": "Drums",
+  "tags": "Valve · Pentode",
+  "desc": "Pentode on the upper mids. Crack and snap, with the body left mostly dry.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "B",
+    "drive": 0.7,
+    "bias": 0.5,
+    "focus": 0.75,
+    "air": 0.0,
+    "mix": 0.7,
+    "chanMode": "Stereo"
+  }
+}

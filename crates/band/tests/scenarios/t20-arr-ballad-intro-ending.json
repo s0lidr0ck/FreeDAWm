@@ -1,0 +1,10 @@
+{
+  "name": "t20-arr-ballad-intro-ending",
+  "pending": false,
+  "description": "Task 20: intro and ending (the Ballad), played past its end.",
+  "bars": 40,
+  "song": "Ballad with Intro and Ending",
+  "feel": {
+    "natural": true
+  }
+}

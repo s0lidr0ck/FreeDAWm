@@ -1,0 +1,10 @@
+{
+  "name": "t20-factory-band-jazz-natural",
+  "pending": false,
+  "description": "Task 20: the factory band playing Jazz ii-V-I, Natural.",
+  "bars": 32,
+  "song": "Jazz ii-V-I",
+  "feel": {
+    "natural": true
+  }
+}

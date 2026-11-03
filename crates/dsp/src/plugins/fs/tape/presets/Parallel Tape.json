@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Parallel Tape",
+  "group": "Mix Bus",
+  "tags": "Multitrack · Vintage · 15 ips",
+  "desc": "Vintage tape well past its ceiling, blended under the dry mix. Density without the smear.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "C",
+    "speed": "15 ips",
+    "drive": 0.6,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 0.4
+  }
+}

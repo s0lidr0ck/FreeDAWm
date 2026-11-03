@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Rock Vocal Pin",
+  "group": "Vocals",
+  "tags": "1176 · FET",
+  "desc": "Eight-to-one, fast. Pins a shouted vocal in place with some edge.",
+  "values": {
+    "style": "1176",
+    "amount": 0.76,
+    "ratio": 0.25,
+    "attack": 0.634024,
+    "release": 0.139885,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.6,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

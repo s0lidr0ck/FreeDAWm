@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "A/DA Sweep",
+  "group": "Stock Settings",
+  "tags": "BBD · A/DA · ~0.35 Hz stock",
+  "desc": "The deepest sweep here. Wide open and still under control.",
+  "values": {
+    "circuit": "A/DA",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.55,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

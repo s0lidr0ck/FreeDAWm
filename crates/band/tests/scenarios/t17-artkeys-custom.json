@@ -1,0 +1,30 @@
+{
+  "name": "t17-artkeys-custom",
+  "pending": false,
+  "description": "Task 17: Miroslav Philharmonik 2 with a non-default art map (5, 7, 9, 11).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "targets": [
+    null,
+    null,
+    null,
+    "Miroslav Philharmonik 2",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_art_long": 5,
+    "m4_art_short": 7,
+    "m4_art_pluck": 9,
+    "m4_art_trem": 11
+  }
+}

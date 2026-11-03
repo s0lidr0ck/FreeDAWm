@@ -1,0 +1,35 @@
+{
+  "name": "t16-guitar-ujam-amber",
+  "pending": false,
+  "description": "Task 16: guitar on UJAM Virtual Guitarist AMBER 2.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Hollis",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "UJAM Virtual Guitarist AMBER 2",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Muff With Mids",
+  "group":  "Fuzz",
+  "tags":   "Big Muff · NYC · Mids",
+  "desc":   "NYC with the mids mod. A Muff that sits in a band mix.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.5,
+    "circuit": "Big Muff",
+    "muffVer": "NYC",
+    "muffDiode": "Stock",
+    "muffMids": "Mids"
+  }
+}

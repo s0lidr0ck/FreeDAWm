@@ -1,0 +1,47 @@
+{
+  "name": "t16-guitar-ample-legato",
+  "pending": false,
+  "description": "Task 16: Bret (auto, hammer-ons, slides) on Ample Guitar M 4, Natural, Energy 4 from bar 5 (strum legato); Ample mode Notes at 41.7 (a regeneration).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Bret",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "param": "m1_energy",
+      "value": 4
+    },
+    {
+      "at_ppq": 41.7,
+      "param": "m1_ample",
+      "value": 2
+    }
+  ]
+}

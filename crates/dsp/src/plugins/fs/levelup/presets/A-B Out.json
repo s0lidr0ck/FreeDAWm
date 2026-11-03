@@ -1,0 +1,21 @@
+{
+  "engine": "LevelUp",
+  "name": "A-B Out",
+  "group": "A/B",
+  "tags": "OUT, after the chain",
+  "desc": "Put this after the chain. It finds the IN in the same pair and matches its loudness, so bypassing the chain changes the sound, not the level.",
+  "values": {
+    "attack": 0.1,
+    "release": 0.05,
+    "gate": 0.24324,
+    "maxGain": 0.5,
+    "target": 0.7272727272727273,
+    "mode": "Auto",
+    "freeze": false,
+    "ceiling": true,
+    "link": "OUT",
+    "platform": "None",
+    "dither": "Off",
+    "shaping": false
+  }
+}

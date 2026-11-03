@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "DS-1 Modded",
+  "group":  "Distortion",
+  "tags":   "DS-1 · Modded",
+  "desc":   "Modded voicing with LEDs. Less fizz, more amp.",
+  "values": {
+    "drive": 0.65,
+    "tone": 0.45,
+    "circuit": "DS-1",
+    "ds1Diode": "LED",
+    "ds1Voice": "Modded"
+  }
+}

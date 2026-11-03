@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FreeDAWm MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build freedawm.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.fdawm` sessions (and the older
+  `.scraft` ones) owned by
+  FreeDAWm, and FreeDAWm offered under "Open with" for WAV/AIFF/FLAC/MP3 and MIDI files
+  (without taking over the user's default player for them).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="FreeDAWm"
+      Manufacturer="FireStation and the FreeDAWm contributors"
+      Version="$(var.Version)"
+      UpgradeCode="EE53D3E5-D0AE-40F9-808D-9417FDEBF61A"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="FreeDAWm digital audio workstation" Manufacturer="FireStation and the FreeDAWm contributors" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of FreeDAWm is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="SoundcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="SoundcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/s0lidr0ck/FreeDAWm" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/s0lidr0ck/FreeDAWm" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/s0lidr0ck/FreeDAWm/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="FreeDAWm" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="FreeDAWm" Level="1">
+      <ComponentGroupRef Id="SoundcraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="SoundcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="SoundcraftApp" Guid="091136D7-205E-41A8-9D27-5E231F7CBBD4">
+        <File Id="SoundcraftExe" Source="$(var.BinDir)\freedawm.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="FreeDAWm"
+              Description="FreeDAWm digital audio workstation" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="SoundcraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <!-- .fdawm: FreeDAWm's own session format, and .scraft, its name before the rename;
+             FreeDAWm is the default app for both. -->
+        <ProgId Id="FreeDAWm.Session" Description="FreeDAWm Session" Icon="SoundcraftExe" IconIndex="0">
+          <Extension Id="fdawm" ContentType="application/x-freedawm-session">
+            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+          <Extension Id="scraft" ContentType="application/x-soundcraft-session">
+            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <!-- Audio and MIDI files: offered under "Open with" (imported into a session), never forced
+             as the default. -->
+        <ProgId Id="FreeDAWm.Audio" Description="Audio File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FreeDAWm.Audio\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <ProgId Id="FreeDAWm.Midi" Description="MIDI File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FreeDAWm.Midi\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.wav\OpenWithProgids" Name="FreeDAWm.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aif\OpenWithProgids" Name="FreeDAWm.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aiff\OpenWithProgids" Name="FreeDAWm.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.flac\OpenWithProgids" Name="FreeDAWm.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mp3\OpenWithProgids" Name="FreeDAWm.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mid\OpenWithProgids" Name="FreeDAWm.Midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.midi\OpenWithProgids" Name="FreeDAWm.Midi" Value="" Type="string" />
+
+        <!-- "Open with" app list and the Run dialog (Win+R "freedawm"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe" Name="FriendlyAppName" Value="FreeDAWm" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".fdawm" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".scraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".wav" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".aif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".aiff" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".flac" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".mp3" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".mid" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\freedawm.exe\SupportedTypes" Name=".midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\freedawm.exe" Value="[#SoundcraftExe]" Type="string" />
+      </Component>
+
+      <Component Id="SoundcraftCli" Guid="4552049A-C2F0-4AB0-BAE6-A62C3348F4B4">
+        <File Id="SoundcraftCliExe" Source="$(var.BinDir)\freedawm-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

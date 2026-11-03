@@ -1,0 +1,32 @@
+{
+  "name": "t11-keys-forward-jump",
+  "pending": false,
+  "description": "Task 11: a jump of more than a quarter beat forward (12 -> 20).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Clay",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  },
+  "events": [
+    {
+      "at_ppq": 12.0,
+      "seek_to": 20.0
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "t16-guitar-ample-68",
+  "pending": false,
+  "description": "Task 16: guitar on Ample Guitar M 4, Natural, 6/8.",
+  "bars": 16,
+  "num": 6,
+  "den": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Jig Strummer",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Upfront Whisper",
+  "group": "Fun",
+  "tags": "LA-2A · Opto",
+  "desc": "Heavy optical limiting. Everything is as loud as everything else.",
+  "values": {
+    "style": "LA-2A",
+    "amount": 0.84,
+    "ratio": 1,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.625965,
+    "color": 0.6,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

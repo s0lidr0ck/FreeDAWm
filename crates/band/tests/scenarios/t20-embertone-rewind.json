@@ -1,0 +1,66 @@
+{
+  "name": "t20-embertone-rewind",
+  "pending": false,
+  "description": "Task 20: Ilse on the Embertone Joshua Bell Violin, Natural, with the Ample mode switch flipped 40 ms before generated steps (6.95 ... 41.95): each flip regenerates the steps made ahead (regenerateFrom without stopAllNotes), so jbRewind restores its note history (the vibLevel catcher Task 17 could not reach).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Ilse",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Embertone Joshua Bell Violin",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  },
+  "events": [
+    {
+      "at_ppq": 6.95,
+      "param": "m4_ample",
+      "value": 1
+    },
+    {
+      "at_ppq": 12.95,
+      "param": "m4_ample",
+      "value": 0
+    },
+    {
+      "at_ppq": 20.95,
+      "param": "m4_ample",
+      "value": 1
+    },
+    {
+      "at_ppq": 27.95,
+      "param": "m4_ample",
+      "value": 0
+    },
+    {
+      "at_ppq": 33.95,
+      "param": "m4_ample",
+      "value": 1
+    },
+    {
+      "at_ppq": 41.95,
+      "param": "m4_ample",
+      "value": 0
+    }
+  ]
+}

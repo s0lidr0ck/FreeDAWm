@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Reverse Half",
+  "group": "Reverse",
+  "tags": "Rhythmic · 1/2",
+  "desc": "Two-beat reverse swells.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.0,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.3,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/2",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

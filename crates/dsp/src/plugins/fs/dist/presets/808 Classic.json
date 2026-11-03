@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "808 Classic",
+  "group":  "Overdrive",
+  "tags":   "Tube Screamer · TS808",
+  "desc":   "The 808 at noon. Warm mid push, the reference.",
+  "values": {
+    "drive": 0.5,
+    "tone": 0.5,
+    "circuit": "Tube Screamer",
+    "tsModel": "TS808",
+    "tsDiode": "Stock"
+  }
+}

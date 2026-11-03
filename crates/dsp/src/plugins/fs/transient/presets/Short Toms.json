@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Short Toms",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "Toms that stop: the ring is gone a moment after the hit.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.555556,
+    "sustain": 0.125,
+    "attackTime": 0.5,
+    "sustainTime": 0.121357,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

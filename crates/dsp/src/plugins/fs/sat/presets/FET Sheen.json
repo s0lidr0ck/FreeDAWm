@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "FET Sheen",
+  "group": "Start Here",
+  "tags": "FET · Stock",
+  "desc": "Pure second harmonic, nothing else. The lightest colour in the plugin.",
+  "values": {
+    "circuit": "FET",
+    "variant": "B",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

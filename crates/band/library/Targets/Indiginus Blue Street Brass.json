@@ -1,0 +1,19 @@
+{
+ "format": 1,
+ "name": "Indiginus Blue Street Brass",
+ "slot": 26,
+ "driver": "brassSection",
+ "instruments": [ "Brass" ],
+ "ksOctaveDefault": 0,
+ "help": "Indiginus Blue Street Brass. We set Key Vel amount 0 and Mod Whl amount full (CC24 / CC25) at every pass, so CC1 is the dynamics; vibrato is in the patch (the \"Vib\" variants). Pick the patch with the dial until the CC15 map is entered (Brass Ensemble 21 for sections, a solo horn such as Soaring Trumpet 7 for lines): write the keyswitch test (a CC15 sweep, one note per value) and note each patch's value in \"instrumentValues\". Legato is switched by C-1 / D-1 (12 / 14) automatically. Narrow \"range\" to the patch's playable keys.",
+ "data": {
+  "range": [ 40, 84 ],
+  "dynamicsCC": 1,
+  "setupCCs": { "24": 0, "25": 127 },
+  "legatoKeys": { "off": 12, "on": 14 },
+  "instrumentCC": 15,
+  "instrumentValues": {},
+  "instrumentFor": { "ensemble": 21, "melodic": 7, "low": 22 },
+  "noteVelocity": 100
+ }
+}

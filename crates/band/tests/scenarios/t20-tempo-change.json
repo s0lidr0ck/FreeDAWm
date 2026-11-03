@@ -1,0 +1,16 @@
+{
+  "name": "t20-tempo-change",
+  "pending": false,
+  "description": "Task 20: a tempo change 120 -> 140 at bar 3.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "events": [
+    {
+      "at_ppq": 8.0,
+      "bpm": 140
+    }
+  ]
+}

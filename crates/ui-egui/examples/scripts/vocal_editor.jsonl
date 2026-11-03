@@ -1,0 +1,15 @@
+# The Vocal Editor as in vocal-tuning-mockups/editor.png: Lead Vox, E major, the chord track,
+# four notes (5.6-7.8 s) tuned Centre 40 / Drift 30, the view 0.9-8.6 s, the playhead at 6.78 s.
+# Render with `--size 1600x1200` so the whole Tuning panel shows.
+{"vocal_demo": {"track": "Lead Vox", "view": [0.9, 8.6], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.78, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"vocal_dock": 900}
+{"steps": 10}
+{"vocal_view": [0.9, 8.6]}
+{"shot": "target-ml/vocal-editor-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"shot": "target-ml/vocal-editor-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}
+{"vocal_view": [5.5, 8.0]}
+{"shot": "target-ml/vocal-editor-detail.png"}

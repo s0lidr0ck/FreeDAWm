@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Orange Edge",
+  "group": "Edge",
+  "tags": "Orange · Gain 6",
+  "desc": "Gain up: mid-forward and chewy, still clean when you back off.",
+  "values": {
+    "amp": "OR120 Graphic '72",
+    "orGain": 0.6,
+    "orFac": "2",
+    "orBass": 0.5,
+    "orTreble": 0.5,
+    "orHfDrive": 0.5,
+    "orCab": "Built-in"
+  }
+}

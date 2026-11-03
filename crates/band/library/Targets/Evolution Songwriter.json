@@ -1,0 +1,27 @@
+{
+ "format": 1,
+ "name": "Evolution Songwriter",
+ "slot": 20,
+ "driver": "evolution",
+ "instruments": [ "Guitar" ],
+ "help": "Orange Tree Evolution. In Kontakt: set every articulation to Keyswitch (momentary, not latching); Chords mode Disabled (we strum and roll ourselves; never use the pattern or strum keys); Setup: Vibrato CC #1, Legato range 2 ST, Mapping octave Standard. Save a Kontakt snapshot so the auto-assigned keys stop moving. Write the keyswitch test and check each articulation sounds while its key is held: the auto-assigned keys can re-pack when you change trigger types, so re-check the map after converting. Optional: assign a Bypass Legato Key (lets strums ring). Narrow \"range\" to the keys Kontakt colours as playable. Map predicted from the latching capture; play the keyswitch test once to confirm. Songwriter: performance effect keys start at E5 (88).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "range": [ 40, 86 ],
+  "articulations": { "powerchord": 22, "octaves": 23, "releaseSlideDown": 24, "slide16": 25, "slide8": 26, "slide4": 27, "velocitySlide": 28, "wsHammer": 29, "wsSlideIn": 30, "buzzTrill": 31, "graceDown": 32, "graceUp": 33, "harmonics": 34, "mute": 35, "palmMute": 36, "buzzRelease": 37 },
+  "stringKeys": [ 0, 1, 2, 3, 4, 5 ],
+  "stringCount": 6,
+  "droneKey": -1,
+  "droneNote": -1,
+  "perfFxBase": 88,
+  "perfFx": {},
+  "vibratoCC": 1,
+  "legatoST": 2,
+  "slideRange": 2,
+  "bypassLegatoKey": -1,
+  "strumKeys": [ -1, -1 ],
+  "strumEngine": false,
+  "noteVelocity": [ 30, 124 ],
+  "bendBlues": false
+ }
+}

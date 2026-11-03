@@ -1,0 +1,38 @@
+{
+  "name": "t16-ample-harmonic-ending",
+  "pending": false,
+  "description": "Task 16: Edge (harmonics 0.1) on Ample Guitar M 4 as Strummer (m1_ample 1), Natural, Energy 3, take 2, Ballad with Intro and Ending (the final hit's harmonic strum key).",
+  "bars": 40,
+  "song": "Ballad with Intro and Ending",
+  "take": 2,
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Edge",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6,
+    "m1_ample": 1,
+    "m1_energy": 3
+  }
+}

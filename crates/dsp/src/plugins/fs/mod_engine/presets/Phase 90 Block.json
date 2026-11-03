@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Phase 90 Block",
+  "group": "Stock Settings",
+  "tags": "Phase · Phase 90 · ~0.9 Hz stock",
+  "desc": "Block logo: R28 in circuit. More peak, more bite, more of everything.",
+  "values": {
+    "circuit": "Phase 90",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.4,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

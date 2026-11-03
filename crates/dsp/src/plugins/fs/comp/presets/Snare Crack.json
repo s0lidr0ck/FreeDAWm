@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Snare Crack",
+  "group": "Drums",
+  "tags": "1176 · FET",
+  "desc": "Slowest FET attack, quick release. More stick, more ring.",
+  "values": {
+    "style": "1176",
+    "amount": 0.36,
+    "ratio": 0,
+    "attack": 0.9982,
+    "release": 0.055279,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

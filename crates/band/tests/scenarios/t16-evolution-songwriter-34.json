@@ -1,0 +1,37 @@
+{
+  "name": "t16-evolution-songwriter-34",
+  "pending": false,
+  "description": "Task 16: guitar on Evolution Songwriter, Natural, 3/4.",
+  "bars": 16,
+  "num": 3,
+  "den": 4,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Boone",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Evolution Songwriter",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Kick - Duck The Snare",
+  "group": "Kick",
+  "tags": "Kick In · Linked",
+  "desc": "For a kick mic that keeps opening on the snare. Needs Kit Link switched on and the snare mic in the same group.",
+  "values": {
+    "instrument": "Kick In",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 1.0,
+    "length": 0.35,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.35,
+    "retrig": 0.2,
+    "debleed": 0.0,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.75,
+    "midiNote": 0.1667
+  }
+}

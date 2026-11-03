@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Short Piano",
+  "group": "Piano & Keys",
+  "tags": "Piano",
+  "desc": "Most of the ring gone almost at once: a percussive, staccato piano.",
+  "values": {
+    "source": "Piano",
+    "attack": 0.611111,
+    "sustain": 0.0,
+    "attackTime": 0.5,
+    "sustainTime": 0.065759,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "t20-factory-band-pop-natural",
+  "pending": false,
+  "description": "Task 20: the factory band playing Pop Verse Chorus Bridge, Natural.",
+  "bars": 32,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  }
+}

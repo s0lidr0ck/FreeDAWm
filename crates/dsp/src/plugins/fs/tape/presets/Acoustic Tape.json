@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Acoustic Tape",
+  "group": "Guitars & Keys",
+  "tags": "Two-Track · Standard · 15 ips",
+  "desc": "A little bump for the body, a little softness on the strings.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

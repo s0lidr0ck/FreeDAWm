@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Amp Vibrato",
+  "group": "Vibrato",
+  "tags": "BBD · JC-120 · ~0.9 Hz stock",
+  "desc": "What the JC's other setting actually did, which was not tremolo.",
+  "values": {
+    "circuit": "JC-120",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.55,
+    "mix": 1.0,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

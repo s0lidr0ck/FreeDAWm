@@ -1,0 +1,26 @@
+{
+ "format": 1,
+ "name": "Indiginus The Resonator",
+ "slot": 25,
+ "driver": "indiginusStrings",
+ "instruments": [ "Folk" ],
+ "help": "Indiginus. In Kontakt: SOLO mode; DISABLE CHORDS KEY SW on (default); Exp CC11 amount up (the default looks low); velocity grid Low = Mutes, High = off; Master Key = the song's key. Articulation keys are momentary (confirmed by the D0 test, 2026-10-07): the driver holds a key for the ornamented note only. Narrow \"range\" to the keys Kontakt colours as playable. Slots mode only: CHORDS mode and chord keyswitches enabled.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "layout": "renegade",
+  "stringCount": 6,
+  "range": [ 43, 84 ],
+  "articulations": { "mutes": 27, "grace": 29, "bend1": 30, "trillUp": 31, "bend2": 32, "trillDown": 33, "upSlide": 34, "downSlide": 35 },
+  "neverSend": [ 28 ],
+  "initKeys": [],
+  "articulationReturn": { "mode": "hold" },
+  "returnKey": -1,
+  "expressionCC": 11,
+  "vibratoCC": 1,
+  "masterKeyCC": -1,
+  "tremoloSpeedCC": -1,
+  "chordKeys": { "down": 36, "up": 48, "rootSelectBase": 60, "major": 72, "minor": 73, "seventh": 74 },
+  "slots": false,
+  "droneNote": -1
+ }
+}

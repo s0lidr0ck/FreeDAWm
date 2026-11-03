@@ -1,0 +1,27 @@
+{
+  "name": "t17-keyswitch-octave-minus1",
+  "pending": false,
+  "description": "Task 17: Crow Hill Pocket Strings (keyswitch driver) with Keyswitch Octave -1.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "targets": [
+    null,
+    null,
+    null,
+    "Crow Hill Pocket Strings",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_ksoctave": -1
+  }
+}

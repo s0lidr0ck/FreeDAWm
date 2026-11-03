@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Gentle Master",
+  "group": "Mastering",
+  "tags": "Soft clip · Transparent",
+  "desc": "A few dB, mostly limiter, slow release. For a mix that is nearly there.",
+  "values": {
+    "drive": 0.125,
+    "clip": 0.3,
+    "shape": "Soft",
+    "character": "Transparent",
+    "ceiling": 0.9167,
+    "release": 0.6962
+  }
+}

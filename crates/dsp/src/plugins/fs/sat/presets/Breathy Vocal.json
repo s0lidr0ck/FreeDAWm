@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Breathy Vocal",
+  "group": "Vocals",
+  "tags": "FET · Hot",
+  "desc": "Gentle FET colour tipped toward the top, with Air for the breath.",
+  "values": {
+    "circuit": "FET",
+    "variant": "C",
+    "drive": 0.4,
+    "bias": 0.5,
+    "focus": 0.625,
+    "air": 0.3,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

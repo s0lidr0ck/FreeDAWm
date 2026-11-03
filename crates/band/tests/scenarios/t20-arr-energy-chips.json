@@ -1,0 +1,77 @@
+{
+  "name": "t20-arr-energy-chips",
+  "pending": false,
+  "description": "Task 20: arrangement energy chips -2..+2.",
+  "bars": 24,
+  "song": {
+    "sections": [
+      {
+        "id": "A",
+        "name": "Verse",
+        "chords": [
+          {
+            "slot": 0,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 80,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 48,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 64,
+            "bass": -1,
+            "length": 2
+          }
+        ]
+      },
+      {
+        "id": "B",
+        "name": "Chorus",
+        "chords": [
+          {
+            "slot": 48,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 64,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 0,
+            "bass": -1,
+            "length": 2
+          },
+          {
+            "slot": 80,
+            "bass": -1,
+            "length": 2
+          }
+        ]
+      }
+    ],
+    "arrangement": [
+      "A",
+      "B",
+      "A",
+      "B"
+    ],
+    "arrangementEnergy": [
+      -2,
+      1,
+      0,
+      2
+    ]
+  },
+  "feel": {
+    "natural": true
+  }
+}

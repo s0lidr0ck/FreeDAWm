@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Tom Thump",
+  "group": "Drums",
+  "tags": "Iron · Nickel",
+  "desc": "Nickel iron on the low end of the toms. More thump, less ring.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "A",
+    "drive": 0.533333,
+    "bias": 0.5,
+    "focus": 0.375,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Room Smash",
+  "group": "Drums",
+  "tags": "Bridge · Silicon",
+  "desc": "Silicon clamps hard once it goes. Room mics crushed and blended back.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "B",
+    "drive": 0.866667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 0.4,
+    "chanMode": "Stereo"
+  }
+}

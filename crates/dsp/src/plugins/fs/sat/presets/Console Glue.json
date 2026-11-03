@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Console Glue",
+  "group": "Start Here",
+  "tags": "Desk · Vintage",
+  "desc": "A slow console line amp: loud highs round off first, everything else just sits better.",
+  "values": {
+    "circuit": "Desk",
+    "variant": "B",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

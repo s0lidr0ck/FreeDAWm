@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Lopsided",
+  "group": "Character",
+  "tags": "Valve · Triode",
+  "desc": "Heavily biased triode. Big even harmonics, and the waveform audibly leans.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "A",
+    "drive": 0.733333,
+    "bias": 0.8,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

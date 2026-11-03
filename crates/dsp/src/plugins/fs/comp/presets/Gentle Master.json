@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Gentle Master",
+  "group": "Mix Bus",
+  "tags": "Clean · Modern",
+  "desc": "One-and-a-half to one with the widest knee. A dB or two, invisibly.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.36,
+    "ratio": 0.156544,
+    "attack": 0.784837,
+    "release": 0.615996,
+    "makeup": 0.333333,
+    "knee": 0.75,
+    "scHpf": 0.284662,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

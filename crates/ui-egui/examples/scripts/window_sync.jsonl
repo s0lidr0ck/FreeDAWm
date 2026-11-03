@@ -1,0 +1,22 @@
+# Window sync (docs/superpowers/specs/2026-10-26-window-sync.md): a "Drums" folder (Kick, Snare,
+# Hat) beside Bass and Keys. Shot 1: the Mix window docked, its Tracks list showing the folder tree.
+# Shot 2: Mix in Separate Window (ui_shot embeds it in the main window) with the folder closed in
+# the Edit window: the Mix list and strips follow, only the folder's own strip stays.
+{"method": "engine.execute", "params": {"command": "track.new", "params": {"count": 1, "format": "mono", "name": "Kick"}}}
+{"method": "engine.execute", "params": {"command": "track.new", "params": {"count": 1, "format": "mono", "name": "Snare"}}}
+{"method": "engine.execute", "params": {"command": "track.new", "params": {"count": 1, "format": "mono", "name": "Hat"}}}
+{"method": "engine.execute", "params": {"command": "track.new", "params": {"count": 1, "format": "mono", "name": "Bass"}}}
+{"method": "engine.execute", "params": {"command": "track.new", "params": {"count": 1, "format": "stereo", "name": "Keys"}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Kick", "Snare", "Hat"]}}}
+{"method": "engine.execute", "params": {"command": "track.move_to_new_folder", "params": {"name": "Drums"}}}
+{"method": "engine.execute", "params": {"command": "track.color", "params": {"tracks": ["Drums"], "color": 3}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Snare"]}}}
+{"method": "engine.execute", "params": {"command": "window.track_list", "params": {"value": true}}}
+{"method": "engine.execute", "params": {"command": "window.mix", "params": {}}}
+{"steps": 8}
+{"shot": "SHOTDIR/window_sync_mix_docked.png"}
+{"method": "engine.execute", "params": {"command": "window.mix_separate", "params": {"value": true}}}
+{"method": "engine.execute", "params": {"command": "track.folder_toggle", "params": {"track": "Drums", "open": false}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Bass"]}}}
+{"steps": 8}
+{"shot": "SHOTDIR/window_sync_mix_separate.png"}

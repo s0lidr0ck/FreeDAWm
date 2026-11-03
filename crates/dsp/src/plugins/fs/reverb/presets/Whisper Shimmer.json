@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Whisper Shimmer",
+  "group": "Mix: Vocals",
+  "tags": "Shimmer · 5.0 s",
+  "desc": "Send. A halo an octave up. A little goes a long way.",
+  "values": {
+    "machine": "Shimmer",
+    "decay": 0.64241,
+    "mix": 1.0,
+    "size": 0.5,
+    "preDelay": 0.44721,
+    "lowCut": 0.69224,
+    "highCut": 0.73345,
+    "damping": 0.5981,
+    "bass": 0.5,
+    "character": 0.35,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

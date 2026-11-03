@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Vocal Parallel Crunch",
+  "group": "Vocals",
+  "tags": "Valve · Starved",
+  "desc": "A starved tube pushed hard and tucked underneath. Attitude without losing the words.",
+  "values": {
+    "circuit": "Valve",
+    "variant": "C",
+    "drive": 0.8,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 0.25,
+    "chanMode": "Stereo"
+  }
+}

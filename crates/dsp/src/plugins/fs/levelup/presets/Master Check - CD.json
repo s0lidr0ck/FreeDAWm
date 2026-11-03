@@ -1,0 +1,21 @@
+{
+  "engine": "LevelUp",
+  "name": "Master Check - CD",
+  "group": "Mastering",
+  "tags": "Measure, 16-bit shaped",
+  "desc": "As Master Check - Streaming, with shaped 16-bit dither for a CD-quality bounce.",
+  "values": {
+    "attack": 0.18367,
+    "release": 0.17949,
+    "gate": 0.24324,
+    "maxGain": 0.5,
+    "target": 0.8181818181818182,
+    "mode": "Static",
+    "freeze": false,
+    "ceiling": false,
+    "link": "Off",
+    "platform": "None",
+    "dither": "16-bit",
+    "shaping": true
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Dimension 1 + 4",
+  "group": "Stock Settings",
+  "tags": "BBD · Dim D · ~0.78 Hz stock",
+  "desc": "Both buttons down. The big one: slow, deep and very wide.",
+  "values": {
+    "circuit": "Dim D",
+    "variant": "E",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

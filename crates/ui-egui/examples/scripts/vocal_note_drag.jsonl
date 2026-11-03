@@ -1,0 +1,10 @@
+# The Vocal Editor mid-drag: the mockup's take (as vocal_editor.jsonl), the second note of the
+# view dragged up two rows with the button still held (the readout by the pointer, the bar at its
+# new semitone, the original as a ghost). Render with `--size 1600x1200`.
+{"vocal_demo": {"track": "Lead Vox", "view": [0.9, 8.6], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.78, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"vocal_dock": 900}
+{"steps": 10}
+{"vocal_view": [5.5, 8.0]}
+{"steps": 6}
+{"vocal_drag": {"index": 1, "rows": 2}}
+{"shot": "target-ml/vocal-note-drag-dark.png"}

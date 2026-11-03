@@ -1,0 +1,35 @@
+{
+  "name": "t11-keys-clay-generic-classic",
+  "pending": false,
+  "description": "Task 11: Clay on Generic, Classic.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": false,
+    "tension": false
+  },
+  "players": [
+    "Clay",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Generic",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

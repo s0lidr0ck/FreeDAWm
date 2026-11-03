@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Cello",
+  "group": "Worship & Ambient",
+  "tags": "Pick · Bloom 80%",
+  "desc": "Dark at the start, opens as it rises. Low strings, neck pickup.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.68,
+    "hold": 0.0,
+    "release": 0.6,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.15,
+    "floorAmt": 0.0,
+    "bloom": 0.8,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

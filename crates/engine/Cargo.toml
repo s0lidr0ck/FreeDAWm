@@ -1,0 +1,41 @@
+[package]
+name = "soundcraft-engine"
+description = "SoundCraft command engine: commands, undo, editing operations, import/export, bounce, parity catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+soundcraft-time.workspace = true
+soundcraft-audio-io.workspace = true
+soundcraft-vocal.workspace = true
+soundcraft-midi.workspace = true
+soundcraft-dsp.workspace = true
+soundcraft-clap-host.workspace = true
+soundcraft-vst3-host.workspace = true
+soundcraft-au-host.workspace = true
+soundcraft-model.workspace = true
+soundcraft-mix.workspace = true
+soundcraft-band.workspace = true
+soundcraft-video.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+zip.workspace = true
+miniz_oxide.workspace = true
+quick-xml.workspace = true
+craft-docpath.workspace = true
+
+# Local ML audio (ONNX Runtime, DeepFilterNet): desktop only, the web app has none.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+soundcraft-ml.workspace = true
+
+[dev-dependencies]
+soundcraft-dsp = { workspace = true, features = ["test-plugins"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Tame the Sides",
+  "group": "Mix Bus",
+  "tags": "Clean · Modern",
+  "desc": "Clean compression on the side channel only, for wide mixes whose edges jump around.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.56,
+    "ratio": 0.313087,
+    "attack": 0.622073,
+    "release": 0.542562,
+    "makeup": 0.333333,
+    "knee": 0.5,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Side only",
+    "dry": 0.0
+  }
+}

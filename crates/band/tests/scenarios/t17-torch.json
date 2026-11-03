@@ -1,0 +1,35 @@
+{
+  "name": "t17-torch",
+  "pending": false,
+  "description": "Task 17: Kit (guitar, m1) on Indiginus Torch, Natural.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Kit",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Indiginus Torch",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6
+  }
+}

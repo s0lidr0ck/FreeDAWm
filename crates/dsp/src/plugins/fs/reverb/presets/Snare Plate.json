@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Snare Plate",
+  "group": "Mix: Drums + Keys",
+  "tags": "Plate · 1.1 s",
+  "desc": "Send. Short bright plate. The snare sound on half the records you own.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.34023,
+    "mix": 1.0,
+    "size": 0.5,
+    "preDelay": 0.2,
+    "lowCut": 0.64563,
+    "highCut": 0.76862,
+    "damping": 0.10353,
+    "bass": 0.5,
+    "character": 0.55,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "t20-rate-b64-44100",
+  "pending": false,
+  "description": "Task 20: t20-factory-band-pop-natural at block 64, 44100 Hz.",
+  "sample_rate": 44100,
+  "block": 64,
+  "bars": 8,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "t15-drums-generic-classic",
+  "pending": false,
+  "description": "Task 15: the drums (m2) on Generic, Classic.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": false,
+    "tension": false
+  },
+  "targets": [
+    null,
+    "Generic",
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

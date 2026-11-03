@@ -1,0 +1,25 @@
+{
+  "engine": "CompEngine",
+  "name": "Parallel Drums",
+  "group": "Drums",
+  "tags": "160 · VCA",
+  "desc": "Flattened completely and mixed in under the kit for weight.",
+  "values": {
+    "style": "160",
+    "amount": 0.68,
+    "ratio": 1,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 1,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.639076,
+    "aLevel": 0.55103
+  }
+}

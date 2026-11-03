@@ -1,0 +1,42 @@
+{
+  "name": "t20-ks-hold-cross",
+  "pending": false,
+  "description": "Task 20 (test Library keyswitch): Wren on KS Test Hold Cross (two holds, a 40 ms key lead, minLen on one), Natural, Energy 4, with a seek forward.",
+  "library_overlay": "keyswitch",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Wren",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "KS Test Hold Cross",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_energy": 4
+  },
+  "events": [
+    {
+      "at_ppq": 20.0,
+      "seek_to": 28.0
+    }
+  ]
+}

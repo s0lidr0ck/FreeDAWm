@@ -1,0 +1,11 @@
+{
+  "name": "t20-feel-tension",
+  "pending": false,
+  "description": "Task 20: the factory band with Tension on, Classic.",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": false,
+    "tension": true
+  }
+}

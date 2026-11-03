@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Synth Pad Drift",
+  "group": "Guitars & Keys",
+  "tags": "Multitrack · Standard · 7.5 ips",
+  "desc": "Slow tape and a transport that wanders: pads pick up movement and lose their digital edge.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "7.5 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.45,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

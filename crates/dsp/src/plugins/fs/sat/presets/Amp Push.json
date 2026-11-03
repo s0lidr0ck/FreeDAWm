@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Amp Push",
+  "group": "Guitars",
+  "tags": "Bridge · Germanium",
+  "desc": "Germanium diodes on a DI'd or amped guitar: firmer, more forward.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "A",
+    "drive": 0.533333,
+    "bias": 0.5,
+    "focus": 0.625,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

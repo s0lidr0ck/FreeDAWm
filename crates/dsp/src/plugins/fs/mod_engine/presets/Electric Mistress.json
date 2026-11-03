@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Electric Mistress",
+  "group": "Stock Settings",
+  "tags": "BBD · Mistress · ~0.35 Hz stock",
+  "desc": "SAD1024 flanger with the filter-matrix voicing. Regen at 5.",
+  "values": {
+    "circuit": "Mistress",
+    "variant": "B",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.5,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

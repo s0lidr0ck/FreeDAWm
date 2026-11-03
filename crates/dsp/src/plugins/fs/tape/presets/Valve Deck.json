@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Valve Deck",
+  "group": "Start Here",
+  "tags": "Valve · Standard · 15 ips",
+  "desc": "Valve record electronics ahead of the tape: second harmonic on top of the oxide's third, and a softer top.",
+  "values": {
+    "machine": "Valve",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

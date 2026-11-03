@@ -1,0 +1,23 @@
+{
+  "name": "t15-bass-modo-natural-busy",
+  "pending": false,
+  "description": "Task 15: Flea (falls 0.4) on MODO BASS 2, Natural, Energy 4, Fills 100, Tension on (fills, slides, hammer-ons, ghosts, falls, the tension tail).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": true
+  },
+  "players": [null, null, "Flea", null, null, null],
+  "targets": [null, null, "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m3_energy": 4,
+    "m3_fills": 100
+  }
+}

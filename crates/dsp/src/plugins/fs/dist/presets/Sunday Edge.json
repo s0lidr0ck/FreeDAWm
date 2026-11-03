@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Sunday Edge",
+  "group":  "Worship",
+  "tags":   "Tube Screamer · TS808",
+  "desc":   "Low drive into a clean amp. Swells and arpeggios.",
+  "values": {
+    "drive": 0.25,
+    "tone": 0.6,
+    "circuit": "Tube Screamer",
+    "tsModel": "TS808",
+    "tsDiode": "Stock"
+  }
+}

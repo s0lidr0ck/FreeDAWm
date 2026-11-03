@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Guv'nor Plexi",
+  "group":  "Distortion",
+  "tags":   "Guv'nor · LED",
+  "desc":   "Gain at 6, mids boost, treble at noon. The Marshall-in-a-box.",
+  "values": {
+    "drive": 0.6,
+    "tone": 0.5,
+    "circuit": "Guv'nor",
+    "govClip": "LED",
+    "govBass": "Flat",
+    "govMid": "Boost"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Room Tamer",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "For room mics: the wash between hits comes down, the hits stay.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.5,
+    "sustain": 0.25,
+    "attackTime": 0.5,
+    "sustainTime": 0.25,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Diode Bass",
+  "group": "Bass",
+  "tags": "33609 · Diode",
+  "desc": "Six-to-one through the bridge. Solid level with some harmonic weight on top.",
+  "values": {
+    "style": "33609",
+    "amount": 0.48,
+    "ratio": 0.8,
+    "attack": 1,
+    "release": 0.2,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.6,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

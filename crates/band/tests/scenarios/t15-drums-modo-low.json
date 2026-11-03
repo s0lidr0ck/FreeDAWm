@@ -1,0 +1,23 @@
+{
+  "name": "t15-drums-modo-low",
+  "pending": false,
+  "description": "Task 15: Jay on MODO DRUM, Natural, Energy 2 (cross-stick draw, splash), Tension on.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "tension": true
+  },
+  "players": [null, "Jay", null, null, null, null],
+  "targets": [null, "MODO DRUM", null, null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_energy": 2,
+    "m2_fills": 50
+  }
+}

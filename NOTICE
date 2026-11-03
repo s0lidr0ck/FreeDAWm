@@ -1,0 +1,54 @@
+FreeDAWm
+Copyright (c) 2026 FireStation (the FreeDAWm owner) and the FreeDAWm contributors.
+
+FreeDAWm is a fork of SoundCraft (https://github.com/storytold/soundcraft):
+Copyright (c) 2026 ArtCraft Team and the SoundCraft contributors.
+
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE). Contributions are accepted under the same terms.
+
+FreeDAWm is based on SoundCraft by the ArtCraft team. It is not an ArtCraft product and is not
+endorsed by the ArtCraft team; the ArtCraft name and marks are trademarks of the ArtCraft Team and
+are not used here.
+
+The FreeDAWm name, logo, wordmark and splash animation are the owner's own work and are released
+under the MIT License like the rest of the repository (owner's decision, 2026-11-02).
+
+Trademarks. Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. Some FreeDAWm
+modes, presets and impulse responses name the hardware they model or were measured from (for
+example the 1176 and LA-2A compressors, SSL 4000 E and G Bus consoles, the Neve 1073, Pultec
+equalisers, and Fender and Marshall amplifiers and cabinets). Universal Audio, Teletronix, Solid
+State Logic, SSL, Neve, AMS Neve, Pultec, Fender, Twin Reverb and Marshall are trademarks of their
+respective owners. Those names, and other product and company names mentioned in this repository,
+are used only to identify the products studied or to describe compatibility; FreeDAWm is not
+affiliated with, sponsored or endorsed by any of their owners.
+
+Third-party material
+
+This product bundles third-party material under its own licenses. The per-file list (author,
+source, license) is in ATTRIBUTION.md; in short:
+
+- Inter Regular (assets/fonts/Inter-Regular.ttf): The Inter Project Authors, SIL Open Font
+  License 1.1 (assets/fonts/Inter-LICENSE.txt).
+- The CMU Pronouncing Dictionary (assets/lexicon/pron.lex, repacked): Carnegie Mellon University
+  and the cmudict contributors, BSD-style licence (assets/lexicon/cmudict-LICENSE.txt).
+- WordNet 3.1 (assets/lexicon/wordnet.lex, pruned): Princeton University, WordNet 3.1 licence
+  (assets/lexicon/wordnet-LICENSE.txt).
+- DeepFilterNet 3 ONNX model (crates/ml/assets/DeepFilterNet3_onnx.tar.gz): Hendrik Schroeter,
+  MIT OR Apache-2.0.
+- DAWproject test projects (crates/engine/tests/fixtures/dawproject/bitwig-*.xml, test data
+  only): Bitwig GmbH, MIT.
+- The egui default fonts (Ubuntu-Light: Ubuntu Font Licence 1.0; Hack: MIT; Noto Emoji: OFL-1.1;
+  emoji-icon-font: OFL-1.1/MIT) ship inside the egui crate under their own licenses.
+
+Everything else bundled is original: icons drawn in code, demo audio synthesised in code, and the
+owner's own work (the FreeDAWm logo, wordmark and splash, the FireStation factory presets, the
+Band library and the amp cabinet impulse responses in assets/amp-irs/), all released under the
+MIT License.
+
+Third-party ML models that some features download (separation, karaoke, transcription) are not
+bundled: the app fetches them from their authors' own pages, and each one's licence is shown in
+the app (Setup > ML Models) and listed in ATTRIBUTION.md. Some of them state no licence.
+
+Rust crate dependencies are under their own licenses (see Cargo.lock; `cargo about` or
+`cargo deny check licenses` lists them).

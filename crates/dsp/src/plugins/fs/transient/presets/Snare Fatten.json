@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Snare Fatten",
+  "group": "Drums",
+  "tags": "Drums",
+  "desc": "A little more hit and a lot more body after it.",
+  "values": {
+    "source": "Drums",
+    "attack": 0.583333,
+    "sustain": 0.625,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

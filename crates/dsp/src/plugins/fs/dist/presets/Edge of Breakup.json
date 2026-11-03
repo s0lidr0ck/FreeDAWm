@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Edge of Breakup",
+  "group":  "Overdrive",
+  "tags":   "Tube Screamer · TS808",
+  "desc":   "Drive low, tone up. Barely clipping, just thicker.",
+  "values": {
+    "drive": 0.2,
+    "tone": 0.65,
+    "circuit": "Tube Screamer",
+    "tsModel": "TS808",
+    "tsDiode": "Stock"
+  }
+}

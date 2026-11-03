@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Bass Growl",
+  "group": "Bass",
+  "tags": "Bridge · Germanium",
+  "desc": "Germanium grind aimed at the mids, where bass is actually heard on small speakers.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "A",
+    "drive": 0.666667,
+    "bias": 0.5,
+    "focus": 0.666667,
+    "air": 0.0,
+    "mix": 0.7,
+    "chanMode": "Stereo"
+  }
+}

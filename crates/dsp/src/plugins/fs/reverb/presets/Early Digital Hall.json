@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Early Digital Hall",
+  "group": "Classics",
+  "tags": "Hall · 3.8 s",
+  "desc": "Late-70s rack hall: lows hang on, highs die young, the tail is gently chorused.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.58764,
+    "mix": 0.32,
+    "size": 0.5,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.76862,
+    "damping": 0.50207,
+    "bass": 0.72125,
+    "character": 0.5,
+    "diffusion": 0.8,
+    "modRate": 0.5463,
+    "modDepth": 0.5,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1970s",
+    "attack": 0.0
+  }
+}

@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- A song laid out as Studio One exports it (written for FreeDAWm's tests): a folder, an FX bus fed by a send, plugins, a tempo ramp, a meter change, looped and layered clips. -->
+<Project version="1.0">
+  <Application name="Studio One" version="6.5.2"/>
+  <Transport>
+    <Tempo id="t" unit="bpm" value="120.0" min="20" max="999"/>
+    <TimeSignature id="ts" numerator="4" denominator="4"/>
+  </Transport>
+  <Structure>
+    <Track contentType="tracks" name="Drums" color="#d24a3c" id="fold">
+      <Channel role="submix" audioChannels="2" destination="mst" id="foldch">
+        <Mute id="foldm" value="false"/>
+        <Pan id="foldp" unit="normalized" value="0.5"/>
+        <Volume id="foldv" unit="linear" value="0.5011872336272722"/>
+      </Channel>
+      <Track contentType="audio" name="Kick" color="#ff8000" id="kick">
+        <Channel role="regular" audioChannels="1" destination="foldch" id="kickch">
+          <Devices>
+            <Vst3Plugin deviceID="ABCDEF0123456789ABCDEF0123456789" deviceName="Pro-Q 3" deviceVendor="FabFilter" deviceRole="audioFX" loaded="true" id="kq">
+              <Parameters>
+                <RealParameter id="kqgain" parameterID="7" name="Band 1 Gain" unit="normalized" min="0" max="1" value="0.5"/>
+              </Parameters>
+              <Enabled id="kqen" value="true"/>
+              <State path="Plugins/Pro-Q 3.vstpreset"/>
+            </Vst3Plugin>
+            <BuiltinDevice deviceName="Pro EQ3" deviceRole="audioFX" id="kpe">
+              <Enabled id="kpeen" value="false"/>
+              <State path="Plugins/Pro EQ3.preset"/>
+            </BuiltinDevice>
+          </Devices>
+          <Mute id="kickm" value="false"/>
+          <Pan id="kickp" unit="normalized" value="0.25"/>
+          <Sends>
+            <Send id="kicks" destination="fxch" type="post">
+              <Enable id="kicksen" value="true"/>
+              <Volume id="kicksv" unit="linear" value="0.25118864315095796"/>
+            </Send>
+          </Sends>
+          <Volume id="kickv" unit="decibel" value="-6.0"/>
+        </Channel>
+      </Track>
+    </Track>
+    <Track contentType="notes" name="Keys" color="#3c8cd2" id="keys">
+      <Channel role="regular" audioChannels="2" destination="mst" solo="true" id="keysch">
+        <Devices>
+          <ClapPlugin deviceID="com.example.synth" deviceName="Synth" deviceRole="instrument" id="ksyn">
+            <State path="Plugins/Synth.clap-preset"/>
+          </ClapPlugin>
+          <Vst2Plugin deviceID="1234" deviceName="Old Chorus" deviceRole="audioFX" id="kch"/>
+        </Devices>
+        <Mute id="keysm" value="true"/>
+        <Pan id="keysp" unit="normalized" value="0.75"/>
+        <Volume id="keysv" unit="linear" value="1.0"/>
+      </Channel>
+    </Track>
+    <Track contentType="audio" name="Vox" color="#40c040" id="vox">
+      <Channel role="regular" audioChannels="2" destination="mst" id="voxch">
+        <Pan id="voxp" unit="normalized" value="0.5"/>
+        <Volume id="voxv" unit="linear" value="1.0"/>
+      </Channel>
+    </Track>
+    <Track name="FX" contentType="audio" id="fx">
+      <Channel role="effect" audioChannels="2" destination="mst" id="fxch">
+        <Volume id="fxv" unit="linear" value="1.0"/>
+      </Channel>
+    </Track>
+    <Track name="Main" id="main">
+      <Channel role="master" audioChannels="2" id="mst">
+        <Volume id="mstv" unit="linear" value="1.0"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="arr">
+    <Lanes timeUnit="beats" id="lanes">
+      <Lanes track="kick" id="kl">
+        <Clips id="kc">
+          <Clip time="4.0" duration="6.0" contentTimeUnit="seconds" playStart="0.5" loopStart="0.5" loopEnd="1.5" name="Kick loop">
+            <Audio channels="2" duration="3.097" sampleRate="44100" timeUnit="seconds" id="ka">
+              <File path="Audio/white-glasses.wav"/>
+            </Audio>
+          </Clip>
+        </Clips>
+        <Points id="kpan" unit="normalized">
+          <Target parameter="kickp"/>
+          <RealPoint time="0.0" value="0.0" interpolation="hold"/>
+          <RealPoint time="4.0" value="1.0" interpolation="linear"/>
+        </Points>
+        <Points id="kqauto">
+          <Target parameter="kqgain"/>
+          <RealPoint time="0.0" value="0.25"/>
+          <RealPoint time="8.0" value="0.75"/>
+        </Points>
+        <Points id="kmute">
+          <Target parameter="kickm"/>
+          <BoolPoint time="0.0" value="false"/>
+          <BoolPoint time="16.0" value="true"/>
+        </Points>
+      </Lanes>
+      <Lanes track="vox" id="vl">
+        <Clips id="vc1">
+          <Clip time="8.0" duration="4.0" contentTimeUnit="seconds" playStart="0.0" playStop="2.0" fadeTimeUnit="seconds" fadeInTime="0.01" fadeOutTime="0.5" name="Take 2" enable="true">
+            <Lanes id="vcl">
+              <Audio channels="2" duration="3.097" sampleRate="44100" timeUnit="seconds" id="va">
+                <File path="Audio/white-glasses.wav"/>
+              </Audio>
+              <Points id="vgain" unit="linear">
+                <Target expression="gain"/>
+                <RealPoint time="0.0" value="0.5"/>
+              </Points>
+            </Lanes>
+          </Clip>
+        </Clips>
+        <Clips id="vc2">
+          <Clip time="8.0" duration="4.0" contentTimeUnit="seconds" playStart="1.0" playStop="3.0" name="Take 1">
+            <Audio channels="2" duration="3.097" sampleRate="44100" timeUnit="seconds" id="vb">
+              <File path="Audio/white-glasses.wav"/>
+            </Audio>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="keys" id="kyl">
+        <Clips id="kyc">
+          <Clip time="0.0" duration="2.0" loopStart="0.0" loopEnd="1.0" name="Riff">
+            <Notes id="kyn">
+              <Note time="0.0" duration="0.25" channel="0" key="60" vel="0.5" rel="0.25"/>
+              <Note time="0.5" duration="0.25" channel="0" key="64" vel="1.0"/>
+            </Notes>
+          </Clip>
+          <Clip time="4.0" duration="2.0" name="Nest" contentTimeUnit="beats" playStart="1.0">
+            <Clips id="nest">
+              <Clip time="0.0" duration="2.0" name="Inner">
+                <Notes id="inn">
+                  <Note time="0.5" duration="0.5" channel="1" key="67" vel="0.75"/>
+                  <Note time="1.5" duration="0.5" channel="1" key="69" vel="0.75"/>
+                </Notes>
+              </Clip>
+            </Clips>
+          </Clip>
+        </Clips>
+        <Points id="keyscc">
+          <Target expression="channelController" channel="0" controller="7"/>
+          <RealPoint time="0.0" value="0.5"/>
+        </Points>
+      </Lanes>
+      <ClipSlot track="keys" id="slot"/>
+    </Lanes>
+    <Markers id="mk">
+      <Marker time="0.0" name="Intro" color="#ff0000"/>
+      <Marker time="16.0" name="Verse"/>
+    </Markers>
+    <TempoAutomation id="ta" unit="bpm">
+      <Target parameter="t"/>
+      <RealPoint time="0.0" value="120.0" interpolation="hold"/>
+      <RealPoint time="16.0" value="120.0" interpolation="linear"/>
+      <RealPoint time="24.0" value="140.0" interpolation="hold"/>
+    </TempoAutomation>
+    <TimeSignatureAutomation id="tsa">
+      <Target parameter="ts"/>
+      <TimeSignaturePoint time="0.0" numerator="4" denominator="4"/>
+      <TimeSignaturePoint time="32.0" numerator="3" denominator="4"/>
+    </TimeSignatureAutomation>
+  </Arrangement>
+  <Scenes>
+    <Scene id="sc1" name="A"><Lanes id="scl"/></Scene>
+  </Scenes>
+</Project>

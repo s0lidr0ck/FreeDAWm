@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Diode Crush",
+  "group": "Character",
+  "tags": "Bridge · Silicon",
+  "desc": "Silicon diodes at full drive, half in.",
+  "values": {
+    "circuit": "Bridge",
+    "variant": "B",
+    "drive": 1.0,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 0.5,
+    "chanMode": "Stereo"
+  }
+}

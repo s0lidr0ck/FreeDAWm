@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Gritty Slow Gear",
+  "group": "Fun",
+  "tags": "Pick · Slow Gear · hot",
+  "desc": "Push Input: the FET grits up as each swell comes through.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.66,
+    "hold": 0.0,
+    "release": 0.4,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Linear",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Slow Gear",
+    "alternate": 0.0,
+    "atkSync": 0.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

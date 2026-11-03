@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Small Stone",
+  "group": "Stock Settings",
+  "tags": "Phase · Small Stone · ~0.8 Hz stock",
+  "desc": "Four OTA stages, Colour off. Liquid rather than throaty.",
+  "values": {
+    "circuit": "Small Stone",
+    "variant": "A",
+    "depth": 0.5,
+    "rate": 0.5,
+    "mix": 0.5,
+    "width": 0.5,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

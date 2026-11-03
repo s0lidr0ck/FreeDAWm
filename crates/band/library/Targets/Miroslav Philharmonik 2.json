@@ -1,0 +1,35 @@
+{
+ "format": 1,
+ "name": "Miroslav Philharmonik 2",
+ "slot": 9,
+ "driver": "articulationKeys",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "KS instruments (polyphonic): velocity carries the dynamics, CC11 shapes expression. Long / Short / Pluck / Tremolo are sent as keyswitches above C0 — open the instrument's keyswitch popup in Philharmonik and set the four keys below to match.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "keys": {
+   "long": 0,
+   "short": 1,
+   "pluck": 2,
+   "tremolo": 3
+  },
+  "keyBase": 24,
+  "customKeys": true,
+  "dynamicsCC": -1,
+  "expressionCC": 11,
+  "tremolo": true,
+  "pluckCapBelowEnergy": 0,
+  "pluckVelCap": 127
+ }
+}

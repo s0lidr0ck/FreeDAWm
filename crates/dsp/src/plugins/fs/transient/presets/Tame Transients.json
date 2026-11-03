@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Tame Transients",
+  "group": "Mix & Bus",
+  "tags": "Full Mix",
+  "desc": "Peaks rounded before a limiter, so it has less to do.",
+  "values": {
+    "source": "Full Mix",
+    "attack": 0.388889,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

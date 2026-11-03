@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Reverse Quarter",
+  "group": "Reverse",
+  "tags": "Rhythmic · 1/4",
+  "desc": "Rises for a whole beat and cuts dead on the next one. Backwards guitar.",
+  "values": {
+    "mode": "Rhythmic",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.0,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "Exp",
+    "retrig": 0.7,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.0,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/4",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 0.0,
+    "relNote": "1/8",
+    "rate": "1/4",
+    "peakBeat": 1.0,
+    "phrase": "Per Note"
+  }
+}

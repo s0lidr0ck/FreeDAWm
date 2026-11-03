@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Piano Warmth",
+  "group": "Guitars & Keys",
+  "tags": "Two-Track · Standard · 15 ips",
+  "desc": "Rounds the hammer attack and fills the low end without blurring the chords.",
+  "values": {
+    "machine": "Two-Track",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.333333,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

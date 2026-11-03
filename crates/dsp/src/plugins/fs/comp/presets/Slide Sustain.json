@@ -1,0 +1,25 @@
+{
+  "engine": "CompEngine",
+  "name": "Slide Sustain",
+  "group": "Guitar",
+  "tags": "Ross · Pedal",
+  "desc": "Long, even sustain for slide with a little dry attack left in.",
+  "values": {
+    "style": "Ross",
+    "amount": 0.84,
+    "ratio": 0.4,
+    "attack": 0.306346,
+    "release": 0.624939,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.400515,
+    "aLevel": 0.701545
+  }
+}

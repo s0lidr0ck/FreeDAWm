@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Starved Tube",
+  "group":  "Overdrive",
+  "tags":   "Tube Driver · 9 V",
+  "desc":   "9 V plate, drive up. Squashed, asymmetric, sags on every note.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.55,
+    "circuit": "Tube Driver",
+    "tdPlate": "9 V",
+    "tdBias": "Stock"
+  }
+}

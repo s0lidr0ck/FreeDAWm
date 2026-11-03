@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Diode Drum Bus",
+  "group": "Drums",
+  "tags": "33609 · Diode",
+  "desc": "Four-to-one with the fastest recovery. The bridge adds grit between the hits.",
+  "values": {
+    "style": "33609",
+    "amount": 0.4,
+    "ratio": 0.6,
+    "attack": 1,
+    "release": 0,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.430677,
+    "color": 0.6,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

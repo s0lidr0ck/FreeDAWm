@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "King of Tone",
+  "group":  "Overdrive",
+  "tags":   "Blues Breaker · Hi",
+  "desc":   "Hi gain mode, tone rolled back. The KOT flavour.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.45,
+    "circuit": "Blues Breaker",
+    "bbGain": "Hi"
+  }
+}

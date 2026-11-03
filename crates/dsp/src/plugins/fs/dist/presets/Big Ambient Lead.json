@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Big Ambient Lead",
+  "group":  "Worship",
+  "tags":   "Blues Breaker · Hi",
+  "desc":   "Hi mode, tone soft. Sustaining lead without fizz.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.35,
+    "circuit": "Blues Breaker",
+    "bbGain": "Hi"
+  }
+}

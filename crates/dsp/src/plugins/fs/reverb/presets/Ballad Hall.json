@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Ballad Hall",
+  "group": "Mix: Vocals",
+  "tags": "Hall · 3.2 s",
+  "desc": "Send. Long, dark, stays behind the singer.",
+  "values": {
+    "machine": "Hall",
+    "decay": 0.55334,
+    "mix": 1.0,
+    "size": 0.65,
+    "preDelay": 0.4899,
+    "lowCut": 0.56166,
+    "highCut": 0.69413,
+    "damping": 0.5981,
+    "bass": 0.5,
+    "character": 0.25,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1980s",
+    "attack": 0.0
+  }
+}

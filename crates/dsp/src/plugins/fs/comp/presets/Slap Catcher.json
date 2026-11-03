@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Slap Catcher",
+  "group": "Bass",
+  "tags": "160 · VCA",
+  "desc": "Hard VCA for pops and slaps that would otherwise jump out.",
+  "values": {
+    "style": "160",
+    "amount": 0.44,
+    "ratio": 0.495035,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

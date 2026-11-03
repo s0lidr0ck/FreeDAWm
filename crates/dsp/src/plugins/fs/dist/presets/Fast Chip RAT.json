@@ -1,0 +1,16 @@
+{
+  "engine": "DistEngine",
+  "name":   "Fast Chip RAT",
+  "group":  "Fun",
+  "tags":   "RAT · TL071",
+  "desc":   "Vintage RAT with a TL071. Hear what the slew rate was doing.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.5,
+    "circuit": "RAT",
+    "ratModel": "Vintage",
+    "ratDiode": "Stock",
+    "ratChip": "TL071",
+    "ratFat": "Off"
+  }
+}

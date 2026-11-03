@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "BD-2 Phat",
+  "group":  "Overdrive",
+  "tags":   "Blues Driver · Phat",
+  "desc":   "Keeley mod, gain up. Fatter, more compression.",
+  "values": {
+    "drive": 0.7,
+    "tone": 0.45,
+    "circuit": "Blues Driver",
+    "bdMode": "Phat"
+  }
+}

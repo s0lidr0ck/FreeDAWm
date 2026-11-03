@@ -1,0 +1,16 @@
+{
+  "name": "t20-jump-over-quarter",
+  "pending": false,
+  "description": "Task 20: a forward jump over a quarter beat (12 -> 14).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "events": [
+    {
+      "at_ppq": 12.0,
+      "seek_to": 14.0
+    }
+  ]
+}

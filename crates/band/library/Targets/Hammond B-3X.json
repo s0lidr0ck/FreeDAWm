@@ -1,0 +1,21 @@
+{
+ "format": 1,
+ "name": "Hammond B-3X",
+ "slot": 16,
+ "driver": "organ",
+ "instruments": [ "Piano", "Electric Keys" ],
+ "help": "Set B-3X's Upper Manual to this musician's channel (the pedals are not driven; the lower manual only when lowerManualChannel is set). Notes go at a fixed velocity, so leave B-3X's velocity response off; no sustain pedal is sent. The swell (expression CC) carries the dynamics, the inverted drawbar-setting keys 24-35 below the manual change the registration by Energy (24 Flute 8', 26, 29, 35 full drawbars), the Leslie speed CC goes fast at Energy 4 (value 64 and up = fast), percussion and chorus-vibrato follow the player. Confirm every CC number in B-3X Controls > MIDI (expression 11 and Leslie speed CC1 are the usual factory assignments) and set percussionCC / chorusCC in this file if you assign them (a CC left at -1 is never sent); hover the inverted keys in B-3X to check their drawbar settings. Drawbar changes land at section starts (an Energy change mid-section waits for the next section). Registration ladders by player style (gospel / jazz / rock / pad) map to the inverted keys — check their names by hovering in B-3X. The manual is assumed 61 keys, C2-C7: lower or higher notes are folded onto it. Lower manual: set `lowerManualChannel` to the channel B-3X's Lower Manual listens on (Controls → MIDI) and the organist's left hand plays there with its own registration keys (`lowerDrawbarKeys`, factory inverted keys 36–47 an octave above the upper's — confirm by hovering). In Natural only, on a share of bars set by the player's lowerHand; its notes sit from C3 (48) up. Use a channel of its own: set to the musician's own channel, the lower manual is not played (the two manuals couldn't be told apart).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "expressionCC": 11,
+  "leslieSpeedCC": 1,
+  "percussionCC": -1,
+  "chorusCC": -1,
+  "chorusValues": { "off": 0, "V1": 20, "V2": 40, "V3": 60, "C1": 80, "C2": 100, "C3": 127 },
+  "drawbarKeys": [ 24, 26, 29, 35 ],
+  "registrations": { "gospel": [ 24, 27, 31, 35 ], "jazz": [ 25, 26, 28, 30 ], "rock": [ 26, 29, 33, 35 ], "pad": [ 24, 25, 27, 29 ] },
+  "lowerManualChannel": 0,
+  "lowerDrawbarKeys": [ 36, 38, 41, 43 ],
+  "noteVelocity": 100
+ }
+}

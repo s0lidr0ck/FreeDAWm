@@ -1,0 +1,47 @@
+{
+  "name": "t16-ample-slide-out",
+  "pending": false,
+  "description": "Task 16: Shane (notes, hammer-ons, slides, harmonics, slide-in) on Ample Guitar M 4, Ample Notes, Natural, Energy 3, take 2, 3/4 from 40 (slide-outs, a regeneration). Ample's lead vibrato (role 5) has no factory player on Guitar / Folk.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "take": 2,
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    "Shane",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "targets": [
+    "Ample Guitar M 4",
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 1,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m1_instrument": 6,
+    "m1_ample": 2,
+    "m1_energy": 3
+  },
+  "events": [
+    {
+      "at_ppq": 40.0,
+      "meter": [
+        3,
+        4
+      ]
+    }
+  ]
+}

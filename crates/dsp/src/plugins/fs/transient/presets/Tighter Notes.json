@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Tighter Notes",
+  "group": "Bass",
+  "tags": "Bass",
+  "desc": "Low end that stops with the note: less overhang on a boomy bass.",
+  "values": {
+    "source": "Bass",
+    "attack": 0.5,
+    "sustain": 0.3125,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Full",
+    "sustainFocus": "Low",
+    "mix": 1.0
+  }
+}

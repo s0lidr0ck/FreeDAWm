@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Seasick",
+  "group": "Fun",
+  "tags": "BBD · A/DA · ~0.35 Hz stock",
+  "desc": "One sweep lasts most of a bar and the sides go opposite ways. Hold on.",
+  "values": {
+    "circuit": "A/DA",
+    "variant": "B",
+    "depth": 1.0,
+    "rate": 0.05,
+    "mix": 1.0,
+    "width": 1.0,
+    "regen": 0.85,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

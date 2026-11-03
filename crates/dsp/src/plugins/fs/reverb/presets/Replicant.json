@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Replicant",
+  "group": "Classics",
+  "tags": "Shimmer · 10 s",
+  "desc": "Dark, slow, a faint octave on top. Synth-film-score territory.",
+  "values": {
+    "machine": "Shimmer",
+    "decay": 0.78074,
+    "mix": 0.4,
+    "size": 0.5,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.41818,
+    "bass": 0.68361,
+    "character": 0.35,
+    "diffusion": 0.7,
+    "modRate": 0.35304,
+    "modDepth": 0.6,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "1970s",
+    "attack": 0.0
+  }
+}

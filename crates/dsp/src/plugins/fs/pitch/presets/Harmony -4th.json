@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Harmony -4th",
+  "group": "Whammy",
+  "tags": "Whammy · -4th pedal",
+  "desc": "Dry plus a 4th below. Thick single-note lines.",
+  "values": {
+    "style": "Whammy",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.0,
+    "lpf": 1.0,
+    "reso": 0.0,
+    "voice": 0.63021,
+    "interval": "-4th",
+    "pedal": 1.0,
+    "glide": 0.1,
+    "width": 0.35,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

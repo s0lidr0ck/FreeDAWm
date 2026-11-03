@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Loud Master",
+  "group": "Mastering",
+  "tags": "Hard clip · Loud",
+  "desc": "As loud as it goes before it falls apart. Listen to Chaff before you keep it.",
+  "values": {
+    "drive": 0.4167,
+    "clip": 0.7,
+    "shape": "Hard",
+    "character": "Loud",
+    "ceiling": 0.9167,
+    "release": 0.469
+  }
+}

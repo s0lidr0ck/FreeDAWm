@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Swell Pad",
+  "group": "Worship",
+  "tags": "POG · +1 +2",
+  "desc": "Octaves swell in slowly behind chords. Under a long reverb it's the pad you didn't have a keys player for.",
+  "values": {
+    "style": "POG",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.53026,
+    "oct2Up": 0.31585,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.6,
+    "lpf": 0.54827,
+    "reso": 0.2,
+    "voice": 0.59496,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.8,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

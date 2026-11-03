@@ -1,0 +1,40 @@
+[package]
+name = "soundcraft-playback"
+description = "SoundCraft audio device I/O: realtime playback and recording through the mix engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+soundcraft-time.workspace = true
+soundcraft-audio-io.workspace = true
+soundcraft-model.workspace = true
+soundcraft-mix.workspace = true
+soundcraft-band.workspace = true
+soundcraft-dsp.workspace = true
+log.workspace = true
+serde.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal.workspace = true
+# Hardware MIDI input ports (WinMM on Windows, CoreMIDI, ALSA): see `midi_in`.
+midir = "0.10"
+# The ASIO driver's own latency figures (only with the `asio` feature).
+soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cpal = { workspace = true, features = ["wasm-bindgen"] }
+
+[features]
+# ASIO on Windows (cpal's ASIO host). Off by default: building it downloads Steinberg's ASIO SDK
+# (its own licence) and needs LLVM (libclang) for the bindings. `cargo build -p soundcraft --features asio`.
+# soundcraft-asio-latency reads the driver's own latencies (ASIOGetLatencies) for `reported_latency`.
+asio = ["cpal/asio", "dep:soundcraft-asio-latency"]
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

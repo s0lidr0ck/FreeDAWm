@@ -1,0 +1,18 @@
+{
+  "engine": "AmpEngine",
+  "name": "Twin Jazz Warm",
+  "group": "Clean",
+  "tags": "Twin · Dark",
+  "desc": "Treble down, bass up, Bright off -- round and clean for hollow bodies.",
+  "values": {
+    "amp": "Twin Reverb '77",
+    "volume": 0.3,
+    "bright": 0,
+    "treble": 0.3,
+    "middle": 0.55,
+    "bass": 0.55,
+    "reverb": 0.15,
+    "master": 0.8,
+    "cab": "Built-in"
+  }
+}

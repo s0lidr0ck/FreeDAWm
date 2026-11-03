@@ -1,0 +1,25 @@
+{
+  "engine": "CompEngine",
+  "name": "Parallel Smash",
+  "group": "Staples",
+  "tags": "1176 · FET",
+  "desc": "All buttons in, blended a third of the way under the dry signal.",
+  "values": {
+    "style": "1176",
+    "amount": 0.64,
+    "ratio": 1,
+    "attack": 0.451936,
+    "release": 0.100233,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.65,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.656457,
+    "aLevel": 0.522034
+  }
+}

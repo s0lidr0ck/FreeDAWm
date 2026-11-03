@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "B3 Grit",
+  "group": "Keys + Acoustic",
+  "tags": "Vari-Mu · 670",
+  "desc": "Vari-mu driven hard. Organ gets thicker and a little angry.",
+  "values": {
+    "style": "Vari-Mu",
+    "amount": 0.5,
+    "ratio": 0.4,
+    "attack": 0.5,
+    "release": 0,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.85,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

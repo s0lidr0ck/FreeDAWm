@@ -1,0 +1,49 @@
+{
+  "name": "t20-ks-modes-melodic-seek-meter",
+  "pending": false,
+  "description": "Task 20 (test Library keyswitch): Lark on KS Test Modes; 4/4 -> 3/4 at bar 5 (regeneration: the held / latched keys dropped), then a seek back 30 -> 8 (the resets).",
+  "library_overlay": "keyswitch",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Lark",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "KS Test Modes",
+    null,
+    null
+  ],
+  "params": {
+    "m4_instrument": 8,
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  },
+  "events": [
+    {
+      "at_ppq": 16.0,
+      "meter": [
+        3,
+        4
+      ]
+    },
+    {
+      "at_ppq": 30.0,
+      "seek_to": 8.0
+    }
+  ]
+}

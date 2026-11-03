@@ -1,0 +1,25 @@
+{
+ "format": 1,
+ "name": "Indiginus The Banjo",
+ "slot": 22,
+ "driver": "indiginusStrings",
+ "instruments": [ "Folk" ],
+ "help": "Indiginus The Banjo. We turn the Picker and Strummer off (D0, A0) at every pass and play our own rolls; velocity zones High OFF, Low Mute; Exp CC11 amount up; Harmony off; Master Key = the song's key. Ornament keys stay off until the D0 test is run: write the keyswitch test, play it, and set \"articulationReturn\" (hold, or latch: returns with C1 Sustain, 36). Never use the sustain pedal on this one (it latches the Picker). Narrow \"range\" to the keys Kontakt colours as playable.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "layout": "banjo",
+  "range": [ 50, 84 ],
+  "articulations": { "sustain": 36, "mutes": 38, "tremolo": 39, "hammer": 41, "graceSlideUp": 42, "trillUp": 43, "graceSlideDown": 44, "trillDown": 45, "upSlide": 46, "pullOff": 47 },
+  "neverSend": [ 40 ],
+  "initKeys": [ 26, 33 ],
+  "articulationReturn": { "mode": "unconfirmed" },
+  "returnKey": 36,
+  "expressionCC": 11,
+  "vibratoCC": -1,
+  "masterKeyCC": -1,
+  "tremoloSpeedCC": -1,
+  "chordKeys": { "down": 43, "up": 45 },
+  "slots": false,
+  "droneNote": 67
+ }
+}

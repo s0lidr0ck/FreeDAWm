@@ -1,0 +1,34 @@
+{
+  "name": "t17-miroslav",
+  "pending": false,
+  "description": "Task 17: Marco on Miroslav Philharmonik 2.",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Marco",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Miroslav Philharmonik 2",
+    null,
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0
+  }
+}

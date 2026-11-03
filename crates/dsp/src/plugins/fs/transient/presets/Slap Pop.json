@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Slap Pop",
+  "group": "Bass",
+  "tags": "Bass",
+  "desc": "Slap and pop transients brought right out.",
+  "values": {
+    "source": "Bass",
+    "attack": 0.722222,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

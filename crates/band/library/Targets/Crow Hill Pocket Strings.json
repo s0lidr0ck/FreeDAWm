@@ -1,0 +1,38 @@
+{
+ "format": 1,
+ "name": "Crow Hill Pocket Strings",
+ "slot": 8,
+ "driver": "keyswitch",
+ "instruments": [
+  "Piano",
+  "Synth",
+  "Bass",
+  "Electric Keys",
+  "Harp & Mallets",
+  "Guitar",
+  "Strings",
+  "Winds",
+  "Ethnic",
+  "Brass"
+ ],
+ "help": "Section (polyphonic): CC1 dynamics and CC11 expression follow the phrasing. Long / Short / Pluck are sent as keyswitch notes C-1 / C♯-1 / D-1 — MIDI-learn those three notes to the plugin's articulation buttons once (shift with Keyswitch octave if they clash).",
+ "ksOctaveDefault": 0,
+ "data": {
+  "articulations": {
+   "long": { "key": 0, "mode": "tap" },
+   "short": { "key": 1, "mode": "tap" },
+   "pluck": { "key": 2, "mode": "tap" }
+  },
+  "use": {
+   "long": "long",
+   "short": "short",
+   "pluck": "pluck"
+  },
+  "keyBase": 0,
+  "dynamicsCC": 1,
+  "expressionCC": 11,
+  "reset": { "dynamics": 64, "expression": 127 },
+  "pluckCapBelowEnergy": 4,
+  "pluckVelCap": 100
+ }
+}

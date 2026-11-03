@@ -1,0 +1,50 @@
+# The pull-request gate: `cargo xtask ci` (fmt check, clippy -D warnings, the workspace tests,
+# the asset and layering checks and the WebAssembly check) on Linux.
+#
+# No secrets: release and signing workflows are not part of this repository yet (see
+# docs/release-playbook.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  ci:
+    name: cargo xtask ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        # ALSA (cpal, MIDI), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
+        # and the X11/Wayland headers the window layer links against.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake clang libclang-dev libasound2-dev libssl-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo xtask ci
+        run: cargo xtask ci

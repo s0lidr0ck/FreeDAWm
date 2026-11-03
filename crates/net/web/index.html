@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1b1d21">
+<title>FreeDAWm Remote</title>
+<link rel="stylesheet" href="remote.css">
+</head>
+<body>
+<main class="phone">
+  <section id="pair" hidden>
+    <h1>FreeDAWm Remote</h1>
+    <p class="dim">This browser is not paired with the booth yet. Ask for a code: the booth shows 4 digits on its screen.</p>
+    <label>This device's name <input id="pair-name" maxlength="40" autocomplete="off"></label>
+    <button id="pair-ask" class="b2 wide">Ask the booth for a code</button>
+    <div id="pair-code-row" hidden>
+      <label>Code shown on the booth <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code"></label>
+      <button id="pair-ok" class="b2 wide">Pair</button>
+    </div>
+    <p id="pair-msg" class="dim"></p>
+  </section>
+
+  <section id="remote" hidden>
+    <div class="top">
+      <div class="sess"><span id="session">…</span><small id="rig-line">connecting…</small></div>
+      <div class="rec" id="rec-badge" hidden>● REC</div>
+    </div>
+    <div class="card warn" id="warning" hidden></div>
+    <div class="clock" id="clock">0:00:00</div>
+    <div class="sub" id="sub">Bar 1 · Playhead 0:00</div>
+    <div class="btns">
+      <button class="b recb" id="b-record"><i>●</i>Record</button>
+      <button class="b" id="b-play"><i>▶</i>Play</button>
+      <button class="b stop" id="b-stop"><span class="fill" id="stop-fill"></span><i>■</i>Stop<span class="hint" id="stop-hint">hold to stop</span></button>
+    </div>
+    <div class="row2">
+      <button class="b2" id="b-arm">⦿ Arm All</button>
+      <button class="b2" id="b-marker">⚑ Add Marker</button>
+    </div>
+    <div class="toast" id="toast" hidden></div>
+    <h4>Rig</h4>
+    <div id="rig"></div>
+    <h4>Tracks</h4>
+    <div class="card" id="tracks"></div>
+    <h4>Markers</h4>
+    <div class="card" id="markers"><div class="dim">None yet.</div></div>
+    <p class="foot dim">Only arming a track can be changed here; nothing on this page deletes anything.</p>
+  </section>
+</main>
+<script src="remote.js"></script>
+</body>
+</html>

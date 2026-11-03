@@ -1,0 +1,39 @@
+[package]
+name = "soundcraft-ml"
+description = "SoundCraft local machine-learning audio (desktop only): model manager, ONNX Runtime sessions (DirectML or CPU), STFT, chunked overlap-add, stem separation, drum split, vocal de-noise and de-reverb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+soundcraft-dsp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+rustfft.workspace = true
+
+# ONNX Runtime and DeepFilterNet run on the desktop only (the web app has no ML).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-22"] }
+# libDF's DSP (STFT with the Vorbis window, ERB bands, feature normalisation, synthesis) for
+# DeepFilterNet 3; its three ONNX graphs run on ONNX Runtime (libDF's tract path fails to optimise
+# them: "duplicate name /convt3/Conv.bias").
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d8309e0935d165700c91da9de862a99c31", default-features = false }
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+sha2 = "0.10"
+# Transcribe Lyrics: Whisper large-v3 in whisper.cpp (built from source with CMake; CPU here: the
+# Vulkan backend needs the Vulkan SDK and the CUDA one the CUDA toolkit, neither installed).
+whisper-rs = { version = "=0.16.0", default-features = false, features = ["log_backend"] }
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml"] }
+
+[dev-dependencies]
+soundcraft-audio-io.workspace = true
+
+[lints]
+workspace = true

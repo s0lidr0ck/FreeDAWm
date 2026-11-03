@@ -1,0 +1,24 @@
+{
+  "engine": "ModEngine",
+  "name": "Eighties Clean",
+  "group": "Chorus",
+  "tags": "BBD · JC-120 · ~0.9 Hz stock",
+  "desc": "The chorus-on-everything sound, and it still works on a clean rhythm part.",
+  "values": {
+    "circuit": "JC-120",
+    "variant": "A",
+    "depth": 0.6,
+    "rate": 0.55,
+    "mix": 0.6,
+    "width": 0.8,
+    "regen": 0.0,
+    "drive": 0.0,
+    "noise": 0.35,
+    "bias": 0.5,
+    "tone": 0.5,
+    "stereo": "Stereo",
+    "shape": "Stock",
+    "sync": "Free",
+    "division": "1/4"
+  }
+}

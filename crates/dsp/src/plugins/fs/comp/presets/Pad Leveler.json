@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Pad Leveler",
+  "group": "Keys + Acoustic",
+  "tags": "Vari-Mu · 670",
+  "desc": "Very slow tube leveling. Holds pads steady through a whole song.",
+  "values": {
+    "style": "Vari-Mu",
+    "amount": 0.4,
+    "ratio": 0.4,
+    "attack": 0.5,
+    "release": 0.6,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

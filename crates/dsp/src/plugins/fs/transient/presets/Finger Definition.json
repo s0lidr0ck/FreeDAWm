@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Finger Definition",
+  "group": "Bass",
+  "tags": "Bass",
+  "desc": "The finger or pick on each note, in the mids where small speakers hear it.",
+  "values": {
+    "source": "Bass",
+    "attack": 0.666667,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "Mid",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

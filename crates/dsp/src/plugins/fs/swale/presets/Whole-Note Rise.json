@@ -1,0 +1,31 @@
+{
+  "engine": "Swale",
+  "name": "Whole-Note Rise",
+  "group": "Worship & Ambient",
+  "tags": "Pick · Attack 1/1",
+  "desc": "A full bar to arrive. For the quiet verse.",
+  "values": {
+    "mode": "Pick",
+    "attack": 0.55,
+    "hold": 0.0,
+    "release": 0.5,
+    "sens": 0.5,
+    "mix": 1.0,
+    "curve": "S-Curve",
+    "retrig": 0.5,
+    "detHp": 0.3,
+    "floorAmt": 0.0,
+    "bloom": 0.5,
+    "vca": "Clean",
+    "alternate": 0.0,
+    "atkSync": 1.0,
+    "atkNote": "1/1",
+    "holdSync": 0.0,
+    "holdNote": "None",
+    "relSync": 1.0,
+    "relNote": "1/2",
+    "rate": "1/2",
+    "peakBeat": 1.0,
+    "phrase": "Phrase"
+  }
+}

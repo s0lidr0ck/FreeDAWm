@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Spring Pad",
+  "group": "Ambient",
+  "tags": "Spring · 8.0 s",
+  "desc": "A spring pushed way past where a real one goes, with the pick attack swelled off.",
+  "values": {
+    "machine": "Spring",
+    "decay": 0.73621,
+    "mix": 0.45,
+    "size": 0.9,
+    "preDelay": 0.28284,
+    "lowCut": 0.35437,
+    "highCut": 0.82948,
+    "damping": 0.41818,
+    "bass": 0.5,
+    "character": 0.35,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.67362,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

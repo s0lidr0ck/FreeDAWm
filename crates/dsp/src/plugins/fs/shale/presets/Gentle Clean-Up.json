@@ -1,0 +1,28 @@
+{
+  "engine": "Shale",
+  "name": "Gentle Clean-Up",
+  "group": "Repair",
+  "tags": "Any mic · Soft",
+  "desc": "Only 9 dB of reduction and a long follow. Tightens a kit without ever sounding gated, which is what most tracks actually want.",
+  "values": {
+    "instrument": "Snare Top",
+    "sens": 0.5,
+    "ghost": 0.0,
+    "reduction": 0.11,
+    "length": 0.7,
+    "closeMode": "Decay Match",
+    "lookahead": "2 ms",
+    "hold": 0.55,
+    "retrig": 0.2,
+    "debleed": 0.3,
+    "debleedMode": "Shelf",
+    "xover": 0.5,
+    "velTrack": 0.5,
+    "autoBand": 1.0,
+    "detLow": 0.4,
+    "detHigh": 0.6,
+    "mix": 1.0,
+    "reject": 0.5,
+    "midiNote": 0.1667
+  }
+}

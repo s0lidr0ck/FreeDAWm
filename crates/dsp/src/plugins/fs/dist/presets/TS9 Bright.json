@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "TS9 Bright",
+  "group":  "Overdrive",
+  "tags":   "Tube Screamer · TS9",
+  "desc":   "The 9. Brighter and a touch thinner than the 808.",
+  "values": {
+    "drive": 0.55,
+    "tone": 0.6,
+    "circuit": "Tube Screamer",
+    "tsModel": "TS9",
+    "tsDiode": "Stock"
+  }
+}

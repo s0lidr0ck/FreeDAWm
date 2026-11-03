@@ -1,0 +1,17 @@
+{
+  "engine": "AmpEngine",
+  "name": "AC30 Top Boost Chime",
+  "group": "Clean",
+  "tags": "AC30 · Top Boost",
+  "desc": "Brilliant channel low, Treble up a little: the jangle.",
+  "values": {
+    "amp": "AC30 Top Boost '64",
+    "acChannel": "Top Boost",
+    "acBrilliant": 0.3,
+    "acNormal": 0.0,
+    "acTreble": 0.6,
+    "acBass": 0.4,
+    "acCut": 0.2,
+    "acCab": "Built-in"
+  }
+}

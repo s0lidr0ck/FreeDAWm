@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "Choir",
+  "group": "Octaves",
+  "tags": "POG · +1 +2",
+  "desc": "Octaves swell in behind every note. Slow chords.",
+  "values": {
+    "style": "POG",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.56167,
+    "oct2Up": 0.35439,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.25,
+    "attack": 0.45,
+    "lpf": 0.58498,
+    "reso": 0.0,
+    "voice": 0.59496,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.7,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

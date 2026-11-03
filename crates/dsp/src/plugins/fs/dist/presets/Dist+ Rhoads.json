@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Dist+ Rhoads",
+  "group":  "Distortion",
+  "tags":   "Dist+ · Ge",
+  "desc":   "Distortion at 8, cap at noon. Germanium fuzz-adjacent distortion.",
+  "values": {
+    "drive": 0.8,
+    "tone": 0.5,
+    "circuit": "Dist+",
+    "dpDiode": "Germanium"
+  }
+}

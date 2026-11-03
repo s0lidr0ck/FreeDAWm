@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Snappy FET",
+  "group": "Staples",
+  "tags": "1176 · FET",
+  "desc": "Four-to-one FET that grabs fast and lets go fast. Brings things forward.",
+  "values": {
+    "style": "1176",
+    "amount": 0.4,
+    "ratio": 0,
+    "attack": 0.816112,
+    "release": 0.236734,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

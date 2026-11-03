@@ -1,0 +1,15 @@
+{
+  "engine": "Twine",
+  "name": "Streaming Master",
+  "group": "Mastering",
+  "tags": "Soft clip · Transparent",
+  "desc": "Level for streaming: clipper and limiter share it evenly, -1 dBTP.",
+  "values": {
+    "drive": 0.25,
+    "clip": 0.5,
+    "shape": "Soft",
+    "character": "Transparent",
+    "ceiling": 0.9167,
+    "release": 0.5998
+  }
+}

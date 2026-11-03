@@ -1,0 +1,28 @@
+{
+  "engine": "PitchEngine",
+  "name": "H910 Double",
+  "group": "Doubler",
+  "tags": "H910 · 10 cents apart",
+  "desc": "Two detuned copies, hard left and right. The classic vocal / guitar doubler.",
+  "values": {
+    "style": "H910",
+    "dry": 0.70711,
+    "sub": 0.0,
+    "octDown": 0.0,
+    "octUp": 0.0,
+    "oct2Up": 0.0,
+    "fifth": 0.0,
+    "fifthMode": "+Oct 5th",
+    "detune": 0.2,
+    "attack": 0.0,
+    "lpf": 1.0,
+    "reso": 0.0,
+    "voice": 0.56167,
+    "interval": "+1 Oct",
+    "pedal": 0.0,
+    "glide": 0.2,
+    "width": 0.9,
+    "grain": 0.5,
+    "track": 0.5
+  }
+}

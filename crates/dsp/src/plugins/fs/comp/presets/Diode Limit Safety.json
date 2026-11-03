@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Diode Limit Safety",
+  "group": "Mix Bus",
+  "tags": "33609 · Diode",
+  "desc": "The limiter position with Auto 1. Sits idle until a peak shows up.",
+  "values": {
+    "style": "33609",
+    "amount": 0.16,
+    "ratio": 1,
+    "attack": 0,
+    "release": 0.8,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 0,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

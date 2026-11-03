@@ -1,0 +1,23 @@
+{
+ "format": 1,
+ "name": "UJAM Virtual Guitarist AMBER 2",
+ "slot": 14,
+ "driver": "ujamPhrase",
+ "instruments": [
+  "Guitar",
+  "Folk"
+ ],
+ "help": "UJAM phrase guitar: holds the chord (C3 and up) and picks a Style Phrase (C2-A#2, calm to intense) by Energy; Stop is B2. In AMBER 2: Player Mode, Play Mode Chord, Latch off. Slash chords play plain. C3 = middle C.",
+ "ksOctaveDefault": 0,
+ "data": {
+  "phraseKeys": [48, 50, 52, 54, 56, 58],
+  "additions": [-1, -1, -1, -1],
+  "energyBase": [0, 1, 3, 5],
+  "stopKey": 59,
+  "playBase": 60,
+  "playHigh": 84,
+  "bassBase": 48,
+  "bassMode": "none",
+  "modCC": -1
+ }
+}

@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Dyna Squash",
+  "group": "Guitar",
+  "tags": "Ross · Pedal",
+  "desc": "The red box as built: same circuit as the Ross with lower-gain transistors, so it grabs a touch slower.",
+  "values": {
+    "style": "Ross",
+    "amount": 0.57,
+    "ratio": 0.4,
+    "attack": 0,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "B",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "t15-drums-fills-yield",
+  "pending": false,
+  "description": "Task 15: drums on MODO DRUM (Fills 100) and bass on MODO BASS 2 with fills_yield on, Natural (the bass yields to the drum fill).",
+  "bars": 24,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true,
+    "fills_yield": true
+  },
+  "targets": [null, "MODO DRUM", "MODO BASS 2", null, null, null],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 1,
+    "m3_enabled": 1,
+    "m4_enabled": 0,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m2_fills": 100
+  }
+}

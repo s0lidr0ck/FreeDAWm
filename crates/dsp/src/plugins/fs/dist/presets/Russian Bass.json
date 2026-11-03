@@ -1,0 +1,15 @@
+{
+  "engine": "DistEngine",
+  "name":   "Russian Bass",
+  "group":  "Fuzz",
+  "tags":   "Big Muff · Russian",
+  "desc":   "Sovtek voicing, tone low. Made for bass.",
+  "values": {
+    "drive": 0.65,
+    "tone": 0.3,
+    "circuit": "Big Muff",
+    "muffVer": "Russian",
+    "muffDiode": "Stock",
+    "muffMids": "Stock"
+  }
+}

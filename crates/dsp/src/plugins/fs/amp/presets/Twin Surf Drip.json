@@ -1,0 +1,19 @@
+{
+  "engine": "AmpEngine",
+  "name": "Twin Surf Drip",
+  "group": "Clean",
+  "tags": "Twin · Reverb",
+  "desc": "Reverb at 7: the drip. Pick hard near the bridge.",
+  "values": {
+    "amp": "Twin Reverb '77",
+    "volume": 0.35,
+    "bright": 1,
+    "treble": 0.7,
+    "middle": 0.5,
+    "bass": 0.3,
+    "reverb": 0.7,
+    "intensity": 0.0,
+    "master": 0.8,
+    "cab": "Built-in"
+  }
+}

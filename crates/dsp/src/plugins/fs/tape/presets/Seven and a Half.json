@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Seven and a Half",
+  "group": "Start Here",
+  "tags": "Multitrack · Standard · 7.5 ips",
+  "desc": "Slow tape: the bump drops to about 25 Hz, the top rolls off, and highs saturate before anything else does.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "7.5 ips",
+    "drive": 0.3,
+    "bias": 0.5,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

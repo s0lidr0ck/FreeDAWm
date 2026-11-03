@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Mix Bus Glue",
+  "group": "Staples",
+  "tags": "G Bus · SSL",
+  "desc": "Four-to-one, 30 ms, Auto release. Aim for two to four dB on the needle.",
+  "values": {
+    "style": "G Bus",
+    "amount": 0.32,
+    "ratio": 0.5,
+    "attack": 1,
+    "release": 1,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0.341303,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Overheads Silk",
+  "group": "Drums",
+  "tags": "Iron · Ferrite",
+  "desc": "Barely-there iron with Air on the cymbals.",
+  "values": {
+    "circuit": "Iron",
+    "variant": "C",
+    "drive": 0.466667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.25,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

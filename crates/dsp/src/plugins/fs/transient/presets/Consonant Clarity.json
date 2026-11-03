@@ -1,0 +1,17 @@
+{
+  "engine": "TransientEngine",
+  "name": "Consonant Clarity",
+  "group": "Vocals",
+  "tags": "Vocal",
+  "desc": "Consonants a little more forward: words over the top of a dense mix.",
+  "values": {
+    "source": "Vocal",
+    "attack": 0.611111,
+    "sustain": 0.5,
+    "attackTime": 0.5,
+    "sustainTime": 0.5,
+    "attackFocus": "High",
+    "sustainFocus": "Full",
+    "mix": 1.0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Tired Machine",
+  "group": "Character",
+  "tags": "Valve · Vintage · 7.5 ips",
+  "desc": "Old valve deck, old tape, worn transport, slow speed. Every flaw at once, still musical.",
+  "values": {
+    "machine": "Valve",
+    "formula": "C",
+    "speed": "7.5 ips",
+    "drive": 0.4,
+    "bias": 0.5,
+    "flutter": 1.0,
+    "hiss": 0.714286,
+    "mix": 1.0
+  }
+}

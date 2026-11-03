@@ -1,0 +1,35 @@
+{
+  "name": "t17-swam-brass",
+  "pending": false,
+  "description": "Task 17: Otto (brass, m5) on SWAM Brass, swaminst 5 (Trombone).",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    null,
+    "Otto",
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    null,
+    "SWAM Brass",
+    null
+  ],
+  "params": {
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 0,
+    "m5_enabled": 1,
+    "m6_enabled": 0,
+    "m5_swaminst": 5
+  }
+}

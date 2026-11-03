@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Snare Dist 3",
+  "group": "Drums",
+  "tags": "EL8 · Distress",
+  "desc": "Six-to-one with a slow enough attack for the crack, odd harmonics for body.",
+  "values": {
+    "style": "EL8",
+    "amount": 0.4,
+    "ratio": 0.571429,
+    "attack": 0.793377,
+    "release": 0.110628,
+    "makeup": 0.333333,
+    "knee": 0.25,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "C",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

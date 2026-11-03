@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Silicon Face",
+  "group":  "Fuzz",
+  "tags":   "Fuzz Face · Si",
+  "desc":   "Silicon, fuzz maxed. Hendrix at the Isle of Wight.",
+  "values": {
+    "drive": 1,
+    "tone": 0.55,
+    "circuit": "Fuzz Face",
+    "ffTrans": "Silicon",
+    "ffBias": "Stock"
+  }
+}

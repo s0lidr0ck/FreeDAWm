@@ -1,0 +1,37 @@
+{
+  "name": "t20-indiginus-latch-lark",
+  "pending": false,
+  "description": "Task 20 (test Library indiginus-return): Lark (melodic, Winds; the overlay gives him a plucked block with hammer-ons and slides) on Indiginus The Banjo with articulationReturn latch (returnKey 36): hammer / pull-off / slide keys of the line's joins (inJoinKey), Natural.",
+  "library_overlay": "indiginus-return",
+  "bars": 16,
+  "song": "Pop Verse Chorus Bridge",
+  "feel": {
+    "natural": true
+  },
+  "players": [
+    null,
+    null,
+    null,
+    "Lark",
+    null,
+    null
+  ],
+  "targets": [
+    null,
+    null,
+    null,
+    "Indiginus The Banjo",
+    null,
+    null
+  ],
+  "params": {
+    "m4_instrument": 8,
+    "m1_enabled": 0,
+    "m2_enabled": 0,
+    "m3_enabled": 0,
+    "m4_enabled": 1,
+    "m5_enabled": 0,
+    "m6_enabled": 0,
+    "m4_energy": 3
+  }
+}

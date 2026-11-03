@@ -1,0 +1,17 @@
+{
+  "engine": "SatEngine",
+  "name": "Even Only",
+  "group": "Character",
+  "tags": "FET · Cold",
+  "desc": "As much second harmonic as the FET will give, and no third at all.",
+  "values": {
+    "circuit": "FET",
+    "variant": "A",
+    "drive": 0.866667,
+    "bias": 0.5,
+    "focus": 0.5,
+    "air": 0.0,
+    "mix": 1.0,
+    "chanMode": "Stereo"
+  }
+}

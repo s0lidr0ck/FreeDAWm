@@ -1,0 +1,13 @@
+{
+  "engine": "DistEngine",
+  "name":   "Blues Driver",
+  "group":  "Overdrive",
+  "tags":   "Blues Driver",
+  "desc":   "Gain at 5, tone at noon. The spanky one — cleans up with your volume.",
+  "values": {
+    "drive": 0.5,
+    "tone": 0.5,
+    "circuit": "Blues Driver",
+    "bdMode": "Stock"
+  }
+}

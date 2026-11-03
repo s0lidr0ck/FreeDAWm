@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Tempo Plate",
+  "group": "Mix: Vocals",
+  "tags": "Plate · 2.0 s",
+  "desc": "Send. Pre-delay locked to a sixteenth note, so the reverb breathes with the song.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.45954,
+    "mix": 1.0,
+    "size": 0.5,
+    "preDelay": 0.28284,
+    "lowCut": 0.58859,
+    "highCut": 0.71437,
+    "damping": 0.10353,
+    "bass": 0.5,
+    "character": 0.5,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.0,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 1.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

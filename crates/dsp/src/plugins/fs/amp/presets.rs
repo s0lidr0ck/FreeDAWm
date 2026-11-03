@@ -1,0 +1,38 @@
+//! AmpEngine factory presets, embedded from `Engine 12 - Amp/Presets/Factory/*.json` (copied
+//! verbatim into `presets/`), in file-name order.
+
+/// `(name, json)` for every factory preset.
+pub static PRESETS: &[(&str, &str)] = &[
+    ("AC30 Jumpered", include_str!("presets/AC30 Jumpered.json")),
+    ("AC30 Normal Channel", include_str!("presets/AC30 Normal Channel.json")),
+    ("AC30 Top Boost Chime", include_str!("presets/AC30 Top Boost Chime.json")),
+    ("AC30 Top Boost Edge", include_str!("presets/AC30 Top Boost Edge.json")),
+    ("Deluxe Clean Sparkle", include_str!("presets/Deluxe Clean Sparkle.json")),
+    ("Deluxe Cranked", include_str!("presets/Deluxe Cranked.json")),
+    ("Deluxe Edge", include_str!("presets/Deluxe Edge.json")),
+    ("Deluxe Normal Channel", include_str!("presets/Deluxe Normal Channel.json")),
+    ("Deluxe Vibrato Swim", include_str!("presets/Deluxe Vibrato Swim.json")),
+    ("JTM45 Bluesbreaker", include_str!("presets/JTM45 Bluesbreaker.json")),
+    ("JTM45 Edge of Breakup", include_str!("presets/JTM45 Edge of Breakup.json")),
+    ("JTM45 Full Tilt", include_str!("presets/JTM45 Full Tilt.json")),
+    ("JTM45 Tremolo Rhythm", include_str!("presets/JTM45 Tremolo Rhythm.json")),
+    ("Orange Big Clean", include_str!("presets/Orange Big Clean.json")),
+    ("Orange Edge", include_str!("presets/Orange Edge.json")),
+    ("Orange Pushed", include_str!("presets/Orange Pushed.json")),
+    ("Orange Thin FAC", include_str!("presets/Orange Thin FAC.json")),
+    ("Princeton Cranked", include_str!("presets/Princeton Cranked.json")),
+    ("Princeton Edge", include_str!("presets/Princeton Edge.json")),
+    ("Princeton Studio Clean", include_str!("presets/Princeton Studio Clean.json")),
+    ("Princeton Tremolo", include_str!("presets/Princeton Tremolo.json")),
+    ("Super Blues Edge", include_str!("presets/Super Blues Edge.json")),
+    ("Super Clean Chime", include_str!("presets/Super Clean Chime.json")),
+    ("Super Normal Channel", include_str!("presets/Super Normal Channel.json")),
+    ("Super Pushed", include_str!("presets/Super Pushed.json")),
+    ("Twin Boosted Lead", include_str!("presets/Twin Boosted Lead.json")),
+    ("Twin Cranked", include_str!("presets/Twin Cranked.json")),
+    ("Twin Jazz Warm", include_str!("presets/Twin Jazz Warm.json")),
+    ("Twin Normal Clean", include_str!("presets/Twin Normal Clean.json")),
+    ("Twin Sparkle Clean", include_str!("presets/Twin Sparkle Clean.json")),
+    ("Twin Surf Drip", include_str!("presets/Twin Surf Drip.json")),
+    ("Twin Vibrato Ballad", include_str!("presets/Twin Vibrato Ballad.json")),
+];

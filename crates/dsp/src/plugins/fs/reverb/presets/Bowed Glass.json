@@ -1,0 +1,31 @@
+{
+  "engine": "ReverbEngine",
+  "name": "Bowed Glass",
+  "group": "Ambient",
+  "tags": "Plate · 9.0 s",
+  "desc": "Long bright plate, full Zing, slow swell. Sounds bowed.",
+  "values": {
+    "machine": "Plate",
+    "decay": 0.75972,
+    "mix": 0.55,
+    "size": 0.9,
+    "preDelay": 0.28284,
+    "lowCut": 0.69224,
+    "highCut": 0.82948,
+    "damping": 0.30587,
+    "bass": 0.5,
+    "character": 1.0,
+    "diffusion": 0.7,
+    "modRate": 0.4537,
+    "modDepth": 0.3,
+    "width": 0.5,
+    "duck": 0.0,
+    "swell": 0.86152,
+    "freeze": 0.0,
+    "interval": "+Oct",
+    "sync": 0.0,
+    "division": "1/16",
+    "color": "Now",
+    "attack": 0.0
+  }
+}

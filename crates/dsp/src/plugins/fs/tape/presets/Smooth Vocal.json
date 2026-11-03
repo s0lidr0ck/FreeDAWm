@@ -1,0 +1,17 @@
+{
+  "engine": "TapeEngine",
+  "name": "Smooth Vocal",
+  "group": "Vocals",
+  "tags": "Multitrack · Standard · 15 ips",
+  "desc": "Over-biased: less distortion and a slightly darker top. Smooths edge without dulling the words.",
+  "values": {
+    "machine": "Multitrack",
+    "formula": "A",
+    "speed": "15 ips",
+    "drive": 0.4,
+    "bias": 0.65,
+    "flutter": 0.0,
+    "hiss": 0.0,
+    "mix": 1.0
+  }
+}

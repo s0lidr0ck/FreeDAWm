@@ -1,0 +1,16 @@
+{
+  "engine": "AmpEngine",
+  "name": "Princeton Edge",
+  "group": "Edge",
+  "tags": "Princeton · Volume 5",
+  "desc": "Twelve watts on the edge: the pick decides clean or dirty.",
+  "values": {
+    "amp": "Princeton Reverb '65",
+    "prnVolume": 0.5,
+    "prnTreble": 0.5,
+    "prnBass": 0.5,
+    "prnReverb": 0.2,
+    "prnIntensity": 0.0,
+    "prnCab": "Built-in"
+  }
+}

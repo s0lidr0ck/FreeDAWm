@@ -1,0 +1,14 @@
+{
+  "engine": "DistEngine",
+  "name":   "Hot Bias Ge",
+  "group":  "Fun",
+  "tags":   "Fuzz Face · Ge · Hot",
+  "desc":   "Hot bias germanium. Smooth, singing, endless.",
+  "values": {
+    "drive": 1,
+    "tone": 0.7,
+    "circuit": "Fuzz Face",
+    "ffTrans": "Germanium",
+    "ffBias": "Hot"
+  }
+}

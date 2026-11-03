@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Backing Vocal Stack",
+  "group": "Vocals",
+  "tags": "160 · VCA",
+  "desc": "OverEasy three-to-one. Evens out a stack so it sits behind the lead.",
+  "values": {
+    "style": "160",
+    "amount": 0.48,
+    "ratio": 0.313087,
+    "attack": 0.5,
+    "release": 0.5,
+    "makeup": 0.333333,
+    "knee": 1,
+    "scHpf": 0,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 1,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}
