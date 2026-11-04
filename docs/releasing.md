@@ -223,5 +223,6 @@ pull requests that change `packaging/`, the app icons or the workflow. Both pin 
 toolchain (`RUST_TOOLCHAIN`), so a new stable release's lints can't break an unchanged tree.
 On Windows, CI skips the DSP `silence_tail_is_cheap` timing tests: on some hosted runners the
 silent tail runs 4 to 10 times slower than the signal (likely denormal arithmetic on those
-CPUs), which deserves a look on Intel machines; `soundcraft-playback`'s tests run one at a
-time there.
+CPUs), which deserves a look on Intel machines. The `soundcraft-playback` and
+`soundcraft-ui-egui` test binaries crash with an access violation on those runners (not yet
+diagnosed; they have no audio devices), so there they are built but not run.
