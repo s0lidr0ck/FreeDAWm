@@ -35,12 +35,14 @@ jobs:
 
       - name: System packages
         # ALSA (cpal, MIDI), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
-        # and the X11/Wayland headers the window layer links against.
+        # the X11/Wayland headers the window layer links against, and Mesa's software Vulkan
+        # (lavapipe) for the UI snapshot tests, which render with wgpu.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config cmake clang libclang-dev libasound2-dev libssl-dev \
-            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            mesa-vulkan-drivers libvulkan1
 
       - name: Rust toolchain
         run: |

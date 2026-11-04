@@ -16,7 +16,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    branches: [ci-bringup]
   pull_request:
     paths: [".github/workflows/release.yml", "packaging/**", "assets/app-icon/**"]
   workflow_dispatch:

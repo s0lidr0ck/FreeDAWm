@@ -105,7 +105,9 @@ fn realtime_renders_from_a_prepared_cache_are_bit_identical_and_a_miss_recovers(
     .join()
     .unwrap();
     assert!(disk::underruns() > before, "misses counted");
-    assert!(cold.iter().flatten().all(|v| *v == 0.0), "a miss is silence, never a wait");
+    // The first block is a miss for sure; later ones may already be cached by the loader that the
+    // miss started (a race a fast machine can win), so only the first block is checked.
+    assert!(cold.iter().all(|c| c.iter().take(512).all(|v| *v == 0.0)), "a miss is silence, never a wait");
     // Everything loaded: identical.
     assert!(disk::prepare(&disk_s, 0, len as f64 / SR as f64 + 1.0, Duration::from_secs(30)));
     let warm = std::thread::spawn({
