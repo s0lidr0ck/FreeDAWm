@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::filter::{butter2_lowpass, filtfilt};
 use crate::note::{Note, NoteId, median, note_core};
-use crate::segment::VocalAnalysis;
+use crate::segment::{NoteMode, VocalAnalysis};
 
 /// A set of pitch classes: bit `pc` set means pitch class `pc` (C = 0) is in the scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -233,15 +233,15 @@ impl ScaleAt for Option<PitchClassSet> {
 }
 
 /// A note needs at least this many voiced frames to get a pitch change.
-const MIN_VOICED_FRAMES: usize = 3;
+pub(crate) const MIN_VOICED_FRAMES: usize = 3;
 /// Taper length (frames) at each end of the drift removal (40 ms).
-const TAPER_FRAMES: usize = 8;
+pub(crate) const TAPER_FRAMES: usize = 8;
 /// Hann smoothing length (frames) of the whole shift curve.
 const SMOOTH_TAPS: usize = 9;
 /// Largest pitch shift either way beyond a note's manual offset (cents).
-const MAX_SHIFT_CENTS: f64 = 250.0;
+pub(crate) const MAX_SHIFT_CENTS: f64 = 250.0;
 /// Largest pitch shift either way, offset included (cents): what the resynthesis takes.
-const MAX_TOTAL_SHIFT_CENTS: f64 = 2400.0;
+pub(crate) const MAX_TOTAL_SHIFT_CENTS: f64 = 2400.0;
 /// Unedited-note frames this close to an edited note keep the smoothing spill.
 const SPILL_FRAMES: u32 = 4;
 /// Shorten's blend from the double-speed glide into the tuned pitch (frames before the midpoint).
@@ -278,16 +278,21 @@ fn filled_pitch(a: &VocalAnalysis, start: u32, end: u32) -> Option<(usize, Vec<f
 }
 
 /// A note's pitch, centre and target under an edit. `x` starts `off` frames into the note.
-struct NotePitch {
-    off: usize,
-    x: Vec<f64>,
-    cen: f64,
-    tgt: f64,
+pub(crate) struct NotePitch {
+    pub(crate) off: usize,
+    pub(crate) x: Vec<f64>,
+    pub(crate) cen: f64,
+    pub(crate) tgt: f64,
 }
 
-fn note_pitch(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt) -> Option<NotePitch> {
+/// A note's pitch under `edit`. The centre is [`note_core`]'s, or in Musical mode the
+/// stability-weighted median of [`crate::musical::weighted_centre`].
+pub(crate) fn note_pitch(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt, mode: NoteMode) -> Option<NotePitch> {
     let (off, x) = filled_pitch(a, note.start, note.end)?;
-    let cen = note_core(&x)?;
+    let cen = match mode {
+        NoteMode::Classic => note_core(&x)?,
+        NoteMode::Musical => crate::musical::weighted_centre(&x)?,
+    };
     let snap = if edit.snap_to_key { scale.scale_at(note.start) } else { None };
     let tgt = f64::from(target_cents(cen as f32, snap));
     Some(NotePitch { off, x, cen, tgt })
@@ -317,7 +322,7 @@ fn note_shift(p: &NotePitch, e: &NoteEdit) -> Vec<f64> {
 }
 
 /// Scoop shifts for frames `[s0, start)` given the note's tuned start pitch `end_pitch`.
-fn scoop_shift(a: &VocalAnalysis, s0: u32, start: u32, end_pitch: f64, tr: Transition) -> Vec<f64> {
+pub(crate) fn scoop_shift(a: &VocalAnalysis, s0: u32, start: u32, end_pitch: f64, tr: Transition) -> Vec<f64> {
     let p: Vec<Option<f64>> =
         (s0..start).map(|i| a.track.frames.get(i as usize).and_then(|f| f.cents).filter(|c| c.is_finite()).map(f64::from)).collect();
     let n = p.len();
@@ -361,7 +366,7 @@ fn scoop_shift(a: &VocalAnalysis, s0: u32, start: u32, end_pitch: f64, tr: Trans
 }
 
 /// numpy `hanning(n)`, normalised to sum 1.
-fn hann_kernel(n: usize) -> Vec<f64> {
+pub(crate) fn hann_kernel(n: usize) -> Vec<f64> {
     let w: Vec<f64> = (0..n).map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / (n - 1) as f64).cos()).collect();
     let s: f64 = w.iter().sum();
     w.into_iter().map(|v| v / s).collect()
@@ -373,20 +378,12 @@ fn convolve_same(x: &[f64], k: &[f64]) -> Vec<f64> {
     (0..x.len()).map(|i| k.iter().enumerate().filter_map(|(j, w)| (i + h).checked_sub(j).and_then(|idx| x.get(idx)).map(|v| v * w)).sum()).collect()
 }
 
-/// The pitch-shift and gain curves for `edits` over the whole track (worker threads only).
-///
-/// A note's pitch is taken from its first to its last voiced frame, with interior unvoiced gaps
-/// of any length filled linearly (the shift itself stays 0 on the unvoiced frames). A note with
-/// fewer than 3 voiced frames gets gain but no pitch change.
-pub fn build_curves(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale: &dyn ScaleAt) -> EditCurves {
+/// The gain curve of `edits` (dB per frame): each edited note's levelling plus its manual gain,
+/// constant with raised-cosine ramps inside the note's edges, zero inside every unvoiced region
+/// (ramped at its edges too), exactly 0.0 elsewhere.
+pub(crate) fn gain_curve(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>) -> Vec<f32> {
     let n = a.track.frames.len();
-    let mut shift = vec![0.0f64; n];
     let mut gain = vec![0.0f32; n];
-    let mut edited_spans: Vec<(u32, u32)> = Vec::new();
-    // Frames whose shift skips the smoothing: (first frame, raw shifts).
-    let mut unsmoothed: Vec<(usize, Vec<f64>)> = Vec::new();
-    // Per frame, the largest manual offset (cents) the shift may carry on top of the ±250 c.
-    let mut offset_room = vec![0.0f64; n];
     let ramp = |d: usize| {
         if d >= GAIN_RAMP_FRAMES { 1.0 } else { 0.5 - 0.5 * (std::f32::consts::PI * (d + 1) as f32 / (GAIN_RAMP_FRAMES + 1) as f32).cos() }
     };
@@ -412,16 +409,6 @@ pub fn build_curves(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale
         if e.is_identity() {
             continue;
         }
-        let span_start = note.scoop.map_or(note.start, |(s0, _)| s0.min(note.start));
-        edited_spans.push((span_start, note.end));
-        if e.offset_cents != 0.0 {
-            // Over the moved note only: the smoothing's spill onto an unedited neighbour keeps the
-            // plain ±250 c clamp, so an octave move never drags the next note's first frames along.
-            for v in offset_room.iter_mut().take(note.end as usize).skip(span_start as usize) {
-                *v = v.max(f64::from(e.offset_cents.abs()));
-            }
-        }
-
         // Gain: the levelling plus the manual gain, constant with raised-cosine ramps inside the
         // note's edges, zero inside every unvoiced region (ramped at its edges too).
         let g = e.typical_db.map_or(0.0, |typ| level_gain_db(note.level_db, typ, e.raise, e.lower)) + e.gain_db;
@@ -435,9 +422,51 @@ pub fn build_curves(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale
                 }
             }
         }
+    }
+    gain
+}
+
+/// [`build_curves`] for notes made in `mode`: Classic is [`build_curves`]; Musical is
+/// [`crate::musical::build_curves_musical`] (each note moves as a whole, Drift and Vibrato act on
+/// its core, and the glides between notes follow smoothly instead of being smoothed over a step).
+pub fn build_curves_with(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale: &dyn ScaleAt, mode: NoteMode) -> EditCurves {
+    match mode {
+        NoteMode::Classic => build_curves(a, edits, scale),
+        NoteMode::Musical => crate::musical::build_curves_musical(a, edits, scale),
+    }
+}
+
+/// The pitch-shift and gain curves for `edits` over the whole track (worker threads only).
+///
+/// A note's pitch is taken from its first to its last voiced frame, with interior unvoiced gaps
+/// of any length filled linearly (the shift itself stays 0 on the unvoiced frames). A note with
+/// fewer than 3 voiced frames gets gain but no pitch change.
+pub fn build_curves(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale: &dyn ScaleAt) -> EditCurves {
+    let n = a.track.frames.len();
+    let mut shift = vec![0.0f64; n];
+    let gain = gain_curve(a, edits);
+    let mut edited_spans: Vec<(u32, u32)> = Vec::new();
+    // Frames whose shift skips the smoothing: (first frame, raw shifts).
+    let mut unsmoothed: Vec<(usize, Vec<f64>)> = Vec::new();
+    // Per frame, the largest manual offset (cents) the shift may carry on top of the ±250 c.
+    let mut offset_room = vec![0.0f64; n];
+    for note in &a.notes {
+        let Some(e) = edits.get(&note.id).cloned().map(NoteEdit::clamped) else { continue };
+        if e.is_identity() {
+            continue;
+        }
+        let span_start = note.scoop.map_or(note.start, |(s0, _)| s0.min(note.start));
+        edited_spans.push((span_start, note.end));
+        if e.offset_cents != 0.0 {
+            // Over the moved note only: the smoothing's spill onto an unedited neighbour keeps the
+            // plain ±250 c clamp, so an octave move never drags the next note's first frames along.
+            for v in offset_room.iter_mut().take(note.end as usize).skip(span_start as usize) {
+                *v = v.max(f64::from(e.offset_cents.abs()));
+            }
+        }
 
         // Pitch (over the note's first to last voiced frame).
-        let Some(p) = note_pitch(a, note, &e, scale) else { continue };
+        let Some(p) = note_pitch(a, note, &e, scale, NoteMode::Classic) else { continue };
         let s = note_shift(&p, &e);
         let body = note.start as usize + p.off;
         for (k, v) in s.iter().enumerate() {
@@ -511,8 +540,13 @@ pub fn build_curves(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, scale
 /// The note's centre after `edit` (for "now 12c" readouts): `cen + centre·(tgt − cen) + offset`,
 /// or the measured centre when the note has fewer than 3 voiced frames (it gets no pitch change).
 pub fn tuned_centre(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt) -> f32 {
+    tuned_centre_with(a, note, edit, scale, NoteMode::Classic)
+}
+
+/// [`tuned_centre`] of a note made in `mode` (Musical notes are centred on their stable middle).
+pub fn tuned_centre_with(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt, mode: NoteMode) -> f32 {
     let e = edit.clone().clamped();
-    match note_pitch(a, note, &e, scale) {
+    match note_pitch(a, note, &e, scale, mode) {
         Some(p) => (p.cen + f64::from(e.centre) * (p.tgt - p.cen) + f64::from(e.offset_cents)) as f32,
         None => note.centre_cents,
     }
@@ -522,8 +556,13 @@ pub fn tuned_centre(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn
 /// centre, Snap to key followed) moved by the offset's whole semitones ([`moved_target`]); not
 /// moved when the note has fewer than 3 voiced frames (it gets no pitch change).
 pub fn tuned_target(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt) -> f32 {
+    tuned_target_with(a, note, edit, scale, NoteMode::Classic)
+}
+
+/// [`tuned_target`] of a note made in `mode`.
+pub fn tuned_target_with(a: &VocalAnalysis, note: &Note, edit: &NoteEdit, scale: &dyn ScaleAt, mode: NoteMode) -> f32 {
     let e = edit.clone().clamped();
-    match note_pitch(a, note, &e, scale) {
+    match note_pitch(a, note, &e, scale, mode) {
         Some(p) => moved_target(p.tgt as f32, e.offset_cents),
         None => {
             let snap = if e.snap_to_key { scale.scale_at(note.start) } else { None };
@@ -556,6 +595,17 @@ pub struct SelectionSummary {
 /// The summary of notes `ids` under `edits` (missing edits count as none); `None` when no id
 /// names a note.
 pub fn selection_summary(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, ids: &[NoteId], scale: &dyn ScaleAt) -> Option<SelectionSummary> {
+    selection_summary_with(a, edits, ids, scale, NoteMode::Classic)
+}
+
+/// [`selection_summary`] of notes made in `mode`.
+pub fn selection_summary_with(
+    a: &VocalAnalysis,
+    edits: &BTreeMap<NoteId, NoteEdit>,
+    ids: &[NoteId],
+    scale: &dyn ScaleAt,
+    mode: NoteMode,
+) -> Option<SelectionSummary> {
     let notes: Vec<&Note> = a.notes.iter().filter(|n| ids.contains(&n.id)).collect();
     if notes.is_empty() {
         return None;
@@ -565,7 +615,7 @@ pub fn selection_summary(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, 
     for n in &notes {
         let e = edits.get(&n.id).unwrap_or(&none).clone().clamped();
         // A note too short to pitch gets no move, so its target stays put.
-        let (cen, tgt, moved) = match note_pitch(a, n, &e, scale) {
+        let (cen, tgt, moved) = match note_pitch(a, n, &e, scale, mode) {
             Some(p) => (p.cen, p.tgt, f64::from(moved_target(p.tgt as f32, e.offset_cents))),
             None => {
                 let snap = if e.snap_to_key { scale.scale_at(n.start) } else { None };
@@ -574,7 +624,7 @@ pub fn selection_summary(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, 
             }
         };
         off_b += (cen - tgt).abs();
-        off_a += (f64::from(tuned_centre(a, n, &e, scale)) - moved).abs();
+        off_a += (f64::from(tuned_centre_with(a, n, &e, scale, mode)) - moved).abs();
         dr_b += f64::from(n.drift_cents);
         dr_a += f64::from(n.drift_cents) * (1.0 - f64::from(e.drift));
     }

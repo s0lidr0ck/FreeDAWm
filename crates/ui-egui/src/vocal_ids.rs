@@ -26,6 +26,10 @@ pub const VOCAL_JOIN: &str = "vocal.join";
 /// Tune Vocal: the notes, unvoiced regions and summary to draw (`{clip? | track?, from?, to?}`; a query).
 pub const VOCAL_NOTES: &str = "vocal.notes";
 
+/// The Tuning panel's Notes selector: how clips' pitch is cut into notes
+/// (`{clip? | clips? | track?, mode: classic|musical}`).
+pub const VOCAL_NOTE_MODE: &str = "vocal.note_mode";
+
 /// AI › Tune Vocal › Tuned / Original: flip the A/B switch (`{clip? | clips? | track?}`).
 pub const VOCAL_TOGGLE: &str = "vocal.toggle";
 

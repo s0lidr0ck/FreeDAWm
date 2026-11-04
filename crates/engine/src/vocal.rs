@@ -12,8 +12,8 @@ use soundcraft_model::{AnalysisKey, Clip, ClipAnalysis, ClipId, Session, TrackId
 use soundcraft_time::{Range, Samples};
 use soundcraft_vocal::resynth::{RenderedSpan, changed_frames, render_spans};
 use soundcraft_vocal::{
-    EditCurves, MAX_ANALYSIS_SECS, Note, NoteEdit, NoteId, PitchClassSet, PitchTrack, ScaleAt, SegOp, VocalAnalysis, VocalError, apply_seg_ops,
-    build_curves, carry_edits,
+    EditCurves, MAX_ANALYSIS_SECS, Note, NoteEdit, NoteId, NoteMode, PitchClassSet, PitchTrack, ScaleAt, SegOp, VocalAnalysis, VocalError,
+    apply_seg_ops_with, build_curves_with, carry_edits, segment_with,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -167,7 +167,8 @@ impl Fnv {
 }
 
 /// What `clip`'s tuned render is made from, hashed: the analysis key of the audio it hears, its
-/// segmentation changes, its note edits and the session scale at each edited note (Snap to key).
+/// segmentation changes, its note edits, its note detection mode and the session scale at each
+/// edited note (Snap to key).
 /// `None` without a live tuning or with the tuning switched to Original. Never 0.
 pub fn render_inputs(s: &Session, clip: &Clip) -> Option<u64> {
     let tune = clip.tune_live().filter(|t| !t.original)?;
@@ -177,6 +178,11 @@ pub fn render_inputs(s: &Session, clip: &Clip) -> Option<u64> {
     h.put(&serde_json::to_vec(&tune.seg_ops).unwrap_or_default());
     h.put(&[0xff]);
     h.put(&serde_json::to_vec(&tune.edits).unwrap_or_default());
+    // Classic adds nothing, so Classic fingerprints are what they were before modes existed.
+    if tune.note_mode != NoteMode::Classic {
+        h.put(&[0xfe]);
+        h.put(tune.note_mode.name().as_bytes());
+    }
     let scale = scale_at(s, clip);
     for id in tune.edits.keys() {
         match scale.scale_at(id.0) {
@@ -499,7 +505,7 @@ pub fn render_job(s: &Arc<Session>, clip: &Clip) -> Option<RenderJob> {
     let tune = clip.tune_live()?;
     let h = AnalysisKey::of(s, clip)?.hash();
     let a = analysis_for(s, clip)?;
-    let curves = build_curves(&a, &tune.edits, &scale_at(s, clip));
+    let curves = build_curves_with(&a, &tune.edits, &scale_at(s, clip), tune.note_mode);
     let base = s.vocal.renders.get(&clip.id).filter(|r| r.analysis == h);
     let prev = base.and_then(|_| s.vocal.rendered_curves.get(&clip.id));
     let base = prev.and(base);
@@ -508,12 +514,30 @@ pub fn render_job(s: &Arc<Session>, clip: &Clip) -> Option<RenderJob> {
     Some(RenderJob { clip: clip.id, inputs, analysis: h, audio, session: Arc::clone(s), track: a.track, curves, frames, base: base.cloned() })
 }
 
-/// The cached analysis `clip` hears, with its tuning's segmentation changes replayed.
+/// The note detection mode of `clip`'s tuning; without one, the mode a new tuning would get
+/// ([`NoteMode::NEW`]), so the notes shown before the first edit are the notes it edits.
+pub fn note_mode(clip: &Clip) -> NoteMode {
+    clip.tune_live().map_or(NoteMode::NEW, |t| t.note_mode)
+}
+
+/// `a` (a cached analysis: Classic notes) with its notes cut in `mode`. The pitch track is the
+/// same in every mode, so a Musical clip needs no new analysis job.
+pub fn in_mode(mut a: VocalAnalysis, mode: NoteMode) -> VocalAnalysis {
+    if mode != NoteMode::Classic {
+        (a.notes, a.unvoiced) = segment_with(&a.track, mode);
+    }
+    a
+}
+
+/// The cached analysis `clip` hears, its notes cut in its tuning's note detection mode and its
+/// segmentation changes replayed.
 pub fn analysis_for(s: &Session, clip: &Clip) -> Option<VocalAnalysis> {
     let key = AnalysisKey::of(s, clip)?;
-    let mut a = s.vocal.analyses.get(&key.hash())?.analysis.clone();
+    let a = s.vocal.analyses.get(&key.hash())?.analysis.clone();
+    let mode = note_mode(clip);
+    let mut a = in_mode(a, mode);
     if let Some(t) = clip.tune_live() {
-        apply_seg_ops(&mut a, &t.seg_ops);
+        apply_seg_ops_with(&mut a, &t.seg_ops, mode);
     }
     Some(a)
 }
@@ -539,9 +563,10 @@ fn retune(tune: &VocalTune, old: Option<&ClipAnalysis>, new: &ClipAnalysis) -> V
     let mut t = tune.clone();
     // Edits saved without frames (made before spans were kept): take them from the analysis the
     // edits were made on.
+    let mode = t.note_mode;
     if let Some(old) = old {
-        let mut a = old.analysis.clone();
-        apply_seg_ops(&mut a, &t.seg_ops);
+        let mut a = in_mode(old.analysis.clone(), mode);
+        apply_seg_ops_with(&mut a, &t.seg_ops, mode);
         for n in &a.notes {
             if t.edits.contains_key(&n.id) {
                 t.note_spans.entry(n.id).or_insert((n.start, n.end));
@@ -549,7 +574,8 @@ fn retune(tune: &VocalTune, old: Option<&ClipAnalysis>, new: &ClipAnalysis) -> V
         }
     }
     // A join names its second note exactly: follow it when it moved a little.
-    let raw = &new.analysis.notes;
+    let fresh = in_mode(new.analysis.clone(), mode);
+    let raw = &fresh.notes;
     for op in &mut t.seg_ops {
         if let SegOp::Join { at } = op
             && !raw.iter().any(|n| n.id == NoteId(*at))
@@ -558,8 +584,8 @@ fn retune(tune: &VocalTune, old: Option<&ClipAnalysis>, new: &ClipAnalysis) -> V
             *at = n.id.0;
         }
     }
-    let mut a = new.analysis.clone();
-    apply_seg_ops(&mut a, &t.seg_ops);
+    let mut a = fresh.clone();
+    apply_seg_ops_with(&mut a, &t.seg_ops, mode);
     // Still no frames (nothing cached to read them from): the ids are kept as they are.
     let (spanned, unspanned): (BTreeMap<NoteId, NoteEdit>, BTreeMap<NoteId, NoteEdit>) =
         std::mem::take(&mut t.edits).into_iter().partition(|(id, _)| t.note_spans.contains_key(id));
@@ -806,7 +832,7 @@ impl FrameMap {
 pub fn curves_for(s: &Session, clip: &Clip) -> Option<EditCurves> {
     let tune = clip.tune_live()?;
     let a = analysis_for(s, clip)?;
-    Some(build_curves(&a, &tune.edits, &scale_at(s, clip)))
+    Some(build_curves_with(&a, &tune.edits, &scale_at(s, clip), tune.note_mode))
 }
 
 /// The note sounding at session time `at` on `track`'s active playlist (an analysed audio clip

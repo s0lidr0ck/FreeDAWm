@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicBool;
 pub mod edit;
 pub mod filter;
 pub mod metrics;
+pub mod musical;
 pub mod note;
 pub mod presets;
 pub mod resynth;

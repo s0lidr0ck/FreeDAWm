@@ -111,9 +111,10 @@ pub fn target_for<'a>(s: &Session, clip: &'a Clip) -> impl Fn(&Note) -> f32 + 'a
 pub fn tuned_for<'a>(s: &Session, clip: &'a Clip, a: &'a VocalAnalysis) -> impl Fn(&Note) -> Option<f32> + 'a {
     let scale = soundcraft_engine::vocal::scale_at(s, clip);
     let tune = clip.tune_live().filter(|t| !t.original);
+    let mode = soundcraft_engine::vocal::note_mode(clip);
     move |n: &Note| {
         let e = tune?.edits.get(&n.id).filter(|e| !soundcraft_vocal::NoteEdit::clone(e).clamped().is_identity())?;
-        Some(soundcraft_vocal::tuned_centre(a, n, e, &scale))
+        Some(soundcraft_vocal::tuned_centre_with(a, n, e, &scale, mode))
     }
 }
 

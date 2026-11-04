@@ -205,7 +205,7 @@ fn the_ai_menu_holds_every_ml_tool() {
     assert_eq!(ids, ["clip.clean_toggle", "clip.clean_mix", "clip.clean_commit", "clip.clean_remove"]);
     let tune = ai.children.iter().find(|c| c.label == "Tune Vocal").unwrap();
     let ids: Vec<String> = tune.children.iter().filter_map(|c| menus::command_for_path(&c.path, &extra)).collect();
-    assert_eq!(ids, ["vocal.analyse", "vocal.toggle", "vocal.commit", "vocal.remove"]);
+    assert_eq!(ids, ["vocal.analyse", "vocal.toggle", "vocal.note_mode", "vocal.commit", "vocal.remove"]);
     let track = tree.iter().find(|n| n.label == "Track").unwrap();
     assert!(!track.children.iter().any(|c| c.label.contains("Stems") || c.label.contains("Karaoke")), "the ML tools left Track");
 }

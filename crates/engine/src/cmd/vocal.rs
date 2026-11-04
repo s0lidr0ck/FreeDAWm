@@ -7,8 +7,8 @@ use crate::vocal::NoteRef;
 use serde_json::json;
 use soundcraft_model::{AnalysisKey, Session, TrackKind, VocalTune};
 use soundcraft_vocal::{
-    NoteEdit, NoteId, ScaleAt, SegOp, Transition, VocalAnalysis, factory_presets, join_notes, selection_summary, split_note, target_cents,
-    tuned_centre, tuned_target, typical_level_db,
+    NoteEdit, NoteId, NoteMode, ScaleAt, SegOp, Transition, VocalAnalysis, carry_edits, factory_presets, join_notes_with, selection_summary_with,
+    split_note_with, target_cents, tuned_centre_with, tuned_target_with, typical_level_db,
 };
 use std::collections::BTreeMap;
 
@@ -96,6 +96,15 @@ pub fn specs() -> Vec<CommandSpec> {
             notes_query
         ),
         cmd!(
+            "vocal.note_mode",
+            "Notes Classic / Musical",
+            [],
+            None,
+            "{clip? | clips? | track?, mode?: classic|musical} — how the targeted audio clips' pitch is cut into notes (default: the selected clips, else the selected tracks' audio clips; no `mode` switches them: Musical unless all already are). musical (new tunings and untuned clips): notes by syllable and settled pitch, scoops, slides and vibrato folded into their note as its pitch curve, each note centred on its stable middle, and the correction moves whole notes with smooth glides between them. classic (tunings saved before modes existed): every pitch held for 70 ms is a note, tight on a vocal near its notes. The edits move onto the overlapping notes of the new cut; splits and joins replay where they still apply. Saved with the clip. Undoable. Returns {clips: [{clip, note_mode, notes?}…]} (notes: the count, once analysed)",
+            has_selection,
+            note_mode_cmd
+        ),
+        cmd!(
             "vocal.toggle",
             "Tuned/Original",
             [],
@@ -142,6 +151,7 @@ const SPLIT: &str = "vocal.split";
 const JOIN: &str = "vocal.join";
 const NOTES: &str = "vocal.notes";
 const TOGGLE: &str = "vocal.toggle";
+const NOTE_MODE: &str = "vocal.note_mode";
 const COMMIT: &str = "vocal.commit";
 const REMOVE: &str = "vocal.remove";
 
@@ -436,7 +446,7 @@ fn tune_mut(s: &mut Session, clip: ClipId, key: u64) -> Option<&mut VocalTune> {
     let c = s.find_clip_mut(clip)?;
     let source = c.source();
     if c.tune_live().is_none() {
-        c.tune = Some(VocalTune { analysed: key, source, ..VocalTune::default() });
+        c.tune = Some(VocalTune { analysed: key, source, note_mode: NoteMode::NEW, ..VocalTune::default() });
     }
     let t = c.tune.as_mut()?;
     if t.source.is_none() {
@@ -568,7 +578,7 @@ fn reset(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         crate::vocal::sync_note_spans(t, a);
         // Only an empty tuning goes: an identity-looking edit can still hold Snap to key.
-        if t.edits.is_empty() && t.seg_ops.is_empty() {
+        if t.edits.is_empty() && t.seg_ops.is_empty() && t.note_mode == NoteMode::NEW {
             c.tune = None;
         }
     }
@@ -589,7 +599,8 @@ fn split(e: &mut Engine, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(SPLIT, "`at` must be inside the note"))?;
     let key = key_of(s, clip);
     let mut edits = c.tune_live().map(|t| t.edits.clone()).unwrap_or_default();
-    let (first, second) = split_note(&mut a, &mut edits, note, frame).ok_or_else(|| bad(SPLIT, "a note already starts there"))?;
+    let mode = crate::vocal::note_mode(c);
+    let (first, second) = split_note_with(&mut a, &mut edits, note, frame, mode).ok_or_else(|| bad(SPLIT, "a note already starts there"))?;
     let t = tune_mut(e.session_mut(), clip, key).ok_or_else(|| bad(SPLIT, format!("no clip with id {}", clip.0)))?;
     t.edits = edits;
     t.seg_ops.push(SegOp::Split { at: frame });
@@ -611,7 +622,7 @@ fn join(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let key = key_of(s, clip);
     let mut edits = c.tune_live().map(|t| t.edits.clone()).unwrap_or_default();
-    let joined = join_notes(&mut a, &mut edits, first, second)
+    let joined = join_notes_with(&mut a, &mut edits, first, second, crate::vocal::note_mode(c))
         .ok_or_else(|| bad(JOIN, "only neighbouring notes join: `second` must come straight after `first`"))?;
     let t = tune_mut(e.session_mut(), clip, key).ok_or_else(|| bad(JOIN, format!("no clip with id {}", clip.0)))?;
     t.edits = edits;
@@ -676,6 +687,7 @@ fn notes_query(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut unvoiced = Vec::new();
     let mut acc = SummaryAcc::default();
     let mut messages = Vec::new();
+    let mut modes = Vec::new();
     for id in clips {
         let Some((_, c)) = s.find_clip(id) else { continue };
         let Some(a) = crate::vocal::analysis_for(s, c) else { continue };
@@ -685,17 +697,19 @@ fn notes_query(e: &mut Engine, p: &Value) -> Result<Value> {
         let m = crate::vocal::FrameMap::of(c, &a);
         let scale = crate::vocal::scale_at(s, c);
         let edits = c.tune_live().map_or(&none, |t| &t.edits);
+        let mode = crate::vocal::note_mode(c);
+        modes.push(json!({"clip": id, "note_mode": mode.name()}));
         let shown = |start: u32, end: u32| m.in_window(start, end) && Range::new(m.time(start), m.time(end)).overlaps(&range);
         let mut ids = Vec::new();
         for n in a.notes.iter().filter(|n| shown(n.start, n.end)) {
             let ed = edits.get(&n.id);
             let applied = ed.cloned().unwrap_or_default().clamped();
-            let centre = tuned_centre(&a, n, &NoteEdit::default(), &scale);
+            let centre = tuned_centre_with(&a, n, &NoteEdit::default(), &scale, mode);
             let snap = if applied.snap_to_key { scale.scale_at(n.start) } else { None };
             let target = target_cents(centre, snap);
-            let tuned = tuned_centre(&a, n, &applied, &scale);
+            let tuned = tuned_centre_with(&a, n, &applied, &scale, mode);
             // A moved note is judged against the semitone it was moved to.
-            let moved = tuned_target(&a, n, &applied, &scale);
+            let moved = tuned_target_with(&a, n, &applied, &scale, mode);
             notes.push(json!({
                 "clip": id,
                 "note": n.id,
@@ -716,7 +730,7 @@ fn notes_query(e: &mut Engine, p: &Value) -> Result<Value> {
         for u in a.unvoiced.iter().filter(|u| shown(u.start, u.end)) {
             unvoiced.push(json!({"clip": id, "start": m.time(u.start), "end": m.time(u.end)}));
         }
-        if let Some(sm) = selection_summary(&a, edits, &ids, &scale) {
+        if let Some(sm) = selection_summary_with(&a, edits, &ids, &scale, mode) {
             let w = sm.count as f64;
             acc.count += sm.count;
             let (st, en) = (m.time(sm.start_frame), m.time(sm.end_frame));
@@ -728,7 +742,7 @@ fn notes_query(e: &mut Engine, p: &Value) -> Result<Value> {
             acc.drift_after += f64::from(sm.drift_after) * w;
         }
     }
-    let mut out = json!({"notes": notes, "unvoiced": unvoiced, "summary": acc.json()});
+    let mut out = json!({"notes": notes, "unvoiced": unvoiced, "summary": acc.json(), "clips": modes});
     if !messages.is_empty()
         && let Some(o) = out.as_object_mut()
     {
@@ -740,13 +754,19 @@ fn notes_query(e: &mut Engine, p: &Value) -> Result<Value> {
 /// `vocal.analyse`'s clips: `clip`/`clips`, else `track`'s audio clips, else the selection (the
 /// selected clips, else the selected tracks' audio clips). Every one must be an audio clip.
 fn analyse_targets(e: &Engine, p: &Value) -> Result<Vec<ClipId>> {
+    audio_targets(e, ANALYSE, p)
+}
+
+/// `p`'s audio clips for command `id`, as [`analyse_targets`] picks them.
+fn audio_targets(e: &Engine, id: &str, p: &Value) -> Result<Vec<ClipId>> {
+    let cmd = id;
     let s = e.session();
     let ids: Vec<ClipId> = if p.get("clip").is_some() || p.get("clips").is_some() {
         if p.get("clip").is_some_and(|v| !v.is_u64()) || p.get("clips").is_some_and(|v| !v.is_array()) {
-            return Err(bad(ANALYSE, "`clip` must be a clip id, `clips` a list of them"));
+            return Err(bad(cmd, "`clip` must be a clip id, `clips` a list of them"));
         }
         clip_ids_param(e, p)
-    } else if let Some(t) = track_param(e, ANALYSE, p, "track")? {
+    } else if let Some(t) = track_param(e, cmd, p, "track")? {
         s.track(t).map(|tr| tr.clips().iter().filter(|c| c.is_audio()).map(|c| c.id).collect()).unwrap_or_default()
     } else if !s.edit.selected_clips.is_empty() {
         s.edit.selected_clips.clone()
@@ -759,13 +779,13 @@ fn analyse_targets(e: &Engine, p: &Value) -> Result<Vec<ClipId>> {
     };
     for id in &ids {
         match s.find_clip(*id) {
-            None => return Err(bad(ANALYSE, format!("no clip with id {}", id.0))),
-            Some((_, c)) if !c.is_audio() => return Err(bad(ANALYSE, format!("`{}` is not an audio clip", c.name))),
+            None => return Err(bad(cmd, format!("no clip with id {}", id.0))),
+            Some((_, c)) if !c.is_audio() => return Err(bad(cmd, format!("`{}` is not an audio clip", c.name))),
             Some(_) => {}
         }
     }
     if ids.is_empty() {
-        return Err(bad(ANALYSE, "choose an audio clip"));
+        return Err(bad(cmd, "choose an audio clip"));
     }
     Ok(ids)
 }
@@ -779,13 +799,64 @@ fn analyse(e: &mut Engine, p: &Value) -> Result<Value> {
         let Some((_, c)) = s.find_clip(id) else { continue };
         let a =
             crate::vocal::analysis_for(s, c).ok_or_else(|| bad(ANALYSE, format!("`{}` cannot be analysed (missing audio, or too long)", c.name)))?;
-        let mut row = json!({"clip": id.0, "notes": a.notes.len(), "unvoiced": a.unvoiced.len()});
+        let mut row = json!({"clip": id.0, "notes": a.notes.len(), "unvoiced": a.unvoiced.len(), "note_mode": crate::vocal::note_mode(c).name()});
         if let Some(m) = crate::vocal::render_failed_message(s, c)
             && let Some(o) = row.as_object_mut()
         {
             o.insert("message".into(), json!(m));
         }
         out.push(row);
+    }
+    Ok(json!({"clips": out}))
+}
+
+// ---- note detection mode -------------------------------------------------------------------
+
+fn note_mode_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
+    let ids = audio_targets(e, NOTE_MODE, p)?;
+    let mode = match p.get("mode") {
+        Some(v) => v.as_str().and_then(NoteMode::parse).ok_or_else(|| bad(NOTE_MODE, "`mode` must be classic or musical"))?,
+        // No mode: the menu's switch. Musical unless every target already is.
+        None => {
+            let s = e.session();
+            let all = ids.iter().all(|id| s.find_clip(*id).is_some_and(|(_, c)| crate::vocal::note_mode(c) == NoteMode::Musical));
+            if all { NoteMode::Classic } else { NoteMode::Musical }
+        }
+    };
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let s = e.session();
+        let Some((_, c)) = s.find_clip(id) else { continue };
+        let old_mode = crate::vocal::note_mode(c);
+        if old_mode == mode {
+            let notes = crate::vocal::analysis_for(s, c).map(|a| a.notes.len());
+            out.push(json!({"clip": id.0, "note_mode": mode.name(), "notes": notes}));
+            continue;
+        }
+        // The edits move onto the overlapping notes of the new cut (as after a re-analysis).
+        let before = crate::vocal::analysis_for(s, c);
+        let key = key_of(s, id);
+        let mut clip = c.clone();
+        let t = clip.tune.get_or_insert_with(|| VocalTune { note_mode: NoteMode::NEW, ..VocalTune::default() });
+        t.note_mode = mode;
+        let after = crate::vocal::analysis_for(s, &clip);
+        let s = e.session_mut();
+        let Some(t) = tune_mut(s, id, key) else { continue };
+        t.note_mode = mode;
+        if let (Some(b), Some(a)) = (&before, &after) {
+            t.edits = carry_edits(&b.notes, &t.edits, &a.notes);
+            crate::vocal::sync_note_spans(t, a);
+        }
+        // Back to the new-tuning mode with nothing else to keep: no tuning, as an untuned clip.
+        if mode == NoteMode::NEW
+            && t.edits.is_empty()
+            && t.seg_ops.is_empty()
+            && !t.original
+            && let Some(cm) = s.find_clip_mut(id)
+        {
+            cm.tune = None;
+        }
+        out.push(json!({"clip": id.0, "note_mode": mode.name(), "notes": after.map(|a| a.notes.len())}));
     }
     Ok(json!({"clips": out}))
 }

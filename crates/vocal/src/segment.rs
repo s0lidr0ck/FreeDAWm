@@ -27,6 +27,55 @@ pub enum SegOp {
     Join { at: u32 },
 }
 
+/// How a clip's pitch is cut into notes. Saved per clip. The `Default` is what a tuning saved
+/// without a mode means ([`NoteMode::Classic`]: sessions tuned before modes existed sound as
+/// they did); new tunings get [`NoteMode::NEW`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+pub enum NoteMode {
+    /// Semitone steps with hysteresis ([`segment`]): every pitch the voice holds for 70 ms is a
+    /// note, a short approach into a long note is its scoop. Tight on a vocal that is near the
+    /// notes; on a loose one, slides and scoops become notes of their own. What tunings saved
+    /// before modes existed use.
+    #[default]
+    Classic,
+    /// Notes by syllable and settled pitch ([`crate::musical::segment_musical`]): glides, scoops
+    /// and vibrato are folded into the note they belong to as its pitch curve, each note is
+    /// centred on its stable middle, and the correction moves notes without snapping inside the
+    /// glides between them. What new tunings use ([`NoteMode::NEW`]).
+    Musical,
+}
+
+impl NoteMode {
+    /// The mode a new tuning gets (and an untuned clip is shown in): Musical.
+    pub const NEW: NoteMode = NoteMode::Musical;
+
+    /// The mode's command/protocol name: `classic` or `musical`.
+    pub fn name(self) -> &'static str {
+        match self {
+            NoteMode::Classic => "classic",
+            NoteMode::Musical => "musical",
+        }
+    }
+
+    /// The mode named `name` (case-insensitive).
+    pub fn parse(name: &str) -> Option<NoteMode> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "classic" => Some(NoteMode::Classic),
+            "musical" => Some(NoteMode::Musical),
+            _ => None,
+        }
+    }
+}
+
+/// [`segment`] in `mode`: Classic is [`segment`] itself; Musical is
+/// [`crate::musical::segment_musical`]. The unvoiced regions are the same in both.
+pub fn segment_with(track: &PitchTrack, mode: NoteMode) -> (Vec<Note>, Vec<UnvoicedRegion>) {
+    match mode {
+        NoteMode::Classic => segment(track),
+        NoteMode::Musical => crate::musical::segment_musical(track),
+    }
+}
+
 /// Median filter kernel (frames) applied inside each voiced run (scipy `medfilt`, zero-padded).
 const MEDFILT: usize = 9;
 /// Frames used for the initial semitone of a voiced run.
@@ -68,6 +117,11 @@ pub fn segment(track: &PitchTrack) -> (Vec<Note>, Vec<UnvoicedRegion>) {
         k += 1;
     }
 
+    (notes, unvoiced_regions(track))
+}
+
+/// The runs of unvoiced frames that still carry level (louder than −60 dB), in frame order.
+pub(crate) fn unvoiced_regions(track: &PitchTrack) -> Vec<UnvoicedRegion> {
     let mut unvoiced = Vec::new();
     let mut run: Option<u32> = None;
     for (i, f) in track.frames.iter().enumerate() {
@@ -85,11 +139,11 @@ pub fn segment(track: &PitchTrack) -> (Vec<Note>, Vec<UnvoicedRegion>) {
     if let Some(s) = run {
         unvoiced.push(UnvoicedRegion { start: s, end: frame_u32(track.frames.len()) });
     }
-    (notes, unvoiced)
+    unvoiced
 }
 
 /// `segment_notes2`: note spans `[a, b)` in frames.
-fn segment_spans(track: &PitchTrack) -> Vec<(u32, u32)> {
+pub(crate) fn segment_spans(track: &PitchTrack) -> Vec<(u32, u32)> {
     let c: Vec<Option<f64>> = track.frames.iter().map(|f| f.cents.filter(|x| x.is_finite()).map(f64::from)).collect();
     let n = c.len();
     let mut notes = Vec::new();
@@ -166,7 +220,7 @@ fn segment_spans(track: &PitchTrack) -> Vec<(u32, u32)> {
 }
 
 /// scipy `medfilt` (odd kernel, zero padding at both ends).
-fn medfilt(x: &[f64], kernel: usize) -> Vec<f64> {
+pub(crate) fn medfilt(x: &[f64], kernel: usize) -> Vec<f64> {
     let h = kernel / 2;
     let mut win = Vec::with_capacity(kernel);
     (0..x.len())
@@ -182,14 +236,42 @@ fn medfilt(x: &[f64], kernel: usize) -> Vec<f64> {
         .collect()
 }
 
-fn frame_u32(i: usize) -> u32 {
+pub(crate) fn frame_u32(i: usize) -> u32 {
     u32::try_from(i).unwrap_or(u32::MAX)
+}
+
+/// A note over `[start, end)` measured as `mode` measures notes (Musical: the stability-weighted
+/// centre, drift and vibrato over the core).
+pub fn note_in(track: &PitchTrack, start: u32, end: u32, mode: NoteMode) -> Note {
+    match mode {
+        NoteMode::Classic => Note::new(track, start, end, None),
+        NoteMode::Musical => crate::musical::musical_note(track, start, end),
+    }
+}
+
+/// [`Note::remeasure`] as `mode` measures notes.
+fn remeasure_in(n: &mut Note, track: &PitchTrack, mode: NoteMode) {
+    n.remeasure(track);
+    if mode == NoteMode::Musical {
+        crate::musical::remeasure_musical(n, track);
+    }
 }
 
 /// Splits note `id` at frame `at` into `[start, at)` (keeps `id` and the scoop) and `[at, end)`
 /// (id `NoteId(at)`). Both halves get the parent's edit. `None` (and no change) when the note is
 /// missing or `at` is not strictly inside it.
 pub fn split_note(a: &mut VocalAnalysis, edits: &mut BTreeMap<NoteId, NoteEdit>, id: NoteId, at: u32) -> Option<(NoteId, NoteId)> {
+    split_note_with(a, edits, id, at, NoteMode::Classic)
+}
+
+/// [`split_note`] on notes made in `mode` (the halves are measured as `mode` measures notes).
+pub fn split_note_with(
+    a: &mut VocalAnalysis,
+    edits: &mut BTreeMap<NoteId, NoteEdit>,
+    id: NoteId,
+    at: u32,
+    mode: NoteMode,
+) -> Option<(NoteId, NoteId)> {
     let k = a.notes.iter().position(|n| n.id == id)?;
     let parent = a.notes.get(k)?;
     if at <= parent.start || at >= parent.end {
@@ -200,11 +282,11 @@ pub fn split_note(a: &mut VocalAnalysis, edits: &mut BTreeMap<NoteId, NoteEdit>,
         return None;
     }
     let end = parent.end;
-    let mut second = Note::new(&a.track, at, end, None);
+    let mut second = note_in(&a.track, at, end, mode);
     second.id = second_id;
     let first = a.notes.get_mut(k)?;
     first.end = at;
-    first.remeasure(&a.track);
+    remeasure_in(first, &a.track, mode);
     a.notes.insert(k + 1, second);
     if let Some(e) = edits.get(&id).cloned() {
         edits.insert(second_id, e);
@@ -219,6 +301,17 @@ pub fn split_note(a: &mut VocalAnalysis, edits: &mut BTreeMap<NoteId, NoteEdit>,
 /// `second`'s scoop is not kept as a scoop: its frames (and any unvoiced gap between the notes)
 /// become part of the joined note's body, whose pitch is filled across the gap for editing.
 pub fn join_notes(a: &mut VocalAnalysis, edits: &mut BTreeMap<NoteId, NoteEdit>, first: NoteId, second: NoteId) -> Option<NoteId> {
+    join_notes_with(a, edits, first, second, NoteMode::Classic)
+}
+
+/// [`join_notes`] on notes made in `mode` (the joined note is measured as `mode` measures notes).
+pub fn join_notes_with(
+    a: &mut VocalAnalysis,
+    edits: &mut BTreeMap<NoteId, NoteEdit>,
+    first: NoteId,
+    second: NoteId,
+    mode: NoteMode,
+) -> Option<NoteId> {
     let k = a.notes.iter().position(|n| n.id == first)?;
     if a.notes.get(k + 1)?.id != second {
         return None;
@@ -226,26 +319,31 @@ pub fn join_notes(a: &mut VocalAnalysis, edits: &mut BTreeMap<NoteId, NoteEdit>,
     let removed = a.notes.remove(k + 1);
     let joined = a.notes.get_mut(k)?;
     joined.end = removed.end;
-    joined.remeasure(&a.track);
+    remeasure_in(joined, &a.track, mode);
     edits.remove(&second);
     Some(first)
 }
 
 /// Replays `ops` in order on a fresh analysis; ops that no longer apply are skipped.
 pub fn apply_seg_ops(a: &mut VocalAnalysis, ops: &[SegOp]) {
+    apply_seg_ops_with(a, ops, NoteMode::Classic);
+}
+
+/// [`apply_seg_ops`] on notes made in `mode`.
+pub fn apply_seg_ops_with(a: &mut VocalAnalysis, ops: &[SegOp], mode: NoteMode) {
     let mut scratch = BTreeMap::new();
     for op in ops {
         match *op {
             SegOp::Split { at } => {
                 if let Some(id) = a.notes.iter().find(|n| n.start < at && at < n.end).map(|n| n.id) {
-                    split_note(a, &mut scratch, id, at);
+                    split_note_with(a, &mut scratch, id, at, mode);
                 }
             }
             SegOp::Join { at } => {
                 if let Some(k) = a.notes.iter().position(|n| n.id == NoteId(at))
                     && let Some(prev) = k.checked_sub(1).and_then(|p| a.notes.get(p)).map(|n| n.id)
                 {
-                    join_notes(a, &mut scratch, prev, NoteId(at));
+                    join_notes_with(a, &mut scratch, prev, NoteId(at), mode);
                 }
             }
         }

@@ -19,7 +19,7 @@ use egui::{Pos2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use soundcraft_engine::vocal::NoteRef;
 use soundcraft_model::TrackId;
-use soundcraft_vocal::{MAX_OFFSET_CENTS, NoteEdit, tuned_centre};
+use soundcraft_vocal::{MAX_OFFSET_CENTS, NoteEdit, tuned_centre_with};
 use std::collections::BTreeSet;
 
 /// How far (px) the pointer moves up or down before a drag changes pitch.
@@ -128,7 +128,8 @@ pub fn start(app: &mut SoundApp, track: TrackId, r: NoteRef, origin: Pos2, toggl
         let Some(cv) = clips.iter().find(|c| c.clip.id == x.clip && !c.stretched) else { continue };
         let Some(n) = cv.a.notes.iter().find(|n| n.id == x.note) else { continue };
         let e = cv.edits.get(&n.id).cloned().unwrap_or_default();
-        base.push((*x, e.clone().clamped().offset_cents, tuned_centre(&cv.a, n, &e, &cv.scale)));
+        let mode = soundcraft_engine::vocal::note_mode(&cv.clip);
+        base.push((*x, e.clone().clamped().offset_cents, tuned_centre_with(&cv.a, n, &e, &cv.scale, mode)));
     }
     if base.is_empty() {
         return;

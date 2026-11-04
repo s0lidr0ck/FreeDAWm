@@ -22,10 +22,12 @@
 //! (the demo's master track; strip meters read before it).
 //!
 //! `{"vocal_demo": {"track": "Lead Vox", "view": [from_s, to_s], "select": [from_s, to_s],
-//! "centre": 40, "drift": 30, "playhead": s, "key": "E", "chords": [[from_s, to_s, "E"], …]}}`
+//! "centre": 40, "drift": 30, "playhead": s, "key": "E", "chords": [[from_s, to_s, "E"], …],
+//! "note_mode": "musical"}}`
 //! adds a mono vocal track holding `$FREEDAWM_VOCAL_TEST_DIR/00_original.wav` (or `$SOUNDCRAFT_VOCAL_TEST_DIR`) (else
 //! `cleanq-ceiling-renders/00_original.wav` found walking up from `CARGO_MANIFEST_DIR`, else a
-//! synthetic sung line), analyses it, tunes the notes inside `select` and opens the Vocal Editor
+//! synthetic sung line), analyses it (cutting notes in `note_mode` when given), tunes the notes
+//! inside `select` and opens the Vocal Editor
 //! on them with the Edit view showing `view`. `{"vocal_view": [from_s, to_s]}` sets the Edit view
 //! (which the Vocal Editor follows) once the layout has settled; `{"vocal_dock": h}` makes the
 //! lower dock holding it `h` points tall. `{"vocal_drag": {"index": i, "rows": r}}` presses on the
@@ -610,6 +612,11 @@ fn vocal_demo(app: &mut SoundApp, p: &serde_json::Value) {
         let _ = app.run("band.chord.add", json!({"at": (a * r) as i64, "end": (b * r) as i64, "chord": chord}));
     }
     if let Err(e) = soundcraft_engine::vocal::run_until_idle(&mut app.engine, &[id]) {
+        eprintln!("vocal_demo: {e}");
+    }
+    if let Some(mode) = p.get("note_mode")
+        && let Err(e) = app.run("vocal.note_mode", json!({"clip": id.0, "mode": mode}))
+    {
         eprintln!("vocal_demo: {e}");
     }
     let sel = p.get("select");

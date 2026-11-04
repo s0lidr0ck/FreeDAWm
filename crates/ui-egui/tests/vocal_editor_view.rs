@@ -242,6 +242,8 @@ fn s_splits_and_j_joins() {
 #[test]
 fn scoop_popup_sets_the_transition() {
     let Setup { ctx, mut app, track, clips } = setup();
+    // Scoops are Classic's (Musical notes take their approach in): new tunings are Musical.
+    app.run("vocal.note_mode", json!({"clips": clips, "mode": "classic"})).unwrap();
     let ns = notes(&app, track);
     add_scoop(&mut app, ns[1], 12);
     settle(&ctx, &mut app);

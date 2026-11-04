@@ -11,7 +11,7 @@ use egui::{Align, Align2, Color32, Layout, Rect, RichText, Sense, Stroke, Stroke
 use serde_json::{Value, json};
 use soundcraft_engine::vocal::NoteRef;
 use soundcraft_model::{ClipId, TrackId};
-use soundcraft_vocal::{MacroPreset, NoteEdit, selection_summary};
+use soundcraft_vocal::{MacroPreset, NoteEdit, NoteMode, selection_summary_with};
 
 const GREEN: Color32 = Color32::from_rgb(61, 187, 94);
 const BLUE: Color32 = Color32::from_rgb(47, 127, 208);
@@ -93,6 +93,9 @@ struct Target {
     /// Tuned clips holding a selected note, else every tuned clip on the track.
     clips: Vec<ClipId>,
     original: bool,
+    /// The track's audio clips (what the Notes selector sets), and whether every one is Musical.
+    audio: Vec<ClipId>,
+    musical: bool,
 }
 
 fn target(app: &mut SoundApp, track: TrackId) -> Target {
@@ -114,7 +117,7 @@ fn target(app: &mut SoundApp, track: TrackId) -> Target {
             edits.push(cv.edits.get(id).cloned().unwrap_or_default());
         }
         levels.extend(cv.a.notes.iter().filter(|n| ids.contains(&n.id)).map(|n| n.level_db));
-        if let Some(sm) = selection_summary(&cv.a, &cv.edits, &ids, &cv.scale) {
+        if let Some(sm) = selection_summary_with(&cv.a, &cv.edits, &ids, &cv.scale, soundcraft_engine::vocal::note_mode(&cv.clip)) {
             let fm = Frames::of(&cv.clip, cv.a.track.hop_samples);
             let w = sm.count as f64;
             let (a, b) = (fm.time(sm.start_frame) as f64 / rate, fm.time(sm.end_frame) as f64 / rate);
@@ -144,7 +147,11 @@ fn target(app: &mut SoundApp, track: TrackId) -> Target {
         s.track(track).map(|t| t.clips().iter().filter_map(|c| c.tune_live().map(|tu| (c.id, tu.original))).collect()).unwrap_or_default();
     let holding: Vec<(ClipId, bool)> = tuned.iter().copied().filter(|(c, _)| refs.iter().any(|r| r.clip == *c)).collect();
     let chosen = if holding.is_empty() { tuned } else { holding };
+    let audio_clips: Vec<&soundcraft_model::Clip> = s.track(track).map(|t| t.clips().iter().filter(|c| c.is_audio()).collect()).unwrap_or_default();
+    let musical = !audio_clips.is_empty() && audio_clips.iter().all(|c| soundcraft_engine::vocal::note_mode(c) == NoteMode::Musical);
     Target {
+        audio: audio_clips.iter().map(|c| c.id).collect(),
+        musical,
         track,
         original: !chosen.is_empty() && chosen.iter().all(|(_, o)| *o),
         clips: chosen.into_iter().map(|(c, _)| c).collect(),
@@ -193,6 +200,50 @@ fn switch(ui: &mut Ui, original: bool, enabled: bool) -> Option<bool> {
             out = Some(right);
         }
     }
+    out
+}
+
+/// The Notes selector, Classic | Musical; returns the clicked side (true = Musical).
+fn notes_switch(ui: &mut Ui, musical: bool, enabled: bool) -> Option<bool> {
+    let t = Tokens::current();
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+    let label_w = 46.0;
+    ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Notes", regular(12.0), if enabled { t.text } else { t.text_dim });
+    let r = Rect::from_min_max(pos2(row.left() + label_w, row.top()), row.max);
+    let mut out = None;
+    for (i, label) in ["Classic", "Musical"].into_iter().enumerate() {
+        let right = i == 1;
+        let half =
+            if right { Rect::from_min_max(pos2(r.center().x, r.top()), r.max) } else { Rect::from_min_max(r.min, pos2(r.center().x, r.bottom())) };
+        store(ui.ctx(), if right { "notes-musical" } else { "notes-classic" }, half);
+        let resp = ui.interact(half, ui.id().with(("vocal-notes-mode", i)), if enabled { Sense::click() } else { Sense::hover() });
+        let on = right == musical;
+        let fill = if on {
+            t.mode_on
+        } else if resp.hovered() && enabled {
+            t.button_hi
+        } else {
+            t.button
+        };
+        ui.painter().rect(half, 0.0, fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+        let text_c = if on {
+            Color32::WHITE
+        } else if enabled {
+            t.text
+        } else {
+            t.text_dim
+        };
+        ui.painter().text(half.center(), Align2::CENTER_CENTER, label, if on { bold(11.5) } else { regular(11.5) }, text_c);
+        let resp = resp.on_hover_text(if right {
+            "Musical: notes by syllable and settled pitch; scoops, slides and vibrato stay inside their note, and tuning moves whole notes with smooth glides between them (for loose vocals)"
+        } else {
+            "Classic: every pitch held for 70 ms is a note (tight on a vocal near its notes)"
+        });
+        if resp.clicked() {
+            out = Some(right);
+        }
+    }
+    store(ui.ctx(), "notes-mode", if musical { "musical".to_string() } else { "classic".to_string() });
     out
 }
 
@@ -325,6 +376,17 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, rect: Rect) {
             && original != tg.original
         {
             let r = app.run(crate::vocal_ids::VOCAL_TOGGLE, json!({"clips": tg.clips}));
+            report(app, r);
+        }
+        ui.add_space(4.0);
+        if let Some(musical) = notes_switch(ui, tg.musical, !tg.audio.is_empty())
+            && musical != tg.musical
+        {
+            let mode = if musical { NoteMode::Musical } else { NoteMode::Classic };
+            let r = app.run(crate::vocal_ids::VOCAL_NOTE_MODE, json!({"clips": tg.audio, "mode": mode.name()}));
+            if r.is_ok() {
+                app.ui.status = format!("Notes: {}", if musical { "Musical" } else { "Classic" });
+            }
             report(app, r);
         }
         ui.add_space(4.0);

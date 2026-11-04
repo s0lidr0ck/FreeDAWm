@@ -100,7 +100,7 @@ fn tune_key(s: &Session, c: &Clip) -> u64 {
     serde_json::to_vec(&t.seg_ops).unwrap_or_default().hash(&mut h);
     serde_json::to_vec(&t.edits).unwrap_or_default().hash(&mut h);
     s.key_signatures.hash(&mut h);
-    (s.band.key, s.band.scale, t.original).hash(&mut h);
+    (s.band.key, s.band.scale, t.original, t.note_mode).hash(&mut h);
     c.start.saturating_sub(c.source_offset()).hash(&mut h);
     h.finish() | 1
 }
@@ -491,7 +491,7 @@ pub fn moved_target_of(cv: &ClipView, n: &Note) -> f32 {
 /// note with no edit.
 pub fn tuned_centre_of(cv: &ClipView, n: &Note) -> Option<f32> {
     let e = cv.edits.get(&n.id).filter(|e| !soundcraft_vocal::NoteEdit::clone(e).clamped().is_identity())?;
-    Some(soundcraft_vocal::tuned_centre(&cv.a, n, e, &cv.scale))
+    Some(soundcraft_vocal::tuned_centre_with(&cv.a, n, e, &cv.scale, soundcraft_engine::vocal::note_mode(&cv.clip)))
 }
 
 /// Whether a target semitone is outside both the session scale and the chord at `at`.

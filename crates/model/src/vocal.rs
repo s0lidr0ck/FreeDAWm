@@ -4,7 +4,7 @@
 
 use crate::{Clip, ClipId, Session, SourceId};
 use soundcraft_time::Samples;
-use soundcraft_vocal::{EditCurves, NoteEdit, NoteId, SegOp, VocalAnalysis};
+use soundcraft_vocal::{EditCurves, NoteEdit, NoteId, NoteMode, SegOp, VocalAnalysis};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -58,6 +58,12 @@ pub struct VocalTune {
     /// ([`Clip::tune_live`]); `None` (not analysed yet) follows whatever the clip plays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceId>,
+    /// How the clip's pitch is cut into notes (the Vocal Editor's Notes selector). New tunings are
+    /// [`NoteMode::NEW`] (Musical; the engine sets it when it makes one). A tuning saved without
+    /// it (before modes existed) is [`NoteMode::Classic`], so it sounds as it did; Classic is not
+    /// written.
+    #[serde(default, skip_serializing_if = "is_classic")]
+    pub note_mode: NoteMode,
     /// The engine's render-inputs hash of this tuning (`soundcraft_engine::vocal::render_inputs`;
     /// 0 when it has none), kept current after every command, undo, redo, install and load so the
     /// audio thread compares it with [`TunedSpans::inputs`] instead of hashing. Never saved.
@@ -73,7 +79,12 @@ impl PartialEq for VocalTune {
             && self.analysed == o.analysed
             && self.note_spans == o.note_spans
             && self.source == o.source
+            && self.note_mode == o.note_mode
     }
+}
+
+fn is_classic(m: &NoteMode) -> bool {
+    *m == NoteMode::Classic
 }
 
 impl VocalTune {
