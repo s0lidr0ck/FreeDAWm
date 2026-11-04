@@ -1,9 +1,9 @@
 # Releasing FreeDAWm
 
-Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates or updates a
-**draft** GitHub Release named `FreeDAWm v<version>`. Nobody sees a draft until a maintainer
-publishes it.
+`.github/workflows/release.yml` builds FreeDAWm on GitHub's free standard runners and attaches
+the packages to a GitHub Release. The builds are **unsigned** (no Apple Developer ID, no Windows
+code-signing certificate) and the Windows build has **no ASIO** (WASAPI only; see
+[release-playbook.md](release-playbook.md) › ASIO). It uses only `GITHUB_TOKEN`.
 
 This is FreeDAWm's implementation of the shared [release playbook](release-playbook.md).
 User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase
@@ -21,40 +21,41 @@ User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase
    ```
 
    Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
-2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
-3. **Wait for the draft.** After about 30 to 60 minutes (notarization and the FreeBSD VM are the
-   slow parts), the Releases page has a draft `FreeDAWm v0.2.0`, tagged `v0.2.0` on the pushed
-   commit, with every artifact and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
-4. **Check it.** Download an installer or two and look at the job summaries. Any `::warning::`
-   there means a signing secret was missing and that artifact is unsigned.
-5. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
-   pre-release suffix (`-rc.1`) are marked as pre-releases.
+2. **Optional dry run:** *Actions › Release › Run workflow* on `main` builds everything and
+   creates (or updates) a **draft** release `v0.2.0` with every package and `SHA256SUMS.txt`.
+   Nobody sees a draft until a maintainer publishes it; download a package or two and try them.
+3. **Tag and push:** `git tag v0.2.0 && git push origin v0.2.0`. The workflow checks that the tag
+   matches `Cargo.toml`, builds everything (about 30 to 60 minutes) and publishes the release
+   (reusing the draft from step 2 if there is one). A version with a pre-release suffix
+   (`-rc.1`) is published as a pre-release.
 
-Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
-After the draft is published, the workflow refuses to touch that version again, so bump it first.
-
-**Test runs:** *Actions → Release → Run workflow* runs the whole pipeline by hand. The optional
-`version` input (such as `0.2.0-rc.1`) overrides `Cargo.toml` for that run only. The jobs apply it
-with `cargo xtask version set` before building, so the binaries report it too. Only the signing
-jobs (macOS, Windows) and the draft-release job use the `release` environment, which only the
-`release` branch can use. On any other branch the run is a dry run: Linux, Flatpak, FreeBSD and
-web build and are checked, the signing jobs are refused, and no release is drafted.
+Once a version is published the workflow refuses to touch it again, so bump the version first.
+Pull requests that change `packaging/`, the app icons or `release.yml` run the build and packaging
+jobs as a check, without making a release.
 
 ## What gets built
 
 | Platform | Artifacts | Built on |
 |---|---|---|
-| macOS 11+ (universal: Apple silicon + Intel) | `freedawm-<v>-macos-universal.dmg`, `freedawm-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `freedawm-<v>-windows-x64.msi`, `freedawm-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `freedawm-<v>-windows-x86.msi`, `freedawm-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Windows 11 ARM64 | `freedawm-<v>-windows-arm64.msi`, `freedawm-<v>-windows-arm64-portable.zip` | `windows-latest` (cross-compiled; `windows-arm64.yml` installs and runs it on ARM64) |
-| Linux x86_64 | `freedawm-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04` |
-| Linux aarch64 | `freedawm-<v>-linux-aarch64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04-arm` |
-| Linux riscv64 | `freedawm-<v>-linux-riscv64.tar.gz` (glibc 2.39+) | `ubuntu-24.04` (cross-compiled; CLI smoke-tested under QEMU) |
-| AppImage updates | `freedawm-<v>-linux-{x86_64,aarch64}.AppImage.zsync` | with the AppImage |
-| Flatpak x86_64, aarch64 | `freedawm-<v>-linux-{x86_64,aarch64}.flatpak` | `ubuntu-24.04`, `ubuntu-24.04-arm` (repackages the Linux tarball) |
-| FreeBSD 14 x86_64 | `freedawm-<v>-freebsd-x86_64.tar.gz` (a `/usr/local` tree) | FreeBSD 14.3 VM on `ubuntu-latest` |
-| Web | `soundcraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
+| macOS 11+, Apple silicon | `freedawm-<v>-macos-aarch64.dmg`, `freedawm-cli-<v>-macos-aarch64.zip` (ad-hoc signed, not notarized) | `macos-15` |
+| Windows 10+ x64 | `freedawm-<v>-windows-x64.msi`, `freedawm-<v>-windows-x64-portable.zip` (unsigned) | `windows-latest` |
+| Linux x86_64 (glibc 2.39+) | `freedawm-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz}`, `.AppImage.zsync` | `ubuntu-24.04` |
+
+No Intel Mac build: ONNX Runtime (the `ort` crate's prebuilt library, used by the ML features)
+has no `x86_64-apple-darwin` binaries. Linux builds on Ubuntu 24.04 because that library needs
+the C++ runtime of GCC 13 or newer. The x86, ARM64, aarch64 and riscv64 builds, Flatpak,
+FreeBSD and the web build that the upstream pipeline made are not part of the free workflow;
+their scripts below still work by hand.
+
+### First launch of unsigned builds
+
+- **macOS:** the app is ad-hoc signed and not notarized, so Gatekeeper stops the first launch.
+  Drag FreeDAWm to Applications, then **right-click (Control-click) it › Open › Open**. On
+  macOS 15 and later, if the dialog has no *Open* button: *System Settings › Privacy & Security*,
+  scroll to the FreeDAWm message and click **Open Anyway**. (Or, in Terminal:
+  `xattr -dr com.apple.quarantine /Applications/FreeDAWm.app`.) Later launches work normally.
+- **Windows:** SmartScreen may show "Windows protected your PC": click **More info › Run anyway**.
+- **Linux:** `chmod +x freedawm-*.AppImage` and run it, or install the `.deb` / `.rpm`.
 
 The from-source Flatpak manifest (`packaging/linux/flatpak/io.github.s0lidr0ck.FreeDAWm.yml`) is
 kept ready for a Flathub submission; the release's `.flatpak` bundles come from
@@ -80,8 +81,9 @@ plugins), and WebAudio in the browser.
 
 ### macOS
 
-`packaging/macos/package.sh` builds `aarch64-apple-darwin` and `x86_64-apple-darwin` with
-`MACOSX_DEPLOYMENT_TARGET=11.0`, joins them with `lipo`, and assembles `FreeDAWm.app`:
+`packaging/macos/package.sh` builds `aarch64-apple-darwin` (and, with `--arch universal`,
+`x86_64-apple-darwin` too, joined with `lipo`; that needs an ONNX Runtime for Intel Macs, which
+`ort` does not ship) with `MACOSX_DEPLOYMENT_TARGET=11.0`, and assembles `FreeDAWm.app`:
 
 - `Info.plist` is generated from `Info.plist.in`. The bundle id is `io.github.s0lidr0ck.FreeDAWm`.
   It declares the session type for `.fdawm` and the older `.scraft`
@@ -99,22 +101,23 @@ plugins), and WebAudio in the browser.
   Its Finder window (background, icon size and positions) comes from
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `FreeDAWm`
   without the version, which the window's background needs; the DMG file name keeps the version.
-- **CLI:** the universal `freedawm-cli` is signed with the hardened runtime, zipped and
+- **CLI:** `freedawm-cli` is signed with the hardened runtime, zipped and
   notarized.
 
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization:
 
 ```sh
-packaging/macos/package.sh                    # universal; needs both rustup targets
-packaging/macos/package.sh --arch aarch64     # quicker, host-only
+packaging/macos/package.sh --arch aarch64     # what CI builds
 open dist/release/freedawm-*-macos-*.dmg
 ```
 
 ### Windows
 
-`packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `-C target-feature=+crt-static`
-(in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected), so neither the MSI
-nor the portable zip needs the Visual C++ redistributable.
+`packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with the dynamic C runtime (ONNX
+Runtime's prebuilt library is compiled against it, so `+crt-static` does not link) and stages
+`DirectML.dll` and the Visual C++ runtime DLLs (from Visual Studio's `VC\Redist`) next to the
+programs, so neither the MSI nor the portable zip needs the VC++ redistributable installed. CI
+builds x64 only, without the `asio` feature.
 
 - `apps/soundcraft/build.rs` embeds the icon (`assets/app-icon/freedawm.ico`) and VERSIONINFO
   with `winresource`, only when targeting Windows. Release packaging sets
@@ -161,7 +164,8 @@ shared-mime-info file declaring `application/x-freedawm-session` (`*.fdawm`) and
   `io.github.s0lidr0ck.FreeDAWm.yml` builds from source for Flathub and needs vendored crates
   (`cargo-sources.json` from `flatpak-cargo-generator.py`); the commands are in its header.
 
-Binaries are built on Ubuntu 22.04 and need **glibc ≥ 2.35**. X11, Wayland, xkbcommon, Vulkan
+Binaries are built on Ubuntu 24.04 and need **glibc ≥ 2.39** and GCC 13's `libstdc++` (ONNX
+Runtime's prebuilt library). X11, Wayland, xkbcommon, Vulkan
 and EGL are loaded at runtime, so the packages declare them as dependencies or recommendations.
 
 Locally (on Linux): install nfpm, then `packaging/linux/package.sh` (or `--formats "deb tar"`).
@@ -182,28 +186,23 @@ the hosting guide. `apps/soundcraft-web` runs the same `SoundApp` as the desktop
 synthesised demo session, rendering with wgpu (WebGPU, or WebGL2 with `?webgl`) and playing
 through WebAudio.
 
-## Secrets
+## Signing (not set up)
 
-All secrets live in the repository's **`release` environment** (*Settings → Environments →
-release*), restricted to the `release` branch. Only the jobs that sign (macOS, Windows) and the
-draft-release job declare `environment: release`; the others get no secrets. Each secret is optional: if one is missing, that platform's artifacts
-are unsigned and the run shows a `::warning::`. Scripts never echo secret values; certificates
-are written with `umask 077` and deleted in `always()`/`finally` steps.
+The public workflow signs nothing and needs no secrets. The packaging scripts still support
+signing when the material exists, if the owner ever buys it:
 
-| Secret | Used for |
-|---|---|
-| `APPLE_CERTIFICATE` | base64 `.p12` with "Developer ID Application: Learning Machines LLC (DJ6XS33FX8)" |
-| `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
-| `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (random if unset) |
-| `APPLE_ID` | Apple ID used by `notarytool` |
-| `APPLE_PASSWORD` | app-specific password for that Apple ID |
-| `APPLE_TEAM_ID` | `DJ6XS33FX8` |
-| `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` | base64 `.pfx` (unused: Windows uses Azure) |
-| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing |
-| `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing endpoint, account and profile |
+- **macOS:** `packaging/macos/package.sh` signs with `MACOS_SIGN_IDENTITY` (hardened runtime,
+  secure timestamp) and notarizes when `APPLE_ID`, `APPLE_PASSWORD` (app-specific password) and
+  `APPLE_TEAM_ID` are set; `packaging/macos/import-cert.sh` imports a base64 `.p12` into a CI
+  keychain. Needs an Apple Developer Program membership.
+- **Windows:** `packaging/windows/sign.ps1` signs with a `.pfx` (`WINDOWS_CERTIFICATE`,
+  `WINDOWS_CERTIFICATE_PASSWORD`) or Azure Trusted Signing (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+  `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`),
+  and otherwise warns and leaves the files unsigned.
 
-`GITHUB_TOKEN` creates the release. Only the final job gets `contents: write`. Provisioning the
-environment, ruleset and secrets for a new repo: craftrules `release/signing-setup.md`.
+Wiring either into `release.yml` means passing those as secrets to the macOS / Windows job
+(ideally through a protected `release` environment). `GITHUB_TOKEN` creates the release; only
+the final job gets `contents: write`.
 
 ## Icons
 
@@ -218,7 +217,13 @@ old nightingale and names the old volume: regenerate it with `packaging/macos/dm
 
 ## Checks
 
-`.github/workflows/packaging-lint.yml` runs in seconds on any change to `packaging/`, the
-workflows or the icons: actionlint, shellcheck, a PowerShell parse, xmllint (WiX, plists,
-AppStream, MIME), `desktop-file-validate`, `appstreamcli validate`, and a check that the two
-Flatpak manifests agree on runtime, finish-args and plugin extensions.
+`.github/workflows/ci.yml` runs `cargo xtask ci` on Linux and `cargo test --workspace` on macOS
+and Windows for every pull request. `release.yml` also runs (build and package, no release) on
+pull requests that change `packaging/`, the app icons or the workflow. Both pin the Rust
+toolchain (`RUST_TOOLCHAIN`), so a new stable release's lints can't break an unchanged tree.
+CI skips the DSP timing tests `silence_tail_is_cheap` and `a_minute_of_silence_stays_cheap`
+(`XTASK_TEST_ARGS` passes the `--skip`s to `cargo xtask ci`): on some hosted runners' CPUs the
+silent tail runs 4 to 13 times slower than the signal (likely denormal arithmetic), which
+deserves a look on those CPUs. The `soundcraft-playback` and
+`soundcraft-ui-egui` test binaries crash with an access violation on those runners (not yet
+diagnosed; they have no audio devices), so there they are built but not run.

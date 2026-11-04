@@ -1,7 +1,7 @@
 # Release playbook
 
-> **Last updated:** 2026-11-02 · **Change:** minor (public export, CI, ASIO licensing, the
-> placeholder repository URL)
+> **Last updated:** 2026-11-03 · **Change:** minor (the free release workflow, the export's sync
+> mode)
 
 The release playbook shared by the crafting apps lives in craftrules
 (`release/playbook.md`); FreeDAWm-specific packaging details are in [releasing.md](releasing.md).
@@ -10,12 +10,15 @@ CI, and the licence questions a binary release raises.
 
 ## Status
 
-- **CI:** `.github/workflows/ci.yml` runs `cargo xtask ci` on every pull request and on pushes to
-  `main` (Linux). It uses no secrets.
-- **Release workflow:** not in the repository. The upstream `release.yml` (and the FreeBSD, Nix,
-  packaging-lint and Windows-Arm workflows) were removed when the fork went private; restore them
-  from upstream only after the signing secrets and the ASIO decision below are settled.
-  `packaging/` and [releasing.md](releasing.md) still describe them.
+- **CI:** `.github/workflows/ci.yml` runs `cargo xtask ci` (Linux) and `cargo test --workspace`
+  (macOS, Windows) on every pull request and on pushes to `main`, with a pinned toolchain. It uses
+  no secrets.
+- **Release workflow:** `.github/workflows/release.yml` builds unsigned packages on the free
+  runners (Windows x64 without ASIO, macOS Apple silicon, Linux x86_64) and publishes them on a
+  `v*` tag (a draft release on a manual run). See [releasing.md](releasing.md). The upstream
+  FreeBSD, Nix, packaging-lint and Windows-Arm workflows were not restored.
+- **Dependabot** (`.github/dependabot.yml`) groups minor and patch updates and ignores Cargo
+  semver-major ones (they need code changes: do them by hand).
 
 ## Public export (fresh history)
 
@@ -59,8 +62,21 @@ checkout), `--skip-scan` (not recommended).
 
 Then, in the destination: run `cargo xtask ci`, read the tree once more (README, NOTICE,
 ATTRIBUTION), create the public GitHub repository, add it as the remote yourself and push.
-For later releases, export again into a fresh folder and copy the changes over in the public
-repository as ordinary commits (or make the public repository the main one).
+For later changes, **sync** into a clone of the public repository instead:
+
+```sh
+git clone https://github.com/s0lidr0ck/FreeDAWm D:/src/FreeDAWm   # once
+python tools/public-export/export.py --sync D:/src/FreeDAWm --ref main -m "What changed"
+```
+
+The same export, exclusions and scan run (the commit message is scanned too: no agent trailers,
+session links or private e-mail addresses), then the clone's tracked files are replaced by the
+exported tree (its `.git` and ignored files stay, executable bits follow the private commit) and
+one ordinary commit is made on the clone's current branch, author and committer the identity of
+its last commit unless `--author-name` / `--author-email` say otherwise. The clone must be clean;
+nothing is pushed. If the public repository got commits of its own (a README edit, a merged
+pull request), merge them into the private branch and the public branch first, or the sync
+reverts them.
 
 ## Before the first public push
 

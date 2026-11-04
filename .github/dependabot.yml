@@ -1,21 +1,32 @@
 version: 2
 updates:
-  # Maintain Rust / Cargo dependencies
+  # Rust / Cargo dependencies. Semver-major updates (x.y -> (x+1).0) are ignored: they need code
+  # changes, so do them by hand. Dependabot counts 0.5 -> 0.6 as "minor", but for a 0.x crate
+  # that is a breaking release (symphonia 0.5 -> 0.6, egui 0.36 -> 0.37), so minor updates get a
+  # PR of their own, apart from the patch updates, which should always build.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"
       time: "06:00"
       timezone: "America/New_York"
-    # Consolidate updates into a single PR rather than one PR per crate
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
-      cargo-dependencies:
+      cargo-patch:
         patterns:
           - "*"
+        update-types: ["patch"]
+      cargo-minor:
+        patterns:
+          - "*"
+        update-types: ["minor"]
     commit-message:
       prefix: "chore(deps)"
 
-  # Maintain GitHub Actions workflows
+  # GitHub Actions: minor/patch in one PR, major versions in a separate grouped PR (they can drop
+  # runner or Node versions, so review them on their own).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -26,5 +37,10 @@ updates:
       actions:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      actions-major:
+        patterns:
+          - "*"
+        update-types: ["major"]
     commit-message:
       prefix: "ci(deps)"

@@ -5,10 +5,10 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     freedawm-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    freedawm-<version>-windows-<arch>-portable.zip   freedawm.exe + freedawm-cli.exe
+    freedawm-<version>-windows-<arch>-portable.zip   freedawm.exe + freedawm-cli.exe + DLLs
 
-  The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
-  zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
+  DirectML.dll and the Visual C++ runtime DLLs are staged next to the programs (app-local), so
+  neither the MSI nor the portable zip needs the VC++ redistributable. Signing is delegated to sign.ps1 (skipped with a
   warning when no signing secrets are set).
 
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
@@ -60,10 +60,8 @@ if (-not $env:FREEDAWM_BUILD_DATE) { $env:FREEDAWM_BUILD_DATE = (Get-Date).ToUni
 Write-Output "FreeDAWm $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
-  # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
-  # proc-macros are unaffected.
-  $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
-  [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
+  # The dynamic C runtime (the MSVC default): ONNX Runtime's prebuilt static library (ort-sys)
+  # is compiled against it, so +crt-static fails to link. The runtime DLLs ship app-locally below.
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:FREEDAWM_REQUIRE_WINRES = '1'
   Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p soundcraft -p soundcraft-cli --target $Target }
@@ -92,6 +90,33 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'freedawm.exe'), (Join-Path $Bin 'freedawm-cli.exe') $Stage
 
+# DLLs the programs load, staged next to them (the MSI installs every staged *.dll):
+# - DirectML.dll, ONNX Runtime's GPU backend, which ort's `copy-dylibs` puts next to the build;
+# - the Visual C++ runtime (vcruntime140*.dll, msvcp140*.dll), app-local, so the app runs without
+#   the VC++ redistributable installed. Microsoft allows redistributing these files from Visual
+#   Studio's Redist folder.
+$dlls = @(Get-ChildItem -Path $Bin -Filter '*.dll' -File -ErrorAction SilentlyContinue)
+if (-not ($dlls | Where-Object Name -eq 'DirectML.dll')) { throw "DirectML.dll not found in $Bin (ort copy-dylibs)" }
+$dlls | ForEach-Object { Copy-Item $_.FullName $Stage; Write-Output "staged $($_.Name)" }
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$crtDir = $null
+if (Test-Path $vswhere) {
+  $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+  if ($vs) {
+    $crtDir = Get-ChildItem -Path (Join-Path $vs 'VC\Redist\MSVC') -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^\d' } | Sort-Object { [version]($_.Name -replace '[^\d.].*$', '') } -Descending |
+      ForEach-Object { Get-ChildItem -Path (Join-Path $_.FullName $Arch) -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue } |
+      Select-Object -First 1
+  }
+}
+if ($crtDir) {
+  Get-ChildItem -Path $crtDir.FullName -Filter '*.dll' -File | ForEach-Object { Copy-Item $_.FullName $Stage; Write-Output "staged $($_.Name) (VC++ runtime)" }
+} elseif ($env:GITHUB_ACTIONS) {
+  throw 'the Visual C++ runtime (VC\Redist\MSVC\<version>\<arch>\Microsoft.VC*.CRT) was not found'
+} else {
+  Write-Warning 'Visual C++ runtime DLLs not found: the package will need the VC++ redistributable'
+}
+
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'freedawm.exe') (Join-Path $Stage 'freedawm-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
@@ -109,7 +134,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 $Portable = Join-Path $TargetDir "windows-package\freedawm-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
-Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item (Join-Path $Stage '*.exe'), (Join-Path $Stage '*.dll') $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

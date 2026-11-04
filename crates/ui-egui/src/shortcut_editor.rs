@@ -479,12 +479,15 @@ mod tests {
         };
         frame(&mut app, vec![]);
         start_capture(&mut app.ui, "session.save");
+        // The window reads keys the way this platform reports them: Cmd on a Mac (where Ctrl is a
+        // key of its own), Ctrl (reported as command + ctrl) elsewhere.
+        let cmd = if cfg!(target_os = "macos") { Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE } } else { PC_CTRL };
         let press = egui::Event::Key {
             key: Key::Y,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: Modifiers { alt: true, shift: true, ..PC_CTRL },
+            modifiers: Modifiers { alt: true, shift: true, ..cmd },
         };
         frame(&mut app, vec![press]);
         assert_eq!(app.ui.shortcuts.get("session.save").map(String::as_str), Some("Cmd+Alt+Shift+Y"));

@@ -1,0 +1,196 @@
+# Release builds on GitHub's free standard runners, unsigned (no Apple Developer ID, no Windows
+# code-signing certificate), with WASAPI on Windows (no `asio` feature: see
+# docs/release-playbook.md › ASIO).
+#
+#   push a tag `v<version>`   build everything and publish the GitHub Release for that tag
+#                             (a pre-release when the version has a `-suffix`). The tag must match
+#                             `[workspace.package] version` in Cargo.toml.
+#   Actions › Release › Run   build everything and create or update a *draft* release
+#                             `v<version>` (nobody sees it until a maintainer publishes it)
+#   pull request touching     build and package everything as a check; no release
+#   packaging or this file
+#
+# Only GITHUB_TOKEN is used. See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml", "packaging/**", "assets/app-icon/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_TOOLCHAIN: "1.97.1"
+  DIST: ${{ github.workspace }}/dist/release
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Read and check the version
+        run: |
+          version="$(awk '/^\[/ { p = ($0 == "[workspace.package]"); next } p && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }' Cargo.toml)"
+          [ -n "$version" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version (expected v$version)"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "FreeDAWm $version" >>"$GITHUB_STEP_SUMMARY"
+
+  linux:
+    name: Linux x86_64
+    needs: version
+    # Ubuntu 24.04, not 22.04: ONNX Runtime's prebuilt static library (ort-sys) needs the
+    # libstdc++ of GCC 13+. The binaries need glibc >= the build host's (2.39).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake clang libclang-dev libasound2-dev libssl-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            desktop-file-utils zsync file
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nfpm
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build and package
+        run: packaging/linux/package.sh --formats "appimage deb rpm tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
+  macos:
+    # Apple silicon only: ONNX Runtime (ort-sys) has no prebuilt x86_64-apple-darwin library.
+    name: macOS arm64
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build and package (ad-hoc signed, not notarized)
+        # No MACOS_SIGN_IDENTITY: package.sh signs ad-hoc, so the DMG opens after the one-time
+        # Gatekeeper approval described in docs/releasing.md.
+        run: packaging/macos/package.sh --arch aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target x86_64-pc-windows-msvc
+          rustup default "$RUST_TOOLCHAIN"
+      - name: WiX
+        run: dotnet tool install --global wix --version 5.0.2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build and package (unsigned, WASAPI only)
+        # No signing secrets: sign.ps1 warns and leaves the files unsigned. No `asio` feature.
+        shell: pwsh
+        run: packaging/windows/package.ps1 -Arch x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [version, linux, macos, windows]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          # Not `assets/`: that is a folder of the checkout.
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          set -o pipefail
+          cd release-assets
+          ls -l
+          sha256sum -- * | tee SHA256SUMS.txt
+      - name: Create or update the release
+        run: |
+          tag="v$VERSION"
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          notes="$RUNNER_TEMP/notes.md"
+          cat >"$notes" <<EOF
+          Unsigned builds made by GitHub Actions from ${GITHUB_SHA::12}.
+
+          - **Windows x64**: \`.msi\` installer or \`-portable.zip\`. The files are not code-signed, so SmartScreen may say "Windows protected your PC": choose *More info › Run anyway*. Audio goes through WASAPI (no ASIO in these builds).
+          - **macOS 11+ on Apple silicon** (no Intel build yet): open the \`.dmg\` and drag FreeDAWm to Applications. The app is not notarized: the first time, right-click (Control-click) FreeDAWm in Applications and choose *Open*, then *Open* again. On macOS 15 and later, if there is no *Open* button, go to *System Settings › Privacy & Security* and click *Open Anyway* under the FreeDAWm message (or run \`xattr -dr com.apple.quarantine /Applications/FreeDAWm.app\`).
+          - **Linux x86_64** (glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 40 or newer): \`.AppImage\` (\`chmod +x\` and run), \`.deb\`, \`.rpm\` or \`.tar.gz\`.
+
+          Check downloads against \`SHA256SUMS.txt\`.
+          EOF
+          sed -i 's/^          //' "$notes"
+          if gh release view "$tag" --json isDraft --jq .isDraft >"$RUNNER_TEMP/draft" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/draft")" != true ] ; then
+              echo "::error::release $tag is already published; bump the version first"
+              exit 1
+            fi
+            gh release upload "$tag" release-assets/* --clobber
+            gh release edit "$tag" --notes-file "$notes" --target "$GITHUB_SHA"
+          else
+            gh release create "$tag" release-assets/* --draft --title "FreeDAWm $tag" --notes-file "$notes" --target "$GITHUB_SHA" "${prerelease[@]}"
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release edit "$tag" --draft=false
+            echo "published release $tag" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "draft release $tag updated (publish it on the Releases page)" >>"$GITHUB_STEP_SUMMARY"
+          fi

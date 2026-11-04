@@ -313,6 +313,11 @@ impl DiskFile {
     /// Opens the WAV at `path` for streaming (its header alone is read).
     pub fn open(path: &Path) -> Result<Arc<DiskFile>, OpenError> {
         use std::io::Read;
+        // A regular file only, checked before opening: opening a named pipe for reading waits
+        // for a writer that never comes.
+        if !std::fs::metadata(path).map_err(|e| OpenError::Io(format!("{}: {e}", path.display())))?.is_file() {
+            return Err(OpenError::NotStreamable);
+        }
         let mut file = std::fs::File::open(path).map_err(|e| OpenError::Io(format!("{}: {e}", path.display())))?;
         let len = file.metadata().map_err(|e| OpenError::Io(format!("{}: {e}", path.display())))?.len();
         if !file.metadata().is_ok_and(|m| m.is_file()) {

@@ -56,9 +56,8 @@
           <Extension Id="fdawm" ContentType="application/x-freedawm-session">
             <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
           </Extension>
-          <Extension Id="scraft" ContentType="application/x-soundcraft-session">
-            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
-          </Extension>
+          <!-- No Verb of its own: the ProgId's open verb (above) serves both extensions. -->
+          <Extension Id="scraft" ContentType="application/x-soundcraft-session" />
         </ProgId>
         <!-- Audio and MIDI files: offered under "Open with" (imported into a session), never forced
              as the default. -->
@@ -92,6 +91,10 @@
       <Component Id="SoundcraftCli" Guid="4552049A-C2F0-4AB0-BAE6-A62C3348F4B4">
         <File Id="SoundcraftCliExe" Source="$(var.BinDir)\freedawm-cli.exe" KeyPath="yes" />
       </Component>
+
+      <!-- The DLLs package.ps1 stages next to the programs: DirectML (ONNX Runtime's GPU
+           backend) and the app-local Visual C++ runtime. -->
+      <Files Include="$(var.BinDir)\*.dll" />
     </ComponentGroup>
   </Fragment>
 </Wix>
