@@ -25,6 +25,10 @@ deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
 sha2 = "0.10"
+# Model downloads from the FreeDAWm models release: the HTTP client the app already links (rustls)
+# and the workspace's zip reader (stored entries).
+ureq = { version = "2", features = ["tls", "json"] }
+zip.workspace = true
 # Transcribe Lyrics: Whisper large-v3 in whisper.cpp (built from source with CMake; CPU here: the
 # Vulkan backend needs the Vulkan SDK and the CUDA one the CUDA toolkit, neither installed).
 whisper-rs = { version = "=0.16.0", default-features = false, features = ["log_backend"] }

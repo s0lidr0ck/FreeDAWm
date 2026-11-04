@@ -46,6 +46,8 @@ pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod ml_downloads;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_text_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_ui;

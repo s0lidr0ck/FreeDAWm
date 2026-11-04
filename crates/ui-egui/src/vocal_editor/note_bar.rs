@@ -1,13 +1,13 @@
 //! The note bar: a floating strip under the selected note (the first selected when several;
 //! it follows scrolling and zoom and hides when that note is off screen) with the fields
-//! `cents`, `semi`, `drift`, `vibrato` and `level`. Drag a value sideways to change it
+//! `cents`, `semi`, `drift`, `vibrato`, `level` and `formant`. Drag a value sideways to change it
 //! ([`BarField::per_px`] a pixel, Shift fine ×0.1), double-click to type (Enter sets, Esc
 //! cancels; two clicks within 0.35 s). A gesture is one undo step (as the Tuning panel's sliders: `vocal.edit` merged at
 //! most every [`DRAG_EVERY`] and on release); Esc mid-drag puts the values back. With several
 //! notes selected the bar shows their mean and "N notes", and a drag moves every note by the
 //! same delta (one value per note in one `vocal.edit`).
 
-use super::roll::{Drawn, clip_views, selection_with_twins};
+use super::roll::{Drawn, clip_views_of, selection_with_twins};
 use super::{hook, store};
 use crate::SoundApp;
 use crate::slider_drag::{DRAG_EVERY, How, report};
@@ -16,8 +16,7 @@ use crate::vocal_style::fmt_cents;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use soundcraft_engine::vocal::NoteRef;
-use soundcraft_model::TrackId;
-use soundcraft_vocal::{MAX_GAIN_DB, MAX_OFFSET_CENTS, NoteEdit};
+use soundcraft_vocal::{MAX_FORMANT_ST, MAX_GAIN_DB, MAX_OFFSET_CENTS, NoteEdit};
 
 /// A field's width (px).
 pub const FIELD_W: f32 = 64.0;
@@ -38,10 +37,15 @@ pub enum BarField {
     Drift,
     Vibrato,
     Level,
+    /// The note's own formant shift (semitones, Vocal Studio).
+    Formant,
 }
 
-/// The fields, left to right.
+/// The tuning fields, left to right.
 pub const FIELDS: [BarField; 5] = [BarField::Cents, BarField::Semi, BarField::Drift, BarField::Vibrato, BarField::Level];
+
+/// Every field the bar shows: the tuning fields, then the formant shift.
+pub const ALL_FIELDS: [BarField; 6] = [BarField::Cents, BarField::Semi, BarField::Drift, BarField::Vibrato, BarField::Level, BarField::Formant];
 
 impl BarField {
     pub fn key(self) -> &'static str {
@@ -51,6 +55,7 @@ impl BarField {
             BarField::Drift => "drift",
             BarField::Vibrato => "vibrato",
             BarField::Level => "level",
+            BarField::Formant => "formant",
         }
     }
 
@@ -61,6 +66,7 @@ impl BarField {
             BarField::Drift => "DRIFT",
             BarField::Vibrato => "VIBRATO",
             BarField::Level => "LEVEL",
+            BarField::Formant => "FORMANT",
         }
     }
 
@@ -70,7 +76,7 @@ impl BarField {
             BarField::Cents => 1.0,
             BarField::Semi => 0.1,
             BarField::Drift | BarField::Vibrato => 1.0,
-            BarField::Level => 0.1,
+            BarField::Level | BarField::Formant => 0.1,
         }
     }
 
@@ -82,13 +88,14 @@ impl BarField {
             BarField::Drift => (0.0, 100.0),
             BarField::Vibrato => (-100.0, 100.0),
             BarField::Level => (-MAX_GAIN_DB, MAX_GAIN_DB),
+            BarField::Formant => (-MAX_FORMANT_ST, MAX_FORMANT_ST),
         }
     }
 
     /// A value's resolution: whole cents, semitones and %, 0.1 dB.
     fn quantise(self, v: f32) -> f32 {
         match self {
-            BarField::Level => (v * 10.0).round() / 10.0,
+            BarField::Level | BarField::Formant => (v * 10.0).round() / 10.0,
             _ => v.round(),
         }
     }
@@ -101,6 +108,7 @@ impl BarField {
             BarField::Drift => e.drift * 100.0,
             BarField::Vibrato => e.vibrato * 100.0,
             BarField::Level => e.gain_db,
+            BarField::Formant => e.formant_st,
         }
     }
 
@@ -118,6 +126,7 @@ impl BarField {
             BarField::Drift => ("drift", json!(v)),
             BarField::Vibrato => ("vibrato", json!(v)),
             BarField::Level => ("gain_db", json!(v)),
+            BarField::Formant => ("formant", json!(v)),
         }
     }
 
@@ -143,6 +152,7 @@ impl BarField {
                     format!("{}{:.1} dB", sign(v), v.abs())
                 }
             }
+            BarField::Formant => super::panel::formant_text(v),
         }
     }
 
@@ -194,9 +204,9 @@ pub fn dragged_values(field: BarField, base: &[f32], delta: f32) -> Vec<f32> {
 }
 
 /// The selected notes (with their twins) and their edits.
-fn targets(app: &mut SoundApp, track: TrackId) -> Vec<(NoteRef, NoteEdit)> {
-    let sel = selection_with_twins(app, track);
-    let cvs = clip_views(app, track, None);
+fn targets(app: &mut SoundApp) -> Vec<(NoteRef, NoteEdit)> {
+    let sel = selection_with_twins(app);
+    let cvs = clip_views_of(app, &sel);
     let mut out = Vec::new();
     for r in sel {
         let Some(cv) = cvs.iter().find(|c| c.clip.id == r.clip && !c.stretched) else { continue };
@@ -221,19 +231,24 @@ pub fn place(d: &Drawn, first: NoteRef, w: f32) -> Option<Rect> {
 
 /// Draws the bar and runs its gestures. Call after the roll's own interaction (the fields sit
 /// above it) and before the keys (a field's Esc is its own).
-pub fn show(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
+pub fn show(app: &mut SoundApp, ui: &mut Ui, d: &Drawn) {
+    // A stack's pick list is open over the roll: it takes the clicks.
+    if app.vocal.studio.picker.is_some() {
+        hide(app, ui);
+        return;
+    }
     let Some(first) = app.vocal.selected.iter().next().copied() else {
         hide(app, ui);
         return;
     };
-    let tg = targets(app, track);
+    let tg = targets(app);
     if tg.is_empty() {
         hide(app, ui);
         return;
     }
     let count = tg.len();
     let count_w = if count > 1 { 58.0 } else { 0.0 };
-    let w = count_w + FIELD_W * FIELDS.len() as f32 + 8.0;
+    let w = count_w + FIELD_W * ALL_FIELDS.len() as f32 + 8.0;
     let Some(bar) = place(d, first, w) else {
         hide(app, ui);
         return;
@@ -257,10 +272,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
         hook(ui.ctx(), "bar-count", String::new());
     }
     let (esc, now) = ui.input(|i| (i.key_pressed(egui::Key::Escape), i.time));
-    for (i, f) in FIELDS.into_iter().enumerate() {
+    for (i, f) in ALL_FIELDS.into_iter().enumerate() {
         let r = Rect::from_min_size(pos2(x, bar.top()), vec2(FIELD_W, BAR_H));
         x = r.right();
-        if i + 1 < FIELDS.len() {
+        if i + 1 < ALL_FIELDS.len() {
             p.line_segment([pos2(r.right(), bar.top() + 6.0), pos2(r.right(), bar.bottom() - 6.0)], Stroke::new(1.0, t.border));
         }
         store(ui.ctx(), &format!("bar-{}", f.key()), r);

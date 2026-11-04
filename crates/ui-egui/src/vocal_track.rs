@@ -438,7 +438,7 @@ pub fn select_from_lane(app: &mut SoundApp, track: soundcraft_model::TrackId, r:
     }
     app.vocal.track = Some(track);
     app.vocal.popup = None;
-    roll::click_select(app, track, Some(r), toggle);
+    roll::click_select(app, Some(r), toggle);
 }
 
 /// The TUNED badge of a clip with a live tuning that edits something ("UNTUNED" while it plays

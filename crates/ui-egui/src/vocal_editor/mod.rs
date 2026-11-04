@@ -4,6 +4,7 @@
 //! commands.
 
 pub mod drag;
+pub mod harmony;
 pub mod layout;
 pub mod level_lane;
 pub mod note_bar;
@@ -11,6 +12,7 @@ pub mod panel;
 pub mod presets;
 pub mod preview;
 pub mod roll;
+pub mod studio;
 pub mod window;
 
 use crate::SoundApp;
@@ -107,6 +109,8 @@ pub struct VocalEditorState {
     pub hand_zoom: bool,
     /// The Edit window's scroll last seen: the roll moves by the same amount it does.
     pub last_edit_scroll: Option<Samples>,
+    /// The Vocal Studio: every vocal track in one view (off: the plain editor).
+    pub studio: studio::StudioState,
 }
 
 impl Default for VocalEditorState {
@@ -136,6 +140,7 @@ impl Default for VocalEditorState {
             spp: None,
             hand_zoom: false,
             last_edit_scroll: None,
+            studio: studio::StudioState::default(),
         }
     }
 }
@@ -463,10 +468,23 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_H));
     ui.painter().rect_filled(header, 0.0, t.panel_bg2);
     ui.painter().line_segment([header.left_bottom(), header.right_bottom()], egui::Stroke::new(1.0, t.border));
-    ui.painter().text(pos2(header.min.x + 10.0, header.center().y), Align2::LEFT_CENTER, "VOCAL EDITOR", bold(12.5), t.header_text);
+    let studio_on = app.vocal.studio.on;
+    let title_text = if studio_on { "VOCAL STUDIO" } else { "VOCAL EDITOR" };
+    ui.painter().text(pos2(header.min.x + 10.0, header.center().y), Align2::LEFT_CENTER, title_text, bold(12.5), t.header_text);
     let title = Rect::from_min_max(header.min, pos2(header.min.x + 110.0, header.max.y));
     ui.interact(title, ui.id().with("vocal_title"), egui::Sense::hover()).on_hover_text("Zoom: the Edit window's × the factor (Ctrl+wheel: by hand)");
-    let body = Rect::from_min_max(pos2(full.min.x, header.max.y), full.max);
+    let mut body = Rect::from_min_max(pos2(full.min.x, header.max.y), full.max);
+    let track = editor_track(app);
+    if studio_on && let Some(id) = track {
+        // The studio bar under the header and the track list on the left; the editor in the rest.
+        let bar = Rect::from_min_size(body.min, vec2(body.width(), studio::BAR_H));
+        let list = Rect::from_min_max(pos2(body.left(), bar.bottom()), pos2(body.left() + studio::TRACKS_W, body.bottom()));
+        studio::bar(app, ui, bar, id);
+        studio::track_list(app, ui, list, id);
+        store(ui.ctx(), "studio-bar", bar);
+        store(ui.ctx(), "studio-list", list);
+        body = Rect::from_min_max(pos2(list.right(), bar.bottom()), body.max);
+    }
     let track = editor_track(app);
     let panel_w = if app.vocal.show_panel { PANEL_W } else { 0.0 };
     if let Some(t) = track {
@@ -501,7 +519,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     ui.ctx().data_mut(|d| d.remove::<String>(egui::Id::new("soundcraft-vocal-message")));
     let Some(track) = track else { return };
-    roll::prune(app, track);
+    let editable = if app.vocal.studio.on { studio::edit_tracks(app, track) } else { vec![track] };
+    roll::prune(app, &editable);
     let right = (body.right() - panel_w).max(body.left() + roll::KEY_W + 60.0);
     let (l, top) = (body.left() + roll::KEY_W, body.top());
     let chords = Rect::from_min_max(pos2(l, top), pos2(right, top + roll::CHORD_H));
@@ -522,11 +541,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let drawn = roll::draw(app, ui, track, &areas, view);
     header_row(app, ui, header, track, &drawn);
     roll::interact(app, ui, track, &drawn);
-    note_bar::show(app, ui, track, &drawn);
+    note_bar::show(app, ui, &drawn);
     keyboard(app, ui, full, track, &drawn);
     level_lane::level_lane(app, ui, lane, &drawn.view);
     if panel_w > 0.0 {
         panel::panel(app, ui, Rect::from_min_max(pos2(right, body.top()), body.max));
+    }
+    if app.vocal.studio.on {
+        harmony::dialog(app, ui, roll_r);
     }
 }
 
@@ -539,6 +561,22 @@ fn centre_rows(app: &mut SoundApp, track: TrackId, roll_h: f32) {
             app.vocal.scroll_rows = (roll::TOP_CENTS - cents) / 100.0 - rows / 2.0;
         }
     };
+    // The studio, just turned on: the rows centre on every listed track's notes at once.
+    if app.vocal.studio.on && app.vocal.studio.centre_all {
+        let mut centres: Vec<f32> = Vec::new();
+        for t in studio::listed(app) {
+            centres.extend(roll::clip_views(app, t, None).iter().flat_map(|c| c.a.notes.iter().map(|n| n.centre_cents)).filter(|c| c.is_finite()));
+        }
+        let lo = centres.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = centres.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if lo.is_finite() && hi.is_finite() {
+            centre_on(app, (lo + hi) / 2.0);
+            app.vocal.studio.centre_all = false;
+            app.vocal.pending_open = None;
+            app.vocal.centred = Some(track);
+            return;
+        }
+    }
     if let Some((t, at, note)) = app.vocal.pending_open.take() {
         if t != track {
             return;
@@ -647,7 +685,7 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
 
 /// The header's right-hand bar width (px): Select all / Split / Join / Preview / row height /
 /// zoom / Tuning / Window (Dock).
-const HEADER_BAR_W: f32 = 740.0;
+const HEADER_BAR_W: f32 = 800.0;
 
 /// The header: "VOCAL EDITOR", the counts and hints, and Select all / Split / Join / Preview /
 /// Tuning.
@@ -717,6 +755,16 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     store(ui.ctx(), "select-all", all.rect);
     if all.on_hover_text("Select every note of the clips shown (Ctrl+A; Ctrl+Shift+A: only those in view)").clicked() {
         select_all(app, track, d, false);
+    }
+    let st_on = app.vocal.studio.on;
+    let studio_b = tb.add(egui::Button::new(egui::RichText::new("Studio").color(if st_on { t.mode_on_text } else { t.text })).fill(if st_on {
+        t.mode_on
+    } else {
+        t.button
+    }));
+    store(ui.ctx(), "studio", studio_b.rect);
+    if studio_b.on_hover_text("Vocal Studio: every vocal track in one pitch view").clicked() {
+        let _ = app.run("ui.vocal_studio", json!({"value": !st_on}));
     }
 }
 
@@ -921,7 +969,7 @@ fn keyboard(app: &mut SoundApp, ui: &Ui, full: Rect, track: TrackId, d: &roll::D
     if j_key {
         join_selected(app);
     }
-    drag::keys(app, ui, track);
+    drag::keys(app, ui);
     if esc {
         // Mid-drag, Esc cancels the move (see `drag::update`) and leaves the selection alone.
         if !std::mem::take(&mut app.vocal.drag_cancelled) {

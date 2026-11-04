@@ -490,6 +490,8 @@ AI > Tune Vocal… [desktop]
 AI > Tune Vocal > Analyse Now = @vocal.analyse [desktop]
 AI > Tune Vocal > Tuned / Original = @vocal.toggle [desktop]
 AI > Tune Vocal > Notes Classic / Musical = @vocal.note_mode [desktop]
+AI > Tune Vocal > Fit to Lead = @vocal.fit_to_lead [desktop]
+AI > Tune Vocal > Make Harmony… = @ui.vocal_harmony [desktop]
 AI > Tune Vocal > Commit = @vocal.commit [desktop]
 AI > Tune Vocal > Remove Tuning = @vocal.remove [desktop]
 AI > --- [desktop]
@@ -560,6 +562,7 @@ Window > ---
 Window > ## Editors
 Window > MIDI Editor
 Window > Vocal Editor
+Window > Vocal Studio = @window.vocal_studio
 Window > Score Editor
 Window > MIDI Event List
 Window > MIDI Keyboard

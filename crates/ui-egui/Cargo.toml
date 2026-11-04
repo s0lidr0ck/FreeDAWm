@@ -33,6 +33,8 @@ image.workspace = true
 [dev-dependencies]
 soundcraft-dsp = { workspace = true, features = ["test-plugins"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+# The model-download tests make tiny model zips.
+zip.workspace = true
 
 [lints]
 workspace = true

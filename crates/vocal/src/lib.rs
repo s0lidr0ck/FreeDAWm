@@ -13,7 +13,9 @@
 //! - [`filter`]: second-order Butterworth and zero-phase `filtfilt`.
 //! - [`presets`]: [`factory_presets`] macros.
 //! - [`metrics`]: objective measures: steady frames, harmonic flux (wobble), pitch error.
-//! - [`resynth`]: the formant-preserving phase vocoder with partial render ([`resynth::render_spans`]).
+//! - [`resynth`]: the formant-preserving phase vocoder with partial render ([`resynth::render_spans`]) and
+//!   formant shift ([`resynth::render_spans_formant`], [`formant_curve`]).
+//! - [`harmony`]: the Vocal Studio's music theory: clash intervals, Fit to lead, diatonic harmony notes.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -22,6 +24,7 @@ use std::sync::atomic::AtomicBool;
 
 pub mod edit;
 pub mod filter;
+pub mod harmony;
 pub mod metrics;
 pub mod musical;
 pub mod note;

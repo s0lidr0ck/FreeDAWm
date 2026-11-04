@@ -21,6 +21,10 @@
 //! `{"method":"engine.execute","params":{"command":"mix.volume","params":{"tracks":["Master 1"],"db":-144}}}`
 //! (the demo's master track; strip meters read before it).
 //!
+//! `{"studio_demo": {"tracks": [{"name", "notes": [[midi (0: a rest), secs, cents?], …]}, …], "key", "chords",
+//! "view", "edit"}}` adds synthetic sung lines (never a real recording) on vocal tracks, analyses
+//! them and opens the Vocal Studio editing `edit` (see `studio_demo`); `{"studio_roll": [from_s,
+//! to_s]}` zooms its roll to that span.
 //! `{"vocal_demo": {"track": "Lead Vox", "view": [from_s, to_s], "select": [from_s, to_s],
 //! "centre": 40, "drift": 30, "playhead": s, "key": "E", "chords": [[from_s, to_s, "E"], …],
 //! "note_mode": "musical"}}`
@@ -42,6 +46,9 @@
 //! PC recording audio, its live level and clips on the booth's track; `"internet"`: Setup › Network
 //! with an invite made and a friend joined over a real local internet connection). `{"follower_demo": "recording"}`
 //! (or `waiting`, `sent`) shows this PC as a piano PC following a booth (`net_ui::follower_demo`).
+//! `{"models_demo": "progress"}` (or `"confirm"`) shows Setup › ML Models over a fake model folder
+//! and manifest with a download in progress (and the personal-use confirm; `ml_downloads::demo`),
+//! without the network.
 //! `{"performer_demo": "loud"}` (or `check`, `good`) shows a guitar PC's level window
 //! (`net_ui::performer_demo`).
 
@@ -279,6 +286,23 @@ fn main() {
                 }
                 continue;
             }
+            if let Some(span) = v.get("studio_roll").and_then(|x| x.as_array()) {
+                // The Vocal Studio's roll shows `[from_s, to_s]` (its own zoom, by hand).
+                let ctx = harness.ctx.clone();
+                let roll: Option<egui::Rect> = ctx.data(|m| m.get_temp(egui::Id::new("soundcraft-vocal-roll")));
+                let (a, b) = (span.first().and_then(|x| x.as_f64()).unwrap_or(0.0), span.get(1).and_then(|x| x.as_f64()).unwrap_or(6.0));
+                let app = harness.state_mut();
+                let r = f64::from(app.engine.session().sample_rate.hz());
+                if let Some(roll) = roll {
+                    app.vocal.hand_zoom = true;
+                    app.vocal.t0 = Some((a * r) as i64);
+                    app.vocal.spp = Some(((b - a).max(0.1) * r / f64::from(roll.width().max(10.0))).max(0.01));
+                }
+                for _ in 0..4 {
+                    step(&mut harness);
+                }
+                continue;
+            }
             if let Some(d) = v.get("vocal_drag") {
                 // Presses on the Vocal Editor's note `index` (of the bars drawn) and drags it up
                 // `rows` rows (down when negative), holding the button for a mid-drag shot.
@@ -375,6 +399,13 @@ fn main() {
                 }
                 continue;
             }
+            if let Some(p) = v.get("studio_demo") {
+                studio_demo(harness.state_mut(), p);
+                for _ in 0..6 {
+                    step(&mut harness);
+                }
+                continue;
+            }
             if let Some(p) = v.get("vocal_demo") {
                 vocal_demo(harness.state_mut(), p);
                 for _ in 0..6 {
@@ -385,6 +416,15 @@ fn main() {
             if let Some(path) = v.get("save_with_fakes").and_then(|x| x.as_str()) {
                 save_with_fakes(harness.state_mut(), path);
                 for _ in 0..4 {
+                    step(&mut harness);
+                }
+                continue;
+            }
+            if let Some(which) = v.get("models_demo").and_then(serde_json::Value::as_str) {
+                if let Err(e) = soundcraft_ui_egui::ml_downloads::demo(harness.state_mut(), which == "confirm") {
+                    eprintln!("models_demo: {e}");
+                }
+                for _ in 0..3 {
                     step(&mut harness);
                 }
                 continue;
@@ -645,6 +685,104 @@ fn vocal_demo(app: &mut SoundApp, p: &serde_json::Value) {
     let z = &mut app.engine.session_mut().edit.zoom;
     z.scroll = (v0 * r) as i64;
     app.vocal.selected = notes.into_iter().collect();
+    app.ui.show_midi_editor = false;
+}
+
+/// A synthetic sung line: `notes` are `[midi, seconds, cents?]`, each a vowel-like harmonic
+/// series with a little vibrato, 60 ms of silence after each; a `midi` of 0 is a rest as long.
+fn sung_line(rate: u32, notes: &[(f64, f64, f64)]) -> Vec<f32> {
+    let mut out = vec![0.0f32; rate as usize / 10];
+    for (k, (midi, secs, cents)) in notes.iter().enumerate() {
+        let f0 = 440.0 * 2f64.powf((midi * 100.0 + cents - 6900.0) / 1200.0);
+        let n = (secs * f64::from(rate)) as usize;
+        if *midi <= 0.0 {
+            out.extend(std::iter::repeat_n(0.0, n + rate as usize * 6 / 100));
+            continue;
+        }
+        let g = 10f64.powf((-21.0 + (k % 3) as f64) / 20.0);
+        let formants = [(700.0, 110.0, 1.0), (1150.0, 120.0, 0.55), (2600.0, 170.0, 0.3)];
+        let ks: Vec<(f64, f64)> = (1..=30)
+            .map(f64::from)
+            .filter(|h| h * f0 < f64::from(rate) / 2.0)
+            .map(|h| (h, formants.iter().map(|(c, b, a)| a / (1.0 + ((h * f0 - c) / b).powi(2))).sum::<f64>() + 0.02 / h))
+            .collect();
+        let norm = ks.iter().map(|(_, a)| a).sum::<f64>().max(1e-9);
+        let mut ph = 0.0f64;
+        for i in 0..n {
+            let t = i as f64 / f64::from(rate);
+            let env = (t / 0.03).min(1.0).min(((n - i) as f64 / f64::from(rate)) / 0.03);
+            let f = f0 * (1.0 + 0.003 * (std::f64::consts::TAU * 5.3 * t).sin());
+            ph += std::f64::consts::TAU * f / f64::from(rate);
+            let v: f64 = ks.iter().map(|(h, a)| a * (ph * h).sin()).sum();
+            out.push((v / norm * g * 2.2 * env) as f32);
+        }
+        out.extend(std::iter::repeat_n(0.0, rate as usize * 6 / 100));
+    }
+    out
+}
+
+/// `{"studio_demo": {"tracks": [{"name": "Lead Vox", "notes": [[midi, secs, cents?], …]}, …],
+/// "key": "E", "chords": [[from_s, to_s, "E"], …], "view": [from_s, to_s], "edit": "BV 1"}}`:
+/// mono tracks holding synthetic sung lines (never a real recording), analysed, the band key
+/// and chords set, and the Vocal Studio open editing `edit`.
+fn studio_demo(app: &mut SoundApp, p: &serde_json::Value) {
+    use serde_json::json;
+    let rate = app.engine.session().sample_rate.hz();
+    let r = f64::from(rate);
+    let mut clips = Vec::new();
+    let mut ids = Vec::new();
+    for tr in p.get("tracks").and_then(|x| x.as_array()).into_iter().flatten() {
+        let name = tr.get("name").and_then(|x| x.as_str()).unwrap_or("Vox").to_string();
+        let notes: Vec<(f64, f64, f64)> = tr
+            .get("notes")
+            .and_then(|x| x.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|n| Some((n.get(0)?.as_f64()?, n.get(1)?.as_f64()?, n.get(2).and_then(|c| c.as_f64()).unwrap_or(0.0))))
+            .collect();
+        let take = sung_line(rate, &notes);
+        let len = take.len();
+        let s = app.engine.session_mut();
+        let t = s.add_track(soundcraft_model::TrackKind::Audio, soundcraft_model::ChannelFormat::Mono, Some(&name));
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: rate, channels: vec![take] };
+        let src = soundcraft_engine::io::add_source(s, &name, buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let id = s.new_clip_id();
+        soundcraft_engine::edit::place_clip(s, t, soundcraft_model::Clip::audio(id, &name, src, 0, 0, len as i64));
+        if let Some(x) = s.track_mut(t) {
+            x.vocal = Some(true);
+        }
+        clips.push(id);
+        ids.push((name, t));
+    }
+    if let Some(k) = p.get("key").and_then(|x| x.as_str()).and_then(soundcraft_engine::vocal::parse_key) {
+        let s = app.engine.session_mut();
+        s.band.key = k.0;
+        s.band.scale = k.1;
+    }
+    for c in p.get("chords").and_then(|x| x.as_array()).into_iter().flatten() {
+        let a = c.get(0).and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let b = c.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let chord = c.get(2).and_then(|x| x.as_str()).unwrap_or("C");
+        if let Err(e) = app.run("band.chord.add", json!({"at": (a * r) as i64, "end": (b * r) as i64, "chord": chord})) {
+            eprintln!("studio_demo: {e}");
+        }
+    }
+    if let Err(e) = soundcraft_engine::vocal::run_until_idle(&mut app.engine, &clips) {
+        eprintln!("studio_demo: {e}");
+    }
+    let edit = p.get("edit").and_then(|x| x.as_str()).and_then(|n| ids.iter().find(|(x, _)| x == n)).or(ids.first()).map(|(_, t)| *t);
+    let view = p.get("view");
+    let v0 = view.and_then(|v| v.get(0)).and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let v1 = view.and_then(|v| v.get(1)).and_then(|x| x.as_f64()).unwrap_or(6.0);
+    if let Some(t) = edit {
+        let _ = app.run("edit.select", json!({"tracks": [t.0], "start": (v0 * r) as i64, "end": (v0 * r) as i64}));
+        let _ = app.run("ui.vocal_editor", json!({"track": t.0, "at": (v0 * r) as i64}));
+        let _ = app.run("ui.vocal_studio", json!({"value": true, "edit": t.0}));
+    }
+    let w = (app.edit_layout.timeline[2] - app.edit_layout.timeline[0]).max(100.0);
+    let z = &mut app.engine.session_mut().edit.zoom;
+    z.samples_per_px = ((v1 - v0).max(0.1) * r / f64::from(w)).max(0.01);
+    z.scroll = (v0 * r) as i64;
     app.ui.show_midi_editor = false;
 }
 

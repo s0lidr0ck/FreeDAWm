@@ -115,6 +115,17 @@ fn licence_color(status: &str, t: &Tokens) -> egui::Color32 {
     if status.contains("personal use") { t.rec } else { t.text_dim }
 }
 
+/// A licence status short enough for the Models window's column (the whole one on hover).
+fn short_licence(status: &str) -> String {
+    if status == ml::LICENCE_NOT_STATED {
+        "No licence stated · personal use".into()
+    } else if status.contains("non-commercial") {
+        format!("{} · non-commercial, personal use", status.split(" — ").next().unwrap_or(status))
+    } else {
+        status.to_string()
+    }
+}
+
 /// "Licence: Model — status; …" for the models a job runs.
 fn licence_line(models: &[ml::ModelEntry], ids: &[&str]) -> String {
     let parts: Vec<String> = ids
@@ -130,7 +141,10 @@ fn licence_line(models: &[ml::ModelEntry], ids: &[&str]) -> String {
 /// The model list, read from disk once (when a dialog or the Models window opens, or on Refresh),
 /// not every frame.
 fn models(app: &mut SoundApp) -> Vec<ml::ModelEntry> {
-    app.ml.models.get_or_insert_with(|| ml::list_models(&ml::models_dir())).clone()
+    if app.ml.models.is_none() {
+        app.ml.models = Some(ml::list_models(&crate::ml_downloads::models_dir(app)));
+    }
+    app.ml.models.clone().unwrap_or_default()
 }
 
 /// Opens the model folder in the file manager (made first, so there is something to open).
@@ -176,8 +190,11 @@ pub struct MlUi {
     /// Convert to MIDI's analysed source, decoded with the dialog's settings.
     pub audition: Option<crate::ml_audition::Audition>,
     pub show_models: bool,
-    /// The model list as last read (refreshed when the window opens or on Refresh).
-    models: Option<Vec<ml::ModelEntry>>,
+    /// The model list as last read (refreshed when the window opens, on Refresh, or after a
+    /// download).
+    pub(crate) models: Option<Vec<ml::ModelEntry>>,
+    /// Model downloads from the FreeDAWm models release.
+    pub downloads: crate::ml_downloads::Downloads,
 }
 
 /// The UI-layer commands: menu items that open a job's dialog, and the Models window.
@@ -347,6 +364,7 @@ pub fn start(app: &mut SoundApp, command: &str, p: &Value) -> Result<(), String>
 
 /// Picks up a finished job and applies it (one undo step). Called every frame.
 pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
+    crate::ml_downloads::step(app, ctx);
     let Some(run) = &app.ml.running else { return };
     let got = match run.rx.try_recv() {
         Ok(r) => r,
@@ -392,6 +410,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     progress_window(app, ctx);
     dialog(app, ctx);
     models_window(app, ctx);
+    crate::ml_downloads::confirm_window(app, ctx);
 }
 
 fn progress_window(app: &mut SoundApp, ctx: &egui::Context) {
@@ -599,7 +618,10 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(line).small().color(c));
         }
         if !missing.is_empty() {
-            ui.colored_label(Tokens::current().rec, format!("Not installed: {}. See Setup › ML Models.", missing.join(", ")));
+            ui.colored_label(Tokens::current().rec, format!("Not installed: {}.", missing.join(", ")));
+            if crate::ml_downloads::dialog_offer(app, ui, &missing) {
+                ui.label(egui::RichText::new("See Setup › ML Models.").color(Tokens::current().text_dim));
+            }
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -865,21 +887,82 @@ pub(crate) fn cap(s: &str) -> String {
 }
 
 fn models_window(app: &mut SoundApp, ctx: &egui::Context) {
+    use crate::ml_downloads::{self as dl, RowAction};
     if !app.ml.show_models {
         return;
     }
-    let dir = ml::models_dir();
+    let dir = dl::models_dir(app);
     if app.ml.models.is_none() {
         app.ml.models = Some(ml::list_models(&dir));
     }
     let mut open = true;
     let mut refresh = false;
     let mut folder_error: Option<String> = None;
+    let mut action: Option<RowAction> = None;
     let mut device = device(app);
     let t = Tokens::current();
     let models = app.ml.models.clone().unwrap_or_default();
-    egui::Window::new(egui::RichText::new("ML Models").font(bold(13.0))).open(&mut open).default_width(560.0).resizable(true).show(ctx, |ui| {
+    egui::Window::new(egui::RichText::new("ML Models").font(bold(13.0))).open(&mut open).default_width(860.0).resizable(true).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+        dl::header(app, ui, &models);
+        ui.separator();
+        egui::Grid::new("ml_models_grid").striped(true).num_columns(6).min_row_height(26.0).show(ui, |ui| {
+            for h in ["Model", "Job", "Status", "Licence", "Source", ""] {
+                ui.label(egui::RichText::new(h).font(bold(12.0)).color(t.text_dim));
+            }
+            ui.end_row();
+            for m in &models {
+                ui.label(m.model.name);
+                // The job's name here ("Separate Stems (best)"), what it makes on hover.
+                let job = m.model.job.split(':').next().unwrap_or(m.model.job);
+                ui.label(job).on_hover_text(m.model.job);
+                if !dl::status_cell(app, ui, m.model.id) {
+                    let (text, color) = match &m.status {
+                        ModelStatus::Installed(_) => (format!("installed, {:.0} MB", m.size as f64 / 1e6), t.meter_green),
+                        ModelStatus::Builtin => ("built in".to_string(), t.text),
+                        ModelStatus::Missing => ("not installed".to_string(), t.rec),
+                        ModelStatus::Broken(w) => (format!("broken: {w}"), t.rec),
+                    };
+                    ui.colored_label(color, text);
+                }
+                let status = m.licence();
+                ui.colored_label(licence_color(&status, &t), short_licence(&status)).on_hover_text(&status);
+                let release = dl::manifest(app).and_then(|r| r.get(m.model.id));
+                let lic = match &m.status {
+                    ModelStatus::Installed(c) => format!(
+                        "{}
+{}",
+                        c.license, c.source
+                    ),
+                    ModelStatus::Builtin => "MIT OR Apache-2.0
+https://github.com/Rikorose/DeepFilterNet"
+                        .to_string(),
+                    _ => release
+                        .map(|r| {
+                            format!(
+                                "{}
+{}",
+                                r.license_note, r.source
+                            )
+                            .trim()
+                            .to_string()
+                        })
+                        .unwrap_or_default(),
+                };
+                // One line here; the whole licence note and source on hover.
+                let src = lic.lines().last().unwrap_or("");
+                let short: String = src.split([' ', ';']).next().unwrap_or("").trim_start_matches("https://").chars().take(32).collect();
+                let r = ui.add(egui::Label::new(egui::RichText::new(short).small().color(t.text_dim)).truncate());
+                if !lic.is_empty() {
+                    r.on_hover_text(lic);
+                }
+                if let Some(a) = dl::action_cell(app, ui, m) {
+                    action = Some(a);
+                }
+                ui.end_row();
+            }
+        });
+        ui.separator();
         ui.horizontal(|ui| {
             ui.label("Run models on");
             egui::ComboBox::from_id_salt("ml_models_device").selected_text(device.label()).show_ui(ui, |ui| {
@@ -900,55 +983,37 @@ fn models_window(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.ctx().copy_text(dir.display().to_string());
             }
         });
-        ui.label(
-            egui::RichText::new(format!(
-                "Install or update the models with `cargo xtask ml-models` (exports them and copies them here). Set {} to use another folder.",
-                soundcraft_ml_env()
-            ))
-            .color(t.text_dim),
-        );
-        ui.separator();
-        egui::Grid::new("ml_models_grid").striped(true).num_columns(5).show(ui, |ui| {
-            for h in ["Model", "Job", "Status", "Licence", "Notes / source"] {
-                ui.label(egui::RichText::new(h).font(bold(12.0)));
-            }
-            ui.end_row();
-            for m in &models {
-                ui.label(m.model.name);
-                ui.label(m.model.job);
-                let (text, color) = match &m.status {
-                    ModelStatus::Installed(_) => (format!("installed, {:.0} MB", m.size as f64 / 1e6), t.text),
-                    ModelStatus::Builtin => ("built in".to_string(), t.text),
-                    ModelStatus::Missing => ("not installed".to_string(), t.rec),
-                    ModelStatus::Broken(w) => (format!("broken: {w}"), t.rec),
-                };
-                ui.colored_label(color, text);
-                let status = m.licence();
-                ui.colored_label(licence_color(&status, &t), &status);
-                let lic = match &m.status {
-                    ModelStatus::Installed(c) => format!("{}\n{}", c.license, c.source),
-                    ModelStatus::Builtin => "MIT OR Apache-2.0\nhttps://github.com/Rikorose/DeepFilterNet".to_string(),
-                    _ => String::new(),
-                };
-                // One line here; the whole licence note and source on hover.
-                let first: String = lic.split(['.', '\n']).next().unwrap_or("").chars().take(48).collect();
-                let short = if first.is_empty() { String::new() } else { format!("{first}…") };
-                let r = ui.add(egui::Label::new(egui::RichText::new(short).small().color(t.text_dim)).truncate());
-                if !lic.is_empty() {
-                    r.on_hover_text(lic);
-                }
-                ui.end_row();
-            }
-        });
+        let dim = |text: String| egui::RichText::new(text).small().color(t.text_dim);
+        ui.label(dim(
+            "Personal-use models ask to confirm before downloading. A job that needs a missing model shows a Download button in its own dialog."
+                .into(),
+        ));
+        ui.label(dim(format!(
+            "By hand: `cargo xtask ml-models` exports the models and copies them into this folder; set {} to use another folder.",
+            soundcraft_ml_env()
+        )));
         if ui.button("Refresh").clicked() {
             refresh = true;
         }
     });
+    match action {
+        Some(RowAction::Download(id)) => dl::request(app, &[id], false),
+        Some(RowAction::Cancel) => dl::cancel_all(app),
+        Some(RowAction::Remove(id)) => {
+            if let Err(e) = dl::remove(app, &id) {
+                app.ui.status = e;
+            }
+        }
+        None => {}
+    }
     if device.id() != app.ui.ml_device {
         app.ui.ml_device = device.id().to_string();
     }
     if refresh || !open {
         app.ml.models = None;
+    }
+    if refresh {
+        dl::load_manifest(app, true);
     }
     if let Some(e) = folder_error {
         app.ui.status = e;
@@ -966,7 +1031,14 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, Stri
     if id == "window.ml_models" {
         app.ml.show_models = p.get("value").and_then(Value::as_bool).unwrap_or(true);
         app.ml.models = None;
+        if app.ml.show_models {
+            // Opening the window looks the release up (a few KB); nothing downloads without a click.
+            crate::ml_downloads::load_manifest(app, false);
+        }
         return Some(Ok(json!({"value": app.ml.show_models})));
+    }
+    if let Some(r) = crate::ml_downloads::command(app, id, p) {
+        return Some(r);
     }
     if !id.starts_with("ui.ml.") {
         return None;
@@ -987,7 +1059,9 @@ pub const BLOCKED: &str = "An ML job is running: edits wait until it finishes or
 
 /// Whether `id` would change the session (or start another job) while a job runs.
 pub fn blocks(id: &str) -> bool {
-    if matches!(id, "edit.undo" | "edit.redo" | "transport.record") || (id.starts_with("ml.") && id != "ml.models") {
+    if matches!(id, "edit.undo" | "edit.redo" | "transport.record")
+        || (id.starts_with("ml.") && id != "ml.models" && !crate::ml_downloads::is_download_command(id))
+    {
         return true;
     }
     soundcraft_engine::find_command(id).is_some_and(|c| c.undoable && !c.view)

@@ -3,6 +3,8 @@
 //!
 //! - [`models`]: the model folder (`%LOCALAPPDATA%\FreeDAWm\models`, or `FREEDAWM_MODELS_DIR`),
 //!   one `<id>/card.json` per model, sha256 checked on first load, installed/missing listing.
+//! - [`catalog`]: the models FreeDAWm runs and the downloads manifest; [`download`]: installing
+//!   them from the FreeDAWm models release (after a click, on a worker).
 //! - [`runtime`]: ONNX Runtime sessions on DirectML (the GPU, no CUDA install) or the CPU, with a
 //!   graceful CPU fallback when DirectML can't start or fails mid-run. Never used on the audio
 //!   thread: every job runs on a worker.
@@ -29,10 +31,12 @@ pub(crate) fn env_var_os(suffix: &str) -> Option<std::ffi::OsString> {
 }
 pub mod basicpitch;
 pub mod bs_roformer;
+pub mod catalog;
 pub mod chords;
 pub mod chunk;
 pub mod clean;
 pub mod denoise;
+pub mod download;
 pub mod drumsep;
 pub mod game;
 pub mod htdemucs;

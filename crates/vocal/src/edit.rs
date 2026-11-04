@@ -88,6 +88,16 @@ pub struct NoteEdit {
     /// bar's `level` field. 0 in sessions saved before it existed.
     #[serde(default)]
     pub gain_db: f32,
+    /// A formant shift (semitones, ±12) over the note, independent of its pitch: positive
+    /// brightens (a smaller singer), negative darkens. Not a pitch or level change, so
+    /// [`NoteEdit::is_identity`] ignores it; [`formant_curve`] builds it. Not written when 0, so
+    /// tunings saved before it load and hash as they did.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub formant_st: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 impl NoteEdit {
@@ -115,10 +125,52 @@ impl NoteEdit {
             lower: c(self.lower, 0.0, 1.0),
             offset_cents: c(self.offset_cents, -MAX_OFFSET_CENTS, MAX_OFFSET_CENTS),
             gain_db: c(self.gain_db, -MAX_GAIN_DB, MAX_GAIN_DB),
+            formant_st: c(self.formant_st, -MAX_FORMANT_ST, MAX_FORMANT_ST),
             typical_db: self.typical_db.filter(|t| t.is_finite()),
             ..self
         }
     }
+}
+
+/// Largest formant shift either way (semitones), per note and per clip.
+pub const MAX_FORMANT_ST: f32 = 12.0;
+
+/// The per-frame formant shift (semitones) of a clip tuned with a clip-wide `clip_st` and the
+/// notes' own [`NoteEdit::formant_st`] on top: on voiced frames only (exactly 0.0 on unvoiced
+/// frames and inside every unvoiced region, so breaths still separate render spans), a note's own
+/// shift over its frames (scoop included) with 3-frame raised-cosine ramps inside its edges, the
+/// sum clamped to ±12. All 0.0 (`is_empty` false, every value 0) when nothing shifts formants.
+pub fn formant_curve(a: &VocalAnalysis, edits: &BTreeMap<NoteId, NoteEdit>, clip_st: f32) -> Vec<f32> {
+    let n = a.track.frames.len();
+    let clip = if clip_st.is_finite() { clip_st.clamp(-MAX_FORMANT_ST, MAX_FORMANT_ST) } else { 0.0 };
+    let mut out = vec![clip; n];
+    let ramp = |d: usize| {
+        if d >= GAIN_RAMP_FRAMES { 1.0 } else { 0.5 - 0.5 * (std::f32::consts::PI * (d + 1) as f32 / (GAIN_RAMP_FRAMES + 1) as f32).cos() }
+    };
+    for note in &a.notes {
+        let Some(e) = edits.get(&note.id).cloned().map(NoteEdit::clamped) else { continue };
+        if e.formant_st == 0.0 {
+            continue;
+        }
+        let s0 = note.scoop.map_or(note.start, |(s, _)| s.min(note.start)) as usize;
+        let len = (note.end as usize).saturating_sub(s0);
+        for k in 0..len {
+            if let Some(v) = out.get_mut(s0 + k) {
+                *v += e.formant_st * ramp(k).min(ramp(len - 1 - k));
+            }
+        }
+    }
+    for (v, f) in out.iter_mut().zip(&a.track.frames) {
+        *v = if f.cents.is_some_and(f32::is_finite) && v.is_finite() { v.clamp(-MAX_FORMANT_ST, MAX_FORMANT_ST) } else { 0.0 };
+    }
+    for r in &a.unvoiced {
+        for i in r.start..r.end {
+            if let Some(v) = out.get_mut(i as usize) {
+                *v = 0.0;
+            }
+        }
+    }
+    out
 }
 
 /// Largest manual pitch move either way (cents): two octaves.

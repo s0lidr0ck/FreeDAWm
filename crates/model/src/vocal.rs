@@ -34,6 +34,41 @@ pub fn looks_vocal(name: &str) -> bool {
     !(lone_lead && count(&INSTRUMENT_WORDS) > 0)
 }
 
+/// The Vocal Studio's Tune all settings (spec 2026-11-04-vocal-studio-edit-all-design.md),
+/// saved with the session (omitted from the file while they are the defaults).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StudioTuning {
+    /// Notes whose held pitch is already within this many cents of their target are left alone
+    /// by Tune all; unison notes further apart than this are marked "≠".
+    pub tolerance_cents: f32,
+    /// Tune all moves corrected notes only to the edge of the tolerance (`false`: to the centre).
+    pub fix_to_edge: bool,
+}
+
+impl StudioTuning {
+    /// The default tolerance (cents).
+    pub const DEFAULT_TOLERANCE: f32 = 10.0;
+    /// The tolerance's range (cents).
+    pub const TOLERANCE_RANGE: (f32, f32) = (5.0, 25.0);
+
+    pub fn is_default(&self) -> bool {
+        *self == StudioTuning::default()
+    }
+
+    /// The tolerance, finite and within [`StudioTuning::TOLERANCE_RANGE`].
+    pub fn tolerance(&self) -> f32 {
+        let (lo, hi) = Self::TOLERANCE_RANGE;
+        if self.tolerance_cents.is_finite() { self.tolerance_cents.clamp(lo, hi) } else { Self::DEFAULT_TOLERANCE }
+    }
+}
+
+impl Default for StudioTuning {
+    fn default() -> Self {
+        StudioTuning { tolerance_cents: Self::DEFAULT_TOLERANCE, fix_to_edge: false }
+    }
+}
+
 /// An audio clip's vocal tuning (saved with the clip): the note edits, the segmentation changes
 /// replayed after every analysis, the Tuned/Original switch and the analysis the edits refer to.
 /// Equality ignores [`VocalTune::fingerprint`] (derived).
@@ -64,6 +99,10 @@ pub struct VocalTune {
     /// written.
     #[serde(default, skip_serializing_if = "is_classic")]
     pub note_mode: NoteMode,
+    /// The clip's formant shift (semitones, ±12; the notes' own `formant_st` adds to it):
+    /// darker below 0, brighter above, the pitch unchanged. Not written when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub formant_st: f32,
     /// The engine's render-inputs hash of this tuning (`soundcraft_engine::vocal::render_inputs`;
     /// 0 when it has none), kept current after every command, undo, redo, install and load so the
     /// audio thread compares it with [`TunedSpans::inputs`] instead of hashing. Never saved.
@@ -80,7 +119,12 @@ impl PartialEq for VocalTune {
             && self.note_spans == o.note_spans
             && self.source == o.source
             && self.note_mode == o.note_mode
+            && self.formant_st.to_bits() == o.formant_st.to_bits()
     }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_classic(m: &NoteMode) -> bool {
@@ -90,7 +134,7 @@ fn is_classic(m: &NoteMode) -> bool {
 impl VocalTune {
     /// How many notes have an edit that changes something.
     pub fn edited_count(&self) -> usize {
-        self.edits.values().filter(|e| !e.is_identity()).count()
+        self.edits.values().filter(|e| !e.is_identity() || e.formant_st != 0.0).count()
     }
 
     /// Every edit clamped to its ranges (non-finite values become 0); empty note spans dropped.
@@ -99,6 +143,8 @@ impl VocalTune {
             *e = std::mem::take(e).clamped();
         }
         self.note_spans.retain(|_, (start, end)| end > start);
+        let max = soundcraft_vocal::MAX_FORMANT_ST;
+        self.formant_st = if self.formant_st.is_finite() { self.formant_st.clamp(-max, max) } else { 0.0 };
     }
 }
 
@@ -274,6 +320,8 @@ pub struct VocalCache {
     /// The curves each clip's cached render was made from (a re-render only redoes the frames
     /// whose curves changed since).
     pub rendered_curves: Arc<BTreeMap<ClipId, Arc<EditCurves>>>,
+    /// The formant curve (semitones per frame) each clip's cached render was made with.
+    pub rendered_formant: Arc<BTreeMap<ClipId, Arc<Vec<f32>>>>,
     /// The heard audio (every channel) by [`AnalysisKey::hash`], kept so a slider drag does not
     /// read the source window again for every render.
     pub heard: Arc<BTreeMap<u64, Arc<Vec<Vec<f32>>>>>,
@@ -289,6 +337,7 @@ impl VocalCache {
         Arc::ptr_eq(&self.analyses, &other.analyses)
             && Arc::ptr_eq(&self.renders, &other.renders)
             && Arc::ptr_eq(&self.rendered_curves, &other.rendered_curves)
+            && Arc::ptr_eq(&self.rendered_formant, &other.rendered_formant)
             && Arc::ptr_eq(&self.heard, &other.heard)
             && Arc::ptr_eq(&self.failed, &other.failed)
             && Arc::ptr_eq(&self.failed_why, &other.failed_why)

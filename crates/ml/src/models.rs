@@ -1,6 +1,7 @@
 //! The model folder and model cards.
 //!
-//! Models are not bundled: `cargo xtask ml-models` exports them and installs each into
+//! Models are not bundled: Setup › ML Models downloads them from the FreeDAWm models release
+//! ([`crate::download`]), or `cargo xtask ml-models` exports them and installs each into
 //! `<models dir>/<id>/` with a `card.json` (id, name, sample rate, stems, source, licence, the
 //! ONNX file name and its sha256). The folder is `%LOCALAPPDATA%\FreeDAWm\models` on Windows
 //! (`~/Library/Application Support/FreeDAWm/models` on macOS, `$XDG_DATA_HOME/FreeDAWm/models`
@@ -106,150 +107,7 @@ impl ModelCard {
     }
 }
 
-/// A model the DAW knows how to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KnownModel {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub job: &'static str,
-    /// Built into the app (DeepFilterNet ships inside `deep_filter`): never "missing".
-    pub builtin: bool,
-    /// The licence status shown before the model is installed (once installed, the card's
-    /// `license` field decides: [`licence_status`]). [`LICENCE_NOT_STATED`] when the author states
-    /// none.
-    pub license: &'static str,
-}
-
-/// The licence status shown for a model whose author states no licence.
-pub const LICENCE_NOT_STATED: &str = "Licence not stated by the author — personal use";
-
-/// A short licence status from a model card's `license` text (a free-text note such as
-/// "Code: MIT. Weights: no licence stated by the authors…"): [`LICENCE_NOT_STATED`] when the
-/// weights' licence is unknown or not stated, else the first licence the note names ("MIT",
-/// "Apache-2.0", a non-commercial Creative Commons licence), else the note's first sentence.
-/// `None` for an empty note.
-pub fn licence_status(text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let low = text.to_lowercase();
-    if ["licence unknown", "license unknown", "no licence stated", "no license stated", "licence not stated", "license not stated"]
-        .iter()
-        .any(|k| low.contains(k))
-    {
-        return Some(LICENCE_NOT_STATED.to_string());
-    }
-    const KNOWN: [(&str, &str); 6] = [
-        ("cc by-nc-sa 4.0", "CC BY-NC-SA 4.0 — non-commercial, personal use"),
-        ("cc by-nc 4.0", "CC BY-NC 4.0 — non-commercial, personal use"),
-        ("mit or apache-2.0", "MIT OR Apache-2.0"),
-        ("apache-2.0", "Apache-2.0"),
-        ("apache 2.0", "Apache-2.0"),
-        ("mit", "MIT"),
-    ];
-    let first = KNOWN.iter().filter_map(|(k, label)| find_word(&low, k).map(|at| (at, *label))).min_by_key(|(at, _)| *at);
-    if let Some((_, label)) = first {
-        return Some(label.to_string());
-    }
-    Some(text.split(['.', ';', '\n']).next().unwrap_or(text).chars().take(60).collect())
-}
-
-/// Where `word` first occurs in `text` on its own (not inside a longer word).
-fn find_word(text: &str, word: &str) -> Option<usize> {
-    let alnum = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
-    text.match_indices(word)
-        .map(|(at, _)| at)
-        .find(|&at| !alnum(text.get(..at).and_then(|b| b.chars().next_back())) && !alnum(text.get(at + word.len()..).and_then(|a| a.chars().next())))
-}
-
-/// The licence status known for model `id` before it is installed.
-pub fn known_licence(id: &str) -> &'static str {
-    KNOWN_MODELS.iter().find(|m| m.id == id).map_or(LICENCE_NOT_STATED, |m| m.license)
-}
-
-/// The models the DAW runs, in the order the Models page lists them.
-pub const KNOWN_MODELS: &[KnownModel] = &[
-    KnownModel { id: "htdemucs", name: "HTDemucs v4 (4 stems)", job: "Separate Stems: vocals, drums, bass, other", builtin: false, license: "MIT" },
-    KnownModel {
-        id: "bs_roformer_sw",
-        name: "BS-RoFormer SW (6 stems)",
-        job: "Separate Stems (sw6, best): bass, drums, other, vocals, guitar, piano",
-        builtin: false,
-        license: LICENCE_NOT_STATED,
-    },
-    KnownModel {
-        id: "vocals_melroformer",
-        name: "Mel-Band RoFormer vocals (Kimberley Jensen)",
-        job: "Separate Stems (best): vocals; Make Karaoke's vocals",
-        builtin: false,
-        license: "MIT",
-    },
-    KnownModel {
-        id: "karaoke_melroformer",
-        name: "Mel-Band RoFormer Karaoke",
-        job: "Make Karaoke: lead vs backing vocals",
-        builtin: false,
-        license: LICENCE_NOT_STATED,
-    },
-    KnownModel {
-        id: "drumsep_mdx23c",
-        name: "MDX23C DrumSep (6 stems)",
-        job: "Split Drums: kick, snare, toms, hi-hat, ride, crash",
-        builtin: false,
-        license: LICENCE_NOT_STATED,
-    },
-    KnownModel {
-        id: "deepfilternet3",
-        name: "DeepFilterNet 3",
-        job: "Clean Vocal: de-noise (built in)",
-        builtin: true,
-        license: "MIT OR Apache-2.0",
-    },
-    KnownModel { id: "srs_small", name: "Smule Renaissance Small", job: "Clean Vocal: de-reverb and cleanup", builtin: false, license: "MIT" },
-    KnownModel {
-        id: "basicpitch",
-        name: "Basic Pitch (Spotify)",
-        job: "Convert to MIDI: General (any instrument, pitch bends)",
-        builtin: false,
-        license: "Apache-2.0",
-    },
-    KnownModel {
-        id: "piano_kong",
-        name: "Piano Transcription (Kong et al.)",
-        job: "Convert to MIDI: Piano (notes and sustain pedal)",
-        builtin: false,
-        license: "Apache-2.0",
-    },
-    KnownModel {
-        id: "adtof_drums",
-        name: "ADTOF Drums",
-        job: "Convert to MIDI: Drums (kick, snare, toms, hi-hat, cymbals)",
-        builtin: false,
-        license: "CC BY-NC-SA 4.0 — non-commercial, personal use",
-    },
-    KnownModel {
-        id: "game_vocal",
-        name: "GAME small (openvpi)",
-        job: "Convert to MIDI: Vocal (singing voice, one note at a time)",
-        builtin: false,
-        license: "MIT",
-    },
-    KnownModel {
-        id: "btc_chords",
-        name: "BTC chord recognition (large vocabulary)",
-        job: "Detect Chords: chords for the Band's chord lane",
-        builtin: false,
-        license: "MIT",
-    },
-    KnownModel {
-        id: "whisper_lyrics",
-        name: "Whisper large-v3 (whisper.cpp)",
-        job: "Transcribe Lyrics: words with times",
-        builtin: false,
-        license: "MIT",
-    },
-];
+pub use crate::catalog::{KNOWN_MODELS, KnownModel, LICENCE_NOT_STATED, known_licence, licence_status};
 
 /// How a model stands in the model folder.
 #[derive(Debug, Clone, PartialEq)]
@@ -314,7 +172,7 @@ pub fn list(dir: &Path) -> Vec<ModelEntry> {
 
 /// What to tell the person about a missing model.
 pub fn how_to_install(id: &str, dir: &Path) -> String {
-    format!("the `{id}` model is not installed in {}: run `cargo xtask ml-models` (see Setup > ML Models)", dir.display())
+    format!("the `{id}` model is not installed in {}: download it in Setup > ML Models (or run `cargo xtask ml-models`)", dir.display())
 }
 
 /// `<dir>/<id>/card.json`.

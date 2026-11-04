@@ -42,6 +42,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
     ("window.midi_editor", "MIDI Editor", "Window > MIDI Editor", None),
     ("window.vocal_editor", "Vocal Editor", "Window > Vocal Editor", None),
+    ("window.vocal_studio", "Vocal Studio", "", None),
     ("window.universe", "Universe", "View > Other Displays > Universe", Some("Alt+7")),
     ("window.video", "Video", "Window > Video", Some("Cmd+9")),
     ("window.video_universe", "Video Universe", "Window > Video Universe", None),
@@ -134,6 +135,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.clean", "Clean Vocal…", "AI > Clean Vocal…", None),
     ("ui.vocal_editor", "Tune Vocal…", "AI > Tune Vocal…", None),
     ("ui.vocal_panel", "Tuning Panel", "", None),
+    ("ui.vocal_studio", "Vocal Studio View", "", None),
+    ("ui.vocal_harmony", "Make Harmony…", "", None),
     ("ui.vocal_preset_save", "Save Tuning Macro…", "", None),
     ("ui.ml.midi", "Convert to MIDI…", "AI > Convert to MIDI…", None),
     ("ui.ml.chords", "Detect Chords…", "AI > Detect Chords…", None),
@@ -842,6 +845,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.clip_effects") => app.ui.show_clip_effects,
         Some("window.midi_editor") => app.ui.show_midi_editor,
         Some("window.vocal_editor") => app.ui.show_vocal_editor,
+        Some("window.vocal_studio") => app.ui.show_vocal_editor && app.vocal.studio.on,
         Some("window.score") => app.ui.show_score,
         Some("window.event_list") => app.ui.show_event_list,
         Some("window.midi_keyboard") => app.ui.show_midi_keyboard,
@@ -1001,7 +1005,7 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
     // The ML jobs run for minutes: from a menu or the palette they open their dialog and run on a
     // worker, never as the blocking engine command on the UI thread.
     #[cfg(not(target_arch = "wasm32"))]
-    if id.starts_with("ml.") && id != "ml.models" {
+    if id.starts_with("ml.") && id != "ml.models" && !crate::ml_downloads::is_download_command(id) {
         if let Err(e) = crate::ml_ui::open(app, id, None) {
             app.ui.status = e;
         }
@@ -1070,7 +1074,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1087,6 +1091,22 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     // Tune Vocal… opens the Vocal Editor, on a clip or a track when given.
     if id == "ui.vocal_editor" {
         return Some(crate::vocal_editor::open_command(app, p));
+    }
+    // The Vocal Studio: the editor over every vocal track (Window › Vocal Studio toggles it).
+    if id == "ui.vocal_studio" {
+        return Some(crate::vocal_editor::studio::command(app, p));
+    }
+    if id == "ui.vocal_harmony" {
+        return Some(crate::vocal_editor::harmony::command(app, p));
+    }
+    if id == "window.vocal_studio" {
+        let cur = app.ui.show_vocal_editor && app.vocal.studio.on;
+        let on = p.get("value").and_then(Value::as_bool).unwrap_or(!cur);
+        if on {
+            return Some(crate::vocal_editor::studio::command(app, &json!({"value": true})).map(|_| json!({"value": true})));
+        }
+        app.vocal.studio.on = false;
+        return Some(Ok(json!({"value": false})));
     }
     // The Vocal Editor's Tuning panel, and saving its values as a user macro preset.
     if id == "ui.vocal_panel" {

@@ -1,0 +1,18 @@
+# Setup › ML Models with Download buttons, Mel-Band RoFormer vocals downloading and (second pair)
+# the personal-use confirm, as in docs/superpowers/specs/mockups/vocal_studio_edit_all_mock.png
+# (bottom). A fake model folder and manifest: no network. Render with `--size 1300x820`; the shots
+# go to the paths given (MODELS_DIR: change to taste).
+{"models_demo": "progress"}
+{"steps": 4}
+{"shot": "MODELS_DIR/models-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"steps": 4}
+{"shot": "MODELS_DIR/models-light.png"}
+{"models_demo": "confirm"}
+{"steps": 4}
+{"shot": "MODELS_DIR/models-confirm-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}
+{"steps": 4}
+{"shot": "MODELS_DIR/models-confirm-dark.png"}

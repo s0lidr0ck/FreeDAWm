@@ -279,6 +279,22 @@ impl Cache {
         out
     }
 
+    /// `refs` and their twins, each note looked up on its own track (the Vocal Studio's Edit
+    /// All selects notes of several tracks).
+    fn expand_any(&mut self, s: &Session, refs: &BTreeSet<NoteRef>) -> BTreeSet<NoteRef> {
+        let mut by: BTreeMap<TrackId, BTreeSet<NoteRef>> = BTreeMap::new();
+        for r in refs {
+            if let Some((t, _)) = s.find_clip(r.clip) {
+                by.entry(t).or_default().insert(*r);
+            }
+        }
+        let mut out = BTreeSet::new();
+        for (t, rs) in by {
+            out.extend(self.expand(s, t, &rs));
+        }
+        out
+    }
+
     /// Every note of the track inside its clips' windows, unstretched clips only.
     fn all_notes(&mut self, s: &Session, track: TrackId) -> Vec<NoteRef> {
         let tw = self.twins(s, track);
@@ -304,17 +320,27 @@ pub fn derived(app: &mut SoundApp, clip: &Clip) -> Derived {
 
 /// `refs` and every note that hears the same analysis and has the same id (a note cut by a clip
 /// edge shows in both clips: selecting one selects both); notes of stretched clips are dropped.
-/// Read from the shared cache: no analysis is copied.
-pub fn with_twins(app: &mut SoundApp, track: TrackId, refs: &BTreeSet<NoteRef>) -> BTreeSet<NoteRef> {
+/// Each note is looked up on its own track. Read from the shared cache: no analysis is copied.
+pub fn with_twins(app: &mut SoundApp, refs: &BTreeSet<NoteRef>) -> BTreeSet<NoteRef> {
     let s = checked(app);
-    app.vocal.cache.expand(&s, track, refs)
+    app.vocal.cache.expand_any(&s, refs)
 }
 
 /// The selection with its twins (see [`with_twins`]), remembered until it changes.
-pub fn selection_with_twins(app: &mut SoundApp, track: TrackId) -> BTreeSet<NoteRef> {
+pub fn selection_with_twins(app: &mut SoundApp) -> BTreeSet<NoteRef> {
     let s = checked(app);
     let st = &mut app.vocal;
-    st.cache.expand(&s, track, &st.selected)
+    st.cache.expand_any(&s, &st.selected)
+}
+
+/// The analysed audio clips of the tracks holding `refs` (every clip of each, as
+/// [`clip_views`] with no range).
+pub fn clip_views_of(app: &mut SoundApp, refs: &BTreeSet<NoteRef>) -> Vec<ClipView> {
+    let s = app.engine.session_arc();
+    let mut tracks: Vec<TrackId> = refs.iter().filter_map(|r| s.find_clip(r.clip).map(|(t, _)| t)).collect();
+    tracks.sort();
+    tracks.dedup();
+    tracks.into_iter().flat_map(|t| clip_views(app, t, None)).collect()
 }
 
 /// Every tunable note of the track (unstretched clips, inside their windows), from the cache.
@@ -798,6 +824,12 @@ pub struct Drawn {
     pub unvoiced: Vec<Rect>,
     pub scoops: Vec<(NoteRef, Rect)>,
     pub clips: Vec<ClipView>,
+    /// The Vocal Studio's reference notes (track, note, bar), under the editing track's.
+    pub refs: Vec<(TrackId, NoteRef, Rect)>,
+    /// The studio's clash markers (note, marker, why).
+    pub clashes: Vec<(NoteRef, Rect, String)>,
+    /// The studio's unison stacks as drawn (striped where their notes overlap).
+    pub stacks: Vec<super::studio::StackMark>,
 }
 
 /// Draws the strips, ruler, keys and roll for `track` in `areas`.
@@ -805,8 +837,19 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     let t = Tokens::current();
     let s = app.engine.session_arc();
     let painter = ui.painter().clone();
-    let clips = clip_views(app, track, Some((v.t0, v.t1)));
-    let typical_db = typical(app, track);
+    let studio = app.vocal.studio.on;
+    // The tracks whose notes are editable: the editing one, or in the studio's Edit All every
+    // shown track.
+    let edit_tracks = if studio { super::studio::edit_tracks(app, track) } else { vec![track] };
+    let mut clips = Vec::new();
+    let mut owner: BTreeMap<ClipId, (TrackId, f32)> = BTreeMap::new();
+    for t in &edit_tracks {
+        let typical_db = typical(app, *t);
+        for cv in clip_views(app, *t, Some((v.t0, v.t1))) {
+            owner.insert(cv.clip.id, (*t, typical_db));
+            clips.push(cv);
+        }
+    }
     let key_scale = soundcraft_engine::vocal::scale_at(&s, &Clip::audio(ClipId(0), "", soundcraft_model::SourceId(0), 0, v.t0, 1));
     // Without a key no rows are shaded as the scale and no note is off key.
     let has_key = has_key(&s);
@@ -820,7 +863,9 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     let roll_p = painter.with_clip_rect(a.roll);
     time_grid(&roll_p, &v, rate, &t);
     // Clips not analysed yet show their audio until their notes land.
-    super::draw_waves(app, ui, track, a.roll, (v.t0, v.t1), true);
+    for t in &edit_tracks {
+        super::draw_waves(app, ui, *t, a.roll, (v.t0, v.t1), true);
+    }
     let is_dark = dark(&t);
     // Unvoiced blocks at the roll's bottom third.
     let mut unvoiced = Vec::new();
@@ -841,6 +886,17 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
                 store(ui.ctx(), "unvoiced-label", "breath".to_string());
             }
             unvoiced.push(r);
+        }
+    }
+    // The studio's reference tracks, faint, under the editing track's notes.
+    let refs = if studio { super::studio::draw_references(app, ui, &roll_p, &v, &edit_tracks) } else { Vec::new() };
+    if studio {
+        super::harmony::draw_preview(app, ui, &roll_p, &v);
+    }
+    let mut colours: BTreeMap<TrackId, Color32> = BTreeMap::new();
+    if studio {
+        for t in &edit_tracks {
+            colours.insert(*t, super::studio::colour(app, *t));
         }
     }
     // Notes.
@@ -868,6 +924,8 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
             store(ui.ctx(), "stretched", "Tuning can't follow a stretched clip".to_string());
             continue;
         }
+        let (cv_track, typical_db) = owner.get(&cv.clip.id).copied().unwrap_or((track, -21.0));
+        let edit_colour = colours.get(&cv_track).copied();
         let list = note_shapes(&v, &cv.clip, &cv.a, cv.curves.as_deref(), typical_db, |n| moved_target_of(cv, n), |n| tuned_centre_of(cv, n));
         let fm = Frames::of(&cv.clip, cv.a.track.hop_samples);
         for mut sh in list {
@@ -900,7 +958,7 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
                 dashed_round(&roll_p, g, off_colour(sung).gamma_multiply(0.6));
             }
             let rad = (sh.rect.height() / 2.0).min(sh.rect.width() / 2.0);
-            let fill = off_colour(sh.tuned_offset).gamma_multiply(if sel { 0.95 } else { 0.85 });
+            let fill = edit_colour.unwrap_or_else(|| off_colour(sh.tuned_offset)).gamma_multiply(if sel { 0.95 } else { 0.85 });
             let stroke = if sel { Stroke::new(2.0, sel_c) } else { Stroke::new(1.0, Color32::from_black_alpha(90)) };
             roll_p.rect(sh.rect, CornerRadius::same(rad.clamp(0.0, 255.0) as u8), fill, stroke, StrokeKind::Outside);
             if off {
@@ -943,9 +1001,19 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     // as a faint dashed ghost and the tuned curve in white. `layers` records the order for tests.
     hook(ui.ctx(), "cent-labels", labels.clone());
     layers.push("notes");
+    let stacks = if studio { super::studio::draw_stacks(app, ui, &roll_p, &shapes, &refs, &selected) } else { Vec::new() };
+    let clash_marks = if studio { super::studio::draw_clashes(app, ui, &roll_p, &shapes, &stacks) } else { Vec::new() };
     let grey = if is_dark { Color32::from_rgba_unmultiplied(242, 242, 242, 140) } else { Color32::from_rgba_unmultiplied(60, 60, 60, 150) };
     let tuned_c = if is_dark { Color32::WHITE } else { Color32::from_rgb(20, 20, 20) };
+    let all_mode = studio && app.vocal.studio.edit_all;
     for cv in clips.iter().filter(|c| !c.stretched) {
+        // Edit All: each track's pitch line in its own colour, so stacked notes show where each
+        // really sits.
+        let own = all_mode.then(|| owner.get(&cv.clip.id).and_then(|(t, _)| colours.get(t)).copied()).flatten();
+        let (grey, tuned_c) = match own {
+            Some(c) => (super::studio::line_colour(c, is_dark).gamma_multiply(0.75), super::studio::line_colour(c, is_dark)),
+            None => (grey, tuned_c),
+        };
         let shift = cv.curves.as_ref().map(|c| c.shift_cents.as_slice());
         let moved = |f: u32| shift.and_then(|s| s.get(f as usize)).is_some_and(|x| x.abs() > 0.05);
         for line in curve_points_where(&v, &cv.clip, &cv.a.track, None, |f| !moved(f)) {
@@ -963,7 +1031,9 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     layers.push("curves");
     hook(ui.ctx(), "off-key", off_key_refs);
     store(ui.ctx(), "layers", layers);
-    legend(&roll_p, a.roll, &t);
+    if !studio {
+        legend(&roll_p, a.roll, &t);
+    }
     // Playhead.
     let ph = app.position();
     if ph >= v.t0 && ph <= v.t1 {
@@ -981,15 +1051,15 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     store(ui.ctx(), "view", v);
     store(ui.ctx(), "roll", a.roll);
     store(ui.ctx(), "ruler", a.ruler);
-    Drawn { view: v, ruler: a.ruler, shapes, unvoiced, scoops, clips }
+    Drawn { view: v, ruler: a.ruler, shapes, unvoiced, scoops, clips, refs, clashes: clash_marks, stacks }
 }
 
 /// A selection change by a click on `r` with the held modifiers (the roll and the Level lane).
-pub(crate) fn click_select(app: &mut SoundApp, track: TrackId, r: Option<NoteRef>, toggle: bool) {
+pub(crate) fn click_select(app: &mut SoundApp, r: Option<NoteRef>, toggle: bool) {
     app.vocal.whole_track = false;
     match r {
         Some(r) => {
-            let both = with_twins(app, track, &BTreeSet::from([r]));
+            let both = with_twins(app, &BTreeSet::from([r]));
             let st = &mut app.vocal;
             if toggle {
                 if st.selected.contains(&r) {
@@ -1039,7 +1109,10 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
         // A drag that began on a note moves pitch; anywhere else it is a rubber band.
         let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
         let on_block = d.unvoiced.iter().any(|r| r.contains(origin));
-        match hit(origin).filter(|_| !on_block) {
+        // On a stack, the note picked from it (selected) is the one dragged.
+        let stacked =
+            d.stacks.iter().find(|m| m.rect.contains(origin)).and_then(|m| m.notes.iter().find(|n| app.vocal.selected.contains(n)).copied());
+        match stacked.or_else(|| hit(origin)).filter(|_| !on_block) {
             Some(r) => super::drag::start(app, track, r, origin, toggle),
             None => app.vocal.band = Some(p),
         }
@@ -1060,7 +1133,7 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
         );
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             let picked: BTreeSet<NoteRef> = d.shapes.iter().filter(|sh| sh.rect.intersects(band)).map(|sh| sh.r).collect();
-            let picked = with_twins(app, track, &picked);
+            let picked = with_twins(app, &picked);
             app.vocal.whole_track = false;
             if toggle {
                 app.vocal.selected.extend(picked);
@@ -1075,8 +1148,14 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
     {
         app.vocal.popup = None;
         let on_block = d.unvoiced.iter().any(|r| r.contains(p));
+        let stack = (!on_block && !toggle).then(|| d.stacks.iter().position(|m| m.rect.contains(p))).flatten();
+        if let Some(i) = stack {
+            // A click on a striped spot: the pick list.
+            super::studio::open_picker(app, &d.stacks, i, p);
+            return super::studio::picker(app, ui, d);
+        }
         let r = if on_block { None } else { hit(p) };
-        click_select(app, track, r, toggle && !on_block);
+        click_select(app, r, toggle && !on_block);
         match r {
             Some(r) => super::preview::request(app, r),
             // Blank space (as in Melodyne): the playhead moves there, the selection is cleared.
@@ -1084,8 +1163,40 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
             None => {}
         }
     }
+    // The studio: a double-click on another track's note makes it the editing track.
+    if resp.double_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+        && hit(p).is_none()
+        && let Some((t, _, _)) = d.refs.iter().rev().find(|(_, _, r)| r.expand(2.0).contains(p))
+        && let Err(e) = app.run("ui.vocal_studio", json!({"edit": t.0}))
+    {
+        app.ui.status = e;
+    }
+    if let Some(p) = resp.hover_pos()
+        && app.vocal.band.is_none()
+        && app.vocal.drag.is_none()
+        && hit(p).is_none()
+        && let Some((t, _, _)) = d.refs.iter().rev().find(|(_, _, r)| r.expand(2.0).contains(p))
+    {
+        let name = app.engine.session().track(*t).map_or(String::new(), |tr| tr.name.clone());
+        let tip = format!("{name} \u{b7} double-click to edit it");
+        store(ui.ctx(), "tooltip", tip.clone());
+        resp.clone().on_hover_text_at_pointer(tip);
+    }
+    // A stack's hover: the pick list, read-only.
+    let on_stack = resp.hover_pos().and_then(|p| d.stacks.iter().find(|m| m.rect.contains(p)));
+    if let Some(m) = on_stack
+        && app.vocal.band.is_none()
+        && app.vocal.drag.is_none()
+        && app.vocal.studio.picker.is_none()
+    {
+        let tip = super::studio::stack_text(app, m);
+        store(ui.ctx(), "tooltip", tip.clone());
+        resp.clone().on_hover_text_at_pointer(tip);
+    }
     // Hover tooltip.
     if let Some(p) = resp.hover_pos()
+        && on_stack.is_none()
         && app.vocal.band.is_none()
         && app.vocal.drag.is_none()
         && let Some(r) = hit(p)
@@ -1094,6 +1205,14 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
         let tip = tooltip(cv, sh);
         store(ui.ctx(), "tooltip", tip.clone());
         resp.clone().on_hover_text_at_pointer(tip);
+    }
+    // Clash markers: their hover says why.
+    for (r, rect, why) in &d.clashes {
+        let h = ui.interact(*rect, ui.id().with(("vocal-clash", r.clip.0, r.note.0)), Sense::hover());
+        if h.hovered() {
+            store(ui.ctx(), "tooltip", why.clone());
+        }
+        h.on_hover_text(why.clone());
     }
     // Scoop handles (above the roll's own response).
     for (r, rect) in &d.scoops {
@@ -1104,6 +1223,7 @@ pub fn interact(app: &mut SoundApp, ui: &mut Ui, track: TrackId, d: &Drawn) {
         h.on_hover_text("Transition into this note: Keep, Smooth or Shorten");
     }
     popup(app, ui, d);
+    super::studio::picker(app, ui, d);
 }
 
 /// The transition popup of `app.vocal.popup`, under its scoop handle.
@@ -1155,8 +1275,8 @@ fn popup(app: &mut SoundApp, ui: &mut Ui, d: &Drawn) {
 }
 
 /// Drops selected notes that no longer exist (after Undo, a re-analysis or a split), or that
-/// belong to another track.
-pub fn prune(app: &mut SoundApp, track: TrackId) {
+/// belong to a track other than `tracks` (the editable ones).
+pub fn prune(app: &mut SoundApp, tracks: &[TrackId]) {
     if app.vocal.selected.is_empty() {
         return;
     }
@@ -1166,7 +1286,7 @@ pub fn prune(app: &mut SoundApp, track: TrackId) {
     for r in sel {
         let ok = s
             .find_clip(r.clip)
-            .filter(|(t, _)| *t == track)
+            .filter(|(t, _)| tracks.contains(t))
             .and_then(|(_, c)| st.cache.get(&s, c))
             .is_some_and(|(a, _)| a.notes.iter().any(|n| n.id == r.note));
         if ok {

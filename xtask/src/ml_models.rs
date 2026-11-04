@@ -20,7 +20,7 @@ fn flag(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(PathBuf::from)
 }
 
-fn default_models() -> PathBuf {
+pub(crate) fn default_models() -> PathBuf {
     if let Some(d) = std::env::var_os("FREEDAWM_MODELS_DIR").or_else(|| std::env::var_os("SOUNDCRAFT_MODELS_DIR")).filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
@@ -46,7 +46,7 @@ fn python(venv: &Path) -> PathBuf {
 }
 
 /// The sha256 of a file, as lowercase hex.
-fn sha256(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256(path: &Path) -> Result<String, String> {
     use sha2::Digest;
     use std::io::Read;
     let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -63,7 +63,7 @@ fn sha256(path: &Path) -> Result<String, String> {
 }
 
 /// The model files a card names, with their sha256: (relative path, sha256).
-fn card_files(card: &Path) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn card_files(card: &Path) -> Result<Vec<(String, String)>, String> {
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(card).map_err(|e| format!("{}: {e}", card.display()))?)
         .map_err(|e| format!("{}: {e}", card.display()))?;
     let one = |f: &serde_json::Value| (f["file"].as_str().unwrap_or("").to_string(), f["sha256"].as_str().unwrap_or("").to_string());

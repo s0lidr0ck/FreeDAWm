@@ -69,6 +69,7 @@ mod video;
 mod view;
 mod view_more;
 mod vocal;
+mod vocal_studio;
 mod vst3;
 mod zoom_toggle;
 
@@ -201,6 +202,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_words::specs());
         v.extend(lyric_place::specs());
         v.extend(vocal::specs());
+        v.extend(vocal_studio::specs());
         v.extend(comp::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(ml::specs());

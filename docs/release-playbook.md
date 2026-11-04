@@ -1,7 +1,7 @@
 # Release playbook
 
-> **Last updated:** 2026-11-03 · **Change:** minor (the free release workflow, the export's sync
-> mode)
+> **Last updated:** 2026-11-04 · **Change:** minor (the ML models release `models-v1`; previously
+> minor: the free release workflow, the export's sync mode)
 
 The release playbook shared by the crafting apps lives in craftrules
 (`release/playbook.md`); FreeDAWm-specific packaging details are in [releasing.md](releasing.md).
@@ -109,5 +109,45 @@ ASIO SDK under GPLv3 as well as its proprietary licence agreement. A binary buil
 Source releases and default builds are unaffected. Decide this before publishing any Windows
 binary with ASIO, and say which in its release notes.
 
-Third-party ML models are not bundled; the app downloads them from their authors and shows each
-model's licence. Some are non-commercial or state no licence: keep them opt-in in public builds.
+Third-party ML models are not bundled. Setup › ML Models downloads them, after a click, from our own
+`models-v1` release (below) and shows each model's licence; models that are non-commercial or state
+no licence ask for a confirm first ("personal use only").
+
+## ML models release (`models-v1`)
+
+The converted (ONNX) models are assets of one GitHub release on the public repo, tag
+**`models-v1`** on `s0lidr0ck/FreeDAWm`, not tied to app versions (spec
+`docs/superpowers/specs/2026-11-04-model-downloads-design.md`). The app reads
+`https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/models.json`
+(`FREEDAWM_MODELS_URL` overrides it). Upload only with the owner's go-ahead.
+
+1. Pack the installed models (each file is checked against its card first; `golden/` test data is
+   left out; a model over GitHub's 2 GiB asset limit, or not installed, is listed as "install
+   manually" in the manifest, as `whisper_lyrics` is at 4.75 GB):
+
+   ```sh
+   cargo xtask ml-publish --models "$LOCALAPPDATA/SoundCraft/models" --out ../models-publish
+   ```
+
+   It writes `<id>.zip` per model, `models.json` (id, version = the card's `exported_utc`, url,
+   size, sha256, licence status and note, source, `personal_use_only`, or `manual` and
+   `manual_note`) and `MODELS-NOTICE.md` (every model, source and licence).
+2. Create the release once (not marked latest, so it never looks like an app release), with the
+   notice as its notes:
+
+   ```sh
+   cd ../models-publish
+   gh release create models-v1 --repo s0lidr0ck/FreeDAWm --title "FreeDAWm models (v1)" \
+     --notes-file MODELS-NOTICE.md --latest=false
+   ```
+3. Upload the zips first and the manifest last, so `models.json` never names a missing asset:
+
+   ```sh
+   gh release upload models-v1 --repo s0lidr0ck/FreeDAWm --clobber *.zip
+   gh release upload models-v1 --repo s0lidr0ck/FreeDAWm --clobber models.json MODELS-NOTICE.md
+   ```
+4. Check: `curl -sL https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/models.json | head`;
+   then Setup › ML Models lists the sizes and Download buttons.
+
+To update a model: install the new export, run step 1 again (its `version` rises with the card's
+`exported_utc`, so installed copies show **Update**), then step 3 for that zip and the manifest.

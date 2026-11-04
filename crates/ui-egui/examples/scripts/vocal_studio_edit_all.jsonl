@@ -1,0 +1,25 @@
+# Vocal Studio Edit All as in docs/superpowers/specs/mockups/vocal_studio_edit_all_mock.png (top half):
+# synthetic sung parts in E major (never a real recording): Lead Vox, Lead Double singing two of its
+# notes with it (E4 15 c from the lead's: a ≠ mismatch; G#4 2 c apart: agreeing), BV 1 a third
+# under drifting, BV 2 hidden. Edit: All vocals, the first stack's pick list open; then Tune all.
+# Render with `--blank --size 1600x1000`; the shots go to the paths given (change them to taste).
+{"studio_demo": {"tracks": [{"name": "Lead Vox", "notes": [[64, 0.6, 3], [66, 0.6, -4], [68, 0.6, 2], [69, 0.6, -24], [68, 0.6, 5], [71, 0.6, 22], [66, 0.6, -4], [68, 0.6, -6]]}, {"name": "Lead Double", "notes": [[64, 0.6, -12], [0, 0.6], [68, 0.6, 4], [0, 0.6], [0, 0.6], [0, 0.6], [0, 0.6], [0, 0.6]]}, {"name": "BV 1", "notes": [[59, 0.6, -6], [61, 0.6, 14], [64, 0.6, -16], [64, 0.6, 9], [64, 0.6, 12], [68, 0.6, -15], [64, 0.6], [64, 0.6, 16]]}, {"name": "BV 2", "notes": [[59, 1.3, 14], [57, 1.3, 16], [59, 1.3, 15]]}], "key": "E", "view": [0, 5.6], "edit": "Lead Vox"}}
+{"vocal_dock": 760}
+{"steps": 10}
+{"vocal_view": [0, 5.6]}
+{"method": "engine.execute", "params": {"command": "ui.vocal_panel", "params": {"value": false}}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_studio", "params": {"edit": "all", "hide": "BV 2"}}}
+{"steps": 4}
+{"studio_roll": [0, 5.6]}
+{"method": "engine.execute", "params": {"command": "ui.vocal_studio", "params": {"pick": 0}}}
+{"steps": 4}
+{"shot": "STUDIO_DIR/edit-all-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"steps": 4}
+{"shot": "STUDIO_DIR/edit-all-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_studio", "params": {"pick": null, "tune_all": true}}}
+{"steps": 6}
+{"shot": "STUDIO_DIR/edit-all-tuned-dark.png"}

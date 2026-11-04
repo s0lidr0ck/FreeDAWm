@@ -38,6 +38,7 @@ pub mod spill;
 pub mod split_files;
 pub mod tempo_detect;
 pub mod vocal;
+pub mod vocal_studio;
 
 use serde_json::{Value, json};
 use soundcraft_model::{Clip, Session, TrackId, ZoomState};

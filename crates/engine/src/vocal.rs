@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use soundcraft_band::chord_theory::scale_offset;
 use soundcraft_model::{AnalysisKey, Clip, ClipAnalysis, ClipId, Session, TrackId, TunedSpan, TunedSpans, VocalTune};
 use soundcraft_time::{Range, Samples};
-use soundcraft_vocal::resynth::{RenderedSpan, changed_frames, render_spans};
+use soundcraft_vocal::resynth::{RenderedSpan, changed_frames_formant, render_spans_formant};
 use soundcraft_vocal::{
     EditCurves, MAX_ANALYSIS_SECS, Note, NoteEdit, NoteId, NoteMode, PitchClassSet, PitchTrack, ScaleAt, SegOp, VocalAnalysis, VocalError,
-    apply_seg_ops_with, build_curves_with, carry_edits, segment_with,
+    apply_seg_ops_with, build_curves_with, carry_edits, formant_curve, segment_with,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -183,6 +183,11 @@ pub fn render_inputs(s: &Session, clip: &Clip) -> Option<u64> {
         h.put(&[0xfe]);
         h.put(tune.note_mode.name().as_bytes());
     }
+    // No clip formant adds nothing either (the notes' own shifts are in the edits).
+    if tune.formant_st != 0.0 {
+        h.put(&[0xfd]);
+        h.put(&tune.formant_st.to_bits().to_le_bytes());
+    }
     let scale = scale_at(s, clip);
     for id in tune.edits.keys() {
         match scale.scale_at(id.0) {
@@ -278,6 +283,8 @@ pub struct RenderJob {
     pub session: Arc<Session>,
     pub track: PitchTrack,
     pub curves: EditCurves,
+    /// The formant shift per frame (semitones): the clip's and its notes' ([`formant_curve`]).
+    pub formant: Vec<f32>,
     /// `changed_frames(curves of the cached render, curves)`.
     pub frames: Vec<std::ops::Range<u32>>,
     /// The cached render the new spans are spliced over (`None`: a full render).
@@ -291,6 +298,7 @@ pub struct RenderDone {
     pub inputs: u64,
     pub spans: Arc<TunedSpans>,
     pub curves: Arc<EditCurves>,
+    pub formant: Arc<Vec<f32>>,
     /// The heard audio it was made from, cached for the next render.
     pub audio: Arc<Vec<Vec<f32>>>,
 }
@@ -312,7 +320,7 @@ impl RenderJob {
         // Identical channels (or one): rendered once, the data shared.
         let same = chans.iter().skip(1).all(|c| c.len() == first.len() && c.iter().zip(first).all(|(a, b)| a.to_bits() == b.to_bits()));
         let new: Vec<TunedSpan> = if same {
-            render_spans(first, &self.track, &self.curves, &self.frames, cancel)?
+            render_spans_formant(first, &self.track, &self.curves, &self.formant, &self.frames, cancel)?
                 .into_iter()
                 .map(|r| {
                     let data = Arc::new(r.samples);
@@ -320,8 +328,10 @@ impl RenderJob {
                 })
                 .collect()
         } else {
-            let per: Vec<Vec<RenderedSpan>> =
-                chans.iter().map(|c| render_spans(c, &self.track, &self.curves, &self.frames, cancel)).collect::<std::result::Result<_, _>>()?;
+            let per: Vec<Vec<RenderedSpan>> = chans
+                .iter()
+                .map(|c| render_spans_formant(c, &self.track, &self.curves, &self.formant, &self.frames, cancel))
+                .collect::<std::result::Result<_, _>>()?;
             let count = per.first().map_or(0, Vec::len);
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
@@ -338,7 +348,14 @@ impl RenderJob {
             out
         };
         let spans = TunedSpans::replace(self.base.as_deref(), self.inputs, self.analysis, new);
-        Ok(RenderDone { clip: self.clip, inputs: self.inputs, spans: Arc::new(spans), curves: Arc::new(self.curves), audio })
+        Ok(RenderDone {
+            clip: self.clip,
+            inputs: self.inputs,
+            spans: Arc::new(spans),
+            curves: Arc::new(self.curves),
+            formant: Arc::new(self.formant),
+            audio,
+        })
     }
 }
 
@@ -506,12 +523,26 @@ pub fn render_job(s: &Arc<Session>, clip: &Clip) -> Option<RenderJob> {
     let h = AnalysisKey::of(s, clip)?.hash();
     let a = analysis_for(s, clip)?;
     let curves = build_curves_with(&a, &tune.edits, &scale_at(s, clip), tune.note_mode);
+    let formant = formant_curve(&a, &tune.edits, tune.formant_st);
     let base = s.vocal.renders.get(&clip.id).filter(|r| r.analysis == h);
     let prev = base.and_then(|_| s.vocal.rendered_curves.get(&clip.id));
     let base = prev.and(base);
-    let frames = changed_frames(prev.map(|p| &**p), &curves);
+    // A cached render without a formant curve was made with none.
+    let prev_formant = s.vocal.rendered_formant.get(&clip.id).map_or(&[][..], |f| f.as_slice());
+    let frames = changed_frames_formant(prev.map(|p| (&**p, prev_formant)), &curves, &formant);
     let audio = s.vocal.heard.get(&h).cloned();
-    Some(RenderJob { clip: clip.id, inputs, analysis: h, audio, session: Arc::clone(s), track: a.track, curves, frames, base: base.cloned() })
+    Some(RenderJob {
+        clip: clip.id,
+        inputs,
+        analysis: h,
+        audio,
+        session: Arc::clone(s),
+        track: a.track,
+        curves,
+        formant,
+        frames,
+        base: base.cloned(),
+    })
 }
 
 /// The note detection mode of `clip`'s tuning; without one, the mode a new tuning would get
@@ -626,14 +657,17 @@ fn install_render(e: &mut Engine, d: RenderDone) -> bool {
     let used: BTreeSet<u64> = s.all_clips().filter_map(|c| AnalysisKey::of(s, c)).map(|k| k.hash()).collect();
     let mut renders = (*s.vocal.renders).clone();
     let mut curves = (*s.vocal.rendered_curves).clone();
+    let mut formants = (*s.vocal.rendered_formant).clone();
     let mut heard: BTreeMap<u64, Arc<Vec<Vec<f32>>>> =
         s.vocal.heard.iter().filter(|(k, _)| used.contains(k)).map(|(k, v)| (*k, Arc::clone(v))).collect();
     heard.insert(d.spans.analysis, d.audio);
     renders.insert(d.clip, d.spans);
     curves.insert(d.clip, d.curves);
+    formants.insert(d.clip, d.formant);
     let v = &mut e.session_mut().vocal;
     v.renders = Arc::new(renders);
     v.rendered_curves = Arc::new(curves);
+    v.rendered_formant = Arc::new(formants);
     v.heard = Arc::new(heard);
     true
 }
@@ -750,6 +784,10 @@ pub fn prune(s: &mut Session) -> bool {
     }
     if v.rendered_curves.keys().any(|c| !tuned.contains(c)) {
         v.rendered_curves = Arc::new(v.rendered_curves.iter().filter(|(c, _)| tuned.contains(c)).map(|(c, r)| (*c, Arc::clone(r))).collect());
+        changed = true;
+    }
+    if v.rendered_formant.keys().any(|c| !tuned.contains(c)) {
+        v.rendered_formant = Arc::new(v.rendered_formant.iter().filter(|(c, _)| tuned.contains(c)).map(|(c, r)| (*c, Arc::clone(r))).collect());
         changed = true;
     }
     changed

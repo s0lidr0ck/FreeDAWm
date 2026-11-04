@@ -100,8 +100,15 @@ struct Target {
 
 fn target(app: &mut SoundApp, track: TrackId) -> Target {
     let s = app.engine.session_arc();
-    let sel = roll::selection_with_twins(app, track);
-    let cvs = roll::clip_views(app, track, None);
+    // The Vocal Studio's Edit All: the selection on any shown track, else every shown track's
+    // notes (the amounts act on all of them, one undo step).
+    let all = app.vocal.studio.on && app.vocal.studio.edit_all;
+    let tracks = if all { super::studio::edit_tracks(app, track) } else { vec![track] };
+    let mut sel = roll::selection_with_twins(app);
+    if all && sel.is_empty() {
+        sel = tracks.iter().flat_map(|t| roll::tunable_notes(app, *t)).collect();
+    }
+    let cvs: Vec<roll::ClipView> = tracks.iter().flat_map(|t| roll::clip_views(app, *t, None)).collect();
     let rate = f64::from(s.sample_rate.hz().max(1));
     let mut refs = Vec::new();
     let mut edits = Vec::new();
@@ -143,11 +150,15 @@ fn target(app: &mut SoundApp, track: TrackId) -> Target {
             ..sum
         }
     });
-    let tuned: Vec<(ClipId, bool)> =
-        s.track(track).map(|t| t.clips().iter().filter_map(|c| c.tune_live().map(|tu| (c.id, tu.original))).collect()).unwrap_or_default();
+    let tuned: Vec<(ClipId, bool)> = tracks
+        .iter()
+        .filter_map(|t| s.track(*t))
+        .flat_map(|t| t.clips().iter().filter_map(|c| c.tune_live().map(|tu| (c.id, tu.original))))
+        .collect();
     let holding: Vec<(ClipId, bool)> = tuned.iter().copied().filter(|(c, _)| refs.iter().any(|r| r.clip == *c)).collect();
     let chosen = if holding.is_empty() { tuned } else { holding };
-    let audio_clips: Vec<&soundcraft_model::Clip> = s.track(track).map(|t| t.clips().iter().filter(|c| c.is_audio()).collect()).unwrap_or_default();
+    let audio_clips: Vec<&soundcraft_model::Clip> =
+        tracks.iter().filter_map(|t| s.track(*t)).flat_map(|t| t.clips().iter().filter(|c| c.is_audio())).collect();
     let musical = !audio_clips.is_empty() && audio_clips.iter().all(|c| soundcraft_engine::vocal::note_mode(c) == NoteMode::Musical);
     Target {
         audio: audio_clips.iter().map(|c| c.id).collect(),
@@ -427,6 +438,9 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, rect: Rect) {
         key_lines(app, ui);
         ui.add_space(6.0);
         bottom_row(app, ui, &tg);
+        // Below everything else, so the controls above keep their places.
+        section(ui, "FORMANT");
+        formant_row(app, ui, &tg);
     });
 }
 
@@ -517,6 +531,71 @@ fn snap_row(app: &mut SoundApp, ui: &mut Ui, tg: &Target) {
         }
         report(app, r);
     }
+}
+
+/// A formant value as the panel shows it: "0 st", "+2.5 st", "−1 st".
+pub fn formant_text(st: f32) -> String {
+    let r = if st.is_finite() { (st * 10.0).round() / 10.0 } else { 0.0 };
+    if r == 0.0 {
+        "0 st".into()
+    } else if r < 0.0 {
+        format!("\u{2212}{} st", -r)
+    } else {
+        format!("+{r} st")
+    }
+}
+
+/// One formant field: a value dragged (or typed) locally and sent once on release. Returns the
+/// value to send.
+fn formant_field(ui: &mut Ui, id: &str, current: f32, enabled: bool) -> Option<f32> {
+    let key = egui::Id::new(("vocal-formant-edit", id.to_string()));
+    let mut v: f32 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(current);
+    let max = soundcraft_vocal::MAX_FORMANT_ST;
+    let resp = ui.add_enabled(
+        enabled,
+        egui::DragValue::new(&mut v)
+            .range(-max..=max)
+            .speed(0.05)
+            .custom_formatter(|n, _| formant_text(n as f32).trim_end_matches(" st").to_string()),
+    );
+    store(ui.ctx(), &format!("formant-{id}"), resp.rect);
+    if resp.dragged() || resp.has_focus() {
+        ui.ctx().data_mut(|d| d.insert_temp(key, v));
+        return None;
+    }
+    ui.ctx().data_mut(|d| d.remove::<f32>(key));
+    ((resp.drag_stopped() || resp.lost_focus() || resp.changed()) && (v - current).abs() >= 0.05).then_some(v)
+}
+
+/// Formant: the clip's shift (every audio clip of the track) and the selected notes' own.
+fn formant_row(app: &mut SoundApp, ui: &mut Ui, tg: &Target) {
+    let t = Tokens::current();
+    let s = app.engine.session_arc();
+    let clip_st = tg.audio.iter().filter_map(|c| s.find_clip(*c)).filter_map(|(_, c)| c.tune_live()).map(|tu| tu.formant_st).next().unwrap_or(0.0);
+    let note_st = tg.edits.first().map_or(0.0, |e| e.formant_st);
+    hook(ui.ctx(), "formant-values", (clip_st, note_st));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Formant").font(regular(12.5)).color(t.text))
+            .on_hover_text("Moves the voice's formants (darker below 0, brighter above) without changing the pitch");
+        ui.label(RichText::new("clip").font(regular(11.0)).color(t.text_dim));
+        if let Some(v) = formant_field(ui, "clip", clip_st, !tg.audio.is_empty()) {
+            let r = app.run("vocal.formant", json!({"clips": tg.audio, "semitones": v}));
+            if r.is_ok() {
+                let what = if tg.audio.len() == 1 { "the clip".to_string() } else { format!("{} clips", tg.audio.len()) };
+                app.ui.status = format!("Formant {} on {what}", formant_text(v));
+            }
+            report(app, r);
+        }
+        ui.label(RichText::new("notes").font(regular(11.0)).color(t.text_dim));
+        if let Some(v) = formant_field(ui, "notes", note_st, !tg.refs.is_empty()) {
+            let r = app.run(crate::vocal_ids::VOCAL_EDIT, json!({"notes": notes_json(&tg.refs), "formant": v}));
+            if r.is_ok() {
+                app.ui.status = format!("Formant {} on {} notes", formant_text(v), tg.refs.len());
+                super::preview::changed(app);
+            }
+            report(app, r);
+        }
+    });
 }
 
 /// The selection's slider values as a preset (Save…).

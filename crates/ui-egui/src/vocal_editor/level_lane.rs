@@ -110,7 +110,7 @@ pub fn level_lane(app: &mut SoundApp, ui: &mut Ui, rect: Rect, view: &RollView) 
     {
         let toggle = ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         let hit = bars.iter().rev().find(|(_, b)| b.expand2(egui::vec2(1.0, 4.0)).contains(pt)).map(|(r, _)| *r);
-        roll::click_select(app, track, hit, toggle);
+        roll::click_select(app, hit, toggle);
         if let Some(r) = hit {
             super::preview::request(app, r);
         }

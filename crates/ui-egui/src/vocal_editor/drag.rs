@@ -9,7 +9,7 @@
 //! ends back where it began, or Esc mid-drag, leaves the notes as they were and no undo step.
 //! Alt+Up/Down moves the selection a semitone.
 
-use super::roll::{Drawn, click_select, clip_views, selection_with_twins};
+use super::roll::{Drawn, click_select, clip_views_of, selection_with_twins};
 use super::{hook, store};
 use crate::SoundApp;
 use crate::slider_drag::{DRAG_EVERY, How, report};
@@ -119,10 +119,10 @@ pub fn readout_text(cents: f32) -> String {
 /// panel's sliders do: a twin in a clip scrolled out of view moves too.
 pub fn start(app: &mut SoundApp, track: TrackId, r: NoteRef, origin: Pos2, toggle: bool) {
     if !app.vocal.selected.contains(&r) {
-        click_select(app, track, Some(r), toggle);
+        click_select(app, Some(r), toggle);
     }
-    let refs: BTreeSet<NoteRef> = selection_with_twins(app, track);
-    let clips = clip_views(app, track, None);
+    let refs: BTreeSet<NoteRef> = selection_with_twins(app);
+    let clips = clip_views_of(app, &refs);
     let mut base = Vec::new();
     for x in &refs {
         let Some(cv) = clips.iter().find(|c| c.clip.id == x.clip && !c.stretched) else { continue };
@@ -276,7 +276,7 @@ fn draw_readout(ui: &Ui, p: Pos2, text: &str) {
 /// Alt+Up/Down (a semitone) on the selection, one undo step each. Alt+Shift+Up/Down stays the
 /// app's (Copy Selection to Target/New Playlist); finer moves are what a drag is for. The caller
 /// checks the pointer is over the editor and no text field has focus.
-pub fn keys(app: &mut SoundApp, ui: &Ui, track: TrackId) {
+pub fn keys(app: &mut SoundApp, ui: &Ui) {
     use egui::Key;
     let steps: Vec<f32> = ui.input(|i| {
         i.events
@@ -294,7 +294,7 @@ pub fn keys(app: &mut SoundApp, ui: &Ui, track: TrackId) {
     if steps.is_empty() || app.vocal.selected.is_empty() {
         return;
     }
-    let refs: Vec<NoteRef> = selection_with_twins(app, track).into_iter().collect();
+    let refs: Vec<NoteRef> = selection_with_twins(app).into_iter().collect();
     if refs.is_empty() {
         return;
     }

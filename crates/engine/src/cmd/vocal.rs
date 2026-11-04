@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Tune Vocal Edit",
             [],
             None,
-            "{notes: [{clip, note, offset?, centre?, drift?, vibrato?, raise?, lower?, gain_db?}], centre?, drift?, raise?, lower?: 0..100 (%), vibrato?: -100..100 (%), offset?: cents (-2400..2400) | offset_by?: cents (-4800..4800), gain_db?: dB (-12..12), snap_to_key?: bool, transition?: keep|smooth|shorten, reference?: selection|track, from?, to?} — sets the given fields on each note's edit (the clip gets a tuning when it has none). `offset` is the note's manual pitch move (what dragging it does), `offset_by` adds to it (the result clamped to ±2400); a note's own values in `notes` override the shared ones for that note (the note bar moves several notes by one delta in one step). `gain_db` is the note's manual level change over its body, on top of the levelling (the note bar's level field). With raise/lower, each note's levelling reference becomes the median level of the notes (reference selection, the default) or of the notes' tracks' notes (track; from/to limit it to a range), frozen per note. Undoable; the UI merges a slider drag. Returns {notes}",
+            "{notes: [{clip, note, offset?, centre?, drift?, vibrato?, raise?, lower?, gain_db?, formant?}], centre?, drift?, raise?, lower?: 0..100 (%), vibrato?: -100..100 (%), offset?: cents (-2400..2400) | offset_by?: cents (-4800..4800), gain_db?: dB (-12..12), formant?: semitones (-12..12, the note's formant shift, on top of the clip's: vocal.formant), snap_to_key?: bool, transition?: keep|smooth|shorten, reference?: selection|track, from?, to?} — sets the given fields on each note's edit (the clip gets a tuning when it has none). `offset` is the note's manual pitch move (what dragging it does), `offset_by` adds to it (the result clamped to ±2400); a note's own values in `notes` override the shared ones for that note (the note bar moves several notes by one delta in one step). `gain_db` is the note's manual level change over its body, on top of the levelling (the note bar's level field). With raise/lower, each note's levelling reference becomes the median level of the notes (reference selection, the default) or of the notes' tracks' notes (track; from/to limit it to a range), frozen per note. Undoable; the UI merges a slider drag. Returns {notes}",
             always,
             edit
         ),
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Centre Note",
             [],
             None,
-            "{track, at: position, kind: centre|drift} — the note under `at`: Centre note pulls 40 % further to its target (centre = 1 − (1 − centre)·0.6), Flatten drift 30 % (drift = 1 − (1 − drift)·0.7). Undoable (Centre Note / Flatten Drift). Returns the note {clip, note}",
+            "{track, at: position | notes: [{clip, note}], kind: centre|drift} — the note under `at` (or every note of `notes`, across tracks in one step: the Vocal Studio's Edit All): Centre note pulls 40 % further to its target (centre = 1 − (1 − centre)·0.6), Flatten drift 30 % (drift = 1 − (1 − drift)·0.7). Undoable (Centre Note / Flatten Drift). Returns the note {clip, note}",
             always,
             step
         ),
@@ -204,7 +204,7 @@ fn note_id(id: &str, v: Option<&Value>, key: &str) -> Result<NoteId> {
 
 /// `notes`: every `{clip, note}`, each naming an analysed clip's note (duplicates dropped), and
 /// each clip's analysis.
-fn note_refs(e: &Engine, id: &str, p: &Value) -> Result<(Vec<NoteRef>, BTreeMap<ClipId, VocalAnalysis>)> {
+pub(super) fn note_refs(e: &Engine, id: &str, p: &Value) -> Result<(Vec<NoteRef>, BTreeMap<ClipId, VocalAnalysis>)> {
     let arr = p.get("notes").and_then(Value::as_array).ok_or_else(|| bad(id, "`notes` must be a list of {clip, note}"))?;
     let mut refs: Vec<NoteRef> = Vec::with_capacity(arr.len());
     for v in arr {
@@ -268,6 +268,7 @@ struct NoteValues {
     raise: Option<f32>,
     lower: Option<f32>,
     gain: Option<f32>,
+    formant: Option<f32>,
 }
 
 impl NoteValues {
@@ -277,6 +278,18 @@ impl NoteValues {
 
     fn levels(&self) -> bool {
         self.raise.is_some() || self.lower.is_some()
+    }
+}
+
+/// An optional `formant` (±12 semitones); anything else refused.
+pub(super) fn formant_param(id: &str, p: &Value, key: &str) -> Result<Option<f32>> {
+    let max = f64::from(soundcraft_vocal::MAX_FORMANT_ST);
+    match p.get(key) {
+        None => Ok(None),
+        Some(v) => match v.as_f64().filter(|g| g.is_finite() && g.abs() <= max) {
+            Some(g) => Ok(Some(g as f32)),
+            None => Err(bad(id, format!("`{key}` must be a number of semitones from -{max} to {max}"))),
+        },
     }
 }
 
@@ -304,6 +317,8 @@ struct Fields {
     offset: Option<Offset>,
     /// The manual level change (dB).
     gain: Option<f32>,
+    /// The note's formant shift (semitones).
+    formant: Option<f32>,
     /// Per-note values (`notes: [{clip, note, offset, centre, …}]`), overriding the shared ones.
     note_values: BTreeMap<NoteRef, NoteValues>,
 }
@@ -339,6 +354,7 @@ impl Fields {
                 raise: pct(id, v, "raise", 0.0)?,
                 lower: pct(id, v, "lower", 0.0)?,
                 gain: gain_param(id, v)?,
+                formant: formant_param(id, v, "formant")?,
             };
             if nv.is_empty() {
                 continue;
@@ -348,6 +364,7 @@ impl Fields {
         }
         Ok(Fields {
             gain: gain_param(id, p)?,
+            formant: formant_param(id, p, "formant")?,
             centre: pct(id, p, "centre", 0.0)?,
             drift: pct(id, p, "drift", 0.0)?,
             vibrato: pct(id, p, "vibrato", -100.0)?,
@@ -366,6 +383,7 @@ impl Fields {
             && self.transition.is_none()
             && self.offset.is_none()
             && self.gain.is_none()
+            && self.formant.is_none()
             && self.note_values.is_empty()
     }
 
@@ -392,6 +410,7 @@ impl Fields {
         set(&mut e.raise, own.raise.or(self.raise));
         set(&mut e.lower, own.lower.or(self.lower));
         set(&mut e.gain_db, own.gain.or(self.gain));
+        set(&mut e.formant_st, own.formant.or(self.formant));
         if let Some(b) = self.snap {
             e.snap_to_key = b;
         }
@@ -442,7 +461,7 @@ fn typical_for(e: &Engine, id: &str, p: &Value, refs: &[NoteRef], analyses: &BTr
 
 /// `clip`'s live tuning to change: created (or, when the clip plays another source than an old
 /// tuning was made on, replaced) against the clip's current source and analysis.
-fn tune_mut(s: &mut Session, clip: ClipId, key: u64) -> Option<&mut VocalTune> {
+pub(super) fn tune_mut(s: &mut Session, clip: ClipId, key: u64) -> Option<&mut VocalTune> {
     let c = s.find_clip_mut(clip)?;
     let source = c.source();
     if c.tune_live().is_none() {
@@ -458,12 +477,12 @@ fn tune_mut(s: &mut Session, clip: ClipId, key: u64) -> Option<&mut VocalTune> {
     Some(t)
 }
 
-fn key_of(s: &Session, clip: ClipId) -> u64 {
+pub(super) fn key_of(s: &Session, clip: ClipId) -> u64 {
     s.find_clip(clip).and_then(|(_, c)| AnalysisKey::of(s, c)).map_or(0, |k| k.hash())
 }
 
 /// Changes each of `refs`' edits with `f` (clamped after), keeping the note spans current.
-fn change_edits(e: &mut Engine, refs: &[NoteRef], analyses: &BTreeMap<ClipId, VocalAnalysis>, f: impl Fn(NoteRef, &mut NoteEdit)) {
+pub(super) fn change_edits(e: &mut Engine, refs: &[NoteRef], analyses: &BTreeMap<ClipId, VocalAnalysis>, f: impl Fn(NoteRef, &mut NoteEdit)) {
     let keys: BTreeMap<ClipId, u64> = analyses.keys().map(|c| (*c, key_of(e.session(), *c))).collect();
     let s = e.session_mut();
     for (clip, a) in analyses {
@@ -493,14 +512,17 @@ fn set_fields(e: &mut Engine, id: &str, p: &Value, fields: &Fields, level: bool)
 fn edit(e: &mut Engine, p: &Value) -> Result<Value> {
     let fields = Fields::parse(EDIT, p)?;
     if fields.is_empty() {
-        return Err(bad(EDIT, "pass a value to set: centre, drift, raise, lower, vibrato, offset, offset_by, gain_db, snap_to_key or transition"));
+        return Err(bad(
+            EDIT,
+            "pass a value to set: centre, drift, raise, lower, vibrato, offset, offset_by, gain_db, formant, snap_to_key or transition",
+        ));
     }
     set_fields(e, EDIT, p, &fields, false)
 }
 
 fn macro_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
     let per_note = |key: &str| p.get("notes").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.get(key).is_some()));
-    for key in ["snap_to_key", "transition", "offset", "offset_by", "gain_db"] {
+    for key in ["snap_to_key", "transition", "offset", "offset_by", "gain_db", "formant"] {
         if p.get(key).is_some() || per_note(key) {
             return Err(bad(MACRO, format!("a macro doesn't set `{key}`: use vocal.edit")));
         }
@@ -537,13 +559,26 @@ fn macro_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 fn step(e: &mut Engine, p: &Value) -> Result<Value> {
-    let track = track_param(e, STEP, p, "track")?.ok_or_else(|| bad(STEP, "`track` required"))?;
-    let at = position_param(e, STEP, p, "at")?.ok_or_else(|| bad(STEP, "`at` required"))?;
     let centre = match str_param(p, "kind") {
         Some("centre") => true,
         Some("drift") => false,
         _ => return Err(bad(STEP, "`kind` must be centre or drift")),
     };
+    let stepped = move |ed: &mut NoteEdit| {
+        if centre {
+            ed.centre = 1.0 - (1.0 - ed.centre) * (1.0 - CENTRE_STEP);
+        } else {
+            ed.drift = 1.0 - (1.0 - ed.drift) * (1.0 - DRIFT_STEP);
+        }
+    };
+    if p.get("notes").is_some() {
+        let (refs, analyses) = note_refs(e, STEP, p)?;
+        change_edits(e, &refs, &analyses, |_, ed| stepped(ed));
+        e.step_label = Some(if centre { "Centre Note" } else { "Flatten Drift" });
+        return Ok(json!({"notes": refs}));
+    }
+    let track = track_param(e, STEP, p, "track")?.ok_or_else(|| bad(STEP, "`track` required"))?;
+    let at = position_param(e, STEP, p, "at")?.ok_or_else(|| bad(STEP, "`at` required"))?;
     let s = e.session();
     let Some(r) = crate::vocal::note_at(s, track, at) else {
         let waiting = s
@@ -553,13 +588,7 @@ fn step(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     let a = editable(e, STEP, r.clip)?;
     let analyses = BTreeMap::from([(r.clip, a)]);
-    change_edits(e, &[r], &analyses, |_, ed| {
-        if centre {
-            ed.centre = 1.0 - (1.0 - ed.centre) * (1.0 - CENTRE_STEP);
-        } else {
-            ed.drift = 1.0 - (1.0 - ed.drift) * (1.0 - DRIFT_STEP);
-        }
-    });
+    change_edits(e, &[r], &analyses, |_, ed| stepped(ed));
     e.step_label = Some(if centre { "Centre Note" } else { "Flatten Drift" });
     Ok(json!(r))
 }
@@ -578,7 +607,7 @@ fn reset(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         crate::vocal::sync_note_spans(t, a);
         // Only an empty tuning goes: an identity-looking edit can still hold Snap to key.
-        if t.edits.is_empty() && t.seg_ops.is_empty() && t.note_mode == NoteMode::NEW {
+        if t.edits.is_empty() && t.seg_ops.is_empty() && t.note_mode == NoteMode::NEW && t.formant_st == 0.0 {
             c.tune = None;
         }
     }
@@ -758,7 +787,7 @@ fn analyse_targets(e: &Engine, p: &Value) -> Result<Vec<ClipId>> {
 }
 
 /// `p`'s audio clips for command `id`, as [`analyse_targets`] picks them.
-fn audio_targets(e: &Engine, id: &str, p: &Value) -> Result<Vec<ClipId>> {
+pub(super) fn audio_targets(e: &Engine, id: &str, p: &Value) -> Result<Vec<ClipId>> {
     let cmd = id;
     let s = e.session();
     let ids: Vec<ClipId> = if p.get("clip").is_some() || p.get("clips").is_some() {
@@ -852,6 +881,7 @@ fn note_mode_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
             && t.edits.is_empty()
             && t.seg_ops.is_empty()
             && !t.original
+            && t.formant_st == 0.0
             && let Some(cm) = s.find_clip_mut(id)
         {
             cm.tune = None;

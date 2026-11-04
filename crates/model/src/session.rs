@@ -361,6 +361,9 @@ pub struct Session {
     /// The lyric sheet (Window › Lyrics; omitted from the file while empty).
     #[serde(default, skip_serializing_if = "crate::LyricSheet::is_empty", deserialize_with = "crate::sheet::de_sheet")]
     pub lyric_sheet: crate::LyricSheet,
+    /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
+    #[serde(default, skip_serializing_if = "crate::StudioTuning::is_default")]
+    pub studio_tuning: crate::StudioTuning,
     #[serde(skip)]
     pub pool: SourcePool,
     /// Module assets made ready for their plugins (`Insert::assets`), by reference and rate.
@@ -410,6 +413,7 @@ impl Session {
             band: crate::BandState::default(),
             notes: Vec::new(),
             lyric_sheet: crate::LyricSheet::default(),
+            studio_tuning: crate::StudioTuning::default(),
             pool: SourcePool::default(),
             assets: crate::AssetPool::default(),
             folder: None,

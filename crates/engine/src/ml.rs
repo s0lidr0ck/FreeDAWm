@@ -25,6 +25,7 @@ use std::path::PathBuf;
 
 pub use crate::cmd::chord_lane::{Grid, KeyChoice, LaneOptions};
 pub use soundcraft_ml::job::ProgressCell;
+pub use soundcraft_ml::models::sha256_file;
 pub use soundcraft_ml::models::{
     KNOWN_MODELS, LICENCE_NOT_STATED, ModelEntry, ModelStatus, default_models_dir, known_licence, licence_status, list as list_models, models_dir,
     read_card,
@@ -34,7 +35,7 @@ pub use soundcraft_ml::{
     Analysed, Analysis, Cancel, ChordOptions, ChordSegment, CleanMode, CleanOptions, Ctx, Device, Isolate, JobKind, JobOutput, Lyrics,
     LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription,
 };
-pub use soundcraft_ml::{adtof, basicpitch};
+pub use soundcraft_ml::{adtof, basicpitch, catalog, download};
 
 /// Clean Vocal's default de-noise amount (attenuation limit), dB.
 pub const DEFAULT_AMOUNT_DB: f32 = soundcraft_ml::denoise::DEFAULT_ATTEN_DB;

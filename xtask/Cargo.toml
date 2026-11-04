@@ -6,10 +6,13 @@ license.workspace = true
 publish = false
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
 soundcraft-audio-io.workspace = true
 soundcraft-dsp.workspace = true
 sha2 = "0.10"
+# ml-publish: the model zips (stored entries).
+zip.workspace = true
 
 [lints]
 workspace = true

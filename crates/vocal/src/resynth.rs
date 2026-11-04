@@ -68,19 +68,26 @@ fn curve_at(c: &[f32], i: usize) -> f32 {
 /// Maximal frame runs where `next` differs from `prev` (or from zero when `prev` is `None`). Runs
 /// separated by at most 2 frames (closer than 2 STFT frames) are merged.
 pub fn changed_frames(prev: Option<&EditCurves>, next: &EditCurves) -> Vec<Range<u32>> {
-    let mut len = next.shift_cents.len().max(next.gain_db.len());
-    if let Some(p) = prev {
-        len = len.max(p.shift_cents.len()).max(p.gain_db.len());
+    changed_frames_formant(prev.map(|p| (p, &[][..])), next, &[])
+}
+
+/// [`changed_frames`] with formant curves (semitones per frame, see
+/// [`crate::formant_curve`]): `prev` is the cached render's curves and formant curve, `None` for
+/// none (all zero). A frame changes when its shift, gain or formant shift does.
+pub fn changed_frames_formant(prev: Option<(&EditCurves, &[f32])>, next: &EditCurves, next_formant: &[f32]) -> Vec<Range<u32>> {
+    let mut len = next.shift_cents.len().max(next.gain_db.len()).max(next_formant.len());
+    if let Some((p, pf)) = prev {
+        len = len.max(p.shift_cents.len()).max(p.gain_db.len()).max(pf.len());
     }
     // Compared as render_spans sees them: non-finite values count as 0.
     let clean = |v: f32| if v.is_finite() { v } else { 0.0 };
-    let pair = |c: &EditCurves, i: usize| (clean(curve_at(&c.shift_cents, i)), clean(curve_at(&c.gain_db, i)));
+    let triple = |c: &EditCurves, f: &[f32], i: usize| (clean(curve_at(&c.shift_cents, i)), clean(curve_at(&c.gain_db, i)), clean(curve_at(f, i)));
     let mut runs: Vec<Range<usize>> = Vec::new();
     for i in 0..len {
-        let now = pair(next, i);
+        let now = triple(next, next_formant, i);
         let differs = match prev {
-            Some(p) => pair(p, i) != now,
-            None => now != (0.0, 0.0),
+            Some((p, pf)) => triple(p, pf, i) != now,
+            None => now != (0.0, 0.0, 0.0),
         };
         if !differs {
             continue;
@@ -131,6 +138,23 @@ pub fn render_spans(
     frames: &[Range<u32>],
     cancel: &AtomicBool,
 ) -> Result<Vec<RenderedSpan>, VocalError> {
+    render_spans_formant(input, track, curves, &[], frames, cancel)
+}
+
+/// [`render_spans`] with a formant shift: `formant_st` per analysis frame (semitones, within
+/// ±12; missing frames are 0), see [`crate::formant_curve`]. The spectral envelope (the cepstral
+/// envelope the vocoder keeps when pitch moves) is scaled in frequency by `2^(st/12)`
+/// independently of the pitch shift: +3 st moves every formant up a minor third and leaves the
+/// pitch where the shift curve puts it. A span with formant shift but no pitch shift goes through
+/// the vocoder too (its phases are kept).
+pub fn render_spans_formant(
+    input: &[f32],
+    track: &PitchTrack,
+    curves: &EditCurves,
+    formant_st: &[f32],
+    frames: &[Range<u32>],
+    cancel: &AtomicBool,
+) -> Result<Vec<RenderedSpan>, VocalError> {
     let sr = track.sample_rate;
     if !(MIN_RATE..=MAX_RATE).contains(&sr) {
         return Err(VocalError::Unsupported(format!("sample rate {sr} Hz")));
@@ -146,12 +170,14 @@ pub fn render_spans(
     let ms10 = sr as usize / 100;
     let shift = sanitize(&curves.shift_cents);
     let gain = sanitize(&curves.gain_db);
-    let nf = shift.len().max(gain.len()).max(track.frames.len());
+    let max_st = f64::from(crate::MAX_FORMANT_ST);
+    let formant: Vec<f64> = sanitize(formant_st).into_iter().map(|v| v.clamp(-max_st, max_st)).collect();
+    let nf = shift.len().max(gain.len()).max(formant.len()).max(track.frames.len());
     let dil = n + ms10;
     // A shifted frame j changes the output up to j·hop + hop + N/2 + the level follow's half-window.
     let level_half = level_kernel_len(sr) / 2;
     let reach = (dil + hop + n / 2 + level_half).div_ceil(hop) + 1;
-    let sample_spans = span_samples(frames, &shift, &gain, nf, hop, dil, reach, input.len());
+    let sample_spans = span_samples(frames, &shift, &gain, &formant, nf, hop, dil, reach, input.len());
     if sample_spans.is_empty() {
         return Ok(Vec::new());
     }
@@ -160,7 +186,7 @@ pub fn render_spans(
         let secs = (b - a) as f64 / f64::from(sr);
         return Err(VocalError::Unsupported(format!("a {secs:.1} s render span: no breath for over {MAX_SPAN_SECS} s")));
     }
-    let mut r = Renderer::new(input, track, shift, gain, cancel);
+    let mut r = Renderer::new(input, track, shift, gain, formant, cancel);
     let mut out = Vec::with_capacity(sample_spans.len());
     for (a, b) in sample_spans {
         let samples = r.render(a, b)?;
@@ -177,17 +203,20 @@ fn sanitize(c: &[f32]) -> Vec<f64> {
 /// The sample spans `[a, b)` for `frames`: grown over shifted or gain-changed frames within
 /// `reach` frames of their ends (repeatedly), dilated by `dil` samples, clamped to `len`, sorted
 /// and merged.
+#[allow(clippy::too_many_arguments)]
 fn span_samples(
     frames: &[Range<u32>],
     shift: &[f64],
     gain: &[f64],
+    formant: &[f64],
     nf: usize,
     hop: usize,
     dil: usize,
     reach: usize,
     len: usize,
 ) -> Vec<(usize, usize)> {
-    let edited = |i: usize| shift.get(i).is_some_and(|&v| v != 0.0) || gain.get(i).is_some_and(|&v| v != 0.0);
+    let edited =
+        |i: usize| shift.get(i).is_some_and(|&v| v != 0.0) || gain.get(i).is_some_and(|&v| v != 0.0) || formant.get(i).is_some_and(|&v| v != 0.0);
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for fr in frames {
         let mut s = (fr.start as usize).min(nf);
@@ -260,6 +289,8 @@ struct Renderer<'a> {
     ms10: usize,
     shift: Vec<f64>,
     gain: Vec<f64>,
+    /// Formant shift per track frame (semitones).
+    formant: Vec<f64>,
     /// Per track frame: voiced (dilated by one frame) as 0.0 / 1.0.
     voiced: Vec<f64>,
     cancel: &'a AtomicBool,
@@ -279,6 +310,7 @@ struct Renderer<'a> {
     out_ph: Vec<f64>,
     w_inst: Vec<f64>,
     env: Vec<f64>,
+    env_w: Vec<f64>,
     mag_n: Vec<f64>,
     ks: Vec<usize>,
     new_ph: Vec<f64>,
@@ -287,7 +319,7 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(input: &'a [f32], track: &PitchTrack, shift: Vec<f64>, gain: Vec<f64>, cancel: &'a AtomicBool) -> Self {
+    fn new(input: &'a [f32], track: &PitchTrack, shift: Vec<f64>, gain: Vec<f64>, formant: Vec<f64>, cancel: &'a AtomicBool) -> Self {
         let sr = track.sample_rate;
         let (n, h, lifter) = stft_sizes(sr);
         let mut planner = FftPlanner::new();
@@ -314,6 +346,7 @@ impl<'a> Renderer<'a> {
             ms10,
             shift,
             gain,
+            formant,
             voiced,
             cancel,
             planner,
@@ -331,6 +364,7 @@ impl<'a> Renderer<'a> {
             out_ph: vec![0.0; k],
             w_inst: vec![0.0; k],
             env: vec![0.0; k],
+            env_w: vec![0.0; k],
             mag_n: vec![0.0; k],
             ks: vec![0; k],
             new_ph: vec![0.0; k],
@@ -406,7 +440,17 @@ impl<'a> Renderer<'a> {
                 2f64.powf(cents / 1200.0)
             })
             .collect();
-        if ratios.iter().all(|r| (r - 1.0).abs() < IDENTITY_EPS) {
+        // The envelope's frequency scale per frame (1 = formants kept).
+        let fratios: Vec<f64> = (0..nfr)
+            .map(|f| {
+                if self.formant.is_empty() {
+                    return 1.0;
+                }
+                let centre = origin + (f * h + n / 2) as i64;
+                2f64.powf(interp_frames(&self.formant, self.frame_pos(centre)) / 12.0)
+            })
+            .collect();
+        if ratios.iter().all(|r| (r - 1.0).abs() < IDENTITY_EPS) && fratios.iter().all(|r| (r - 1.0).abs() < IDENTITY_EPS) {
             if self.cancel.load(Ordering::Relaxed) {
                 return Err(VocalError::Cancelled);
             }
@@ -418,7 +462,7 @@ impl<'a> Renderer<'a> {
         self.prev_ph.iter_mut().for_each(|v| *v = 0.0);
         self.out_ph.iter_mut().for_each(|v| *v = 0.0);
         let inv_n = 1.0 / n as f64;
-        for (f, &r) in ratios.iter().enumerate() {
+        for (f, (&r, &fr)) in ratios.iter().zip(&fratios).enumerate() {
             if f % CANCEL_EVERY == 0 && self.cancel.load(Ordering::Relaxed) {
                 return Err(VocalError::Cancelled);
             }
@@ -454,8 +498,24 @@ impl<'a> Renderer<'a> {
             for k in 0..k_len {
                 self.env[k] = self.buf[k].re.exp();
             }
-            // Shift the excitation, keep the envelope.
+            // The envelope the output gets: the input's, or scaled in frequency by `fr` (formant
+            // shift: what sat at bin k / fr moves to bin k).
             let last = k_len - 1;
+            if (fr - 1.0).abs() < IDENTITY_EPS {
+                self.env_w.copy_from_slice(&self.env);
+            } else {
+                for k in 0..k_len {
+                    let src = k as f64 / fr;
+                    let i0 = src.floor() as usize;
+                    self.env_w[k] = if i0 >= last {
+                        self.env[last]
+                    } else {
+                        let (e0, e1) = (self.env[i0], self.env[i0 + 1]);
+                        e0 + (e1 - e0) * (src - i0 as f64)
+                    };
+                }
+            }
+            // Shift the excitation, keep (or move) the envelope.
             for k in 0..k_len {
                 let src = k as f64 / r;
                 let exc_at = |j: usize| self.mag[j] / self.env[j];
@@ -470,7 +530,7 @@ impl<'a> Renderer<'a> {
                         e0 + (e1 - e0) * (src - i0 as f64)
                     }
                 };
-                self.mag_n[k] = exc_n * self.env[k];
+                self.mag_n[k] = exc_n * self.env_w[k];
                 self.ks[k] = (src.round_ties_even().max(0.0) as usize).min(last);
             }
             if (r - 1.0).abs() < IDENTITY_EPS {
