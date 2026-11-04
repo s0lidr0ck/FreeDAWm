@@ -24,6 +24,11 @@ env:
   # Pinned so a new stable release's lints can't turn the gate red on an unchanged tree. Raise it
   # deliberately (and fix the new clippy findings) in its own pull request.
   RUST_TOOLCHAIN: "1.97.1"
+  # The DSP "silence stays cheap" timing tests compare how long a silent tail takes against the
+  # signal. On some hosted runners' CPUs the silence is 4 to 13 times slower (likely denormal
+  # arithmetic), so CI skips them; they pass on the desktop machines they were written on. See
+  # docs/releasing.md › Checks.
+  TIMING_SKIPS: "--skip silence_tail_is_cheap --skip a_minute_of_silence_stays_cheap"
 
 jobs:
   ci:
@@ -53,6 +58,8 @@ jobs:
 
       - name: cargo xtask ci
         run: cargo xtask ci
+        env:
+          XTASK_TEST_ARGS: ${{ env.TIMING_SKIPS }}
 
   test:
     # The workspace's own tests on the two other desktop platforms (no clippy/fmt: Linux has those).
@@ -64,13 +71,8 @@ jobs:
           - name: macOS
             os: macos-15
             exclude: ""
-            skip: ""
           - name: Windows
             os: windows-latest
-            # The DSP "silence tail is cheap" timing tests fail on some hosted Windows runners
-            # (silence 4-10x slower than signal; likely denormals on those CPUs) though they pass
-            # on Linux, macOS and a desktop Windows machine; see docs/releasing.md › Checks.
-            skip: "--skip silence_tail_is_cheap"
             # soundcraft-playback's and soundcraft-ui-egui's test binaries crash (access violation)
             # on the hosted Windows runners (not yet diagnosed; the runners have no audio devices);
             # they pass on a desktop Windows machine and on macOS/Linux CI. Here they are only built.
@@ -89,7 +91,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test
-        run: cargo test --workspace --locked ${{ matrix.exclude }} -- ${{ matrix.skip }}
+        run: cargo test --workspace --locked ${{ matrix.exclude }} -- ${{ env.TIMING_SKIPS }}
 
       - name: Build the tests that don't run here
         if: matrix.exclude != ''

@@ -177,11 +177,23 @@ fn wasm() -> Result<(), String> {
     run_cargo(&mut cmd, &args)
 }
 
+/// `cargo test --workspace`, plus the test-harness arguments in `XTASK_TEST_ARGS` (split on
+/// whitespace) if set: CI uses it to skip timing tests the hosted runners can't keep.
+fn test_workspace() -> Result<(), String> {
+    let extra = std::env::var("XTASK_TEST_ARGS").unwrap_or_default();
+    let mut args = vec!["test", "--workspace"];
+    if !extra.trim().is_empty() {
+        args.push("--");
+        args.extend(extra.split_whitespace());
+    }
+    cargo(&args)
+}
+
 fn ci() -> Result<(), String> {
     let steps: Vec<(&str, Box<dyn Fn() -> Result<(), String>>)> = vec![
         ("fmt", Box::new(|| cargo(&["fmt", "--all", "--", "--check"]))),
         ("clippy", Box::new(|| cargo(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
-        ("test", Box::new(|| cargo(&["test", "--workspace"]))),
+        ("test", Box::new(test_workspace)),
         ("assets", Box::new(assets)),
         ("layers", Box::new(layers)),
         ("wasm", Box::new(wasm)),

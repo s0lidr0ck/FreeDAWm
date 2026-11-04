@@ -221,8 +221,9 @@ old nightingale and names the old volume: regenerate it with `packaging/macos/dm
 and Windows for every pull request. `release.yml` also runs (build and package, no release) on
 pull requests that change `packaging/`, the app icons or the workflow. Both pin the Rust
 toolchain (`RUST_TOOLCHAIN`), so a new stable release's lints can't break an unchanged tree.
-On Windows, CI skips the DSP `silence_tail_is_cheap` timing tests: on some hosted runners the
-silent tail runs 4 to 10 times slower than the signal (likely denormal arithmetic on those
-CPUs), which deserves a look on Intel machines. The `soundcraft-playback` and
+CI skips the DSP timing tests `silence_tail_is_cheap` and `a_minute_of_silence_stays_cheap`
+(`XTASK_TEST_ARGS` passes the `--skip`s to `cargo xtask ci`): on some hosted runners' CPUs the
+silent tail runs 4 to 13 times slower than the signal (likely denormal arithmetic), which
+deserves a look on those CPUs. The `soundcraft-playback` and
 `soundcraft-ui-egui` test binaries crash with an access violation on those runners (not yet
 diagnosed; they have no audio devices), so there they are built but not run.
