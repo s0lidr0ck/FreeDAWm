@@ -42,9 +42,25 @@ pub fn chord_spans(s: &Session, clip: &Clip) -> Vec<ChordSpan> {
     spans
 }
 
-/// The session key's scale tones: the seven degrees; a minor key also has its raised 7th.
+/// The band key's scale tones: the seven degrees; a minor key also has its raised 7th.
 pub fn key_tones(s: &Session) -> [bool; 12] {
-    let (key, scale) = (i32::from(s.band.key), i32::from(s.band.scale));
+    tones_of(s.band.key, s.band.scale)
+}
+
+/// The key a clip's cleanup reads, as `(tonic pitch class, scale)`: the key change in force where
+/// it starts (the Key ruler's), else the band key.
+pub fn clip_key(s: &Session, clip: &Clip) -> (u8, u8) {
+    crate::vocal::key_pc_at(s, clip.start)
+}
+
+/// The scale tones of [`clip_key`].
+pub fn clip_key_tones(s: &Session, clip: &Clip) -> [bool; 12] {
+    let (k, sc) = clip_key(s, clip);
+    tones_of(k, sc)
+}
+
+fn tones_of(key: u8, scale: u8) -> [bool; 12] {
+    let (key, scale) = (i32::from(key), i32::from(scale));
     let mut t = [false; 12];
     for d in 0..7 {
         t[(key + scale_offset(scale, d)).rem_euclid(12) as usize] = true;
@@ -106,7 +122,7 @@ fn inputs(s: &Session, clip: &Clip, tones: [bool; 12]) -> Option<Inputs> {
 /// the tempo, its settings); `None` for a clip without a cleanup. Two equal prints derive the
 /// same cleaned notes.
 pub(crate) fn fingerprint(s: &Session, clip: &Clip) -> Option<u64> {
-    inputs(s, clip, key_tones(s)).map(|i| i.print)
+    inputs(s, clip, clip_key_tones(s, clip)).map(|i| i.print)
 }
 
 /// Whether a clip's preview is kept as it is: on a frozen track, the render played the cleaned
@@ -122,10 +138,10 @@ pub(crate) fn any_stale(s: &Session) -> bool {
     if !s.all_clips().any(|c| c.midi_cleanup.is_some()) {
         return false;
     }
-    let tones = key_tones(s);
     s.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(move |p| p.clips.iter().map(move |c| (t, c)))).any(|(t, c)| {
         !kept(t, c)
-            && inputs(s, c, tones).is_some_and(|i| c.midi_cleanup.as_ref().and_then(|m| m.preview.as_ref()).is_none_or(|p| p.inputs != i.print))
+            && inputs(s, c, clip_key_tones(s, c))
+                .is_some_and(|i| c.midi_cleanup.as_ref().and_then(|m| m.preview.as_ref()).is_none_or(|p| p.inputs != i.print))
     })
 }
 
@@ -135,7 +151,6 @@ pub(crate) fn refresh(s: &mut Session) {
     if !s.all_clips().any(|c| c.midi_cleanup.is_some()) {
         return;
     }
-    let tones = key_tones(s);
     let mut fresh: Vec<(usize, usize, usize, Arc<CleanupPreview>)> = Vec::new();
     for (ti, t) in s.tracks.iter().enumerate() {
         for (pi, p) in t.playlists.iter().enumerate() {
@@ -143,7 +158,7 @@ pub(crate) fn refresh(s: &mut Session) {
                 if kept(t, c) {
                     continue;
                 }
-                let Some(i) = inputs(s, c, tones) else { continue };
+                let Some(i) = inputs(s, c, clip_key_tones(s, c)) else { continue };
                 if c.midi_cleanup.as_ref().and_then(|m| m.preview.as_ref()).is_some_and(|p| p.inputs == i.print) {
                     continue;
                 }

@@ -108,6 +108,7 @@ mod desktop {
     /// The `edit` kind as the report names it.
     fn kind_name(k: EditKind) -> &'static str {
         match k {
+            EditKind::OutOfKey => "out of key",
             EditKind::WrongNote => "wrong note",
             EditKind::HeldOver => "held over",
             EditKind::LegatoTrim => "legato trim",

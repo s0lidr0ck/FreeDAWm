@@ -8,7 +8,8 @@
 //! and UI-free: the engine derives a clip's cleaned notes from its original notes, the chord track,
 //! the key and the clip's [`CleanupSettings`], so the cleanup stays adjustable until committed.
 //!
-//! Stages, in order: Wrong notes → Held over chord change → Legato → Extend.
+//! Stages, in order: Out of key (when switched on) → Wrong notes → Held over chord change → Legato
+//! → Extend.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,11 +57,13 @@ pub struct CleanupSettings {
     pub extend: u8,
     /// Never remove the top voice, passing notes or sus2/sus4 colour tones.
     pub protect_melody: bool,
+    /// Remove every note whose pitch class is outside the key (Protect melody doesn't keep them).
+    pub remove_out_of_key: bool,
 }
 
 impl Default for CleanupSettings {
     fn default() -> Self {
-        Self { wrong: 40, held: 70, legato: 30, extend: 40, protect_melody: true }
+        Self { wrong: 40, held: 70, legato: 30, extend: 40, protect_melody: true, remove_out_of_key: false }
     }
 }
 
@@ -100,6 +103,8 @@ pub struct CleanupInput<'a> {
 /// What a stage did to a note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditKind {
+    /// Removed by "Remove out-of-key notes".
+    OutOfKey,
     WrongNote,
     HeldOver,
     LegatoTrim,
@@ -122,7 +127,10 @@ pub struct NoteEdit {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CleanupReport {
     pub total: usize,
+    /// Every removed note, out-of-key ones included.
     pub removed: usize,
+    /// The notes "Remove out-of-key notes" removed.
+    pub out_of_key: usize,
     pub held_trimmed: usize,
     pub legato_trimmed: usize,
     pub legato_closed: usize,
@@ -167,6 +175,7 @@ pub fn cleanup(input: &CleanupInput) -> CleanupOutput {
     }));
     work.sort_by_key(|s| (s.note.start, s.note.pitch, s.index));
 
+    out_of_key(&mut work, &ctx);
     wrong_notes(&mut work, &ctx);
     let pedal = held_over(&mut work, &ctx, input.ctrls);
     let voices = Voices::new(&work, ctx.ticks_per_ms);
@@ -391,6 +400,16 @@ fn is_protected(work: &[Slot], voices: &Voices, chords: &[ChordSpan], pos: usize
     }
 
     chord_at(chords, note.start).is_some_and(|c| matches!((pc(note.pitch) + 12 - pc(c.root)) % 12, 2 | 5))
+}
+
+/// Remove out-of-key notes: every note whose pitch class is outside the key goes, protected or not.
+fn out_of_key(work: &mut [Slot], ctx: &Ctx) {
+    if !ctx.settings.remove_out_of_key {
+        return;
+    }
+    for slot in work.iter_mut().filter(|s| s.end.is_some() && !ctx.key_tones[pc(s.note.pitch)]) {
+        slot.set_end(None, EditKind::OutOfKey);
+    }
 }
 
 /// Removes notes whose wrongness score passes the threshold the `wrong` amount sets.
@@ -781,12 +800,17 @@ fn finish(input: &CleanupInput, mut work: Vec<Slot>, pedal: PedalOut) -> Cleanup
         let Some(kind) = slot.kind else { continue };
         edits.push(NoteEdit { index: slot.index, kind, old_end: original.end(), new_end: slot.end });
         match (slot.end, kind) {
-            (None, _) => report.removed += 1,
+            (None, kind) => {
+                report.removed += 1;
+                if kind == EditKind::OutOfKey {
+                    report.out_of_key += 1;
+                }
+            }
             (Some(_), EditKind::HeldOver) => report.held_trimmed += 1,
             (Some(_), EditKind::LegatoTrim) => report.legato_trimmed += 1,
             (Some(_), EditKind::LegatoClose) => report.legato_closed += 1,
             (Some(_), EditKind::Extended) => report.extended += 1,
-            (Some(_), EditKind::WrongNote | EditKind::PedalCatch) => {}
+            (Some(_), EditKind::OutOfKey | EditKind::WrongNote | EditKind::PedalCatch) => {}
         }
     }
     let ctrls = pedal.ctrls.unwrap_or_else(|| input.ctrls.to_vec());
@@ -824,7 +848,7 @@ mod tests {
     }
 
     fn settings(wrong: u8, held: u8, legato: u8, extend: u8, protect_melody: bool) -> CleanupSettings {
-        CleanupSettings { wrong, held, legato, extend, protect_melody }
+        CleanupSettings { wrong, held, legato, extend, protect_melody, remove_out_of_key: false }
     }
 
     fn input<'a>(notes: &'a [Note], chords: &'a [ChordSpan], settings: CleanupSettings) -> CleanupInput<'a> {
@@ -854,11 +878,71 @@ mod tests {
 
     #[test]
     fn defaults_are_the_spec_values() {
-        assert_eq!(CleanupSettings::default(), CleanupSettings { wrong: 40, held: 70, legato: 30, extend: 40, protect_melody: true });
+        assert_eq!(
+            CleanupSettings::default(),
+            CleanupSettings { wrong: 40, held: 70, legato: 30, extend: 40, protect_melody: true, remove_out_of_key: false }
+        );
         // Old sessions (no field) and partial settings load with the defaults filled in.
         assert_eq!(serde_json::from_str::<CleanupSettings>("{}").ok(), Some(CleanupSettings::default()));
         assert_eq!(serde_json::from_str::<CleanupSettings>(r#"{"wrong":7}"#).ok(), Some(CleanupSettings { wrong: 7, ..CleanupSettings::default() }));
         assert_eq!(settings(101, 255, 100, 0, false).clamped(), settings(100, 100, 100, 0, false));
+    }
+
+    fn e_major() -> [bool; 12] {
+        let mut k = [false; 12];
+        for p in [4, 6, 8, 9, 11, 1, 3] {
+            k[p] = true;
+        }
+        k
+    }
+
+    #[test]
+    fn remove_out_of_key_removes_exactly_the_notes_outside_the_key() {
+        // E major: E F# G# A B C# D#. C4, F4, G4 and D4 are outside it; the rest inside. No
+        // chords, so Wrong notes and Held over do nothing; Legato and Extend are off.
+        let notes = [
+            n(64, 0, 480, 90),
+            n(60, 0, 480, 90),
+            n(66, 480, 480, 90),
+            n(65, 480, 480, 90),
+            n(68, 960, 480, 90),
+            n(67, 960, 480, 90),
+            n(62, 1440, 480, 90),
+            n(71, 1440, 480, 90),
+        ];
+        let on = CleanupSettings { remove_out_of_key: true, ..settings(0, 0, 0, 0, false) };
+        let out = cleanup(&CleanupInput { key_tones: e_major(), ..input(&notes, &[], on) });
+        let removed: Vec<u8> = out.edits.iter().filter(|e| e.new_end.is_none()).filter_map(|e| notes.get(e.index)).map(|n| n.pitch).collect();
+        let mut removed_sorted = removed.clone();
+        removed_sorted.sort_unstable();
+        assert_eq!(removed_sorted, vec![60, 62, 65, 67]);
+        assert!(out.edits.iter().all(|e| e.kind == EditKind::OutOfKey));
+        assert_eq!(out.report.out_of_key, 4);
+        assert_eq!(out.report.removed, 4);
+        let mut kept: Vec<u8> = out.sequence.notes.iter().map(|n| n.pitch).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, vec![64, 66, 68, 71]);
+        // Off (the default): nothing removed.
+        let off = cleanup(&CleanupInput { key_tones: e_major(), ..input(&notes, &[], settings(0, 0, 0, 0, false)) });
+        assert!(off.edits.is_empty());
+        assert_eq!(off.report.out_of_key, 0);
+    }
+
+    #[test]
+    fn protect_melody_does_not_protect_out_of_key_notes() {
+        // The top voice, out of key: Protect melody would keep it from Wrong notes, not from this.
+        let notes = [n(52, 0, 960, 90), n(56, 0, 960, 90), n(72, 0, 960, 110)];
+        let on = CleanupSettings { remove_out_of_key: true, ..settings(0, 0, 0, 0, true) };
+        let out = cleanup(&CleanupInput { key_tones: e_major(), ..input(&notes, &[], on) });
+        assert_eq!(out.edits, vec![edit(2, EditKind::OutOfKey, 960, None)]);
+    }
+
+    #[test]
+    fn remove_out_of_key_loads_off_from_old_sessions() {
+        let s: CleanupSettings = serde_json::from_str(r#"{"wrong":7}"#).unwrap_or_default();
+        assert!(!s.remove_out_of_key);
+        let s: CleanupSettings = serde_json::from_str(r#"{"remove_out_of_key":true}"#).unwrap_or_default();
+        assert!(s.remove_out_of_key);
     }
 
     #[test]
@@ -1359,7 +1443,16 @@ mod tests {
 
     #[test]
     fn summary_line() {
-        let r = CleanupReport { total: 412, removed: 6, held_trimmed: 10, legato_trimmed: 4, legato_closed: 1, extended: 2, pedal_changes: 0 };
+        let r = CleanupReport {
+            total: 412,
+            removed: 6,
+            held_trimmed: 10,
+            legato_trimmed: 4,
+            legato_closed: 1,
+            extended: 2,
+            out_of_key: 0,
+            pedal_changes: 0,
+        };
         assert_eq!(r.summary(), "Removed 6 · trimmed 14 · extended 3 of 412 notes");
         let r = CleanupReport { pedal_changes: 3, ..r };
         assert_eq!(r.summary(), "Removed 6 · trimmed 14 · extended 3 of 412 notes · pedal changes 3");

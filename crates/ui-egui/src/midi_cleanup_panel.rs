@@ -61,6 +61,8 @@ pub fn overlays(painter: &Painter, clip: &Clip, x_of: impl Fn(i64) -> f32, y_of:
                 let r = span(n.start, e.old_end);
                 painter.rect_filled(r, 2.0, Color32::from_black_alpha(150));
                 dashed_rect(painter, r, REMOVED);
+                // Struck through: removed.
+                painter.line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, REMOVED));
             }
             Some(end) if end < e.old_end => dashed_rect(painter, span(end, e.old_end), REMOVED),
             Some(end) if end > e.old_end => {
@@ -249,8 +251,13 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, rect: Rect) {
     ui.painter().rect_filled(rect, 0.0, t.panel_bg2);
     ui.painter().line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(1.0, t.border));
     let inner = rect.shrink2(vec2(10.0, 6.0));
-    let mut ui = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::LEFT)));
-    ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+    // Reset, Remove and Commit stay in view along the bottom; the rest scrolls above them.
+    let buttons = Rect::from_min_max(pos2(inner.min.x, inner.max.y - 24.0), inner.max);
+    let scrolled = Rect::from_min_max(inner.min, pos2(inner.max.x, buttons.min.y - 4.0));
+    let mut bui = ui.new_child(UiBuilder::new().max_rect(buttons).layout(Layout::left_to_right(Align::Center)));
+    bui.set_clip_rect(rect.intersect(bui.clip_rect()));
+    let mut ui = ui.new_child(UiBuilder::new().max_rect(scrolled).layout(Layout::top_down(Align::LEFT)));
+    ui.set_clip_rect(scrolled.intersect(ui.clip_rect()));
     ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
     egui::ScrollArea::vertical().id_salt(("midi-cleanup", cid.0)).auto_shrink([false, false]).show(&mut ui, |ui| {
         ui.horizontal(|ui| {
@@ -280,6 +287,7 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, rect: Rect) {
         if ui.checkbox(&mut protect, egui::RichText::new("Protect melody").font(regular(11.0))).changed() {
             set(app, cid, "protect_melody", json!(protect));
         }
+        out_of_key_row(app, ui, cid, k.remove_out_of_key, counts.map(|r| r.out_of_key));
         match counts {
             Some(report) => {
                 let summary = report.summary();
@@ -292,32 +300,90 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, rect: Rect) {
                 );
             }
         }
-        ui.horizontal(|ui| {
-            let reset = ui.add_enabled(active, egui::Button::new("Reset")).on_hover_text("Settings back to the defaults");
-            store(ui, "reset", reset.rect);
-            if reset.clicked() {
-                set(app, cid, "reset", json!(true));
-            }
-            if active {
-                let remove =
-                    ui.add(egui::Label::new(egui::RichText::new("Remove").font(regular(10.0)).color(t.text_dim).underline()).sense(Sense::click()));
-                if remove.on_hover_text("Drop the cleanup; the take plays untouched").clicked() {
-                    let r = app.run("midi.cleanup_remove", json!({"clip": cid.0}));
-                    report(app, r);
-                }
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let commit = ui
-                    .add_enabled(active, egui::Button::new(egui::RichText::new("Commit").strong()).fill(t.mode_on))
-                    .on_hover_text("Replace the clip's notes with what plays and drop the cleanup");
-                store(ui, "commit", commit.rect);
-                if commit.clicked() {
-                    let r = app.run("midi.cleanup_commit", json!({"clip": cid.0}));
-                    report(app, r);
-                }
-            });
-        });
     });
+    {
+        let ui = &mut bui;
+        let reset = ui.add_enabled(active, egui::Button::new("Reset")).on_hover_text("Settings back to the defaults");
+        store(ui, "reset", reset.rect);
+        if reset.clicked() {
+            set(app, cid, "reset", json!(true));
+        }
+        if active {
+            let remove =
+                ui.add(egui::Label::new(egui::RichText::new("Remove").font(regular(10.0)).color(t.text_dim).underline()).sense(Sense::click()));
+            if remove.on_hover_text("Drop the cleanup; the take plays untouched").clicked() {
+                let r = app.run("midi.cleanup_remove", json!({"clip": cid.0}));
+                report(app, r);
+            }
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let commit = ui
+                .add_enabled(active, egui::Button::new(egui::RichText::new("Commit").strong()).fill(t.mode_on))
+                .on_hover_text("Replace the clip's notes with what plays and drop the cleanup");
+            store(ui, "commit", commit.rect);
+            if commit.clicked() {
+                let r = app.run("midi.cleanup_commit", json!({"clip": cid.0}));
+                report(app, r);
+            }
+        });
+    }
+}
+
+/// A small on/off switch; true when clicked.
+fn toggle(ui: &mut Ui, on: bool, enabled: bool) -> egui::Response {
+    let t = Tokens::current();
+    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 14.0), if enabled { Sense::click() } else { Sense::hover() });
+    let fill = match (on, enabled) {
+        (true, true) => EXTENDED,
+        (true, false) => EXTENDED.gamma_multiply(0.4),
+        (false, _) => t.fader_track,
+    };
+    ui.painter().rect_filled(r, 7.0, fill);
+    let x = if on { r.right() - 7.0 } else { r.left() + 7.0 };
+    ui.painter().circle_filled(pos2(x, r.center().y), 5.0, if enabled { Color32::WHITE } else { t.text_dim });
+    resp
+}
+
+/// Remove out-of-key notes: a switch (off by default) that drops every note outside the session
+/// key from the cleaned notes, and the key it reads with how many notes it removed. Without a key
+/// set it is greyed out with "Set a key first".
+fn out_of_key_row(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, on: bool, removed: Option<usize>) {
+    let t = Tokens::current();
+    let (has_key, key) = {
+        let s = app.engine.session();
+        let (k, sc) = s.find_clip(cid).map_or((s.band.key, s.band.scale), |(_, c)| soundcraft_engine::midi_cleanup::clip_key(s, c));
+        (crate::session_key::has_key(s), crate::session_key::key_name(k, sc))
+    };
+    let frame =
+        egui::Frame::new().stroke(Stroke::new(1.0, if on { CHORD_TEXT } else { t.border })).corner_radius(4.0).inner_margin(egui::Margin::same(4));
+    frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let row = ui.horizontal(|ui| {
+                let sw = toggle(ui, on && has_key, has_key);
+                let text = egui::RichText::new("Remove out-of-key notes").font(bold(11.0)).color(if has_key { t.text } else { t.text_dim });
+                let label = ui.add(egui::Label::new(text).sense(if has_key { Sense::click() } else { Sense::hover() }));
+                sw.clicked() || label.clicked()
+            });
+            store(ui, "outofkey", row.response.rect);
+            if row.inner && has_key {
+                set(app, cid, "remove_out_of_key", json!(!on));
+            }
+            let line = if !has_key {
+                "Set a key first".to_string()
+            } else if on {
+                let n = removed.unwrap_or(0);
+                format!("Key: {key} (session) · {n} note{} removed", if n == 1 { "" } else { "s" })
+            } else {
+                format!("Key: {key} (session)")
+            };
+            ui.label(egui::RichText::new(&line).font(regular(10.5)).color(t.text_dim));
+            store(ui, "outofkey-line", line);
+        })
+        .response
+        .on_hover_text(
+            "Drop every note outside the session key from the cleaned notes (Protect melody doesn't keep them); nothing changes until Commit",
+        );
 }
 
 /// The chord detection row: a combo of the session's audio tracks and "Detect chords", which opens

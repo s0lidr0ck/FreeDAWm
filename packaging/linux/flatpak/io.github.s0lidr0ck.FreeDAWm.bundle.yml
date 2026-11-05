@@ -60,6 +60,7 @@ modules:
     build-commands:
       - install -Dm755 bin/freedawm /app/bin/freedawm
       - install -Dm755 bin/freedawm-cli /app/bin/freedawm-cli
+      - install -Dm755 bin/freedawm-scan /app/bin/freedawm-scan
       - install -Dm644 share/applications/io.github.s0lidr0ck.FreeDAWm.desktop /app/share/applications/io.github.s0lidr0ck.FreeDAWm.desktop
       # Session files; the runtime's shared-mime-info already knows WAV, AIFF, FLAC, MP3 and MIDI.
       - install -Dm644 share/mime/packages/io.github.s0lidr0ck.FreeDAWm.xml /app/share/mime/packages/io.github.s0lidr0ck.FreeDAWm.xml

@@ -2,8 +2,11 @@
 
 `.github/workflows/release.yml` builds FreeDAWm on GitHub's free standard runners and attaches
 the packages to a GitHub Release. The builds are **unsigned** (no Apple Developer ID, no Windows
-code-signing certificate) and the Windows build has **no ASIO** (WASAPI only; see
-[release-playbook.md](release-playbook.md) › ASIO). It uses only `GITHUB_TOKEN`.
+code-signing certificate). The Windows build has **ASIO and WASAPI**: the workflow downloads
+Steinberg's ASIO SDK 2.3.4, checks its SHA-256, and uses it under GPLv3, so the Windows packages are
+GPLv3 as a whole and carry `GPL-3.0.txt` and `ASIO-NOTICE.txt` (see
+[release-playbook.md](release-playbook.md) › ASIO). Every package includes the plugin scanner
+helper `freedawm-scan` next to the app. It uses only `GITHUB_TOKEN`.
 
 This is FreeDAWm's implementation of the shared [release playbook](release-playbook.md).
 User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase

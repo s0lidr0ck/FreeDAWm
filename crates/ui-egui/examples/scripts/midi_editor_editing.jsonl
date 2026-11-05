@@ -1,0 +1,29 @@
+# The MIDI Editor's editing (docs/superpowers/specs/2026-11-04-midi-editor-editing-design.md): the
+# demo's Keys clip with three notes selected (the note bar), ghost notes of the Lead track behind,
+# the hover details on a note, and the Cleanup panel with Remove out-of-key notes on (E major),
+# dark and light. Render with `--size 1600x1000`; shots go to docs/superpowers/specs/renders.
+{"method": "engine.execute", "params": {"command": "window.midi_editor", "params": {"value": true}}}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "bars_beats"}}}
+{"method": "engine.execute", "params": {"command": "event.add_key_change", "params": {"key": "E major", "at": 0}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Keys"]}}}
+{"steps": 8}
+{"method": "engine.execute", "params": {"command": "ui.midi_editor", "params": {"select": [0, 1, 2], "grid": "1/16"}}}
+{"steps": 6}
+{"method": "engine.execute", "params": {"command": "band.chord.add", "params": {"at": 443072, "end": 886144, "chord": "E"}}}
+{"method": "engine.execute", "params": {"command": "midi.cleanup", "params": {"clip": 25, "wrong": 0, "held": 0, "remove_out_of_key": true}}}
+{"method": "engine.execute", "params": {"command": "ui.midi_editor", "params": {"zoom": 4}}}
+{"steps": 6}
+{"click": [1254, 640]}
+{"click": [1254, 640]}
+{"method": "ui.scroll", "params": {"x": 720, "y": 760, "dy": 160}}
+{"steps": 6}
+{"hover": [300, 749]}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/midi-editor-editing-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"hover": [400, 690]}
+{"steps": 6}
+{"shot": "docs/superpowers/specs/renders/midi-editor-editing-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}

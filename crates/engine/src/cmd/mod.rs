@@ -21,6 +21,7 @@ mod clip_more;
 pub mod comp;
 mod edit;
 mod edit_more;
+pub mod editor_link;
 mod event;
 pub(crate) mod event_more;
 mod file;
@@ -190,6 +191,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(sampler::specs());
         v.extend(video::specs());
         v.extend(zoom_toggle::specs());
+        v.extend(editor_link::specs());
         v.extend(scout::specs());
         v.extend(scout_profile::specs());
         v.extend(looping::specs());

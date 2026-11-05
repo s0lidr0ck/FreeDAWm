@@ -142,6 +142,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.chords", "Detect Chords…", "AI > Detect Chords…", None),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "AI > Transcribe Lyrics…", None),
     ("ui.midi_cleanup", "MIDI Cleanup…", "AI > MIDI Cleanup…", None),
+    ("ui.midi_editor", "MIDI Editor State", "", None),
     ("window.ml_models", "ML Models", "Setup > ML Models…", None),
 ];
 
@@ -1081,6 +1082,21 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    // The MIDI Editor's state and tools: `linked` sets its 🔗 Link; Select all, Split, Join,
+    // Grid, ghosts, zoom and the note bar (`midi_edit_tools::command`).
+    if id == "ui.midi_editor" {
+        return Some(crate::midi_editor_link::command(app, p).and_then(|link| {
+            let mut v = crate::midi_edit_tools::command(app, p)?;
+            if let (Some(o), Some(l)) = (v.as_object_mut(), link.as_object()) {
+                for k in ["open", "linked"] {
+                    if let Some(x) = l.get(k) {
+                        o.insert(k.into(), x.clone());
+                    }
+                }
+            }
+            Ok(v)
+        }));
     }
     // MIDI Cleanup… opens the MIDI Editor with its Cleanup panel showing.
     if id == "ui.midi_cleanup" {

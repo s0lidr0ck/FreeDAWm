@@ -39,7 +39,7 @@ BASENAME="freedawm-$VERSION-freebsd-$ARCH"
 echo "==> FreeDAWm $VERSION for FreeBSD $ARCH"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli)
+  (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/freebsd-package"
@@ -49,8 +49,8 @@ rm -rf "$WORK"
 # ---- stage a /usr/local-style tree ---------------------------------------------------------------
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" "$STAGE/share/metainfo" \
   "$STAGE/share/icons" "$STAGE/share/doc/freedawm"
-install -m 755 "$BIN/freedawm" "$BIN/freedawm-cli" "$STAGE/bin/"
-strip "$STAGE/bin/freedawm" "$STAGE/bin/freedawm-cli" 2>/dev/null || true
+install -m 755 "$BIN/freedawm" "$BIN/freedawm-cli" "$BIN/freedawm-scan" "$STAGE/bin/"
+strip "$STAGE/bin/freedawm" "$STAGE/bin/freedawm-cli" "$STAGE/bin/freedawm-scan" 2>/dev/null || true
 # The desktop entry, MIME type and metainfo are the freedesktop files the Linux packages use.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"

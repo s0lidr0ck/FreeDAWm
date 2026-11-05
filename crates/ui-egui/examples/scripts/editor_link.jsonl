@@ -1,0 +1,41 @@
+# The editors' timeline link (docs/superpowers/specs/2026-11-04-editor-timeline-link-design.md):
+# the Vocal Editor (a synthetic sung line on Lead Vox) and the MIDI Editor (the demo's Keys clip),
+# each with its Link button and its ruler in the main counter's format (Bars|Beats, then
+# Min:Secs), dark and light. Render with `--size 1600x1000`; shots go to docs/superpowers/specs/renders.
+{"studio_demo": {"tracks": [{"name": "Lead Vox", "notes": [[64, 0.6], [66, 0.6], [68, 0.6], [69, 0.6], [73, 0.6], [71, 0.6], [66, 0.6], [68, 0.6], [71, 0.6], [68, 0.6], [66, 0.6], [64, 0.6]]}], "key": "E", "chords": [[0, 2, "E"], [2, 4, "A"], [4, 6, "B"], [6, 8.2, "E"]], "view": [0, 8.2], "edit": "Lead Vox"}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_studio", "params": {"value": false}}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_panel", "params": {"value": false}}}
+{"method": "engine.execute", "params": {"command": "window.midi_editor", "params": {"value": false}}}
+{"vocal_dock": 560}
+{"steps": 10}
+{"vocal_view": [0, 8.2]}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "bars_beats"}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"start": 163200}}}
+{"steps": 6}
+{"shot": "docs/superpowers/specs/renders/editor-link-vocal-bars-dark.png"}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "min_secs"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-vocal-minsecs-dark.png"}
+{"system_theme": "light"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "light"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-vocal-minsecs-light.png"}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "bars_beats"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-vocal-bars-light.png"}
+{"method": "engine.execute", "params": {"command": "window.vocal_editor", "params": {"value": false}}}
+{"method": "engine.execute", "params": {"command": "window.midi_editor", "params": {"value": true}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Keys"]}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"start": 1305600}}}
+{"steps": 8}
+{"shot": "docs/superpowers/specs/renders/editor-link-midi-bars-light.png"}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "min_secs"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-midi-minsecs-light.png"}
+{"system_theme": "dark"}
+{"method": "engine.execute", "params": {"command": "ui.theme", "params": {"mode": "dark"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-midi-minsecs-dark.png"}
+{"method": "engine.execute", "params": {"command": "view.main_counter", "params": {"format": "bars_beats"}}}
+{"steps": 4}
+{"shot": "docs/superpowers/specs/renders/editor-link-midi-bars-dark.png"}

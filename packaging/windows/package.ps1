@@ -5,7 +5,14 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     freedawm-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    freedawm-<version>-windows-<arch>-portable.zip   freedawm.exe + freedawm-cli.exe + DLLs
+    freedawm-<version>-windows-<arch>-portable.zip   freedawm.exe + freedawm-cli.exe + freedawm-scan.exe + DLLs
+
+  freedawm-scan.exe is the plugin scanner helper: the app scans plugins only through it, next to itself.
+
+  -Asio builds the app with ASIO audio devices (`--features soundcraft/asio`). It needs Steinberg's
+  ASIO SDK unzipped with CPAL_ASIO_DIR pointing at it (the folder holding common/asio.h). Steinberg
+  licenses the SDK under GPLv3 or its own agreement; these builds use GPLv3, so the package then
+  carries GPL-3.0.txt and ASIO-NOTICE.txt (see docs/release-playbook.md › ASIO).
 
   DirectML.dll and the Visual C++ runtime DLLs are staged next to the programs (app-local), so
   neither the MSI nor the portable zip needs the VC++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -16,12 +23,14 @@
 
 .EXAMPLE
   pwsh packaging/windows/package.ps1 -Arch x64
+  pwsh packaging/windows/package.ps1 -Arch x64 -Asio   # with ASIO; needs CPAL_ASIO_DIR
   pwsh packaging/windows/package.ps1 -Arch x86 -SkipBuild
   pwsh packaging/windows/package.ps1 -Arch arm64     # cross-compiled; needs the MSVC ARM64 build tools
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [switch] $Asio
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -64,7 +73,14 @@ if (-not $SkipBuild) {
   # is compiled against it, so +crt-static fails to link. The runtime DLLs ship app-locally below.
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:FREEDAWM_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p soundcraft -p soundcraft-cli --target $Target }
+  $features = @()
+  if ($Asio) {
+    if (-not $env:CPAL_ASIO_DIR -or -not (Test-Path (Join-Path $env:CPAL_ASIO_DIR 'common\asio.h'))) {
+      throw '-Asio needs CPAL_ASIO_DIR set to an unzipped ASIO SDK (the folder holding common\asio.h)'
+    }
+    $features = @('--features', 'soundcraft/asio')
+  }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan --target $Target @features }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -79,7 +95,7 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('freedawm.exe', 2), @('freedawm-cli.exe', 3))) {
+foreach ($check in @(@('freedawm.exe', 2), @('freedawm-cli.exe', 3), @('freedawm-scan.exe', 3))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -88,7 +104,24 @@ foreach ($check in @(@('freedawm.exe', 2), @('freedawm-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'freedawm.exe'), (Join-Path $Bin 'freedawm-cli.exe') $Stage
+Copy-Item (Join-Path $Bin 'freedawm.exe'), (Join-Path $Bin 'freedawm-cli.exe'), (Join-Path $Bin 'freedawm-scan.exe') $Stage
+if ($Asio) {
+  # The ASIO SDK is used under GPLv3, so this build as a whole is distributed under GPLv3.
+  Copy-Item (Join-Path $PSScriptRoot 'GPL-3.0.txt') $Stage
+  @(
+    "FreeDAWm $Version for Windows ($Arch), built with ASIO support.",
+    '',
+    "This build includes code from Steinberg's ASIO SDK, which Steinberg Media Technologies GmbH",
+    'licenses under the GNU General Public License version 3 (or its own licence agreement). It is',
+    'used here under GPLv3, so this Windows build as a whole is distributed under GPLv3: see',
+    'GPL-3.0.txt. FreeDAWm''s own source code is MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).',
+    '',
+    'Complete corresponding source: https://github.com/s0lidr0ck/FreeDAWm (the tag for this version),',
+    'and the ASIO SDK from https://www.steinberg.net/developers/.',
+    '',
+    'ASIO is a trademark and software of Steinberg Media Technologies GmbH.'
+  ) | Set-Content -Encoding utf8 (Join-Path $Stage 'ASIO-NOTICE.txt')
+}
 
 # DLLs the programs load, staged next to them (the MSI installs every staged *.dll):
 # - DirectML.dll, ONNX Runtime's GPU backend, which ort's `copy-dylibs` puts next to the build;
@@ -117,7 +150,7 @@ if ($crtDir) {
   Write-Warning 'Visual C++ runtime DLLs not found: the package will need the VC++ redistributable'
 }
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'freedawm.exe') (Join-Path $Stage 'freedawm-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'freedawm.exe') (Join-Path $Stage 'freedawm-cli.exe') (Join-Path $Stage 'freedawm-scan.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "freedawm-$Version-windows-$Arch.msi"
@@ -135,6 +168,7 @@ $Portable = Join-Path $TargetDir "windows-package\freedawm-$Version-windows-$Arc
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe'), (Join-Path $Stage '*.dll') $Portable
+Get-ChildItem -Path $Stage -Filter '*.txt' -File | ForEach-Object { Copy-Item $_.FullName $Portable }
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

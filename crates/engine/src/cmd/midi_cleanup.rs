@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "MIDI Cleanup",
             [],
             None,
-            "{clip? | clips?, wrong?, held?, legato?, extend?: 0..100 (% of each stage), protect_melody?: bool, original?: bool (true plays the untouched take), toggle?: bool (flips original), reset?: bool (settings back to defaults)} — non-destructive cleanup of MIDI clips against the band's chord lane and key: the first call gives the clip settings (defaults 40/70/30/40), the cleaned notes are derived (recomputed when notes, chords, key, tempo or settings change) and play instead of the take; undoable (the UI merges a drag into one step)",
+            "{clip? | clips?, wrong?, held?, legato?, extend?: 0..100 (% of each stage), protect_melody?: bool, remove_out_of_key?: bool (drop every note outside the session key), original?: bool (true plays the untouched take), toggle?: bool (flips original), reset?: bool (settings back to defaults)} — non-destructive cleanup of MIDI clips against the band's chord lane and key: the first call gives the clip settings (defaults 40/70/30/40), the cleaned notes are derived (recomputed when notes, chords, key, tempo or settings change) and play instead of the take; undoable (the UI merges a drag into one step)",
             always,
             cleanup
         ),
@@ -74,6 +74,10 @@ fn cleanup(e: &mut Engine, p: &Value) -> Result<Value> {
     let legato = amount(p, "legato")?;
     let extend = amount(p, "extend")?;
     let protect = p.get("protect_melody").and_then(Value::as_bool);
+    let out_of_key = match p.get("remove_out_of_key") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(ID, "`remove_out_of_key` must be a boolean"))?),
+    };
     let original = p.get("original").and_then(Value::as_bool);
     let toggle = bool_or(p, "toggle", false);
     let reset = bool_or(p, "reset", false);
@@ -91,6 +95,7 @@ fn cleanup(e: &mut Engine, p: &Value) -> Result<Value> {
         k.legato = legato.unwrap_or(k.legato);
         k.extend = extend.unwrap_or(k.extend);
         k.protect_melody = protect.unwrap_or(k.protect_melody);
+        k.remove_out_of_key = out_of_key.unwrap_or(k.remove_out_of_key);
         m.original = original.unwrap_or(m.original);
         if toggle {
             m.original = !m.original;
@@ -124,10 +129,10 @@ fn report(s: &Session, ids: &[ClipId]) -> Value {
         let k = m.settings;
         out.push(json!({
             "clip": id.0,
-            "settings": {"wrong": k.wrong, "held": k.held, "legato": k.legato, "extend": k.extend, "protect_melody": k.protect_melody},
+            "settings": {"wrong": k.wrong, "held": k.held, "legato": k.legato, "extend": k.extend, "protect_melody": k.protect_melody, "remove_out_of_key": k.remove_out_of_key},
             "original": m.original,
             "report": {
-                "total": report.total, "removed": report.removed, "held_trimmed": report.held_trimmed,
+                "total": report.total, "removed": report.removed, "out_of_key": report.out_of_key, "held_trimmed": report.held_trimmed,
                 "legato_trimmed": report.legato_trimmed, "legato_closed": report.legato_closed,
                 "extended": report.extended, "pedal_changes": report.pedal_changes,
             },
@@ -232,6 +237,68 @@ mod tests {
         assert_eq!(notes(&e, id).len(), 4, "the take is untouched");
     }
 
+    /// A clip in E major (no chords) with E4, C4, G#4, F4, B4 and D4: C, F and D are out of key.
+    fn e_major_setup() -> (Engine, ClipId) {
+        let mut e = Engine::default();
+        let s = e.session_mut();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let id = s.new_clip_id();
+        let pitches = [64, 60, 68, 65, 71, 62];
+        let seq = Sequence { notes: pitches.iter().enumerate().map(|(i, p)| note(*p, 90, i as i64 * 480, 480)).collect(), ctrls: Vec::new() };
+        let len = s.sample_rate.samples(4.0);
+        crate::edit::place_clip(s, t, soundcraft_model::Clip::midi(id, "take", 0, len, seq));
+        s.band.key = 4;
+        s.band.scale = 0;
+        (e, id)
+    }
+
+    #[test]
+    fn remove_out_of_key_removes_exactly_the_out_of_key_notes_and_nothing_changes_until_commit() {
+        let (mut e, id) = e_major_setup();
+        let take = notes(&e, id);
+        let r =
+            e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 0, "held": 0, "legato": 0, "extend": 0, "remove_out_of_key": true})).unwrap();
+        assert_eq!(r["clips"][0]["settings"]["remove_out_of_key"], true);
+        assert_eq!(r["clips"][0]["report"]["out_of_key"], 3);
+        let mut playing: Vec<u8> = clip(&e, id).midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
+        playing.sort_unstable();
+        assert_eq!(playing, vec![64, 68, 71]);
+        assert_eq!(notes(&e, id), take, "the take is untouched until Commit");
+        // Original plays the take; Cleaned the cleaned notes again.
+        e.execute("midi.cleanup", &json!({"clip": id.0, "original": true})).unwrap();
+        assert_eq!(clip(&e, id).midi_playing().unwrap().notes.len(), 6);
+        e.execute("midi.cleanup", &json!({"clip": id.0, "original": false})).unwrap();
+        // Reset turns it back off.
+        e.execute("midi.cleanup", &json!({"clip": id.0, "reset": true})).unwrap();
+        assert!(!clip(&e, id).midi_cleanup.as_ref().unwrap().settings.remove_out_of_key);
+        e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 0, "held": 0, "legato": 0, "extend": 0, "remove_out_of_key": true})).unwrap();
+        e.execute("midi.cleanup_commit", &json!({"clip": id.0})).unwrap();
+        let mut left: Vec<u8> = notes(&e, id).iter().map(|n| n.pitch).collect();
+        left.sort_unstable();
+        assert_eq!(left, vec![64, 68, 71]);
+    }
+
+    #[test]
+    fn remove_out_of_key_reads_the_key_change_where_the_clip_starts() {
+        let (mut e, id) = e_major_setup();
+        // The band key back to C major; the Key ruler says E major from the start.
+        e.session_mut().band.key = 0;
+        e.execute("event.add_key_change", &json!({"key": "E major", "at": 0})).unwrap();
+        let r =
+            e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 0, "held": 0, "legato": 0, "extend": 0, "remove_out_of_key": true})).unwrap();
+        assert_eq!(r["clips"][0]["report"]["out_of_key"], 3);
+        // A key change to C major re-derives the preview: now only G# is out.
+        e.execute("event.key_change_edit", &json!({"at": 0, "key": "C major"})).unwrap();
+        let p = clip(&e, id).midi_cleanup.as_ref().and_then(|m| m.preview.clone()).unwrap();
+        assert_eq!(p.out.report.out_of_key, 1);
+    }
+
+    #[test]
+    fn remove_out_of_key_must_be_a_boolean() {
+        let (mut e, id) = e_major_setup();
+        assert!(e.execute("midi.cleanup", &json!({"clip": id.0, "remove_out_of_key": 3})).is_err());
+    }
+
     #[test]
     fn a_call_that_changes_nothing_adds_no_undo_step() {
         let (mut e, id) = setup();
@@ -315,7 +382,10 @@ mod tests {
         let (mut e, id) = setup();
         e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 90, "held": 5, "legato": 6, "extend": 7, "protect_melody": false})).unwrap();
         let r = e.execute("midi.cleanup", &json!({"clip": id.0, "reset": true})).unwrap();
-        assert_eq!(r["clips"][0]["settings"], json!({"wrong": 40, "held": 70, "legato": 30, "extend": 40, "protect_melody": true}));
+        assert_eq!(
+            r["clips"][0]["settings"],
+            json!({"wrong": 40, "held": 70, "legato": 30, "extend": 40, "protect_melody": true, "remove_out_of_key": false})
+        );
     }
 
     #[test]

@@ -92,9 +92,16 @@
         <File Id="SoundcraftCliExe" Source="$(var.BinDir)\freedawm-cli.exe" KeyPath="yes" />
       </Component>
 
+      <!-- The plugin scanner helper: the app scans plugins only through it, next to itself. -->
+      <Component Id="SoundcraftScan" Guid="7D3A0E52-9B4C-4F1E-A8C6-2E5B91D04F73">
+        <File Id="SoundcraftScanExe" Source="$(var.BinDir)\freedawm-scan.exe" KeyPath="yes" />
+      </Component>
+
       <!-- The DLLs package.ps1 stages next to the programs: DirectML (ONNX Runtime's GPU
            backend) and the app-local Visual C++ runtime. -->
       <Files Include="$(var.BinDir)\*.dll" />
+      <!-- With -Asio: GPL-3.0.txt and ASIO-NOTICE.txt. -->
+      <Files Include="$(var.BinDir)\*.txt" />
     </ComponentGroup>
   </Fragment>
 </Wix>

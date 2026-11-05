@@ -131,8 +131,8 @@ fn switch_and_reset_buttons() {
     app.run("midi.cleanup", json!({"clip": cid.0, "wrong": 90})).unwrap();
     frame(&ctx, &mut app, vec![]);
     let sw = control(&ctx, "switch").unwrap();
-    // The right half is "Original".
-    click(&ctx, &mut app, pos2(sw.right() - 8.0, sw.center().y));
+    // The right half is "Original" (clear of the scroll bar the taller panel can show).
+    click(&ctx, &mut app, pos2(sw.right() - 30.0, sw.center().y));
     assert!(clip(&app, cid).midi_cleanup.unwrap().original);
     click(&ctx, &mut app, pos2(sw.left() + 8.0, sw.center().y));
     assert!(!clip(&app, cid).midi_cleanup.unwrap().original);
@@ -199,8 +199,78 @@ fn delete_with_the_panel_hidden_works_off_the_roll() {
 fn original_on_a_clip_without_cleanup_creates_nothing() {
     let (ctx, mut app, cid) = setup(true);
     let sw = control(&ctx, "switch").unwrap();
-    click(&ctx, &mut app, pos2(sw.right() - 8.0, sw.center().y));
+    click(&ctx, &mut app, pos2(sw.right() - 30.0, sw.center().y));
     assert!(clip(&app, cid).midi_cleanup.is_none(), "the take already plays: nothing to switch");
+}
+
+fn line(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<String>(Id::new("soundcraft-midi-cleanup-outofkey-line")))
+}
+
+#[test]
+fn remove_out_of_key_removes_exactly_the_out_of_key_notes_in_e_major_until_commit() {
+    let (ctx, mut app, cid) = setup(false);
+    {
+        let s = app.engine.session_mut();
+        s.band.key = 4;
+        s.band.scale = 0;
+    }
+    // Synthetic notes: E major's E, G#, B and the foreign C, F, D.
+    let pitches = [64u8, 60, 68, 65, 71, 62];
+    let notes: Vec<serde_json::Value> =
+        pitches.iter().enumerate().map(|(i, p)| json!({"pitch": p, "start": i as i64 * 480, "length": 480})).collect();
+    let all: Vec<usize> = (0..notes_len(&app, cid)).collect();
+    app.run("midi.note_delete", json!({"clip": cid.0, "indices": all})).unwrap();
+    app.run("midi.notes_add", json!({"clip": cid.0, "notes": notes})).unwrap();
+    // Only Legato and Extend would move ends: off, so only the switch acts.
+    app.run("midi.cleanup", json!({"clip": cid.0, "wrong": 0, "held": 0, "legato": 0, "extend": 0})).unwrap();
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(line(&ctx).as_deref(), Some("Key: E major (session)"));
+    let take = clip(&app, cid).content.clone();
+    let r = control(&ctx, "outofkey").expect("the switch is drawn");
+    click(&ctx, &mut app, pos2(r.left() + 10.0, r.center().y));
+    let c = clip(&app, cid);
+    let m = c.midi_cleanup.as_ref().unwrap();
+    assert!(m.settings.remove_out_of_key, "the switch turned it on");
+    let p = m.preview.as_ref().unwrap();
+    let ClipContent::Midi { sequence } = &c.content else { panic!("not MIDI") };
+    let mut removed: Vec<u8> =
+        p.out.edits.iter().filter(|e| e.new_end.is_none()).filter_map(|e| sequence.notes.get(e.index)).map(|n| n.pitch).collect();
+    removed.sort_unstable();
+    assert_eq!(removed, vec![60, 62, 65]);
+    assert_eq!(line(&ctx).as_deref(), Some("Key: E major (session) · 3 notes removed"));
+    assert_eq!(c.content, take, "nothing changes until Commit");
+    // Original plays the take; Commit keeps what plays.
+    app.run("midi.cleanup", json!({"clip": cid.0, "original": true})).unwrap();
+    assert_eq!(clip(&app, cid).midi_playing().map(|q| q.notes.len()), Some(6));
+    app.run("midi.cleanup", json!({"clip": cid.0, "original": false})).unwrap();
+    app.run("midi.cleanup_commit", json!({"clip": cid.0})).unwrap();
+    let ClipContent::Midi { sequence } = clip(&app, cid).content else { panic!("not MIDI") };
+    let mut left: Vec<u8> = sequence.notes.iter().map(|n| n.pitch).collect();
+    left.sort_unstable();
+    assert_eq!(left, vec![64, 68, 71]);
+}
+
+fn notes_len(app: &SoundApp, cid: ClipId) -> usize {
+    match &clip(app, cid).content {
+        ClipContent::Midi { sequence } => sequence.notes.len(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn remove_out_of_key_needs_a_key() {
+    let (ctx, mut app, cid) = setup(false);
+    app.run("midi.cleanup", json!({"clip": cid.0})).unwrap();
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(line(&ctx).as_deref(), Some("Set a key first"));
+    let r = control(&ctx, "outofkey").unwrap();
+    click(&ctx, &mut app, pos2(r.left() + 10.0, r.center().y));
+    assert!(!clip(&app, cid).midi_cleanup.unwrap().settings.remove_out_of_key, "greyed out: the click does nothing");
 }
 
 #[test]

@@ -67,6 +67,8 @@ contents:
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/bin/freedawm-cli
     dst: /usr/bin/freedawm-cli
+  - src: ${STAGE}/usr/bin/freedawm-scan
+    dst: /usr/bin/freedawm-scan
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/

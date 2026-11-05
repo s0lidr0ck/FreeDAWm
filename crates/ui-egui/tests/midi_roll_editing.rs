@@ -189,6 +189,12 @@ fn the_pencil_drags_out_a_length_and_reuses_it_with_the_last_velocity() {
     drag(&mut h, p0, p1);
     assert_eq!(psl(&h).last(), Some(&(72, 2880, 1440)));
     assert_eq!(h.state().midi.last_length, Some(1440));
+    // Row 74 sits under the ruler at the roll's top: the notes scroll down two rows first.
+    let c = clip(&h);
+    if let Some(v) = h.state_mut().midi.views.get_mut(&c) {
+        v.scroll = (v.scroll - 2.0 * v.row_h).max(0.0);
+    }
+    h.step();
     let p0 = at(&h, 500, 74);
     click(&mut h, p0);
     let n = notes(&h);

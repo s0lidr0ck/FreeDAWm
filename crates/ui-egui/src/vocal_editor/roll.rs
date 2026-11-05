@@ -13,7 +13,7 @@ use egui::{Align2, Color32, CornerRadius, Painter, Pos2, Rect, Sense, Shape, Str
 use serde_json::json;
 use soundcraft_engine::vocal::{NoteRef, SessionScale};
 use soundcraft_model::{AnalysisKey, Clip, ClipId, Session, TrackId};
-use soundcraft_time::Samples;
+use soundcraft_time::{Range, Samples};
 use soundcraft_vocal::{EditCurves, Note, NoteEdit, NoteId, ScaleAt, Transition, VocalAnalysis, moved_target, target_cents, typical_level_db};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -619,17 +619,6 @@ fn grid(painter: &Painter, s: &Session, a: &Areas, v: &RollView, scale: Option<s
     fills
 }
 
-/// Seconds between ruler labels: the smallest of a few steps that leaves 60 px between them.
-fn ruler_step(v: &RollView, rate: f64) -> f64 {
-    let px_per_sec = f64::from(v.rect.width()) / ((v.t1 - v.t0).max(1) as f64 / rate);
-    [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0].into_iter().find(|s| s * px_per_sec >= 60.0).unwrap_or(600.0)
-}
-
-fn fmt_secs(secs: f64) -> String {
-    let r = (secs * 100.0).round() / 100.0;
-    if (r - r.round()).abs() < 1e-9 { format!("{}s", r.round() as i64) } else { format!("{r}s").trim_end_matches('0').to_string() }
-}
-
 /// Draws the chord and key strips; returns the key strip's first text (for the tests).
 fn strips(painter: &Painter, s: &Session, a: &Areas, v: &RollView, t: &Tokens, has_key: bool) -> String {
     // Chords.
@@ -677,35 +666,14 @@ fn strips(painter: &Painter, s: &Session, a: &Areas, v: &RollView, t: &Tokens, h
         strip = format!("No key set \u{b7} {HINT}");
         kp.text(pos2(a.key.left() + 6.0, a.key.center().y), Align2::LEFT_CENTER, &strip, regular(11.5), text_c);
     }
-    // Ruler.
-    painter.rect_filled(a.ruler, 0.0, t.panel_bg);
-    let rate = f64::from(sr.hz().max(1));
-    let step = ruler_step(v, rate);
-    let first = ((v.t0 as f64 / rate) / step).ceil() as i64;
-    let rp = painter.with_clip_rect(a.ruler);
-    for k in first.. {
-        let secs = k as f64 * step;
-        let at = (secs * rate) as Samples;
-        if at > v.t1 || k > first + 400 {
-            break;
-        }
-        let x = v.x(at);
-        rp.line_segment([pos2(x, a.ruler.bottom() - 7.0), pos2(x, a.ruler.bottom())], Stroke::new(1.0, t.ruler_tick));
-        rp.text(pos2(x + 3.0, a.ruler.center().y - 1.0), Align2::LEFT_CENTER, fmt_secs(secs), regular(10.5), t.text_dim);
-    }
     strip
 }
 
-/// The time grid lines over the rows, at the ruler's step (and half steps).
-fn time_grid(painter: &Painter, v: &RollView, rate: f64, t: &Tokens) {
-    let step = ruler_step(v, rate) / 2.0;
-    let first = ((v.t0 as f64 / rate) / step).ceil() as i64;
-    for k in first..first + 800 {
-        let at = (k as f64 * step * rate) as Samples;
-        if at > v.t1 {
-            break;
-        }
-        let major = k % 2 == 0;
+/// The time grid lines over the rows, at the ruler's ticks (the main counter's format: bars and
+/// beats in Bars|Beats, following tempo and meter changes).
+fn time_grid(painter: &Painter, s: &Session, v: &RollView, t: &Tokens) {
+    let spp = (v.t1 - v.t0).max(1) as f64 / f64::from(v.rect.width().max(1.0));
+    for (at, major) in crate::timeline_link::marks(s, Range::new(v.t0, v.t1), spp, s.edit.main_counter, s.frame_rate) {
         let c = if dark(t) {
             if major { Color32::from_rgb(58, 59, 65) } else { Color32::from_rgb(47, 48, 53) }
         } else if major {
@@ -859,9 +827,11 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     hook(ui.ctx(), "row-fills", fills);
     let strip = strips(&painter, &s, a, &v, &t, has_key);
     hook(ui.ctx(), "key-strip", strip);
-    let rate = f64::from(s.sample_rate.hz().max(1));
+    // The ruler: the main ruler's format and ticks (shared code); the playhead is drawn below.
+    crate::timeline_link::editor_ruler(ui, &s, "vocal", a.ruler, Range::new(v.t0, v.t1), &|at| v.x(at), None);
     let roll_p = painter.with_clip_rect(a.roll);
-    time_grid(&roll_p, &v, rate, &t);
+    time_grid(&roll_p, &s, &v, &t);
+    let rate = f64::from(s.sample_rate.hz().max(1));
     // Clips not analysed yet show their audio until their notes land.
     for t in &edit_tracks {
         super::draw_waves(app, ui, *t, a.roll, (v.t0, v.t1), true);

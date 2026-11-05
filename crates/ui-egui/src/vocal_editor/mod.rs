@@ -111,6 +111,8 @@ pub struct VocalEditorState {
     pub last_edit_scroll: Option<Samples>,
     /// The Vocal Studio: every vocal track in one view (off: the plain editor).
     pub studio: studio::StudioState,
+    /// Following the playhead while linked ([`follow_playhead`]).
+    pub follow: crate::timeline_link::EditorFollow,
 }
 
 impl Default for VocalEditorState {
@@ -141,6 +143,7 @@ impl Default for VocalEditorState {
             hand_zoom: false,
             last_edit_scroll: None,
             studio: studio::StudioState::default(),
+            follow: crate::timeline_link::EditorFollow::default(),
         }
     }
 }
@@ -242,8 +245,12 @@ fn sync_view(app: &mut SoundApp, track: TrackId, roll_w: f32) {
         app.vocal.last_edit_scroll = Some(scroll);
         return;
     };
+    // Linked and stopped, the roll moves with the Edit window's scroll; while playing it
+    // follows the playhead itself, and unlinked it stays where it is put.
     if let Some(last) = app.vocal.last_edit_scroll
         && last != scroll
+        && linked(app)
+        && !playing(app)
     {
         // The Edit window back at the start takes the roll there too: a zoom about an anchor
         // can leave the roll's edge ahead of the Edit window's, and the Edit window can't
@@ -262,6 +269,34 @@ fn sync_view(app: &mut SoundApp, track: TrackId, roll_w: f32) {
     app.vocal.t0 = Some(t0);
 }
 
+/// Whether the Vocal Editor is linked (its 🔗 Link button; on by default).
+pub fn linked(app: &SoundApp) -> bool {
+    soundcraft_engine::cmd::editor_link::linked(app.engine.session(), soundcraft_engine::cmd::editor_link::VOCAL_UNLINKED)
+}
+
+/// The transport plays (a note preview aside: it is not followed).
+fn playing(app: &SoundApp) -> bool {
+    app.is_playing() && app.vocal.preview.is_none()
+}
+
+/// Linked, the roll follows the playhead itself (Options › Scrolling), every frame it is drawn,
+/// whether the Edit window shows or not ([`crate::timeline_link::EditorFollow`]).
+fn follow_playhead(app: &mut SoundApp, roll_w: f32) {
+    // A note preview plays and puts the playhead back: not a locate, nothing to follow.
+    if app.vocal.preview.is_some() {
+        return;
+    }
+    let (t0, t1) = view_range(app, roll_w);
+    let (mode, jump) = {
+        let s = app.engine.session();
+        (crate::timeline_link::Follow::of(s), crate::timeline_link::frame_jump(s.sample_rate.hz()))
+    };
+    let (on, playing, pos) = (linked(app), app.is_playing(), app.position());
+    if let Some(to) = app.vocal.follow.update(on, mode, playing, pos, t0, t1.saturating_sub(t0), jump) {
+        app.vocal.t0 = Some(to);
+    }
+}
+
 /// The session time the roll shows across `w` px: its own view ([`sync_view`]).
 pub fn view_range(app: &SoundApp, w: f32) -> (Samples, Samples) {
     let t0 = app.vocal.t0.unwrap_or(app.engine.session().edit.zoom.scroll);
@@ -275,6 +310,7 @@ pub fn view_range(app: &SoundApp, w: f32) -> (Samples, Samples) {
 pub fn set_zoom_factor(app: &mut SoundApp, f: f32) {
     app.ui.vocal_zoom_factor = f;
     app.vocal.hand_zoom = false;
+    app.vocal.follow.user_moved = true;
     app.ui.status = format!("Vocal Editor zoom {} the Edit window's", zoom_label(f));
 }
 
@@ -337,6 +373,7 @@ pub fn open_at(app: &mut SoundApp, track: TrackId, at: Samples, select: Option<N
     // The roll follows the Edit window's scroll from here, at its own zoom.
     app.vocal.t0 = None;
     app.vocal.spp = None;
+    app.vocal.follow = crate::timeline_link::EditorFollow::opened_at();
     app.vocal.pending_open = Some((track, at, select));
     app.vocal.centred = Some(track);
 }
@@ -345,6 +382,15 @@ pub fn open_at(app: &mut SoundApp, track: TrackId, at: Samples, select: Option<N
 /// `at` (default: the clip's start, else the playhead) when one is given.
 pub fn open_command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     const ID: &str = "ui.vocal_editor";
+    // `linked` sets the 🔗 Link (and alone opens nothing); every answer reports it.
+    if let Some(v) = p.get("linked") {
+        let on = v.as_bool().ok_or("`linked` must be true or false")?;
+        app.run("view.vocal_editor_link", json!({"value": on}))?;
+        if p.as_object().is_some_and(|o| o.len() == 1) {
+            return Ok(json!({"open": app.ui.show_vocal_editor, "linked": on}));
+        }
+    }
+    let linked = linked(app);
     let clip = match p.get("clip") {
         None => None,
         Some(v) => {
@@ -362,11 +408,11 @@ pub fn open_command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
         Some(t) => {
             let at = at.or(clip.map(|c| c.1)).unwrap_or_else(|| app.position());
             open_at(app, t, at, None);
-            Ok(json!({"track": t.0, "at": at}))
+            Ok(json!({"track": t.0, "at": at, "linked": linked}))
         }
         None => {
             app.ui.show_vocal_editor = true;
-            Ok(json!({}))
+            Ok(json!({"linked": linked}))
         }
     }
 }
@@ -534,6 +580,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     sync_view(app, track, roll_r.width());
     centre_rows(app, track, roll_r.height());
     wheel(app, ui, roll_r);
+    follow_playhead(app, roll_r.width());
     let (t0, t1) = view_range(app, roll_r.width());
     let rows = roll_r.height() / app.vocal.row_h.max(1.0);
     app.vocal.scroll_rows = app.vocal.scroll_rows.clamp(0.0, (128.0 - rows).max(0.0));
@@ -655,9 +702,18 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
             app.vocal.spp = Some(new);
             app.vocal.t0 = Some(soundcraft_time::to_samples(at - x * new).max(0));
             app.vocal.hand_zoom = true;
+            app.vocal.follow.user_moved = true;
         } else {
             let dx = if m.shift { d.x + d.y } else { d.x };
-            if dx != 0.0 {
+            if dx != 0.0 && (!linked(app) || playing(app)) {
+                // Unlinked (or following the playhead): the roll pans on its own.
+                app.vocal.follow.user_moved = true;
+                let spp = app.vocal.spp.unwrap_or_else(|| factor_spp(app));
+                if let Some(t0) = app.vocal.t0 {
+                    let by = soundcraft_time::to_samples(f64::from(-dx) * spp);
+                    app.vocal.t0 = Some(t0.saturating_add(by).max(0));
+                }
+            } else if dx != 0.0 {
                 let by_px = f64::from(-dx * to_edit_px);
                 let (before, edit_spp) = {
                     let z = &app.engine.session().edit.zoom;
@@ -729,6 +785,12 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
         let _ = app.run("ui.vocal_panel", json!({}));
     }
     zoom_control(app, &mut tb);
+    let on = linked(app);
+    let link = crate::timeline_link::link_button(&mut tb, on);
+    store(ui.ctx(), "link", link.rect);
+    if link.clicked() {
+        let _ = app.run("ui.vocal_editor", json!({"linked": !on}));
+    }
     row_h_control(app, &mut tb, d.view.rect.height());
     let pv = app.ui.vocal_preview;
     let preview = tb.add(egui::Button::new(egui::RichText::new("Preview").color(if pv { t.mode_on_text } else { t.text })).fill(if pv {

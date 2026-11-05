@@ -550,18 +550,6 @@ fn tempo_editor(app: &mut SoundApp, ui: &mut Ui, painter: &egui::Painter, s: &Se
     }
 }
 
-/// A "nice" step in samples for ruler labels at the current zoom.
-fn nice_step(spp: f64, sr: f64, min_px: f64) -> i64 {
-    let min = spp * min_px;
-    let steps_s = [0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0];
-    for st in steps_s {
-        if st * sr >= min {
-            return (st * sr) as i64;
-        }
-    }
-    (3600.0 * sr) as i64
-}
-
 fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[String]) {
     let t = Tokens::current();
     let s = app.engine.session_arc();
@@ -877,6 +865,8 @@ fn loop_strip(app: &mut SoundApp, ui: &mut Ui, painter: &egui::Painter, s: &Sess
     (over, false)
 }
 
+/// A timebase ruler row in format `f` (the shared drawing: [`crate::timeline_link::draw`]).
+#[allow(clippy::too_many_arguments)]
 fn timebase_ruler(
     _ui: &Ui,
     painter: &egui::Painter,
@@ -888,99 +878,10 @@ fn timebase_ruler(
     rate: soundcraft_time::FrameRate,
     bottom: bool,
 ) {
-    let t = Tokens::current();
-    let sr = s.sample_rate;
-    let spp = s.edit.zoom.samples_per_px;
-    let mut marks: Vec<(Samples, bool)> = Vec::new();
-    match f {
-        TimeFormat::BarsBeats => {
-            // Bars every n so labels are ≥ 60 px apart.
-            let bar_px = {
-                let b = GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false };
-                b.step_samples(view.start.max(0), sr, &s.tempo, rate) as f64 / spp
-            };
-            let every = [1i64, 2, 4, 8, 16, 32, 64, 128].into_iter().find(|n| bar_px * *n as f64 >= 60.0).unwrap_or(256);
-            let first = s.tempo.bar_beat_at(view.start.max(0), sr).bar;
-            let mut bar = first - (first - 1).rem_euclid(every);
-            let mut guard = 0;
-            loop {
-                let at = s.tempo.samples_at_bar_beat(soundcraft_time::BarBeat { bar, beat: 1, tick: 0 }, sr);
-                if at > view.end || guard > 400 {
-                    break;
-                }
-                marks.push((at, true));
-                if bar_px * every as f64 >= 240.0 {
-                    let m = s.tempo.meter_at_tick(s.tempo.samples_to_ticks(at, sr));
-                    for beat in 2..=i64::from(m.numerator) {
-                        marks.push((s.tempo.samples_at_bar_beat(soundcraft_time::BarBeat { bar, beat, tick: 0 }, sr), false));
-                    }
-                }
-                bar += every;
-                guard += 1;
-            }
-        }
-        TimeFormat::Samples => {
-            let step = {
-                let min = spp * 90.0;
-                let mut st = 1i64;
-                while (st as f64) < min {
-                    st *= if st.to_string().starts_with('1') {
-                        2
-                    } else if st.to_string().starts_with('2') {
-                        5
-                    } else {
-                        2
-                    };
-                    if st > 10_000_000_000 {
-                        break;
-                    }
-                }
-                st
-            };
-            let mut at = view.start.max(0).div_euclid(step) * step;
-            while at <= view.end && marks.len() < 400 {
-                marks.push((at, true));
-                at += step;
-            }
-        }
-        _ => {
-            let step = nice_step(spp, sr.as_f64(), 70.0).max(1);
-            let mut at = view.start.max(0).div_euclid(step) * step;
-            while at <= view.end && marks.len() < 400 {
-                marks.push((at, true));
-                let sub = step / 4;
-                if sub > 0 && (sub as f64 / spp) > 8.0 {
-                    for k in 1..4 {
-                        marks.push((at + sub * k, false));
-                    }
-                }
-                at += step;
-            }
-        }
-    }
-    for (at, major) in marks {
-        let x = x_of(s, tl, at);
-        if major {
-            painter.line_segment([pos2(x, row.min.y + 2.0), pos2(x, row.max.y)], Stroke::new(1.0, t.ruler_tick));
-            let label = match f {
-                TimeFormat::BarsBeats => s.tempo.bar_beat_at(at, sr).bar.to_string(),
-                TimeFormat::MinSecs => {
-                    let secs = sr.seconds(at);
-                    if secs.fract().abs() < 1e-9 {
-                        format!("{}:{:02}", (secs / 60.0) as i64, (secs as i64) % 60)
-                    } else {
-                        format_position(at, f, sr, &s.tempo, rate, s.timecode_start, s.feet_frames_start())
-                    }
-                }
-                _ => format_position(at, f, sr, &s.tempo, rate, s.timecode_start, s.feet_frames_start()),
-            };
-            painter.text(pos2(x + 3.0, row.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.ruler_text);
-        } else {
-            painter.line_segment([pos2(x, row.max.y - 4.0), pos2(x, row.max.y)], Stroke::new(1.0, t.ruler_tick));
-        }
-    }
-    if bottom {
-        painter.line_segment([pos2(tl.min.x, row.max.y), pos2(tl.max.x, row.max.y)], Stroke::new(1.0, t.border));
+    let x = |at: Samples| x_of(s, tl, at);
+    let drawn = crate::timeline_link::draw(painter, s, row, view, s.edit.zoom.samples_per_px, &x, f, rate, bottom);
+    if crate::vocal_editor::hooks_on() && rate == s.frame_rate {
+        _ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(format!("soundcraft-ruler-edit-{f:?}")), drawn));
     }
 }
 
@@ -3919,29 +3820,37 @@ fn clean_menu(app: &mut SoundApp, ui: &mut Ui, c: ClipId) {
 /// session scroll differs from both the last seen value and our own last
 /// follow target, something else (a manual pan, scrollbar, universe jump,
 /// or programmatic scroll) took over, so the follow pauses (`hold`) and no
-/// jump is issued. Stopping, or scrolling back to the playhead, clears the
-/// hold. Only `page`/`continuous`/`center` ever issue follow jumps while
-/// playing; `none`/`after_playback` leave the view alone.
+/// jump is issued. Stopping clears the hold; in Page mode so does the
+/// playhead showing again (Continuous and Centre always show it, so their
+/// hold lasts until the transport stops or starts). While playing, the
+/// target comes from [`crate::timeline_link::follow_target`]: Page turns at
+/// 90 % to land at 10 %, Continuous holds the playhead a third in, Centre at
+/// the middle; `none`/`after_playback` leave the view alone.
+#[allow(clippy::too_many_arguments)]
 fn follow_update(
     playing: bool,
-    mode_follow: bool,
-    playhead_visible: bool,
+    mode: crate::timeline_link::Follow,
     cur: Samples,
+    span: Samples,
     last_scroll: Samples,
     last_follow_to: Option<Samples>,
     hold: bool,
     pos: Samples,
 ) -> (bool, Option<Samples>) {
-    if !playing || playhead_visible {
+    use crate::timeline_link::Follow;
+    if !playing || !mode.follows() {
         return (false, None);
     }
-    if cur != last_scroll && Some(cur) != last_follow_to {
-        return (mode_follow, None);
+    let visible = pos >= cur && pos <= cur.saturating_add(span);
+    let taken = cur != last_scroll && Some(cur) != last_follow_to;
+    let mut hold = hold || taken;
+    if hold && visible && mode == Follow::Page && !taken {
+        hold = false;
     }
-    if hold || !mode_follow {
-        return (hold, None);
+    if hold {
+        return (true, None);
     }
-    (false, Some(pos))
+    (false, crate::timeline_link::follow_target(mode, cur, span, pos))
 }
 
 /// Selection overlay, insertion point and playhead across rulers and tracks.
@@ -4006,10 +3915,10 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
         // two borrow disjoint fields.
         let pos = app.position();
         let cur = s.edit.zoom.scroll;
-        let mode_follow = matches!(s.edit.scrolling.as_str(), "page" | "continuous" | "center");
-        let visible = x >= tl.min.x && x <= tl.max.x;
+        let mode = crate::timeline_link::Follow::of(s);
+        let span = (f64::from(tl.width().max(1.0)) * s.edit.zoom.samples_per_px).clamp(1.0, 1e15) as Samples;
         let layout = &mut app.edit_layout;
-        let (hold, follow_to) = follow_update(true, mode_follow, visible, cur, layout.last_scroll, layout.last_follow_to, layout.follow_hold, pos);
+        let (hold, follow_to) = follow_update(true, mode, cur, span, layout.last_scroll, layout.last_follow_to, layout.follow_hold, pos);
         layout.follow_hold = hold;
         layout.last_scroll = cur;
         layout.last_follow_to = follow_to;
@@ -4068,43 +3977,62 @@ mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
 
+    use crate::timeline_link::Follow;
+    const SPAN: Samples = 10_000;
+
     #[test]
     fn follow_jumps_to_offscreen_playhead_while_playing() {
-        // Steady view, follow mode, playhead left the screen: jump to it.
-        assert_eq!(follow_update(true, true, false, 1_000, 1_000, None, false, 96_000), (false, Some(96_000)));
+        // Steady view, Page, the playhead left the screen: the page turns, the playhead 10 % in.
+        assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 96_000), (false, Some(95_000)));
+        // Past 90 % of the width already turns it.
+        assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 10_500), (false, Some(9_500)));
     }
 
     #[test]
     fn follow_leaves_onscreen_playhead_alone() {
-        assert_eq!(follow_update(true, true, true, 1_000, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 6_000), (false, None));
+    }
+
+    #[test]
+    fn continuous_and_centre_scroll_with_the_playhead() {
+        // Continuous: the playhead a third in, every frame (no jump to the left edge).
+        let (_, to) = follow_update(true, Follow::Continuous, 0, 9_000, 0, None, false, 6_000);
+        assert_eq!(to, Some(3_000));
+        let (_, to) = follow_update(true, Follow::Continuous, 3_000, 9_000, 0, Some(3_000), false, 6_100);
+        assert_eq!(to, Some(3_100), "our own move is not a takeover: it keeps scrolling");
+        // Centre: the playhead at the middle.
+        assert_eq!(follow_update(true, Follow::Centre, 0, SPAN, 0, None, false, 8_000), (false, Some(3_000)));
+        // A pan by hand holds them until the transport stops.
+        assert_eq!(follow_update(true, Follow::Centre, 50_000, SPAN, 3_000, Some(3_000), false, 8_100), (true, None));
+        assert_eq!(follow_update(true, Follow::Centre, 50_000, SPAN, 50_000, None, true, 52_000), (true, None), "visible, still held");
     }
 
     #[test]
     fn follow_never_scrolls_when_stopped_nor_in_free_modes() {
-        assert_eq!(follow_update(false, true, false, 1_000, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(false, Follow::Page, 1_000, SPAN, 1_000, None, false, 96_000), (false, None));
         // `none`/`after_playback` never follow, even with a steady view.
-        assert_eq!(follow_update(true, false, false, 1_000, 1_000, None, false, 96_000), (false, None));
-        assert_eq!(follow_update(true, false, false, 9_000, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(true, Follow::Off, 1_000, SPAN, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(true, Follow::Off, 9_000, SPAN, 1_000, None, false, 96_000), (false, None));
     }
 
     #[test]
     fn outside_view_move_pauses_the_follow() {
         // The view moved and it was not our own jump: pause, no jump.
-        assert_eq!(follow_update(true, true, false, 9_000, 1_000, None, false, 96_000), (true, None));
+        assert_eq!(follow_update(true, Follow::Page, 9_000, SPAN, 1_000, None, false, 96_000), (true, None));
         // A held view stays held while it sits still elsewhere.
-        assert_eq!(follow_update(true, true, false, 9_000, 9_000, None, true, 96_000), (true, None));
+        assert_eq!(follow_update(true, Follow::Page, 9_000, SPAN, 9_000, None, true, 96_000), (true, None));
     }
 
     #[test]
     fn own_follow_jump_is_not_mistaken_for_a_takeover() {
         // The scroll equals the target we issued last frame: keep following.
-        assert_eq!(follow_update(true, true, false, 96_000, 1_000, Some(96_000), false, 97_000), (false, Some(97_000)));
+        assert_eq!(follow_update(true, Follow::Page, 95_000, SPAN, 1_000, Some(95_000), false, 107_000), (false, Some(106_000)));
     }
 
     #[test]
     fn hold_clears_when_playhead_returns_or_transport_stops() {
-        assert_eq!(follow_update(true, true, true, 9_000, 9_000, None, true, 96_000), (false, None));
-        assert_eq!(follow_update(false, true, false, 9_000, 9_000, None, true, 96_000), (false, None));
+        assert_eq!(follow_update(true, Follow::Page, 9_000, SPAN, 9_000, None, true, 12_000), (false, None));
+        assert_eq!(follow_update(false, Follow::Page, 9_000, SPAN, 9_000, None, true, 96_000), (false, None));
     }
 
     fn harness(n: usize) -> Harness<'static, SoundApp> {

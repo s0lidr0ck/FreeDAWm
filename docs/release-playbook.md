@@ -14,7 +14,7 @@ CI, and the licence questions a binary release raises.
   (macOS, Windows) on every pull request and on pushes to `main`, with a pinned toolchain. It uses
   no secrets.
 - **Release workflow:** `.github/workflows/release.yml` builds unsigned packages on the free
-  runners (Windows x64 without ASIO, macOS Apple silicon, Linux x86_64) and publishes them on a
+  runners (Windows x64 with ASIO under GPLv3, see below; macOS Apple silicon, Linux x86_64) and publishes them on a
   `v*` tag (a draft release on a manual run). See [releasing.md](releasing.md). The upstream
   FreeBSD, Nix, packaging-lint and Windows-Arm workflows were not restored.
 - **Dependabot** (`.github/dependabot.yml`) groups minor and patch updates and ignores Cargo
@@ -106,8 +106,14 @@ ASIO SDK under GPLv3 as well as its proprietary licence agreement. A binary buil
   corresponding source offer; or
 - under **Steinberg's ASIO licence agreement** (signed with Steinberg).
 
-Source releases and default builds are unaffected. Decide this before publishing any Windows
-binary with ASIO, and say which in its release notes.
+Source releases and default builds are unaffected. Decided 2026-11-04 (owner): the GitHub Windows
+release builds use ASIO under **GPLv3**. `release.yml` downloads
+`ASIO-SDK_2.3.4_2025-10-15.zip` from download.steinberg.net, checks its SHA-256 and that its
+`LICENSE.txt` still offers GPLv3, and runs `packaging/windows/package.ps1 -Asio`, which adds
+`GPL-3.0.txt` and `ASIO-NOTICE.txt` (source offer: the public repo at the release tag) to the MSI
+and the portable zip. The SDK is never committed. No ASIO logo is shown, so the ASIO usage
+guidelines' logo rules don't apply; "ASIO" appears only as a driver type, never in the product name.
+A new SDK version means updating the URL and SHA-256 in `release.yml`.
 
 Third-party ML models are not bundled. Setup › ML Models downloads them, after a click, from our own
 `models-v1` release (below) and shows each model's licence; models that are non-commercial or state

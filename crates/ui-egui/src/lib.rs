@@ -39,8 +39,11 @@ pub mod lyrics_panel;
 pub mod menus;
 pub mod midi_cleanup_panel;
 pub mod midi_devices;
+pub mod midi_edit_tools;
 pub mod midi_editor;
+pub mod midi_editor_link;
 pub mod midi_editor_window;
+pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,6 +87,7 @@ pub mod teleprompter;
 pub mod tempo_markers;
 pub mod tempo_ui;
 pub mod theme;
+pub mod timeline_link;
 pub mod toolbar;
 pub mod user_files;
 pub mod video_track;
@@ -2378,6 +2382,7 @@ impl SoundApp {
             "frame_ms": self.frame_ms,
             "audio_device": self.player.as_ref().map(|p| p.device_name.clone()),
             "status": self.ui.status,
+            "midi_editor": midi_edit_tools::state(self),
         })
     }
 }

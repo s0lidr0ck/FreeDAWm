@@ -69,9 +69,10 @@ modules:
         CARGO_HOME: /run/build/freedawm/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p soundcraft -p soundcraft-cli
+      - cargo --offline build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan
       - install -Dm755 target/release/freedawm /app/bin/freedawm
       - install -Dm755 target/release/freedawm-cli /app/bin/freedawm-cli
+      - install -Dm755 target/release/freedawm-scan /app/bin/freedawm-scan
       - install -Dm644 packaging/linux/io.github.s0lidr0ck.FreeDAWm.desktop /app/share/applications/io.github.s0lidr0ck.FreeDAWm.desktop
       - install -Dm644 packaging/linux/io.github.s0lidr0ck.FreeDAWm.mime.xml /app/share/mime/packages/io.github.s0lidr0ck.FreeDAWm.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

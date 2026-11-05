@@ -52,6 +52,33 @@ pub fn specs() -> Vec<CommandSpec> {
             notes_copy
         ),
         cmd!(
+            "midi.notes_set",
+            "Set Notes",
+            [],
+            None,
+            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, channel?: 0..15} — the same value on every picked note -> {indices}",
+            always,
+            notes_set
+        ),
+        cmd!(
+            "midi.notes_split",
+            "Split Notes",
+            [],
+            None,
+            "{clip, indices: [n], at: tick from the clip start} — each picked note sounding across `at` becomes two -> {indices} (both halves)",
+            always,
+            notes_split
+        ),
+        cmd!(
+            "midi.notes_join",
+            "Join Notes",
+            [],
+            None,
+            "{clip, indices: [n]} — the picked notes of one pitch and channel, one after another, become one note from the first start to the last end (the first one's velocity) -> {indices}",
+            always,
+            notes_join
+        ),
+        cmd!(
             "midi.notes_velocity",
             "Change Note Velocity",
             [],
@@ -336,6 +363,114 @@ fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"changed": changed}))
 }
 
+fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "midi.notes_set";
+    let id = clip_id(p, C)?;
+    if p.get("indices").is_none() {
+        return Err(bad(C, "`indices` required"));
+    }
+    let int = |k: &str| p.get(k).and_then(Value::as_i64);
+    let (pitch, start, length, velocity, channel) = (int("pitch"), int("start"), int("length"), int("velocity"), int("channel"));
+    if [pitch, start, length, velocity, channel].iter().all(Option::is_none) {
+        return Err(bad(C, "give pitch, start, length, velocity or channel"));
+    }
+    let seq = seq_mut(e, id, C)?;
+    let idx = picked(p, seq.notes.len());
+    for i in &idx {
+        if let Some(n) = seq.notes.get_mut(*i) {
+            if let Some(v) = pitch {
+                n.pitch = v.clamp(0, 127) as u8;
+            }
+            if let Some(v) = start {
+                n.start = v.max(0);
+            }
+            if let Some(v) = length {
+                n.length = v.max(1);
+            }
+            if let Some(v) = velocity {
+                n.velocity = v.clamp(1, 127) as u8;
+            }
+            if let Some(v) = channel {
+                n.channel = v.clamp(0, 15) as u8;
+            }
+        }
+    }
+    let kept = sort_tracked(seq, &idx);
+    Ok(json!({"indices": kept}))
+}
+
+fn notes_split(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "midi.notes_split";
+    let id = clip_id(p, C)?;
+    let at = p.get("at").and_then(Value::as_i64).ok_or_else(|| bad(C, "`at` (a tick from the clip start) required"))?;
+    let seq = seq_mut(e, id, C)?;
+    let idx = picked(p, seq.notes.len());
+    let mut marked = Vec::new();
+    let mut tails = Vec::new();
+    for i in &idx {
+        if let Some(n) = seq.notes.get_mut(*i)
+            && n.start < at
+            && at < n.end()
+        {
+            tails.push(Note { start: at, length: n.end().saturating_sub(at).max(1), ..*n });
+            n.length = at.saturating_sub(n.start).max(1);
+            marked.push(*i);
+        }
+    }
+    if tails.is_empty() {
+        return Err(bad(C, "no picked note sounds across the split point"));
+    }
+    let first = seq.notes.len();
+    seq.notes.extend(tails);
+    marked.extend(first..seq.notes.len());
+    let kept = sort_tracked(seq, &marked);
+    Ok(json!({"indices": kept}))
+}
+
+fn notes_join(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "midi.notes_join";
+    let id = clip_id(p, C)?;
+    if p.get("indices").is_none() {
+        return Err(bad(C, "`indices` required"));
+    }
+    let seq = seq_mut(e, id, C)?;
+    let mut idx = picked(p, seq.notes.len());
+    // By pitch and channel, then start: each run of one pitch and channel joins into its first.
+    idx.sort_by_key(|i| seq.notes.get(*i).map(|n| (n.pitch, n.channel, n.start)));
+    let mut gone: Vec<usize> = Vec::new();
+    let mut heads: Vec<usize> = Vec::new();
+    for i in idx {
+        let Some(n) = seq.notes.get(i).copied() else { continue };
+        let head = heads.last().copied().and_then(|h| seq.notes.get(h).copied().map(|x| (h, x)));
+        match head {
+            Some((h, x)) if x.pitch == n.pitch && x.channel == n.channel => {
+                if let Some(x) = seq.notes.get_mut(h) {
+                    x.length = n.end().max(x.end()).saturating_sub(x.start).max(1);
+                }
+                gone.push(i);
+            }
+            _ => heads.push(i),
+        }
+    }
+    if gone.is_empty() {
+        return Err(bad(C, "pick two or more notes of the same pitch"));
+    }
+    let mut kept_heads = Vec::new();
+    let mut notes = Vec::with_capacity(seq.notes.len());
+    for (i, n) in seq.notes.iter().enumerate() {
+        if gone.contains(&i) {
+            continue;
+        }
+        if heads.contains(&i) {
+            kept_heads.push(notes.len());
+        }
+        notes.push(*n);
+    }
+    seq.notes = notes;
+    let kept = sort_tracked(seq, &kept_heads);
+    Ok(json!({"indices": kept, "joined": gone.len()}))
+}
+
 /// The pitch in `allowed` nearest to `pitch` (ties down), or the first one at or above (`up`) or
 /// below (`down`); `up`/`down` fall back to the other way at the ends of the range. `None` when
 /// the set is empty.
@@ -461,6 +596,51 @@ mod tests {
         e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "semitones": i64::MAX})).unwrap();
         let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
         assert_eq!(n["notes"][0]["pitch"], 127);
+    }
+
+    fn psl(e: &mut Engine, clip: u64) -> Vec<(u64, i64, i64)> {
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        n["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| (x["pitch"].as_u64().unwrap(), x["start"].as_i64().unwrap(), x["length"].as_i64().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn notes_split_cuts_the_picked_notes_crossing_the_point() {
+        let mut e = Engine::default();
+        let clip = clip_with(&mut e, &[(60, 0), (64, 0), (67, 960)]);
+        let r = e.execute("midi.notes_split", &json!({"clip": clip, "indices": [0, 1, 2], "at": 240})).unwrap();
+        assert_eq!(psl(&mut e, clip), vec![(60, 0, 240), (64, 0, 240), (60, 240, 240), (64, 240, 240), (67, 960, 480)]);
+        assert_eq!(r["indices"], json!([0, 1, 2, 3]));
+        assert!(e.execute("midi.notes_split", &json!({"clip": clip, "indices": [4], "at": 240})).is_err());
+    }
+
+    #[test]
+    fn notes_join_makes_one_note_per_pitch_run() {
+        let mut e = Engine::default();
+        let clip = clip_with(&mut e, &[(60, 0), (60, 480), (60, 1200), (64, 0)]);
+        let r = e.execute("midi.notes_join", &json!({"clip": clip, "indices": [0, 1, 2, 3]})).unwrap();
+        // C4 0-480, 480-960 and 1200-1680 join to 0-1680; E4 stays alone.
+        assert_eq!(psl(&mut e, clip), vec![(60, 0, 1680), (64, 0, 480)]);
+        assert_eq!(r["indices"], json!([0, 1]));
+        assert!(e.execute("midi.notes_join", &json!({"clip": clip, "indices": [0, 1]})).is_err());
+    }
+
+    #[test]
+    fn notes_set_gives_every_picked_note_the_value() {
+        let mut e = Engine::default();
+        let clip = clip_with(&mut e, &[(60, 0), (64, 480), (67, 960)]);
+        e.execute("midi.notes_set", &json!({"clip": clip, "indices": [0, 2], "length": 120, "velocity": 30, "channel": 3})).unwrap();
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        assert_eq!(n["notes"][0]["length"], 120);
+        assert_eq!(n["notes"][0]["channel"], 3);
+        assert_eq!(n["notes"][2]["velocity"], 30);
+        assert_eq!(n["notes"][1]["velocity"], 100);
+        assert!(e.execute("midi.notes_set", &json!({"clip": clip, "indices": [0]})).is_err());
+        assert!(e.execute("midi.notes_set", &json!({"clip": clip, "indices": [0], "channel": 99})).is_ok());
     }
 
     /// A MIDI clip of one bar with `(pitch, start_ticks)` notes.
