@@ -29,6 +29,7 @@ pub mod fs_presets;
 pub mod hardware_credit;
 pub mod icons;
 pub mod juke_fx;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod juke_kits_ui;
 pub mod juke_window;
 pub mod key_knobs;
@@ -873,6 +874,7 @@ pub struct SoundApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub ml: ml_ui::MlUi,
     /// Juke's recorded kits: the installed ones, the kits release's list and its downloads.
+    #[cfg(not(target_arch = "wasm32"))]
     pub juke_kits: juke_kits_ui::KitDownloads,
     /// Event › Detect Tempo…: the dialog and its analysis worker.
     pub tempo: tempo_ui::TempoUi,
@@ -1012,6 +1014,7 @@ impl SoundApp {
             dawproject_report: None,
             #[cfg(not(target_arch = "wasm32"))]
             ml: ml_ui::MlUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             juke_kits: juke_kits_ui::KitDownloads::default(),
             tempo: tempo_ui::TempoUi::default(),
             scout: scout::ScoutUi::default(),

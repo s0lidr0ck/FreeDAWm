@@ -137,11 +137,15 @@ struct Out {
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
     /// Recorded kits: fetch the release's list, download one, cancel the download.
+    #[cfg(not(target_arch = "wasm32"))]
     fetch_kits: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     download_kit: Option<soundcraft_engine::ml::kits::KitEntry>,
+    #[cfg(not(target_arch = "wasm32"))]
     cancel_kit: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// What the Kits menu shows of the recorded kits.
 struct KitsView {
     /// (name, folder) of each installed kit.
@@ -153,6 +157,7 @@ struct KitsView {
     note: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn kits_view(app: &mut SoundApp) -> KitsView {
     use crate::juke_kits_ui::ListState;
     app.juke_kits.step();
@@ -186,10 +191,14 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     let mut view: View = ctx.data(|d| d.get_temp(view_id(tid))).unwrap_or_default();
     view.pad = view.pad.min(PADS - 1);
     let (levels, bus_levels) = pad_levels(app, &ctx, tid);
+    #[cfg(not(target_arch = "wasm32"))]
     let kits = kits_view(app);
+    #[cfg(not(target_arch = "wasm32"))]
     if kits.active.is_some() || kits.available.as_ref().is_err_and(|e| e.starts_with("Checking")) {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
+    #[cfg(target_arch = "wasm32")]
+    let kits = ();
     let mut out = Out::default();
     let full = ui.available_rect_before_wrap();
     let full = Rect::from_min_size(full.min, vec2(full.width().max(760.0), full.height().max(520.0)));
@@ -287,14 +296,17 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     if let Some(m) = out.open_fx {
         crate::juke_fx::open(app, tid, m);
     }
-    if out.fetch_kits {
-        app.juke_kits.load_list();
-    }
-    if let Some(k) = &out.download_kit {
-        app.juke_kits.download(k);
-    }
-    if out.cancel_kit {
-        app.juke_kits.cancel();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if out.fetch_kits {
+            app.juke_kits.load_list();
+        }
+        if let Some(k) = &out.download_kit {
+            app.juke_kits.download(k);
+        }
+        if out.cancel_kit {
+            app.juke_kits.cancel();
+        }
     }
     if let Some(e) = out.editing {
         view.editing = e;
@@ -376,7 +388,12 @@ fn knob_at(ui: &mut Ui, r: Rect, ins: &Insert, id: &str, size: f32, style: KnobS
     }
 }
 
-fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, recorded: &KitsView, out: &mut Out) {
+#[cfg(not(target_arch = "wasm32"))]
+type Recorded = KitsView;
+#[cfg(target_arch = "wasm32")]
+type Recorded = ();
+
+fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, recorded: &Recorded, out: &mut Out) {
     let p = ui.painter();
     p.rect_filled(r, 4.0, TOP_BAR);
     text(p, pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, "JUKE", bold(14.0), AMBER);
@@ -431,7 +448,10 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, record
                 ui.close();
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
         recorded_menu(ui, tid, &kit, recorded, out);
+        #[cfg(target_arch = "wasm32")]
+        let _ = recorded;
     });
     // Kit view or the selected pad's edit view.
     let tabs = Rect::from_min_size(pos2(menu.max.x + 16.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
@@ -623,6 +643,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
 
 /// The Kits menu's recorded kits: those installed (click to load), and the kits release's list
 /// with a download for each.
+#[cfg(not(target_arch = "wasm32"))]
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
     ui.label(egui::RichText::new("Recorded").strong());
