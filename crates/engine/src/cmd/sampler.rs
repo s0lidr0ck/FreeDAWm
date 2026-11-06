@@ -41,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             from_selection
         ),
         cmd!(
-            "mix.sampler_detect",
+            query "mix.sampler_detect",
             "Detect Sampler Root Note",
             [],
             None,
