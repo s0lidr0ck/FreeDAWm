@@ -51,6 +51,11 @@ when one doesn't, download the library and play it in sfizz.
 - [ ] **Headroom Piano**, Bengt Nilsson: CC-BY 4.0.
 - [ ] **Greg Sullivan E-Pianos**: electric pianos, CC-BY 3.0.
 - [ ] **VCSL Keys** (part of VCSL below): assorted keyboards, CC0.
+- [ ] **Piano in 162**, Ivy Audio: Steinway Model B, five dynamics, two round robins, pedal-down
+      samples, two mic positions, over 5 GB. Owner likes it. Free for personal and commercial
+      music (donations welcome), but no license text found that allows redistribution: check the
+      readme in the download, ask Ivy Audio, or link to their download instead of hosting it.
+      <https://sfzinstruments.github.io/pianos/in_162>
 - [ ] ~~jRhodes3c / jRhodes3d~~: lovely Rhodes, but NC licenses. Listen only.
 - [ ] **Church Steinway**, Richard Luke (Pianobook): Steinway Model D in a Glasgow church, lots of
       natural room. Owner likes it. Pianobook's terms allow use in your own music but forbid
