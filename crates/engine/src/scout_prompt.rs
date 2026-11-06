@@ -13,7 +13,8 @@ use soundcraft_dsp::{Category, ParamInfo, PluginInfo, Unit};
 use std::fmt::Write as _;
 
 /// The prompt stays under this many characters.
-pub const MAX_CHARS: usize = 40_000;
+/// (40 000 until Juke: its 33 pad parameters, one line each for all 16 pads, add 2 800.)
+pub const MAX_CHARS: usize = 43_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -69,6 +70,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_vint" => "Vintage EQ / colour boxes: seven circuits (four passive/active EQs solved by nodal analysis) plus the MEQ-5.",
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
+        "juke" => {
+            "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
+        }
         "subtractive_synth" => "Instrument: subtractive synthesizer (oscillators, filter, envelopes).",
         "time_shift" => "Utility: shifts the signal in time (sample-accurate delay or advance) to align tracks.",
         "gain" => "Utility: clean gain change.",
