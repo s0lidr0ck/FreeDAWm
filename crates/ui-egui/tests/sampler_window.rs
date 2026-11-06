@@ -100,9 +100,22 @@ fn dropping_audio_with_a_path_loads_the_sampler() {
     assert_eq!(src.frames, 24_000);
     assert!(h.state().engine.session().pool.get(src.id).is_some());
     assert!(h.state().ui.status.contains("loaded into the sampler"), "{}", h.state().ui.status);
-    // The window now shows the sample strip and the sampler's own parameters.
+    // The window is now Lift's editor: the sample's buttons, the panels and the detected root.
     let _ = h.get_by_label("Load Sample…");
-    let _ = h.get_by_label("Root Note");
+    let _ = h.get_by_label("From Selection");
+    for panel in ["PITCH", "FILTER", "AMP ENVELOPE", "LFO", "OUTPUT"] {
+        let _ = h.get_by_label(panel);
+    }
+    // The 220 Hz tone is A (MIDI 57); the root is still middle C until Use as Root.
+    assert_eq!(ins.params.get("root_note").copied(), Some(60.0));
+    h.get_by_label("Use as Root").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    assert_eq!(instrument(&h, keys).params.get("root_note").copied(), Some(57.0));
+    assert!(h.query_by_label("Use as Root").is_none(), "nothing left to apply");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(instrument(&h, keys).params.get("root_note").copied(), Some(60.0), "one undo step");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -151,4 +164,17 @@ fn a_built_in_instruments_menu_opens_its_parameters() {
     h.get_by_label("Edit Parameters…").click();
     h.step();
     assert_eq!(h.state().ui.plugin_windows, vec![(keys, soundcraft_mix::SlotKey::Instrument)]);
+}
+
+#[test]
+fn the_instrument_window_command_opens_and_closes_it() {
+    let engine = soundcraft_engine::demo::demo_engine();
+    let keys = engine.session().tracks.iter().find(|t| t.name == "Keys").unwrap().id;
+    let mut app = SoundApp::new(engine, None, Services::default());
+    let r = app.run("ui.mix.instrument_window", serde_json::json!({"track": "Keys"})).unwrap();
+    assert_eq!(r["plugin"], "subtractive_synth");
+    assert_eq!(app.ui.plugin_windows, vec![(keys, soundcraft_mix::SlotKey::Instrument)]);
+    app.run("ui.mix.instrument_window", serde_json::json!({"track": "Keys", "open": false})).unwrap();
+    assert!(app.ui.plugin_windows.is_empty());
+    assert!(app.run("ui.mix.instrument_window", serde_json::json!({"track": "Kick"})).is_err(), "an audio track has no instrument");
 }

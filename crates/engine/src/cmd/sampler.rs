@@ -4,6 +4,10 @@
 //! The source is saved in `Audio Files/` with the session like any other audio, so a session that
 //! uses a sample reopens with it. Sampler parameters (root note, key range, ADSR, loop…) are set
 //! with `mix.instrument_param`, or all at once with `params` here.
+//!
+//! `mix.sampler_from_selection` takes the sample from the session instead: the selected range of
+//! an audio track, rendered as it plays (clip gain and fades included, the track's plugins not).
+//! `mix.sampler_detect` reports the pitch the sample sounds at, for its root note.
 
 use super::*;
 use crate::cmd;
@@ -27,13 +31,37 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             load
         ),
+        cmd!(
+            "mix.sampler_from_selection",
+            "Sampler Sample from Selection",
+            [],
+            None,
+            "{track?, from?, start?, end?, params?}: the range (default the edit selection) of audio track `from` (default the first selected audio or aux track), rendered as its clips play, becomes the sample of instrument track `track`'s Sampler (default the first selected instrument track) → {track, source, name, frames, channels, sample_rate}",
+            has_selection,
+            from_selection
+        ),
+        cmd!(
+            "mix.sampler_detect",
+            "Detect Sampler Root Note",
+            [],
+            None,
+            "{track?}: the pitch the track's Sampler sample sounds at → {track, root: MIDI note (fractional) or null, note, cents, name}; null for drums, noise and silence",
+            has_selection,
+            detect
+        ),
         cmd!("mix.sampler_clear", "Clear Sampler Sample", [], None, "{track?}: the track's Sampler stops playing its sample", has_selection, clear),
     ]
 }
 
-/// The instrument track a sampler command acts on.
+/// The instrument track a sampler command acts on: `track`/`tracks`, else the first selected
+/// instrument track.
 fn instrument_track(e: &Engine, id: &str, p: &Value) -> Result<TrackId> {
-    let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    let named = p.get("track").is_some() || p.get("tracks").is_some();
+    let ts = tracks_required(e, id, p)?;
+    let s = e.session();
+    let is_inst = |t: &TrackId| s.track(*t).map(|tr| tr.kind) == Some(TrackKind::Instrument);
+    let t = if named { ts.first().copied() } else { ts.iter().copied().find(is_inst).or_else(|| ts.first().copied()) };
+    let t = t.ok_or_else(|| bad(id, "no track"))?;
     if e.session().track(t).map(|tr| tr.kind) != Some(TrackKind::Instrument) {
         return Err(bad(id, "only instrument tracks have a sampler"));
     }
@@ -44,8 +72,15 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "mix.sampler_load";
     let path = str_param(p, "path").ok_or_else(|| bad(id, "`path` required"))?.to_string();
     let t = instrument_track(e, id, p)?;
+    let values = param_values(id, p)?;
+    let bytes = crate::io::read_file(&path)?;
+    let name = Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
+    attach(e, t, &name, &bytes, Some(&path), values)
+}
+
+/// Sampler parameters passed in `params`, validated and clamped, before anything changes.
+fn param_values(id: &str, p: &Value) -> Result<Vec<(String, f32)>> {
     let info = soundcraft_dsp::plugin_info(SAMPLER).ok_or_else(|| bad(id, "the sampler is not available"))?;
-    // Validate the parameters before touching the session.
     let mut values = Vec::new();
     if let Some(v) = p.get("params") {
         let obj = v.as_object().ok_or_else(|| bad(id, "`params` must be an object"))?;
@@ -55,9 +90,75 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
             values.push((k.clone(), pi.clamp(x as f32)));
         }
     }
-    let bytes = crate::io::read_file(&path)?;
-    let name = Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
-    attach(e, t, &name, &bytes, Some(&path), values)
+    Ok(values)
+}
+
+fn from_selection(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_from_selection";
+    let t = instrument_track(e, id, p)?;
+    let values = param_values(id, p)?;
+    let s = e.session();
+    let audio_kind = |k: TrackKind| k.has_playlist() && !k.is_midi();
+    let from = match track_param(e, id, p, "from")? {
+        Some(f) => f,
+        None => {
+            let sel = e.target_tracks();
+            sel.into_iter()
+                .find(|x| s.track(*x).is_some_and(|tr| audio_kind(tr.kind)))
+                .ok_or_else(|| bad(id, "select a range on an audio track, or pass `from`"))?
+        }
+    };
+    let tr = s.track(from).ok_or_else(|| bad(id, "no source track"))?;
+    if !audio_kind(tr.kind) {
+        return Err(bad(id, format!("`{}` has no audio clips to sample", tr.name)));
+    }
+    let r = range_param(e, id, p)?;
+    let start = r.start.max(0);
+    let len = r.end.saturating_sub(start);
+    if len <= 0 {
+        return Err(bad(id, "the selection is empty: select a range to sample"));
+    }
+    let max = MAX_SAMPLE_VALUES / tr.channels().max(1);
+    crate::io::refuse_longer(s, id, &tr.name, "sample", len, max.min(crate::io::render_limit(tr.channels())))?;
+    let r = soundcraft_time::Range::new(start, start + len);
+    let audio = soundcraft_mix::render_clips(s, from, r);
+    if audio.iter().all(|ch| ch.iter().all(|x| *x == 0.0)) {
+        return Err(bad(id, format!("the selection on `{}` is silent", tr.name)));
+    }
+    let name = format!("{} sample", tr.name);
+    let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
+    attach_buffer(e, t, &name, buf, None, soundcraft_audio_io::FileFormat::Wav, values)
+}
+
+fn detect(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_detect";
+    let t = instrument_track(e, id, p)?;
+    let s = e.session();
+    let ins = s.track(t).and_then(|tr| tr.instrument.as_ref()).filter(|i| i.plugin == SAMPLER);
+    let ins = ins.ok_or_else(|| bad(id, "the track's instrument is not the sampler"))?;
+    let src = ins.sample.ok_or_else(|| bad(id, "the sampler has no sample"))?;
+    let audio = s.pool.get(src).ok_or_else(|| bad(id, "the sample's audio is missing"))?;
+    let root = sample_root(audio);
+    let (note, cents) = root.map_or((Value::Null, Value::Null), |m| {
+        let n = m.round();
+        (json!(n as u8), json!(((m - n) * 100.0).round()))
+    });
+    let name = root.map(|m| soundcraft_midi::note_name(m.round().clamp(0.0, 127.0) as u8));
+    Ok(json!({"track": t, "root": root, "note": note, "cents": cents, "name": name}))
+}
+
+/// The pitch a source sounds at (a fractional MIDI note), from the first seconds of its first
+/// channel (or its two channels mixed).
+pub fn sample_root(audio: &soundcraft_model::SourceAudio) -> Option<f32> {
+    let rate = audio.sample_rate();
+    let n = audio.frames().min(rate as usize * 4);
+    let w = audio.window(0, n);
+    let mono: Vec<f32> = match (w.first(), w.get(1)) {
+        (Some(a), Some(b)) => a.iter().zip(b).map(|(x, y)| 0.5 * (x + y)).collect(),
+        (Some(a), None) => a.clone(),
+        _ => return None,
+    };
+    soundcraft_dsp::pitch_detect::sample_root(&mono, rate as f32)
 }
 
 /// Decodes `bytes` (a file called `name`, for the format hint) into a new session source and
@@ -68,9 +169,26 @@ pub(crate) fn attach(e: &mut Engine, t: TrackId, name: &str, bytes: &[u8], path:
     if e.session().track(t).map(|tr| tr.kind) != Some(TrackKind::Instrument) {
         return Err(bad(id, "only instrument tracks have a sampler"));
     }
-    let info = soundcraft_dsp::plugin_info(SAMPLER).ok_or_else(|| bad(id, "the sampler is not available"))?;
     let ext = Path::new(name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
     let (format, buf) = soundcraft_audio_io::decode(bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+    attach_buffer(e, t, name, buf, path, format.format, values)
+}
+
+/// Makes decoded audio the sample of track `t`'s Sampler (see [`attach`]).
+fn attach_buffer(
+    e: &mut Engine,
+    t: TrackId,
+    name: &str,
+    buf: soundcraft_audio_io::AudioBuffer,
+    path: Option<&str>,
+    format: soundcraft_audio_io::FileFormat,
+    values: Vec<(String, f32)>,
+) -> Result<Value> {
+    let id = "mix.sampler_load";
+    if e.session().track(t).map(|tr| tr.kind) != Some(TrackKind::Instrument) {
+        return Err(bad(id, "only instrument tracks have a sampler"));
+    }
+    let info = soundcraft_dsp::plugin_info(SAMPLER).ok_or_else(|| bad(id, "the sampler is not available"))?;
     if buf.frames() == 0 || buf.num_channels() == 0 {
         return Err(EngineError::Io(format!("{name}: no audio")));
     }
@@ -78,7 +196,7 @@ pub(crate) fn attach(e: &mut Engine, t: TrackId, name: &str, bytes: &[u8], path:
         .ok_or_else(|| EngineError::Io(format!("{name}: too long for a sample (ten minutes of 192 kHz stereo at most)")))?;
     let channels = buf.num_channels();
     let s = e.session_mut();
-    let src = crate::io::add_source(s, name, buf, path, format.format);
+    let src = crate::io::add_source(s, name, buf, path, format);
     let (frames, rate, stem) = s.source(src).map_or((0, 0, String::new()), |x| (x.frames, x.sample_rate, x.name.clone()));
     let tr = s.track_mut(t).ok_or_else(|| bad(id, "no track"))?;
     let keep = tr.instrument.as_ref().is_some_and(|i| i.plugin == SAMPLER);
@@ -355,5 +473,98 @@ mod tests {
         e.session_mut().pool.remove(src);
         assert_eq!(peak(&render(&e, 1)[0]), 0.0);
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn samples_a_selection_from_an_audio_track_and_detects_its_root() {
+        let d = dir("from-sel");
+        let wav = d.join("a3.wav");
+        tone_wav(&wav, 220.0, 48_000, 3.0, 2);
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "audio", "format": "stereo"})).unwrap();
+        let audio = e.session().tracks.last().unwrap().id;
+        e.execute("file.import_audio", &json!({"path": wav.to_string_lossy(), "track": audio.0, "at": 0})).unwrap();
+        let t = instrument_track(&mut e);
+        let undo_before = e.session().sources.len();
+        let r = e.execute("mix.sampler_from_selection", &json!({"track": t.0, "from": audio.0, "start": 24_000, "end": 72_000})).unwrap();
+        assert_eq!(r["frames"], 48_000, "the selection's length: {r}");
+        assert_eq!(r["channels"], 2);
+        let name = r["name"].as_str().unwrap().to_string();
+        assert!(name.ends_with("sample"), "{name}");
+        let ins = e.session().track(t).unwrap().instrument.clone().unwrap();
+        assert_eq!(ins.plugin, "sampler");
+        assert_eq!(ins.sample.map(|s| s.0), r["source"].as_u64());
+        let found = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
+        assert_eq!(found["note"], 57, "A3: {found}");
+        assert_eq!(found["cents"], 0.0);
+        assert_eq!(found["name"], soundcraft_midi::note_name(57));
+        // Played at its root (A3), it sounds as recorded.
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "root_note", "value": 57})).unwrap();
+        add_notes(&mut e, t, &[(57, 0, 1)]);
+        let out = render(&e, 1);
+        let held = &out[0][2400..21_600];
+        assert!((crossings(held) as f32 - 88.0).abs() <= 2.0, "220 Hz over 0.4 s: {}", crossings(held));
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().sources.len(), undo_before, "undo removes the sampled source");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn sampling_uses_the_selection_and_refuses_what_it_cannot_sample() {
+        let d = dir("from-sel-bad");
+        let wav = d.join("tone.wav");
+        tone_wav(&wav, 440.0, 48_000, 1.0, 1);
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "audio", "format": "mono"})).unwrap();
+        let audio = e.session().tracks.last().unwrap().id;
+        e.execute("file.import_audio", &json!({"path": wav.to_string_lossy(), "track": audio.0, "at": 0})).unwrap();
+        let t = instrument_track(&mut e);
+        // Nothing selected: no range.
+        let err = e.execute("mix.sampler_from_selection", &json!({"track": t.0, "from": audio.0})).unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+        // The edit selection and the selected tracks pick the range and both tracks.
+        {
+            let s = e.session_mut();
+            s.edit.selection = Range::new(0, 12_000);
+            s.edit.selected_tracks = vec![audio, t].into_iter().collect();
+        }
+        let r = e.execute("mix.sampler_from_selection", &json!({})).unwrap();
+        assert_eq!((r["track"].as_u64(), r["frames"].as_u64()), (Some(t.0), Some(12_000)), "{r}");
+        // Silence, a MIDI source and a non-instrument target are refused.
+        let err = e.execute("mix.sampler_from_selection", &json!({"track": t.0, "from": audio.0, "start": 96_000, "end": 120_000})).unwrap_err();
+        assert!(err.to_string().contains("silent"), "{err}");
+        let err = e.execute("mix.sampler_from_selection", &json!({"track": t.0, "from": t.0, "start": 0, "end": 100})).unwrap_err();
+        assert!(err.to_string().contains("no audio clips"), "{err}");
+        let err = e.execute("mix.sampler_from_selection", &json!({"track": audio.0, "from": audio.0, "start": 0, "end": 100})).unwrap_err();
+        assert!(err.to_string().contains("instrument"), "{err}");
+        let err = e
+            .execute("mix.sampler_from_selection", &json!({"track": t.0, "from": audio.0, "start": 0, "end": 100, "params": {"nope": 1}}))
+            .unwrap_err();
+        assert!(err.to_string().contains("nope"), "{err}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn detect_needs_a_sample_and_finds_no_root_in_noise() {
+        let mut e = Engine::default();
+        let t = instrument_track(&mut e);
+        assert!(e.execute("mix.sampler_detect", &json!({"track": t.0})).is_err(), "not a sampler yet");
+        let mut x = 0x2468_ACE1u32;
+        let noise: Vec<f32> = (0..48_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x as f32 / u32::MAX as f32) - 0.5
+            })
+            .collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![noise] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None };
+        let bytes = soundcraft_audio_io::encode(&buf, &opts).unwrap();
+        crate::io::load_sampler_bytes(&mut e, t, "noise.wav", &bytes).unwrap();
+        let r = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
+        assert!(r["root"].is_null() && r["note"].is_null(), "{r}");
     }
 }
