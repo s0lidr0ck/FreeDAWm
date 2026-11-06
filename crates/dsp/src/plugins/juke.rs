@@ -149,8 +149,8 @@ macro_rules! juke_table {
             )*
             lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
             lin("humanize", "Humanize", 0.0, 100.0, 0.0, Unit::Percent),
-            lin("return_a", "Bus A Return", -48.0, 6.0, -6.0, Unit::Db),
-            lin("return_b", "Bus B Return", -48.0, 6.0, -6.0, Unit::Db),
+            lin("return_a", "Return A", -48.0, 6.0, -6.0, Unit::Db),
+            lin("return_b", "Return B", -48.0, 6.0, -6.0, Unit::Db),
         ]
     };
 }
