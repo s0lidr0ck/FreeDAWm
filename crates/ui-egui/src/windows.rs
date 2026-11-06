@@ -422,7 +422,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                         let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
                         let ext = std::path::Path::new(&name).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
                         (is_dir
-                            || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "m4b", "caf", "mid", "midi"].contains(&ext.as_str())
+                            || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "opus", "m4a", "m4b", "caf", "mid", "midi"].contains(&ext.as_str())
                             || soundcraft_model::is_session_extension(&ext))
                         .then_some((name, is_dir))
                     })

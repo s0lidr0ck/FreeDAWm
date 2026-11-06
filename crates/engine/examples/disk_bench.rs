@@ -39,7 +39,7 @@ fn make(dir: &Path, tracks: usize, minutes: usize) {
     std::fs::create_dir_all(&audio).unwrap();
     let frames = minutes * 60 * 48_000;
     let mut s = Session::new("Bench", soundcraft_time::SampleRate::HZ_48000);
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     for k in 0..tracks {
         let name = format!("Track {:02}", k + 1);
         let path = audio.join(format!("{name}.wav"));

@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-26 · **Change:** trivial (renamed to FreeDAWm, sessions saved as .fdawm; previously trivial: WAV: empty data chunk with trailing metadata (#466); previously minor: continuous fade curvature in FreeDAWm sessions) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-06 · **Change:** minor (MP3 and Ogg Opus export, Opus import; AAC/M4A export not planned; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously trivial: WAV: empty data chunk with trailing metadata (#466); previously minor: continuous fade curvature in FreeDAWm sessions) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -42,10 +42,11 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 | WAV `WAVE_FORMAT_EXTENSIBLE` multichannel with channel mask | read/write | ✅ | ✅ | `encode_with_channel_mask`; default 5.1 import creates a stereo track (#89, PR #128) |
 | AIFF / AIFF-C | native | ✅ | ✅ (`fl32`) | Native |
 | FLAC | import | ✅ | ✅ | Own encoder |
-| MP3 | import, bounce | ✅ (symphonia) | ❌ | G-21 |
-| AAC / M4A / MP4 audio | import, bounce | ✅ (symphonia) | ❌ | G-21 |
+| MP3 | import, bounce | ✅ (symphonia) | ✅ | Bounce Mix and Bounce Stems, CBR 32–320 kbps (default 320), via the pure-Rust `rusty_mp3`; mono or stereo; sessions above 48 kHz are converted to 44.1 or 48 kHz; LAME/Xing Info frame for gapless playback. At 256 kbps and below the encoder keeps the encoded frames in memory until the end (its bit-reservoir pass), so memory grows with the file's size |
+| AAC / M4A / MP4 audio | import, bounce | ✅ (symphonia) | ❌ | Export not planned (owner decision, 2026-11-06): the pure-Rust encoders measured too slow and below ffmpeg's quality, and the platform encoders would leave Linux and the web build out |
 | ALAC | import | ✅ | ❌ | |
 | Ogg Vorbis | — | ✅ | ❌ | Beyond Pro Tools |
+| Ogg Opus | — | ✅ | ✅ | Beyond Pro Tools. Bounce at 6–510 kbps (default 160) via the pure-Rust `rusty-opus`, mono or stereo, coded at 48 kHz (other rates converted); import through the same crate (symphonia has no Opus decoder), channel mapping family 0 only |
 | CAF | — | ✅ | ❌ | |
 | Sound Designer / SD II | import (legacy) | ❌ | — | Rare today |
 | ReCycle / REX | import | ❌ | — | Loops |
@@ -84,6 +85,7 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | MP3 and Ogg Opus export (Bounce Mix, Bounce Stems), Opus import; AAC/M4A export marked not planned. Readiness estimate unchanged |
 | 2026-10-26 | trivial | The product is renamed FreeDAWm (was SoundCraft); sessions are saved as `.fdawm` and `.scraft` still opens. Estimates unchanged |
 | 2026-10-13 | trivial | WAV: empty data chunk with trailing metadata (#466) |
 | 2026-10-13 | minor | Fade curvature round-trips in sessions with a zero default for older files. Format version and readiness estimate unchanged |

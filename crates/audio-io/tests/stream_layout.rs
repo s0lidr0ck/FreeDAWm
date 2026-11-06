@@ -36,7 +36,7 @@ fn every_native_depth_streams_bit_identically() {
     let buf = signal(2, 10_000);
     for depth in [BitDepth::Int16, BitDepth::Int24, BitDepth::Int32, BitDepth::Float32] {
         let bwf = Some(BwfInfo { description: "x".into(), ..BwfInfo::default() });
-        let bytes = encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf }).unwrap();
+        let bytes = encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf, bitrate_kbps: 0 }).unwrap();
         check(&bytes, 64 * 1024);
     }
 }
@@ -55,7 +55,8 @@ fn a_recording_header_streams() {
 fn what_cannot_stream_says_so() {
     assert!(stream_layout(b"not a wav at all", 16).is_none());
     let buf = signal(1, 100);
-    let bytes = encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None }).unwrap();
+    let bytes =
+        encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None, bitrate_kbps: 0 }).unwrap();
     // The header cut before the data chunk starts.
     assert!(stream_layout(&bytes[..20], bytes.len() as u64).is_none());
 }

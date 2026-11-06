@@ -114,3 +114,34 @@ fn cancel_or_escape_stops_a_bounce_and_leaves_no_file() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_mp3_bounce_offers_a_bitrate_instead_of_a_bit_depth() {
+    let dir = scratch("bounce-mp3");
+    let mut h = harness();
+    let app = h.state_mut();
+    assert!(app.dialogs.open_for_command(&app.engine, "file.bounce_mix"));
+    if let Some(Dialog::Bounce { path, format, .. }) = &mut app.dialogs.open {
+        *path = dir.join("Mix.wav").to_string_lossy().into_owned();
+        *format = "mp3".into();
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("Bitrate").is_some() && h.query_by_label("Bit Depth").is_none());
+    match &h.state().dialogs.open {
+        Some(Dialog::Bounce { bitrate, .. }) => assert_eq!(*bitrate, 320),
+        other => panic!("{other:?}"),
+    }
+    if let Some(Dialog::Bounce { bitrate, .. }) = &mut h.state_mut().dialogs.open {
+        *bitrate = 128;
+    }
+    h.run_steps(2);
+    h.get_by_label("Bounce").click();
+    h.run();
+    assert!(h.state().ui.status.starts_with("Bounced Mix.mp3 (peak"), "{}", h.state().ui.status);
+    let bytes = std::fs::read(dir.join("Mix.mp3")).unwrap();
+    let (info, file) = soundcraft_audio_io::decode(&bytes, None).unwrap();
+    assert_eq!((info.format, info.channels), (soundcraft_audio_io::FileFormat::Mp3, 2));
+    let kbps = bytes.len() as f64 * 8.0 / file.duration_secs() / 1000.0;
+    assert!((kbps - 128.0).abs() < 16.0, "{kbps:.0} kbps");
+    let _ = std::fs::remove_dir_all(&dir);
+}

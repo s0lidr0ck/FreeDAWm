@@ -1,6 +1,6 @@
 # Where FreeDAWm falls short of a complete studio workflow
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-30 · **Change:** minor (G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-06 · **Change:** minor (G-21 closed: MP3 and Opus export; AAC/M4A export not planned; previously minor: G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -39,7 +39,6 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 | G-18 | Speech-to-text transcription | AI | this file | 30–50 |
 | G-19 | UI feel: generic plugin windows, shortcut collisions, pro-grade meters and scaling | UI/UX | [ui-parity.md](ui-parity.md) | 60–100 |
 | G-20 | MIDI/instrument depth: MIDI learn, sampler, notation editing | Features | [target-app-parity.md](target-app-parity.md) | 40–60 |
-| G-21 | Compressed export (MP3, AAC/M4A, Ogg/Opus) | File formats | [file-format-parity.md](file-format-parity.md) | 10–20 |
 | G-22 | Avid cloud services (collaboration, Sketch, Splice, sign-in) | Ecosystem | — | not estimated (owner decision) |
 | G-23 | The Band (MIDI Studio) round 2: Live mode (needs G-02), kept takes, audition while stopped, per-song meter override, MIDI export tabs | Features / MIDI | [band design](superpowers/specs/2026-10-21-band-design.md) | ≈ 30–50 |
 
@@ -240,11 +239,6 @@ See [`ui-parity.md`](ui-parity.md). ≈ 60–100 h.
 
 MIDI learn, a sampler (PR #108), drum machine depth, notation editing (tuplets, lyrics,
 articulations, parts). ≈ 40–60 h.
-
-### G-21. Compressed export
-
-Bounce writes WAV/BWF/RF64, AIFF and FLAC; Pro Tools also writes MP3 and AAC/M4A in Bounce Mix.
-≈ 10–20 h (pure-Rust encoders).
 
 ### G-22. Avid cloud services
 

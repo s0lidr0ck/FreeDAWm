@@ -19,7 +19,7 @@ fn scratch(name: &str) -> PathBuf {
 
 fn rms_db(e: &Engine, dir: &Path, name: &str, range: Range) -> f64 {
     let path = dir.join(name);
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     Bounce::new(e.session_arc(), &path, range, &opts, None, false, false).unwrap().run().unwrap();
     let (_, file) = soundcraft_audio_io::decode(&std::fs::read(&path).unwrap(), None).unwrap();
     let (mut sum, mut n) = (0.0f64, 0usize);

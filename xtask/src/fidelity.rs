@@ -40,7 +40,7 @@ fn fidelity_dir(repo: &Path) -> PathBuf {
 
 fn write_wav(path: &Path, channels: Vec<Vec<f32>>) -> Result<(), String> {
     let buf = AudioBuffer { sample_rate: RATE, channels };
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None, bitrate_kbps: 0 };
     let bytes = soundcraft_audio_io::encode(&buf, &opts).map_err(|e| format!("{}: {e}", path.display()))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

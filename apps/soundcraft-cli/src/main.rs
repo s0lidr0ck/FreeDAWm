@@ -296,7 +296,8 @@ fn ml(args: &[String]) -> ExitCode {
         return fail(format!("{outdir}: {e}"));
     }
     let stem = std::path::Path::new(input).file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
-    let opts = soundcraft_audio_io::EncodeOptions { format: soundcraft_audio_io::FileFormat::Wav, bit_depth, dither: false, bwf: None };
+    let opts =
+        soundcraft_audio_io::EncodeOptions { format: soundcraft_audio_io::FileFormat::Wav, bit_depth, dither: false, bwf: None, bitrate_kbps: 0 };
     for s in out.stems {
         let path = std::path::Path::new(outdir).join(format!("{stem} - {}.wav", s.name));
         let b = soundcraft_audio_io::AudioBuffer { sample_rate: job.rate, channels: s.audio };
@@ -524,7 +525,7 @@ fn convert(args: &[String]) -> ExitCode {
     let Some(format) = soundcraft_audio_io::encode_format_for(&out_ext) else {
         return fail(format!("{output}: cannot write `.{out_ext}` files (supported: {})", soundcraft_audio_io::ENCODE_EXTENSIONS));
     };
-    let opts = soundcraft_audio_io::EncodeOptions { format, bit_depth, dither: true, bwf: None };
+    let opts = soundcraft_audio_io::EncodeOptions { format, bit_depth, dither: true, bwf: None, bitrate_kbps: 0 };
     match soundcraft_audio_io::encode(&buf, &opts).map_err(|e| e.to_string()).and_then(|b| std::fs::write(output, b).map_err(|e| e.to_string())) {
         Ok(()) => {
             outln!("wrote {output} ({} ch, {} Hz, {:.2} s)", buf.num_channels(), buf.sample_rate, buf.duration_secs());

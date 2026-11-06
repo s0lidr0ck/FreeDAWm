@@ -7,7 +7,9 @@ fn only_formats_the_encoder_writes_are_named() {
     assert_eq!(encode_format_for(".aif"), Some(FileFormat::Aiff));
     assert_eq!(encode_format_for("aiff"), Some(FileFormat::Aiff));
     assert_eq!(encode_format_for("flac"), Some(FileFormat::Flac));
-    for other in ["mp3", "ogg", "m4a", "xyz", ""] {
+    assert_eq!(encode_format_for("MP3"), Some(FileFormat::Mp3));
+    assert_eq!(encode_format_for(".opus"), Some(FileFormat::Opus));
+    for other in ["ogg", "m4a", "aac", "xyz", ""] {
         assert_eq!(encode_format_for(other), None, "{other}");
     }
 }

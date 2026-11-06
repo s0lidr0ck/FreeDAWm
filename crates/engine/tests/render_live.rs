@@ -235,7 +235,7 @@ fn a_bounce_renders_through_the_live_instance_at_its_playback_level() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("keys.wav");
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     let range = Range::new(0, s.sample_rate.samples(SECS));
     // Normalizing: two passes through the same instances.
     let bounce = Bounce::new(e.session_arc(), &path, range, &opts, None, true, false).unwrap().through(lent);

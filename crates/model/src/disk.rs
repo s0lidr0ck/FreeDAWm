@@ -998,6 +998,7 @@ mod tests {
             bit_depth: soundcraft_audio_io::BitDepth::Float32,
             dither: false,
             bwf: None,
+            bitrate_kbps: 0,
         };
         let p = d.join("a.wav");
         std::fs::write(&p, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();

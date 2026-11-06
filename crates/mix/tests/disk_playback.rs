@@ -30,7 +30,7 @@ fn tone(channels: usize, frames: usize, f: f32) -> AudioBuffer {
 
 /// The audio written as a WAV in `d`, played from disk and from memory.
 fn both(d: &Path, name: &str, buf: &AudioBuffer, depth: BitDepth) -> (Arc<SourceAudio>, Arc<SourceAudio>) {
-    let bytes = encode(buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: None }).unwrap();
+    let bytes = encode(buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: None, bitrate_kbps: 0 }).unwrap();
     let p = d.join(name);
     std::fs::write(&p, &bytes).unwrap();
     let mem = SourceAudio::new(decode(&bytes, Some("wav")).unwrap().1);

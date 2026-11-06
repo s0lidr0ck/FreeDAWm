@@ -42,7 +42,7 @@ fn bounces_play_the_band_in_both_passes() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("Band.wav");
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     for normalize in [false, true] {
         Bounce::new(s.clone(), &path, r, &opts, None, normalize, false).unwrap().with_band(e.band_library()).run().unwrap();
         let (_, file) = soundcraft_audio_io::decode(&std::fs::read(&path).unwrap(), None).unwrap();

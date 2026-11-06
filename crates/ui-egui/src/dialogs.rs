@@ -77,6 +77,8 @@ pub enum Dialog {
         path: String,
         format: String,
         bit_depth: String,
+        /// kbps, for MP3 and Opus.
+        bitrate: u32,
         normalize: bool,
         range: BounceRange,
     },
@@ -371,6 +373,7 @@ impl Dialogs {
                     path: format!("{dir}/{name} Bounce.wav"),
                     format: "wav".into(),
                     bit_depth: "24".into(),
+                    bitrate: 0,
                     normalize: false,
                     range: BounceRange::default_for(e.session()),
                 }
@@ -748,7 +751,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some(("track.load_preset".into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, normalize, range } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -761,22 +764,44 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                                 Some("wav") => *format = "wav".into(),
                                 Some("aif" | "aiff") => *format = "aiff".into(),
                                 Some("flac") => *format = "flac".into(),
+                                Some("mp3") => *format = "mp3".into(),
+                                Some("opus") => *format = "opus".into(),
                                 _ => {}
                             }
                         }
                     });
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_label("Format").selected_text(format.to_uppercase()).show_ui(ui, |ui| {
-                            for f in ["wav", "aiff", "flac"] {
+                            for f in ["wav", "aiff", "flac", "mp3", "opus"] {
                                 ui.selectable_value(format, f.to_string(), f.to_uppercase());
                             }
                         });
-                        egui::ComboBox::from_label("Bit Depth").selected_text(format!("{bit_depth}-bit")).show_ui(ui, |ui| {
-                            for b in ["16", "24", "32f"] {
-                                ui.selectable_value(bit_depth, b.to_string(), format!("{b}-bit"));
+                        // A lossy format has a bitrate where the others have a bit depth.
+                        let lossy = soundcraft_audio_io::encode_format_for(format).filter(|f| soundcraft_audio_io::is_lossy(*f));
+                        match lossy {
+                            Some(f) => {
+                                let offered = soundcraft_audio_io::offered_kbps(f);
+                                if !offered.contains(bitrate) {
+                                    *bitrate = soundcraft_audio_io::default_kbps(f);
+                                }
+                                egui::ComboBox::from_label("Bitrate").selected_text(format!("{bitrate} kbps")).show_ui(ui, |ui| {
+                                    for &k in offered {
+                                        ui.selectable_value(bitrate, k, format!("{k} kbps"));
+                                    }
+                                });
                             }
-                        });
+                            None => {
+                                egui::ComboBox::from_label("Bit Depth").selected_text(format!("{bit_depth}-bit")).show_ui(ui, |ui| {
+                                    for b in ["16", "24", "32f"] {
+                                        ui.selectable_value(bit_depth, b.to_string(), format!("{b}-bit"));
+                                    }
+                                });
+                            }
+                        }
                     });
+                    if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
+                        ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
+                    }
                     bounce_range_choice(app, ui, range);
                     crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
                     let chosen = range.range(app.engine.session());
@@ -784,10 +809,15 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && let Some(r) = chosen
                     {
                         let p = std::path::Path::new(path.as_str()).with_extension(if format == "aiff" { "aif" } else { format.as_str() });
-                        crate::bounce::start(
-                            app,
-                            &json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize, "start": r.start, "end": r.end}),
-                        );
+                        let mut params =
+                            json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize, "start": r.start, "end": r.end});
+                        if matches!(format.as_str(), "mp3" | "opus") {
+                            params["bitrate"] = json!(bitrate);
+                            if app.engine.session().main_format().channels() > 2 {
+                                params["fold_down"] = json!("stereo");
+                            }
+                        }
+                        crate::bounce::start(app, &params);
                         keep = false;
                     }
                 }

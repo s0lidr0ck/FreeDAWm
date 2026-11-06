@@ -10,7 +10,74 @@ fn small(format: FileFormat, depth: BitDepth, channels: usize) -> Vec<u8> {
             *s = ((i as f32) * 0.1).sin() * 0.5;
         }
     }
-    encode(&b, &EncodeOptions { format, bit_depth: depth, dither: false, bwf: None }).unwrap()
+    encode(&b, &EncodeOptions { format, bit_depth: depth, dither: false, bwf: None, bitrate_kbps: 0 }).unwrap()
+}
+
+/// Ogg's CRC-32 (polynomial 0x04C11DB7, unreflected).
+fn ogg_crc(bytes: &[u8]) -> u32 {
+    let mut c = 0u32;
+    for &b in bytes {
+        c ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            c = if c & 0x8000_0000 != 0 { (c << 1) ^ 0x04C1_1DB7 } else { c << 1 };
+        }
+    }
+    c
+}
+
+/// One Ogg page holding `packets` (each under 255 * 255 bytes), with a valid checksum.
+fn ogg_page(packets: &[&[u8]], flags: u8, granule: i64, seq: u32) -> Vec<u8> {
+    let mut lacing = Vec::new();
+    for p in packets {
+        lacing.extend(std::iter::repeat_n(255u8, p.len() / 255));
+        lacing.push((p.len() % 255) as u8);
+    }
+    let mut page = b"OggS\0".to_vec();
+    page.push(flags);
+    page.extend_from_slice(&granule.to_le_bytes());
+    page.extend_from_slice(&1u32.to_le_bytes());
+    page.extend_from_slice(&seq.to_le_bytes());
+    page.extend_from_slice(&[0; 4]);
+    page.push(lacing.len() as u8);
+    page.extend_from_slice(&lacing);
+    for p in packets {
+        page.extend_from_slice(p);
+    }
+    let sum = ogg_crc(&page).to_le_bytes();
+    page[22..26].copy_from_slice(&sum);
+    page
+}
+
+/// An Ogg Opus file with the given `OpusHead` fields and audio packets (checksums valid, so the
+/// packets reach the decoder).
+fn opus_file(channels: u8, pre_skip: u16, gain: i16, family: u8, packets: &[Vec<u8>], granule: i64) -> Vec<u8> {
+    let mut head = b"OpusHead\x01".to_vec();
+    head.push(channels);
+    head.extend_from_slice(&pre_skip.to_le_bytes());
+    head.extend_from_slice(&48_000u32.to_le_bytes());
+    head.extend_from_slice(&gain.to_le_bytes());
+    head.push(family);
+    let mut f = ogg_page(&[&head], 2, 0, 0);
+    f.extend(ogg_page(&[b"OpusTags\0\0\0\0\0\0\0\0"], 0, 0, 1));
+    let refs: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
+    f.extend(ogg_page(&refs, 4, granule, 2));
+    f
+}
+
+#[test]
+fn opus_headers_the_decoder_cannot_use_are_refused() {
+    let silence = vec![vec![0xF8u8, 0xFF, 0xFE]];
+    for (channels, family) in [(0u8, 0u8), (3, 0), (6, 1), (2, 255)] {
+        let f = opus_file(channels, 120, 0, family, &silence, 960);
+        assert!(decode(&f, None).is_err(), "{channels} channels, family {family}");
+        assert!(probe(&f, None).is_err(), "{channels} channels, family {family}");
+    }
+    // A granule before the pre-skip is an empty stream, not an underflow.
+    let f = opus_file(2, 3000, 0, 0, &silence, 100);
+    assert!(decode(&f, None).is_ok_and(|(i, b)| i.frames == 0 && b.frames() == 0));
+    // An absurd stated length is capped by the audio that is really there.
+    let f = opus_file(1, 0, 0, 0, &silence, i64::MAX);
+    assert!(decode(&f, None).is_ok_and(|(_, b)| b.frames() <= 5760));
 }
 
 /// Little helper for building RIFF files by hand.
@@ -51,6 +118,9 @@ fn every_truncation_is_handled() {
         small(FileFormat::Aiff, BitDepth::Float32, 2),
         small(FileFormat::Flac, BitDepth::Int16, 2),
         small(FileFormat::Flac, BitDepth::Int24, 1),
+        small(FileFormat::Mp3, BitDepth::Int16, 2),
+        small(FileFormat::Opus, BitDepth::Int16, 2),
+        small(FileFormat::Opus, BitDepth::Int16, 1),
     ];
     for file in &files {
         for n in 0..file.len() {
@@ -74,8 +144,13 @@ fn truncated_data_chunk_yields_partial_audio() {
 
 #[test]
 fn every_single_byte_corruption_is_handled() {
-    for file in [small(FileFormat::Wav, BitDepth::Int24, 2), small(FileFormat::Aiff, BitDepth::Int16, 2), small(FileFormat::Flac, BitDepth::Int16, 1)]
-    {
+    for file in [
+        small(FileFormat::Wav, BitDepth::Int24, 2),
+        small(FileFormat::Aiff, BitDepth::Int16, 2),
+        small(FileFormat::Flac, BitDepth::Int16, 1),
+        small(FileFormat::Mp3, BitDepth::Int16, 2),
+        small(FileFormat::Opus, BitDepth::Int16, 2),
+    ] {
         for i in 0..file.len().min(200) {
             for v in [0x00, 0xFF, 0x7F, 0x80] {
                 let mut f = file.clone();
@@ -476,10 +551,26 @@ proptest! {
     }
 
     #[test]
+    fn random_opus_packets_never_panic(
+        packets in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..400), 0..12),
+        channels in 1u8..3,
+        pre_skip in 0u16..2000,
+        gain in any::<i16>(),
+        granule in -10i64..100_000,
+    ) {
+        let f = opus_file(channels, pre_skip, gain, 0, &packets, granule);
+        let _ = probe(&f, None);
+        if let Ok((info, buf)) = decode(&f, None) {
+            prop_assert_eq!(buf.frames() as u64, info.frames);
+            prop_assert!(buf.channels.iter().flatten().all(|s| s.is_finite()));
+        }
+    }
+
+    #[test]
     fn random_audio_roundtrips_through_flac(samples in proptest::collection::vec(-1.2f32..1.2, 1..3000), channels in 1usize..4) {
         let buf = AudioBuffer::from_interleaved(48_000, channels, &samples);
         prop_assume!(buf.frames() > 0);
-        let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int24, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int24, dither: false, bwf: None, bitrate_kbps: 0 };
         let (_, flac) = decode(&encode(&buf, &opts).unwrap(), None).unwrap();
         let (_, wav) = decode(&encode(&buf, &EncodeOptions { format: FileFormat::Wav, ..opts }).unwrap(), None).unwrap();
         prop_assert_eq!(flac, wav);

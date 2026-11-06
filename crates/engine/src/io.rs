@@ -904,11 +904,7 @@ pub fn bounce_stems_with(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, 
         return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
     }
     make_dir(dir)?;
-    let ext = match opts.format {
-        FileFormat::Aiff => "aif",
-        FileFormat::Flac => "flac",
-        _ => "wav",
-    };
+    let ext = soundcraft_audio_io::encode_extension(opts.format);
     let mut out = Vec::new();
     let stems: Vec<(TrackId, String)> = s
         .tracks
@@ -1370,7 +1366,13 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
         let (name, new) = match copied {
             Some(name) => (name, true),
             None => {
-                let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None };
+                let opts = EncodeOptions {
+                    format: FileFormat::Wav,
+                    bit_depth: soundcraft_audio_io::BitDepth::Float32,
+                    dither: false,
+                    bwf: None,
+                    bitrate_kbps: 0,
+                };
                 let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts).map_err(|err| EngineError::Io(err.to_string()))?;
                 store_wav(&into, &stem, &bytes)?
             }
@@ -1657,6 +1659,7 @@ pub(crate) fn write_wav_new(dir: &Path, stem: &str, buf: &soundcraft_audio_io::A
         bit_depth: soundcraft_audio_io::BitDepth::Float32,
         dither: false,
         bwf: None,
+        bitrate_kbps: 0,
     };
     for k in 0..10_000u32 {
         let name = if k == 0 { format!("{stem}.wav") } else { format!("{stem}_{k:02}.wav") };
@@ -1963,7 +1966,8 @@ pub fn session_bundle(session: &Session) -> Result<(Vec<u8>, Session)> {
             target = format!("Audio Files/{base}_{k:02}.wav");
             k += 1;
         }
-        let opts_wav = EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None };
+        let opts_wav =
+            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
         let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts_wav).map_err(|err| EngineError::Io(err.to_string()))?;
         w.start_file(target.as_str(), opts).map_err(zerr)?;
         w.write_all(&bytes).map_err(ioerr)?;
@@ -2618,7 +2622,8 @@ mod save_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Elsewhere")).unwrap();
         let original = dir.join("Elsewhere").join("Loop.wav");
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Int16, dither: false, bwf: None };
+        let opts =
+            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Int16, dither: false, bwf: None, bitrate_kbps: 0 };
         let bytes = soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 4_800]] }, &opts).unwrap();
         std::fs::write(&original, &bytes).unwrap();
         for (copy, project) in [(true, "On"), (false, "Off")] {
@@ -2654,7 +2659,8 @@ mod save_tests {
         e.execute("setup.copy_imported_audio", &json!({"value": false})).unwrap();
         std::fs::create_dir_all(dir.join("Elsewhere")).unwrap();
         let original = dir.join("Elsewhere").join("Pad.wav");
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None };
+        let opts =
+            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(&original, soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 480]] }, &opts).unwrap())
             .unwrap();
         e.execute("file.import_audio", &json!({"path": original.to_string_lossy()})).unwrap();

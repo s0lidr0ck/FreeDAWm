@@ -1,6 +1,6 @@
 # Coverage assessment: FreeDAWm against a reference DAW (Pro Tools)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** trivial (renamed to FreeDAWm, sessions saved as .fdawm; previously minor: hours to ~95 % for each audience; full number confirmed as an additive weighted sum) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1 (bundle 26.4.1.179, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (MP3 and Opus export: essentials user ~58 %; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: hours to ~95 % for each audience; full number confirmed as an additive weighted sum) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1 (bundle 26.4.1.179, macOS)
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -22,7 +22,7 @@ summarizes it, [`gaps.md`](gaps.md) itemizes every shortfall, and the per-dimens
 | Feature breadth (menus plus everything not in a menu: plugins, hardware, formats, immersive, cloud) | **~70 %** | estimated (area table below, presence only) |
 | **Ready for real work** (whole of Pro Tools) | **~40 %** | estimated: written dimension weights × values = 40.6 % ([By dimension](#by-dimension)) |
 | **Mainstream practitioner** (a working tracking/mixing engineer) | **~36 %** | estimated: written area weights and discounts ([below](#mainstream-practitioner-and-essentials-user)) |
-| **Essentials user** (making a song or podcast with the core features) | **~57 %** | estimated: written feature weights and discounts ([below](#mainstream-practitioner-and-essentials-user)) |
+| **Essentials user** (making a song or podcast with the core features) | **~58 %** | estimated: written feature weights and discounts ([below](#mainstream-practitioner-and-essentials-user)) |
 | Stage | **pre-alpha** (core-workflow gate fails) | see [Stage](#stage) |
 | Remaining effort to alpha | **~110–180 Opus 5.5 agent-hours** | estimated: the failing gate rows |
 | Remaining effort to beta | **~350–570 Opus 5.5 agent-hours** | estimated, calibrated (below) |
@@ -33,17 +33,17 @@ summarizes it, [`gaps.md`](gaps.md) itemizes every shortfall, and the per-dimens
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95 % | Work that dominates |
 |---|---:|---:|---|
 | Full target (ready for real work) | ~40 % | ~950–1,450 h (~60–70 % parallelizable) | Hardware (interfaces, MIDI, surfaces, sync), the built-in plugin catalogue, AAF/OMF and immersive delivery, localization, fidelity against Pro Tools |
-| Mainstream practitioner | ~36 % | ~380–600 h (~60 % parallelizable) | Interface recording and MIDI devices, AAF/OMF exchange, stock-plugin depth, the core-path bug backlog, interaction feel |
-| Essentials user | ~57 % | ~110–200 h (~70 % parallelizable) | Launch and platform fixes, an onboarding and user guide, stock-effect panels and presets, MP3/AAC export, editing and transport bugs |
+| Mainstream practitioner | ~36 % | ~370–580 h (~60 % parallelizable) | Interface recording and MIDI devices, AAF/OMF exchange, stock-plugin depth, the core-path bug backlog, interaction feel |
+| Essentials user | ~58 % | ~100–180 h (~70 % parallelizable) | Launch and platform fixes, an onboarding and user guide, stock-effect panels and presets, editing and transport bugs |
 
 Each audience's hours are for its own areas only, so essentials ⊂ mainstream ⊂ full. Calibration
 is the same as for the full estimate ([Effort and calibration](#effort-and-calibration)): bug fixes
 at 0.5–1.5 h each, features at about 200–300 tested lines per agent-hour, from the public-week PRs.
 - **Mainstream sum:** recording 40–60, MIDI 50–80, editing 40–60, mixing 35–50, automation 20–30,
-  stock plugins 80–120, AAF/OMF 50–90, compressed export 10–20, bug backlog 25–40, interaction
+  stock plugins 80–120, AAF/OMF 50–90, bug backlog 25–40, interaction
   feel 30–50.
 - **Essentials sum:** default-device recording 10–15, transport 5–10, editing polish 15–25, effect
-  panels and presets 20–30, MP3/AAC export 10–20, built-in instrument 10–20, launch and platform
+  panels and presets 20–30, built-in instrument 10–20, launch and platform
   15–25, onboarding and user guide 15–25, save fixes 5–10.
 
 The previous figure in ROADMAP.md (2026-10-07: "~65 % overall feature parity", "110–150 h to 100 %")
@@ -148,7 +148,7 @@ maintainers):
 - **Contributions:** 12 outside contributors have merged PRs in the first week. That's
   engagement, not yet use on real projects.
 
-### Essentials user: ~57 %
+### Essentials user: ~58 %
 
 A user who needs only the essentials: makes a song, demo or podcast, records through the computer's default
 microphone or interface, uses default settings, and exports a file to share.
@@ -165,15 +165,15 @@ microphone or interface, uses default settings, and exports a file to share.
 | Add a stock effect (EQ, compressor, reverb) and pick a preset | 10 % | 60 % | Generic panels, few presets |
 | Draw MIDI notes for a built-in synth | 5 % | 50 % | Two built-in instruments |
 | Save and reopen | 5 % | 80 % | Web build can drop unsaved edits (#136) |
-| Export / bounce a file to share | 5 % | 60 % | WAV/AIFF/FLAC only, no MP3/AAC |
-| **Weighted depth** | 100 % | **72.4 %** | |
+| Export / bounce a file to share | 5 % | 90 % | WAV/AIFF/FLAC, MP3, Opus; no AAC (not planned) |
+| **Weighted depth** | 100 % | **73.9 %** | |
 
 | Discount | Factor | Evidence |
 |---|---:|---|
 | Launch and stability | ×0.90 | Doesn't launch for one user (#142), X11 llvmpipe failure (#107), Linux symbols as boxes (#45), Windows shortcuts (#41); macOS is solid |
 | Discoverability and UI clarity | ×0.90 | Pro Tools' dense layout with no onboarding or user guide; shortcut collisions; plugin windows are bare sliders |
 | Opening files people send them | ×0.97 | These users get WAV/MP3, which work; only Pro Tools sessions fail |
-| **Result** | 72.4 × 0.90 × 0.90 × 0.97 = **56.9 % ≈ 57 %** | |
+| **Result** | 73.9 × 0.90 × 0.90 × 0.97 = **58.1 % ≈ 58 %** | |
 
 ## Feature areas
 
@@ -250,6 +250,7 @@ serializes more, because it needs hands-on testing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | MP3 and Opus export (G-21 closed; AAC not planned): the essentials export row 60 → 90 %, weighted depth 72.4 → 73.9 %, essentials ~57 → ~58 %; essentials hours 110–200 → 100–180 h and mainstream 380–600 → 370–580 h without compressed export. The full estimate is unchanged at its rounding |
 | 2026-10-26 | trivial | The product is renamed FreeDAWm (was SoundCraft); sessions are saved as `.fdawm` and `.scraft` still opens. Estimates unchanged |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95 % for full (950–1,450 h), mainstream (380–600 h) and essentials (110–200 h). The full number is already the additive weighted sum over the written dimension table (40.6 %); method unchanged |
 | 2026-10-10 | minor | Added the mainstream-practitioner (~36 %) and essentials-user (~57 %) numbers with written weights, discounts and user evidence. Checked the full ~40 %: it is the written dimension weights × values (40.6 %), so it doesn't move |
