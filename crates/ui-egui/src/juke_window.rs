@@ -136,6 +136,39 @@ struct Out {
     drops: Vec<(Rect, (usize, usize, usize))>,
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
+    /// Recorded kits: fetch the release's list, download one, cancel the download.
+    fetch_kits: bool,
+    download_kit: Option<soundcraft_engine::ml::kits::KitEntry>,
+    cancel_kit: bool,
+}
+
+/// What the Kits menu shows of the recorded kits.
+struct KitsView {
+    /// (name, folder) of each installed kit.
+    installed: Vec<(String, std::path::PathBuf)>,
+    /// The release's kits not installed yet, once listed; or why the list is not there.
+    available: Result<Vec<soundcraft_engine::ml::kits::KitEntry>, String>,
+    /// The download running: (kit id, received, expected bytes).
+    active: Option<(String, u64, u64)>,
+    note: String,
+}
+
+fn kits_view(app: &mut SoundApp) -> KitsView {
+    use crate::juke_kits_ui::ListState;
+    app.juke_kits.step();
+    let installed: Vec<_> = app.juke_kits.installed();
+    let have: Vec<&str> = installed.iter().map(|(id, _, _)| id.as_str()).collect();
+    let available = match &app.juke_kits.list {
+        ListState::NotLoaded => Err(String::new()),
+        ListState::Loading(_) => Err("Checking for kits…".into()),
+        ListState::Failed(e) => Err(format!("Kits list: {e}")),
+        ListState::Ready(m) => Ok(m.kits.iter().filter(|k| !have.contains(&k.id.as_str())).cloned().collect()),
+    };
+    let active = app.juke_kits.active.as_ref().map(|a| {
+        let (done, total) = a.progress.get();
+        (a.id.clone(), done, total)
+    });
+    KitsView { installed: installed.into_iter().map(|(_, name, path)| (name, path)).collect(), available, active, note: app.juke_kits.note.clone() }
 }
 
 impl Out {
@@ -153,6 +186,10 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     let mut view: View = ctx.data(|d| d.get_temp(view_id(tid))).unwrap_or_default();
     view.pad = view.pad.min(PADS - 1);
     let (levels, bus_levels) = pad_levels(app, &ctx, tid);
+    let kits = kits_view(app);
+    if kits.active.is_some() || kits.available.as_ref().is_err_and(|e| e.starts_with("Checking")) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
     let mut out = Out::default();
     let full = ui.available_rect_before_wrap();
     let full = Rect::from_min_size(full.min, vec2(full.width().max(760.0), full.height().max(520.0)));
@@ -164,7 +201,7 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     }
     let inner = full.shrink(6.0);
     let top = Rect::from_min_size(inner.min, vec2(inner.width(), 28.0));
-    top_bar(&mut body, top, tid, ins, &view, &mut out);
+    top_bar(&mut body, top, tid, ins, &view, &kits, &mut out);
     let honey_h = 64.0;
     let strips_w = STRIP_W * 3.0 + 12.0;
     let main = Rect::from_min_max(pos2(inner.min.x, top.max.y + 6.0), pos2(inner.max.x - strips_w - 8.0, inner.max.y - honey_h - 8.0));
@@ -250,6 +287,15 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     if let Some(m) = out.open_fx {
         crate::juke_fx::open(app, tid, m);
     }
+    if out.fetch_kits {
+        app.juke_kits.load_list();
+    }
+    if let Some(k) = &out.download_kit {
+        app.juke_kits.download(k);
+    }
+    if out.cancel_kit {
+        app.juke_kits.cancel();
+    }
     if let Some(e) = out.editing {
         view.editing = e;
     }
@@ -330,7 +376,7 @@ fn knob_at(ui: &mut Ui, r: Rect, ins: &Insert, id: &str, size: f32, style: KnobS
     }
 }
 
-fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, out: &mut Out) {
+fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, recorded: &KitsView, out: &mut Out) {
     let p = ui.painter();
     p.rect_filled(r, 4.0, TOP_BAR);
     text(p, pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, "JUKE", bold(14.0), AMBER);
@@ -385,6 +431,7 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, out: &
                 ui.close();
             }
         }
+        recorded_menu(ui, tid, &kit, recorded, out);
     });
     // Kit view or the selected pad's edit view.
     let tabs = Rect::from_min_size(pos2(menu.max.x + 16.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
@@ -571,6 +618,55 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
     }
     if selected {
         p.rect_stroke(r.expand(1.5), 7.0, Stroke::new(2.0, CREAM), StrokeKind::Outside);
+    }
+}
+
+/// The Kits menu's recorded kits: those installed (click to load), and the kits release's list
+/// with a download for each.
+fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
+    ui.separator();
+    ui.label(egui::RichText::new("Recorded").strong());
+    for (name, path) in &v.installed {
+        if ui.selectable_label(name == current, name).clicked() {
+            out.cmds.push(("mix.kit_load", json!({"track": tid.0, "path": path.to_string_lossy()})));
+            ui.close();
+        }
+    }
+    match &v.active {
+        Some((id, done, total)) => {
+            let pct = if *total > 0 { *done as f64 / *total as f64 * 100.0 } else { 0.0 };
+            ui.label(format!("Downloading {id}: {pct:.0} %"));
+            if ui.button("Cancel Download").clicked() {
+                out.cancel_kit = true;
+            }
+        }
+        None => match &v.available {
+            Ok(list) if list.is_empty() => {
+                ui.label(egui::RichText::new("No more kits to download").weak());
+            }
+            Ok(list) => {
+                for k in list {
+                    let mb = k.size as f64 / 1_048_576.0;
+                    let tip = format!("{}. {}", k.license, k.credit);
+                    if ui.button(format!("Download {} ({mb:.0} MB)", if k.name.is_empty() { &k.id } else { &k.name })).on_hover_text(tip).clicked() {
+                        out.download_kit = Some(k.clone());
+                    }
+                }
+            }
+            Err(msg) => {
+                if !msg.is_empty() {
+                    ui.label(egui::RichText::new(msg).weak());
+                }
+                if !msg.starts_with("Checking")
+                    && ui.button("Get Recorded Kits…").on_hover_text("List the kits FreeDAWm's kits release offers").clicked()
+                {
+                    out.fetch_kits = true;
+                }
+            }
+        },
+    }
+    if !v.note.is_empty() {
+        ui.label(egui::RichText::new(&v.note).weak());
     }
 }
 

@@ -167,3 +167,51 @@ fn the_kit_arrows_step_through_the_starter_kits() {
     h.run_steps(3);
     assert_eq!(name(&h).as_deref(), Some("Porch Light"));
 }
+
+/// A 16-bit mono WAV of a short click.
+fn click_wav() -> Vec<u8> {
+    let samples: Vec<i16> = (0..4800).map(|i| if i < 200 { if i % 2 == 0 { 20_000 } else { -20_000 } } else { 0 }).collect();
+    let data_len = (samples.len() * 2) as u32;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + data_len).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&48_000u32.to_le_bytes());
+    b.extend_from_slice(&96_000u32.to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        b.extend_from_slice(&s.to_le_bytes());
+    }
+    b
+}
+
+#[test]
+fn an_installed_recorded_kit_loads_from_the_kits_menu() {
+    let d = std::env::temp_dir().join(format!("juke-ui-kits-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let kit = d.join("porch_test");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(kit.join("k.wav"), click_wav()).unwrap();
+    std::fs::write(
+        kit.join("kit.json"),
+        r#"{"name":"Porch Test","license":"CC0","pads":[{"name":"Stomp","family":"kick","samples":{"v1.r1":"k.wav"}}]}"#,
+    )
+    .unwrap();
+    let (mut h, t) = rig(false);
+    h.state_mut().juke_kits.dir = Some(d.clone());
+    h.run_steps(2);
+    h.get_by_label("Kits").click();
+    h.run_steps(2);
+    h.get_by_label("Porch Test").click();
+    h.run_steps(3);
+    let ins = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
+    assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some("Porch Test"));
+    assert!(ins.samples.contains_key("p1.v1.r1"));
+    let _ = std::fs::remove_dir_all(&d);
+}

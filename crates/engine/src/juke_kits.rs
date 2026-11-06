@@ -250,3 +250,102 @@ mod tests {
         assert!(hat.frames() < hard.frames());
     }
 }
+
+/// A recorded kit as installed: a folder with `kit.json` and its samples.
+///
+/// ```json
+/// {"name": "SM Drums", "license": "Public domain", "credit": "…",
+///  "pads": [{"name": "Kick", "family": "kick", "note": 36,
+///            "samples": {"v1.r1": "kick/v1r1.wav", "v4.r2": "kick/v4r2.wav"}}]}
+/// ```
+///
+/// Pads in pad order (at most 16); each sample's key is its velocity layer (1 the softest) and
+/// round-robin take, each 1–4; paths are relative to the folder.
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize)]
+pub struct RecordedKit {
+    pub name: String,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub credit: String,
+    #[serde(default)]
+    pub pads: Vec<RecordedPad>,
+}
+
+/// One pad of a [`RecordedKit`].
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize)]
+pub struct RecordedPad {
+    pub name: String,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub note: Option<u8>,
+    #[serde(default)]
+    pub samples: std::collections::BTreeMap<String, String>,
+}
+
+/// Reads and checks `<dir>/kit.json`: at most 16 pads, sample keys `vN.rM` within Juke's layers
+/// and round-robins, sample paths plain and inside the folder.
+pub fn read_recorded(dir: &std::path::Path) -> Result<RecordedKit, String> {
+    let path = dir.join("kit.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let kit: RecordedKit = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    if kit.name.trim().is_empty() {
+        return Err(format!("{}: the kit has no name", path.display()));
+    }
+    if kit.pads.len() > PADS {
+        return Err(format!("{}: {} pads, Juke has {PADS}", path.display(), kit.pads.len()));
+    }
+    for (i, pad) in kit.pads.iter().enumerate() {
+        if let Some(f) = &pad.family
+            && DrumFamily::from_id(f).is_none()
+        {
+            return Err(format!("pad {}: no family `{f}`", i + 1));
+        }
+        for (key, file) in &pad.samples {
+            if layer_robin(key).is_none() {
+                return Err(format!("pad {}: `{key}` is not a layer and take (v1.r1 to v4.r4)", i + 1));
+            }
+            let p = std::path::Path::new(file);
+            if file.is_empty() || !p.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                return Err(format!("pad {}: `{file}` is not a file in the kit's folder", i + 1));
+            }
+        }
+    }
+    Ok(kit)
+}
+
+/// `vN.rM` as (layer, take), each from 0.
+pub fn layer_robin(key: &str) -> Option<(usize, usize)> {
+    let (v, r) = key.split_once('.')?;
+    let v: usize = v.strip_prefix('v')?.parse().ok()?;
+    let r: usize = r.strip_prefix('r')?.parse().ok()?;
+    ((1..=LAYERS).contains(&v) && (1..=soundcraft_dsp::plugins::juke::ROBINS).contains(&r)).then(|| (v - 1, r - 1))
+}
+
+#[cfg(test)]
+mod recorded_tests {
+    use super::*;
+
+    #[test]
+    fn kit_json_is_checked() {
+        let d = std::env::temp_dir().join(format!("fdawm-recorded-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let write = |s: &str| std::fs::write(d.join("kit.json"), s).unwrap();
+        write(r#"{"name":"T","pads":[{"name":"Kick","family":"kick","note":36,"samples":{"v1.r1":"k.wav"}}]}"#);
+        let k = read_recorded(&d).unwrap();
+        assert_eq!(k.pads[0].samples.get("v1.r1").map(String::as_str), Some("k.wav"));
+        for bad in [
+            r#"{"name":"","pads":[]}"#,
+            r#"{"name":"T","pads":[{"name":"K","samples":{"v5.r1":"k.wav"}}]}"#,
+            r#"{"name":"T","pads":[{"name":"K","samples":{"v1.r1":"../k.wav"}}]}"#,
+            r#"{"name":"T","pads":[{"name":"K","family":"bongo"}]}"#,
+        ] {
+            write(bad);
+            assert!(read_recorded(&d).is_err(), "{bad}");
+        }
+        assert_eq!(layer_robin("v4.r4"), Some((3, 3)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

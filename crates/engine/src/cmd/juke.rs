@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Kit",
             [],
             None,
-            "{track?, kit: name} -> {kit, samples}: a starter kit on the Juke track (its sounds, names and bus effects; the pads keep their notes, mutes and solos). A rendered kit's pads play samples made from their synth voices",
+            "{track?, kit: name | path: an installed recorded kit's folder} -> {kit, samples}: a starter kit (or a recorded kit downloaded from the kits release) on the Juke track: its sounds, names and bus effects; the pads keep their notes (unless a recorded kit gives them), mutes and solos. A rendered kit's pads play samples made from their synth voices",
             has_selection,
             kit_load
         ),
@@ -381,6 +381,9 @@ fn kit_load(e: &mut Engine, p: &Value) -> Result<Value> {
     use crate::juke_kits::{KITS, LAYER_VELOCITIES, find, render_pad, takes};
     let id = "mix.kit_load";
     let t = juke_track(e, id, p)?;
+    if let Some(path) = str_param(p, "path") {
+        return recorded_load(e, t, Path::new(path));
+    }
     let names = || KITS.iter().map(|k| k.name).collect::<Vec<_>>().join(", ");
     let kit = p.get("kit").and_then(Value::as_str).and_then(find).ok_or_else(|| bad(id, format!("`kit` must be one of: {}", names())))?;
     let current = e.session().track(t).and_then(|tr| tr.instrument.clone()).ok_or_else(|| bad(id, "no instrument"))?;
@@ -445,6 +448,71 @@ fn kit_load(e: &mut Engine, p: &Value) -> Result<Value> {
     ins.kit_fx = fx;
     ins.sanitize_kit_fx();
     Ok(json!({"kit": kit.name, "samples": n}))
+}
+
+/// Loads the recorded kit installed in `dir` onto Juke track `t`.
+fn recorded_load(e: &mut Engine, t: TrackId, dir: &Path) -> Result<Value> {
+    let id = "mix.kit_load";
+    let kit = crate::juke_kits::read_recorded(dir).map_err(|m| bad(id, m))?;
+    let current = e.session().track(t).and_then(|tr| tr.instrument.clone()).ok_or_else(|| bad(id, "no instrument"))?;
+    let mut params: std::collections::BTreeMap<String, f32> = JUKE_INFO.params.iter().map(|q| (q.id.to_string(), q.default)).collect();
+    for pad in 1..=PADS {
+        for k in ["note", "mute", "solo"] {
+            let key = format!("p{pad}_{k}");
+            if let Some(v) = current.params.get(&key) {
+                params.insert(key, *v);
+            }
+        }
+    }
+    for (i, pad) in kit.pads.iter().enumerate() {
+        if let Some(n) = pad.note {
+            params.insert(format!("p{}_note", i + 1), f32::from(n.min(127)));
+        }
+    }
+    {
+        let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+        ins.params = params;
+        ins.samples.clear();
+        ins.kit_fx.clear();
+    }
+    // A missing or broken file fails the command, which leaves the session as it was.
+    let mut n = 0;
+    for (i, pad) in kit.pads.iter().enumerate() {
+        for (key, file) in &pad.samples {
+            let Some((layer, robin)) = crate::juke_kits::layer_robin(key) else { continue };
+            let path = dir.join(file);
+            let bytes = crate::io::read_file(&path)?;
+            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("Sample").to_string();
+            attach_sample(e, t, (i, layer, robin), &name, &bytes, Some(&path.to_string_lossy()))?;
+            n += 1;
+        }
+    }
+    let layout = KitLayout {
+        name: kit.name.chars().take(64).collect(),
+        pads: (0..PADS)
+            .map(|i| match kit.pads.get(i) {
+                Some(pad) => KitPad {
+                    name: pad.name.chars().take(32).collect(),
+                    family: pad.family.as_deref().and_then(DrumFamily::from_id).unwrap_or(DrumFamily::Percussion),
+                },
+                None => {
+                    let (n, f) = DEFAULT_PADS.get(i).copied().unwrap_or(("Pad", DrumFamily::Percussion));
+                    KitPad { name: n.into(), family: f }
+                }
+            })
+            .collect(),
+    };
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    for (i, pad) in kit.pads.iter().enumerate() {
+        let layers =
+            pad.samples.keys().filter_map(|k| crate::juke_kits::layer_robin(k)).map(|(l, _)| l).collect::<std::collections::BTreeSet<_>>().len();
+        // Layered recordings carry their own dynamics; one layer leans on the velocity.
+        if layers > 0 {
+            ins.params.insert(format!("p{}_velocity", i + 1), if layers > 1 { 30.0 } else { 75.0 });
+        }
+    }
+    ins.kit = Some(layout);
+    Ok(json!({"kit": kit.name, "samples": n, "license": kit.license, "credit": kit.credit}))
 }
 
 fn kit_name(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -681,6 +749,34 @@ mod tests {
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, "Tin Roof");
         assert!(e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Nope"})).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_recorded_kit_loads_from_its_folder() {
+        let d = dir("recorded");
+        std::fs::create_dir_all(d.join("kick")).unwrap();
+        click_wav(&d.join("kick").join("v1r1.wav"), 48_000);
+        click_wav(&d.join("kick").join("v2r1.wav"), 48_000);
+        std::fs::write(
+            d.join("kit.json"),
+            r#"{"name":"Test Kit","license":"CC0","pads":[{"name":"Thud","family":"kick","note":36,"samples":{"v1.r1":"kick/v1r1.wav","v2.r1":"kick/v2r1.wav"}}]}"#,
+        )
+        .unwrap();
+        let (mut e, t) = beat();
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        e.execute("pattern.step", &json!({"clip": clip.0, "lane": 0, "step": 0, "on": true, "velocity": 127})).unwrap();
+        let v = e.execute("mix.kit_load", &json!({"track": t.0, "path": d.to_string_lossy()})).unwrap();
+        assert_eq!(v["samples"], 2);
+        let ins = juke(&e, t);
+        assert_eq!(pad_layout(&ins, 0).name, "Thud");
+        assert_eq!(ins.kit.as_ref().unwrap().name, "Test Kit");
+        assert!(ins.samples.contains_key("p1.v2.r1") && ins.params.get("p1_source") == Some(&0.0));
+        assert!(bounce_peak(&mut e, &d, "rec.wav") > 0.05, "the recorded kick plays");
+        // A kit naming a missing file changes nothing.
+        std::fs::write(d.join("kit.json"), r#"{"name":"Broken","pads":[{"name":"K","samples":{"v1.r1":"nope.wav"}}]}"#).unwrap();
+        assert!(e.execute("mix.kit_load", &json!({"track": t.0, "path": d.to_string_lossy()})).is_err());
+        assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, "Test Kit");
         let _ = std::fs::remove_dir_all(&d);
     }
 

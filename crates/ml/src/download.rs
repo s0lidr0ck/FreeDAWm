@@ -89,7 +89,7 @@ impl DownloadProgress {
     }
 }
 
-fn io(p: &Path, e: impl std::fmt::Display) -> MlError {
+pub(crate) fn io(p: &Path, e: impl std::fmt::Display) -> MlError {
     MlError::Io(format!("{}: {e}", p.display()))
 }
 
@@ -121,7 +121,7 @@ pub fn download(dir: &Path, m: &ManifestModel, manifest_url: &str, cancel: &Canc
 }
 
 /// Streams `url` into `part`, checking its size and sha256 against `m`.
-fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Cancel, progress: &DownloadProgress) -> Result<()> {
+pub(crate) fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Cancel, progress: &DownloadProgress) -> Result<()> {
     use sha2::Digest;
     progress.set(0, m.size);
     let mut reader = get(url)?.into_reader().take(m.size.saturating_add(1));
@@ -156,7 +156,7 @@ fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Cancel, progres
 }
 
 /// Puts a model folder back after a swap that stopped half way, and clears old leftovers.
-fn recover(dir: &Path, id: &str) {
+pub(crate) fn recover(dir: &Path, id: &str) {
     let (live, old) = (dir.join(id), dir.join(format!(".{id}.old")));
     if std::fs::symlink_metadata(&old).is_ok() {
         if std::fs::symlink_metadata(&live).is_err() {
@@ -187,7 +187,7 @@ pub fn install_zip(dir: &Path, id: &str, zip_path: &Path) -> Result<()> {
     r
 }
 
-fn unpack(zip_path: &Path, to: &Path) -> Result<()> {
+pub(crate) fn unpack(zip_path: &Path, to: &Path) -> Result<()> {
     let bad = |e: &dyn std::fmt::Display| MlError::Io(format!("{}: not a model zip ({e})", zip_path.display()));
     let f = std::fs::File::open(zip_path).map_err(|e| io(zip_path, e))?;
     let mut z = zip::ZipArchive::new(std::io::BufReader::new(f)).map_err(|e| bad(&e))?;
@@ -228,7 +228,7 @@ fn unpack(zip_path: &Path, to: &Path) -> Result<()> {
 }
 
 /// Swaps the checked folder `new` in as `dir/<id>`.
-fn swap(dir: &Path, id: &str, new: &Path) -> Result<()> {
+pub(crate) fn swap(dir: &Path, id: &str, new: &Path) -> Result<()> {
     let (live, old) = (dir.join(id), dir.join(format!(".{id}.old")));
     let had = std::fs::symlink_metadata(&live).is_ok();
     if had {

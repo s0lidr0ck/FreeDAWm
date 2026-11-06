@@ -35,7 +35,7 @@ pub use soundcraft_ml::{
     Analysed, Analysis, Cancel, ChordOptions, ChordSegment, CleanMode, CleanOptions, Ctx, Device, Isolate, JobKind, JobOutput, Lyrics,
     LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription,
 };
-pub use soundcraft_ml::{adtof, basicpitch, catalog, download};
+pub use soundcraft_ml::{adtof, basicpitch, catalog, download, kits};
 
 /// Clean Vocal's default de-noise amount (attenuation limit), dB.
 pub const DEFAULT_AMOUNT_DB: f32 = soundcraft_ml::denoise::DEFAULT_ATTEN_DB;
