@@ -54,6 +54,7 @@ mod module_preset;
 mod more_util;
 pub mod notes;
 mod options;
+mod pattern;
 mod plugin_state;
 mod query;
 pub(crate) mod sampler;
@@ -155,6 +156,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(track::specs());
         v.extend(freeze::specs());
         v.extend(clip::specs());
+        v.extend(pattern::specs());
         v.extend(clip_clean::specs());
         v.extend(event::specs());
         v.extend(mix::specs());

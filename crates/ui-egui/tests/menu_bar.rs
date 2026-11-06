@@ -16,7 +16,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Edit", 27),
     ("View", 11),
     ("Track", 28),
-    ("Clip", 21),
+    ("Clip", 23),
     ("Event", 15),
     ("Process", 14),
     ("AI", 11),

@@ -77,8 +77,10 @@ bigger grid come later). Each pad:
 **Hosting effects inside the instrument** is new: Juke owns up to twelve instances of built-in
 FireStation plugins (made through the registry, prepared with the instrument, run on its audio
 thread with no allocation). Their parameters are stored with the insert (below), changed through a
-command so they undo and automate, and their existing editors open from the Juke window. This
-part is built after the pads and patterns work.
+command so they undo and automate. A filled slot opens that effect's **full detached plugin window**
+(the floating editor every module already has), not a view embedded in Juke (owner's decision,
+2026-11-06): nothing new to lay out, and each effect looks and works exactly as it does on a track.
+This part is built after the pads and patterns work.
 
 Engine and audio-thread rules stay as for every built-in: no allocation, no locks, no panics in
 `process`. Voices are a fixed pool (64), stolen oldest-first within a slot.
@@ -155,7 +157,7 @@ Instrument parameters go through the existing `mix.instrument_param`.
     `#7FA9EE`, percussion green `#9ED27C`.
   - **Right side:** three equal strips, Bus A and Bus B (slate) and Output (brass), each with four
     effect slots (a lit dot when filled, a dashed "Add effect" when empty; a filled slot opens that
-    FireStation effect's editor), a full-height fader with a dB scale and a stereo meter, and the
+    FireStation effect's full detached window), a full-height fader with a dB scale and a stereo meter, and the
     return or output level underneath.
   - **Knobs:** the app's knob (`widgets::paint_knob_face`) in a **cream** variant of its silver
     style (a brushed cream cap, dark pointer); Tune and Pan in the hero style, whose segmented value

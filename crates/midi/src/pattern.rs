@@ -207,7 +207,7 @@ pub struct Expand {
     /// The clip's length in ticks: notes start in `0..length`.
     pub length: i64,
     /// Where in the pattern the clip starts, in ticks (a clip trimmed from its start keeps its
-    /// place in the bar).
+    /// place in the bar; negative before the pattern's first step, which the lanes loop back into).
     pub phase: i64,
     /// Most notes to make (the expansion stops there).
     pub max_notes: usize,
@@ -265,7 +265,7 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
         // Positions whose (nudged) hits can land in the clip: one step of slack each side.
         let first = ((at.phase as f64) / step_len).floor() as i64 - 1;
         let last = (((at.phase + at.length) as f64) / step_len).ceil() as i64 + 1;
-        for k in first.max(0)..=last {
+        for k in first..=last {
             let pass = k.div_euclid(len.max(1) as i64);
             let mut chance = step_rng(p.seed, li, k, 0);
             let idx = lane_index(lane.direction, len, k, &mut chance);

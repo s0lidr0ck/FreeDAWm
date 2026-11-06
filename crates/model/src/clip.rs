@@ -88,15 +88,29 @@ impl Fade {
 pub struct PatternClip {
     pub pattern: soundcraft_midi::pattern::Pattern,
     /// Where in the pattern the clip starts, in ticks: a clip trimmed or split from its start keeps
-    /// its place in the bar. Never negative.
+    /// its place in the bar (negative when its start was extended before the pattern's first step).
     #[serde(default)]
     pub phase: i64,
+    /// The clip's start and end (samples) when its notes were last expanded: the engine tells a
+    /// move (both changed alike: the phase stays) from a trim or split at the start (the phase
+    /// follows) by comparing them with the clip's. `None` until first expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen: Option<(i64, i64)>,
+    /// Fingerprint of the notes last expanded into the clip: notes that no longer match were
+    /// edited by hand, and the clip becomes a plain MIDI clip rather than lose the edit.
+    #[serde(default)]
+    pub expanded: u64,
 }
 
 impl PatternClip {
+    /// A pattern clip that has not been expanded yet.
+    pub fn new(pattern: soundcraft_midi::pattern::Pattern, phase: i64) -> PatternClip {
+        PatternClip { pattern, phase, seen: None, expanded: 0 }
+    }
+
     pub fn sanitize(&mut self) {
         self.pattern.sanitize();
-        self.phase = self.phase.clamp(0, i64::from(i32::MAX));
+        self.phase = self.phase.clamp(-i64::from(i32::MAX), i64::from(i32::MAX));
     }
 }
 
@@ -591,7 +605,7 @@ mod tests {
         use soundcraft_midi::pattern::{Lane, Pattern, Step};
         let mut lane = Lane::new(36, 16);
         lane.steps[0] = Step::hit(110);
-        let pc = PatternClip { pattern: Pattern { lanes: vec![lane], ..Pattern::default() }, phase: 480 };
+        let pc = PatternClip::new(Pattern { lanes: vec![lane], ..Pattern::default() }, 480);
         let mut c = cleanup_clip();
         c.pattern = Some(pc.clone());
         let json = serde_json::to_string(&c).unwrap();
@@ -605,9 +619,9 @@ mod tests {
         a.pattern = Some(PatternClip { phase: -5, ..pc });
         a.sanitize();
         assert!(a.pattern.is_none(), "only MIDI clips keep a pattern");
-        c.pattern.as_mut().unwrap().phase = -5;
+        c.pattern.as_mut().unwrap().phase = i64::MIN;
         c.sanitize();
-        assert_eq!(c.pattern.as_ref().map(|p| p.phase), Some(0));
+        assert_eq!(c.pattern.as_ref().map(|p| p.phase), Some(-i64::from(i32::MAX)));
     }
 
     #[test]
