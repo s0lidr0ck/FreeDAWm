@@ -24,7 +24,7 @@ signal_generator d7cb0e0b4e08442b
 dither a9ee63712fe8e756
 subtractive_synth 4c49b76696123530
 drum_synth 478531d398691945
-sampler 409fb70d8ba3e414
+sampler 6884c5186c1729e1
 fs_sat ad2f990efe8687fb
 fs_comp 76936655812c764a
 fs_tape 4014bd718ef468ae

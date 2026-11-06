@@ -61,6 +61,7 @@ const LFO_VOLUME: usize = 30;
 const GLIDE: usize = 31;
 const VOICE_MODE: usize = 32;
 const PAN: usize = 33;
+const LOOP_XFADE: usize = 34;
 
 fn pan_display(v: f32) -> String {
     let v = v.round();
@@ -75,7 +76,7 @@ fn pan_display(v: f32) -> String {
 
 // New parameters go at the end: sessions and presets store them by id, and the indices above
 // are the order of this table.
-static SAMPLER_PARAMS: [ParamInfo; 34] = [
+static SAMPLER_PARAMS: [ParamInfo; 35] = [
     lin("root_note", "Root Note", 0.0, 127.0, 60.0, Unit::None),
     lin("transpose", "Transpose", -48.0, 48.0, 0.0, Unit::Semitones),
     lin("fine_tune", "Fine Tune", -100.0, 100.0, 0.0, Unit::Cents),
@@ -121,6 +122,7 @@ static SAMPLER_PARAMS: [ParamInfo; 34] = [
         display: Some(pan_display),
         group: "",
     },
+    lin("loop_xfade", "Loop Crossfade", 0.0, 50.0, 0.0, Unit::Percent),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
@@ -309,6 +311,8 @@ struct Derived {
     /// One-pole glide coefficient (0 = no glide).
     glide: f64,
     mono: bool,
+    /// Forward-loop crossfade as a fraction of the loop's length.
+    xfade: f64,
 }
 
 /// A MIDI key or velocity parameter as a whole number in `lo..=127`.
@@ -406,6 +410,7 @@ impl Sampler {
                 lfo_volume: 0.0,
                 glide: 0.0,
                 mono: false,
+                xfade: 0.0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -474,6 +479,7 @@ impl Sampler {
             // A third of the glide time is the time constant: the slide is all but done by then.
             glide: f64::from(time_coef(v(GLIDE) / 3.0, sr)),
             mono: self.p.choice(VOICE_MODE) == 1,
+            xfade: f64::from(v(LOOP_XFADE) / 100.0).clamp(0.0, 0.5),
         };
         if was_mono != self.d.mono {
             self.held_len = 0;
@@ -724,6 +730,15 @@ impl Sampler {
         let region = self.loop_frames();
         let d = self.d;
         let trem = 1.0 - d.lfo_volume * (0.5 + 0.5 * self.lfo);
+        // A forward loop's crossfade: the last `xf` frames before the loop end fade into the
+        // frames the same distance before the loop start (no more than there is before it).
+        let fade = match region {
+            Some((ls, le)) if mode == LoopMode::Forward && d.xfade > 0.0 => {
+                let xf = (d.xfade * (le - ls)).min(ls);
+                (xf >= 2.0).then_some((le - ls, le - xf, xf))
+            }
+            _ => None,
+        };
         for v in &mut self.voices {
             if !v.active() {
                 continue;
@@ -734,6 +749,14 @@ impl Sampler {
                 let src = if nch == 1 { 0 } else { c };
                 if let (Some(x), Some(data)) = (b.get_mut(n), sample.channel(src)) {
                     let mut y = hermite(data, v.pos);
+                    if v.looping
+                        && let Some((len, from, xf)) = fade
+                        && v.pos >= from
+                    {
+                        // Equal power: the loop's end fades out as its lead-in fades up.
+                        let t = (((v.pos - from) / xf) as f32).clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+                        y = y * t.cos() + hermite(data, v.pos - len) * t.sin();
+                    }
                     if d.filter != FilterKind::Off
                         && let Some(f) = v.svf.get_mut(c.min(1))
                     {
@@ -1435,6 +1458,26 @@ mod tests {
         assert!((l - 0.5).abs() < 1e-6 && r.abs() < 1e-6, "hard left: {l} {r}");
         let (l, r) = level(50.0);
         assert!((l - 0.25).abs() < 1e-3 && (r - 0.5).abs() < 1e-6, "half right: {l} {r}");
+    }
+
+    #[test]
+    fn a_loop_crossfade_smooths_the_seam() {
+        // A ramp 0..1 looped over its second half jumps from 1 back to 0.5 at the seam; with a
+        // crossfade the end fades into the audio before the loop start, so there is no jump.
+        let data: Vec<f32> = (0..2000).map(|i| i as f32 / 2000.0).collect();
+        let jump = |xfade: f32| {
+            let mut s = sampler(mono(SR, data.clone()));
+            s.set_param("velocity", 0.0);
+            s.set_param("loop_mode", 1.0);
+            s.set_param("loop_start", 50.0);
+            s.set_param("loop_end", 100.0);
+            s.set_param("loop_xfade", xfade);
+            s.note_on(0, 60, 127);
+            let out = run(&mut s, 6000);
+            out[0][100..5900].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max)
+        };
+        assert!(jump(0.0) > 0.4, "a hard seam: {}", jump(0.0));
+        assert!(jump(25.0) < 0.01, "crossfaded: {}", jump(25.0));
     }
 
     #[test]

@@ -49,6 +49,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             detect
         ),
+        cmd!(
+            "mix.sampler_edit",
+            "Edit Sampler Sample",
+            [],
+            None,
+            "{track?, op: trim|normalize|reverse}: a new sample made from the track's Sampler sample: `trim` cuts the silence (below -60 dB of its peak) off both ends, `normalize` brings its peak to -0.3 dBFS, `reverse` plays it backwards; the start, end, loop and slice markers stay on the same audio → {track, source, name, frames, channels, sample_rate, op}",
+            has_selection,
+            edit
+        ),
         cmd!("mix.sampler_clear", "Clear Sampler Sample", [], None, "{track?}: the track's Sampler stops playing its sample", has_selection, clear),
     ]
 }
@@ -214,6 +223,121 @@ fn attach_buffer(
         }
     }
     Ok(json!({"track": t, "source": src, "name": stem, "frames": frames, "channels": channels, "sample_rate": rate}))
+}
+
+/// Sampler parameters that are positions in the sample (percent of its length).
+fn position_params() -> Vec<&'static str> {
+    soundcraft_dsp::plugin_info(SAMPLER)
+        .map(|i| {
+            i.params
+                .iter()
+                .map(|p| p.id)
+                .filter(|id| matches!(*id, "start" | "end" | "loop_start" | "loop_end") || (id.starts_with("slice_") && *id != "slice_count"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Peak below which the ends of a sample count as silence for `trim` (-60 dB of the peak).
+const TRIM_FLOOR: f32 = 0.001;
+/// The peak `normalize` brings a sample to: -0.3 dBFS.
+const NORMALIZE_PEAK: f32 = 0.966_05;
+
+fn edit(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_edit";
+    let op = str_param(p, "op").ok_or_else(|| bad(id, "`op` required: trim, normalize or reverse"))?.to_string();
+    if !matches!(op.as_str(), "trim" | "normalize" | "reverse") {
+        return Err(bad(id, format!("unknown op `{op}`: trim, normalize or reverse")));
+    }
+    let t = instrument_track(e, id, p)?;
+    let s = e.session();
+    let ins = s.track(t).and_then(|tr| tr.instrument.as_ref()).filter(|i| i.plugin == SAMPLER);
+    let ins = ins.ok_or_else(|| bad(id, "the track's instrument is not the sampler"))?;
+    let src = ins.sample.ok_or_else(|| bad(id, "the sampler has no sample"))?;
+    let audio = s.pool.get(src).ok_or_else(|| bad(id, "the sample's audio is missing"))?;
+    let stem = s.source(src).map_or_else(|| "Sample".to_string(), |x| x.name.clone());
+    let mut buf = audio.buffer().into_owned();
+    let n = buf.frames();
+    if n == 0 {
+        return Err(bad(id, "the sample is empty"));
+    }
+    let peak = buf.channels.iter().flatten().filter(|x| x.is_finite()).fold(0.0f32, |m, x| m.max(x.abs()));
+    if peak <= 0.0 {
+        return Err(bad(id, "the sample is silent"));
+    }
+    // Where each marker lands in the new sample, as a function of where it was (percent).
+    let positions = position_params();
+    let mut values: Vec<(String, f32)> = Vec::new();
+    let marker = |k: &str| ins.params.get(k).copied().or_else(|| soundcraft_dsp::plugin_info(SAMPLER).and_then(|i| i.param(k)).map(|x| x.default));
+    let suffix = match op.as_str() {
+        "trim" => {
+            let loud = |f: usize| buf.channels.iter().any(|c| c.get(f).is_some_and(|x| x.abs() > peak * TRIM_FLOOR));
+            let a = (0..n).find(|f| loud(*f)).unwrap_or(0);
+            let b = (0..n).rev().find(|f| loud(*f)).map_or(n, |f| f + 1);
+            if a == 0 && b == n {
+                return Err(bad(id, "there is no silence at either end to trim"));
+            }
+            for c in &mut buf.channels {
+                *c = c.get(a..b).map(<[f32]>::to_vec).unwrap_or_default();
+            }
+            let (n, a, len) = (n as f32, a as f32, (b - a).max(1) as f32);
+            for k in &positions {
+                if let Some(v) = marker(k) {
+                    // A slice past the cut keeps its place at an end; an unused one (0) stays 0.
+                    let moved = ((v / 100.0 * n - a) / len * 100.0).clamp(0.0, 100.0);
+                    values.push((k.to_string(), if k.starts_with("slice_") && v == 0.0 { 0.0 } else { moved }));
+                }
+            }
+            "trim"
+        }
+        "normalize" => {
+            let g = NORMALIZE_PEAK / peak;
+            for c in &mut buf.channels {
+                c.iter_mut().for_each(|x| *x = if x.is_finite() { *x * g } else { 0.0 });
+            }
+            "normalized"
+        }
+        _ => {
+            for c in &mut buf.channels {
+                c.reverse();
+            }
+            // Start and end (and the loop's) swap as well as mirror, so the same audio stays
+            // inside them. Slices mirror and stay in order in the editor's view of them.
+            let mirror = |k: &str| marker(k).map(|v| 100.0 - v);
+            for (a, b) in [("start", "end"), ("loop_start", "loop_end")] {
+                if let (Some(x), Some(y)) = (mirror(b), mirror(a)) {
+                    values.push((a.to_string(), x));
+                    values.push((b.to_string(), y));
+                }
+            }
+            reversed_slices(&positions, &marker, &mut values);
+            "reversed"
+        }
+    };
+    let name = format!("{stem} {suffix}");
+    let mut r = attach_buffer(e, t, &name, buf, None, soundcraft_audio_io::FileFormat::Wav, values)?;
+    if let Some(o) = r.as_object_mut() {
+        o.insert("op".into(), json!(op));
+    }
+    Ok(r)
+}
+
+/// A reversed sample's slices: each slice's new start is the mirror of where it ended, in the
+/// same order from the left.
+fn reversed_slices(positions: &[&str], marker: &dyn Fn(&str) -> Option<f32>, values: &mut Vec<(String, f32)>) {
+    let count = marker("slice_count").map_or(0, |c| c.round().max(0.0) as usize);
+    let slices: Vec<&str> = positions.iter().copied().filter(|k| k.starts_with("slice_")).collect();
+    if count == 0 || slices.is_empty() {
+        return;
+    }
+    let count = count.min(slices.len());
+    let mut at: Vec<f32> = slices.iter().take(count).filter_map(|k| marker(k)).collect();
+    at.push(100.0);
+    let mut new: Vec<f32> = at.windows(2).map(|w| 100.0 - w.get(1).copied().unwrap_or(100.0)).collect();
+    new.sort_by(f32::total_cmp);
+    for (k, v) in slices.iter().zip(new) {
+        values.push((k.to_string(), v));
+    }
 }
 
 fn clear(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -566,5 +690,46 @@ mod tests {
         crate::io::load_sampler_bytes(&mut e, t, "noise.wav", &bytes).unwrap();
         let r = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
         assert!(r["root"].is_null() && r["note"].is_null(), "{r}");
+    }
+
+    #[test]
+    fn edits_trim_normalize_and_reverse_the_sample_as_undo_steps() {
+        let mut e = Engine::default();
+        let t = instrument_track(&mut e);
+        // Silence, a ramp up to 0.5, silence: 1000 + 2000 + 1000 frames.
+        let mut x = vec![0.0f32; 1000];
+        x.extend((0..2000).map(|i| 0.5 * (i + 1) as f32 / 2000.0));
+        x.extend(vec![0.0f32; 1000]);
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![x] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        crate::io::load_sampler_bytes(&mut e, t, "ramp.wav", &soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "start", "value": 50.0})).unwrap();
+        let audio = |e: &Engine| {
+            let ins = e.session().track(t).unwrap().instrument.clone().unwrap();
+            let a = e.session().pool.get(ins.sample.unwrap()).unwrap().buffer().into_owned();
+            (a.channels[0].clone(), ins.params)
+        };
+        let r = e.execute("mix.sampler_edit", &json!({"track": t.0, "op": "trim"})).unwrap();
+        assert_eq!(r["op"], "trim");
+        let (a, params) = audio(&e);
+        assert!((1996..=2000).contains(&a.len()), "the silence is gone (the ramp's first quiet frames with it): {}", a.len());
+        assert!((params["start"] - 50.0).abs() < 0.1, "the start stays on the same audio (half way): {}", params["start"]);
+        e.execute("mix.sampler_edit", &json!({"track": t.0, "op": "normalize"})).unwrap();
+        let (a, _) = audio(&e);
+        let peak = a.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!((peak - 0.966).abs() < 0.001, "-0.3 dBFS: {peak}");
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "end", "value": 80.0})).unwrap();
+        e.execute("mix.sampler_edit", &json!({"track": t.0, "op": "reverse"})).unwrap();
+        let (a, params) = audio(&e);
+        assert!(a[0] > a[a.len() - 1], "backwards");
+        assert!((params["start"] - 20.0).abs() < 0.01 && (params["end"] - 50.0).abs() < 0.1, "the span mirrors: {params:?}");
+        assert!(e.execute("mix.sampler_edit", &json!({"track": t.0, "op": "trim"})).is_err(), "nothing left to trim");
+        assert!(e.execute("mix.sampler_edit", &json!({"track": t.0, "op": "shred"})).is_err());
+        for _ in 0..4 {
+            e.execute("edit.undo", &json!({})).unwrap();
+        }
+        let (a, params) = audio(&e);
+        assert_eq!(a.len(), 4000, "undo brings the original back");
+        assert_eq!(params["start"], 50.0);
     }
 }

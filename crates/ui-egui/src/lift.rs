@@ -19,7 +19,7 @@ use soundcraft_model::{Insert, SourceAudio, TrackId};
 
 /// The editor's size: the window opens at this width.
 pub const W: f32 = 1100.0;
-const H: f32 = 760.0;
+const H: f32 = 800.0;
 
 // The Juke family's palette.
 const WALNUT: Color32 = Color32::from_rgb(0x2A, 0x24, 0x1F);
@@ -228,8 +228,10 @@ fn main_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     // Waveform well.
     let wave = Rect::from_min_max(pos2(r.min.x + 14.0, band.max.y + 14.0), pos2(r.max.x - 14.0, band.max.y + 14.0 + 150.0));
     waveform(app, ui, p, wave, tid, ins);
+    let tools = Rect::from_min_max(pos2(wave.min.x, wave.max.y + 8.0), pos2(wave.max.x, wave.max.y + 44.0));
+    sample_tools(app, ui, p, tools, tid, ins);
     // The two envelope rows.
-    let rows_top = wave.max.y + 12.0;
+    let rows_top = tools.max.y + 8.0;
     let row_h = (r.max.y - rows_top) / 2.0;
     let amp = Rect::from_min_max(pos2(r.min.x, rows_top), pos2(r.max.x, rows_top + row_h));
     let filt = Rect::from_min_max(pos2(r.min.x, amp.max.y), pos2(r.max.x, r.max.y));
@@ -237,6 +239,28 @@ fn main_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     p.line_segment([pos2(r.min.x + 1.0, filt.min.y), pos2(r.max.x - 1.0, filt.min.y)], Stroke::new(1.0, Color32::from_black_alpha(90)));
     amp_row(app, ui, p, amp, tid, ins);
     filter_row(app, ui, p, filt, tid, ins);
+}
+
+/// Under the waveform: Trim, Normalize and Reverse (each a new sample, one undo step), and the
+/// loop's crossfade.
+fn sample_tools(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert) {
+    let has = ins.sample.is_some();
+    let ops = [
+        ("Trim", "trim", "Cut the silence off both ends"),
+        ("Normalize", "normalize", "Bring the peak to -0.3 dBFS"),
+        ("Reverse", "reverse", "Play the sample backwards"),
+    ];
+    for (i, (label, op, help)) in ops.iter().enumerate() {
+        let b = Rect::from_min_size(pos2(r.min.x + i as f32 * 104.0, r.min.y + 4.0), vec2(96.0, 28.0));
+        let resp = button(ui, p, b, label, has, ("edit", *op)).on_hover_text(*help);
+        if resp.clicked() {
+            match app.run("mix.sampler_edit", json!({"track": tid.0, "op": op})) {
+                Ok(_) => app.ui.status = format!("{label}: done"),
+                Err(e) => app.ui.status = e,
+            }
+        }
+    }
+    small_knob(app, ui, p, pos2(r.min.x + 330.0, r.min.y - 4.0), tid, ins, "loop_xfade", "Loop Crossfade");
 }
 
 /// The detected root note and Use as Root, at the band's right.
