@@ -21,6 +21,28 @@ and more). Most libraries below are also on GitHub at <https://github.com/sfzins
 
 Mark each box when reviewed; note Keep / Maybe / Pass.
 
+## Where to listen
+
+Demo pages (catalog pages, product pages and recorded demos). Not every page has an audio player;
+when one doesn't, download the library and play it in sfizz.
+
+- Salamander Grand Piano: <https://sfzinstruments.github.io/pianos/salamander>, demo
+  <https://audioboom.com/posts/1769830-a-quick-demo-of-the-salamander-grand-piano-thanks-to-leowyatt1988>
+- Church Steinway: <https://sfzinstruments.github.io/pianos/church_steinway>,
+  <https://www.pianobook.co.uk/?p=23868>
+- Splendid Grand, Headroom Piano, Greg Sullivan E-Pianos: <https://sfzinstruments.github.io/pianos>
+  (each name links to its page)
+- Virtuosity Drums: <https://versilian-studios.com/virtuosity-drums/>,
+  <https://www.kvraudio.com/product/virtuosity-drums-by-versilian-studios>
+- Salamander Drumkit: demo
+  <https://audioboom.com/boos/1770362-two-free-drum-kits-in-sfz-format-salamander-v1-and-open-source>
+- Swirly, Unruly, SM Drums: <https://sfzinstruments.github.io/drums>
+- Black And Blue Basses: <https://www.kvraudio.com/product/black-and-blue-basses-by-karoryfer>
+- Growlybass: <https://www.kvraudio.com/product/growlybass-by-karoryfer>
+- Big Little Bass: <https://www.kvraudio.com/product/big-little-bass-by-karoryfer>
+- All basses: <https://sfzinstruments.github.io/basses>
+- VSCO 2 CE: <https://versilian-studios.com/vsco-community/>
+
 ## Pianos and keys
 
 - [ ] **Salamander Grand Piano**, Alexander Holm: Yamaha C5, 16 velocity layers. CC-BY 3.0.
