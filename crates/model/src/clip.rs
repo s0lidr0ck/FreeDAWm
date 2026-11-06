@@ -81,6 +81,25 @@ impl Fade {
     }
 }
 
+/// A pattern clip's step pattern and where the clip starts in it. The clip's MIDI notes are the
+/// pattern's expansion ([`soundcraft_midi::pattern::expand`]), made again by the engine whenever
+/// the pattern, the clip's length or its bar length changes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PatternClip {
+    pub pattern: soundcraft_midi::pattern::Pattern,
+    /// Where in the pattern the clip starts, in ticks: a clip trimmed or split from its start keeps
+    /// its place in the bar. Never negative.
+    #[serde(default)]
+    pub phase: i64,
+}
+
+impl PatternClip {
+    pub fn sanitize(&mut self) {
+        self.pattern.sanitize();
+        self.phase = self.phase.clamp(0, i64::from(i32::MAX));
+    }
+}
+
 /// What a clip plays.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ClipContent {
@@ -222,6 +241,10 @@ pub struct Clip {
     /// MIDI Cleanup's settings and derived preview ([`MidiCleanup`]); `None` for every other clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi_cleanup: Option<MidiCleanup>,
+    /// A Juke pattern clip's pattern ([`PatternClip`]): the source of truth its notes are expanded
+    /// from. `None` for every other clip; only MIDI clips keep one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<PatternClip>,
     /// Vocal tuning ([`crate::VocalTune`]); `None` for every untuned clip. Only audio clips use it
     /// ([`Clip::tune_live`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +288,7 @@ impl Clip {
             midi_channels: false,
             lyrics: Vec::new(),
             clean: None,
+            pattern: None,
             midi_cleanup: None,
             tune: None,
             from_layer: None,
@@ -445,6 +469,10 @@ impl Clip {
         }
         if !matches!(self.content, ClipContent::Midi { .. }) {
             self.midi_cleanup = None;
+            self.pattern = None;
+        }
+        if let Some(p) = &mut self.pattern {
+            p.sanitize();
         }
         if let Some(t) = &mut self.tune {
             t.sanitize();
@@ -556,6 +584,30 @@ mod tests {
         a.midi_cleanup = Some(m);
         a.sanitize();
         assert!(a.midi_cleanup.is_none());
+    }
+
+    #[test]
+    fn pattern_sidecar_round_trips_and_stays_on_midi_clips() {
+        use soundcraft_midi::pattern::{Lane, Pattern, Step};
+        let mut lane = Lane::new(36, 16);
+        lane.steps[0] = Step::hit(110);
+        let pc = PatternClip { pattern: Pattern { lanes: vec![lane], ..Pattern::default() }, phase: 480 };
+        let mut c = cleanup_clip();
+        c.pattern = Some(pc.clone());
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Clip = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pattern, Some(pc.clone()));
+        // A clip saved before patterns existed has none.
+        let old = serde_json::to_string(&cleanup_clip()).unwrap();
+        assert!(!old.contains("pattern"));
+        assert_eq!(serde_json::from_str::<Clip>(&old).unwrap().pattern, None);
+        let mut a = Clip::audio(ClipId(2), "a", SourceId(0), 0, 0, 10);
+        a.pattern = Some(PatternClip { phase: -5, ..pc });
+        a.sanitize();
+        assert!(a.pattern.is_none(), "only MIDI clips keep a pattern");
+        c.pattern.as_mut().unwrap().phase = -5;
+        c.sanitize();
+        assert_eq!(c.pattern.as_ref().map(|p| p.phase), Some(0));
     }
 
     #[test]

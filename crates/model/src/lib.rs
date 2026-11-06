@@ -26,7 +26,7 @@ pub mod vocal;
 
 pub use automation::{AutoParam, AutomationLane, AutomationMode, AutomationPoint, CURVE_EPSILON, curve_shape, letter_slot};
 pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
-pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MidiCleanup};
+pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MidiCleanup, PatternClip};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use lyrics::{
     LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,

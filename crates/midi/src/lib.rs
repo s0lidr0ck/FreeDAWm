@@ -6,12 +6,14 @@
 //!   export (format 1, 960 PPQ). The reader treats its input as hostile: every length is checked,
 //!   variable-length quantities are bounded and event counts are capped.
 //! - [`ops`]: MIDI editing operations (quantize, transpose, velocity, duration, split).
+//! - [`pattern`]: step patterns (Juke patterns) and their expansion into notes.
 //! - [`note_name`], [`gm_drum_name`], [`gm_program_name`]: display names.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cleanup;
 mod names;
 pub mod ops;
+pub mod pattern;
 mod rng;
 mod sequence;
 mod smf;
