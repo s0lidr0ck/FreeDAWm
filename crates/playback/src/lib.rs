@@ -114,6 +114,8 @@ enum Cmd {
     Locate(Samples),
     /// A one-off action for a module's live plugin ([`Plugin::action`]).
     Action(TrackId, ModuleId, &'static str),
+    /// A note played on a track's instrument now (note-off at velocity 0): auditions.
+    Audition(TrackId, u8, u8),
     /// Where the callback sends Scout rigs back (finished, or refused while another is armed).
     ScoutReturn(SyncSender<Box<ScoutRig>>),
     /// Arm a Scout capture (built on the UI thread with `ScoutRig::new`).
@@ -653,6 +655,10 @@ impl AudioState {
                 Cmd::Action(track, module, name) => {
                     // (no allocation: a lookup and the plugin's own flag)
                     self.mix.module_action(track, module, name);
+                }
+                Cmd::Audition(track, note, velocity) => {
+                    // (no allocation: a lookup and the plugin's event queue)
+                    self.mix.audition(track, note, velocity);
                 }
                 Cmd::Shutdown => {
                     // Plugin stability, part 2: the instances go back to the UI thread, which
@@ -2551,6 +2557,12 @@ impl Player {
     /// module `module` on `track` of the playing session (the engine's `mix.module_action`).
     pub fn module_action(&self, track: TrackId, module: ModuleId, name: &'static str) {
         let _ = self.tx.send(Cmd::Action(track, module, name));
+    }
+
+    /// Plays `note` on `track`'s instrument now, whether or not the track is armed (Juke's pad
+    /// audition): a note-on at `velocity`, a note-off at 0.
+    pub fn audition(&self, track: TrackId, note: u8, velocity: u8) {
+        let _ = self.tx.send(Cmd::Audition(track, note, velocity));
     }
 
     pub fn locate(&self, at: Samples) {

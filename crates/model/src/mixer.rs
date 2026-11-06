@@ -655,6 +655,10 @@ pub struct Insert {
     /// module, and for a kit still on its defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kit: Option<KitLayout>,
+    /// The effects a kit instrument hosts on its buses (Juke's bus A, bus B and output slots),
+    /// each a module in its own right. Empty for every other module.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kit_fx: Vec<KitFx>,
     /// The session-level instance link group the module is in (FireStation LevelUp's IN/OUT
     /// pairs, Shale's Kit Link), for plugins that declare `PluginInfo::link`: every module in a
     /// group, on any track, shares one value bus. `None`: not linked.
@@ -789,6 +793,72 @@ pub struct KitLayout {
     pub pads: Vec<KitPad>,
 }
 
+/// One of a kit instrument's effect buses (Juke): the two send buses and the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KitBus {
+    A,
+    B,
+    Out,
+}
+
+impl KitBus {
+    pub const ALL: [KitBus; 3] = [KitBus::A, KitBus::B, KitBus::Out];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            KitBus::A => "a",
+            KitBus::B => "b",
+            KitBus::Out => "out",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<KitBus> {
+        KitBus::ALL.into_iter().find(|b| b.id() == id)
+    }
+}
+
+/// An effect in one of a kit instrument's bus slots: a module like any other (its id is
+/// [`KitFx::module_id`] of its place, outside the range chain modules use), hosted by the
+/// instrument in its own signal path.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KitFx {
+    pub bus: KitBus,
+    /// The slot on its bus, from 0 (below [`KitFx::SLOTS`]).
+    pub slot: u8,
+    pub insert: Insert,
+}
+
+/// The first module id kit effects use; chain modules stay below it.
+pub const KIT_FX_BASE: u32 = u32::MAX - 63;
+
+impl KitFx {
+    /// Effect slots per bus.
+    pub const SLOTS: usize = 4;
+
+    /// The place's index over every bus (`bus × SLOTS + slot`).
+    pub fn index(bus: KitBus, slot: usize) -> usize {
+        let b = match bus {
+            KitBus::A => 0,
+            KitBus::B => 1,
+            KitBus::Out => 2,
+        };
+        b * Self::SLOTS + slot.min(Self::SLOTS - 1)
+    }
+
+    /// The module id of the effect at `index` ([`KitFx::index`]).
+    pub fn module_id(index: usize) -> ModuleId {
+        ModuleId(KIT_FX_BASE.saturating_add(u32::try_from(index).unwrap_or(63).min(63)))
+    }
+
+    /// The place a kit effect's module id names: (bus, slot).
+    pub fn place(id: ModuleId) -> Option<(KitBus, usize)> {
+        let i = usize::try_from(id.0.checked_sub(KIT_FX_BASE)?).ok()?;
+        let bus = *KitBus::ALL.get(i / Self::SLOTS)?;
+        Some((bus, i % Self::SLOTS))
+    }
+}
+
 impl KitLayout {
     /// Most pads a layout names (Juke has 16; room for a bigger grid later).
     pub const MAX_PADS: usize = 32;
@@ -820,6 +890,7 @@ impl Insert {
             assets: BTreeMap::new(),
             samples: BTreeMap::new(),
             kit: None,
+            kit_fx: Vec::new(),
             link_group: None,
             state_load: 0,
             foreign: None,
@@ -827,6 +898,24 @@ impl Insert {
     }
 
     /// Every session source the module plays: its `sample` and its keyed `samples`.
+    /// The kit effect at (bus, slot), if the slot holds one.
+    pub fn kit_effect(&self, bus: KitBus, slot: usize) -> Option<&KitFx> {
+        self.kit_fx.iter().find(|f| f.bus == bus && usize::from(f.slot) == slot)
+    }
+
+    /// Keeps the kit effects valid: real slots, one effect each, in place order, each with its
+    /// place's module id and nothing nested.
+    pub fn sanitize_kit_fx(&mut self) {
+        self.kit_fx.retain(|f| usize::from(f.slot) < KitFx::SLOTS);
+        self.kit_fx.sort_by_key(|f| KitFx::index(f.bus, usize::from(f.slot)));
+        self.kit_fx.dedup_by_key(|f| KitFx::index(f.bus, usize::from(f.slot)));
+        for f in &mut self.kit_fx {
+            f.insert.id = KitFx::module_id(KitFx::index(f.bus, usize::from(f.slot)));
+            f.insert.kit_fx.clear();
+            f.insert.kit = None;
+        }
+    }
+
     pub fn sources(&self) -> impl Iterator<Item = SourceId> + '_ {
         self.sample.into_iter().chain(self.samples.values().copied())
     }
@@ -999,7 +1088,8 @@ impl Mixer {
 
     /// Hands out the next unused id; `None` once the counter is exhausted.
     fn fresh_module_id(&mut self) -> Option<ModuleId> {
-        if self.next_module == u32::MAX {
+        // Ids from `KIT_FX_BASE` up are the kit effects'.
+        if self.next_module >= KIT_FX_BASE {
             return None;
         }
         let id = self.next_module.max(1);
@@ -1013,14 +1103,14 @@ impl Mixer {
         let mut max_id = 0u32;
         let mut need = Vec::new();
         for (idx, ins) in self.inserts.iter().enumerate() {
-            if ins.id.0 == 0 || !seen.insert(ins.id) {
+            if ins.id.0 == 0 || ins.id.0 >= KIT_FX_BASE || !seen.insert(ins.id) {
                 need.push(idx);
             } else {
                 max_id = max_id.max(ins.id.0);
             }
         }
         self.next_module = self.next_module.max(max_id.saturating_add(1));
-        let mut exhausted = max_id == u32::MAX;
+        let mut exhausted = max_id >= KIT_FX_BASE - 1;
         if !exhausted {
             for idx in need {
                 match self.fresh_module_id() {
@@ -1159,6 +1249,38 @@ pub fn fader_db_to_pos(db: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn kit_effect_ids_name_their_place_and_never_meet_chain_ids() {
+        for bus in KitBus::ALL {
+            for slot in 0..KitFx::SLOTS {
+                let id = KitFx::module_id(KitFx::index(bus, slot));
+                assert_eq!(KitFx::place(id), Some((bus, slot)));
+            }
+        }
+        assert_eq!(KitFx::place(ModuleId(1)), None);
+        assert_eq!(KitFx::place(ModuleId(KIT_FX_BASE + 12)), None);
+        // A chain module claiming a kit id gets a chain id.
+        let mut m = Mixer::new(ChannelFormat::Stereo);
+        let mut ins = Insert::new("eq_7band");
+        ins.id = ModuleId(KIT_FX_BASE + 1);
+        m.inserts.push(ins);
+        m.sanitize();
+        assert!(m.inserts[0].id.0 < KIT_FX_BASE);
+    }
+
+    #[test]
+    fn kit_effects_sanitize_to_one_per_slot() {
+        let mut ins = Insert::new("juke");
+        let fx = |bus, slot: u8| KitFx { bus, slot, insert: Insert::new("reverb") };
+        ins.kit_fx = vec![fx(KitBus::Out, 1), fx(KitBus::A, 0), fx(KitBus::A, 0), fx(KitBus::B, 9)];
+        ins.kit_fx[1].insert.kit_fx.push(fx(KitBus::A, 2));
+        ins.sanitize_kit_fx();
+        let places: Vec<_> = ins.kit_fx.iter().map(|f| (f.bus, f.slot)).collect();
+        assert_eq!(places, vec![(KitBus::A, 0), (KitBus::Out, 1)]);
+        assert!(ins.kit_fx.iter().all(|f| f.insert.kit_fx.is_empty() && KitFx::place(f.insert.id) == Some((f.bus, usize::from(f.slot)))));
+        assert!(ins.kit_effect(KitBus::Out, 1).is_some());
+    }
     use super::*;
 
     #[test]

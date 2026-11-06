@@ -220,6 +220,18 @@ commit. Both kinds ship (owner's decision):
 | 2 | Stack triggers UI depth, per-step parameter locks (Elektron-style: a step's own tune or decay), trigger conditions and fills, pattern generator, randomize kit, kit presets with samples, recorded kits beyond the first, "split pads to tracks" if wanted | ≈ 30–50 h |
 | 3 | Motion (a slot morphs through samples over time, driven by an envelope, a controller or aftertouch), a modulation matrix, more synth voice types | ≈ 25–40 h |
 
+**Phase 1 status (2026-11-06):** built, except the recorded kit. Juke, the pattern clips and the
+step grid (in the MIDI Editor for a pattern clip), the Juke window (kit view, pad edit view,
+honeycomb), Track › New Beat, the effects buses (`mix.kit_fx`; each effect is a module with an id
+from `KitFx::module_id`, so the module commands and FireStation's full editors work on it) and five
+starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). Still to do:
+
+- **The first recorded kit** (SM Drums): blocked on the owner. Someone has to fetch the kit, confirm
+  its licence on its download page, trim it to 4 layers × 4 round-robins and publish it as a
+  `kits-v1` release asset; the in-app download (the `ml-models` mechanism) is built against that.
+- **Bus meters:** the Bus A and Bus B strips show no level yet (the instrument's readouts carry the
+  16 pad meters); the output strip meters the track.
+
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the
 model fields are merged.

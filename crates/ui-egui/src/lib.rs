@@ -28,6 +28,8 @@ pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
 pub mod icons;
+pub mod juke_fx;
+pub mod juke_window;
 pub mod key_knobs;
 pub mod key_ruler;
 pub mod levelup_ui;
@@ -82,6 +84,7 @@ pub mod sidechain_picker;
 pub mod slider_drag;
 pub mod split_progress;
 pub mod spot;
+pub mod step_grid;
 pub mod swale_ui;
 pub mod teleprompter;
 pub mod tempo_markers;
@@ -812,6 +815,8 @@ pub struct SoundApp {
     pub synthetic: Vec<egui::Event>,
     /// Where a dropped audio file loads into a track's sampler (last frame's rects).
     pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
+    /// Juke pad slots `(pad, layer, robin)` drawn this frame that take a dropped audio file.
+    pub kit_drop_targets: Vec<(egui::Rect, TrackId, (usize, usize, usize))>,
     /// This frame's places a dragged browser card can land (see `browser::drop`).
     pub(crate) plugin_drop_targets: Vec<browser::drop::Registered>,
     sample_reads: Vec<sampler_window::SampleRead>,
@@ -971,6 +976,7 @@ impl SoundApp {
             focus_midi_editor: false,
             synthetic: Vec::new(),
             sample_drop_targets: Vec::new(),
+            kit_drop_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
             sample_reads: Vec::new(),
             synthetic_grace: 0,
@@ -2322,6 +2328,7 @@ impl SoundApp {
         // The wide editor under the pointer claims its keys again as it draws.
         self.ui.wide_key_owner.remove(&ctx.viewport_id());
         self.sample_drop_targets.clear();
+        self.kit_drop_targets.clear();
         self.plugin_drop_targets.clear();
         if !self.native_menu_bar {
             menus::menu_bar(self, ui);

@@ -106,7 +106,7 @@ pub(crate) fn run_with<E: VstEditor>(
     meters: Option<&StripMeter>,
     prep: impl FnOnce(&mut E, &SoundApp),
 ) {
-    let Some(ins) = track.mixer.module(module) else { return };
+    let Some(ins) = track.module(module) else { return };
     let Some(info) = soundcraft_dsp::plugin_info(&ins.plugin) else { return };
     let key = Id::new(("vst-editor", E::PLUGIN, track.id.0, module.0));
     let mut ed: Box<E> = app.editor_states.remove(&key).and_then(|b| b.downcast::<E>().ok()).unwrap_or_else(|| {
@@ -289,7 +289,7 @@ pub(crate) fn ui_state(ins: &Insert) -> Map<String, Value> {
 /// `uiState.setProperty`: `entries` merged into the module's `uiState` through
 /// `mix.module_state` (not undoable, as in the C++).
 pub(crate) fn set_ui_state(app: &mut SoundApp, host: &Host, entries: &[(&str, Value)]) {
-    let live = app.engine.session().track(host.track).and_then(|t| t.mixer.module(host.ins.id)).map(ui_state);
+    let live = app.engine.session().track(host.track).and_then(|t| t.module(host.ins.id)).map(ui_state);
     let mut m = live.unwrap_or_else(|| ui_state(host.ins));
     for (k, v) in entries {
         m.insert((*k).to_string(), v.clone());

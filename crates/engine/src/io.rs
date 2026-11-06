@@ -294,6 +294,15 @@ pub fn load_sampler_bytes(e: &mut Engine, track: TrackId, name: &str, bytes: &[u
     Ok(r)
 }
 
+/// Loads a dropped file's bytes into slot `(pad, layer, robin)` (each from 0) of `track`'s Juke,
+/// as one undo step.
+pub fn load_kit_bytes(e: &mut Engine, track: TrackId, slot: (usize, usize, usize), name: &str, bytes: &[u8]) -> Result<Value> {
+    let before = e.session_arc();
+    let r = crate::cmd::juke::attach_sample(e, track, slot, name, bytes, None)?;
+    e.push_undo("Load Pad Sample", before);
+    Ok(r)
+}
+
 /// Import a movie: a Video track clip spanning the picture (the movie is referenced by `path`,
 /// never copied) plus its audio on a new audio track when it has a usable audio stream. Fails
 /// only when the file has neither a readable picture nor audio.

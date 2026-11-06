@@ -39,7 +39,7 @@ pub fn has_wide(plugin: &str) -> bool {
 /// Draws `module`'s wide editor and returns true, or returns false (drawing nothing) when its
 /// plugin has none: the caller then draws the narrow drawer.
 pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) -> bool {
-    let Some(ins) = track.mixer.module(module) else { return false };
+    let Some(ins) = track.module(module) else { return false };
     match crate::engine_ui::engine_ui(&ins.plugin).and_then(|u| u.wide_editor) {
         Some(draw) => {
             draw(app, ui, track, module, meters);

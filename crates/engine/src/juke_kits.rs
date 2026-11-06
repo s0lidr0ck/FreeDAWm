@@ -1,0 +1,252 @@
+//! Juke's starter kits: original by construction, nothing recorded or copied.
+//!
+//! Each kit is a set of changes to Juke's defaults (voices, tuning, envelopes, sends), a name and
+//! family for each pad, and the effects on its buses. The **rendered** kits go one step further:
+//! when one loads, every pad's synth voice is rendered here, at four velocities (and, for the hats,
+//! snares and claps, two round-robin takes a few cents apart), into samples the pads then play.
+//! The samples become session audio like any loaded sample, so the kit travels with the project.
+
+use soundcraft_audio_io::AudioBuffer;
+use soundcraft_dsp::plugins::juke::{JUKE_INFO, LAYERS, PADS};
+use soundcraft_model::{DrumFamily, KitBus};
+
+/// A starter kit.
+pub struct Kit {
+    pub name: &'static str,
+    /// Its pads play samples rendered from their synth voices when it loads.
+    pub rendered: bool,
+    /// Pad names and families, in pad order; a pad not listed keeps the default kit's.
+    pub pads: &'static [(&'static str, DrumFamily)],
+    /// Parameter changes from Juke's defaults (`p3_tune`, `return_a`, …).
+    pub params: &'static [(&'static str, f32)],
+    /// Effects on the buses: (bus, slot from 0, plugin, its parameter changes).
+    pub fx: &'static [(KitBus, u8, &'static str, &'static [(&'static str, f32)])],
+}
+
+use DrumFamily::{Clap, Hat, Kick, Percussion, Snare, Tom};
+
+/// The starter kits, the default first.
+pub static KITS: [Kit; 5] = [
+    Kit { name: "Porch Light", rendered: false, pads: &[], params: &[], fx: &[] },
+    Kit {
+        name: "Tin Roof",
+        rendered: true,
+        pads: &[
+            ("Tin kick", Kick),
+            ("Rim", Percussion),
+            ("Tin snare", Snare),
+            ("Clap", Clap),
+            ("Tight hat", Hat),
+            ("Foot hat", Hat),
+            ("Open hat", Hat),
+        ],
+        params: &[
+            ("p1_tune", 2.0),
+            ("p1_decay", 320.0),
+            ("p1_pitch_amount", 9.0),
+            ("p1_pitch_decay", 35.0),
+            ("p3_tone", 68.0),
+            ("p3_snappy", 82.0),
+            ("p3_decay", 180.0),
+            ("p4_decay", 240.0),
+            ("p5_decay", 45.0),
+            ("p5_tone", 70.0),
+            ("p7_decay", 420.0),
+            ("humanize", 15.0),
+        ],
+        fx: &[],
+    },
+    Kit {
+        name: "Muddy Water",
+        rendered: false,
+        pads: &[
+            ("Deep kick", Kick),
+            ("Rim", Percussion),
+            ("Mud snare", Snare),
+            ("Clap", Clap),
+            ("Closed hat", Hat),
+            ("Pedal hat", Hat),
+            ("Open hat", Hat),
+            ("Floor tom", Tom),
+            ("Low tom", Tom),
+            ("Mid tom", Tom),
+        ],
+        params: &[
+            ("p1_tune", -5.0),
+            ("p1_decay", 1300.0),
+            ("p1_pitch_amount", 12.0),
+            ("p1_pitch_decay", 90.0),
+            ("p1_drive", 22.0),
+            ("p3_tone", 30.0),
+            ("p3_decay", 260.0),
+            ("p3_send_a", 25.0),
+            ("p4_send_a", 30.0),
+            ("p8_tune", -9.0),
+            ("p9_tune", -5.0),
+            ("p10_tune", -1.0),
+            ("return_a", -8.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Back Forty",
+        rendered: true,
+        pads: &[("Dusty kick", Kick), ("Rim", Percussion), ("Dusty snare", Snare), ("Clap", Clap), ("Closed hat", Hat)],
+        params: &[
+            ("p1_drive", 35.0),
+            ("p1_filter", 1.0),
+            ("p1_cutoff", 4000.0),
+            ("p3_drive", 30.0),
+            ("p3_filter", 1.0),
+            ("p3_cutoff", 6000.0),
+            ("p4_drive", 25.0),
+            ("p5_filter", 2.0),
+            ("p5_cutoff", 3000.0),
+            ("p6_filter", 2.0),
+            ("p6_cutoff", 3000.0),
+            ("p7_filter", 2.0),
+            ("p7_cutoff", 3000.0),
+            ("humanize", 25.0),
+        ],
+        fx: &[(KitBus::Out, 0, "fs_sat", &[])],
+    },
+    Kit {
+        name: "Revival Tent",
+        rendered: true,
+        pads: &[("Big kick", Kick), ("Stick", Percussion), ("Tent snare", Snare), ("Handclap", Clap)],
+        params: &[
+            ("p1_decay", 700.0),
+            ("p3_send_a", 35.0),
+            ("p4_send_a", 40.0),
+            ("p2_send_b", 25.0),
+            ("p4_send_b", 15.0),
+            ("p8_send_a", 25.0),
+            ("p9_send_a", 25.0),
+            ("p10_send_a", 25.0),
+            ("return_a", -4.0),
+            ("return_b", -10.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::B, 0, "fs_delay", &[])],
+    },
+];
+
+/// The kit named `name` (any case).
+pub fn find(name: &str) -> Option<&'static Kit> {
+    KITS.iter().find(|k| k.name.eq_ignore_ascii_case(name.trim()))
+}
+
+/// The velocities a rendered pad's four layers are taken at, softest first.
+pub const LAYER_VELOCITIES: [u8; LAYERS] = [40, 72, 100, 127];
+
+/// Longest a rendered hit runs, in seconds.
+const MAX_SECONDS: f32 = 3.0;
+
+/// Round-robin takes a pad gets: two for the hats, snares and claps (a few cents apart), one
+/// for the rest.
+pub fn takes(family: DrumFamily) -> usize {
+    if matches!(family, Hat | Snare | Clap) { 2 } else { 1 }
+}
+
+/// Renders pad `pad` (from 0) of a Juke set to `params` (the full parameter map) at `velocity`,
+/// detuned by `cents`: the pad alone, centred, at unity, through no bus and no kit level, its
+/// silent tail trimmed. Mono, at `rate`. `None` when nothing sounds.
+pub fn render_pad(params: &std::collections::BTreeMap<String, f32>, pad: usize, velocity: u8, cents: f32, rate: u32) -> Option<AudioBuffer> {
+    let mut j = soundcraft_dsp::create(JUKE_INFO.id)?;
+    j.prepare(rate as f32, 512, 2);
+    for (k, v) in params {
+        j.set_param(k, *v);
+    }
+    // This pad alone: every other pad plays samples it has none of.
+    for other in (0..PADS).filter(|p| *p != pad) {
+        j.set_param(&format!("p{}_source", other + 1), 0.0);
+    }
+    let n = pad + 1;
+    for (k, v) in [
+        ("source", 1.0),
+        ("pan", 0.0),
+        ("level", 0.0),
+        ("send_a", 0.0),
+        ("send_b", 0.0),
+        ("velocity", 100.0),
+        ("mute", 0.0),
+        ("solo", 0.0),
+        ("stack1", 0.0),
+        ("stack2", 0.0),
+        ("mode", 0.0),
+        ("reverse", 0.0),
+    ] {
+        j.set_param(&format!("p{n}_{k}"), v);
+    }
+    let fine = params.get(&format!("p{n}_fine")).copied().unwrap_or(0.0);
+    j.set_param(&format!("p{n}_fine"), (fine + cents).clamp(-100.0, 100.0));
+    for (k, v) in [("level", 0.0), ("humanize", 0.0)] {
+        j.set_param(k, v);
+    }
+    let note = params.get(&format!("p{n}_note")).copied().unwrap_or(36.0).round().clamp(0.0, 127.0) as u8;
+    // Let the kit level's glide settle before the hit.
+    let mut io = vec![vec![0.0f32; 512]; 2];
+    for _ in 0..8 {
+        j.process(&mut io, 512);
+    }
+    j.note_on(0, note, velocity);
+    let max = (rate as f32 * MAX_SECONDS) as usize;
+    let mut out = Vec::with_capacity(max.min(rate as usize));
+    let mut quiet = 0usize;
+    while out.len() < max {
+        j.process(&mut io, 512);
+        // Centred: each side carries the hit at -3 dB.
+        out.extend(io[0].iter().map(|x| x * std::f32::consts::SQRT_2));
+        let peak = io[0].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        quiet = if peak < 1.0e-4 { quiet + 512 } else { 0 };
+        if quiet >= rate as usize / 20 && out.len() > quiet {
+            break;
+        }
+    }
+    let end = out.iter().rposition(|x| x.abs() >= 1.0e-4)?;
+    out.truncate(end + 1);
+    // A short fade so a trimmed tail never clicks.
+    let fade = (rate as usize / 200).min(out.len());
+    let len = out.len();
+    for (i, x) in out.iter_mut().skip(len - fade).enumerate() {
+        *x *= 1.0 - i as f32 / fade.max(1) as f32;
+    }
+    Some(AudioBuffer { sample_rate: rate, channels: vec![out] })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kit_names_real_parameters_and_effects() {
+        for k in &KITS {
+            for (id, v) in k.params {
+                let p = JUKE_INFO.param(id).unwrap_or_else(|| panic!("{}: no parameter {id}", k.name));
+                assert!((p.min..=p.max).contains(v), "{}: {id} = {v}", k.name);
+            }
+            assert!(k.pads.len() <= PADS);
+            for (_, slot, plugin, params) in k.fx {
+                let info = soundcraft_dsp::plugin_info(plugin).unwrap_or_else(|| panic!("{}: no plugin {plugin}", k.name));
+                assert!(!info.is_instrument && usize::from(*slot) < soundcraft_model::KitFx::SLOTS);
+                for (id, _) in *params {
+                    assert!(info.params.iter().any(|p| p.id == *id), "{plugin}: {id}");
+                }
+            }
+        }
+        assert_eq!(KITS[0].name, "Porch Light");
+        assert!(find("tin roof").is_some() && find("nope").is_none());
+    }
+
+    #[test]
+    fn a_rendered_hit_is_louder_at_higher_velocity_and_trimmed() {
+        let params: std::collections::BTreeMap<String, f32> = JUKE_INFO.params.iter().map(|p| (p.id.to_string(), p.default)).collect();
+        let soft = render_pad(&params, 0, 40, 0.0, 48_000).unwrap();
+        let hard = render_pad(&params, 0, 127, 0.0, 48_000).unwrap();
+        assert!(hard.peak() > soft.peak() * 1.5, "{} vs {}", hard.peak(), soft.peak());
+        assert!(hard.frames() < 48_000 * 3 && hard.frames() > 4_800, "{} frames", hard.frames());
+        assert!(hard.channels[0].iter().all(|x| x.is_finite()));
+        // The hats are short.
+        let hat = render_pad(&params, 4, 100, 0.0, 48_000).unwrap();
+        assert!(hat.frames() < hard.frames());
+    }
+}

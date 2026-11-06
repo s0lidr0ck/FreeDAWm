@@ -678,6 +678,13 @@ impl Session {
                     k.sanitize();
                 }
             }
+            // Only the instrument hosts kit effects.
+            for ins in &mut t.mixer.inserts {
+                ins.kit_fx.clear();
+            }
+            if let Some(ins) = &mut t.instrument {
+                ins.sanitize_kit_fx();
+            }
             // Modules' MIDI plays into an instrument or MIDI track, never their own; each once.
             if let crate::Route::Modules(refs) = &t.mixer.input {
                 let id = t.id;

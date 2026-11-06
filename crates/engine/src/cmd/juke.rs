@@ -10,8 +10,8 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_dsp::plugins::juke::{LAYERS, PADS, ROBINS, sample_key};
-use soundcraft_model::{DrumFamily, Insert, KitLayout, KitPad, Route, TrackKind};
+use soundcraft_dsp::plugins::juke::{JUKE_INFO, LAYERS, PADS, ROBINS, sample_key};
+use soundcraft_model::{DrumFamily, Insert, KitBus, KitFx, KitLayout, KitPad, Route, TrackKind};
 use std::path::Path;
 
 /// Juke's plugin id.
@@ -105,6 +105,25 @@ pub fn specs() -> Vec<CommandSpec> {
             pad_edit
         ),
         cmd!("mix.kit_name", "Rename Kit", [], None, "{track?, name} -> {name}", has_selection, kit_name),
+        cmd!(query "mix.kit_list", "List Kits", [], None, "{} -> {kits: [{name, rendered}]}: Juke's starter kits", always, kit_list),
+        cmd!(
+            "mix.kit_load",
+            "Load Kit",
+            [],
+            None,
+            "{track?, kit: name} -> {kit, samples}: a starter kit on the Juke track (its sounds, names and bus effects; the pads keep their notes, mutes and solos). A rendered kit's pads play samples made from their synth voices",
+            has_selection,
+            kit_load
+        ),
+        cmd!(
+            "mix.kit_fx",
+            "Kit Effect",
+            [],
+            None,
+            "{track?, bus: a|b|out, slot: 1-4, plugin?: a built-in effect id, or '' to empty the slot, params?: {id: value}, bypass?} -> {bus, slot, module, plugin}: a FireStation effect on one of Juke's buses (bus A, bus B or the output); `module` is its module id for the module commands",
+            has_selection,
+            kit_fx
+        ),
     ]
 }
 
@@ -162,11 +181,32 @@ fn sample_load(e: &mut Engine, p: &Value) -> Result<Value> {
     let layer = slot_param(p, "layer", LAYERS, id)?.unwrap_or(0);
     let robin = slot_param(p, "robin", ROBINS, id)?.unwrap_or(0);
     let path = str_param(p, "path").ok_or_else(|| bad(id, "`path` required"))?.to_string();
-    // Decode before touching the session: a bad file changes nothing.
     let bytes = crate::io::read_file(&path)?;
     let name = Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
+    attach_sample(e, t, (pad, layer, robin), &name, &bytes, Some(&path))
+}
+
+/// Decodes `bytes` (a file called `name`, read from `path` when there is one) into slot
+/// `(pad, layer, robin)` of track `t`'s Juke, each from 0. Decodes before touching the session,
+/// so a bad file changes nothing.
+pub fn attach_sample(
+    e: &mut Engine,
+    t: TrackId,
+    (pad, layer, robin): (usize, usize, usize),
+    name: &str,
+    bytes: &[u8],
+    path: Option<&str>,
+) -> Result<Value> {
+    let id = "mix.kit_sample_load";
+    if pad >= PADS || layer >= LAYERS || robin >= ROBINS {
+        return Err(bad(id, "no such pad, layer or round-robin"));
+    }
+    if juke_mut(e, t).is_none() {
+        return Err(bad(id, "the track's instrument is not Juke"));
+    }
+    let name = name.to_string();
     let ext = Path::new(&name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-    let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+    let (format, buf) = soundcraft_audio_io::decode(bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
     if buf.frames() == 0 || buf.num_channels() == 0 {
         return Err(EngineError::Io(format!("{name}: no audio")));
     }
@@ -174,7 +214,7 @@ fn sample_load(e: &mut Engine, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::Io(format!("{name}: too long for a pad (a minute of 192 kHz stereo at most)")))?;
     let key = sample_key(pad, layer, robin);
     let s = e.session_mut();
-    let src = crate::io::add_source(s, &name, buf, Some(&path), format.format);
+    let src = crate::io::add_source(s, &name, buf, path, format.format);
     let stem = Path::new(&name).file_stem().and_then(|x| x.to_str()).unwrap_or("Sample").to_string();
     let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
     let first = !ins.samples.keys().any(|k| k.starts_with(&format!("p{}.", pad + 1)));
@@ -260,6 +300,151 @@ fn pad_edit(e: &mut Engine, p: &Value) -> Result<Value> {
     let out = layout.pads.get(pad).cloned();
     ins.kit = Some(layout);
     Ok(json!({"pad": out}))
+}
+
+fn kit_fx(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_fx";
+    let t = juke_track(e, id, p)?;
+    let bus = p
+        .get("bus")
+        .and_then(Value::as_str)
+        .and_then(|b| KitBus::from_id(&b.trim().to_ascii_lowercase()))
+        .ok_or_else(|| bad(id, "`bus` must be a, b or out"))?;
+    let slot = slot_param(p, "slot", KitFx::SLOTS, id)?.ok_or_else(|| bad(id, format!("`slot` (1 to {}) required", KitFx::SLOTS)))?;
+    let plugin = match p.get("plugin") {
+        None => None,
+        Some(Value::Null) => Some(String::new()),
+        Some(v) => Some(v.as_str().ok_or_else(|| bad(id, "`plugin` must be a plugin id"))?.trim().to_string()),
+    };
+    let bypass = match p.get("bypass") {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(id, "`bypass` must be true or false"))?),
+    };
+    let module = KitFx::module_id(KitFx::index(bus, slot));
+    let fresh = match plugin.as_deref() {
+        Some("") | None => None,
+        Some(name) => {
+            let info = soundcraft_dsp::plugin_info(name).ok_or_else(|| bad(id, format!("`{name}` is not a built-in effect")))?;
+            if info.is_instrument {
+                return Err(bad(id, format!("`{name}` is an instrument, not an effect")));
+            }
+            Some(super::module::build_insert(id, info.id, p.get("params"))?)
+        }
+    };
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let at = ins.kit_fx.iter().position(|f| f.bus == bus && usize::from(f.slot) == slot);
+    match (plugin.as_deref(), fresh) {
+        (_, Some(insert)) => {
+            let fx = KitFx { bus, slot: slot as u8, insert };
+            match at {
+                Some(i) => {
+                    if let Some(x) = ins.kit_fx.get_mut(i) {
+                        *x = fx;
+                    }
+                }
+                None => ins.kit_fx.push(fx),
+            }
+        }
+        (Some(_), None) => {
+            if let Some(i) = at {
+                ins.kit_fx.remove(i);
+            }
+        }
+        (None, None) => {
+            let fx = at.and_then(|i| ins.kit_fx.get_mut(i)).ok_or_else(|| bad(id, "the slot is empty: give `plugin`"))?;
+            let info = soundcraft_dsp::plugin_info(&fx.insert.plugin);
+            if let Some(obj) = p.get("params").and_then(Value::as_object) {
+                for (k, v) in obj {
+                    let pi = info.and_then(|i| i.params.iter().find(|x| x.id == k)).ok_or_else(|| bad(id, format!("no parameter `{k}`")))?;
+                    let x = v.as_f64().filter(|f| f.is_finite()).ok_or_else(|| bad(id, format!("`{k}` must be a number")))?;
+                    fx.insert.params.insert(k.clone(), (x as f32).clamp(pi.min, pi.max));
+                }
+            }
+        }
+    }
+    if let Some(b) = bypass
+        && let Some(fx) = ins.kit_fx.iter_mut().find(|f| f.bus == bus && usize::from(f.slot) == slot)
+    {
+        fx.insert.bypass = b;
+    }
+    ins.sanitize_kit_fx();
+    let held = ins.kit_effect(bus, slot).map(|f| f.insert.plugin.clone());
+    Ok(json!({"bus": bus.id(), "slot": slot + 1, "module": module.0, "plugin": held}))
+}
+
+fn kit_list(_e: &mut Engine, _p: &Value) -> Result<Value> {
+    let kits: Vec<Value> = crate::juke_kits::KITS.iter().map(|k| json!({"name": k.name, "rendered": k.rendered})).collect();
+    Ok(json!({"kits": kits}))
+}
+
+fn kit_load(e: &mut Engine, p: &Value) -> Result<Value> {
+    use crate::juke_kits::{KITS, LAYER_VELOCITIES, find, render_pad, takes};
+    let id = "mix.kit_load";
+    let t = juke_track(e, id, p)?;
+    let names = || KITS.iter().map(|k| k.name).collect::<Vec<_>>().join(", ");
+    let kit = p.get("kit").and_then(Value::as_str).and_then(find).ok_or_else(|| bad(id, format!("`kit` must be one of: {}", names())))?;
+    let current = e.session().track(t).and_then(|tr| tr.instrument.clone()).ok_or_else(|| bad(id, "no instrument"))?;
+    // Juke's defaults, the pads' notes, mutes and solos kept, then the kit's changes.
+    let mut params: std::collections::BTreeMap<String, f32> = JUKE_INFO.params.iter().map(|q| (q.id.to_string(), q.default)).collect();
+    for pad in 1..=PADS {
+        for k in ["note", "mute", "solo"] {
+            let key = format!("p{pad}_{k}");
+            if let Some(v) = current.params.get(&key) {
+                params.insert(key, *v);
+            }
+        }
+    }
+    for (k, v) in kit.params {
+        params.insert((*k).to_string(), *v);
+    }
+    let mut fx = Vec::new();
+    for (bus, slot, plugin, ps) in kit.fx {
+        let obj: serde_json::Map<String, Value> = ps.iter().map(|(k, v)| ((*k).to_string(), json!(v))).collect();
+        let insert = super::module::build_insert(id, plugin, Some(&Value::Object(obj)))?;
+        fx.push(KitFx { bus: *bus, slot: *slot, insert });
+    }
+    let layout = KitLayout {
+        name: kit.name.into(),
+        pads: (0..PADS)
+            .map(|i| match kit.pads.get(i) {
+                Some((n, f)) => KitPad { name: (*n).into(), family: *f },
+                None => {
+                    let (n, f) = DEFAULT_PADS.get(i).copied().unwrap_or(("Pad", DrumFamily::Percussion));
+                    KitPad { name: n.into(), family: f }
+                }
+            })
+            .collect(),
+    };
+    let mut samples = std::collections::BTreeMap::new();
+    if kit.rendered {
+        let rate = e.session().sample_rate.hz();
+        for (pad, kp) in layout.pads.iter().enumerate() {
+            let mut any = false;
+            for (layer, vel) in LAYER_VELOCITIES.iter().enumerate() {
+                for take in 0..takes(kp.family).min(ROBINS) {
+                    let cents = if take == 0 { 0.0 } else { 7.0 };
+                    let Some(buf) = render_pad(&params, pad, *vel, cents, rate) else { continue };
+                    let name = format!("{} {} v{} r{}.wav", kit.name, kp.name, layer + 1, take + 1);
+                    let src = crate::io::add_source(e.session_mut(), &name, buf, None, soundcraft_audio_io::FileFormat::Wav);
+                    samples.insert(sample_key(pad, layer, take), src);
+                    any = true;
+                }
+            }
+            if any {
+                // The pad plays its takes; their loudness already follows the velocity.
+                params.insert(format!("p{}_source", pad + 1), 0.0);
+                params.insert(format!("p{}_velocity", pad + 1), 30.0);
+            }
+        }
+    }
+    let n = samples.len();
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    ins.params = params;
+    ins.samples = samples;
+    ins.kit = Some(layout);
+    ins.kit_fx = fx;
+    ins.sanitize_kit_fx();
+    Ok(json!({"kit": kit.name, "samples": n}))
 }
 
 fn kit_name(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -408,6 +593,94 @@ mod tests {
         // Back on its synth voice it sounds again.
         e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p1_source", "value": 1})).unwrap();
         assert!(bounce_peak(&mut e, &d, "c.wav") > 0.05);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn bus_effects_are_modules_that_play_undo_and_save() {
+        let (mut e, t) = beat();
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        e.execute("pattern.step", &json!({"clip": clip.0, "lane": 0, "step": 0, "on": true, "velocity": 127})).unwrap();
+        let d = dir("fx");
+        let plain = bounce_peak(&mut e, &d, "plain.wav");
+        // A gain of -12 dB on the output takes the whole kit down by a quarter.
+        let v = e.execute("mix.kit_fx", &json!({"track": t.0, "bus": "out", "slot": 4, "plugin": "gain", "params": {"gain": -12.0412}})).unwrap();
+        assert_eq!(v["plugin"], "gain");
+        let module = soundcraft_model::ModuleId(u32::try_from(v["module"].as_u64().unwrap()).unwrap());
+        assert_eq!(KitFx::place(module), Some((KitBus::Out, 3)));
+        let quiet = bounce_peak(&mut e, &d, "quiet.wav");
+        assert!((quiet / plain - 0.25).abs() < 0.02, "the output effect plays: {}", quiet / plain);
+        // It is a module: the module commands edit it (the plugin window and full editors use them).
+        e.execute("mix.module_param", &json!({"track": t.0, "module": module.0, "param": "gain", "value": 0.0})).unwrap();
+        assert!((bounce_peak(&mut e, &d, "unity.wav") / plain - 1.0).abs() < 0.02);
+        e.execute("mix.module_bypass", &json!({"track": t.0, "module": module.0})).unwrap();
+        assert!(juke(&e, t).kit_effect(KitBus::Out, 3).is_some_and(|f| f.insert.bypass));
+        // mix.kit_fx edits it too, and undo takes each step back.
+        e.execute("mix.kit_fx", &json!({"track": t.0, "bus": "out", "slot": 4, "params": {"gain": 3.0}, "bypass": false})).unwrap();
+        assert_eq!(juke(&e, t).kit_effect(KitBus::Out, 3).and_then(|f| f.insert.params.get("gain").copied()), Some(3.0));
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(juke(&e, t).kit_effect(KitBus::Out, 3).is_some_and(|f| f.insert.bypass));
+        // A send bus with an effect, then saved and opened again.
+        e.execute("mix.kit_fx", &json!({"track": t.0, "bus": "a", "slot": 1, "plugin": "fs_reverb"})).unwrap();
+        let path = d.join("Song").join("Song.fdawm");
+        e.execute("session.save_as", &json!({"path": path.to_string_lossy()})).unwrap();
+        let mut back = Engine::default();
+        back.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        let tr = back.session().tracks.iter().find(|tr| tr.instrument.as_ref().is_some_and(|i| i.plugin == JUKE)).unwrap();
+        let ins = tr.instrument.as_ref().unwrap();
+        assert_eq!(ins.kit_effect(KitBus::A, 0).map(|f| f.insert.plugin.as_str()), Some("fs_reverb"));
+        assert!(tr.module(KitFx::module_id(KitFx::index(KitBus::A, 0))).is_some());
+        // Emptying a slot.
+        e.execute("mix.kit_fx", &json!({"track": t.0, "bus": "a", "slot": 1, "plugin": ""})).unwrap();
+        assert!(juke(&e, t).kit_effect(KitBus::A, 0).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn kit_effects_refuse_what_they_cannot_host() {
+        let (mut e, t) = beat();
+        for p in [
+            json!({"track": t.0, "bus": "c", "slot": 1, "plugin": "gain"}),
+            json!({"track": t.0, "bus": "a", "slot": 5, "plugin": "gain"}),
+            json!({"track": t.0, "bus": "a", "slot": 1, "plugin": "juke"}),
+            json!({"track": t.0, "bus": "a", "slot": 1, "plugin": "no_such_thing"}),
+            json!({"track": t.0, "bus": "a", "slot": 1, "params": {"gain": 1.0}}),
+            json!({"track": t.0, "bus": "a", "slot": 1, "plugin": "gain", "params": {"nope": 1.0}}),
+        ] {
+            assert!(e.execute("mix.kit_fx", &p).is_err(), "{p}");
+        }
+        assert!(juke(&e, t).kit_fx.is_empty());
+    }
+
+    #[test]
+    fn starter_kits_load_render_and_undo() {
+        let (mut e, t) = beat();
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        for s in [0, 8] {
+            e.execute("pattern.step", &json!({"clip": clip.0, "lane": 0, "step": s, "on": true, "velocity": 127})).unwrap();
+        }
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p1_note", "value": 35})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p1_note", "value": 36})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p12_mute", "value": 1})).unwrap();
+        let kits = e.execute("mix.kit_list", &json!({})).unwrap();
+        assert_eq!(kits["kits"].as_array().unwrap().len(), crate::juke_kits::KITS.len());
+        let v = e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Tin Roof"})).unwrap();
+        let n = v["samples"].as_u64().unwrap();
+        assert!(n >= 64, "every pad rendered at four velocities: {n}");
+        let ins = juke(&e, t);
+        assert_eq!(ins.kit.as_ref().unwrap().name, "Tin Roof");
+        assert_eq!(ins.params.get("p1_source"), Some(&0.0), "rendered pads play samples");
+        assert_eq!(ins.params.get("p12_mute"), Some(&1.0), "mutes stay");
+        assert!(ins.samples.contains_key("p5.v4.r2"), "the hats get two takes");
+        let d = dir("kits");
+        assert!(bounce_peak(&mut e, &d, "tin.wav") > 0.05, "the rendered kick plays");
+        // A synth kit with a bus effect, then undo back to the rendered one.
+        e.execute("mix.kit_load", &json!({"track": t.0, "kit": "muddy water"})).unwrap();
+        let ins = juke(&e, t);
+        assert!(ins.samples.is_empty() && ins.kit_effect(KitBus::A, 0).is_some());
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, "Tin Roof");
+        assert!(e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Nope"})).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 

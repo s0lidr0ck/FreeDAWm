@@ -19,6 +19,11 @@ The demo session's audio (drums, bass, pad) and its MIDI parts are synthesised i
 `crates/engine/src/demo.rs` by the SoundCraft contributors (MIT OR Apache-2.0). No sample files
 are bundled.
 
+Juke's synth voices (`crates/dsp/src/plugins/juke.rs`) and its starter kits
+(`crates/engine/src/juke_kits.rs`) are original work by the SoundCraft contributors (MIT OR
+Apache-2.0). The rendered kits' samples are made from those voices when a kit loads; no sample
+files are bundled, and nothing is recorded from or modelled on another product's sounds.
+
 ## Fonts
 
 FreeDAWm bundles one font file: Inter Regular (`assets/fonts/Inter-Regular.ttf`, listed under

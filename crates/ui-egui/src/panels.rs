@@ -270,8 +270,11 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let items: Vec<(u64, String, bool, [u8; 3], bool)> = {
         let s = app.engine.session();
         let mut v = Vec::new();
-        // Whole files first (bold), then clips on tracks.
-        for src in &s.sources {
+        // Whole files first (bold), then clips on tracks. A drum kit's pad samples belong to its
+        // instrument (a rendered kit brings dozens): they are not listed.
+        let pads: std::collections::HashSet<SourceId> =
+            s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
+        for src in s.sources.iter().filter(|src| !pads.contains(&src.id)) {
             v.push((src.id.0, format!("{} ({}ch)", src.name, src.channels), true, [150, 150, 150], s.edit.selected_sources.contains(&src.id)));
         }
         for tr in &s.tracks {
@@ -540,12 +543,16 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         let Some((tname, ins, pos, frozen)) = app.engine.session().track(tid).and_then(|t| {
             let (ins, pos) = match key {
                 soundcraft_mix::SlotKey::Instrument => (t.instrument.clone(), 0),
-                soundcraft_mix::SlotKey::Module(m) => (t.mixer.module(m).cloned(), t.mixer.module_index(m).unwrap_or_default()),
+                soundcraft_mix::SlotKey::Module(m) => (t.module(m).cloned(), t.mixer.module_index(m).unwrap_or_default()),
             };
             // A frozen track's instrument is read-only (its render plays), like its frozen modules.
             let frozen = match key {
                 soundcraft_mix::SlotKey::Instrument => t.frozen_audio().is_some(),
-                soundcraft_mix::SlotKey::Module(m) => t.mixer.module_index(m).is_some_and(|i| crate::chain_view::module_frozen(t, i)),
+                soundcraft_mix::SlotKey::Module(m) => match soundcraft_model::KitFx::place(m) {
+                    // A kit effect is frozen with its instrument.
+                    Some(_) => t.frozen_audio().is_some(),
+                    None => t.mixer.module_index(m).is_some_and(|i| crate::chain_view::module_frozen(t, i)),
+                },
             };
             ins.map(|i| (t.name.clone(), i, pos, frozen))
         }) else {
@@ -569,12 +576,17 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
             Some(_) => window_place(anchor, vec2(356.0, 320.0), screen).min,
             None => egui::pos2(screen.width() - 380.0, 120.0),
         };
+        let juke = instrument && ins.plugin == crate::juke_window::JUKE && info.is_some();
         let mut window = egui::Window::new(format!("{tname} · {place} · {name}"))
             .id(wid)
             .open(&mut open)
             .default_width(340.0)
             .max_height((screen.height() - 48.0).max(120.0))
             .constrain(true);
+        if juke {
+            let size = crate::juke_window::WINDOW_SIZE.min(screen.size() - vec2(24.0, 48.0));
+            window = window.default_size(size).resizable(true);
+        }
         // Always wholly on screen, also a remembered position that no longer is (spec 2026-11-02
         // item 6).
         window = match back_on_screen(ctx, wid, screen) {
@@ -582,6 +594,13 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
             None => window.default_pos(start),
         };
         let shown = window.show(ctx, |ui| {
+            if juke {
+                crate::juke_window::draw(app, ui, tid, &ins, frozen);
+                if frozen {
+                    ui.label(egui::RichText::new(read_only.as_str()).color(Tokens::current().text_dim));
+                }
+                return;
+            }
             ui.horizontal(|ui| {
                 // Bypass and presets act on insert slots.
                 if !instrument && let Some(info) = info {
@@ -911,7 +930,7 @@ pub(crate) fn full_editors(app: &mut SoundApp, ctx: &egui::Context) {
         }
         let session = app.engine.session_arc();
         let Some(track) = session.track(tid) else { continue };
-        let Some(ins) = track.mixer.module(module) else { continue };
+        let Some(ins) = track.module(module) else { continue };
         if !crate::editors::has_wide(&ins.plugin) {
             continue;
         }

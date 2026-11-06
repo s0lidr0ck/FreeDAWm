@@ -301,7 +301,7 @@ fn prelude(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) ->
         let before = values(host);
         let preset_before = host.ins.preset.clone();
         let _ = family::browser(app, ui, host, &PALETTE, &mut st.fam, &FAMILY, "");
-        if app.engine.session().track(host.track).and_then(|t| t.mixer.module(host.ins.id)).is_some_and(|i| i.preset != preset_before) {
+        if app.engine.session().track(host.track).and_then(|t| t.module(host.ins.id)).is_some_and(|i| i.preset != preset_before) {
             st.undo.push(before);
         }
         return None;

@@ -43,6 +43,12 @@ const VOICES: usize = 64;
 const MAX_PENDING: usize = 64;
 /// Envelopes below this are silent.
 const OFF: f32 = 1.0e-4;
+/// Effect slots per bus, and every bus's: bus A's four, bus B's, then the output's
+/// ([`Plugin::set_child`] slots `0..FX_SLOTS`).
+pub const FX_PER_BUS: usize = 4;
+pub const FX_SLOTS: usize = FX_PER_BUS * 3;
+/// Frames the work buffers hold before `prepare` sizes them.
+const DEFAULT_BLOCK: usize = 512;
 
 /// Where a pad gets its sound.
 pub const SOURCES: [&str; 3] = ["Sample", "Synth", "Both"];
@@ -350,6 +356,41 @@ pub struct Juke {
     level: Smoother,
     ret_a: Smoother,
     ret_b: Smoother,
+    /// Each pad's peak over the block just rendered (before the kit level), for the pad meters.
+    pad_peak: [f32; PADS],
+    /// Effects hosted on the buses (see [`FX_SLOTS`]).
+    fx: [Option<Box<dyn Plugin>>; FX_SLOTS],
+    /// Stereo work buffers, one block long: the pads' dry mix, bus A and bus B.
+    work: [Vec<Vec<f32>>; 3],
+}
+
+/// A pad level in a readout: 0–1 in 4096 steps.
+const LEVEL_STEPS: f32 = 4095.0;
+
+/// The pad levels a [`Juke`]'s readouts carry: slot `i` holds pads `2i` and `2i + 1`, each 0–1
+/// in 4096 steps (`a × 4096 + b`, exact in an `f32`). NaN or out-of-range slots read as silence.
+pub fn unpack_pad_levels(readouts: &[f32; 8]) -> [f32; PADS] {
+    let mut out = [0.0; PADS];
+    for (i, &v) in readouts.iter().enumerate() {
+        if !(v.is_finite() && (0.0..16_777_216.0).contains(&v)) {
+            continue;
+        }
+        let n = v as u32;
+        if let Some(a) = out.get_mut(2 * i) {
+            *a = (n / 4096) as f32 / LEVEL_STEPS;
+        }
+        if let Some(b) = out.get_mut(2 * i + 1) {
+            *b = (n % 4096) as f32 / LEVEL_STEPS;
+        }
+    }
+    out
+}
+
+/// Runs `len` frames of the stereo buffer `io` through `fx` in order (empty slots pass through).
+fn run_effects(fx: &mut [Option<Box<dyn Plugin>>], io: &mut [Vec<f32>], len: usize) {
+    for f in fx.iter_mut().flatten() {
+        f.process(io, len);
+    }
 }
 
 impl Default for Juke {
@@ -380,6 +421,9 @@ impl Juke {
             level: Smoother::new(0.5),
             ret_a: Smoother::new(0.5),
             ret_b: Smoother::new(0.5),
+            pad_peak: [0.0; PADS],
+            fx: std::array::from_fn(|_| None),
+            work: std::array::from_fn(|_| vec![vec![0.0; DEFAULT_BLOCK]; 2]),
         };
         j.update();
         j
@@ -682,6 +726,9 @@ impl Juke {
                 continue;
             }
             let (ol, or) = (out * v.pan_l, out * v.pan_r);
+            if let Some(pk) = self.pad_peak.get_mut(v.pad) {
+                *pk = pk.max(ol.abs()).max(or.abs());
+            }
             l += ol;
             r += or;
             al += ol * v.send_a;
@@ -874,9 +921,15 @@ fn set_filter(v: &mut Voice, sr: f32) {
 impl Plugin for Juke {
     param_plumbing!(JUKE_INFO);
 
-    fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
+    fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
+        let block = max_block.clamp(1, 1 << 16);
+        for w in &mut self.work {
+            for c in w.iter_mut() {
+                c.resize(block, 0.0);
+            }
+        }
         for s in [&mut self.level, &mut self.ret_a, &mut self.ret_b] {
             s.set_time(20.0, self.sr);
         }
@@ -887,6 +940,9 @@ impl Plugin for Juke {
     fn reset(&mut self) {
         for v in &mut self.voices {
             v.active = false;
+        }
+        for fx in self.fx.iter_mut().flatten() {
+            fx.reset();
         }
         self.pending_len = 0;
         self.events.clear();
@@ -907,54 +963,122 @@ impl Plugin for Juke {
             sorted.len().min(MAX_EVENTS)
         };
         self.events.clear();
+        self.pad_peak = [0.0; PADS];
+        let block = self.work.iter().flat_map(|w| w.iter().map(Vec::len)).min().unwrap_or(0);
+        if block == 0 {
+            return;
+        }
         let mut next = 0;
-        for n in 0..frames {
-            if self.pending_len > 0 {
-                self.tick_pending();
-            }
-            while next < count {
-                let Some(&(off, kind)) = evs.get(next) else { break };
-                if off > n && n + 1 < frames {
-                    break;
+        let mut start = 0;
+        while start < frames {
+            let len = (frames - start).min(block);
+            // The pads, dry and into the buses.
+            for k in 0..len {
+                let n = start + k;
+                if self.pending_len > 0 {
+                    self.tick_pending();
                 }
-                self.apply(kind);
-                next += 1;
-            }
-            let (l, r, al, ar, bl, br) = self.render();
-            let (ga, gb, g) = (self.ret_a.next(), self.ret_b.next(), self.level.next());
-            let out_l = (l + al * ga + bl * gb) * g;
-            let out_r = (r + ar * ga + br * gb) * g;
-            match io {
-                [only] => {
-                    if let Some(x) = only.get_mut(n) {
-                        *x = (out_l + out_r) * FRAC_1_SQRT_2;
+                while next < count {
+                    let Some(&(off, kind)) = evs.get(next) else { break };
+                    if off > n && n + 1 < frames {
+                        break;
+                    }
+                    self.apply(kind);
+                    next += 1;
+                }
+                let (l, r, al, ar, bl, br) = self.render();
+                for (w, (x, y)) in self.work.iter_mut().zip([(l, r), (al, ar), (bl, br)]) {
+                    if let [wl, wr, ..] = w.as_mut_slice()
+                        && let (Some(a), Some(b)) = (wl.get_mut(k), wr.get_mut(k))
+                    {
+                        *a = x;
+                        *b = y;
                     }
                 }
-                [left, right, rest @ ..] => {
-                    if let Some(x) = left.get_mut(n) {
-                        *x = out_l;
+            }
+            // Each bus through its effects, returned into the mix; the mix through the output's.
+            let [dry, bus_a, bus_b] = &mut self.work;
+            let (fx_a, rest) = self.fx.split_at_mut(FX_PER_BUS);
+            let (fx_b, fx_out) = rest.split_at_mut(FX_PER_BUS);
+            run_effects(fx_a, bus_a, len);
+            run_effects(fx_b, bus_b, len);
+            if let ([dl, dr, ..], [al, ar, ..], [bl, br, ..]) = (dry.as_mut_slice(), bus_a.as_slice(), bus_b.as_slice()) {
+                for k in 0..len {
+                    let (ga, gb) = (self.ret_a.next(), self.ret_b.next());
+                    if let (Some(l), Some(r)) = (dl.get_mut(k), dr.get_mut(k)) {
+                        *l += al.get(k).copied().unwrap_or(0.0) * ga + bl.get(k).copied().unwrap_or(0.0) * gb;
+                        *r += ar.get(k).copied().unwrap_or(0.0) * ga + br.get(k).copied().unwrap_or(0.0) * gb;
                     }
-                    if let Some(x) = right.get_mut(n) {
-                        *x = out_r;
+                }
+            }
+            run_effects(fx_out, dry, len);
+            if let [dl, dr, ..] = dry.as_slice() {
+                for k in 0..len {
+                    let g = self.level.next();
+                    let (mut out_l, mut out_r) = (dl.get(k).copied().unwrap_or(0.0) * g, dr.get(k).copied().unwrap_or(0.0) * g);
+                    if !(out_l.is_finite() && out_r.is_finite()) {
+                        (out_l, out_r) = (0.0, 0.0);
                     }
-                    for b in rest.iter_mut().take(ch.saturating_sub(2)) {
-                        if let Some(x) = b.get_mut(n) {
-                            *x = 0.0;
+                    let n = start + k;
+                    match &mut *io {
+                        [only] => {
+                            if let Some(x) = only.get_mut(n) {
+                                *x = (out_l + out_r) * FRAC_1_SQRT_2;
+                            }
                         }
+                        [left, right, rest @ ..] => {
+                            if let Some(x) = left.get_mut(n) {
+                                *x = out_l;
+                            }
+                            if let Some(x) = right.get_mut(n) {
+                                *x = out_r;
+                            }
+                            for b in rest.iter_mut().take(ch.saturating_sub(2)) {
+                                if let Some(x) = b.get_mut(n) {
+                                    *x = 0.0;
+                                }
+                            }
+                        }
+                        [] => {}
                     }
                 }
-                [] => {}
             }
+            start += len;
         }
         for &(_, kind) in evs.iter().take(count).skip(next) {
             self.apply(kind);
         }
     }
 
+    fn set_transport(&mut self, transport: &crate::Transport) {
+        for fx in self.fx.iter_mut().flatten() {
+            fx.set_transport(transport);
+        }
+    }
+
+    fn set_offline(&mut self, offline: bool) {
+        for fx in self.fx.iter_mut().flatten() {
+            fx.set_offline(offline);
+        }
+    }
+
+    fn set_child(&mut self, slot: usize, child: Option<Box<dyn Plugin>>) -> Option<Box<dyn Plugin>> {
+        match self.fx.get_mut(slot) {
+            Some(at) => std::mem::replace(at, child),
+            None => child,
+        }
+    }
+
+    fn child_mut(&mut self, slot: usize) -> Option<&mut (dyn Plugin + 'static)> {
+        self.fx.get_mut(slot)?.as_deref_mut()
+    }
+
     fn tail_samples(&self) -> usize {
         let longest =
             (0..PADS).map(|pad| self.pv(pad, PadParam::Decay) + self.pv(pad, PadParam::Hold) + self.pv(pad, PadParam::Attack)).fold(0.0, f32::max);
-        ms_to_samples(longest + 50.0, self.sr) as usize
+        // A bus effect (a reverb, a delay) rings on after the pads.
+        let fx = self.fx.iter().flatten().map(|f| f.tail_samples()).max().unwrap_or(0);
+        (ms_to_samples(longest + 50.0, self.sr) as usize).saturating_add(fx)
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -990,6 +1114,14 @@ impl Plugin for Juke {
 
     fn take_released_asset(&mut self) -> Option<Arc<dyn SampleSource>> {
         self.released.pop()
+    }
+
+    /// The pads' peaks of the last block, two per slot (see [`unpack_pad_levels`]).
+    fn readouts(&self, out: &mut [f32; 8]) {
+        let q = |pad: usize| (self.pad_peak.get(pad).copied().unwrap_or(0.0).clamp(0.0, 1.0) * LEVEL_STEPS).round() as u32;
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = (q(2 * i) * 4096 + q(2 * i + 1)) as f32;
+        }
     }
 }
 
@@ -1190,6 +1322,41 @@ mod tests {
     }
 
     #[test]
+    fn bus_effects_shape_their_bus_and_the_output() {
+        let gain = |db: f32| {
+            let mut g = crate::create("gain").unwrap();
+            g.prepare(SR, 512, 2);
+            g.set_param("gain", db);
+            g
+        };
+        let hit = |j: &mut Juke| peak(&run(j, 4900, &[(4800, 36, 127)]).0[4800..]);
+        let setup = || {
+            let mut j = juke();
+            set(&mut j, "p1_source", 0.0);
+            set(&mut j, "p1_send_a", 100.0);
+            set(&mut j, "return_a", 0.0);
+            assert!(j.set_asset("p1.v1.r1", Some(click(10, 1.0))));
+            j
+        };
+        let mut j = setup();
+        let plain = hit(&mut j);
+        // Bus A's effect doubles the bus: dry + 2 × send = 3 × dry, against 2 × dry before.
+        let mut j = setup();
+        assert!(j.set_child(0, Some(gain(6.0206))).is_none());
+        let louder = hit(&mut j);
+        assert!((louder / plain - 1.5).abs() < 0.02, "bus effect: {}", louder / plain);
+        // An output effect takes the whole kit.
+        let mut j = setup();
+        assert!(j.set_child(FX_SLOTS - 1, Some(gain(-6.0206))).is_none());
+        assert!((hit(&mut j) / plain - 0.5).abs() < 0.02);
+        // Its parameters reach it; emptying the slot hands it back; a slot out of range refuses.
+        assert!(j.child_mut(FX_SLOTS - 1).is_some_and(|c| c.set_param("gain", 0.0)));
+        assert!(j.set_child(FX_SLOTS - 1, None).is_some());
+        assert!(j.set_child(FX_SLOTS, Some(gain(0.0))).is_some(), "no such slot: the child comes back");
+        assert!(j.child_mut(0).is_none());
+    }
+
+    #[test]
     fn processing_keeps_its_buffers() {
         let mut j = juke();
         for pad in 1..=PADS {
@@ -1210,6 +1377,20 @@ mod tests {
         assert_eq!(samples, (j.samples.as_ptr(), j.samples.capacity()));
         assert_eq!(released, (j.released.as_ptr(), j.released.capacity()));
         assert!(io.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn pad_levels_reach_the_readouts() {
+        let mut j = juke();
+        let mut io = vec![vec![0.0; 2400]; 2];
+        j.note_on(0, 38, 120);
+        j.process(&mut io, 2400);
+        let mut r = [f32::NAN; 8];
+        j.readouts(&mut r);
+        let levels = unpack_pad_levels(&r);
+        assert!(levels[2] > 0.05, "the snare (pad 3) shows: {levels:?}");
+        assert!(levels.iter().enumerate().all(|(i, &l)| i == 2 || l == 0.0), "only the snare: {levels:?}");
+        assert_eq!(unpack_pad_levels(&[f32::NAN, -1.0, 1e30, 0.0, 0.0, 0.0, 0.0, 0.0]), [0.0; PADS]);
     }
 
     #[test]

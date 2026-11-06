@@ -375,6 +375,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     };
     let Some((track, clip)) = app.engine.session().find_clip(cid).map(|(t, c)| (t, c.clone())) else { return };
     let ClipContent::Midi { sequence } = &clip.content else { return };
+    // A pattern clip edits as its step grid.
+    if clip.pattern.is_some() {
+        ui.painter().text(pos2(header.min.x + 110.0, header.center().y), Align2::LEFT_CENTER, &clip.name, regular(11.0), t.text_dim);
+        let body = Rect::from_min_max(pos2(full.min.x, full.min.y + 22.0), full.max);
+        crate::step_grid::show(app, ui, body, track, cid, &clip);
+        return;
+    }
     let track_color = app.engine.session().track(track).map_or([120, 120, 200], |t| t.color);
     let header_text = format!("{} · {} selected", clip.name, app.midi.selected.len());
     let edit_grid = app.engine.session().edit.grid;

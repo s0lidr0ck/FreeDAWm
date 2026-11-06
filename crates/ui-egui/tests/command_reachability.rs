@@ -8,24 +8,6 @@ use soundcraft_ui_egui::menus::{self, MenuKind, MenuNode};
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Juke's commands whose UI is the Juke window and the step grid (docs/juke.md, phase 1 step
-/// 1e): engine first, then the panels that call them. Step 1e removes this list; nothing else
-/// goes in it.
-const AWAITING_JUKE_UI: &[&str] = &[
-    "pattern.step",
-    "pattern.paint",
-    "pattern.lane",
-    "pattern.lane_add",
-    "pattern.lane_remove",
-    "pattern.settings",
-    "pattern.reroll",
-    "track.new_beat",
-    "mix.kit_sample_load",
-    "mix.kit_sample_clear",
-    "mix.kit_pad",
-    "mix.kit_name",
-];
-
 /// Known gaps: commands with no menu, shortcut or literal reference in the UI source today.
 /// Give each one a UI path and remove it from this list; don't add to it.
 const KNOWN_UNREACHED: &[&str] = &[
@@ -171,7 +153,7 @@ fn every_command_has_a_ui_path() {
         let direct = |id: &str| in_menus.contains(id) || src.contains(&format!("\"{id}\""));
         let alias_of = ALIASES.iter().find(|(alias, _)| *alias == c.id).map(|(_, target)| *target);
         let reached = direct(c.id) || c.shortcut.is_some() || alias_of.is_some_and(direct);
-        let known = KNOWN_UNREACHED.contains(&c.id) || AWAITING_JUKE_UI.contains(&c.id) || OFF_THE_MENUS.iter().any(|(id, _)| *id == c.id);
+        let known = KNOWN_UNREACHED.contains(&c.id) || OFF_THE_MENUS.iter().any(|(id, _)| *id == c.id);
         if !reached && !known {
             unreached.push(c.id);
         } else if reached && known {

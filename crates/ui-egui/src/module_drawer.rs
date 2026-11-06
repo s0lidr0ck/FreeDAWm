@@ -768,7 +768,7 @@ pub fn drawer_rect(ctx: &egui::Context, track: TrackId, module: ModuleId) -> Opt
 pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     // A frozen module (Track › Freeze) is read-only and greyed; its header menu still works.
     let frozen = track.mixer.module_index(module).is_some_and(|i| crate::chain_view::module_frozen(track, i));
-    let wide_editor = track.mixer.module(module).and_then(|i| crate::engine_ui::engine_ui(&i.plugin)).and_then(|u| u.wide_editor).is_some();
+    let wide_editor = track.module(module).and_then(|i| crate::engine_ui::engine_ui(&i.plugin)).and_then(|u| u.wide_editor).is_some();
     if app.ui.wide_editors && wide_editor {
         ui.scope(|ui| {
             if frozen {
@@ -783,7 +783,7 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
     let (r, _) = ui.allocate_exact_size(vec2(DRAWER_W, h), Sense::hover());
     let pass = ui.ctx().cumulative_pass_nr();
     ui.data_mut(|d| d.insert_temp(rect_key(track.id, module), (r, pass)));
-    let Some(ins) = track.mixer.module(module) else { return };
+    let Some(ins) = track.module(module) else { return };
     let Some(info) = soundcraft_dsp::plugin_info(&ins.plugin) else { return };
     let live = meters.and_then(|m| m.modules.iter().find(|x| x.module == module)).map(live_values);
     let kind = graph_kind(&ins.plugin);

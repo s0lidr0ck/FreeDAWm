@@ -448,6 +448,18 @@ pub trait Plugin: Send {
     fn action(&mut self, _name: &str) -> bool {
         false
     }
+    /// Hosts `child` (made and prepared off the audio thread for two channels) in slot `slot` of
+    /// the plugin's own signal path, `None` to empty it: Juke's bus effects. Returns what the slot
+    /// held, or `child` itself when the plugin hosts nothing there; the host drops what comes back
+    /// off the audio thread. No allocation, no I/O.
+    fn set_child(&mut self, _slot: usize, child: Option<Box<dyn Plugin>>) -> Option<Box<dyn Plugin>> {
+        child
+    }
+    /// The plugin hosted in slot `slot` (see [`Plugin::set_child`]), for the host to set its
+    /// parameters.
+    fn child_mut(&mut self, _slot: usize) -> Option<&mut (dyn Plugin + 'static)> {
+        None
+    }
     /// One asset the plugin no longer uses (see [`Plugin::set_asset`]); the host drops it off the
     /// audio thread. Call until `None`. Does not allocate.
     fn take_released_asset(&mut self) -> Option<Arc<dyn SampleSource>> {

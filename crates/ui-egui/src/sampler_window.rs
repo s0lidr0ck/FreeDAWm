@@ -14,7 +14,7 @@ use std::path::Path;
 pub const SAMPLER: &str = "sampler";
 
 /// File extensions a sample can come from (what the audio decoder reads).
-const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf"];
+pub(crate) const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf"];
 
 /// Markers on the sample strip: the parameter each one sets, and whether it needs a loop.
 const MARKERS: [(&str, bool); 3] = [("start", false), ("loop_start", true), ("loop_end", true)];
@@ -71,6 +71,8 @@ pub fn drop_target(app: &mut SoundApp, ctx: &egui::Context, r: Rect, t: TrackId)
 pub struct SampleRead {
     pub track: TrackId,
     pub file: egui::DroppedFileHandle,
+    /// The Juke pad slot `(pad, layer, robin)` it was dropped on (`None`: the track's sampler).
+    pub kit: Option<(usize, usize, usize)>,
 }
 
 impl SampleRead {
@@ -90,7 +92,7 @@ impl SoundApp {
         if files.is_empty() {
             return files;
         }
-        let Some(track) = self.drop_track(pos) else { return files };
+        let Some((track, kit)) = self.drop_track(pos) else { return files };
         let mut rest = Vec::new();
         let mut claimed = false;
         for f in files {
@@ -101,10 +103,14 @@ impl SoundApp {
             claimed = true;
             if f.path().is_absolute() {
                 let path = f.path().to_string_lossy().into_owned();
-                let r = self.run("mix.sampler_load", json!({"track": track.0, "path": path}));
-                self.sample_loaded(track, &path, r);
+                let r = match kit {
+                    Some((pad, layer, robin)) => self
+                        .run("mix.kit_sample_load", json!({"track": track.0, "pad": pad + 1, "layer": layer + 1, "robin": robin + 1, "path": path})),
+                    None => self.run("mix.sampler_load", json!({"track": track.0, "path": path})),
+                };
+                self.sample_loaded(track, kit, &path, r);
             } else {
-                self.sample_reads.push(SampleRead { track, file: f });
+                self.sample_reads.push(SampleRead { track, file: f, kit });
             }
         }
         rest
@@ -112,16 +118,19 @@ impl SoundApp {
 
     /// The track a drop at `pos` loads into. Without a position (some platforms report none
     /// during a drag), a single open Sampler window takes it.
-    fn drop_track(&self, pos: Option<egui::Pos2>) -> Option<TrackId> {
+    fn drop_track(&self, pos: Option<egui::Pos2>) -> Option<(TrackId, Option<(usize, usize, usize)>)> {
         if let Some(p) = pos {
-            return self.sample_drop_targets.iter().rev().find(|(r, _)| r.contains(p)).map(|(_, t)| *t);
+            if let Some((_, t, slot)) = self.kit_drop_targets.iter().rev().find(|(r, _, _)| r.contains(p)) {
+                return Some((*t, Some(*slot)));
+            }
+            return self.sample_drop_targets.iter().rev().find(|(r, _)| r.contains(p)).map(|(_, t)| (*t, None));
         }
         let s = self.engine.session();
         let mut open = self.ui.plugin_windows.iter().filter(|(t, slot)| {
             *slot == soundcraft_mix::SlotKey::Instrument && s.track(*t).and_then(|x| x.instrument.as_ref()).is_some_and(|i| i.plugin == SAMPLER)
         });
         match (open.next(), open.next()) {
-            (Some((t, _)), None) => Some(*t),
+            (Some((t, _)), None) => Some((*t, None)),
             _ => None,
         }
     }
@@ -135,12 +144,23 @@ impl SoundApp {
     /// sampler, as one undo step.
     pub fn load_sample_bytes(&mut self, read: &SampleRead, bytes: Result<Vec<u8>, String>) {
         let name = read.name();
-        let r = bytes.and_then(|b| soundcraft_engine::io::load_sampler_bytes(&mut self.engine, read.track, &name, &b).map_err(|e| e.to_string()));
-        self.sample_loaded(read.track, &name, r);
+        let r = bytes.and_then(|b| {
+            match read.kit {
+                Some(slot) => soundcraft_engine::io::load_kit_bytes(&mut self.engine, read.track, slot, &name, &b),
+                None => soundcraft_engine::io::load_sampler_bytes(&mut self.engine, read.track, &name, &b),
+            }
+            .map_err(|e| e.to_string())
+        });
+        self.sample_loaded(read.track, read.kit, &name, r);
     }
 
-    fn sample_loaded(&mut self, track: TrackId, what: &str, r: Result<serde_json::Value, String>) {
+    fn sample_loaded(&mut self, track: TrackId, kit: Option<(usize, usize, usize)>, what: &str, r: Result<serde_json::Value, String>) {
         match r {
+            Ok(v) if kit.is_some() => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(what);
+                let pad = v.get("pad").and_then(serde_json::Value::as_u64).unwrap_or(1);
+                self.ui.status = format!("{name} loaded onto pad {pad}");
+            }
             Ok(v) => {
                 if !self.ui.plugin_windows.contains(&(track, soundcraft_mix::SlotKey::Instrument)) {
                     self.ui.plugin_windows.push((track, soundcraft_mix::SlotKey::Instrument));

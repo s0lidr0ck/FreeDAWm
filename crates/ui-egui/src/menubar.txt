@@ -282,6 +282,7 @@ Track > ## Create
 Track > New...
 Track > Duplicate = Track > Duplicate...
 Track > Create Click Track
+Track > New Beat = @track.new_beat
 Track > ---
 Track > ## Organise
 Track > Rename... = @track.rename
