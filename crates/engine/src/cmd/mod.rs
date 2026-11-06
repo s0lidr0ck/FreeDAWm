@@ -31,6 +31,7 @@ pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
 mod health;
 mod instrument;
+pub mod juke;
 mod looping;
 mod lyric_alt;
 pub mod lyric_check;
@@ -157,6 +158,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(freeze::specs());
         v.extend(clip::specs());
         v.extend(pattern::specs());
+        v.extend(juke::specs());
         v.extend(clip_clean::specs());
         v.extend(event::specs());
         v.extend(mix::specs());

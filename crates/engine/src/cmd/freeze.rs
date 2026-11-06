@@ -191,8 +191,8 @@ fn unfreeze(e: &mut Engine, tracks: &[TrackId]) -> Vec<TrackId> {
 pub(crate) fn drop_unused_source(s: &mut Session, src: SourceId) {
     let used = s.tracks.iter().any(|t| {
         t.freeze.is_some_and(|f| f.source == src)
-            || t.mixer.inserts.iter().any(|i| i.sample == Some(src))
-            || t.instrument.as_ref().is_some_and(|i| i.sample == Some(src))
+            || t.mixer.inserts.iter().any(|i| i.sources().any(|x| x == src))
+            || t.instrument.as_ref().is_some_and(|i| i.sources().any(|x| x == src))
             || t.playlists.iter().flat_map(|p| &p.clips).any(|c| c.uses_source(src))
     });
     if !used {
@@ -313,10 +313,11 @@ type AudibleModule<'a> = (
     &'a Option<soundcraft_model::SidechainSource>,
     &'a std::collections::BTreeMap<String, String>,
     Option<u32>,
+    &'a std::collections::BTreeMap<String, SourceId>,
 );
 
 fn audible_module(i: &soundcraft_model::Insert) -> AudibleModule<'_> {
-    (i.id, i.plugin.as_str(), &i.params, i.bypass, i.active, &i.state, i.sample, &i.sidechain, &i.assets, i.link_group)
+    (i.id, i.plugin.as_str(), &i.params, i.bypass, i.active, &i.state, i.sample, &i.sidechain, &i.assets, i.link_group, &i.samples)
 }
 
 /// The active playlists play the same: clip for clip, everything but identity and labels, clip

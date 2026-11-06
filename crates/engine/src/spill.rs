@@ -65,7 +65,7 @@ pub fn subfolder_of(path: &str) -> Option<&'static str> {
 
 /// Sources a sample-playing instrument plays: kept in memory (it reads them whole).
 fn sampled(s: &Session) -> HashSet<SourceId> {
-    s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).filter_map(|i| i.sample).collect()
+    s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).flat_map(|i| i.sources()).collect()
 }
 
 /// A stored source path, relative ones taken from `base`.

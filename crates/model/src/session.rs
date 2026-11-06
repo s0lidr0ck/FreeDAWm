@@ -673,6 +673,11 @@ impl Session {
         truncate_chars(&mut self.comments, MAX_COMMENT_CHARS);
         for t in &mut self.tracks {
             t.mixer.sanitize();
+            for ins in t.mixer.inserts.iter_mut().chain(t.instrument.as_mut()) {
+                if let Some(k) = &mut ins.kit {
+                    k.sanitize();
+                }
+            }
             // Modules' MIDI plays into an instrument or MIDI track, never their own; each once.
             if let crate::Route::Modules(refs) = &t.mixer.input {
                 let id = t.id;

@@ -644,6 +644,17 @@ pub struct Insert {
     /// engine makes each ready (`Session::assets`) and the mix engine hands it over.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub assets: BTreeMap<String, String>,
+    /// Session audio sources a sample-playing instrument plays, by the plugin's own key (Juke's
+    /// pad samples, `p3.v2.r1`: pad 3, velocity layer 2, round-robin 1). Like `sample`, they live
+    /// in the session's pool and `Audio Files/`, so a kit travels with its project; the mix
+    /// engine hands each over with `Plugin::set_asset`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub samples: BTreeMap<String, SourceId>,
+    /// A drum kit's names for its pads and their families (Juke), shown on the pads and in the
+    /// step grid; the kit's sound itself is the parameters and `samples`. `None` for every other
+    /// module, and for a kit still on its defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<KitLayout>,
     /// The session-level instance link group the module is in (FireStation LevelUp's IN/OUT
     /// pairs, Shale's Kit Link), for plugins that declare `PluginInfo::link`: every module in a
     /// group, on any track, shares one value bus. `None`: not linked.
@@ -726,6 +737,71 @@ fn yes() -> bool {
     true
 }
 
+/// A drum family: a pad's colour in the kit view and the step grid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrumFamily {
+    Kick,
+    Snare,
+    Clap,
+    Hat,
+    Tom,
+    Cymbal,
+    #[default]
+    Percussion,
+}
+
+impl DrumFamily {
+    pub const ALL: [DrumFamily; 7] =
+        [DrumFamily::Kick, DrumFamily::Snare, DrumFamily::Clap, DrumFamily::Hat, DrumFamily::Tom, DrumFamily::Cymbal, DrumFamily::Percussion];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            DrumFamily::Kick => "kick",
+            DrumFamily::Snare => "snare",
+            DrumFamily::Clap => "clap",
+            DrumFamily::Hat => "hat",
+            DrumFamily::Tom => "tom",
+            DrumFamily::Cymbal => "cymbal",
+            DrumFamily::Percussion => "percussion",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<DrumFamily> {
+        DrumFamily::ALL.into_iter().find(|f| f.id() == id)
+    }
+}
+
+/// One pad's name and family in a [`KitLayout`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KitPad {
+    pub name: String,
+    #[serde(default)]
+    pub family: DrumFamily,
+}
+
+/// A drum kit's name and its pads' names and families, in pad order.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KitLayout {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub pads: Vec<KitPad>,
+}
+
+impl KitLayout {
+    /// Most pads a layout names (Juke has 16; room for a bigger grid later).
+    pub const MAX_PADS: usize = 32;
+
+    pub fn sanitize(&mut self) {
+        self.name = self.name.chars().take(64).collect();
+        self.pads.truncate(Self::MAX_PADS);
+        for p in &mut self.pads {
+            p.name = p.name.chars().take(32).collect();
+        }
+    }
+}
+
 impl Insert {
     pub fn new(plugin: impl Into<String>) -> Self {
         Insert {
@@ -742,10 +818,17 @@ impl Insert {
             sidechain: None,
             prepared: None,
             assets: BTreeMap::new(),
+            samples: BTreeMap::new(),
+            kit: None,
             link_group: None,
             state_load: 0,
             foreign: None,
         }
+    }
+
+    /// Every session source the module plays: its `sample` and its keyed `samples`.
+    pub fn sources(&self) -> impl Iterator<Item = SourceId> + '_ {
+        self.sample.into_iter().chain(self.samples.values().copied())
     }
 
     /// The decoded plugin state (`None` when absent or malformed).

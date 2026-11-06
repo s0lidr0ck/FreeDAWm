@@ -34,9 +34,9 @@ pub use lyrics::{
 };
 pub use markers::{Group, MarkerKind, MemoryLocation};
 pub use mixer::{
-    Bus, ChainError, ChannelFormat, ForeignDevice, InputMonitor, InputPath, Insert, MAX_MODULES, MidiIn, Mixer, ModuleId, ModuleRef, OutputPath,
-    PreparedState, REFERENCE_KEYS, Route, SEND_SLOTS, SendSlot, SidechainSource, Speaker, StripSize, SurroundPan, fader_db_to_pos, fader_pos_to_db,
-    is_reference_key, track_input_channel,
+    Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, InputMonitor, InputPath, Insert, KitLayout, KitPad, MAX_MODULES, MidiIn, Mixer,
+    ModuleId, ModuleRef, OutputPath, PreparedState, REFERENCE_KEYS, Route, SEND_SLOTS, SendSlot, SidechainSource, Speaker, StripSize, SurroundPan,
+    fader_db_to_pos, fader_pos_to_db, is_reference_key, track_input_channel,
 };
 pub use notes::{MAX_NOTE_CHARS, MAX_NOTES, Note, note_typed, sanitize_notes, split_tags};
 pub use scout::{

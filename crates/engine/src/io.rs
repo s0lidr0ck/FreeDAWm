@@ -1256,7 +1256,7 @@ fn stream_saved(e: &mut Engine, file: &Path) {
     let s = e.session();
     let rate = s.sample_rate.hz();
     let sampled: std::collections::HashSet<SourceId> =
-        s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).filter_map(|i| i.sample).collect();
+        s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).flat_map(|i| i.sources()).collect();
     let mut swaps: Vec<(Arc<SourceAudio>, Arc<SourceAudio>)> = Vec::new();
     for src in s.sources.iter().filter(|src| !src.unsaved && !sampled.contains(&src.id)) {
         let Some(audio) = s.pool.get(src.id) else { continue };
@@ -1772,7 +1772,7 @@ pub(crate) fn load_session_file_reporting(
         .tracks
         .iter()
         .flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref()))
-        .filter_map(|i| i.sample)
+        .flat_map(|i| i.sources())
         .filter_map(|id| s.sources.iter().position(|src| src.id == id))
         .filter_map(|k| by_source.get(k).and_then(|r| r.as_ref().ok()).copied())
         .collect();

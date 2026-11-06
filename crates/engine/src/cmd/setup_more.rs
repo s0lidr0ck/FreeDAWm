@@ -554,7 +554,7 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
         .flat_map(|t| t.playlists.iter().flat_map(|pl| pl.clips.iter().flat_map(|c| c.source().into_iter().chain(c.clean_alt().map(|k| k.source)))))
         .collect();
     // A Sampler's sample is session audio too.
-    needed.extend(picked.iter().filter_map(|t| t.instrument.as_ref().and_then(|i| i.sample)));
+    needed.extend(picked.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.sources()));
     needed.sort_by_key(|x| x.0);
     needed.dedup();
     let sr = e.session().sample_rate.hz();
@@ -616,6 +616,7 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
         // The donor's source ids mean nothing here: remap the sample, or drop it when it didn't come along.
         if let Some(ins) = tr.instrument.as_mut() {
             ins.sample = ins.sample.and_then(|sid| map.get(&sid.0).copied());
+            ins.samples = std::mem::take(&mut ins.samples).into_iter().filter_map(|(k, sid)| Some((k, *map.get(&sid.0)?))).collect();
         }
         // Busses are matched by name (created when missing).
         let remap = |s: &mut Session, r: &Route| -> Route {

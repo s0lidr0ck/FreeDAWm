@@ -12,7 +12,7 @@ use soundcraft_model::{Clip, PatternClip, TrackKind};
 
 /// The lanes a new pattern starts with: a General MIDI drum kit's core, which Juke's default kit,
 /// the Drum Synth and most drum instruments play.
-const DEFAULT_LANES: [u8; 8] = [36, 38, 42, 46, 39, 41, 47, 49];
+pub(crate) const DEFAULT_LANES: [u8; 8] = [36, 38, 42, 46, 39, 41, 47, 49];
 /// Most bars a new pattern clip spans.
 const MAX_NEW_BARS: i64 = 64;
 
@@ -171,6 +171,14 @@ fn new_pattern(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     };
     let at = position_param(e, id, p, "start")?.unwrap_or(e.session().edit.selection.start);
+    let (clip_id, start, length) = place_pattern(e, track, at, bars, steps, &notes)?;
+    Ok(json!({"clip": clip_id.0, "start": start, "length": length}))
+}
+
+/// Puts a new pattern clip of `bars` bars on `track`, from the bar `at` is in: `steps` per bar, a
+/// lane per note. Returns the clip, its start and its length.
+pub(crate) fn place_pattern(e: &mut Engine, track: TrackId, at: Samples, bars: i64, steps: u8, notes: &[u8]) -> Result<(ClipId, Samples, Samples)> {
+    let id = "pattern.new";
     let s = e.session();
     let sr = s.sample_rate;
     // Back to the bar the position is in, so the steps sit on the grid.
@@ -192,7 +200,7 @@ fn new_pattern(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut clip = Clip::midi(clip_id, "Pattern", start, end - start, soundcraft_midi::Sequence::default());
     clip.pattern = Some(PatternClip::new(pattern, 0));
     crate::edit::place_clip(ses, track, clip);
-    Ok(json!({"clip": clip_id.0, "start": start, "length": end - start}))
+    Ok((clip_id, start, end - start))
 }
 
 fn get(e: &mut Engine, p: &Value) -> Result<Value> {

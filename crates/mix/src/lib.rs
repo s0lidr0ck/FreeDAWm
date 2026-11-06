@@ -1442,6 +1442,9 @@ impl MixEngine {
                 strip.sample = None;
             }
             sync_sample(strip, want, s);
+            if let (Some(slot), Some(ins)) = (strip.instrument.as_mut(), want) {
+                sync_kit_samples(slot, ins, s, cx.retired_assets);
+            }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
                 strip.llm_dry = vec![vec![0.0; mb]; n];
@@ -3709,6 +3712,14 @@ impl SampleSource for PoolSample {
     fn channel(&self, ch: usize) -> Option<&[f32]> {
         self.0.channel(ch)
     }
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// The pool audio a handed-over sample wraps (`None`: not a pool sample).
+fn pool_audio(a: &Arc<dyn SampleSource>) -> Option<*const SourceAudio> {
+    a.as_any().and_then(|x| x.downcast_ref::<PoolSample>()).map(|p| Arc::as_ptr(&p.0))
 }
 
 /// Capacity reserved per strip for assets its plugins let go of between two syncs.
@@ -3807,6 +3818,46 @@ fn sync_sample(strip: &mut Strip, want: Option<&soundcraft_model::Insert>, s: &S
         inst.plugin.set_sample(shared);
     }
     strip.sample = audio.cloned();
+}
+
+/// Hands a strip's instrument its keyed sample sources (`Insert::samples`: Juke's pad samples)
+/// where they changed: a new source, a cleared one, a removed key, or a new instance. The slot
+/// keeps its own reference to each; the ones it replaces, and those the plugin let go of, go to
+/// `retired` (dropped off the audio thread). Missing media plays nothing.
+fn sync_kit_samples(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, s: &Session, retired: &mut Vec<Arc<dyn SampleSource>>) {
+    for (key, sid) in &ins.samples {
+        let want = s.pool.get(*sid);
+        let at = slot.assets.iter().position(|(k, _)| k == key);
+        match (want, at) {
+            (Some(w), Some(i)) if slot.assets.get(i).and_then(|(_, a)| pool_audio(a)) == Some(Arc::as_ptr(w)) => {}
+            (Some(w), at) => {
+                let shared: Arc<dyn SampleSource> = Arc::new(PoolSample(Arc::clone(w)));
+                slot.plugin.set_asset(key, Some(Arc::clone(&shared)));
+                match at.and_then(|i| slot.assets.get_mut(i)) {
+                    Some(entry) => retired.push(std::mem::replace(&mut entry.1, shared)),
+                    None => slot.assets.push((key.clone(), shared)),
+                }
+            }
+            (None, Some(i)) => {
+                slot.plugin.set_asset(key, None);
+                retired.push(slot.assets.remove(i).1);
+            }
+            (None, None) => {}
+        }
+    }
+    let mut i = 0;
+    while i < slot.assets.len() {
+        if slot.assets.get(i).is_some_and(|(k, _)| ins.samples.contains_key(k)) {
+            i += 1;
+        } else {
+            let (key, a) = slot.assets.remove(i);
+            slot.plugin.set_asset(&key, None);
+            retired.push(a);
+        }
+    }
+    while let Some(a) = slot.plugin.take_released_asset() {
+        retired.push(a);
+    }
 }
 
 /// Record insert latency without processing audio, so this block can compensate for it.
