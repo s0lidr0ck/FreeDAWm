@@ -1,6 +1,6 @@
 # Where FreeDAWm falls short of a complete studio workflow
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-06 · **Change:** minor (G-21 closed: MP3 and Opus export; AAC/M4A export not planned; previously minor: G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-06 · **Change:** trivial (G-20: the Juke drum machine design; previously minor: G-21 closed: MP3 and Opus export; AAC/M4A export not planned; previously minor: G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -237,7 +237,8 @@ See [`ui-parity.md`](ui-parity.md). ≈ 60–100 h.
 
 ### G-20. MIDI and instrument depth
 
-MIDI learn, a sampler (PR #108), drum machine depth, notation editing (tuplets, lyrics,
+MIDI learn, multi-sample instruments and a drum machine with a step sequencer (designed: **Juke**,
+[juke.md](juke.md); the single-sample Sampler is built), notation editing (tuplets, lyrics,
 articulations, parts). ≈ 40–60 h.
 
 ### G-22. Avid cloud services
