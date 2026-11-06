@@ -358,32 +358,51 @@ pub struct Juke {
     ret_b: Smoother,
     /// Each pad's peak over the block just rendered (before the kit level), for the pad meters.
     pad_peak: [f32; PADS],
+    /// Bus A's and bus B's peaks over the block just rendered, as they return into the mix.
+    bus_peak: [f32; 2],
     /// Effects hosted on the buses (see [`FX_SLOTS`]).
     fx: [Option<Box<dyn Plugin>>; FX_SLOTS],
     /// Stereo work buffers, one block long: the pads' dry mix, bus A and bus B.
     work: [Vec<Vec<f32>>; 3],
 }
 
-/// A pad level in a readout: 0–1 in 4096 steps.
-const LEVEL_STEPS: f32 = 4095.0;
+/// Levels a readout slot carries (3 × 8 bits, exact in an `f32`).
+const PER_SLOT: usize = 3;
+/// The quietest level a readout codes; below it reads as silence.
+const FLOOR_DB: f32 = -72.0;
 
-/// The pad levels a [`Juke`]'s readouts carry: slot `i` holds pads `2i` and `2i + 1`, each 0–1
-/// in 4096 steps (`a × 4096 + b`, exact in an `f32`). NaN or out-of-range slots read as silence.
-pub fn unpack_pad_levels(readouts: &[f32; 8]) -> [f32; PADS] {
-    let mut out = [0.0; PADS];
+/// A peak as an 8-bit code: 0 is silence, 1–255 run evenly from [`FLOOR_DB`] to 0 dB.
+fn level_code(peak: f32) -> u32 {
+    if !(peak.is_finite() && peak > 0.0) {
+        return 0;
+    }
+    let db = (20.0 * peak.log10()).min(0.0);
+    if db < FLOOR_DB { 0 } else { 1 + ((db - FLOOR_DB) / -FLOOR_DB * 254.0).round() as u32 }
+}
+
+fn code_level(code: u32) -> f32 {
+    if code == 0 { 0.0 } else { 10f32.powf((FLOOR_DB + (code.min(255) - 1) as f32 * -FLOOR_DB / 254.0) / 20.0) }
+}
+
+/// The levels a [`Juke`]'s readouts carry: the 16 pads, then bus A and bus B (after their
+/// effects and returns), three to a slot as 8-bit dB codes (`a × 65536 + b × 256 + c`), linear
+/// peaks out. NaN or out-of-range slots read as silence.
+pub fn unpack_levels(readouts: &[f32; 8]) -> ([f32; PADS], [f32; 2]) {
+    let mut all = [0.0f32; PADS + 2];
     for (i, &v) in readouts.iter().enumerate() {
         if !(v.is_finite() && (0.0..16_777_216.0).contains(&v)) {
             continue;
         }
         let n = v as u32;
-        if let Some(a) = out.get_mut(2 * i) {
-            *a = (n / 4096) as f32 / LEVEL_STEPS;
-        }
-        if let Some(b) = out.get_mut(2 * i + 1) {
-            *b = (n % 4096) as f32 / LEVEL_STEPS;
+        for (k, code) in [n >> 16, (n >> 8) & 0xFF, n & 0xFF].into_iter().enumerate() {
+            if let Some(x) = all.get_mut(i * PER_SLOT + k) {
+                *x = code_level(code);
+            }
         }
     }
-    out
+    let mut pads = [0.0; PADS];
+    pads.copy_from_slice(&all[..PADS]);
+    (pads, [all[PADS], all[PADS + 1]])
 }
 
 /// Runs `len` frames of the stereo buffer `io` through `fx` in order (empty slots pass through).
@@ -422,6 +441,7 @@ impl Juke {
             ret_a: Smoother::new(0.5),
             ret_b: Smoother::new(0.5),
             pad_peak: [0.0; PADS],
+            bus_peak: [0.0; 2],
             fx: std::array::from_fn(|_| None),
             work: std::array::from_fn(|_| vec![vec![0.0; DEFAULT_BLOCK]; 2]),
         };
@@ -964,6 +984,7 @@ impl Plugin for Juke {
         };
         self.events.clear();
         self.pad_peak = [0.0; PADS];
+        self.bus_peak = [0.0; 2];
         let block = self.work.iter().flat_map(|w| w.iter().map(Vec::len)).min().unwrap_or(0);
         if block == 0 {
             return;
@@ -1005,9 +1026,13 @@ impl Plugin for Juke {
             if let ([dl, dr, ..], [al, ar, ..], [bl, br, ..]) = (dry.as_mut_slice(), bus_a.as_slice(), bus_b.as_slice()) {
                 for k in 0..len {
                     let (ga, gb) = (self.ret_a.next(), self.ret_b.next());
+                    let a = (al.get(k).copied().unwrap_or(0.0) * ga, ar.get(k).copied().unwrap_or(0.0) * ga);
+                    let b = (bl.get(k).copied().unwrap_or(0.0) * gb, br.get(k).copied().unwrap_or(0.0) * gb);
+                    self.bus_peak[0] = self.bus_peak[0].max(a.0.abs()).max(a.1.abs());
+                    self.bus_peak[1] = self.bus_peak[1].max(b.0.abs()).max(b.1.abs());
                     if let (Some(l), Some(r)) = (dl.get_mut(k), dr.get_mut(k)) {
-                        *l += al.get(k).copied().unwrap_or(0.0) * ga + bl.get(k).copied().unwrap_or(0.0) * gb;
-                        *r += ar.get(k).copied().unwrap_or(0.0) * ga + br.get(k).copied().unwrap_or(0.0) * gb;
+                        *l += a.0 + b.0;
+                        *r += a.1 + b.1;
                     }
                 }
             }
@@ -1116,11 +1141,14 @@ impl Plugin for Juke {
         self.released.pop()
     }
 
-    /// The pads' peaks of the last block, two per slot (see [`unpack_pad_levels`]).
+    /// The pads' and buses' peaks of the last block (see [`unpack_levels`]).
     fn readouts(&self, out: &mut [f32; 8]) {
-        let q = |pad: usize| (self.pad_peak.get(pad).copied().unwrap_or(0.0).clamp(0.0, 1.0) * LEVEL_STEPS).round() as u32;
+        let level = |i: usize| {
+            level_code(if i < PADS { self.pad_peak.get(i).copied().unwrap_or(0.0) } else { self.bus_peak.get(i - PADS).copied().unwrap_or(0.0) })
+        };
         for (i, slot) in out.iter_mut().enumerate() {
-            *slot = (q(2 * i) * 4096 + q(2 * i + 1)) as f32;
+            let at = i * PER_SLOT;
+            *slot = ((level(at) << 16) | (level(at + 1) << 8) | level(at + 2)) as f32;
         }
     }
 }
@@ -1387,10 +1415,25 @@ mod tests {
         j.process(&mut io, 2400);
         let mut r = [f32::NAN; 8];
         j.readouts(&mut r);
-        let levels = unpack_pad_levels(&r);
+        let (levels, buses) = unpack_levels(&r);
         assert!(levels[2] > 0.05, "the snare (pad 3) shows: {levels:?}");
         assert!(levels.iter().enumerate().all(|(i, &l)| i == 2 || l == 0.0), "only the snare: {levels:?}");
-        assert_eq!(unpack_pad_levels(&[f32::NAN, -1.0, 1e30, 0.0, 0.0, 0.0, 0.0, 0.0]), [0.0; PADS]);
+        assert_eq!(buses, [0.0; 2], "no sends, no bus level");
+        assert_eq!(unpack_levels(&[f32::NAN, -1.0, 1e30, 0.0, 0.0, 0.0, 0.0, 0.0]), ([0.0; PADS], [0.0; 2]));
+        // A send lights its bus.
+        j.set_param("p3_send_b", 100.0);
+        j.note_on(0, 38, 120);
+        j.process(&mut io, 2400);
+        j.readouts(&mut r);
+        let (_, buses) = unpack_levels(&r);
+        assert!(buses[1] > 0.01 && buses[0] == 0.0, "{buses:?}");
+        // The codes keep a level within a third of a dB.
+        for db in [-60.0f32, -24.0, -6.0, -0.5] {
+            let x = 10f32.powf(db / 20.0);
+            let back = 20.0 * code_level(level_code(x)).log10();
+            assert!((back - db).abs() < 0.3, "{db} -> {back}");
+        }
+        assert_eq!(level_code(1.0e-5), 0);
     }
 
     #[test]

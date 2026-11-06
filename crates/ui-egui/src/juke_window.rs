@@ -15,7 +15,7 @@ use crate::widgets::{self, KnobStyle};
 use egui::{Align2, Color32, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use serde_json::{Value, json};
 use soundcraft_dsp::ParamInfo;
-use soundcraft_dsp::plugins::juke::{JUKE_INFO, LAYERS, PADS, ROBINS, SOURCES, VOICE_NAMES, sample_key, unpack_pad_levels};
+use soundcraft_dsp::plugins::juke::{JUKE_INFO, LAYERS, PADS, ROBINS, SOURCES, VOICE_NAMES, sample_key, unpack_levels};
 use soundcraft_engine::cmd::juke::pad_layout;
 use soundcraft_model::{DrumFamily, Insert, KitBus, KitFx, TrackId};
 
@@ -152,7 +152,7 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     let ctx = ui.ctx().clone();
     let mut view: View = ctx.data(|d| d.get_temp(view_id(tid))).unwrap_or_default();
     view.pad = view.pad.min(PADS - 1);
-    let levels = pad_levels(app, &ctx, tid);
+    let (levels, bus_levels) = pad_levels(app, &ctx, tid);
     let mut out = Out::default();
     let full = ui.available_rect_before_wrap();
     let full = Rect::from_min_size(full.min, vec2(full.width().max(760.0), full.height().max(520.0)));
@@ -175,18 +175,22 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
         pad_grid(&mut body, main, tid, ins, &view, &levels, &mut out);
     }
     let out_meter = app.meters.get(&tid).map(|m| (m.level, m.hold, m.clip)).unwrap_or_default();
-    bus_strips(&mut body, strips, tid, ins, out_meter, &mut out);
+    bus_strips(&mut body, strips, tid, ins, out_meter, bus_levels, &mut out);
     let honey = Rect::from_min_max(pos2(inner.min.x, inner.max.y - honey_h), inner.max);
     honeycomb(&mut body, honey, tid, ins, view.pad, &mut out);
     apply(app, tid, &mut view, out);
     ctx.data_mut(|d| d.insert_temp(view_id(tid), view));
 }
 
-/// The pads' meter levels, falling back smoothly between the audio thread's block peaks.
-fn pad_levels(app: &SoundApp, ctx: &egui::Context, tid: TrackId) -> [f32; PADS] {
-    let now = app.meter_snapshot.tracks.get(&tid).map(|m| unpack_pad_levels(&m.instrument)).unwrap_or([0.0; PADS]);
+/// The pads' and the two buses' meter levels, falling back smoothly between the audio thread's
+/// block peaks.
+fn pad_levels(app: &SoundApp, ctx: &egui::Context, tid: TrackId) -> ([f32; PADS], [f32; 2]) {
+    let (pads, buses) = app.meter_snapshot.tracks.get(&tid).map(|m| unpack_levels(&m.instrument)).unwrap_or(([0.0; PADS], [0.0; 2]));
+    let mut now = [0.0f32; PADS + 2];
+    now[..PADS].copy_from_slice(&pads);
+    now[PADS..].copy_from_slice(&buses);
     let id = egui::Id::new(("juke-levels", tid.0));
-    let mut shown: [f32; PADS] = ctx.data(|d| d.get_temp(id)).unwrap_or([0.0; PADS]);
+    let mut shown: [f32; PADS + 2] = ctx.data(|d| d.get_temp(id)).unwrap_or([0.0; PADS + 2]);
     let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.25);
     let fall = (-dt * 6.0).exp();
     let mut moving = false;
@@ -201,7 +205,9 @@ fn pad_levels(app: &SoundApp, ctx: &egui::Context, tid: TrackId) -> [f32; PADS] 
     if moving {
         ctx.request_repaint();
     }
-    shown
+    let mut pads = [0.0; PADS];
+    pads.copy_from_slice(&shown[..PADS]);
+    (pads, [shown[PADS], shown[PADS + 1]])
 }
 
 /// Remembers `r` as a place a dropped audio file loads into `slot`, outlined while files are
@@ -569,7 +575,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
 }
 
 /// Bus A, Bus B and the output, each a strip with four effect slots, a fader and a meter.
-fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32; 2], [f32; 2], bool), out: &mut Out) {
+fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32; 2], [f32; 2], bool), buses: [f32; 2], out: &mut Out) {
     let strips = [
         ("BUS A", "return_a", SLATE_TOP, SLATE_BOTTOM),
         ("BUS B", "return_b", SLATE_TOP, SLATE_BOTTOM),
@@ -599,8 +605,11 @@ fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32
         if let Some(x) = widgets::fader_cream(ui, fr, db, egui::Id::new(("juke-bus-fader", tid.0, i)), STRIP_CAP) {
             out.set(param, x.clamp(-48.0, 6.0));
         }
-        // The output meters the track; the buses' own meters come with their effects.
-        let (level, hold, clip) = if i == 2 { out_meter } else { ([0.0; 2], [0.0; 2], false) };
+        // The output meters the track; a bus its level as it returns into the kit.
+        let (level, hold, clip) = match buses.get(i) {
+            Some(&b) => ([b; 2], [b; 2], false),
+            None => out_meter,
+        };
         for (c, x) in [lane.max.x - 15.0, lane.max.x - 7.0].into_iter().enumerate() {
             let mr = Rect::from_min_max(pos2(x, lane.min.y), pos2(x + 6.0, lane.max.y));
             widgets::meter(ui, mr, level[c], hold[c], clip);

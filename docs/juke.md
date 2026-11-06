@@ -224,13 +224,15 @@ commit. Both kinds ship (owner's decision):
 step grid (in the MIDI Editor for a pattern clip), the Juke window (kit view, pad edit view,
 honeycomb), Track › New Beat, the effects buses (`mix.kit_fx`; each effect is a module with an id
 from `KitFx::module_id`, so the module commands and FireStation's full editors work on it) and five
-starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). Still to do:
+starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). The pads and
+both buses meter through Juke's readouts (8-bit dB codes, three to a slot). Still to do:
 
 - **The first recorded kit** (SM Drums): blocked on the owner. Someone has to fetch the kit, confirm
   its licence on its download page, trim it to 4 layers × 4 round-robins and publish it as a
   `kits-v1` release asset; the in-app download (the `ml-models` mechanism) is built against that.
-- **Bus meters:** the Bus A and Bus B strips show no level yet (the instrument's readouts carry the
-  16 pad meters); the output strip meters the track.
+  The kit (SFZ Instruments lists it as public domain, version 1.2, 2.2 GB of WAV) is out of reach
+  of the agent sessions: its site is outside their network and its GitHub org outside their
+  repository access.
 
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the
