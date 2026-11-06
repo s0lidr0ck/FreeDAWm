@@ -251,7 +251,7 @@ fn sample_tools(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: Trac
         ("Reverse", "reverse", "Play the sample backwards"),
     ];
     for (i, (label, op, help)) in ops.iter().enumerate() {
-        let b = Rect::from_min_size(pos2(r.min.x + i as f32 * 104.0, r.min.y + 4.0), vec2(96.0, 28.0));
+        let b = Rect::from_min_size(pos2(r.min.x + i as f32 * 92.0, r.min.y + 4.0), vec2(86.0, 28.0));
         let resp = button(ui, p, b, label, has, ("edit", *op)).on_hover_text(*help);
         if resp.clicked() {
             match app.run("mix.sampler_edit", json!({"track": tid.0, "op": op})) {
@@ -260,7 +260,70 @@ fn sample_tools(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: Trac
             }
         }
     }
-    small_knob(app, ui, p, pos2(r.min.x + 330.0, r.min.y - 4.0), tid, ins, "loop_xfade", "Loop Crossfade");
+    if !slicing(ins) {
+        small_knob(app, ui, p, pos2(r.min.x + 292.0, r.min.y - 4.0), tid, ins, "loop_xfade", "Loop Crossfade");
+        let b = Rect::from_min_size(pos2(r.max.x - 110.0, r.min.y + 4.0), vec2(110.0, 28.0));
+        let resp = button(ui, p, b, "Slice…", has, "slice-start").on_hover_text("Cut the sample at its hits and play a slice on each key");
+        if resp.clicked() {
+            run_status(app, "mix.sampler_slice", json!({"track": tid.0, "by": "hits"}));
+        }
+        return;
+    }
+    // Slice mode: re-slice by hits, beats or equal parts, write the slices into a MIDI clip, or
+    // play the picked slice up and down the keyboard.
+    let x = r.min.x + 282.0;
+    let tips = ["Slice at each hit", "Slice on the beat grid (the sample's tempo)", "Slice into 16 equal parts"];
+    for (i, ((label, by), tip)) in [("Hits", "hits"), ("Beats", "beats"), ("Equal", "equal")].iter().zip(tips).enumerate() {
+        let pr = Rect::from_min_size(pos2(x + i as f32 * 58.0, r.min.y + 5.0), vec2(54.0, 26.0));
+        if pill(ui, p, pr, label, false, ("slice-by", *by)).on_hover_text(tip).clicked() {
+            run_status(app, "mix.sampler_slice", json!({"track": tid.0, "by": by}));
+        }
+    }
+    let midi = Rect::from_min_size(pos2(r.max.x - 192.0, r.min.y + 4.0), vec2(78.0, 28.0));
+    if button(ui, p, midi, "To MIDI", true, "slice-midi").on_hover_text("A MIDI clip that plays the slices in order, to rearrange").clicked() {
+        run_status(app, "mix.sampler_slice_midi", json!({"track": tid.0}));
+    }
+    let picked = picked_slice(ui, tid);
+    let keys = Rect::from_min_size(pos2(r.max.x - 106.0, r.min.y + 4.0), vec2(106.0, 28.0));
+    let resp = button(ui, p, keys, "Slice → Keys", picked.is_some(), "slice-keys")
+        .on_hover_text("Play the picked slice up and down the keyboard")
+        .on_disabled_hover_text("Click a slice in the waveform first");
+    if resp.clicked()
+        && let Some(k) = picked
+    {
+        run_status(app, "mix.sampler_slice_play", json!({"track": tid.0, "slice": k}));
+    }
+}
+
+/// Runs a command, putting its error (or nothing) in the status line.
+fn run_status(app: &mut SoundApp, id: &str, params: serde_json::Value) {
+    if let Err(e) = app.run(id, params) {
+        app.ui.status = e;
+    }
+}
+
+/// Whether the Sampler is in Slice mode.
+fn slicing(ins: &Insert) -> bool {
+    param(ins, "play_mode").round() as i32 == 2
+}
+
+/// The slices in use: (number from 1 in order, parameter id, start percent), in order.
+fn slices(ins: &Insert) -> Vec<(usize, String, f32)> {
+    let n = (param(ins, "slice_count").round().max(0.0) as usize).min(soundcraft_dsp::slices::MAX_SLICES);
+    let mut v: Vec<(String, f32)> = (1..=n)
+        .map(|k| format!("slice_{k}"))
+        .map(|id| {
+            let at = param(ins, &id);
+            (id, at)
+        })
+        .collect();
+    v.sort_by(|a, b| a.1.total_cmp(&b.1));
+    v.into_iter().enumerate().map(|(i, (id, at))| (i + 1, id, at)).collect()
+}
+
+/// The slice picked in the waveform (numbered from 1), if any.
+fn picked_slice(ui: &Ui, tid: TrackId) -> Option<usize> {
+    ui.ctx().data(|d| d.get_temp::<usize>(egui::Id::new(("lift-slice-pick", tid.0))))
 }
 
 /// The detected root note and Use as Root, at the band's right.
@@ -366,6 +429,10 @@ fn waveform(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
         }
     }
     p.rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, Color32::from_black_alpha(120)), StrokeKind::Inside);
+    if slicing(ins) {
+        slice_lines(app, ui, p, r, &resp, tid, ins);
+        return;
+    }
     // Markers: cream lines with tabs.
     let shown: Vec<(&str, f32, &str, bool)> = MARKERS
         .iter()
@@ -418,6 +485,71 @@ fn waveform(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
         && let (Some(id), Some(pos)) = (grabbed.as_deref(), resp.interact_pointer_pos())
     {
         set(app, tid, id, ((pos.x - r.min.x) / r.width().max(1.0) * 100.0).clamp(0.0, 100.0));
+    }
+    if resp.drag_stopped() {
+        ui.ctx().data_mut(|d| d.remove::<Option<String>>(grab_id));
+    }
+}
+
+/// Slice mode's waveform overlay: a numbered line at each slice start (drag to move it), the
+/// picked slice shaded (click to pick).
+fn slice_lines(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, resp: &egui::Response, tid: TrackId, ins: &Insert) {
+    let x_of = |pct: f32| r.min.x + r.width() * (pct / 100.0).clamp(0.0, 1.0);
+    let list = slices(ins);
+    let picked = picked_slice(ui, tid);
+    for (i, (k, _, at)) in list.iter().enumerate() {
+        let next = list.get(i + 1).map_or(100.0, |n| n.2);
+        if picked == Some(*k) {
+            p.rect_filled(Rect::from_x_y_ranges(x_of(*at)..=x_of(next), r.y_range()), 0.0, CREAM.gamma_multiply(0.12));
+        }
+        let x = x_of(*at);
+        p.line_segment([pos2(x, r.min.y), pos2(x, r.max.y)], Stroke::new(1.5, CREAM));
+        let label = k.to_string();
+        let tab = Rect::from_min_size(pos2(x, r.min.y), vec2(8.0 + 7.0 * label.len() as f32, 15.0));
+        p.rect_filled(tab, CornerRadius::same(3), if picked == Some(*k) { AMBER } else { CREAM });
+        p.text(tab.center(), Align2::CENTER_CENTER, label, bold(10.0), INK);
+    }
+    if list.is_empty() {
+        p.text(pos2(r.center().x, r.min.y + 14.0), Align2::CENTER_CENTER, "No slices yet: Slice by Hits, Beats or Equal", regular(12.0), DIM);
+    }
+    let grab_id = ui.id().with(("lift-slice-grab", tid.0));
+    let nearest = |x: f32| {
+        list.iter()
+            .map(|(_, id, at)| (id.clone(), (x_of(*at) - x).abs()))
+            .filter(|(_, d)| *d <= 6.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    };
+    if let Some(h) = resp.hover_pos()
+        && nearest(h.x).is_some()
+    {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+    }
+    if resp.clicked()
+        && let Some(at) = resp.interact_pointer_pos()
+    {
+        let pct = (at.x - r.min.x) / r.width().max(1.0) * 100.0;
+        let k = list.iter().rev().find(|(_, _, s)| *s <= pct).map(|(k, _, _)| *k);
+        let key = egui::Id::new(("lift-slice-pick", tid.0));
+        ui.ctx().data_mut(|d| {
+            if let Some(k) = k {
+                d.insert_temp(key, k);
+            } else {
+                d.remove::<usize>(key);
+            }
+        });
+    }
+    if resp.drag_started()
+        && let Some(at) = resp.interact_pointer_pos()
+    {
+        let g = nearest(at.x);
+        ui.ctx().data_mut(|d| d.insert_temp(grab_id, g));
+    }
+    let grabbed = ui.ctx().data(|d| d.get_temp::<Option<String>>(grab_id)).flatten();
+    if resp.dragged()
+        && let (Some(id), Some(at)) = (grabbed.as_deref(), resp.interact_pointer_pos())
+    {
+        set(app, tid, id, ((at.x - r.min.x) / r.width().max(1.0) * 100.0).clamp(0.0, 100.0));
     }
     if resp.drag_stopped() {
         ui.ctx().data_mut(|d| d.remove::<Option<String>>(grab_id));
@@ -778,7 +910,7 @@ fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     let row = |k: f32| y + 22.0 + k * 34.0;
     let label = |yy: f32, t: &str| p.text(pos2(x, yy + 13.0), Align2::LEFT_CENTER, t, regular(12.5), DIM);
     label(row(0.0), "Play");
-    choice_pills(app, ui, p, pos2(x + 64.0, row(0.0)), tid, ins, "play_mode", &["Gate", "One-shot"], 84.0);
+    choice_pills(app, ui, p, pos2(x + 64.0, row(0.0)), tid, ins, "play_mode", &["Gate", "One-shot", "Slice"], 84.0);
     label(row(1.0), "Loop");
     choice_pills(app, ui, p, pos2(x + 64.0, row(1.0)), tid, ins, "loop_mode", &["Off", "Forward", "Ping-pong"], 84.0);
     label(row(2.0), "Voices");
@@ -846,7 +978,11 @@ fn keyboard(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
             wi += 1.0;
         }
     }
-    let in_range = |n: u8| n >= lo && n <= hi;
+    let slice_keys = slicing(ins).then(|| (root, root.saturating_add(slices(ins).len().min(127) as u8).saturating_sub(1)));
+    let in_range = |n: u8| match slice_keys {
+        Some((a, b)) => n >= a && n <= b,
+        None => n >= lo && n <= hi,
+    };
     for (n, k) in keys.iter().filter(|(n, _)| !black(*n)) {
         let fill = if *n == root {
             AMBER
@@ -872,8 +1008,10 @@ fn keyboard(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
     }
     let edge = |n: u8, upper: bool| keys.iter().find(|(k, _)| *k == n).map_or(r.min.x, |(_, k)| if upper { k.max.x } else { k.min.x });
     let (xl, xh) = (edge(lo, false), edge(hi, true));
-    for x in [xl, xh] {
-        p.line_segment([pos2(x, r.min.y - 2.0), pos2(x, r.max.y + 2.0)], Stroke::new(3.0, AMBER));
+    if slice_keys.is_none() {
+        for x in [xl, xh] {
+            p.line_segment([pos2(x, r.min.y - 2.0), pos2(x, r.max.y + 2.0)], Stroke::new(3.0, AMBER));
+        }
     }
     let key_at = |x: f32, y: f32| {
         keys.iter()

@@ -58,6 +58,33 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             edit
         ),
+        cmd!(
+            "mix.sampler_slice",
+            "Slice Sampler Sample",
+            [],
+            None,
+            "{track?, by: hits|beats|equal, sensitivity?: 0..100 (hits, default 50), per_beat?: 1..16 (beats, default 2), bpm? (beats; default the sample's tempo), count?: 1..64 (equal, default 16)}: cuts the Sampler's sample into slices (at most 64) and switches it to Slice mode, where the root key plays the first slice and each key up the next → {track, slices: [percent…]}",
+            has_selection,
+            slice
+        ),
+        cmd!(
+            "mix.sampler_slice_play",
+            "Play Slice Across Keys",
+            [],
+            None,
+            "{track?, slice: 1..}: the Sampler plays that slice up and down the keyboard (Gate mode, its start and end on the slice's) → {track, start, end}",
+            has_selection,
+            slice_play
+        ),
+        cmd!(
+            "mix.sampler_slice_midi",
+            "Slices to MIDI Clip",
+            [],
+            None,
+            "{track?, at?: position (default the selection start)}: a MIDI clip on the Sampler's track that plays the slices in their original order and timing, to rearrange → {track, clip, notes}",
+            has_selection,
+            slice_midi
+        ),
         cmd!("mix.sampler_clear", "Clear Sampler Sample", [], None, "{track?}: the track's Sampler stops playing its sample", has_selection, clear),
     ]
 }
@@ -338,6 +365,141 @@ fn reversed_slices(positions: &[&str], marker: &dyn Fn(&str) -> Option<f32>, val
     for (k, v) in slices.iter().zip(new) {
         values.push((k.to_string(), v));
     }
+}
+
+/// The track's Sampler insert, or why there is none.
+fn sampler_insert<'a>(e: &'a Engine, id: &str, t: TrackId) -> Result<&'a Insert> {
+    e.session()
+        .track(t)
+        .and_then(|tr| tr.instrument.as_ref())
+        .filter(|i| i.plugin == SAMPLER)
+        .ok_or_else(|| bad(id, "the track's instrument is not the sampler"))
+}
+
+/// A Sampler parameter's value (its default when unset).
+fn value_of(ins: &Insert, k: &str) -> f32 {
+    ins.params.get(k).copied().or_else(|| soundcraft_dsp::plugin_info(SAMPLER).and_then(|i| i.param(k)).map(|x| x.default)).unwrap_or(0.0)
+}
+
+/// The slices in use, as percents of the sample, in order.
+fn slice_starts(ins: &Insert) -> Vec<f32> {
+    let n = (value_of(ins, "slice_count").round().max(0.0) as usize).min(soundcraft_dsp::slices::MAX_SLICES);
+    let mut v: Vec<f32> = (1..=n).map(|k| value_of(ins, &format!("slice_{k}"))).collect();
+    v.sort_by(f32::total_cmp);
+    v
+}
+
+fn slice(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_slice";
+    let t = instrument_track(e, id, p)?;
+    let by = str_param(p, "by").unwrap_or("hits").to_string();
+    let ins = sampler_insert(e, id, t)?;
+    let src = ins.sample.ok_or_else(|| bad(id, "the sampler has no sample"))?;
+    let s = e.session();
+    let audio = s.pool.get(src).ok_or_else(|| bad(id, "the sample's audio is missing"))?;
+    let len = audio.frames();
+    if len == 0 {
+        return Err(bad(id, "the sample is empty"));
+    }
+    let rate = audio.sample_rate() as f32;
+    let mono = || {
+        let w = audio.window(0, len);
+        soundcraft_dsp::beat::downmix(&w)
+    };
+    let frames: Vec<usize> = match by.as_str() {
+        "hits" => soundcraft_dsp::slices::hits(&mono(), rate, f32_or(p, "sensitivity", 50.0)),
+        "beats" => {
+            let per = i64_or(p, "per_beat", 2).clamp(1, 16) as u32;
+            let bpm = match p.get("bpm").and_then(Value::as_f64) {
+                Some(b) => b,
+                None => sample_tempo(ins, &mono(), rate),
+            };
+            soundcraft_dsp::slices::grid(len, rate, bpm, per)
+        }
+        "equal" => soundcraft_dsp::slices::equal(len, i64_or(p, "count", 16).clamp(1, 64) as usize),
+        other => return Err(bad(id, format!("unknown `by` `{other}`: hits, beats or equal"))),
+    };
+    let pct: Vec<f32> = frames.iter().map(|f| (*f as f64 / len as f64 * 100.0) as f32).collect();
+    let tr = e.session_mut().track_mut(t).and_then(|tr| tr.instrument.as_mut()).ok_or_else(|| bad(id, "no track"))?;
+    tr.params.insert("slice_count".into(), pct.len() as f32);
+    for k in 1..=soundcraft_dsp::slices::MAX_SLICES {
+        tr.params.insert(format!("slice_{k}"), pct.get(k - 1).copied().unwrap_or(0.0));
+    }
+    tr.params.insert("play_mode".into(), 2.0);
+    Ok(json!({"track": t, "slices": pct}))
+}
+
+/// A sample's tempo for a beat grid: its `sample_bpm` when set, else what beat tracking finds,
+/// else 120.
+fn sample_tempo(ins: &Insert, mono: &[f32], rate: f32) -> f64 {
+    if let Some(b) = ins.params.get("sample_bpm").filter(|b| b.is_finite() && **b > 0.0) {
+        return f64::from(*b);
+    }
+    let found = soundcraft_dsp::beat::track_beats(mono, rate, &soundcraft_dsp::beat::BeatOptions::default()).bpm;
+    if found.is_finite() && found > 0.0 { found } else { 120.0 }
+}
+
+fn slice_play(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_slice_play";
+    let t = instrument_track(e, id, p)?;
+    let ins = sampler_insert(e, id, t)?;
+    let starts = slice_starts(ins);
+    let k = i64_or(p, "slice", 0);
+    let i = usize::try_from(k)
+        .ok()
+        .and_then(|k| k.checked_sub(1))
+        .filter(|i| *i < starts.len())
+        .ok_or_else(|| bad(id, format!("no slice {k}: the sample has {} slices", starts.len())))?;
+    let start = starts.get(i).copied().unwrap_or(0.0);
+    let end = starts.get(i + 1).copied().unwrap_or(100.0);
+    let tr = e.session_mut().track_mut(t).and_then(|tr| tr.instrument.as_mut()).ok_or_else(|| bad(id, "no track"))?;
+    tr.params.insert("start".into(), start);
+    tr.params.insert("end".into(), end);
+    tr.params.insert("play_mode".into(), 0.0);
+    tr.params.insert("loop_mode".into(), 0.0);
+    Ok(json!({"track": t, "start": start, "end": end}))
+}
+
+fn slice_midi(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.sampler_slice_midi";
+    let t = instrument_track(e, id, p)?;
+    let ins = sampler_insert(e, id, t)?;
+    let starts = slice_starts(ins);
+    if starts.is_empty() {
+        return Err(bad(id, "slice the sample first"));
+    }
+    let src = ins.sample.ok_or_else(|| bad(id, "the sampler has no sample"))?;
+    let root = value_of(ins, "root_note").round().clamp(0.0, 127.0) as u8;
+    let s = e.session();
+    let len = s.pool.get(src).map_or(0, |a| a.frames()) as i64;
+    if len == 0 {
+        return Err(bad(id, "the sample is empty"));
+    }
+    let at = match position_param(e, id, p, "at")? {
+        Some(a) => a,
+        None => s.edit.selection.start,
+    }
+    .max(0);
+    let sr = s.sample_rate;
+    let base = s.tempo.samples_to_ticks(at, sr);
+    let tick = |frame: i64| s.tempo.samples_to_ticks(at + frame, sr) - base;
+    let mut seq = soundcraft_midi::Sequence::default();
+    for (i, st) in starts.iter().enumerate() {
+        let a = (f64::from(*st) / 100.0 * len as f64) as i64;
+        let b = starts.get(i + 1).map_or(len, |n| (f64::from(*n) / 100.0 * len as f64) as i64);
+        let Ok(pitch) = u8::try_from(usize::from(root) + i) else { break };
+        if pitch > 127 {
+            break;
+        }
+        let (ta, tb) = (tick(a), tick(b));
+        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start: ta, length: (tb - ta).max(1) });
+    }
+    let notes = seq.notes.len();
+    let s = e.session_mut();
+    let cid = s.new_clip_id();
+    let name = format!("{} slices", s.source(src).map_or("Sample", |x| x.name.as_str()));
+    crate::edit::place_clip(s, t, soundcraft_model::Clip::midi(cid, name, at, len, seq));
+    Ok(json!({"track": t, "clip": cid, "notes": notes}))
 }
 
 fn clear(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -731,5 +893,63 @@ mod tests {
         let (a, params) = audio(&e);
         assert_eq!(a.len(), 4000, "undo brings the original back");
         assert_eq!(params["start"], 50.0);
+    }
+
+    #[test]
+    fn slices_a_sample_plays_a_slice_across_keys_and_writes_a_midi_clip() {
+        let mut e = Engine::default();
+        let t = instrument_track(&mut e);
+        // Four decaying hits a quarter second apart (1 s at 48 kHz).
+        let mut x = vec![0.0f32; 48_000];
+        for k in 0..4 {
+            for i in 0..3000 {
+                x[k * 12_000 + i] = 0.8 * (-(i as f32) / 400.0).exp() * ((i as f32) * 0.25).sin();
+            }
+        }
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![x] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        crate::io::load_sampler_bytes(&mut e, t, "hits.wav", &soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        let r = e.execute("mix.sampler_slice", &json!({"track": t.0, "by": "hits"})).unwrap();
+        let slices: Vec<f64> = r["slices"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert_eq!(slices.len(), 4, "{r}");
+        for (s, want) in slices.iter().zip([0.0, 25.0, 50.0, 75.0]) {
+            assert!((s - want).abs() < 1.2, "{s} vs {want}");
+        }
+        let ins = e.session().track(t).unwrap().instrument.clone().unwrap();
+        assert_eq!(ins.params["play_mode"], 2.0, "Slice mode");
+        assert_eq!(ins.params["slice_count"], 4.0);
+        // The root (C3, 60) plays the first hit; 61 the second.
+        add_notes(&mut e, t, &[(61, 0, 1)]);
+        let out = render(&e, 1);
+        assert!(peak(&out[0][0..2000]) > 0.3, "the second slice sounds at once");
+        assert!(peak(&out[0][13_000..24_000]) < 1e-3, "and stops before the third");
+        // Equal and beat grids.
+        let r = e.execute("mix.sampler_slice", &json!({"track": t.0, "by": "equal", "count": 8})).unwrap();
+        assert_eq!(r["slices"].as_array().unwrap().len(), 8);
+        let r = e.execute("mix.sampler_slice", &json!({"track": t.0, "by": "beats", "bpm": 120.0, "per_beat": 2})).unwrap();
+        assert_eq!(r["slices"].as_array().unwrap().len(), 4, "a second of 120 bpm in eighths: {r}");
+        // One slice across the keys.
+        let r = e.execute("mix.sampler_slice_play", &json!({"track": t.0, "slice": 2})).unwrap();
+        assert_eq!((r["start"].as_f64(), r["end"].as_f64()), (Some(25.0), Some(50.0)));
+        let ins = e.session().track(t).unwrap().instrument.clone().unwrap();
+        assert_eq!((ins.params["play_mode"], ins.params["start"], ins.params["end"]), (0.0, 25.0, 50.0));
+        assert!(e.execute("mix.sampler_slice_play", &json!({"track": t.0, "slice": 9})).is_err());
+        // Slices to MIDI: four notes, a quarter second apart, root upwards.
+        let clips_before = e.session().track(t).unwrap().playlist().map_or(0, |p| p.clips.len());
+        let r = e.execute("mix.sampler_slice_midi", &json!({"track": t.0, "at": 0})).unwrap();
+        assert_eq!(r["notes"], 4);
+        let tr = e.session().track(t).unwrap();
+        let clips = &tr.playlist().unwrap().clips;
+        assert_eq!(clips.len(), clips_before + 1);
+        let seq = clips.iter().find_map(|c| match &c.content {
+            soundcraft_model::ClipContent::Midi { sequence } if c.name.ends_with("slices") => Some(sequence.clone()),
+            _ => None,
+        });
+        let seq = seq.unwrap();
+        let pitches: Vec<u8> = seq.notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![60, 61, 62, 63]);
+        // 120 bpm: a quarter second is half a quarter note.
+        assert!((seq.notes[1].start - TICKS_PER_QUARTER / 2).abs() <= 2, "{}", seq.notes[1].start);
+        assert!(e.execute("mix.sampler_slice", &json!({"track": t.0, "by": "chop"})).is_err());
     }
 }

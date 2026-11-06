@@ -19,7 +19,7 @@ use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
 use crate::util::{Rng, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Unit, db_to_gain};
 
-const PLAY_MODES: &[&str] = &["Gate", "One Shot"];
+const PLAY_MODES: &[&str] = &["Gate", "One Shot", "Slice"];
 const LOOP_MODES: &[&str] = &["Off", "Forward", "Ping-Pong"];
 /// Filter types, in the order of the `filter_type` choice.
 pub const FILTER_TYPES: &[&str] = &["Off", "Low-pass", "High-pass", "Band-pass"];
@@ -62,6 +62,26 @@ const GLIDE: usize = 31;
 const VOICE_MODE: usize = 32;
 const PAN: usize = 33;
 const LOOP_XFADE: usize = 34;
+const SLICE_COUNT: usize = 35;
+/// `slice_1`: the first slice's start; the 64 slices follow in order.
+const SLICE_FIRST: usize = 36;
+const SLICES: usize = crate::slices::MAX_SLICES;
+
+/// A slice's start, as a percent of the sample (grouped apart from the sound's parameters).
+const fn slice(id: &'static str, name: &'static str) -> ParamInfo {
+    ParamInfo {
+        id,
+        name,
+        min: 0.0,
+        max: 100.0,
+        default: 0.0,
+        unit: Unit::Percent,
+        taper: Taper::Linear,
+        choices: &[],
+        display: None,
+        group: "Slices",
+    }
+}
 
 fn pan_display(v: f32) -> String {
     let v = v.round();
@@ -76,7 +96,7 @@ fn pan_display(v: f32) -> String {
 
 // New parameters go at the end: sessions and presets store them by id, and the indices above
 // are the order of this table.
-static SAMPLER_PARAMS: [ParamInfo; 35] = [
+static SAMPLER_PARAMS: [ParamInfo; 100] = [
     lin("root_note", "Root Note", 0.0, 127.0, 60.0, Unit::None),
     lin("transpose", "Transpose", -48.0, 48.0, 0.0, Unit::Semitones),
     lin("fine_tune", "Fine Tune", -100.0, 100.0, 0.0, Unit::Cents),
@@ -123,6 +143,71 @@ static SAMPLER_PARAMS: [ParamInfo; 35] = [
         group: "",
     },
     lin("loop_xfade", "Loop Crossfade", 0.0, 50.0, 0.0, Unit::Percent),
+    lin("slice_count", "Slices", 0.0, 64.0, 0.0, Unit::None),
+    slice("slice_1", "Slice 1 Start"),
+    slice("slice_2", "Slice 2 Start"),
+    slice("slice_3", "Slice 3 Start"),
+    slice("slice_4", "Slice 4 Start"),
+    slice("slice_5", "Slice 5 Start"),
+    slice("slice_6", "Slice 6 Start"),
+    slice("slice_7", "Slice 7 Start"),
+    slice("slice_8", "Slice 8 Start"),
+    slice("slice_9", "Slice 9 Start"),
+    slice("slice_10", "Slice 10 Start"),
+    slice("slice_11", "Slice 11 Start"),
+    slice("slice_12", "Slice 12 Start"),
+    slice("slice_13", "Slice 13 Start"),
+    slice("slice_14", "Slice 14 Start"),
+    slice("slice_15", "Slice 15 Start"),
+    slice("slice_16", "Slice 16 Start"),
+    slice("slice_17", "Slice 17 Start"),
+    slice("slice_18", "Slice 18 Start"),
+    slice("slice_19", "Slice 19 Start"),
+    slice("slice_20", "Slice 20 Start"),
+    slice("slice_21", "Slice 21 Start"),
+    slice("slice_22", "Slice 22 Start"),
+    slice("slice_23", "Slice 23 Start"),
+    slice("slice_24", "Slice 24 Start"),
+    slice("slice_25", "Slice 25 Start"),
+    slice("slice_26", "Slice 26 Start"),
+    slice("slice_27", "Slice 27 Start"),
+    slice("slice_28", "Slice 28 Start"),
+    slice("slice_29", "Slice 29 Start"),
+    slice("slice_30", "Slice 30 Start"),
+    slice("slice_31", "Slice 31 Start"),
+    slice("slice_32", "Slice 32 Start"),
+    slice("slice_33", "Slice 33 Start"),
+    slice("slice_34", "Slice 34 Start"),
+    slice("slice_35", "Slice 35 Start"),
+    slice("slice_36", "Slice 36 Start"),
+    slice("slice_37", "Slice 37 Start"),
+    slice("slice_38", "Slice 38 Start"),
+    slice("slice_39", "Slice 39 Start"),
+    slice("slice_40", "Slice 40 Start"),
+    slice("slice_41", "Slice 41 Start"),
+    slice("slice_42", "Slice 42 Start"),
+    slice("slice_43", "Slice 43 Start"),
+    slice("slice_44", "Slice 44 Start"),
+    slice("slice_45", "Slice 45 Start"),
+    slice("slice_46", "Slice 46 Start"),
+    slice("slice_47", "Slice 47 Start"),
+    slice("slice_48", "Slice 48 Start"),
+    slice("slice_49", "Slice 49 Start"),
+    slice("slice_50", "Slice 50 Start"),
+    slice("slice_51", "Slice 51 Start"),
+    slice("slice_52", "Slice 52 Start"),
+    slice("slice_53", "Slice 53 Start"),
+    slice("slice_54", "Slice 54 Start"),
+    slice("slice_55", "Slice 55 Start"),
+    slice("slice_56", "Slice 56 Start"),
+    slice("slice_57", "Slice 57 Start"),
+    slice("slice_58", "Slice 58 Start"),
+    slice("slice_59", "Slice 59 Start"),
+    slice("slice_60", "Slice 60 Start"),
+    slice("slice_61", "Slice 61 Start"),
+    slice("slice_62", "Slice 62 Start"),
+    slice("slice_63", "Slice 63 Start"),
+    slice("slice_64", "Slice 64 Start"),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
@@ -240,6 +325,8 @@ struct Voice {
     step: f64,
     forward: bool,
     looping: bool,
+    /// The frame a voice that is not looping stops at.
+    end: f64,
     env: Adsr,
     /// Current pitch in semitones from the sample's own (gliding towards `target`).
     pitch: f64,
@@ -261,6 +348,7 @@ impl Voice {
             step: 1.0,
             forward: true,
             looping: false,
+            end: 0.0,
             env: Adsr::new(),
             pitch: 0.0,
             target: 0.0,
@@ -313,6 +401,11 @@ struct Derived {
     mono: bool,
     /// Forward-loop crossfade as a fraction of the loop's length.
     xfade: f64,
+    /// Slice mode: each key from the root plays a slice.
+    slicing: bool,
+    /// Slice starts (fractions of the sample, ascending) and how many are in use.
+    slices: [f64; SLICES],
+    slice_count: usize,
 }
 
 /// A MIDI key or velocity parameter as a whole number in `lo..=127`.
@@ -411,6 +504,9 @@ impl Sampler {
                 glide: 0.0,
                 mono: false,
                 xfade: 0.0,
+                slicing: false,
+                slices: [0.0; SLICES],
+                slice_count: 0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -480,7 +576,18 @@ impl Sampler {
             glide: f64::from(time_coef(v(GLIDE) / 3.0, sr)),
             mono: self.p.choice(VOICE_MODE) == 1,
             xfade: f64::from(v(LOOP_XFADE) / 100.0).clamp(0.0, 0.5),
+            slicing: self.p.choice(PLAY_MODE) == 2,
+            slices: [0.0; SLICES],
+            slice_count: whole(v(SLICE_COUNT), 0).min(SLICES as u8) as usize,
         };
+        for (k, x) in self.d.slices.iter_mut().enumerate() {
+            *x = f64::from(self.p.v(SLICE_FIRST + k) / 100.0).clamp(0.0, 1.0);
+        }
+        // Kept in order, whatever order they were set in.
+        let used = self.d.slice_count;
+        if let Some(sl) = self.d.slices.get_mut(..used) {
+            sl.sort_by(f64::total_cmp);
+        }
         if was_mono != self.d.mono {
             self.held_len = 0;
         }
@@ -527,12 +634,16 @@ impl Sampler {
         if self.len == 0 || note < d.keys.0 || note > d.keys.1 || vel < d.vels.0 || vel > d.vels.1 {
             return;
         }
+        let gain = (1.0 - d.sens) + d.sens * f32::from(vel) / 127.0;
+        if d.slicing {
+            self.start_slice(note, gain);
+            return;
+        }
         let pitch = self.key_pitch(note);
         let step = self.step_for(pitch);
         if step <= 0.0 {
             return;
         }
-        let gain = (1.0 - d.sens) + d.sens * f32::from(vel) / 127.0;
         if d.mono {
             self.push_held(note);
             // Legato: a key pressed while another still sounds moves the pitch and keeps the
@@ -576,15 +687,49 @@ impl Sampler {
         self.begin(idx, note, gain, pitch, step);
     }
 
+    /// Slice mode: the key `note` semitones from the root plays slice `note - root` at the
+    /// sample's own pitch (plus transpose and fine tune), from its start to the next slice's.
+    fn start_slice(&mut self, note: u8, gain: f32) {
+        let d = self.d;
+        let Some(i) = usize::from(note).checked_sub(d.root as usize).filter(|i| *i < d.slice_count) else { return };
+        let len = self.len as f64;
+        let start = d.slices.get(i).copied().unwrap_or(0.0) * len;
+        let next = if i + 1 < d.slice_count { d.slices.get(i + 1).copied().unwrap_or(1.0) * len } else { len };
+        let end = if next > start { next } else { len };
+        let pitch = d.offset;
+        let step = self.step_for(pitch);
+        if step <= 0.0 || start >= len {
+            return;
+        }
+        self.stop_note(note);
+        let idx = self.voices.iter().position(|v| !v.active()).or_else(|| self.quietest()).unwrap_or(0);
+        if let Some(v) = self.voices.get_mut(idx) {
+            *v = Voice { note, held: true, gain, pos: start, step, forward: true, looping: false, end, pitch, target: pitch, ..Voice::new() };
+            v.env.gate_on();
+            v.fenv.trigger();
+        }
+        self.control = 0;
+    }
+
+    /// The voice to steal: a released one before a held one, the quietest first.
+    fn quietest(&self) -> Option<usize> {
+        self.voices
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| (a.held, a.env.level).partial_cmp(&(b.held, b.env.level)).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+    }
+
     /// Starts voice `idx` from the sample start (gliding from the last note's pitch).
     fn begin(&mut self, idx: usize, note: u8, gain: f32, pitch: f64, step: f64) {
         let d = self.d;
         let start = d.span.0 * self.len.saturating_sub(1) as f64;
         let looping = self.loop_frames().is_some_and(|(_, end)| start < end);
+        let end = self.end_frame();
         let from = if d.glide > 0.0 { self.last_pitch.unwrap_or(pitch) } else { pitch };
         let step = if from == pitch { step } else { self.step_for(from) };
         if let Some(v) = self.voices.get_mut(idx) {
-            *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, pitch: from, target: pitch, ..Voice::new() };
+            *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, end, pitch: from, target: pitch, ..Voice::new() };
             v.env.gate_on();
             v.fenv.trigger();
         }
@@ -614,7 +759,7 @@ impl Sampler {
     }
 
     fn stop_note(&mut self, note: u8) {
-        if self.d.mono {
+        if self.d.mono && !self.d.slicing {
             self.remove_held(note);
             let back = self.held_len.checked_sub(1).and_then(|i| self.held.get(i)).copied();
             let sounding = self.voices.first().is_some_and(|v| v.held && v.note == note);
@@ -725,7 +870,6 @@ impl Sampler {
     fn render_frame(&mut self, io: &mut [Vec<f32>], ch: usize, n: usize, level: f32, pan: (f32, f32)) {
         let Some(sample) = self.sample.as_deref() else { return };
         let nch = sample.num_channels();
-        let end = self.end_frame();
         let mode = self.d.loop_mode;
         let region = self.loop_frames();
         let d = self.d;
@@ -771,7 +915,7 @@ impl Sampler {
                 }
             }
             let r = if v.looping { region } else { None };
-            advance(v, end, r, mode);
+            advance(v, v.end, r, mode);
         }
     }
 }
@@ -1478,6 +1622,38 @@ mod tests {
         };
         assert!(jump(0.0) > 0.4, "a hard seam: {}", jump(0.0));
         assert!(jump(25.0) < 0.01, "crossfaded: {}", jump(25.0));
+    }
+
+    #[test]
+    fn slice_mode_plays_one_slice_per_key_from_the_root() {
+        // Four plateaus, 1000 frames each: 0.1, 0.2, 0.3, 0.4.
+        let data: Vec<f32> = (0..4000).map(|i| 0.1 * (1 + i / 1000) as f32).collect();
+        let mut s = sampler(mono(SR, data));
+        s.set_param("velocity", 0.0);
+        s.set_param("attack", 0.1);
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 2.0);
+        s.set_param("slice_count", 4.0);
+        // Set out of order: the Sampler sorts them.
+        for (k, at) in [(1, 0.0), (2, 75.0), (3, 25.0), (4, 50.0)] {
+            s.set_param(&format!("slice_{k}"), at);
+        }
+        s.note_on(0, 62, 127); // root (60) + 2: the third slice
+        let out = run(&mut s, 2000);
+        assert!((out[0][100] - 0.3).abs() < 1e-3, "the third slice: {}", out[0][100]);
+        assert!(peak(&out[0][1010..]) < 1e-3, "stops at the next slice");
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 200);
+        assert!((out[0][100] - 0.1).abs() < 1e-3, "the root plays the first slice, at its own pitch");
+        s.note_off(0, 60);
+        run(&mut s, 200);
+        s.note_on(0, 64, 127); // past the last slice
+        s.note_on(0, 59, 127); // below the root
+        assert_eq!(peak(&run(&mut s, 500)[0]), 0.0);
+        s.note_on(0, 63, 127);
+        let out = run(&mut s, 1200);
+        assert!((out[0][100] - 0.4).abs() < 1e-3, "the last slice runs to the end");
+        assert!(peak(&out[0][1010..]) < 1e-3);
     }
 
     #[test]

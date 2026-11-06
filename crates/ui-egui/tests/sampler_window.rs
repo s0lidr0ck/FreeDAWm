@@ -113,6 +113,17 @@ fn dropping_audio_with_a_path_loads_the_sampler() {
     }
     assert_eq!(instrument(&h, keys).params.get("loop_mode").copied(), Some(2.0));
     h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    // Slice… cuts the sample and switches to Slice mode, where the slice tools show.
+    h.get_by_label("Slice…").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let sliced = instrument(&h, keys);
+    assert_eq!(sliced.params.get("play_mode").copied(), Some(2.0));
+    assert!(sliced.params.get("slice_count").copied().unwrap_or(0.0) >= 1.0);
+    let _ = h.get_by_label("To MIDI");
+    let _ = h.get_by_label("Slice → Keys");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
     // The 220 Hz tone is A (MIDI 57); the root is still middle C until Use as Root.
     assert_eq!(ins.params.get("root_note").copied(), Some(60.0));
     h.get_by_label("Use as Root").click();
