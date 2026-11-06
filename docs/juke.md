@@ -3,7 +3,8 @@
 > **Status:** design, approved for phase 1 · **Written:** 2026-11-06 · **Owner decisions
 > (2026-11-06):** the name Juke; pads and a step grid both; patterns as clips on the timeline
 > (pattern-backed MIDI clips); 16 pads; one stereo output; two effects buses with four FireStation
-> slots each, every pad sending to both; starter kits both synth-rendered and recorded
+> slots each, every pad sending to both, and four more slots on the output; starter kits both
+> synth-rendered and recorded; the kit view's look (below)
 
 FreeDAWm gets **Juke**, a drum machine that plays samples and synthesized voices from one set of
 16 pads, and a step sequencer whose patterns are clips on an instrument track (**Juke patterns**,
@@ -66,10 +67,14 @@ bigger grid come later). Each pad:
   Filter, Delay, Reverb, ChamberMade, Tape, …), run in order, with a return level. Every pad sends
   to both. The buses sum with the dry pads into **one stereo output** (no multi-out: a "split pads to
   tracks" command can come later if it is wanted).
+- **Output:** **four slots** of its own for FireStation effects, run in order on the summed kit
+  (the kit's glue: Comp, Tape or Sat, CleanQ, LevelUp), then the output level. They are part of the
+  kit, so a kit preset carries its sound; processing that belongs to the mix stays on the track's
+  inserts.
 - **Kit-wide:** master level and humanize (small random level and timing per hit, seeded so a
   bounce is repeatable).
 
-**Hosting effects inside the instrument** is new: Juke owns up to eight instances of built-in
+**Hosting effects inside the instrument** is new: Juke owns up to twelve instances of built-in
 FireStation plugins (made through the registry, prepared with the instrument, run on its audio
 thread with no allocation). Their parameters are stored with the insert (below), changed through a
 command so they undo and automate, and their existing editors open from the Juke window. This
@@ -126,7 +131,7 @@ Everything is a command, so the UI, MCP and the control channel share it:
 
 - `mix.kit_slot` `{track, slot, name?, note?, source?: sample|synth|both, voice?, stack?: [...], choke?, color?}`
 - `mix.kit_sample_load` `{track, slot, path, layer?, round_robin?}` / `mix.kit_sample_clear`
-- `mix.kit_fx` `{track, bus: a|b, slot: 1-4, plugin?: id|null, params?: {...}, return?}`
+- `mix.kit_fx` `{track, bus: a|b|out, slot: 1-4, plugin?: id|null, params?: {...}, return?}`
 - `mix.kit_randomize` `{track, slots?, amount?}` (DrumComputer: new sounds within each slot's role)
 - `mix.kit_preset_save` / `mix.kit_preset_load` (a kit file holding its samples)
 - `pattern.new` `{track, start, bars?, steps?}`: a pattern clip, empty or from a starter pattern
@@ -138,11 +143,37 @@ Instrument parameters go through the existing `mix.instrument_param`.
 
 ### 5. UI (`crates/ui-egui`)
 
-- **Juke window** (the instrument window for `juke`): a 4×4 grid of slots, each showing its name,
-  source, a waveform or voice icon and a level meter that flashes on hits. Click a slot to audition,
-  drop audio files onto it to load (several files on one slot: velocity layers, or round-robin with a
-  modifier). Below the grid, the selected slot's editor: source, tune, envelope, filter, sends, output. A strip at the side shows the two effects buses with
-  their four slots each; clicking a slot opens that FireStation effect's editor.
+- **Juke window, kit view** (the instrument window for `juke`; look approved by the owner,
+  2026-11-06, from the mockup canvas):
+  - **Pads as channel strips:** a 3-column grid of pad cards (9 showing, scrolling to 16). Each
+    card: a header band in the pad's **family colour** (dark text: name, note and source; icon
+    buttons for Edit, Load, More); Tune and Pan as large knobs, Send A and Send B as small ones; a
+    fader with a stereo meter; a footer with audition, the choke group, Solo and Mute. The selected
+    pad has a cream outline.
+  - **Family colours** (pad headers and trigger cells share them): kick coral `#E8704F`, snare
+    amber `#F2B544`, clap pink `#EC8FB0`, hats teal `#62C6C8`, toms violet `#AE92E6`, cymbals blue
+    `#7FA9EE`, percussion green `#9ED27C`.
+  - **Right side:** three equal strips, Bus A and Bus B (slate) and Output (brass), each with four
+    effect slots (a lit dot when filled, a dashed "Add effect" when empty; a filled slot opens that
+    FireStation effect's editor), a full-height fader with a dB scale and a stereo meter, and the
+    return or output level underneath.
+  - **Knobs:** the app's knob (`widgets::paint_knob_face`) in a **cream** variant of its silver
+    style (a brushed cream cap, dark pointer); Tune and Pan in the hero style, whose segmented value
+    ring lights in amber from the centre.
+  - **Faders and meters:** the Mix window's (`widgets::fader`, `widgets::meter`, the same taper),
+    with the cap in the knobs' cream. The slot and the meters span the same height, so at either
+    end of its travel the cap's edge is level with the meters' end. Bus and output caps 26 × 48 px,
+    pad caps 18 × 30.
+  - **Trigger notes:** a two-row honeycomb across C1–B5, white keys on the bottom row and each black
+    key nested above between its neighbours (none between E–F and B–C). A note assigned to a pad is
+    a solid cell in the pad's family colour, unassigned cells are dim, C cells carry the octave, and
+    the selected pad's cell is ringed. Clicking a cell selects its pad; dragging a pad onto a cell
+    moves its trigger note.
+  - **Panels:** warm mid-tones (tobacco pad cards, slate buses, brass output on a walnut ground)
+    so the knobs and faders sit on a surface; one amber accent for values and active states.
+- **Pad edit view** (Edit on a pad): amp, pitch and filter envelopes as curves to drag, the sample
+  layers (4 velocity × 4 round-robin) and the synth voice, humanize, with the pad's strip, the buses
+  and the output kept at the side. Mockup to be revised in the kit view's look.
 - **Step grid** (a panel under the Edit window, and in the MIDI Editor for pattern clips): one row
   per lane, labelled with the slot names; cells show velocity as height and accent as colour,
   probability as fill, and rolls as ticks. Drag vertically for velocity, modifier-click for the step's
@@ -170,7 +201,7 @@ commit. Both kinds ship (owner's decision):
 
 | Phase | Scope | Estimate |
 |---|---|---:|
-| 1 | Juke (16 pads, sample and synth sources, layers, round-robin, choke, shaping, two effects buses with four FireStation slots each); model fields; commands; Juke window; pattern clips with steps, accent, shuffle, flam, last step, per-lane length, probability, rolls, micro-timing, re-roll; step grid; Convert to MIDI; starter kits; tests | ≈ 45–70 h |
+| 1 | Juke (16 pads, sample and synth sources, layers, round-robin, choke, shaping, two effects buses and the output with four FireStation slots each); model fields; commands; Juke window; pattern clips with steps, accent, shuffle, flam, last step, per-lane length, probability, rolls, micro-timing, re-roll; step grid; Convert to MIDI; starter kits; tests | ≈ 45–70 h |
 | 2 | Stack triggers UI depth, per-step parameter locks (Elektron-style: a step's own tune or decay), trigger conditions and fills, pattern generator, randomize kit, kit presets with samples, recorded kits beyond the first, "split pads to tracks" if wanted | ≈ 30–50 h |
 | 3 | Motion (a slot morphs through samples over time, driven by an envelope, a controller or aftertouch), a modulation matrix, more synth voice types | ≈ 25–40 h |
 
@@ -194,4 +225,5 @@ model fields are merged.
 
 All four open questions are settled (2026-11-06): the name **Juke — Drum Machine**; **16
 pads**; starter kits **both** synth-rendered and recorded; effects as **two buses with four
-FireStation slots each**, every pad sending to both, into **one stereo output**.
+FireStation slots each**, every pad sending to both, and **four slots on the output**, into **one
+stereo output**; the kit view's look as described in the UI section.
