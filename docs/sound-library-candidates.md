@@ -30,6 +30,12 @@ Mark each box when reviewed; note Keep / Maybe / Pass.
 - [ ] **Greg Sullivan E-Pianos**: electric pianos, CC-BY 3.0.
 - [ ] **VCSL Keys** (part of VCSL below): assorted keyboards, CC0.
 - [ ] ~~jRhodes3c / jRhodes3d~~: lovely Rhodes, but NC licenses. Listen only.
+- [ ] **Church Steinway**, Richard Luke (Pianobook): Steinway Model D in a Glasgow church, lots of
+      natural room. Owner likes it. Pianobook's terms allow use in your own music but forbid
+      redistributing the samples, so it can't ship as is. Options: ask Richard Luke for
+      permission, or have the library link to Pianobook's download instead of hosting it.
+      <https://sfzinstruments.github.io/pianos/church_steinway/>,
+      <https://www.pianobook.co.uk/?p=23868>
 
 ## Drums
 
