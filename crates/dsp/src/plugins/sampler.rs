@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::synth::{Adsr, AdsrRates, Event, EventKind, EventQueue, MAX_EVENTS, Stage};
 use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
 use crate::util::{Rng, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
-use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Unit, db_to_gain};
+use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Transport, Unit, db_to_gain};
 
 const PLAY_MODES: &[&str] = &["Gate", "One Shot", "Slice"];
 const LOOP_MODES: &[&str] = &["Off", "Forward", "Ping-Pong"];
@@ -66,6 +66,15 @@ const SLICE_COUNT: usize = 35;
 /// `slice_1`: the first slice's start; the 64 slices follow in order.
 const SLICE_FIRST: usize = 36;
 const SLICES: usize = crate::slices::MAX_SLICES;
+const WARP: usize = 100;
+const SAMPLE_BPM: usize = 101;
+const LFO_SYNC: usize = 102;
+const LFO_DIVISION: usize = 103;
+/// LFO divisions with tempo sync, and the quarter notes one cycle lasts.
+pub const LFO_DIVISIONS: &[&str] = &["2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T"];
+const DIVISION_QUARTERS: [f64; 10] = [8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0];
+/// A warp grain's length in seconds: two of them, half a grain apart, overlap to one.
+const GRAIN_SECS: f32 = 0.06;
 
 /// A slice's start, as a percent of the sample (grouped apart from the sound's parameters).
 const fn slice(id: &'static str, name: &'static str) -> ParamInfo {
@@ -96,7 +105,7 @@ fn pan_display(v: f32) -> String {
 
 // New parameters go at the end: sessions and presets store them by id, and the indices above
 // are the order of this table.
-static SAMPLER_PARAMS: [ParamInfo; 100] = [
+static SAMPLER_PARAMS: [ParamInfo; 104] = [
     lin("root_note", "Root Note", 0.0, 127.0, 60.0, Unit::None),
     lin("transpose", "Transpose", -48.0, 48.0, 0.0, Unit::Semitones),
     lin("fine_tune", "Fine Tune", -100.0, 100.0, 0.0, Unit::Cents),
@@ -208,6 +217,10 @@ static SAMPLER_PARAMS: [ParamInfo; 100] = [
     slice("slice_62", "Slice 62 Start"),
     slice("slice_63", "Slice 63 Start"),
     slice("slice_64", "Slice 64 Start"),
+    toggle("warp", "Warp", false),
+    lin("sample_bpm", "Sample Tempo", 40.0, 300.0, 120.0, Unit::None),
+    toggle("lfo_sync", "LFO Sync", false),
+    choice("lfo_division", "LFO Division", LFO_DIVISIONS, 3),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
@@ -327,6 +340,11 @@ struct Voice {
     looping: bool,
     /// The frame a voice that is not looping stops at.
     end: f64,
+    /// Warp: the pitch step its grains read at (`step` then moves through the sample in time),
+    /// and the two grains' read positions and progress (0..1).
+    pstep: f64,
+    grain_pos: [f64; 2],
+    grain_phase: [f32; 2],
     env: Adsr,
     /// Current pitch in semitones from the sample's own (gliding towards `target`).
     pitch: f64,
@@ -349,6 +367,9 @@ impl Voice {
             forward: true,
             looping: false,
             end: 0.0,
+            pstep: 1.0,
+            grain_pos: [0.0; 2],
+            grain_phase: [0.0, 0.5],
             env: Adsr::new(),
             pitch: 0.0,
             target: 0.0,
@@ -406,6 +427,11 @@ struct Derived {
     /// Slice starts (fractions of the sample, ascending) and how many are in use.
     slices: [f64; SLICES],
     slice_count: usize,
+    warp: bool,
+    sample_bpm: f64,
+    lfo_sync: bool,
+    /// Quarter notes per LFO cycle when synced.
+    lfo_quarters: f64,
 }
 
 /// A MIDI key or velocity parameter as a whole number in `lo..=127`.
@@ -467,6 +493,9 @@ pub struct Sampler {
     /// Mono: the keys held, oldest first.
     held: [u8; HELD_STACK],
     held_len: usize,
+    /// The song's tempo (quarter notes a minute), and where the transport is when it plays.
+    tempo: f64,
+    quarters: Option<f64>,
 }
 
 impl Default for Sampler {
@@ -507,6 +536,10 @@ impl Sampler {
                 slicing: false,
                 slices: [0.0; SLICES],
                 slice_count: 0,
+                warp: false,
+                sample_bpm: 120.0,
+                lfo_sync: false,
+                lfo_quarters: 1.0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -526,6 +559,8 @@ impl Sampler {
             last_pitch: None,
             held: [0; HELD_STACK],
             held_len: 0,
+            tempo: 120.0,
+            quarters: None,
         };
         s.update();
         s
@@ -579,6 +614,10 @@ impl Sampler {
             slicing: self.p.choice(PLAY_MODE) == 2,
             slices: [0.0; SLICES],
             slice_count: whole(v(SLICE_COUNT), 0).min(SLICES as u8) as usize,
+            warp: self.p.on(WARP),
+            sample_bpm: f64::from(finite(v(SAMPLE_BPM), 120.0)).clamp(40.0, 300.0),
+            lfo_sync: self.p.on(LFO_SYNC),
+            lfo_quarters: DIVISION_QUARTERS.get(self.p.choice(LFO_DIVISION)).copied().unwrap_or(1.0),
         };
         for (k, x) in self.d.slices.iter_mut().enumerate() {
             *x = f64::from(self.p.v(SLICE_FIRST + k) / 100.0).clamp(0.0, 1.0);
@@ -705,6 +744,7 @@ impl Sampler {
         let idx = self.voices.iter().position(|v| !v.active()).or_else(|| self.quietest()).unwrap_or(0);
         if let Some(v) = self.voices.get_mut(idx) {
             *v = Voice { note, held: true, gain, pos: start, step, forward: true, looping: false, end, pitch, target: pitch, ..Voice::new() };
+            v.grain_pos = [start; 2];
             v.env.gate_on();
             v.fenv.trigger();
         }
@@ -730,6 +770,7 @@ impl Sampler {
         let step = if from == pitch { step } else { self.step_for(from) };
         if let Some(v) = self.voices.get_mut(idx) {
             *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, end, pitch: from, target: pitch, ..Voice::new() };
+            v.grain_pos = [start; 2];
             v.env.gate_on();
             v.fenv.trigger();
         }
@@ -829,7 +870,8 @@ impl Sampler {
             4 => self.random,
             _ => (TAU * ph).sin(),
         };
-        let mut next = ph + self.d.lfo_inc;
+        let inc = if self.d.lfo_sync { (self.tempo / 60.0 / self.d.lfo_quarters / f64::from(self.sr)) as f32 } else { self.d.lfo_inc };
+        let mut next = ph + if inc.is_finite() { inc.clamp(0.0, 0.5) } else { 0.0 };
         if next >= 1.0 {
             next -= 1.0;
             self.random = self.rng.bipolar();
@@ -854,7 +896,15 @@ impl Sampler {
             }
             let semis = v.pitch + d.lfo_pitch * f64::from(lfo);
             let step = base * 2f64.powf(semis / 12.0);
-            v.step = if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 };
+            let step = if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 };
+            if d.warp {
+                // Warp: the grains read at the pitch; the sample moves through time at the
+                // song's tempo over its own.
+                v.pstep = step;
+                v.step = (base * self.tempo / d.sample_bpm).clamp(0.0, MAX_STEP);
+            } else {
+                v.step = step;
+            }
             if d.filter != FilterKind::Off {
                 let semis = d.fenv_amount * v.fenv.level + d.lfo_filter * lfo;
                 let hz = (d.cutoff * (semis / 12.0).exp2()).clamp(20.0, nyquist);
@@ -883,6 +933,9 @@ impl Sampler {
             }
             _ => None,
         };
+        let grain_inc = 1.0 / (GRAIN_SECS * self.sr).max(16.0);
+        // How far a new grain may move to line up: 12 ms of the sample.
+        let search = f64::from(self.sample_sr) * 0.012;
         for v in &mut self.voices {
             if !v.active() {
                 continue;
@@ -892,8 +945,9 @@ impl Sampler {
             for (c, b) in io.iter_mut().take(ch).enumerate() {
                 let src = if nch == 1 { 0 } else { c };
                 if let (Some(x), Some(data)) = (b.get_mut(n), sample.channel(src)) {
-                    let mut y = hermite(data, v.pos);
-                    if v.looping
+                    let mut y = if d.warp { grains(data, v) } else { hermite(data, v.pos) };
+                    if !d.warp
+                        && v.looping
                         && let Some((len, from, xf)) = fade
                         && v.pos >= from
                     {
@@ -914,10 +968,90 @@ impl Sampler {
                     *x += y * a * side;
                 }
             }
+            if d.warp {
+                advance_grains(v, grain_inc, sample.channel(0).unwrap_or_default(), search);
+            }
             let r = if v.looping { region } else { None };
             advance(v, v.end, r, mode);
         }
     }
+}
+
+/// A warping voice's output: two Hann-windowed grains half a grain apart, which sum to one.
+#[inline]
+fn grains(data: &[f32], v: &Voice) -> f32 {
+    let mut y = 0.0;
+    for (pos, ph) in v.grain_pos.iter().zip(v.grain_phase) {
+        let w = (std::f32::consts::PI * ph).sin();
+        y += hermite(data, *pos) * w * w;
+    }
+    y
+}
+
+/// Moves a warping voice's grains on: each reads on at the pitch step and, when it ends, starts
+/// again near where the voice now is in the sample, at the offset whose audio best matches what
+/// the other grain is about to play (so the two overlap without a phase jump).
+#[inline]
+fn advance_grains(v: &mut Voice, inc: f32, data: &[f32], search: f64) {
+    for j in 0..2 {
+        let (Some(pos), Some(ph)) = (v.grain_pos.get(j).copied(), v.grain_phase.get(j).copied()) else { continue };
+        let mut pos = pos + v.pstep;
+        let mut ph = ph + inc;
+        if ph >= 1.0 || !pos.is_finite() {
+            ph -= ph.floor();
+            let other = v.grain_pos.get(1 - j).copied().unwrap_or(v.pos);
+            pos = best_match(data, v.pos, other, v.pstep, search);
+        }
+        if let (Some(p), Some(f)) = (v.grain_pos.get_mut(j), v.grain_phase.get_mut(j)) {
+            *p = pos;
+            *f = ph;
+        }
+    }
+}
+
+/// Points compared when matching a new grain to the other one.
+const MATCH_POINTS: usize = 32;
+
+/// The start within `search` frames of `around` whose next few points (read at `step`) look most
+/// like those from `target`: normalised cross-correlation over a coarse then a fine pass.
+fn best_match(data: &[f32], around: f64, target: f64, step: f64, search: f64) -> f64 {
+    if search < 1.0 || !around.is_finite() || !target.is_finite() {
+        return around;
+    }
+    // Nearest samples: matching only needs the shape, and a new grain fires every ~30 ms.
+    let at = |p: f64| data.get(p.max(0.0) as usize).copied().filter(|x| x.is_finite()).unwrap_or(0.0);
+    let span = step.max(0.25);
+    let score = |p: f64| {
+        let (mut xy, mut yy) = (0.0f32, 0.0f32);
+        for i in 0..MATCH_POINTS {
+            let k = i as f64 * span;
+            let (x, y) = (at(target + k), at(p + k));
+            xy += x * y;
+            yy += y * y;
+        }
+        if yy > 1e-12 { xy / yy.sqrt() } else { 0.0 }
+    };
+    let mut best = (around, f32::MIN);
+    let coarse = (search / 16.0).max(1.0);
+    let mut off = -search;
+    while off <= search {
+        let c = score(around + off);
+        if c > best.1 {
+            best = (around + off, c);
+        }
+        off += coarse;
+    }
+    let centre = best.0;
+    let fine = (coarse / 12.0).max(1.0);
+    let mut off = -coarse;
+    while off <= coarse {
+        let c = score(centre + off);
+        if c > best.1 {
+            best = (centre + off, c);
+        }
+        off += fine;
+    }
+    best.0.max(0.0)
 }
 
 /// Moves a voice's read position one output frame on, looping or ending it at `end`.
@@ -1036,6 +1170,20 @@ impl Plugin for Sampler {
         let rest = if self.d.one_shot { span * self.len as f32 * self.sr / self.sample_sr } else { 0.0 };
         let t = release + rest;
         if t.is_finite() { t.min(1.0e9) as usize } else { 0 }
+    }
+
+    fn set_transport(&mut self, transport: &Transport) {
+        if transport.tempo.is_finite() && transport.tempo > 0.0 {
+            self.tempo = transport.tempo.clamp(10.0, 1000.0);
+        }
+        self.quarters = (transport.playing && transport.quarters.is_finite()).then_some(transport.quarters);
+        // A synced LFO follows the song: its phase is where the transport is in its cycle.
+        if self.d.lfo_sync
+            && let Some(q) = self.quarters
+        {
+            let ph = (q / self.d.lfo_quarters).rem_euclid(1.0) as f32;
+            self.lfo_phase = if ph.is_finite() { ph } else { 0.0 };
+        }
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -1654,6 +1802,74 @@ mod tests {
         let out = run(&mut s, 1200);
         assert!((out[0][100] - 0.4).abs() < 1e-3, "the last slice runs to the end");
         assert!(peak(&out[0][1010..]) < 1e-3);
+    }
+
+    fn transport(tempo: f64, quarters: f64) -> Transport {
+        Transport { playing: true, recording: false, tempo, numerator: 4, denominator: 4, samples: 0, seconds: 0.0, quarters, bar_start: 0.0, bar: 0 }
+    }
+
+    /// The last frame louder than -40 dB.
+    fn last_loud(x: &[f32]) -> usize {
+        x.iter().rposition(|v| v.abs() > 0.01).unwrap_or(0)
+    }
+
+    #[test]
+    fn warp_changes_pitch_and_keeps_the_length() {
+        let make = |warp: bool| {
+            let mut s = sampler(mono(SR, sine(440.0, SR, 48_000)));
+            s.set_param("velocity", 0.0);
+            s.set_param("release", 1.0);
+            s.set_param("play_mode", 1.0);
+            s.set_param("warp", if warp { 1.0 } else { 0.0 });
+            s
+        };
+        let mut plain = make(false);
+        plain.note_on(0, 72, 127);
+        let out = run(&mut plain, 96_000);
+        assert!(last_loud(&out[0]).abs_diff(24_000) < 600, "without warp an octave up lasts half: {}", last_loud(&out[0]));
+        let mut warped = make(true);
+        warped.note_on(0, 72, 127);
+        let out = run(&mut warped, 96_000);
+        assert!(last_loud(&out[0]).abs_diff(48_000) < 3000, "warped: as long as the sample: {}", last_loud(&out[0]));
+        let f = freq(&out[0][4000..40_000], SR);
+        assert!((f / 880.0 - 1.0).abs() < 0.01, "and an octave up: {f}");
+    }
+
+    #[test]
+    fn warp_follows_the_song_tempo() {
+        let mut s = sampler(mono(SR, sine(440.0, SR, 48_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 1.0);
+        s.set_param("warp", 1.0);
+        s.set_param("sample_bpm", 120.0);
+        s.set_transport(&transport(60.0, 0.0));
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 144_000);
+        assert!(last_loud(&out[0]).abs_diff(96_000) < 4000, "half the tempo: twice as long: {}", last_loud(&out[0]));
+        let f = freq(&out[0][4000..80_000], SR);
+        assert!((f / 440.0 - 1.0).abs() < 0.01, "at its own pitch: {f}");
+    }
+
+    #[test]
+    fn a_synced_lfo_follows_the_song() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("velocity", 0.0);
+        s.set_param("lfo_shape", 2.0);
+        s.set_param("lfo_volume", 100.0);
+        s.set_param("lfo_sync", 1.0);
+        s.set_param("lfo_division", 3.0); // 1/4: half a second at 120
+        s.set_transport(&transport(120.0, 0.0));
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 48_000);
+        // Square: silent for the first eighth, open for the second, and so on.
+        assert!(peak(&out[0][1000..11_000]) < 1e-6, "first half of the cycle");
+        assert!((out[0][18_000] - 0.5).abs() < 1e-3, "second half");
+        assert!(peak(&out[0][25_000..35_000]) < 1e-6, "the next cycle");
+        // The phase follows the transport: half a quarter in, the cycle is half done.
+        s.set_transport(&transport(120.0, 0.5));
+        let out = run(&mut s, 512);
+        assert!((out[0][100] - 0.5).abs() < 1e-3, "{}", out[0][100]);
     }
 
     #[test]

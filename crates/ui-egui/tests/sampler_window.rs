@@ -124,6 +124,18 @@ fn dropping_audio_with_a_path_loads_the_sampler() {
     let _ = h.get_by_label("To MIDI");
     let _ = h.get_by_label("Slice → Keys");
     h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    // Warp and the LFO's Sync are switches.
+    h.get_by_label("On").click();
+    h.get_by_label("Sync").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let warped = instrument(&h, keys);
+    assert_eq!((warped.params.get("warp").copied(), warped.params.get("lfo_sync").copied()), (Some(1.0), Some(1.0)));
+    let _ = h.get_by_label("Division");
+    let _ = h.get_by_label("Sample Tempo");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
     // The 220 Hz tone is A (MIDI 57); the root is still middle C until Use as Root.
     assert_eq!(ins.params.get("root_note").copied(), Some(60.0));
     h.get_by_label("Use as Root").click();

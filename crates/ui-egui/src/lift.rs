@@ -19,7 +19,7 @@ use soundcraft_model::{Insert, SourceAudio, TrackId};
 
 /// The editor's size: the window opens at this width.
 pub const W: f32 = 1100.0;
-const H: f32 = 800.0;
+const H: f32 = 860.0;
 
 // The Juke family's palette.
 const WALNUT: Color32 = Color32::from_rgb(0x2A, 0x24, 0x1F);
@@ -622,6 +622,9 @@ fn value_text(ins: &Insert, id: &str) -> String {
     if info.unit == soundcraft_dsp::Unit::Ms && v >= 100.0 {
         return format!("{v:.0} ms");
     }
+    if id == "sample_bpm" {
+        return format!("{v:.1} bpm");
+    }
     if id == "lfo_pitch" || id == "fine_tune" && v.fract() != 0.0 {
         return format!("{v:.1} {}", if id == "lfo_pitch" { "st" } else { "ct" });
     }
@@ -887,9 +890,20 @@ fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     section(p, pos2(x, y), "LFO");
     choice_pills(app, ui, p, pos2(x + 50.0, y - 13.0), tid, ins, "lfo_shape", &["Sine", "Tri", "Sq", "Saw", "Rnd"], 48.0);
     let prev = Rect::from_min_size(pos2(x, y + 18.0), vec2(r.width() - 32.0, 46.0));
-    lfo_preview(p, prev, param(ins, "lfo_shape").round() as usize, param(ins, "lfo_rate"));
+    let synced = param(ins, "lfo_sync") >= 0.5;
+    let rate = if synced { value_text(ins, "lfo_division") } else { value_text(ins, "lfo_rate") };
+    lfo_preview(p, prev, param(ins, "lfo_shape").round() as usize, &rate);
+    let sync_r = Rect::from_min_size(pos2(prev.max.x - 58.0, prev.min.y + 4.0), vec2(52.0, 20.0));
+    let sync = pill(ui, p, sync_r, "Sync", synced, ("lfo-sync", tid.0)).on_hover_text("Lock the LFO to the song's tempo");
+    if sync.clicked() {
+        set(app, tid, "lfo_sync", if synced { 0.0 } else { 1.0 });
+    }
     let ky = prev.max.y + 4.0;
-    small_knob(app, ui, p, pos2(x, ky), tid, ins, "lfo_rate", "Rate");
+    if synced {
+        small_knob(app, ui, p, pos2(x, ky), tid, ins, "lfo_division", "Division");
+    } else {
+        small_knob(app, ui, p, pos2(x, ky), tid, ins, "lfo_rate", "Rate");
+    }
     small_knob(app, ui, p, pos2(x + col, ky), tid, ins, "lfo_pitch", "To Pitch");
     small_knob(app, ui, p, pos2(x, ky + 46.0), tid, ins, "lfo_filter", "To Filter");
     small_knob(app, ui, p, pos2(x + col, ky + 46.0), tid, ins, "lfo_volume", "To Volume");
@@ -915,10 +929,50 @@ fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     choice_pills(app, ui, p, pos2(x + 64.0, row(1.0)), tid, ins, "loop_mode", &["Off", "Forward", "Ping-pong"], 84.0);
     label(row(2.0), "Voices");
     choice_pills(app, ui, p, pos2(x + 64.0, row(2.0)), tid, ins, "voice_mode", &["Poly", "Mono"], 84.0);
+    // Warp: the sample at the song's tempo, its pitch free of its speed.
+    label(row(3.0), "Warp");
+    choice_pills(app, ui, p, pos2(x + 64.0, row(3.0)), tid, ins, "warp", &["Off", "On"], 50.0);
+    small_knob(app, ui, p, pos2(x + 182.0, row(3.0) - 8.0), tid, ins, "sample_bpm", "Sample Tempo");
+    let yy = row(4.0) + 10.0;
+    let found = detected_bpm(app, ui, tid, ins);
+    if found.is_none() && ins.sample.is_some() {
+        p.text(pos2(x + 64.0, yy + 3.0), Align2::LEFT_CENTER, "no steady beat found: set the tempo by hand", regular(12.0), DIM);
+    }
+    if let Some(bpm) = found {
+        p.text(pos2(x + 64.0, yy + 3.0), Align2::LEFT_CENTER, format!("detected {bpm:.1} bpm"), regular(12.0), DIM);
+        if (f64::from(param(ins, "sample_bpm")) - bpm).abs() > 0.05 {
+            let b = Rect::from_min_size(pos2(x + 200.0, yy - 10.0), vec2(96.0, 26.0));
+            if pill(ui, p, b, "Use tempo", false, ("use-bpm", tid.0)).on_hover_text("Set the sample's tempo to the detected one").clicked() {
+                set(app, tid, "sample_bpm", bpm as f32);
+            }
+        }
+    }
+}
+
+/// The sample's tempo from beat tracking (its first 30 seconds), worked out once per sample;
+/// `None` for a sample too short or without a steady beat.
+fn detected_bpm(app: &SoundApp, ui: &Ui, tid: TrackId, ins: &Insert) -> Option<f64> {
+    let src = ins.sample?;
+    let key = ui.id().with(("lift-bpm", tid.0, src.0));
+    if let Some(found) = ui.ctx().data(|d| d.get_temp::<Option<f64>>(key)) {
+        return found;
+    }
+    let found = app.engine.session().pool.get(src).and_then(|audio| {
+        let rate = audio.sample_rate();
+        let n = audio.frames().min(rate as usize * 30);
+        if n < rate as usize * 2 {
+            return None;
+        }
+        let mono = soundcraft_dsp::beat::downmix(&audio.window(0, n));
+        let t = soundcraft_dsp::beat::track_beats(&mono, rate as f32, &soundcraft_dsp::beat::BeatOptions::default());
+        (t.bpm.is_finite() && t.bpm > 0.0 && t.beats.len() >= 4).then(|| (t.bpm * 10.0).round() / 10.0)
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(key, found));
+    found
 }
 
 /// Two cycles of the LFO's shape in a well (the random shape as steps).
-fn lfo_preview(p: &Painter, r: Rect, shape: usize, rate: f32) {
+fn lfo_preview(p: &Painter, r: Rect, shape: usize, rate: &str) {
     well(p, r);
     let n = 160usize;
     let mid = r.center().y;
@@ -945,7 +999,7 @@ fn lfo_preview(p: &Painter, r: Rect, shape: usize, rate: f32) {
         })
         .collect();
     p.add(Shape::line(pts, Stroke::new(2.0, AMBER)));
-    p.text(pos2(r.max.x - 8.0, r.min.y + 9.0), Align2::RIGHT_CENTER, format!("{rate:.2} Hz"), mono(10.0), DIM);
+    p.text(pos2(r.min.x + 8.0, r.min.y + 9.0), Align2::LEFT_CENTER, rate, mono(10.0), DIM);
 }
 
 /// The keyboard: keys in the playable range lit cream, the others dark; the root in amber with

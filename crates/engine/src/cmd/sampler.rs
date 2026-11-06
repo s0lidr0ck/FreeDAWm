@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Detect Sampler Root Note",
             [],
             None,
-            "{track?}: the pitch the track's Sampler sample sounds at → {track, root: MIDI note (fractional) or null, note, cents, name}; null for drums, noise and silence",
+            "{track?}: the pitch the track's Sampler sample sounds at and its tempo → {track, root: MIDI note (fractional) or null, note, cents, name, bpm: beats a minute or null}; root null for drums, noise and silence, bpm null when it has no steady beat (Warp plays it at the song's tempo from `sample_bpm`)",
             has_selection,
             detect
         ),
@@ -180,7 +180,8 @@ fn detect(e: &mut Engine, p: &Value) -> Result<Value> {
         (json!(n as u8), json!(((m - n) * 100.0).round()))
     });
     let name = root.map(|m| soundcraft_midi::note_name(m.round().clamp(0.0, 127.0) as u8));
-    Ok(json!({"track": t, "root": root, "note": note, "cents": cents, "name": name}))
+    let bpm = sample_bpm(audio);
+    Ok(json!({"track": t, "root": root, "note": note, "cents": cents, "name": name, "bpm": bpm}))
 }
 
 /// The pitch a source sounds at (a fractional MIDI note), from the first seconds of its first
@@ -195,6 +196,19 @@ pub fn sample_root(audio: &soundcraft_model::SourceAudio) -> Option<f32> {
         _ => return None,
     };
     soundcraft_dsp::pitch_detect::sample_root(&mono, rate as f32)
+}
+
+/// A sample's tempo from beat tracking (its first 30 seconds): `None` without a steady beat.
+pub fn sample_bpm(audio: &soundcraft_model::SourceAudio) -> Option<f64> {
+    let rate = audio.sample_rate();
+    let n = audio.frames().min(rate as usize * 30);
+    // A beat needs a few of them to be found.
+    if n < rate as usize * 2 {
+        return None;
+    }
+    let mono = soundcraft_dsp::beat::downmix(&audio.window(0, n));
+    let found = soundcraft_dsp::beat::track_beats(&mono, rate as f32, &soundcraft_dsp::beat::BeatOptions::default());
+    (found.bpm.is_finite() && found.bpm > 0.0 && found.beats.len() >= 4).then(|| (found.bpm * 10.0).round() / 10.0)
 }
 
 /// Decodes `bytes` (a file called `name`, for the format hint) into a new session source and
@@ -951,5 +965,29 @@ mod tests {
         // 120 bpm: a quarter second is half a quarter note.
         assert!((seq.notes[1].start - TICKS_PER_QUARTER / 2).abs() <= 2, "{}", seq.notes[1].start);
         assert!(e.execute("mix.sampler_slice", &json!({"track": t.0, "by": "chop"})).is_err());
+    }
+
+    #[test]
+    fn detect_finds_a_loops_tempo() {
+        let mut e = Engine::default();
+        let t = instrument_track(&mut e);
+        // Four seconds of clicks at 100 bpm.
+        let beat = 48_000 * 60 / 100;
+        let mut x = vec![0.0f32; 48_000 * 4];
+        let mut at = 0;
+        while at < x.len() {
+            for i in 0..1200 {
+                if let Some(v) = x.get_mut(at + i) {
+                    *v = 0.8 * (-(i as f32) / 200.0).exp() * ((i as f32) * 0.4).sin();
+                }
+            }
+            at += beat;
+        }
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![x] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        crate::io::load_sampler_bytes(&mut e, t, "clicks.wav", &soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        let r = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
+        let bpm = r["bpm"].as_f64().unwrap();
+        assert!((bpm - 100.0).abs() < 1.0, "{r}");
     }
 }
