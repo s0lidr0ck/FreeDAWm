@@ -171,14 +171,27 @@ Instrument parameters go through the existing `mix.instrument_param`.
     moves its trigger note.
   - **Panels:** warm mid-tones (tobacco pad cards, slate buses, brass output on a walnut ground)
     so the knobs and faders sit on a surface; one amber accent for values and active states.
-- **Pad edit view** (Edit on a pad): amp, pitch and filter envelopes as curves to drag, the sample
-  layers (4 velocity × 4 round-robin) and the synth voice, humanize, with the pad's strip, the buses
-  and the output kept at the side. Mockup to be revised in the kit view's look.
-- **Step grid** (a panel under the Edit window, and in the MIDI Editor for pattern clips): one row
-  per lane, labelled with the slot names; cells show velocity as height and accent as colour,
-  probability as fill, and rolls as ticks. Drag vertically for velocity, modifier-click for the step's
-  detail popover. Lane length handles at the row ends; the playhead runs per lane, so polymeters are
-  visible.
+- **Pad edit view** (Edit on a pad; look approved 2026-11-06): the pad's card at full size, its
+  header band in the family colour with a back-to-kit button, the name and note, and a
+  Sample / Synth / Both switch. Three envelope rows (amp, pitch, filter), each with a hero knob
+  (Gain, Tune, Cutoff), an on lamp, the curve in a dark inset well (amber, with cream handles to
+  drag) and small knobs for its stages and velocity. A side column: the sample layers (4 velocity
+  rows × 4 round-robin columns; filled cells in the pad's colour with a waveform, empty ones dashed
+  drop targets), the synth voice (voice menu, its knobs, a sample↔synth blend), humanize sliders and
+  playback options (one-shot or gate, reverse, stack, choke). At the side: the pad's own strip
+  (Tune, Pan, sends, fader) beside the buses and the output, all four faders aligned.
+- **Step grid** (a panel under the Edit window, and in the MIDI Editor for pattern clips; look
+  approved 2026-11-06): the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
+  Accent and Humanize knobs, fill bars, Re-roll, Convert to MIDI); one row per lane, its header a band
+  in the pad's family colour (name, lane length, choke or rate, mute); steps as raised keys grouped
+  by beat. A step's fill height is its velocity in the lane's colour, a cream cap marks an accent,
+  hatching with a percentage marks probability, ticks a roll, ◂ a flam, a dark badge a condition;
+  a shorter lane's repeats are ghosted, and each lane's playhead step is outlined.
+  - **Editing:** click a step to turn it on or off; drag across steps to paint or clear a run (the
+    first step decides which); new steps take the **New steps** velocity (Full, 75, 50 or 25 %, chosen
+    in the pattern bar); drag a step up or down for fine velocity; keys 1–4 over a step set it to
+    Full / 75 / 50 / 25; right-click (or modifier-click) opens the step's details popover (velocity,
+    probability, nudge, roll, accent, flam, when it plays). Lane length handles at the row ends.
 - The menu bar gets **Track › New Beat** (an instrument track with Juke and a starter kit) and
   **Clip › Convert Pattern to MIDI**; `menubar.txt` and the parity checklist update with them.
 
