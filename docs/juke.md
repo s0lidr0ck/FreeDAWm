@@ -225,15 +225,14 @@ step grid (in the MIDI Editor for a pattern clip), the Juke window (kit view, pa
 honeycomb), Track › New Beat, the effects buses (`mix.kit_fx`; each effect is a module with an id
 from `KitFx::module_id`, so the module commands and FireStation's full editors work on it) and five
 starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). The pads and
-both buses meter through Juke's readouts (8-bit dB codes, three to a slot). Still to do:
-
-- **The first recorded kit** (SM Drums). Everything for recorded kits is built: the
-  installed-kit format (a folder with `kit.json` and its WAVs, `juke_kits::RecordedKit`), loading one
-  (`mix.kit_load {path}`; a recorded pad plays its takes whole, at their own pitch), the kits
-  release's list and downloads (`soundcraft_ml::kits`) in the Kits menu, and `cargo xtask
-  kit-package`. The SM Drums kit is built and packed (`tools/kits/`: 16 pads × 4 velocity layers × 4
-  takes, 216 MB) and checked to install and play on every pad. `.github/workflows/kits.yml` builds it from the
-  authors' download on GitHub Actions and publishes the `kits-v1` release.
+both buses meter through Juke's readouts (8-bit dB codes, three to a slot). Recorded kits: the
+installed-kit format (a folder with `kit.json` and its WAVs, `juke_kits::RecordedKit`), loading one
+(`mix.kit_load {path}`; a recorded pad plays its takes whole, at their own pitch), the kits release's
+list and downloads (`soundcraft_ml::kits`) in the Kits menu, and `cargo xtask kit-package`. The first
+recorded kit, **SM Drums** (16 pads × 4 velocity layers × 4 takes, 216 MB), is published in the
+[`kits-v1` release](https://github.com/s0lidr0ck/FreeDAWm/releases/tag/kits-v1), built from the
+authors' download by `.github/workflows/kits.yml` with `tools/kits/` (2026-11-07). Phase 1 is
+complete.
 
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the
