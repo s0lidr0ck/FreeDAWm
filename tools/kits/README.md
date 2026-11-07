@@ -20,5 +20,7 @@ FREEDAWM_TEST_KIT_ZIP=target/kits-release/sm_drums.zip \
 The script reads the zip without unpacking it, picks four velocity layers (40, 72, 100, 124) and
 four round-robin takes per pad from the SFZ mappings for 16 pieces (kick, side stick, snare,
 rimshot, three hi-hats, four toms, two crashes, ride, ride bell, china), trims each take (1.5–6 s)
-with a 20 ms fade, and writes `kit.json`. The result is 256 takes, about 216 MB packed. Upload
-`sm_drums.zip` and `kits.json` to the `kits-v1` release.
+with a 20 ms fade, and writes `kit.json`. The result is 256 takes, about 216 MB packed.
+
+`.github/workflows/kits.yml` does all of this on GitHub Actions (download, build, pack, check) and
+creates or updates the `kits-v1` release; run it from Actions › Kits, or push a change here.

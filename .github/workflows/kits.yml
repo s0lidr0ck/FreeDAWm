@@ -1,0 +1,109 @@
+# Juke's recorded kits release (`kits-v1`, docs/juke.md): makes each kit from its source with
+# tools/kits/, packs it with `cargo xtask kit-package`, checks that it installs and plays on every
+# pad, and creates or updates the `kits-v1` release with the zips and `kits.json`.
+#
+#   Actions › Kits › Run   (re)build and publish the kits
+#   push touching this file or tools/kits/ on a branch   the same, so a kit change publishes
+#
+# The kits are big (SM Drums is 216 MB packed from a 2.2 GB source), so they live in this release,
+# never in the repository. Only GITHUB_TOKEN is used.
+name: Kits
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths: [".github/workflows/kits.yml", "tools/kits/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kits
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_TOOLCHAIN: "1.97.1"
+  TAG: kits-v1
+
+jobs:
+  kits:
+    name: Build and publish the recorded kits
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake clang libclang-dev libasound2-dev libssl-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch SM Drums (SMDrums_Sforzando_1.2.zip, the authors' Google Drive link)
+        # https://smmdrums.wordpress.com/for-sfz-sforzando/ links this file. Drive answers a large
+        # file with a confirm page first; its form carries the uuid the download needs.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/src"
+          id=1DHs_jQyNGfls6j3mvyO9F8DpK8vkySLa
+          base="https://drive.usercontent.google.com/download?id=$id&export=download"
+          curl -fsSL "$base" -o "$RUNNER_TEMP/src/page.html"
+          uuid=$(grep -oE 'name="uuid" value="[^"]+"' "$RUNNER_TEMP/src/page.html" | sed 's/.*value="//; s/"$//' || true)
+          curl -fsSL --retry 3 "$base&confirm=t${uuid:+&uuid=$uuid}" -o "$RUNNER_TEMP/src/smdrums.zip"
+          size=$(stat -c %s "$RUNNER_TEMP/src/smdrums.zip")
+          echo "downloaded $size bytes"
+          # The 1.2 zip is 2,409,313,871 bytes; anything else is not the file the kit was made from.
+          test "$size" = 2409313871
+
+      - name: Build and pack SM Drums
+        run: |
+          set -euo pipefail
+          python3 -I tools/kits/build_smdrums.py "$RUNNER_TEMP/src/smdrums.zip" "$RUNNER_TEMP/kits/sm_drums"
+          rm -f "$RUNNER_TEMP/src/smdrums.zip"
+          cargo xtask kit-package "$RUNNER_TEMP/kits/sm_drums" --id sm_drums --out "$RUNNER_TEMP/release"
+          cat "$RUNNER_TEMP/release/kits.json"
+
+      - name: Check the packed kit installs and plays
+        run: cargo test -p soundcraft-engine --lib -- --ignored a_packed_kit_installs_and_plays --nocapture
+        env:
+          FREEDAWM_TEST_KIT_ZIP: ${{ runner.temp }}/release/sm_drums.zip
+
+      - name: Publish the kits-v1 release
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          cat > "$notes" <<'EOF'
+          Recorded drum kits for Juke, FreeDAWm's drum machine. The app downloads them from here
+          (Juke window › Kits › Get Recorded Kits…); `kits.json` lists them with their size, sha256,
+          licence and credit.
+
+          - **SM Drums**: by Scott McLean, Tod Stillwell and Suleiman Ali, SFZ programming by
+            DSmolken (smmdrums.wordpress.com), trimmed to Juke's 4 velocity layers × 4 takes on
+            16 pads. Public domain as listed by SFZ Instruments; the authors offer it free of charge
+            for any use.
+
+          Made by `.github/workflows/kits.yml` from `tools/kits/`.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$RUNNER_TEMP/release/sm_drums.zip" "$RUNNER_TEMP/release/kits.json" --clobber
+            gh release edit "$TAG" --notes-file "$notes"
+          else
+            gh release create "$TAG" "$RUNNER_TEMP/release/sm_drums.zip" "$RUNNER_TEMP/release/kits.json" \
+              --title "Juke recorded kits" --notes-file "$notes" --target "$GITHUB_SHA" --latest=false
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size)"'
