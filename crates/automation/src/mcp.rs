@@ -63,14 +63,14 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "import_audio",
-            "Import an audio file (WAV, AIFF, FLAC, MP3, OGG, AAC/M4A, ALAC, CAF) onto a new or existing track.",
+            "Import an audio file (WAV, AIFF, FLAC, MP3, OGG, Opus, AAC/M4A, ALAC, CAF) onto a new or existing track.",
             json!({"path": {"type": "string"}, "track": {"type": ["string", "integer"]}, "at": {}}),
             &["path"],
         ),
         tool(
             "bounce_mix",
             "Render the mix to an audio file. Returns peak dBFS and integrated LUFS.",
-            json!({"path": {"type": "string"}, "format": {"type": "string", "enum": ["wav", "aiff", "flac"]}, "bit_depth": {"type": "string"}, "start": {}, "end": {}, "normalize": {"type": "boolean"}}),
+            json!({"path": {"type": "string"}, "format": {"type": "string", "enum": ["wav", "aiff", "flac", "mp3", "opus"]}, "bit_depth": {"type": "string"}, "bitrate": {"type": "integer"}, "start": {}, "end": {}, "normalize": {"type": "boolean"}, "fold_down": {"type": "string"}}),
             &["path"],
         ),
         tool("parity", "Feature-parity report against the incumbent's menu catalog.", json!({}), &[]),

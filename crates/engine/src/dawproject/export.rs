@@ -90,6 +90,7 @@ pub fn export<W: Write + Seek>(s: &Session, w: W) -> Result<(W, Exported), Strin
                     bit_depth: soundcraft_audio_io::BitDepth::Float32,
                     dither: false,
                     bwf: None,
+                    bitrate_kbps: 0,
                 };
                 let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts).map_err(|e| format!("{path}: {e}"))?;
                 zip.add(&path, &bytes)?;

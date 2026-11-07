@@ -366,7 +366,7 @@ mod tests {
         let n = (rate as f32 * secs) as usize;
         let one: Vec<f32> = (1..=n).map(|i| 0.6 * (i as f32 * 0.3).sin() * (-(i as f32) / (rate as f32 * 0.02)).exp()).collect();
         let buf = AudioBuffer { sample_rate: rate, channels: vec![one] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(path, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
     }
 
@@ -440,7 +440,7 @@ mod tests {
         let n = 48_000usize;
         let tone: Vec<f32> = (0..n).map(|i| 0.4 * (i as f32 * 0.03).sin() * (-((i % 6000) as f32) / 3000.0).exp()).collect();
         let buf = AudioBuffer { sample_rate: 48_000, channels: vec![tone.clone(), tone] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(&wav, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
         e.execute("file.import_audio", &json!({"path": wav.display().to_string(), "track": t, "at": 0})).unwrap();
         e.execute("mix.module_params", &json!({"track": t, "module": m, "params": {"cab": 1.0}})).unwrap();
@@ -475,7 +475,7 @@ mod tests {
         assert!(fails(&mut e, json!({"path": big.display().to_string()})).contains("large"));
         let long = d.join("long.wav");
         let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.3; 48_000 * 6]] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(&long, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
         assert!(fails(&mut e, json!({"path": long.display().to_string()})).contains("too long"));
         // an unknown bundled name, a non-amp module, nonsense
@@ -611,7 +611,7 @@ mod tests {
         let l: Vec<f32> = (0..frames).map(|i| 0.5 * (i as f32 * 0.002).sin()).collect();
         let r: Vec<f32> = l.iter().map(|x| -x).collect();
         let buf = AudioBuffer { sample_rate: rate, channels: vec![l, r] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: bits, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: bits, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(path, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
     }
 
@@ -693,13 +693,13 @@ mod tests {
         assert!(fails(&mut e, &tenth).contains("too quiet"));
         let silent = d.join("silent.wav");
         let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 48_000]; 2] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(&silent, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
         assert!(fails(&mut e, &silent).contains("silent"));
         // non-finite samples
         let nan = d.join("nan.wav");
         let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.1, f32::NAN, 0.2, f32::INFINITY]] };
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
         std::fs::write(&nan, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
         // (the decoder keeps such a file playable: what loads holds only finite samples)
         if let Ok(r) = e.execute("mix.module_reference", &json!({"track": t, "module": m, "slot": 0, "file": nan.display().to_string()})) {

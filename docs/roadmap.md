@@ -1,6 +1,6 @@
 # FreeDAWm roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** trivial (renamed to FreeDAWm, sessions saved as .fdawm; previously minor: Tune Vocal complete: track pitch view and mixer PITCH section, toward M16; previously minor: the Vocal Editor, toward M16; previously minor: Tune Vocal on clips, toward M16; previously minor: the Band built, round 2 is G-23; previously minor: audio I/O built, G-01 closed pending the owner's hardware pass; previously minor: VST-faithful FireStation editors; previously trivial: CleanQ's dynamic ceiling deferred; previously trivial: the Vint strip graph is done; previously minor: mixing-core FireStation ports milestone) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** trivial (G-21 done: compressed export dropped from the after-beta list; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: Tune Vocal complete: track pitch view and mixer PITCH section, toward M16; previously minor: the Vocal Editor, toward M16; previously minor: Tune Vocal on clips, toward M16; previously minor: the Band built, round 2 is G-23; previously minor: audio I/O built, G-01 closed pending the owner's hardware pass; previously minor: VST-faithful FireStation editors; previously trivial: CleanQ's dynamic ceiling deferred; previously trivial: the Vint strip graph is done; previously minor: mixing-core FireStation ports milestone) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -31,7 +31,7 @@ main platform). Any **no** keeps FreeDAWm **pre-alpha**, and those rows are the 
 | Record MIDI from a controller and play it back through an instrument | **no** | Playback of drawn and imported MIDI works. No MIDI device layer at all, so nothing can be recorded and instruments can't be played live (G-02). | 20–35 |
 | Edit: select, trim, fade, comp playlists, Slip/Shuffle/Grid | yes (rough) | Every Edit menu command; property-tested with undo; open bugs #3, #5, #140 don't block the workflow | — |
 | Mix with built-in and third-party plugins, sends, busses, automation | partial (passes on CLAP/AU) | 26 built-in processors; CLAP and AU host on the signed macOS build, but its missing entitlement blocks third-party VST3 (#153). No AU plugin windows yet; VST3 windows on macOS only | 1–2 (entitlement) |
-| Bounce mix and stems; save and reopen the session | yes (rough) | WAV/BWF/AIFF/FLAC bounce, stems, `.fdawm` save/reopen with plugin state; bugs #59, #103 in bus bounce and aux latency (PRs open) | — |
+| Bounce mix and stems; save and reopen the session | yes (rough) | WAV/BWF/AIFF/FLAC/MP3/Opus bounce, stems, `.fdawm` save/reopen with plugin state; bugs #59, #103 in bus bounce and aux latency (PRs open) | — |
 | Exchange a session with Pro Tools or a picture editor | **no** | No `.ptx`, AAF or OMF import or export (#40, G-03) | 50–90 |
 
 **Result: pre-alpha.** Three workflows fail. Passing them is ~110–180 h, about 70 % of it
@@ -120,7 +120,7 @@ AAX, `.ptx` and Avid cloud features.
 
 Control surfaces (G-10), immersive delivery (G-12), the rest of the built-in plugin catalogue
 (G-08), Elastic Audio depth (G-15), session templates and browser (G-16), video depth (G-17),
-speech-to-text (G-18), notation and instrument depth (G-20), compressed export (G-21), and the
+speech-to-text (G-18), notation and instrument depth (G-20), and the
 remaining languages.
 
 There is no `cargo xtask scorecard` in this repo; the measured number is `cargo xtask parity`
@@ -130,6 +130,7 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | trivial | Compressed export (G-21) done: dropped from the after-beta list |
 | 2026-10-26 | trivial | The product is renamed FreeDAWm (was SoundCraft); sessions are saved as `.fdawm` and `.scraft` still opens. Estimates unchanged |
 | 2026-10-25 | minor | Tune Vocal complete (plan 4 of 4: track pitch view, mixer PITCH section) noted under the milestones |
 | 2026-10-25 | minor | The Vocal Editor (Tune Vocal plan 3 of 4) noted under the milestones |

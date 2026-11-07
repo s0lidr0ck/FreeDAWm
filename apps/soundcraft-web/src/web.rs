@@ -69,7 +69,7 @@ enum Purpose {
 const SESSION_EXTS: &[&str] =
     &[io::BUNDLE_EXTENSION, soundcraft_model::SESSION_EXTENSION, io::LEGACY_BUNDLE_EXTENSION, soundcraft_model::LEGACY_SESSION_EXTENSION];
 const AUDIO_EXTS: &[&str] =
-    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"];
+    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "opus", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"];
 const MIDI_EXTS: &[&str] = &["mid", "midi", "smf"];
 
 impl Purpose {
@@ -231,6 +231,8 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
         Some("wav") => "audio/wav",
         Some("aif" | "aiff") => "audio/aiff",
         Some("flac") => "audio/flac",
+        Some("mp3") => "audio/mpeg",
+        Some("opus" | "ogg") => "audio/ogg",
         Some("mid" | "midi") => "audio/midi",
         Some("svg") => "image/svg+xml",
         Some("txt") => "text/plain",

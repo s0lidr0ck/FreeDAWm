@@ -282,6 +282,7 @@ Track > ## Create
 Track > New...
 Track > Duplicate = Track > Duplicate...
 Track > Create Click Track
+Track > New Beat = @track.new_beat
 Track > ---
 Track > ## Organise
 Track > Rename... = @track.rename
@@ -372,6 +373,8 @@ Track > More > Clear Trim Automation = Track > Clear Trim Automation
 
 Clip > ## Create
 Clip > New MIDI Clip
+Clip > New Pattern = @pattern.new
+Clip > Convert Pattern to MIDI = @pattern.to_midi
 Clip > Capture = Clip > Capture...
 Clip > Rename...
 Clip > Loop = Clip > Loop...

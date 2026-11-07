@@ -24,7 +24,7 @@ fn signal(channels: usize, frames: usize, seed: u32) -> AudioBuffer {
 }
 
 fn write(d: &std::path::Path, name: &str, buf: &AudioBuffer, depth: BitDepth) -> (PathBuf, AudioBuffer) {
-    let bytes = encode(buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: None }).unwrap();
+    let bytes = encode(buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: None, bitrate_kbps: 0 }).unwrap();
     let p = d.join(name);
     std::fs::write(&p, &bytes).unwrap();
     (p, decode(&bytes, Some("wav")).unwrap().1)

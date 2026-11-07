@@ -104,7 +104,7 @@ fn live(s: &Session, range: Range, block: usize) -> Vec<Vec<f32>> {
 
 fn bounce(e: &Engine, dir: &Path, name: &str, range: Range) -> Vec<Vec<f32>> {
     let path = dir.join(name);
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     Bounce::new(e.session_arc(), &path, range, &opts, None, false, false).unwrap().run().unwrap();
     let bytes = std::fs::read(&path).unwrap();
     let (_, file) = soundcraft_audio_io::decode(&bytes, None).unwrap();

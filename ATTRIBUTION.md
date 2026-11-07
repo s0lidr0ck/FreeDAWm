@@ -19,6 +19,11 @@ The demo session's audio (drums, bass, pad) and its MIDI parts are synthesised i
 `crates/engine/src/demo.rs` by the SoundCraft contributors (MIT OR Apache-2.0). No sample files
 are bundled.
 
+Juke's synth voices (`crates/dsp/src/plugins/juke.rs`) and its starter kits
+(`crates/engine/src/juke_kits.rs`) are original work by the SoundCraft contributors (MIT OR
+Apache-2.0). The rendered kits' samples are made from those voices when a kit loads; no sample
+files are bundled, and nothing is recorded from or modelled on another product's sounds.
+
 ## Fonts
 
 FreeDAWm bundles one font file: Inter Regular (`assets/fonts/Inter-Regular.ttf`, listed under
@@ -79,6 +84,17 @@ available (never redistributed).
 | `crates/engine/tests/fixtures/dawproject/studio-one-style.xml` | FreeDAWm contributors (Claude) | original: a song laid out as Studio One's DAWproject export, written for the tests | MIT OR Apache-2.0 |
 | Steinberg ASIO SDK 2.3.4 (`ASIO-SDK_2.3.4_2025-10-15.zip`, not in the repo; downloaded by `release.yml` and compiled into the Windows release builds) | Steinberg Media Technologies GmbH | ASIO audio device support on Windows | GPL-3.0 (dual-licensed by Steinberg: GPLv3 or the Steinberg ASIO License; used under GPLv3) |
 | `packaging/windows/GPL-3.0.txt` | Free Software Foundation | Licence text shipped with the Windows ASIO builds | verbatim copying permitted |
+
+## Recorded drum kits (not bundled)
+
+Downloaded by the app from the `kits-v1` release into the kits folder, never committed; each kit's
+licence and credit travel in its `kit.json` and the release's `kits.json`, and the Kits menu shows
+them. Made from their sources by `tools/kits/`.
+
+- `sm_drums`: SM Drums by Scott McLean, Tod Stillwell and Suleiman Ali, SFZ programming by
+  DSmolken (smmdrums.wordpress.com, `SMDrums_Sforzando_1.2.zip`), trimmed to Juke's 4 velocity
+  layers × 4 takes: public domain as listed by SFZ Instruments (sfzinstruments.github.io/drums/sm_drums);
+  the authors offer it free of charge for any use. The source zip carries no licence file.
 
 ## Third-party ML models (not bundled)
 

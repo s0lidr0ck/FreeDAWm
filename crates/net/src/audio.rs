@@ -52,13 +52,13 @@ pub fn transfer_format(bits: u16) -> (FileFormat, &'static str) {
 /// The transfer file of a take recorded into `buf`, at project bit depth `bits`.
 pub fn encode_transfer(buf: &AudioBuffer, bits: u16) -> Result<Vec<u8>, String> {
     let (format, _) = transfer_format(bits);
-    let opts = EncodeOptions { format, bit_depth: depth_of(bits), dither: false, bwf: None };
+    let opts = EncodeOptions { format, bit_depth: depth_of(bits), dither: false, bwf: None, bitrate_kbps: 0 };
     soundcraft_audio_io::encode(buf, &opts).map_err(|e| e.to_string())
 }
 
 /// A landed take as the booth project keeps it: WAV at its bit depth.
 pub fn encode_landed(buf: &AudioBuffer, bits: u16) -> Result<Vec<u8>, String> {
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: depth_of(bits), dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: depth_of(bits), dither: false, bwf: None, bitrate_kbps: 0 };
     soundcraft_audio_io::encode(buf, &opts).map_err(|e| e.to_string())
 }
 

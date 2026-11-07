@@ -216,6 +216,9 @@ pub struct StripMeter {
     /// Low-latency monitoring: bit `i` set means chain module `i` is bypassed by it (modules
     /// from 64 on aren't reported). Zero while it's off.
     pub llm_bypassed: u64,
+    /// The instrument's readouts of the last block (`Plugin::readouts`; what each means is the
+    /// plugin's, e.g. Juke's pad levels); NaN where it gives none, and on non-instrument strips.
+    pub instrument: [f32; 8],
 }
 
 /// Live values of one chain module for the last block. A module with no instance (missing, not
@@ -281,6 +284,7 @@ impl StripMeter {
         self.modules.clone_from(&o.modules);
         self.analysis.clone_from(&o.analysis);
         self.llm_bypassed = o.llm_bypassed;
+        self.instrument = o.instrument;
     }
 
     fn measure(&mut self, bufs: &[Vec<f32>], frames: usize, gr: f32) {
@@ -331,6 +335,9 @@ struct PluginSlot {
     assets: Vec<(String, Arc<dyn SampleSource>)>,
     /// The link group slab handed to the plugin (`Plugin::set_link`) and the member index.
     link: Option<(Arc<LinkSlab>, usize)>,
+    /// The plugin each of its hosted slots holds (`Plugin::set_child`: Juke's bus effects), by
+    /// [`soundcraft_model::KitFx::index`].
+    kit_fx: Vec<Option<String>>,
     /// Low-latency monitoring bypasses it (or is crossfading to that), see `llm_step`.
     llm_off: bool,
     /// Samples into that crossfade (negative: a resumed plugin is still priming its latency);
@@ -416,6 +423,8 @@ struct Strip {
     /// Assets the chain's plugins let go of while rendering (`Plugin::take_released_asset`), for
     /// the host to drop off the audio thread (capacity reserved in `sync`).
     released: Vec<Arc<dyn SampleSource>>,
+    /// The instrument's readouts of the last block it rendered (NaN without one).
+    inst_readouts: [f32; 8],
     /// This strip's Scout PRE/POST taps while a capture runs (see [`scout`]).
     scout: Option<Box<scout::StripTaps>>,
     /// Where the strip's output goes, resolved in `sync` (no name lookups while rendering).
@@ -580,6 +589,7 @@ impl Strip {
             pre_key: false,
             key_regrow: false,
             released: Vec::new(),
+            inst_readouts: [f32::NAN; 8],
             scout: None,
             dest: Dest::None,
             in_span: None,
@@ -849,6 +859,7 @@ impl SlotCtx<'_> {
             prepared: 0,
             assets: Vec::new(),
             link: None,
+            kit_fx: Vec::new(),
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
@@ -1112,6 +1123,20 @@ impl MixEngine {
     pub fn module_action(&mut self, track: TrackId, module: ModuleId, name: &str) -> bool {
         let Some(strip) = self.strips.get_mut(&track) else { return false };
         strip.plugins.iter_mut().flatten().find(|p| p.module == module).is_some_and(|p| p.plugin.action(name))
+    }
+
+    /// Plays `note` on `track`'s instrument now (a pad's audition button): a note-on at
+    /// `velocity`, or a note-off when it is 0. `false` without a working instrument there.
+    /// Allocation-free (the plugin queues the event for its next block): callable on the audio
+    /// thread.
+    pub fn audition(&mut self, track: TrackId, note: u8, velocity: u8) -> bool {
+        let Some(inst) = self.strips.get_mut(&track).and_then(|s| s.instrument.as_mut()).filter(|i| !i.failed) else { return false };
+        if velocity > 0 {
+            inst.plugin.note_on(0, note.min(127), velocity.min(127));
+        } else {
+            inst.plugin.note_off(0, note.min(127));
+        }
+        true
     }
 
     /// The value bus of link group `group` as of the last sync (`None`: no module is in it).
@@ -1440,8 +1465,13 @@ impl MixEngine {
                 cx.retire(t.id, SlotKey::Instrument, old);
                 strip.instrument = want.and_then(|i| cx.make(t.id, SlotKey::Instrument, i, ich));
                 strip.sample = None;
+                strip.inst_readouts = [f32::NAN; 8];
             }
             sync_sample(strip, want, s);
+            if let (Some(slot), Some(ins)) = (strip.instrument.as_mut(), want) {
+                sync_kit_samples(slot, ins, s, cx.retired_assets);
+                sync_kit_fx(slot, ins, cx.sr, cx.mb, cx.offline, cx.retired);
+            }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
                 strip.llm_dry = vec![vec![0.0; mb]; n];
@@ -1939,6 +1969,7 @@ impl MixEngine {
                 m.plugin_failures = strip.failures;
                 m.modules.clone_from(&strip.mods);
                 m.analysis.clone_from(&strip.analysis);
+                m.instrument = strip.inst_readouts;
             }
         }
         self.llm = scope;
@@ -2065,6 +2096,7 @@ impl MixEngine {
         m.plugin_failures = strip.failures;
         m.modules.clone_from(&strip.mods);
         m.analysis.clone_from(&strip.analysis);
+        m.instrument = strip.inst_readouts;
         let src_fmt = strip_format(t, strip.buf.len());
         let law = self.pan_law;
         for (i, snd) in t.mixer.sends.iter().enumerate() {
@@ -2590,6 +2622,7 @@ fn process_strip(
                 if contain_failure(inst, &mut strip.buf, frames) {
                     strip.failures.record(SlotKey::Instrument);
                 }
+                read_readouts(&*inst.plugin, &mut strip.inst_readouts);
                 // A let-go release runs until it has been silent a while (a quiet gap in it is not
                 // its end); one that outlasts its time is faded out over this block and cut
                 // (nothing is left frozen in the instrument). What the inserts, sends and auxes
@@ -3709,6 +3742,14 @@ impl SampleSource for PoolSample {
     fn channel(&self, ch: usize) -> Option<&[f32]> {
         self.0.channel(ch)
     }
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// The pool audio a handed-over sample wraps (`None`: not a pool sample).
+fn pool_audio(a: &Arc<dyn SampleSource>) -> Option<*const SourceAudio> {
+    a.as_any().and_then(|x| x.downcast_ref::<PoolSample>()).map(|p| Arc::as_ptr(&p.0))
 }
 
 /// Capacity reserved per strip for assets its plugins let go of between two syncs.
@@ -3807,6 +3848,95 @@ fn sync_sample(strip: &mut Strip, want: Option<&soundcraft_model::Insert>, s: &S
         inst.plugin.set_sample(shared);
     }
     strip.sample = audio.cloned();
+}
+
+/// Hands a strip's instrument its keyed sample sources (`Insert::samples`: Juke's pad samples)
+/// where they changed: a new source, a cleared one, a removed key, or a new instance. The slot
+/// keeps its own reference to each; the ones it replaces, and those the plugin let go of, go to
+/// `retired` (dropped off the audio thread). Missing media plays nothing.
+fn sync_kit_samples(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, s: &Session, retired: &mut Vec<Arc<dyn SampleSource>>) {
+    for (key, sid) in &ins.samples {
+        let want = s.pool.get(*sid);
+        let at = slot.assets.iter().position(|(k, _)| k == key);
+        match (want, at) {
+            (Some(w), Some(i)) if slot.assets.get(i).and_then(|(_, a)| pool_audio(a)) == Some(Arc::as_ptr(w)) => {}
+            (Some(w), at) => {
+                let shared: Arc<dyn SampleSource> = Arc::new(PoolSample(Arc::clone(w)));
+                slot.plugin.set_asset(key, Some(Arc::clone(&shared)));
+                match at.and_then(|i| slot.assets.get_mut(i)) {
+                    Some(entry) => retired.push(std::mem::replace(&mut entry.1, shared)),
+                    None => slot.assets.push((key.clone(), shared)),
+                }
+            }
+            (None, Some(i)) => {
+                slot.plugin.set_asset(key, None);
+                retired.push(slot.assets.remove(i).1);
+            }
+            (None, None) => {}
+        }
+    }
+    let mut i = 0;
+    while i < slot.assets.len() {
+        if slot.assets.get(i).is_some_and(|(k, _)| ins.samples.contains_key(k)) {
+            i += 1;
+        } else {
+            let (key, a) = slot.assets.remove(i);
+            slot.plugin.set_asset(&key, None);
+            retired.push(a);
+        }
+    }
+    while let Some(a) = slot.plugin.take_released_asset() {
+        retired.push(a);
+    }
+}
+
+/// Hands a kit instrument the effects its buses host (`Insert::kit_fx`): a new instance where a
+/// slot's plugin changed, none where a slot emptied or its effect is bypassed, and every hosted
+/// effect its parameters. What the plugin hands back goes to `retired` (dropped off the audio
+/// thread).
+fn sync_kit_fx(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, sr: f32, mb: usize, offline: bool, retired: &mut Vec<Box<dyn Plugin>>) {
+    use soundcraft_model::{KitBus, KitFx};
+    if ins.kit_fx.is_empty() && slot.kit_fx.iter().all(Option::is_none) {
+        return;
+    }
+    let n = KitBus::ALL.len() * KitFx::SLOTS;
+    slot.kit_fx.resize(n, None);
+    for i in 0..n {
+        let want = ins
+            .kit_fx
+            .iter()
+            .find(|f| KitFx::index(f.bus, usize::from(f.slot)) == i)
+            .filter(|f| f.insert.active && !f.insert.bypass && !is_third_party(&f.insert.plugin));
+        let have = slot.kit_fx.get(i).cloned().flatten();
+        match want {
+            Some(f) if have.as_deref() == Some(f.insert.plugin.as_str()) => {}
+            Some(f) => {
+                let made = create_instance_for(&f.insert.plugin, None, sr, mb, 2, offline).map(|n| n.plugin);
+                let accepted = made.is_some();
+                if let Some(old) = slot.plugin.set_child(i, made) {
+                    retired.push(old);
+                }
+                let hosted = accepted && slot.plugin.child_mut(i).is_some();
+                if let Some(at) = slot.kit_fx.get_mut(i) {
+                    *at = hosted.then(|| f.insert.plugin.clone());
+                }
+            }
+            None if have.is_some() => {
+                if let Some(old) = slot.plugin.set_child(i, None) {
+                    retired.push(old);
+                }
+                if let Some(at) = slot.kit_fx.get_mut(i) {
+                    *at = None;
+                }
+            }
+            None => {}
+        }
+        if let (Some(f), Some(c)) = (want, slot.plugin.child_mut(i)) {
+            for (k, v) in &f.insert.params {
+                c.set_param(k, *v);
+            }
+        }
+    }
 }
 
 /// Record insert latency without processing audio, so this block can compensate for it.
@@ -5034,6 +5164,7 @@ mod tests {
             prepared: 0,
             assets: Vec::new(),
             link: None,
+            kit_fx: Vec::new(),
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
@@ -5079,6 +5210,7 @@ mod tests {
             prepared: 0,
             assets: Vec::new(),
             link: None,
+            kit_fx: Vec::new(),
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
@@ -5169,6 +5301,7 @@ mod tests {
             prepared: 0,
             assets: Vec::new(),
             link: None,
+            kit_fx: Vec::new(),
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,

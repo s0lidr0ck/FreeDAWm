@@ -139,7 +139,8 @@ fn track_of<'a>(e: &'a mut Engine, cmd: &str, t: TrackId) -> Result<&'a mut Trac
 pub(super) fn find_mut<'a>(e: &'a mut Engine, cmd: &str, t: TrackId, id: ModuleId) -> Result<&'a mut Insert> {
     let tr = track_of(e, cmd, t)?;
     let name = tr.name.clone();
-    tr.mixer.module_mut(id).ok_or_else(|| bad(cmd, format!("no module {} on {name}", id.0)))
+    // A chain module, or an effect on the instrument's kit buses.
+    tr.module_mut(id).ok_or_else(|| bad(cmd, format!("no module {} on {name}", id.0)))
 }
 
 /// A fresh module of `plugin` with every parameter at its default, then `params` applied

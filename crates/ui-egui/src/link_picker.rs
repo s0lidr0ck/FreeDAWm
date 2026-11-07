@@ -154,7 +154,7 @@ pub(crate) fn reference_rows(app: &mut SoundApp, ui: &mut Ui, track: &Track, ins
             let can_pick = app.services.pick_open.is_some();
             if ui.add_enabled(can_pick, egui::Button::new("Load file…")).clicked() {
                 if let Some(open) = &app.services.pick_open
-                    && let Some(path) = open("mix.module_reference", &["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg"])
+                    && let Some(path) = open("mix.module_reference", &["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "opus"])
                 {
                     pick = Some(json!(path));
                 }

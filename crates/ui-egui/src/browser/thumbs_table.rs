@@ -32,6 +32,7 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("fs_vint", include_bytes!("../../assets/browser-thumbs/fs_vint.png")),
     ("gain", include_bytes!("../../assets/browser-thumbs/gain.png")),
     ("invert", include_bytes!("../../assets/browser-thumbs/invert.png")),
+    ("juke", include_bytes!("../../assets/browser-thumbs/juke.png")),
     ("lofi", include_bytes!("../../assets/browser-thumbs/lofi.png")),
     ("maximizer", include_bytes!("../../assets/browser-thumbs/maximizer.png")),
     ("mod_delay", include_bytes!("../../assets/browser-thumbs/mod_delay.png")),

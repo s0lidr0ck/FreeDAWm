@@ -16,7 +16,8 @@ fn a_session_longer_than_the_cache_streams_without_underruns() {
     // 60 blocks (~41 s) of mono audio against a cache of 40 pages.
     let frames = 60 * BLOCK;
     let buf = AudioBuffer { sample_rate: 48_000, channels: vec![(0..frames).map(|i| ((i % 4801) as f32 / 4801.0) - 0.5).collect()] };
-    let bytes = encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None }).unwrap();
+    let bytes =
+        encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 }).unwrap();
     let path = d.join("long.wav");
     std::fs::write(&path, &bytes).unwrap();
     let want = decode(&bytes, Some("wav")).unwrap().1;

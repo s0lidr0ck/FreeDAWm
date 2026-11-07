@@ -296,6 +296,22 @@ fn yes() -> bool {
 }
 
 impl Track {
+    /// A module by id: a chain module, or an effect the instrument hosts on its kit buses
+    /// ([`crate::KitFx`]).
+    pub fn module(&self, id: ModuleId) -> Option<&crate::Insert> {
+        self.mixer.module(id).or_else(|| {
+            crate::KitFx::place(id)?;
+            self.instrument.as_ref()?.kit_fx.iter().map(|f| &f.insert).find(|i| i.id == id)
+        })
+    }
+
+    pub fn module_mut(&mut self, id: ModuleId) -> Option<&mut crate::Insert> {
+        if crate::KitFx::place(id).is_some() {
+            return self.instrument.as_mut()?.kit_fx.iter_mut().map(|f| &mut f.insert).find(|i| i.id == id);
+        }
+        self.mixer.module_mut(id)
+    }
+
     pub fn new(id: TrackId, name: impl Into<String>, kind: TrackKind, format: ChannelFormat, color: [u8; 3]) -> Self {
         let name = name.into();
         let format = if kind.is_midi() && kind == TrackKind::Midi { ChannelFormat::Mono } else { format };

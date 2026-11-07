@@ -591,7 +591,10 @@ fn services() -> Services {
                 "scout.profile_import" => d.add_filter("Sound Profile", &["json"]),
                 _ => d.add_filter(
                     "Audio",
-                    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"],
+                    &[
+                        "wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "opus", "m4a", "m4b", "aac", "mp4", "caf", "mkv",
+                        "webm",
+                    ],
                 ),
             };
             d.pick_file().map(|p| p.to_string_lossy().into_owned())
@@ -599,7 +602,7 @@ fn services() -> Services {
         pick_save: Some(Box::new(|purpose: &str, default: &str| {
             let path = std::path::Path::new(default);
             let mut d = match purpose {
-                "file.bounce_mix" => rfd::FileDialog::new().add_filter("Audio", &["wav", "aif", "aiff", "flac"]),
+                "file.bounce_mix" => rfd::FileDialog::new().add_filter("Audio", &["wav", "aif", "aiff", "flac", "mp3", "opus"]),
                 "file.export_dawproject" => rfd::FileDialog::new().add_filter("DAWproject", &["dawproject"]),
                 "scout.starting_prompt" => rfd::FileDialog::new().add_filter("Markdown", &["md"]),
                 "scout.profile_export" => rfd::FileDialog::new().add_filter("Sound Profile", &["json"]),

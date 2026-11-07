@@ -540,16 +540,32 @@ const FADER_CAP_H: f32 = 40.0;
 /// The travel of a [`fader`] drawn in `r`: its cap's centre runs from the bottom (-inf) to the
 /// top (+12 dB).
 pub fn fader_slot(r: Rect) -> Rect {
-    Rect::from_center_size(r.center(), vec2(4.0, r.height() - FADER_CAP_H))
+    fader_slot_for(r, FADER_CAP_H)
+}
+
+/// [`fader_slot`] for a cap `cap_h` tall: at either end of the travel the cap's edge sits on `r`'s.
+pub fn fader_slot_for(r: Rect, cap_h: f32) -> Rect {
+    Rect::from_center_size(r.center(), vec2(4.0, (r.height() - cap_h).max(1.0)))
 }
 
 /// A fader: returns the new dB value when dragged. `db` in -144..12.
 pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
+    let cap = vec2((r.width() * 0.4).clamp(16.0, 18.0), FADER_CAP_H);
+    fader_with(ui, r, db, id, false, cap)
+}
+
+/// [`fader`] with a cream cap of size `cap` (Juke's strips), same taper and scale; the travel is
+/// [`fader_slot_for`] the cap's height.
+pub fn fader_cream(ui: &mut Ui, r: Rect, db: f32, id: egui::Id, cap: egui::Vec2) -> Option<f32> {
+    fader_with(ui, r, db, id, true, cap)
+}
+
+fn fader_with(ui: &mut Ui, r: Rect, db: f32, id: egui::Id, cream: bool, cap_size: egui::Vec2) -> Option<f32> {
     let t = Tokens::current();
     let resp = ui.interact(r, id, Sense::click_and_drag());
     let p = ui.painter();
-    let slot = fader_slot(r);
-    let cap_w = (r.width() * 0.4).clamp(16.0, 18.0);
+    let slot = fader_slot_for(r, cap_size.y);
+    let cap_w = cap_size.x;
     p.rect_filled(slot, 2.0, t.fader_track);
     p.vline(slot.min.x + 0.5, slot.min.y + 1.0..=slot.max.y - 1.0, Stroke::new(1.0, Color32::from_black_alpha(120)));
     p.vline(slot.max.x + 0.5, slot.min.y + 2.0..=slot.max.y - 2.0, Stroke::new(1.0, Color32::from_white_alpha(18)));
@@ -557,6 +573,9 @@ pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
     let mut last = f32::NEG_INFINITY;
     for mark in [12.0f32, 6.0, 0.0, -5.0, -10.0, -15.0, -20.0, -30.0, -40.0, -60.0] {
         let y = slot.max.y - slot.height() * soundcraft_model::fader_db_to_pos(mark);
+        if slot.height() < 60.0 && mark != 0.0 {
+            continue;
+        }
         p.hline(slot.min.x - 6.0..=slot.min.x - 2.0, y, Stroke::new(1.0, t.text_dim.gamma_multiply(0.7)));
         if numbers_x - r.min.x >= 10.0 && y - last >= 9.0 {
             p.text(pos2(numbers_x, y), Align2::RIGHT_CENTER, format!("{}", mark.abs()), regular(8.0), t.text_dim);
@@ -565,17 +584,24 @@ pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
     }
     let pos = soundcraft_model::fader_db_to_pos(db);
     let y = slot.max.y - slot.height() * pos;
-    let cap = Rect::from_center_size(pos2(slot.center().x, y), vec2(cap_w, FADER_CAP_H));
+    let cap = Rect::from_center_size(pos2(slot.center().x, y), cap_size);
     p.rect_filled(cap.translate(vec2(0.0, 2.0)).expand(1.0), 4.0, Color32::from_black_alpha(80));
     let g = Color32::from_gray;
-    p.rect_filled(cap, 3.0, g(34));
+    let rgb = Color32::from_rgb;
+    // (rim, face top, face middle, lower top, lower bottom, centre line)
+    let (rim, top, mid, low_top, low_bottom, line) = if cream {
+        (rgb(58, 46, 34), rgb(253, 248, 239), rgb(201, 187, 162), rgb(210, 195, 168), rgb(187, 170, 140), rgb(42, 34, 27))
+    } else {
+        (g(34), g(236), g(104), g(214), g(150), g(30))
+    };
+    p.rect_filled(cap, 3.0, rim);
     let face = cap.shrink(1.0);
-    rounded_vgradient(p, face, 2.0, g(236), g(104));
-    vgradient(p, Rect::from_x_y_ranges(face.x_range(), y + 1.0..=face.max.y - 2.0), g(214), g(150));
+    rounded_vgradient(p, face, 2.0, top, mid);
+    vgradient(p, Rect::from_x_y_ranges(face.x_range(), y + 1.0..=face.max.y - 2.0), low_top, low_bottom);
     p.hline(face.min.x + 2.0..=face.max.x - 2.0, face.min.y + 1.5, Stroke::new(1.0, Color32::from_white_alpha(110)));
-    p.hline(face.x_range(), y, Stroke::new(2.0, g(30)));
+    p.hline(face.x_range(), y, Stroke::new(2.0, line));
     for (x, dx) in [(cap.min.x, 2.5), (cap.max.x, -2.5)] {
-        p.add(egui::Shape::convex_polygon(vec![pos2(x, y - 3.0), pos2(x + dx, y), pos2(x, y + 3.0)], g(34), Stroke::NONE));
+        p.add(egui::Shape::convex_polygon(vec![pos2(x, y - 3.0), pos2(x + dx, y), pos2(x, y + 3.0)], rim, Stroke::NONE));
     }
     if resp.double_clicked() || (resp.clicked() && ui.input(|i| i.modifiers.alt)) {
         return Some(0.0);
@@ -806,6 +832,25 @@ pub enum KnobStyle {
     Dark,
     Silver,
     Hero,
+    /// The silver knob warmed to cream, with a dark pointer (Juke).
+    Cream,
+    /// [`KnobStyle::Hero`]'s segmented value ring around a cream cap (Juke's Tune and Pan).
+    CreamHero,
+}
+
+impl KnobStyle {
+    fn hero(self) -> bool {
+        matches!(self, KnobStyle::Hero | KnobStyle::CreamHero)
+    }
+
+    /// A light cap with a dark pointer (silver or cream).
+    fn light(self) -> bool {
+        matches!(self, KnobStyle::Silver | KnobStyle::Cream | KnobStyle::CreamHero)
+    }
+
+    fn cream(self) -> bool {
+        matches!(self, KnobStyle::Cream | KnobStyle::CreamHero)
+    }
 }
 
 /// `r` moved (and, when larger, shrunk) so all of it is inside `screen`: a window opened near a
@@ -885,7 +930,7 @@ struct KnobGeom {
 
 fn knob_geom(size: f32, style: KnobStyle) -> KnobGeom {
     let size = if size.is_finite() { size.clamp(8.0, 512.0) } else { 28.0 };
-    let hero = style == KnobStyle::Hero;
+    let hero = style.hero();
     // The reference diameters the pixel values of the look were drawn at.
     let s = (size / if hero { 140.0 } else { 64.0 }).clamp(0.5, 2.0);
     let (tick_r, tick_w, tick_len) = if size < 24.0 { (size * 0.5 + 4.0, 1.0, 3.0) } else { (size * 0.5 + 9.0 * s, 2.0 * s, 6.0 * s) };
@@ -921,6 +966,21 @@ const DARK_CONIC: (f32, [(f32, [u8; 3]); 10]) = (
         (0.82, [0x49, 0x4c, 0x55]),
         (0.92, [0x20, 0x22, 0x27]),
         (1.00, [0x26, 0x28, 0x2e]),
+    ],
+);
+
+const CREAM_CONIC: (f32, [(f32, [u8; 3]); 9]) = (
+    0.0,
+    [
+        (0.00, [0xf4, 0xec, 0xdc]),
+        (0.12, [0xcb, 0xbd, 0xa3]),
+        (0.25, [0xfb, 0xf6, 0xec]),
+        (0.37, [0xbd, 0xaf, 0x95]),
+        (0.50, [0xf6, 0xee, 0xdf]),
+        (0.62, [0xc8, 0xba, 0x9f]),
+        (0.75, [0xfd, 0xf8, 0xef]),
+        (0.87, [0xc0, 0xb2, 0x97]),
+        (1.00, [0xf4, 0xec, 0xdc]),
     ],
 );
 
@@ -1046,8 +1106,14 @@ fn paint_knob(
     }
 
     // Cap: conic brushed metal.
-    let silver = style == KnobStyle::Silver;
-    let (from_deg, stops): (f32, &[(f32, [u8; 3])]) = if silver { (SILVER_CONIC.0, &SILVER_CONIC.1) } else { (DARK_CONIC.0, &DARK_CONIC.1) };
+    let silver = style.light();
+    let (from_deg, stops): (f32, &[(f32, [u8; 3])]) = if style.cream() {
+        (CREAM_CONIC.0, &CREAM_CONIC.1)
+    } else if silver {
+        (SILVER_CONIC.0, &SILVER_CONIC.1)
+    } else {
+        (DARK_CONIC.0, &DARK_CONIC.1)
+    };
     let lift = 0.07 * hot;
     let mut cap = Mesh::default();
     const SEG: u32 = 72;
@@ -1099,7 +1165,9 @@ fn paint_knob(
         },
     );
     p.add(inner);
-    if silver {
+    if style.cream() {
+        p.circle_stroke(c, g.cap_r + 0.5, Stroke::new(1.0, fx(Color32::from_rgba_unmultiplied(90, 78, 64, 153))));
+    } else if silver {
         p.circle_stroke(c, g.cap_r + 0.5, Stroke::new(1.0, fx(Color32::from_rgba_unmultiplied(90, 90, 98, 153))));
     } else {
         p.circle_stroke(c, g.cap_r + 1.0, Stroke::new(2.0, fx(Color32::from_rgb(0x0e, 0x0f, 0x12))));
@@ -1107,7 +1175,13 @@ fn paint_knob(
 
     // Pointer: a rounded bar with a faint dark edge.
     let (a, b) = (polar(c, angle, g.ptr_from), polar(c, angle, g.ptr_to));
-    let ptr = if silver { Color32::from_rgb(0x24, 0x26, 0x2b) } else { Color32::from_rgb(0xf3, 0xf1, 0xec) };
+    let ptr = if style.cream() {
+        Color32::from_rgb(0x2a, 0x22, 0x1b)
+    } else if silver {
+        Color32::from_rgb(0x24, 0x26, 0x2b)
+    } else {
+        Color32::from_rgb(0xf3, 0xf1, 0xec)
+    };
     let edge = fx(Color32::from_black_alpha(if silver { 40 } else { 110 }));
     let w = g.ptr_w;
     p.line_segment([a, b], Stroke::new(w + 1.2, edge));
@@ -1230,7 +1304,7 @@ fn knob_inner(
 /// A [`knob`] with its name above (semi-bold; not for [`KnobStyle::Hero`]) and its value below.
 pub fn knob_with_text(ui: &mut Ui, info: &soundcraft_dsp::ParamInfo, value: f32, size: f32, accent: Color32, style: KnobStyle) -> KnobResponse {
     let t = Tokens::current();
-    let hero = style == KnobStyle::Hero;
+    let hero = style.hero();
     let size = if size.is_finite() { size.clamp(8.0, 512.0) } else { 28.0 };
     let label_px = (size * 0.2).clamp(9.0, 15.0);
     let value_px = if hero { (size * 0.14).clamp(11.0, 20.0) } else { (size * 0.2).clamp(9.0, 17.0) };

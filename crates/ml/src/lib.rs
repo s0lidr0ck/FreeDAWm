@@ -42,6 +42,7 @@ pub mod game;
 pub mod htdemucs;
 pub mod job;
 pub mod karaoke;
+pub mod kits;
 pub mod lyrics;
 pub mod midi;
 pub mod models;

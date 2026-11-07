@@ -3,7 +3,8 @@
 //! band's C++ reference events; `fs-tables <engine>` converts an engine's C++ table headers to Rust;
 //! `ml-models` exports and installs the local-ML models (see `ml_models.rs`); `ml-publish` packs
 //! them for the models release (see `ml_publish.rs`); `browser-thumbs
-//! [id…]` renders the plugin browser's built-in card pictures (see `browser_thumbs.rs`).
+//! [id…]` renders the plugin browser's built-in card pictures (see `browser_thumbs.rs`);
+//! `kit-package <folder>` packs a recorded Juke kit for the kits release (see `kit_package.rs`).
 
 mod asio;
 mod band_refs;
@@ -11,6 +12,7 @@ mod browser_thumbs;
 mod fidelity;
 mod fs_tables;
 mod ico;
+mod kit_package;
 mod ml_models;
 mod ml_publish;
 mod version;
@@ -233,8 +235,9 @@ fn main() -> ExitCode {
         Some("fs-tables") => fs_tables::run(&root(), args.get(1..).unwrap_or(&[])),
         Some("ml-models") => ml_models::run(&root(), args.get(1..).unwrap_or(&[])),
         Some("ml-publish") => ml_publish::run(&root(), args.get(1..).unwrap_or(&[])),
+        Some("kit-package") => kit_package::run(&root(), args.get(1..).unwrap_or(&[])),
         _ => {
-            Err("usage: cargo xtask <ci|layers|assets|parity|wasm|build-asio|version|fidelity-inputs|fidelity-refs <engine>|band-refs [--library <dir>] [name…]|browser-thumbs [id…]|fs-tables <engine>|ml-models [--scripts DIR] [--venv DIR] [--models DIR] [--force] [ids…] | ml-models --copy-from DIR [--models DIR] | ml-publish [--models DIR] [--out DIR] [--base-url URL] [ids…]>"
+            Err("usage: cargo xtask <ci|layers|assets|parity|wasm|build-asio|version|fidelity-inputs|fidelity-refs <engine>|band-refs [--library <dir>] [name…]|browser-thumbs [id…]|fs-tables <engine>|ml-models [--scripts DIR] [--venv DIR] [--models DIR] [--force] [ids…] | ml-models --copy-from DIR [--models DIR] | ml-publish [--models DIR] [--out DIR] [--base-url URL] [ids…] | kit-package <folder> [--id ID] [--out DIR] [--base-url URL]>"
                 .into())
         }
     };

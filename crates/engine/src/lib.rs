@@ -19,6 +19,7 @@ pub mod edit;
 pub mod file_access;
 pub mod inspect;
 pub mod io;
+pub mod juke_kits;
 pub mod lexicon;
 pub mod lyric_text;
 pub mod lyric_tools;
@@ -29,6 +30,7 @@ pub mod midi_record;
 pub mod ml;
 pub mod module_record;
 pub mod open_job;
+pub mod pattern;
 pub mod peak_cache;
 pub mod render_job;
 pub mod score;
@@ -611,6 +613,7 @@ impl Engine {
         if Arc::ptr_eq(&before, &self.doc) {
             return;
         }
+        crate::pattern::refresh(&mut self.doc);
         self.refresh_cleanup();
         self.refresh_vocal_fingerprints();
         // Audio this step made goes to disk now, so neither the session nor its history holds it.
@@ -724,6 +727,11 @@ impl Engine {
                     // rate); `sidechain_warnings` is kept for older clients.
                     o.insert("routing_warnings".into(), json!(notes));
                     o.insert("sidechain_warnings".into(), json!(notes));
+                }
+                // Pattern clips' notes follow their patterns, positions and the tempo map (first:
+                // MIDI Cleanup derives from the notes).
+                if !Arc::ptr_eq(&before, &self.doc) {
+                    crate::pattern::refresh(&mut self.doc);
                 }
                 // MIDI Cleanup previews follow the notes, chords, key, tempo and settings they derive
                 // from (`push_undo` does this for an undoable step).

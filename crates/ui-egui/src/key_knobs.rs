@@ -59,6 +59,8 @@ pub fn default_key_knobs(info: &PluginInfo) -> Vec<&'static str> {
         // The curve is the main control; the output trim is the one knob.
         "eq_7band" => vec!["output_gain"],
         "channel_strip" => vec!["comp_threshold", "output_gain"],
+        // A drum kit's strip: its level, feel and the two returns (the pads have their window).
+        "juke" => vec!["level", "humanize", "return_a", "return_b"],
         // FireStation engines: Station's own key knobs (`EngineUi::key_knobs`).
         _ => match engine_ui(info.id).map(|u| u.key_knobs).filter(|k| !k.is_empty()) {
             Some(keys) => keys.to_vec(),

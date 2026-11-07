@@ -140,7 +140,7 @@ fn bounce_matches_a_hand_computed_mix() {
     c.clean = None;
     let reference = Engine::new(s);
     let out = scratch("bounce");
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     let range = Range::new(0, 30_000);
     let bounce = |e: &Engine, name: &str| {
         let path = out.join(name);

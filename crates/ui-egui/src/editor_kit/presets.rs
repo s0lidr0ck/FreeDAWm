@@ -343,7 +343,7 @@ fn preset_values(host: &Host, st: &PresetState, name: &str) -> Map<String, Value
 /// Marks the module's preset clean (`setCurrentPreset (name, false)`: a load or save just named
 /// it) or dirty (`markPresetDirty`), as the session now has it.
 pub(crate) fn set_dirty(app: &mut SoundApp, host: &Host, dirty: bool) {
-    let Some(ins) = app.engine.session().track(host.track).and_then(|t| t.mixer.module(host.ins.id)) else { return };
+    let Some(ins) = app.engine.session().track(host.track).and_then(|t| t.module(host.ins.id)) else { return };
     let r = DirtyRef { name: ins.preset.clone(), params: ins.params.clone(), dirty };
     app.ui.preset_dirty.insert((host.track, host.ins.id), r);
 }

@@ -196,7 +196,7 @@ The rest of the mixer:
 - **Twine** (clipper and true-peak limiter) and **LevelUp** on the master. LevelUp does
   loudness-matched A/B against your reference tracks and delivery metering, with dither.
 - **Scout** can compare your mix with a reference's sound profile (see [AI tools](#ai-tools-that-run-on-your-computer)).
-- **Bounce** the mix or the loop to WAV, AIFF or FLAC. The bounce reports peak, true peak and
+- **Bounce** the mix or the loop to WAV, AIFF, FLAC, MP3 or Opus. The bounce reports peak, true peak and
   loudness (LUFS). Bounce and freeze render through the live plugin instances, so hosted
   instruments sound the same as in playback.
 - **Export** stems, clips, MIDI, MusicXML scores, and lyrics as LRC or text.

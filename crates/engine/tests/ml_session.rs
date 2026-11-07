@@ -269,7 +269,7 @@ fn every_command_on_a_scripted_session_saves_reloads_and_bounces() {
     }
     let out = scratch("bounce");
     let path = out.join("stems.wav");
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
     let range = Range::new(at, at + len);
     soundcraft_engine::io::Bounce::new(e.session_arc(), &path, range, &opts, None, false, false).unwrap().run().unwrap();
     let (_, mix) = soundcraft_audio_io::decode(&std::fs::read(&path).unwrap(), None).unwrap();
