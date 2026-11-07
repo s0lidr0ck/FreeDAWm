@@ -864,7 +864,8 @@ fn pad_edit(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level:
 /// Amp, pitch and filter envelope rows: a hero knob, the curve and the stage knobs.
 fn envelopes(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, color: Color32, out: &mut Out) {
     let rows: [(&str, &str, &[&str]); 3] = [
-        ("AMP", "level", &["attack", "hold", "decay", "velocity"]),
+        // Trim: the kit's balance for this pad (a recorded kit sets it), added to the level.
+        ("AMP", "level", &["attack", "hold", "decay", "velocity", "trim"]),
         ("PITCH", "tune", &["fine", "pitch_amount", "pitch_decay"]),
         ("FILTER", "cutoff", &["filter", "resonance", "filter_env", "filter_decay", "drive"]),
     ];
@@ -1087,10 +1088,10 @@ fn pad_strip(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level
     p.rect_stroke(r, 6.0, Stroke::new(1.0, EDGE), StrokeKind::Inside);
     let mut y = r.min.y + 4.0;
     for (name, size, style, h) in [
-        ("tune", 28.0, KnobStyle::CreamHero, 64.0),
-        ("pan", 28.0, KnobStyle::CreamHero, 64.0),
-        ("send_a", 18.0, KnobStyle::Cream, 48.0),
-        ("send_b", 18.0, KnobStyle::Cream, 48.0),
+        ("tune", 28.0, KnobStyle::CreamHero, 74.0),
+        ("pan", 28.0, KnobStyle::CreamHero, 74.0),
+        ("send_a", 18.0, KnobStyle::Cream, 58.0),
+        ("send_b", 18.0, KnobStyle::Cream, 58.0),
     ] {
         knob_at(ui, Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), h)), ins, &pad_param(pad, name), size, style, out);
         y += h;
@@ -1148,6 +1149,7 @@ mod tests {
             "stack1_ms",
             "stack2",
             "stack2_ms",
+            "trim",
         ] {
             for pad in 0..PADS {
                 assert!(info(&pad_param(pad, name)).is_some(), "{}", pad_param(pad, name));

@@ -73,15 +73,13 @@ pub fn owns_key(app: &SoundApp, key: Key, m: egui::Modifiers) -> bool {
         && (note_of(key, 0).is_some() || matches!(key, Key::Z | Key::X | Key::C | Key::V | Key::Tab))
 }
 
-/// Lowest and highest note the A key may play (the octave range), and the velocity step.
-const LOWEST_BASE: u8 = 0;
+/// Highest note the A key may play (the lowest is note 0), and the velocity step.
 const HIGHEST_BASE: u8 = 108;
 const VELOCITY_STEP: u8 = 16;
 
 /// An octave down (`-1`) or up (`1`). Held notes keep sounding and are let go as they started.
 pub fn shift_octave(app: &mut SoundApp, dir: i8) {
-    app.typing.base =
-        if dir < 0 { app.typing.base.saturating_sub(12).max(LOWEST_BASE) } else { app.typing.base.saturating_add(12).min(HIGHEST_BASE) };
+    app.typing.base = if dir < 0 { app.typing.base.saturating_sub(12) } else { app.typing.base.saturating_add(12).min(HIGHEST_BASE) };
 }
 
 /// Softer (`-1`) or harder (`1`).
@@ -265,7 +263,7 @@ mod tests {
             shift_octave(&mut app, -1);
             shift_velocity(&mut app, -1);
         }
-        assert_eq!((app.typing.base, app.typing.velocity), (LOWEST_BASE, 1));
+        assert_eq!((app.typing.base, app.typing.velocity), (0, 1));
     }
 
     #[test]

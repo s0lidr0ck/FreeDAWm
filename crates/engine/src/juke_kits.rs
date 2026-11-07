@@ -255,7 +255,7 @@ mod tests {
 ///
 /// ```json
 /// {"name": "SM Drums", "license": "Public domain", "credit": "…",
-///  "pads": [{"name": "Kick", "family": "kick", "note": 36,
+///  "pads": [{"name": "Kick", "family": "kick", "note": 36, "trim": -2.5,
 ///            "samples": {"v1.r1": "kick/v1r1.wav", "v4.r2": "kick/v4r2.wav"}}]}
 /// ```
 ///
@@ -280,6 +280,9 @@ pub struct RecordedPad {
     pub family: Option<String>,
     #[serde(default)]
     pub note: Option<u8>,
+    /// The pad's trim in dB (−24 to +24): the kit's balance between its pads, under the fader.
+    #[serde(default)]
+    pub trim: Option<f32>,
     #[serde(default)]
     pub samples: std::collections::BTreeMap<String, String>,
 }
@@ -301,6 +304,11 @@ pub fn read_recorded(dir: &std::path::Path) -> Result<RecordedKit, String> {
             && DrumFamily::from_id(f).is_none()
         {
             return Err(format!("pad {}: no family `{f}`", i + 1));
+        }
+        if let Some(t) = pad.trim
+            && !(t.is_finite() && (-24.0..=24.0).contains(&t))
+        {
+            return Err(format!("pad {}: trim {t} dB is outside -24 to +24", i + 1));
         }
         for (key, file) in &pad.samples {
             if layer_robin(key).is_none() {
@@ -341,6 +349,7 @@ mod recorded_tests {
             r#"{"name":"T","pads":[{"name":"K","samples":{"v5.r1":"k.wav"}}]}"#,
             r#"{"name":"T","pads":[{"name":"K","samples":{"v1.r1":"../k.wav"}}]}"#,
             r#"{"name":"T","pads":[{"name":"K","family":"bongo"}]}"#,
+            r#"{"name":"T","pads":[{"name":"K","trim":30}]}"#,
         ] {
             write(bad);
             assert!(read_recorded(&d).is_err(), "{bad}");

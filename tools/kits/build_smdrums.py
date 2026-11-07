@@ -3,9 +3,10 @@
 usage: python3 -I build_smdrums.py <zip> <out folder>
 Reads the zip directly (nothing is extracted but the chosen samples), picks four velocity layers and
 up to four round-robin takes per pad from the SFZ mappings, trims each take's tail with a fade, and
-writes <out>/kit.json.
+writes <out>/kit.json, with each pad's trim balancing the pads by loudness (the samples themselves
+are not changed).
 """
-import json, os, re, struct, sys, zipfile
+import json, math, os, re, struct, sys, zipfile
 
 ZIP, OUT = sys.argv[1], sys.argv[2]
 LAYER_VELS = [40, 72, 100, 124]
@@ -109,6 +110,56 @@ def trim_wav(data, seconds):
     return b"RIFF" + struct.pack("<I", len(body)) + body, rate, ch, bits
 
 
+# Loudness targets (the loudest layer's peak 50 ms energy, dB): drums at the kick's level, hats and
+# cymbals 4 dB under it. A trim never lifts a pad's peak above +6 dBFS (Juke's kit level is -6 dB, so
+# the output still has its headroom), and stays within ±12 dB.
+DRUM_TARGET, CYMBAL_TARGET = -10.0, -14.0
+PEAK_CEILING, TRIM_LIMIT = 6.0, 12.0
+
+
+def energy(wav):
+    """The take's per-frame energy (mean over channels) and its peak, from WAV bytes."""
+    i = wav.index(b"fmt ")
+    tag, ch, rate, _, align, bits = struct.unpack("<HHIIHH", wav[i + 8:i + 24])
+    d = wav.index(b"data")
+    pcm = wav[d + 8:d + 8 + struct.unpack("<I", wav[d + 4:d + 8])[0]]
+    bps, scale = bits // 8, float(1 << (bits - 1))
+    out, peak = [], 0.0
+    for j in range(0, len(pcm) - align + 1, align):
+        e = 0.0
+        for c in range(ch):
+            raw = pcm[j + c * bps:j + c * bps + bps]
+            v = struct.unpack("<f", raw)[0] if tag == 3 else int.from_bytes(raw, "little", signed=True) / scale
+            e += v * v
+            peak = max(peak, abs(v))
+        out.append(e / ch)
+    return out, rate, peak
+
+
+def punch(e, rate, window=0.05):
+    """The loudest `window` of a take: its mean energy."""
+    w, acc, best = max(1, int(rate * window)), 0.0, 0.0
+    for k, v in enumerate(e):
+        acc += v
+        if k >= w:
+            acc -= e[k - w]
+        best = max(best, acc / w)
+    return best
+
+
+def trim_for(family, takes):
+    """The pad's trim (dB) from its loudest layer's takes (WAV bytes)."""
+    loud, peak = [], 0.0
+    for wav in takes:
+        e, rate, pk = energy(wav)
+        loud.append(punch(e, rate))
+        peak = max(peak, pk)
+    db = 10 * math.log10(max(sum(loud) / len(loud), 1e-12))
+    target = CYMBAL_TARGET if family in ("hat", "cymbal") else DRUM_TARGET
+    headroom = PEAK_CEILING - 20 * math.log10(max(peak, 1e-6))
+    return round(max(-TRIM_LIMIT, min(target - db, headroom, TRIM_LIMIT)), 1), db
+
+
 z = zipfile.ZipFile(ZIP)
 names = set(z.namelist())
 os.makedirs(OUT, exist_ok=True)
@@ -117,7 +168,7 @@ for i, (name, family, note, mapping, secs) in enumerate(PADS):
     regs = regions(z.read(f"Programs/mappings/smdrums_sfz_{mapping}.sfz").decode("utf-8", "replace"))
     folder = f"{i + 1:02d}_{re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')}"
     os.makedirs(os.path.join(OUT, folder), exist_ok=True)
-    samples = {}
+    samples, loudest = {}, []
     for layer, vel in enumerate(LAYER_VELS):
         for take in range(1, TAKES + 1):
             hit = [r for r in regs if r[3] == take and r[1] <= vel <= r[2]]
@@ -132,10 +183,13 @@ for i, (name, family, note, mapping, secs) in enumerate(PADS):
                 f.write(wav)
             total += len(wav)
             samples[f"v{layer + 1}.r{take}"] = rel
+            if layer == len(LAYER_VELS) - 1:
+                loudest.append(wav)
     if not samples:
         raise SystemExit(f"{name}: no samples picked")
-    pads.append({"name": name, "family": family, "note": note, "samples": samples})
-    print(f"{name}: {len(samples)} samples ({rate} Hz, {ch} ch, {bits} bit)")
+    trim, db = trim_for(family, loudest)
+    pads.append({"name": name, "family": family, "note": note, "trim": trim, "samples": samples})
+    print(f"{name}: {len(samples)} samples ({rate} Hz, {ch} ch, {bits} bit), loudness {db:.1f} dB, trim {trim:+.1f} dB")
 kit = {
     "name": "SM Drums",
     "license": "Public domain (as listed by SFZ Instruments; the authors offer it free of charge for any use: smmdrums.wordpress.com)",

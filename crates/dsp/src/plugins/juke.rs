@@ -38,7 +38,7 @@ pub const LAYERS: usize = 4;
 /// Round-robin variations per layer.
 pub const ROBINS: usize = 4;
 /// Parameters per pad (see [`PadParam`]).
-const K: usize = 33;
+const K: usize = 34;
 const VOICES: usize = 64;
 const MAX_PENDING: usize = 64;
 /// Envelopes below this are silent.
@@ -99,6 +99,7 @@ enum PadParam {
     Stack1Ms,
     Stack2,
     Stack2Ms,
+    Trim,
 }
 
 // Kit-wide parameters, after the pads.
@@ -146,6 +147,8 @@ macro_rules! juke_table {
                 lin(concat!("p", $n, "_stack1_ms"), concat!("Pad ", $n, " Stack 1 Delay"), 0.0, 50.0, 0.0, Unit::Ms),
                 choice(concat!("p", $n, "_stack2"), concat!("Pad ", $n, " Stack 2"), &STACKS, 0),
                 lin(concat!("p", $n, "_stack2_ms"), concat!("Pad ", $n, " Stack 2 Delay"), 0.0, 50.0, 0.0, Unit::Ms),
+                // A kit's balance between its pads (a recorded kit sets it), under the fader.
+                lin(concat!("p", $n, "_trim"), concat!("Pad ", $n, " Trim"), -24.0, 24.0, 0.0, Unit::Db),
             )*
             lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
             lin("humanize", "Humanize", 0.0, 100.0, 0.0, Unit::Percent),
@@ -593,7 +596,7 @@ impl Juke {
         let hum_cents = h * 20.0 * self.rng.bipolar();
         let sens = self.pv(pad, PadParam::Velocity) / 100.0;
         let vel01 = f32::from(vel.min(127)) / 127.0;
-        let gain = db_to_gain(self.pv(pad, PadParam::Level) + hum_db) * (1.0 - sens + sens * vel01);
+        let gain = db_to_gain(self.pv(pad, PadParam::Level) + self.pv(pad, PadParam::Trim) + hum_db) * (1.0 - sens + sens * vel01);
         let pan = (self.pv(pad, PadParam::Pan) / 100.0).clamp(-1.0, 1.0);
         let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
         let semis = self.pv(pad, PadParam::Tune) + (self.pv(pad, PadParam::Fine) + hum_cents) / 100.0;
@@ -1347,6 +1350,19 @@ mod tests {
         // Let the return's 20 ms glide settle before the hit.
         let wet = peak(&run(&mut j, 4900, &[(4800, 36, 127)]).0[4800..]);
         assert!((wet / dry - 2.0).abs() < 0.01, "dry plus a full send at unity: {}", wet / dry);
+    }
+
+    #[test]
+    fn a_pads_trim_adds_to_its_level() {
+        let hit = |trim: f32| {
+            let mut j = juke();
+            set(&mut j, "p1_source", 0.0);
+            set(&mut j, "p1_trim", trim);
+            assert!(j.set_asset("p1.v1.r1", Some(click(10, 1.0))));
+            peak(&run(&mut j, 100, &[(0, 36, 127)]).0)
+        };
+        let (flat, up) = (hit(0.0), hit(6.0206));
+        assert!((up / flat - 2.0).abs() < 0.01, "+6 dB of trim doubles the pad: {}", up / flat);
     }
 
     #[test]

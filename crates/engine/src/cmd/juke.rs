@@ -468,6 +468,9 @@ fn recorded_load(e: &mut Engine, t: TrackId, dir: &Path) -> Result<Value> {
         if let Some(n) = pad.note {
             params.insert(format!("p{}_note", i + 1), f32::from(n.min(127)));
         }
+        if let Some(t) = pad.trim {
+            params.insert(format!("p{}_trim", i + 1), t.clamp(-24.0, 24.0));
+        }
     }
     {
         let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
@@ -766,7 +769,7 @@ mod tests {
         click_wav(&d.join("kick").join("v2r1.wav"), 48_000);
         std::fs::write(
             d.join("kit.json"),
-            r#"{"name":"Test Kit","license":"CC0","pads":[{"name":"Thud","family":"kick","note":36,"samples":{"v1.r1":"kick/v1r1.wav","v2.r1":"kick/v2r1.wav"}}]}"#,
+            r#"{"name":"Test Kit","license":"CC0","pads":[{"name":"Thud","family":"kick","note":36,"trim":-3.5,"samples":{"v1.r1":"kick/v1r1.wav","v2.r1":"kick/v2r1.wav"}}]}"#,
         )
         .unwrap();
         let (mut e, t) = beat();
@@ -779,6 +782,7 @@ mod tests {
         assert_eq!(ins.kit.as_ref().unwrap().name, "Test Kit");
         assert!(ins.samples.contains_key("p1.v2.r1") && ins.params.get("p1_source") == Some(&0.0));
         assert_eq!(ins.params.get("p1_decay"), Some(&5000.0), "a recording plays whole");
+        assert_eq!(ins.params.get("p1_trim"), Some(&-3.5), "the kit's balance");
         assert!(bounce_peak(&mut e, &d, "rec.wav") > 0.05, "the recorded kick plays");
         // A kit naming a missing file changes nothing.
         std::fs::write(d.join("kit.json"), r#"{"name":"Broken","pads":[{"name":"K","samples":{"v1.r1":"nope.wav"}}]}"#).unwrap();
