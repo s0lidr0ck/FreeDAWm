@@ -3,7 +3,11 @@
 //! the same path as a hardware port: armed or input-monitored instrument tracks whose input is
 //! MIDI: All Inputs or MIDI: Musical Typing hear it, and a take records it.
 //!
-//! Computer keys (while "Computer keys" is on, Ctrl+Alt+K / Cmd+Alt+K): A S D F G H J K L ; are
+//! Opening the window (Shift+K, Window › Musical Typing) turns the computer keys on, and closing
+//! it turns them off, so one key gets straight to playing; the "Computer keys" checkbox (Ctrl+Alt+K
+//! / Cmd+Alt+K) still switches them while it is open.
+//!
+//! Computer keys (while "Computer keys" is on): A S D F G H J K L ; are
 //! the white keys from C, W E T Y U O P the black keys; Z / X an octave down / up; C / V velocity
 //! down / up; Tab held is the sustain pedal. While it is on, those keys don't run their shortcuts
 //! (Space and the rest still do). The window's Octave and Velocity − / + buttons do the same, and
@@ -249,6 +253,16 @@ mod tests {
         set_capture(&mut app, false);
         assert!(!app.typing.sustain);
         assert_eq!(heard(&app), vec![[0xB0, 64, 127], [0xB0, 64, 0]]);
+    }
+
+    #[test]
+    fn opening_the_window_turns_the_computer_keys_on_and_closing_it_off() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        app.run("window.midi_keyboard", json!({})).unwrap();
+        assert!(app.ui.show_midi_keyboard && app.typing.capture, "Shift+K: open and ready to play");
+        set_sustain(&mut app, true);
+        app.run("window.midi_keyboard", json!({})).unwrap();
+        assert!(!app.ui.show_midi_keyboard && !app.typing.capture && !app.typing.sustain, "closed: keys and pedal let go");
     }
 
     #[test]

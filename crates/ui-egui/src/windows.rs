@@ -425,7 +425,9 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
         ui.label(egui::RichText::new(keys_hint).small().color(t.text_dim));
     });
     if !open {
+        // Closed: the keys it played go back to their shortcuts.
         crate::musical_typing::release_all(app);
+        crate::musical_typing::set_capture(app, false);
     }
     app.ui.show_midi_keyboard = open;
 }

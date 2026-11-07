@@ -1284,7 +1284,16 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.task_manager" => toggle(&mut app.ui.show_task_manager),
         "window.metadata" => toggle(&mut app.ui.show_metadata),
         "window.event_list" => toggle(&mut app.ui.show_event_list),
-        "window.midi_keyboard" => toggle(&mut app.ui.show_midi_keyboard),
+        // Musical Typing opens ready to play: the computer keys on with the window, off with it.
+        "window.midi_keyboard" => {
+            let open = !app.ui.show_midi_keyboard;
+            app.ui.show_midi_keyboard = open;
+            crate::musical_typing::set_capture(app, open);
+            if !open {
+                crate::musical_typing::release_all(app);
+            }
+            json!({"value": open})
+        }
         "window.workspace" | "window.workspace_presets" | "window.workspace_sounds" | "window.workspace_front" => {
             app.ui.show_workspace = true;
             json!({"value": true})
