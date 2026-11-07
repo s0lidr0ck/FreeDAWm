@@ -227,16 +227,14 @@ from `KitFx::module_id`, so the module commands and FireStation's full editors w
 starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). The pads and
 both buses meter through Juke's readouts (8-bit dB codes, three to a slot). Still to do:
 
-- **The first recorded kit's files** (SM Drums). Everything for recorded kits is built: the
+- **Publishing the first recorded kit** (SM Drums). Everything for recorded kits is built: the
   installed-kit format (a folder with `kit.json` and its WAVs, `juke_kits::RecordedKit`), loading one
-  (`mix.kit_load {path}`), the kits release's list and downloads (`soundcraft_ml::kits`: `kits.json`
-  at the `kits-v1` release, size and sha256 checked, unpacked and swapped in like the models) in the
-  Kits menu, and `cargo xtask kit-package <folder>` to pack a kit and write its `kits.json` entry.
-  What is left is the kit itself: someone has to fetch SM Drums (SFZ Instruments lists it as public
-  domain, version 1.2, 2.2 GB of WAV), confirm its licence on its download page, trim it to 4
-  layers × 4 takes per pad with a `kit.json`, pack it and upload the zip and `kits.json` to a
-  `kits-v1` release. Agent sessions cannot: the kit's site is outside their network, its GitHub
-  org outside their repository access, and they cannot upload release files.
+  (`mix.kit_load {path}`; a recorded pad plays its takes whole, at their own pitch), the kits
+  release's list and downloads (`soundcraft_ml::kits`) in the Kits menu, and `cargo xtask
+  kit-package`. The SM Drums kit is built and packed (`tools/kits/`: 16 pads × 4 velocity layers × 4
+  takes, 216 MB) and checked to install and play on every pad. What is left is the upload: an agent
+  session cannot publish release files, so `sm_drums.zip` and `kits.json` go to a `kits-v1`
+  release by hand.
 
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the

@@ -506,9 +506,15 @@ fn recorded_load(e: &mut Engine, t: TrackId, dir: &Path) -> Result<Value> {
     for (i, pad) in kit.pads.iter().enumerate() {
         let layers =
             pad.samples.keys().filter_map(|k| crate::juke_kits::layer_robin(k)).map(|(l, _)| l).collect::<std::collections::BTreeSet<_>>().len();
-        // Layered recordings carry their own dynamics; one layer leans on the velocity.
+        // Layered recordings carry their own dynamics; one layer leans on the velocity. A
+        // recording plays whole and at its own pitch: none of the synth voice's short decay,
+        // tuning or pitch sweep the pad had by default.
         if layers > 0 {
-            ins.params.insert(format!("p{}_velocity", i + 1), if layers > 1 { 30.0 } else { 75.0 });
+            let n = i + 1;
+            ins.params.insert(format!("p{n}_velocity"), if layers > 1 { 30.0 } else { 75.0 });
+            for (k, v) in [("decay", 5000.0), ("hold", 0.0), ("attack", 0.0), ("tune", 0.0), ("fine", 0.0), ("pitch_amount", 0.0), ("filter", 0.0)] {
+                ins.params.insert(format!("p{n}_{k}"), v);
+            }
         }
     }
     ins.kit = Some(layout);
@@ -772,11 +778,51 @@ mod tests {
         assert_eq!(pad_layout(&ins, 0).name, "Thud");
         assert_eq!(ins.kit.as_ref().unwrap().name, "Test Kit");
         assert!(ins.samples.contains_key("p1.v2.r1") && ins.params.get("p1_source") == Some(&0.0));
+        assert_eq!(ins.params.get("p1_decay"), Some(&5000.0), "a recording plays whole");
         assert!(bounce_peak(&mut e, &d, "rec.wav") > 0.05, "the recorded kick plays");
         // A kit naming a missing file changes nothing.
         std::fs::write(d.join("kit.json"), r#"{"name":"Broken","pads":[{"name":"K","samples":{"v1.r1":"nope.wav"}}]}"#).unwrap();
         assert!(e.execute("mix.kit_load", &json!({"track": t.0, "path": d.to_string_lossy()})).is_err());
         assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, "Test Kit");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Checks a packed recorded kit before it is published: `FREEDAWM_TEST_KIT_ZIP=<kit>.zip cargo
+    /// test -p soundcraft-engine --lib -- --ignored a_packed_kit_installs_and_plays`.
+    #[test]
+    #[ignore = "needs a packed kit zip (FREEDAWM_TEST_KIT_ZIP)"]
+    fn a_packed_kit_installs_and_plays() {
+        let zip = PathBuf::from(std::env::var_os("FREEDAWM_TEST_KIT_ZIP").expect("FREEDAWM_TEST_KIT_ZIP"));
+        let id = zip.file_stem().and_then(|s| s.to_str()).unwrap().to_string();
+        let d = dir("packed");
+        let kits = d.join("kits");
+        crate::ml::kits::install_kit_zip(&kits, &id, &zip).unwrap();
+        let (mut e, t) = beat();
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        let v = e.execute("mix.kit_load", &json!({"track": t.0, "path": kits.join(&id).to_string_lossy()})).unwrap();
+        let ins = juke(&e, t);
+        println!("{}: {} samples; {}", v["kit"], v["samples"], v["license"]);
+        for pad in 0..PADS {
+            let layout = pad_layout(&ins, pad);
+            let n = ins.samples.keys().filter(|k| k.starts_with(&format!("p{}.", pad + 1))).count();
+            println!(
+                "pad {:2}: {:12} {:?} note {} {n} samples",
+                pad + 1,
+                layout.name,
+                layout.family,
+                ins.params.get(&format!("p{}_note", pad + 1)).unwrap()
+            );
+            assert!(n > 0, "pad {} has samples", pad + 1);
+        }
+        // Every pad's note on the first steps of a lane, one after the other, then the mix.
+        for pad in 0..PADS {
+            let note = *ins.params.get(&format!("p{}_note", pad + 1)).unwrap();
+            e.execute("pattern.lane", &json!({"clip": clip.0, "lane": 0, "note": note as u8})).unwrap();
+            e.execute("pattern.step", &json!({"clip": clip.0, "lane": 0, "step": 0, "on": true, "velocity": 110})).unwrap();
+            let p = bounce_peak(&mut e, &d, &format!("pad{pad}.wav"));
+            println!("pad {:2} bounce peak {p:.3}", pad + 1);
+            assert!(p > 0.01, "pad {} sounds", pad + 1);
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 
