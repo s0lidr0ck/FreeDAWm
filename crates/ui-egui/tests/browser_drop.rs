@@ -94,7 +94,7 @@ fn drop_instrument_on_instrument_track_sets_it() {
     let keys = h.state().engine.session().track_by_name("Keys").unwrap().instrument.clone().unwrap();
     assert_eq!(keys.plugin, "drum_synth");
     // And on the Instrument column's slot.
-    let from = card(&mut h, "Sampler");
+    let from = card(&mut h, "Lift - Sampler");
     let slot = h.get_by_role_and_label(Role::Button, "Instrument").rect().center();
     drag(&mut h, from, slot, Modifiers::NONE);
     let keys = h.state().engine.session().track_by_name("Keys").unwrap().instrument.clone().unwrap();
@@ -225,7 +225,7 @@ fn double_click_uses_selected_track() {
     double_click(&mut h, at);
     assert_eq!(h.state().engine.session().track(keys).unwrap().instrument.as_ref().unwrap().plugin, "drum_synth");
     // The card menu's "Insert on selected track" does the same.
-    let at = card(&mut h, "Sampler");
+    let at = card(&mut h, "Lift - Sampler");
     right_click(&mut h, at);
     h.get_by_label("Insert on selected track").click();
     h.run_steps(3);

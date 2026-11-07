@@ -1,20 +1,31 @@
-//! Sampler: plays one recorded sample across the keyboard, 32 voices.
+//! Lift - Sampler (id `sampler`): plays one recorded sample across the keyboard, 32 voices.
 //!
 //! Each note plays the sample pitched from its root note (an octave up plays twice as fast) with
 //! 4-point cubic interpolation, which also converts the sample's own rate to the host's. Key and
-//! velocity ranges, an amp ADSR with velocity sensitivity, a sample start point, forward or
-//! ping-pong loops, and gate or one-shot playback. The host hands the audio over with
-//! [`Plugin::set_sample`]; without one the Sampler is silent.
+//! velocity ranges, an amp ADSR with velocity sensitivity, a start and an end point, forward or
+//! ping-pong loops, gate or one-shot playback, a resonant filter (low-, high- or band-pass) with
+//! its own attack/decay envelope, an LFO on pitch, filter and volume, glide, mono (legato) or
+//! poly voicing, and pan. The host hands the audio over with [`Plugin::set_sample`]; without one
+//! the Sampler is silent.
+//!
+//! The filter, LFO, glide, voicing and pan parameters came after the first release: their
+//! defaults (filter Off, no LFO depth, no glide, Poly, centre) play an older session as before.
 
+use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 
 use super::synth::{Adsr, AdsrRates, Event, EventKind, EventQueue, MAX_EVENTS, Stage};
 use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
-use crate::util::{Smoother, frames_in, ms_to_samples, sane_channels, sane_sr};
-use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Unit, db_to_gain};
+use crate::util::{Rng, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
+use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Transport, Unit, db_to_gain};
 
-const PLAY_MODES: &[&str] = &["Gate", "One Shot"];
+const PLAY_MODES: &[&str] = &["Gate", "One Shot", "Slice"];
 const LOOP_MODES: &[&str] = &["Off", "Forward", "Ping-Pong"];
+/// Filter types, in the order of the `filter_type` choice.
+pub const FILTER_TYPES: &[&str] = &["Off", "Low-pass", "High-pass", "Band-pass"];
+/// LFO shapes, in the order of the `lfo_shape` choice.
+pub const LFO_SHAPES: &[&str] = &["Sine", "Triangle", "Square", "Saw", "Random"];
+const VOICE_MODES: &[&str] = &["Poly", "Mono"];
 
 const ROOT: usize = 0;
 const TRANSPOSE: usize = 1;
@@ -35,8 +46,66 @@ const LOOP_MODE: usize = 15;
 const LOOP_START: usize = 16;
 const LOOP_END: usize = 17;
 const LEVEL: usize = 18;
+const END: usize = 19;
+const FILTER_TYPE: usize = 20;
+const CUTOFF: usize = 21;
+const RESONANCE: usize = 22;
+const FILTER_ENV: usize = 23;
+const FILTER_ATTACK: usize = 24;
+const FILTER_DECAY: usize = 25;
+const LFO_SHAPE: usize = 26;
+const LFO_RATE: usize = 27;
+const LFO_PITCH: usize = 28;
+const LFO_FILTER: usize = 29;
+const LFO_VOLUME: usize = 30;
+const GLIDE: usize = 31;
+const VOICE_MODE: usize = 32;
+const PAN: usize = 33;
+const LOOP_XFADE: usize = 34;
+const SLICE_COUNT: usize = 35;
+/// `slice_1`: the first slice's start; the 64 slices follow in order.
+const SLICE_FIRST: usize = 36;
+const SLICES: usize = crate::slices::MAX_SLICES;
+const WARP: usize = 100;
+const SAMPLE_BPM: usize = 101;
+const LFO_SYNC: usize = 102;
+const LFO_DIVISION: usize = 103;
+/// LFO divisions with tempo sync, and the quarter notes one cycle lasts.
+pub const LFO_DIVISIONS: &[&str] = &["2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T"];
+const DIVISION_QUARTERS: [f64; 10] = [8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0];
+/// A warp grain's length in seconds: two of them, half a grain apart, overlap to one.
+const GRAIN_SECS: f32 = 0.06;
 
-static SAMPLER_PARAMS: [ParamInfo; 19] = [
+/// A slice's start, as a percent of the sample (grouped apart from the sound's parameters).
+const fn slice(id: &'static str, name: &'static str) -> ParamInfo {
+    ParamInfo {
+        id,
+        name,
+        min: 0.0,
+        max: 100.0,
+        default: 0.0,
+        unit: Unit::Percent,
+        taper: Taper::Linear,
+        choices: &[],
+        display: None,
+        group: "Slices",
+    }
+}
+
+fn pan_display(v: f32) -> String {
+    let v = v.round();
+    if v.abs() < 0.5 {
+        "C".to_string()
+    } else if v < 0.0 {
+        format!("L{:.0}", -v)
+    } else {
+        format!("R{v:.0}")
+    }
+}
+
+// New parameters go at the end: sessions and presets store them by id, and the indices above
+// are the order of this table.
+static SAMPLER_PARAMS: [ParamInfo; 104] = [
     lin("root_note", "Root Note", 0.0, 127.0, 60.0, Unit::None),
     lin("transpose", "Transpose", -48.0, 48.0, 0.0, Unit::Semitones),
     lin("fine_tune", "Fine Tune", -100.0, 100.0, 0.0, Unit::Cents),
@@ -56,12 +125,108 @@ static SAMPLER_PARAMS: [ParamInfo; 19] = [
     lin("loop_start", "Loop Start", 0.0, 100.0, 0.0, Unit::Percent),
     lin("loop_end", "Loop End", 0.0, 100.0, 100.0, Unit::Percent),
     lin("level", "Level", -48.0, 12.0, 0.0, Unit::Db),
+    lin("end", "Sample End", 0.0, 100.0, 100.0, Unit::Percent),
+    choice("filter_type", "Filter", FILTER_TYPES, 0),
+    log("cutoff", "Cutoff", 20.0, 20000.0, 2000.0, Unit::Hz),
+    lin("resonance", "Resonance", 0.0, 100.0, 20.0, Unit::Percent),
+    lin("filter_env", "Filter Env", -72.0, 72.0, 0.0, Unit::Semitones),
+    log("filter_attack", "Filter Attack", 0.1, 5000.0, 1.0, Unit::Ms),
+    log("filter_decay", "Filter Decay", 1.0, 10000.0, 300.0, Unit::Ms),
+    choice("lfo_shape", "LFO Shape", LFO_SHAPES, 0),
+    log("lfo_rate", "LFO Rate", 0.05, 20.0, 4.0, Unit::Hz),
+    lin("lfo_pitch", "LFO to Pitch", 0.0, 12.0, 0.0, Unit::Semitones),
+    lin("lfo_filter", "LFO to Filter", 0.0, 48.0, 0.0, Unit::Semitones),
+    lin("lfo_volume", "LFO to Volume", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("glide", "Glide", 0.0, 2000.0, 0.0, Unit::Ms),
+    choice("voice_mode", "Voices", VOICE_MODES, 0),
+    ParamInfo {
+        id: "pan",
+        name: "Pan",
+        min: -100.0,
+        max: 100.0,
+        default: 0.0,
+        unit: Unit::None,
+        taper: Taper::Linear,
+        choices: &[],
+        display: Some(pan_display),
+        group: "",
+    },
+    lin("loop_xfade", "Loop Crossfade", 0.0, 50.0, 0.0, Unit::Percent),
+    lin("slice_count", "Slices", 0.0, 64.0, 0.0, Unit::None),
+    slice("slice_1", "Slice 1 Start"),
+    slice("slice_2", "Slice 2 Start"),
+    slice("slice_3", "Slice 3 Start"),
+    slice("slice_4", "Slice 4 Start"),
+    slice("slice_5", "Slice 5 Start"),
+    slice("slice_6", "Slice 6 Start"),
+    slice("slice_7", "Slice 7 Start"),
+    slice("slice_8", "Slice 8 Start"),
+    slice("slice_9", "Slice 9 Start"),
+    slice("slice_10", "Slice 10 Start"),
+    slice("slice_11", "Slice 11 Start"),
+    slice("slice_12", "Slice 12 Start"),
+    slice("slice_13", "Slice 13 Start"),
+    slice("slice_14", "Slice 14 Start"),
+    slice("slice_15", "Slice 15 Start"),
+    slice("slice_16", "Slice 16 Start"),
+    slice("slice_17", "Slice 17 Start"),
+    slice("slice_18", "Slice 18 Start"),
+    slice("slice_19", "Slice 19 Start"),
+    slice("slice_20", "Slice 20 Start"),
+    slice("slice_21", "Slice 21 Start"),
+    slice("slice_22", "Slice 22 Start"),
+    slice("slice_23", "Slice 23 Start"),
+    slice("slice_24", "Slice 24 Start"),
+    slice("slice_25", "Slice 25 Start"),
+    slice("slice_26", "Slice 26 Start"),
+    slice("slice_27", "Slice 27 Start"),
+    slice("slice_28", "Slice 28 Start"),
+    slice("slice_29", "Slice 29 Start"),
+    slice("slice_30", "Slice 30 Start"),
+    slice("slice_31", "Slice 31 Start"),
+    slice("slice_32", "Slice 32 Start"),
+    slice("slice_33", "Slice 33 Start"),
+    slice("slice_34", "Slice 34 Start"),
+    slice("slice_35", "Slice 35 Start"),
+    slice("slice_36", "Slice 36 Start"),
+    slice("slice_37", "Slice 37 Start"),
+    slice("slice_38", "Slice 38 Start"),
+    slice("slice_39", "Slice 39 Start"),
+    slice("slice_40", "Slice 40 Start"),
+    slice("slice_41", "Slice 41 Start"),
+    slice("slice_42", "Slice 42 Start"),
+    slice("slice_43", "Slice 43 Start"),
+    slice("slice_44", "Slice 44 Start"),
+    slice("slice_45", "Slice 45 Start"),
+    slice("slice_46", "Slice 46 Start"),
+    slice("slice_47", "Slice 47 Start"),
+    slice("slice_48", "Slice 48 Start"),
+    slice("slice_49", "Slice 49 Start"),
+    slice("slice_50", "Slice 50 Start"),
+    slice("slice_51", "Slice 51 Start"),
+    slice("slice_52", "Slice 52 Start"),
+    slice("slice_53", "Slice 53 Start"),
+    slice("slice_54", "Slice 54 Start"),
+    slice("slice_55", "Slice 55 Start"),
+    slice("slice_56", "Slice 56 Start"),
+    slice("slice_57", "Slice 57 Start"),
+    slice("slice_58", "Slice 58 Start"),
+    slice("slice_59", "Slice 59 Start"),
+    slice("slice_60", "Slice 60 Start"),
+    slice("slice_61", "Slice 61 Start"),
+    slice("slice_62", "Slice 62 Start"),
+    slice("slice_63", "Slice 63 Start"),
+    slice("slice_64", "Slice 64 Start"),
+    toggle("warp", "Warp", false),
+    lin("sample_bpm", "Sample Tempo", 40.0, 300.0, 120.0, Unit::None),
+    toggle("lfo_sync", "LFO Sync", false),
+    choice("lfo_division", "LFO Division", LFO_DIVISIONS, 3),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
     id: "sampler",
-    name: "Sampler",
-    short_name: "Sampler",
+    name: "Lift - Sampler",
+    short_name: "Lift",
     category: Category::Instrument,
     params: &SAMPLER_PARAMS,
     is_instrument: true,
@@ -75,12 +240,91 @@ pub static SAMPLER_INFO: PluginInfo = PluginInfo {
 const VOICES: usize = 32;
 /// Fastest playback step in sample frames per output frame (keeps hostile pitch bounded).
 const MAX_STEP: f64 = 256.0;
+/// Frames between updates of each voice's pitch and filter (the modulation's control rate).
+const CONTROL: usize = 16;
+/// Notes a mono sampler remembers being held, to return to when the newest is let go.
+const HELD_STACK: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LoopMode {
     Off,
     Forward,
     PingPong,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FilterKind {
+    Off,
+    LowPass,
+    HighPass,
+    BandPass,
+}
+
+/// The filter envelope: a linear rise to full over the attack, then an exponential fall to
+/// silence (-60 dB) over the decay. It ignores the key being let go.
+#[derive(Debug, Clone, Copy)]
+struct AdEnv {
+    level: f32,
+    rising: bool,
+}
+
+impl AdEnv {
+    const fn new() -> Self {
+        Self { level: 0.0, rising: false }
+    }
+
+    fn trigger(&mut self) {
+        self.level = 0.0;
+        self.rising = true;
+    }
+
+    #[inline]
+    fn next(&mut self, attack: f32, decay: f32) -> f32 {
+        if self.rising {
+            self.level += attack;
+            if self.level >= 1.0 {
+                self.level = 1.0;
+                self.rising = false;
+            }
+        } else {
+            self.level = crate::util::flush(self.level * decay);
+        }
+        self.level
+    }
+}
+
+/// A topology-preserving state-variable filter (one per voice and side).
+#[derive(Debug, Clone, Copy, Default)]
+struct Svf {
+    ic1: f32,
+    ic2: f32,
+}
+
+impl Svf {
+    #[inline]
+    fn run(&mut self, x: f32, g: f32, k: f32, kind: FilterKind) -> f32 {
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        let a2 = g * a1;
+        let a3 = g * a2;
+        let v3 = x - self.ic2;
+        let v1 = a1 * self.ic1 + a2 * v3;
+        let v2 = self.ic2 + a2 * self.ic1 + a3 * v3;
+        self.ic1 = crate::util::flush(2.0 * v1 - self.ic1);
+        self.ic2 = crate::util::flush(2.0 * v2 - self.ic2);
+        let y = match kind {
+            FilterKind::Off => x,
+            FilterKind::LowPass => v2,
+            // Scaled by the damping so the band's peak stays at unity at any resonance.
+            FilterKind::BandPass => k * v1,
+            FilterKind::HighPass => x - k * v1 - v2,
+        };
+        if y.is_finite() {
+            y
+        } else {
+            *self = Svf::default();
+            0.0
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -94,12 +338,46 @@ struct Voice {
     step: f64,
     forward: bool,
     looping: bool,
+    /// The frame a voice that is not looping stops at.
+    end: f64,
+    /// Warp: the pitch step its grains read at (`step` then moves through the sample in time),
+    /// and the two grains' read positions and progress (0..1).
+    pstep: f64,
+    grain_pos: [f64; 2],
+    grain_phase: [f32; 2],
     env: Adsr,
+    /// Current pitch in semitones from the sample's own (gliding towards `target`).
+    pitch: f64,
+    target: f64,
+    fenv: AdEnv,
+    svf: [Svf; 2],
+    /// Filter coefficients for the current control period.
+    g: f32,
+    k: f32,
 }
 
 impl Voice {
     const fn new() -> Self {
-        Self { note: 0, held: false, gain: 0.0, pos: 0.0, step: 1.0, forward: true, looping: false, env: Adsr::new() }
+        Self {
+            note: 0,
+            held: false,
+            gain: 0.0,
+            pos: 0.0,
+            step: 1.0,
+            forward: true,
+            looping: false,
+            end: 0.0,
+            pstep: 1.0,
+            grain_pos: [0.0; 2],
+            grain_phase: [0.0, 0.5],
+            env: Adsr::new(),
+            pitch: 0.0,
+            target: 0.0,
+            fenv: AdEnv::new(),
+            svf: [Svf { ic1: 0.0, ic2: 0.0 }; 2],
+            g: 0.0,
+            k: 2.0,
+        }
     }
 
     fn active(&self) -> bool {
@@ -122,10 +400,38 @@ struct Derived {
     vels: (u8, u8),
     sens: f32,
     one_shot: bool,
-    start: f64,
+    /// Start and end as fractions of the sample (start <= end).
+    span: (f64, f64),
     loop_mode: LoopMode,
     /// Loop start and end as fractions of the sample (start <= end).
     loop_span: (f64, f64),
+    filter: FilterKind,
+    cutoff: f32,
+    /// Filter damping (2 = no resonance).
+    k: f32,
+    fenv_amount: f32,
+    fenv_attack: f32,
+    fenv_decay: f32,
+    lfo_shape: usize,
+    lfo_inc: f32,
+    lfo_pitch: f64,
+    lfo_filter: f32,
+    lfo_volume: f32,
+    /// One-pole glide coefficient (0 = no glide).
+    glide: f64,
+    mono: bool,
+    /// Forward-loop crossfade as a fraction of the loop's length.
+    xfade: f64,
+    /// Slice mode: each key from the root plays a slice.
+    slicing: bool,
+    /// Slice starts (fractions of the sample, ascending) and how many are in use.
+    slices: [f64; SLICES],
+    slice_count: usize,
+    warp: bool,
+    sample_bpm: f64,
+    lfo_sync: bool,
+    /// Quarter notes per LFO cycle when synced.
+    lfo_quarters: f64,
 }
 
 /// A MIDI key or velocity parameter as a whole number in `lo..=127`.
@@ -174,6 +480,22 @@ pub struct Sampler {
     events: EventQueue,
     rates: AdsrRates,
     level: Smoother,
+    pan: Smoother,
+    /// LFO phase (0..1), its value, and the random shape's held value.
+    lfo_phase: f32,
+    lfo: f32,
+    rng: Rng,
+    random: f32,
+    /// Frames until the voices' pitch and filter are next updated.
+    control: usize,
+    /// The pitch (semitones from the sample's) the last note started at, for glide.
+    last_pitch: Option<f64>,
+    /// Mono: the keys held, oldest first.
+    held: [u8; HELD_STACK],
+    held_len: usize,
+    /// The song's tempo (quarter notes a minute), and where the transport is when it plays.
+    tempo: f64,
+    quarters: Option<f64>,
 }
 
 impl Default for Sampler {
@@ -194,9 +516,30 @@ impl Sampler {
                 vels: (1, 127),
                 sens: 0.7,
                 one_shot: false,
-                start: 0.0,
+                span: (0.0, 1.0),
                 loop_mode: LoopMode::Off,
                 loop_span: (0.0, 1.0),
+                filter: FilterKind::Off,
+                cutoff: 2000.0,
+                k: 2.0,
+                fenv_amount: 0.0,
+                fenv_attack: 1.0,
+                fenv_decay: 0.0,
+                lfo_shape: 0,
+                lfo_inc: 0.0,
+                lfo_pitch: 0.0,
+                lfo_filter: 0.0,
+                lfo_volume: 0.0,
+                glide: 0.0,
+                mono: false,
+                xfade: 0.0,
+                slicing: false,
+                slices: [0.0; SLICES],
+                slice_count: 0,
+                warp: false,
+                sample_bpm: 120.0,
+                lfo_sync: false,
+                lfo_quarters: 1.0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -207,6 +550,17 @@ impl Sampler {
             events: EventQueue::new(),
             rates: AdsrRates::default(),
             level: Smoother::new(1.0),
+            pan: Smoother::new(0.0),
+            lfo_phase: 0.0,
+            lfo: 0.0,
+            rng: Rng::new(0x5A3C_91E7),
+            random: 0.0,
+            control: 0,
+            last_pitch: None,
+            held: [0; HELD_STACK],
+            held_len: 0,
+            tempo: 120.0,
+            quarters: None,
         };
         s.update();
         s
@@ -216,6 +570,11 @@ impl Sampler {
         let v = |i| self.p.v(i);
         let pct = |i| f64::from(v(i) / 100.0).clamp(0.0, 1.0);
         let (ls, le) = (pct(LOOP_START), pct(LOOP_END));
+        let (st, en) = (pct(START), pct(END));
+        let sr = self.sr;
+        let exp60 = |ms: f32| (0.001f32.ln() / ms_to_samples(ms, sr).max(1.0)).exp();
+        let finite = |x: f32, or: f32| if x.is_finite() { x } else { or };
+        let was_mono = self.d.mono;
         self.d = Derived {
             root: f64::from(whole(v(ROOT), 0)),
             offset: f64::from(v(TRANSPOSE)) + f64::from(v(FINE)) / 100.0,
@@ -224,16 +583,56 @@ impl Sampler {
             vels: ordered(whole(v(VEL_LOW), 1), whole(v(VEL_HIGH), 1)),
             sens: (v(VEL_SENS) / 100.0).clamp(0.0, 1.0),
             one_shot: self.p.choice(PLAY_MODE) == 1,
-            start: pct(START),
+            span: (st.min(en), st.max(en)),
             loop_mode: match self.p.choice(LOOP_MODE) {
                 1 => LoopMode::Forward,
                 2 => LoopMode::PingPong,
                 _ => LoopMode::Off,
             },
             loop_span: (ls.min(le), ls.max(le)),
+            filter: match self.p.choice(FILTER_TYPE) {
+                1 => FilterKind::LowPass,
+                2 => FilterKind::HighPass,
+                3 => FilterKind::BandPass,
+                _ => FilterKind::Off,
+            },
+            cutoff: finite(v(CUTOFF), 2000.0),
+            // Resonance 0..100 % takes Q from 0.5 to about 25.
+            k: 2.0 - 1.92 * (v(RESONANCE) / 100.0).clamp(0.0, 1.0),
+            fenv_amount: finite(v(FILTER_ENV), 0.0),
+            fenv_attack: 1.0 / ms_to_samples(v(FILTER_ATTACK), sr).max(1.0),
+            fenv_decay: exp60(v(FILTER_DECAY)),
+            lfo_shape: self.p.choice(LFO_SHAPE),
+            lfo_inc: finite(v(LFO_RATE) / sr, 0.0).clamp(0.0, 0.5),
+            lfo_pitch: f64::from(finite(v(LFO_PITCH), 0.0)),
+            lfo_filter: finite(v(LFO_FILTER), 0.0),
+            lfo_volume: (v(LFO_VOLUME) / 100.0).clamp(0.0, 1.0),
+            // A third of the glide time is the time constant: the slide is all but done by then.
+            glide: f64::from(time_coef(v(GLIDE) / 3.0, sr)),
+            mono: self.p.choice(VOICE_MODE) == 1,
+            xfade: f64::from(v(LOOP_XFADE) / 100.0).clamp(0.0, 0.5),
+            slicing: self.p.choice(PLAY_MODE) == 2,
+            slices: [0.0; SLICES],
+            slice_count: whole(v(SLICE_COUNT), 0).min(SLICES as u8) as usize,
+            warp: self.p.on(WARP),
+            sample_bpm: f64::from(finite(v(SAMPLE_BPM), 120.0)).clamp(40.0, 300.0),
+            lfo_sync: self.p.on(LFO_SYNC),
+            lfo_quarters: DIVISION_QUARTERS.get(self.p.choice(LFO_DIVISION)).copied().unwrap_or(1.0),
         };
-        self.rates = AdsrRates::new(v(ATTACK), v(DECAY), v(SUSTAIN) / 100.0, v(RELEASE), self.sr);
+        for (k, x) in self.d.slices.iter_mut().enumerate() {
+            *x = f64::from(self.p.v(SLICE_FIRST + k) / 100.0).clamp(0.0, 1.0);
+        }
+        // Kept in order, whatever order they were set in.
+        let used = self.d.slice_count;
+        if let Some(sl) = self.d.slices.get_mut(..used) {
+            sl.sort_by(f64::total_cmp);
+        }
+        if was_mono != self.d.mono {
+            self.held_len = 0;
+        }
+        self.rates = AdsrRates::new(v(ATTACK), v(DECAY), v(SUSTAIN) / 100.0, v(RELEASE), sr);
         self.level.set(db_to_gain(v(LEVEL)));
+        self.pan.set((v(PAN) / 100.0).clamp(-1.0, 1.0));
     }
 
     /// The loop region in sample frames, when it is long enough to loop.
@@ -246,6 +645,24 @@ impl Sampler {
         (b - a >= 1.0).then_some((a, b))
     }
 
+    /// The frame a voice that is not looping stops at.
+    fn end_frame(&self) -> f64 {
+        self.d.span.1 * self.len as f64
+    }
+
+    /// A key's pitch in semitones from the sample's own.
+    fn key_pitch(&self, note: u8) -> f64 {
+        let d = &self.d;
+        let keyed = if d.key_track { f64::from(note) - d.root } else { 0.0 };
+        keyed + d.offset
+    }
+
+    /// Playback step for a pitch in semitones from the sample's own.
+    fn step_for(&self, semis: f64) -> f64 {
+        let step = f64::from(self.sample_sr) / f64::from(self.sr) * 2f64.powf(semis / 12.0);
+        if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 }
+    }
+
     fn start_note(&mut self, note: u8, vel: u8) {
         if vel == 0 {
             self.stop_note(note);
@@ -256,9 +673,38 @@ impl Sampler {
         if self.len == 0 || note < d.keys.0 || note > d.keys.1 || vel < d.vels.0 || vel > d.vels.1 {
             return;
         }
-        let semis = if d.key_track { f64::from(note) - d.root } else { 0.0 } + d.offset;
-        let step = f64::from(self.sample_sr) / f64::from(self.sr) * 2f64.powf(semis / 12.0);
-        if !step.is_finite() || step <= 0.0 {
+        let gain = (1.0 - d.sens) + d.sens * f32::from(vel) / 127.0;
+        if d.slicing {
+            self.start_slice(note, gain);
+            return;
+        }
+        let pitch = self.key_pitch(note);
+        let step = self.step_for(pitch);
+        if step <= 0.0 {
+            return;
+        }
+        if d.mono {
+            self.push_held(note);
+            // Legato: a key pressed while another still sounds moves the pitch and keeps the
+            // sample playing; one-shot playback always starts again.
+            let voice = self.voices.first().copied().unwrap_or(Voice::new());
+            if voice.active() && voice.held && !d.one_shot {
+                let glide = d.glide > 0.0;
+                if let Some(v) = self.voices.first_mut() {
+                    v.note = note;
+                    v.target = pitch;
+                    if !glide {
+                        v.pitch = pitch;
+                        v.step = step;
+                    }
+                }
+                self.last_pitch = Some(pitch);
+                return;
+            }
+            for v in self.voices.iter_mut().skip(1) {
+                v.stop();
+            }
+            self.begin(0, note, gain, pitch, step);
             return;
         }
         if !d.one_shot {
@@ -277,16 +723,115 @@ impl Sampler {
                     .map(|(i, _)| i)
             })
             .unwrap_or(0);
-        let start = d.start * self.len.saturating_sub(1) as f64;
-        let looping = self.loop_frames().is_some_and(|(_, end)| start < end);
-        let gain = (1.0 - d.sens) + d.sens * f32::from(vel) / 127.0;
+        self.begin(idx, note, gain, pitch, step);
+    }
+
+    /// Slice mode: the key `note` semitones from the root plays slice `note - root` at the
+    /// sample's own pitch (plus transpose and fine tune), from its start to the next slice's.
+    fn start_slice(&mut self, note: u8, gain: f32) {
+        let d = self.d;
+        let Some(i) = usize::from(note).checked_sub(d.root as usize).filter(|i| *i < d.slice_count) else { return };
+        let len = self.len as f64;
+        let start = d.slices.get(i).copied().unwrap_or(0.0) * len;
+        let next = if i + 1 < d.slice_count { d.slices.get(i + 1).copied().unwrap_or(1.0) * len } else { len };
+        let end = if next > start { next } else { len };
+        let pitch = d.offset;
+        let step = self.step_for(pitch);
+        if step <= 0.0 || start >= len {
+            return;
+        }
+        self.stop_note(note);
+        let idx = self.voices.iter().position(|v| !v.active()).or_else(|| self.quietest()).unwrap_or(0);
         if let Some(v) = self.voices.get_mut(idx) {
-            *v = Voice { note, held: !d.one_shot, gain, pos: start, step: step.min(MAX_STEP), forward: true, looping, env: Adsr::new() };
+            *v = Voice { note, held: true, gain, pos: start, step, forward: true, looping: false, end, pitch, target: pitch, ..Voice::new() };
+            v.grain_pos = [start; 2];
             v.env.gate_on();
+            v.fenv.trigger();
+        }
+        self.control = 0;
+    }
+
+    /// The voice to steal: a released one before a held one, the quietest first.
+    fn quietest(&self) -> Option<usize> {
+        self.voices
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| (a.held, a.env.level).partial_cmp(&(b.held, b.env.level)).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+    }
+
+    /// Starts voice `idx` from the sample start (gliding from the last note's pitch).
+    fn begin(&mut self, idx: usize, note: u8, gain: f32, pitch: f64, step: f64) {
+        let d = self.d;
+        let start = d.span.0 * self.len.saturating_sub(1) as f64;
+        let looping = self.loop_frames().is_some_and(|(_, end)| start < end);
+        let end = self.end_frame();
+        let from = if d.glide > 0.0 { self.last_pitch.unwrap_or(pitch) } else { pitch };
+        let step = if from == pitch { step } else { self.step_for(from) };
+        if let Some(v) = self.voices.get_mut(idx) {
+            *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, end, pitch: from, target: pitch, ..Voice::new() };
+            v.grain_pos = [start; 2];
+            v.env.gate_on();
+            v.fenv.trigger();
+        }
+        self.last_pitch = Some(pitch);
+        // Fresh coefficients before the voice's first frame.
+        self.control = 0;
+    }
+
+    fn push_held(&mut self, note: u8) {
+        self.remove_held(note);
+        if self.held_len == HELD_STACK {
+            self.held.copy_within(1.., 0);
+            self.held_len -= 1;
+        }
+        if let Some(slot) = self.held.get_mut(self.held_len) {
+            *slot = note;
+            self.held_len += 1;
+        }
+    }
+
+    fn remove_held(&mut self, note: u8) {
+        let len = self.held_len.min(HELD_STACK);
+        if let Some(i) = self.held.iter().take(len).position(|n| *n == note) {
+            self.held.copy_within(i + 1..len, i);
+            self.held_len = len - 1;
         }
     }
 
     fn stop_note(&mut self, note: u8) {
+        if self.d.mono && !self.d.slicing {
+            self.remove_held(note);
+            let back = self.held_len.checked_sub(1).and_then(|i| self.held.get(i)).copied();
+            let sounding = self.voices.first().is_some_and(|v| v.held && v.note == note);
+            if !sounding {
+                return;
+            }
+            match back {
+                // Letting go of the newest key returns to the one still held before it.
+                Some(prev) => {
+                    let pitch = self.key_pitch(prev);
+                    let step = self.step_for(pitch);
+                    let glide = self.d.glide > 0.0;
+                    if let Some(v) = self.voices.first_mut() {
+                        v.note = prev;
+                        v.target = pitch;
+                        if !glide {
+                            v.pitch = pitch;
+                            v.step = step;
+                        }
+                    }
+                    self.last_pitch = Some(pitch);
+                }
+                None => {
+                    if let Some(v) = self.voices.first_mut() {
+                        v.held = false;
+                        v.env.gate_off();
+                    }
+                }
+            }
+            return;
+        }
         for v in self.voices.iter_mut().filter(|v| v.held && v.note == note) {
             v.held = false;
             v.env.gate_off();
@@ -298,6 +843,7 @@ impl Sampler {
             EventKind::On(n, v) => self.start_note(n, v),
             EventKind::Off(n) => self.stop_note(n),
             EventKind::AllOff => {
+                self.held_len = 0;
                 for v in &mut self.voices {
                     v.held = false;
                     v.env.gate_off();
@@ -307,34 +853,210 @@ impl Sampler {
         }
     }
 
+    /// Moves the LFO one frame on and returns its value (-1..1).
+    #[inline]
+    fn lfo_next(&mut self) -> f32 {
+        let ph = self.lfo_phase;
+        let y = match self.d.lfo_shape {
+            1 => 1.0 - 4.0 * (ph - 0.5).abs(),
+            2 => {
+                if ph < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            3 => 2.0 * ph - 1.0,
+            4 => self.random,
+            _ => (TAU * ph).sin(),
+        };
+        let inc = if self.d.lfo_sync { (self.tempo / 60.0 / self.d.lfo_quarters / f64::from(self.sr)) as f32 } else { self.d.lfo_inc };
+        let mut next = ph + if inc.is_finite() { inc.clamp(0.0, 0.5) } else { 0.0 };
+        if next >= 1.0 {
+            next -= 1.0;
+            self.random = self.rng.bipolar();
+        }
+        self.lfo_phase = if next.is_finite() { next.clamp(0.0, 1.0) } else { 0.0 };
+        self.lfo = if y.is_finite() { y } else { 0.0 };
+        self.lfo
+    }
+
+    /// Glides each voice's pitch on by a control period and works out its step and filter.
+    fn control_update(&mut self) {
+        let d = self.d;
+        // The glide coefficient is per frame; a control period is CONTROL frames.
+        let glide = if d.glide > 0.0 { d.glide.powi(CONTROL as i32) } else { 0.0 };
+        let base = f64::from(self.sample_sr) / f64::from(self.sr);
+        let lfo = self.lfo;
+        let nyquist = 0.45 * self.sr;
+        for v in self.voices.iter_mut().filter(|v| v.active()) {
+            v.pitch = v.target + (v.pitch - v.target) * glide;
+            if (v.pitch - v.target).abs() < 1e-4 {
+                v.pitch = v.target;
+            }
+            let semis = v.pitch + d.lfo_pitch * f64::from(lfo);
+            let step = base * 2f64.powf(semis / 12.0);
+            let step = if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 };
+            if d.warp {
+                // Warp: the grains read at the pitch; the sample moves through time at the
+                // song's tempo over its own.
+                v.pstep = step;
+                v.step = (base * self.tempo / d.sample_bpm).clamp(0.0, MAX_STEP);
+            } else {
+                v.step = step;
+            }
+            if d.filter != FilterKind::Off {
+                let semis = d.fenv_amount * v.fenv.level + d.lfo_filter * lfo;
+                let hz = (d.cutoff * (semis / 12.0).exp2()).clamp(20.0, nyquist);
+                let g = (PI * hz / self.sr).tan();
+                v.g = if g.is_finite() { g } else { 0.0 };
+                v.k = d.k;
+            }
+        }
+    }
+
     /// Adds every voice's output for frame `n` into `io` and advances the voices.
     #[inline]
-    fn render_frame(&mut self, io: &mut [Vec<f32>], ch: usize, n: usize, level: f32) {
+    fn render_frame(&mut self, io: &mut [Vec<f32>], ch: usize, n: usize, level: f32, pan: (f32, f32)) {
         let Some(sample) = self.sample.as_deref() else { return };
         let nch = sample.num_channels();
-        let len = self.len as f64;
         let mode = self.d.loop_mode;
         let region = self.loop_frames();
+        let d = self.d;
+        let trem = 1.0 - d.lfo_volume * (0.5 + 0.5 * self.lfo);
+        // A forward loop's crossfade: the last `xf` frames before the loop end fade into the
+        // frames the same distance before the loop start (no more than there is before it).
+        let fade = match region {
+            Some((ls, le)) if mode == LoopMode::Forward && d.xfade > 0.0 => {
+                let xf = (d.xfade * (le - ls)).min(ls);
+                (xf >= 2.0).then_some((le - ls, le - xf, xf))
+            }
+            _ => None,
+        };
+        let grain_inc = 1.0 / (GRAIN_SECS * self.sr).max(16.0);
+        // How far a new grain may move to line up: 12 ms of the sample.
+        let search = f64::from(self.sample_sr) * 0.012;
         for v in &mut self.voices {
             if !v.active() {
                 continue;
             }
-            let a = v.env.next(&self.rates) * v.gain * level;
+            v.fenv.next(d.fenv_attack, d.fenv_decay);
+            let a = v.env.next(&self.rates) * v.gain * level * trem;
             for (c, b) in io.iter_mut().take(ch).enumerate() {
                 let src = if nch == 1 { 0 } else { c };
                 if let (Some(x), Some(data)) = (b.get_mut(n), sample.channel(src)) {
-                    *x += hermite(data, v.pos) * a;
+                    let mut y = if d.warp { grains(data, v) } else { hermite(data, v.pos) };
+                    if !d.warp
+                        && v.looping
+                        && let Some((len, from, xf)) = fade
+                        && v.pos >= from
+                    {
+                        // Equal power: the loop's end fades out as its lead-in fades up.
+                        let t = (((v.pos - from) / xf) as f32).clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+                        y = y * t.cos() + hermite(data, v.pos - len) * t.sin();
+                    }
+                    if d.filter != FilterKind::Off
+                        && let Some(f) = v.svf.get_mut(c.min(1))
+                    {
+                        y = f.run(y, v.g, v.k, d.filter);
+                    }
+                    let side = match c {
+                        0 if ch >= 2 => pan.0,
+                        1 => pan.1,
+                        _ => 1.0,
+                    };
+                    *x += y * a * side;
                 }
             }
+            if d.warp {
+                advance_grains(v, grain_inc, sample.channel(0).unwrap_or_default(), search);
+            }
             let r = if v.looping { region } else { None };
-            advance(v, len, r, mode);
+            advance(v, v.end, r, mode);
         }
     }
 }
 
-/// Moves a voice's read position one output frame on, looping or ending it.
+/// A warping voice's output: two Hann-windowed grains half a grain apart, which sum to one.
 #[inline]
-fn advance(v: &mut Voice, len: f64, region: Option<(f64, f64)>, mode: LoopMode) {
+fn grains(data: &[f32], v: &Voice) -> f32 {
+    let mut y = 0.0;
+    for (pos, ph) in v.grain_pos.iter().zip(v.grain_phase) {
+        let w = (std::f32::consts::PI * ph).sin();
+        y += hermite(data, *pos) * w * w;
+    }
+    y
+}
+
+/// Moves a warping voice's grains on: each reads on at the pitch step and, when it ends, starts
+/// again near where the voice now is in the sample, at the offset whose audio best matches what
+/// the other grain is about to play (so the two overlap without a phase jump).
+#[inline]
+fn advance_grains(v: &mut Voice, inc: f32, data: &[f32], search: f64) {
+    for j in 0..2 {
+        let (Some(pos), Some(ph)) = (v.grain_pos.get(j).copied(), v.grain_phase.get(j).copied()) else { continue };
+        let mut pos = pos + v.pstep;
+        let mut ph = ph + inc;
+        if ph >= 1.0 || !pos.is_finite() {
+            ph -= ph.floor();
+            let other = v.grain_pos.get(1 - j).copied().unwrap_or(v.pos);
+            pos = best_match(data, v.pos, other, v.pstep, search);
+        }
+        if let (Some(p), Some(f)) = (v.grain_pos.get_mut(j), v.grain_phase.get_mut(j)) {
+            *p = pos;
+            *f = ph;
+        }
+    }
+}
+
+/// Points compared when matching a new grain to the other one.
+const MATCH_POINTS: usize = 32;
+
+/// The start within `search` frames of `around` whose next few points (read at `step`) look most
+/// like those from `target`: normalised cross-correlation over a coarse then a fine pass.
+fn best_match(data: &[f32], around: f64, target: f64, step: f64, search: f64) -> f64 {
+    if search < 1.0 || !around.is_finite() || !target.is_finite() {
+        return around;
+    }
+    // Nearest samples: matching only needs the shape, and a new grain fires every ~30 ms.
+    let at = |p: f64| data.get(p.max(0.0) as usize).copied().filter(|x| x.is_finite()).unwrap_or(0.0);
+    let span = step.max(0.25);
+    let score = |p: f64| {
+        let (mut xy, mut yy) = (0.0f32, 0.0f32);
+        for i in 0..MATCH_POINTS {
+            let k = i as f64 * span;
+            let (x, y) = (at(target + k), at(p + k));
+            xy += x * y;
+            yy += y * y;
+        }
+        if yy > 1e-12 { xy / yy.sqrt() } else { 0.0 }
+    };
+    let mut best = (around, f32::MIN);
+    let coarse = (search / 16.0).max(1.0);
+    let mut off = -search;
+    while off <= search {
+        let c = score(around + off);
+        if c > best.1 {
+            best = (around + off, c);
+        }
+        off += coarse;
+    }
+    let centre = best.0;
+    let fine = (coarse / 12.0).max(1.0);
+    let mut off = -coarse;
+    while off <= coarse {
+        let c = score(centre + off);
+        if c > best.1 {
+            best = (centre + off, c);
+        }
+        off += fine;
+    }
+    best.0.max(0.0)
+}
+
+/// Moves a voice's read position one output frame on, looping or ending it at `end`.
+#[inline]
+fn advance(v: &mut Voice, end: f64, region: Option<(f64, f64)>, mode: LoopMode) {
     let was_forward = v.forward;
     v.pos = if was_forward { v.pos + v.step } else { v.pos - v.step };
     match region {
@@ -363,7 +1085,7 @@ fn advance(v: &mut Voice, len: f64, region: Option<(f64, f64)>, mode: LoopMode) 
             }
         }
         None => {
-            if v.pos >= len || !v.pos.is_finite() {
+            if v.pos >= end || !v.pos.is_finite() {
                 v.stop();
             }
         }
@@ -380,6 +1102,7 @@ impl Plugin for Sampler {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
         self.level.set_time(20.0, self.sr);
+        self.pan.set_time(20.0, self.sr);
         self.update();
         self.reset();
     }
@@ -390,6 +1113,11 @@ impl Plugin for Sampler {
         }
         self.events.clear();
         self.level.snap();
+        self.pan.snap();
+        self.lfo_phase = 0.0;
+        self.control = 0;
+        self.last_pitch = None;
+        self.held_len = 0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -417,8 +1145,17 @@ impl Plugin for Sampler {
                 self.apply(kind);
                 next += 1;
             }
+            self.lfo_next();
+            if self.control == 0 {
+                self.control_update();
+                self.control = CONTROL;
+            }
+            self.control -= 1;
             let level = self.level.next();
-            self.render_frame(io, ch, n, level);
+            // Balance: the centre leaves both sides as they are; turning one way fades the other.
+            let p = self.pan.next();
+            let pan = ((1.0 - p).min(1.0), (1.0 + p).min(1.0));
+            self.render_frame(io, ch, n, level, pan);
         }
         // Events for an empty block take effect immediately.
         for e in evs.iter().take(count).skip(next) {
@@ -429,9 +1166,24 @@ impl Plugin for Sampler {
     fn tail_samples(&self) -> usize {
         let release = ms_to_samples(self.p.v(RELEASE), self.sr);
         // A one-shot keeps playing its sample after the note ends.
-        let rest = if self.d.one_shot { self.len as f32 * self.sr / self.sample_sr } else { 0.0 };
+        let span = (self.d.span.1 - self.d.span.0) as f32;
+        let rest = if self.d.one_shot { span * self.len as f32 * self.sr / self.sample_sr } else { 0.0 };
         let t = release + rest;
         if t.is_finite() { t.min(1.0e9) as usize } else { 0 }
+    }
+
+    fn set_transport(&mut self, transport: &Transport) {
+        if transport.tempo.is_finite() && transport.tempo > 0.0 {
+            self.tempo = transport.tempo.clamp(10.0, 1000.0);
+        }
+        self.quarters = (transport.playing && transport.quarters.is_finite()).then_some(transport.quarters);
+        // A synced LFO follows the song: its phase is where the transport is in its cycle.
+        if self.d.lfo_sync
+            && let Some(q) = self.quarters
+        {
+            let ph = (q / self.d.lfo_quarters).rem_euclid(1.0) as f32;
+            self.lfo_phase = if ph.is_finite() { ph } else { 0.0 };
+        }
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -450,6 +1202,7 @@ impl Plugin for Sampler {
         for v in &mut self.voices {
             v.stop();
         }
+        self.held_len = 0;
         self.len = sample.as_deref().map_or(0, |s| if s.num_channels() == 0 { 0 } else { s.frames() });
         let rate = sample.as_deref().map_or(self.sr, |s| s.sample_rate());
         // An unusable rate plays at the host rate rather than not at all.
@@ -829,6 +1582,294 @@ mod tests {
         assert!(s.set_sample(None));
         s.note_on(0, 60, 127);
         assert_eq!(peak(&run(&mut s, 512)[0]), 0.0);
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    #[test]
+    fn sample_end_stops_playback_early() {
+        let data: Vec<f32> = (0..1000).map(|i| i as f32 / 1000.0).collect();
+        let mut s = sampler(mono(SR, data));
+        s.set_param("velocity", 0.0);
+        s.set_param("end", 50.0);
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 2000);
+        assert!(out[0][400] > 0.3, "plays up to the end point");
+        assert_eq!(peak(&out[0][510..]), 0.0, "stops at half way");
+    }
+
+    #[test]
+    fn crossed_start_and_end_play_the_span_between_them() {
+        let data: Vec<f32> = (0..1000).map(|i| i as f32 / 1000.0).collect();
+        let mut s = sampler(mono(SR, data));
+        s.set_param("velocity", 0.0);
+        s.set_param("attack", 0.1);
+        s.set_param("start", 60.0);
+        s.set_param("end", 40.0);
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 2000);
+        assert!((out[0][10] - 0.41).abs() < 0.005, "starts at 40 %: {}", out[0][10]);
+        assert_eq!(peak(&out[0][210..]), 0.0, "ends at 60 %");
+    }
+
+    #[test]
+    fn a_one_shot_tail_covers_only_the_span() {
+        let mut s = sampler(mono(SR, vec![0.5; 48_000]));
+        s.set_param("play_mode", 1.0);
+        s.set_param("release", 1.0);
+        let whole = s.tail_samples();
+        s.set_param("end", 25.0);
+        let quarter = s.tail_samples();
+        assert!(quarter < whole / 3 && quarter > whole / 5, "{quarter} of {whole}");
+    }
+
+    #[test]
+    fn the_filter_shapes_the_sound_and_off_leaves_it_alone() {
+        let high = sine(6000.0, SR, 48_000);
+        let low = sine(100.0, SR, 48_000);
+        let level = |data: &Vec<f32>, kind: f32, cutoff: f32, resonance: f32| {
+            let mut s = sampler(mono(SR, data.clone()));
+            s.set_param("velocity", 0.0);
+            s.set_param("filter_type", kind);
+            s.set_param("cutoff", cutoff);
+            s.set_param("resonance", resonance);
+            s.note_on(0, 60, 127);
+            rms(&run(&mut s, 9600)[0][2400..])
+        };
+        let full = 0.5 / 2f32.sqrt();
+        let open = level(&high, 0.0, 200.0, 0.0);
+        assert!((open - full).abs() < 0.01, "filter off plays it as it is: {open}");
+        assert!(level(&high, 1.0, 300.0, 0.0) < open * 0.02, "low-pass removes the highs");
+        assert!(level(&low, 1.0, 300.0, 0.0) > 0.3, "and keeps the lows");
+        assert!(level(&low, 2.0, 3000.0, 0.0) < 0.02, "high-pass removes the lows");
+        assert!(level(&high, 2.0, 3000.0, 0.0) > 0.25, "and keeps the highs");
+        let mid = sine(1000.0, SR, 48_000);
+        let band = level(&mid, 3.0, 1000.0, 60.0);
+        assert!((band - full).abs() < 0.02, "band-pass keeps its band at unity: {band}");
+        assert!(level(&low, 3.0, 1000.0, 60.0) < 0.05 && level(&high, 3.0, 1000.0, 60.0) < 0.07, "and cuts either side");
+        assert!(level(&mid, 1.0, 1000.0, 90.0) > full * 3.0, "resonance rings at the cutoff");
+    }
+
+    #[test]
+    fn the_filter_envelope_opens_then_closes() {
+        let mut s = sampler(mono(SR, sine(4000.0, SR, 48_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("filter_type", 1.0);
+        s.set_param("cutoff", 100.0);
+        s.set_param("resonance", 0.0);
+        s.set_param("filter_env", 72.0);
+        s.set_param("filter_attack", 1.0);
+        s.set_param("filter_decay", 1000.0);
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 24_000);
+        let early = rms(&out[0][96..960]);
+        let late = rms(&out[0][19_200..24_000]);
+        assert!(early > 0.2, "open at the start: {early}");
+        assert!(late < early * 0.05, "closed after the decay: {late} vs {early}");
+    }
+
+    #[test]
+    fn the_lfo_wobbles_pitch_and_volume() {
+        let mut s = sampler(mono(SR, sine(1000.0, SR, 96_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("lfo_shape", 2.0);
+        s.set_param("lfo_rate", 1.0);
+        s.set_param("lfo_pitch", 12.0);
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 48_000);
+        let up = freq(&out[0][2000..20_000], SR);
+        let down = freq(&out[0][26_000..46_000], SR);
+        assert!((up / 2000.0 - 1.0).abs() < 0.02, "an octave up on the square's top: {up}");
+        assert!((down / 500.0 - 1.0).abs() < 0.02, "an octave down on its bottom: {down}");
+
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("velocity", 0.0);
+        s.set_param("lfo_shape", 2.0);
+        s.set_param("lfo_rate", 1.0);
+        s.set_param("lfo_volume", 100.0);
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 48_000);
+        assert!(peak(&out[0][2000..20_000]) < 1e-6, "full depth silences the top half");
+        assert!((out[0][30_000] - 0.5).abs() < 1e-3, "and leaves the bottom half: {}", out[0][30_000]);
+    }
+
+    #[test]
+    fn glide_slides_from_the_last_note() {
+        let mut s = sampler(mono(SR, sine(500.0, SR, 96_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("glide", 300.0);
+        s.note_on(0, 60, 127);
+        run(&mut s, 4800);
+        s.note_off(0, 60);
+        s.set_param("release", 1.0);
+        run(&mut s, 4800);
+        s.note_on(0, 72, 127);
+        let out = run(&mut s, 48_000);
+        let start = freq(&out[0][0..1200], SR);
+        let end = freq(&out[0][36_000..48_000], SR);
+        assert!(start < 650.0, "starts near the last note: {start}");
+        assert!((end / 1000.0 - 1.0).abs() < 0.01, "arrives an octave up: {end}");
+    }
+
+    #[test]
+    fn mono_plays_legato_and_returns_to_the_held_key() {
+        let mut s = sampler(mono(SR, sine(500.0, SR, 192_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("voice_mode", 1.0);
+        s.set_param("release", 1.0);
+        s.note_on(0, 60, 127);
+        run(&mut s, 4800);
+        s.note_on(0, 72, 127);
+        let out = run(&mut s, 9600);
+        assert_eq!(s.voices.iter().filter(|v| v.active()).count(), 1, "one voice");
+        assert!((freq(&out[0][1000..9600], SR) / 1000.0 - 1.0).abs() < 0.01, "the new key's pitch");
+        assert!(rms(&out[0][..480]) > 0.3, "no gap: the sample keeps playing");
+        s.note_off(0, 72);
+        let out = run(&mut s, 9600);
+        assert!((freq(&out[0][1000..9600], SR) / 500.0 - 1.0).abs() < 0.01, "back to the key still held");
+        s.note_off(0, 60);
+        let out = run(&mut s, 4800);
+        assert!(peak(&out[0][960..]) < 1e-3, "released when no key is held");
+    }
+
+    #[test]
+    fn pan_turns_down_the_other_side() {
+        let level = |pan: f32| {
+            let mut s = sampler(mono(SR, vec![0.5; 9600]));
+            s.set_param("velocity", 0.0);
+            s.set_param("pan", pan);
+            s.reset();
+            s.note_on(0, 60, 127);
+            let out = run(&mut s, 4800);
+            (out[0][2400], out[1][2400])
+        };
+        assert_eq!(level(0.0), (0.5, 0.5), "centre leaves both sides");
+        let (l, r) = level(-100.0);
+        assert!((l - 0.5).abs() < 1e-6 && r.abs() < 1e-6, "hard left: {l} {r}");
+        let (l, r) = level(50.0);
+        assert!((l - 0.25).abs() < 1e-3 && (r - 0.5).abs() < 1e-6, "half right: {l} {r}");
+    }
+
+    #[test]
+    fn a_loop_crossfade_smooths_the_seam() {
+        // A ramp 0..1 looped over its second half jumps from 1 back to 0.5 at the seam; with a
+        // crossfade the end fades into the audio before the loop start, so there is no jump.
+        let data: Vec<f32> = (0..2000).map(|i| i as f32 / 2000.0).collect();
+        let jump = |xfade: f32| {
+            let mut s = sampler(mono(SR, data.clone()));
+            s.set_param("velocity", 0.0);
+            s.set_param("loop_mode", 1.0);
+            s.set_param("loop_start", 50.0);
+            s.set_param("loop_end", 100.0);
+            s.set_param("loop_xfade", xfade);
+            s.note_on(0, 60, 127);
+            let out = run(&mut s, 6000);
+            out[0][100..5900].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max)
+        };
+        assert!(jump(0.0) > 0.4, "a hard seam: {}", jump(0.0));
+        assert!(jump(25.0) < 0.01, "crossfaded: {}", jump(25.0));
+    }
+
+    #[test]
+    fn slice_mode_plays_one_slice_per_key_from_the_root() {
+        // Four plateaus, 1000 frames each: 0.1, 0.2, 0.3, 0.4.
+        let data: Vec<f32> = (0..4000).map(|i| 0.1 * (1 + i / 1000) as f32).collect();
+        let mut s = sampler(mono(SR, data));
+        s.set_param("velocity", 0.0);
+        s.set_param("attack", 0.1);
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 2.0);
+        s.set_param("slice_count", 4.0);
+        // Set out of order: the Sampler sorts them.
+        for (k, at) in [(1, 0.0), (2, 75.0), (3, 25.0), (4, 50.0)] {
+            s.set_param(&format!("slice_{k}"), at);
+        }
+        s.note_on(0, 62, 127); // root (60) + 2: the third slice
+        let out = run(&mut s, 2000);
+        assert!((out[0][100] - 0.3).abs() < 1e-3, "the third slice: {}", out[0][100]);
+        assert!(peak(&out[0][1010..]) < 1e-3, "stops at the next slice");
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 200);
+        assert!((out[0][100] - 0.1).abs() < 1e-3, "the root plays the first slice, at its own pitch");
+        s.note_off(0, 60);
+        run(&mut s, 200);
+        s.note_on(0, 64, 127); // past the last slice
+        s.note_on(0, 59, 127); // below the root
+        assert_eq!(peak(&run(&mut s, 500)[0]), 0.0);
+        s.note_on(0, 63, 127);
+        let out = run(&mut s, 1200);
+        assert!((out[0][100] - 0.4).abs() < 1e-3, "the last slice runs to the end");
+        assert!(peak(&out[0][1010..]) < 1e-3);
+    }
+
+    fn transport(tempo: f64, quarters: f64) -> Transport {
+        Transport { playing: true, recording: false, tempo, numerator: 4, denominator: 4, samples: 0, seconds: 0.0, quarters, bar_start: 0.0, bar: 0 }
+    }
+
+    /// The last frame louder than -40 dB.
+    fn last_loud(x: &[f32]) -> usize {
+        x.iter().rposition(|v| v.abs() > 0.01).unwrap_or(0)
+    }
+
+    #[test]
+    fn warp_changes_pitch_and_keeps_the_length() {
+        let make = |warp: bool| {
+            let mut s = sampler(mono(SR, sine(440.0, SR, 48_000)));
+            s.set_param("velocity", 0.0);
+            s.set_param("release", 1.0);
+            s.set_param("play_mode", 1.0);
+            s.set_param("warp", if warp { 1.0 } else { 0.0 });
+            s
+        };
+        let mut plain = make(false);
+        plain.note_on(0, 72, 127);
+        let out = run(&mut plain, 96_000);
+        assert!(last_loud(&out[0]).abs_diff(24_000) < 600, "without warp an octave up lasts half: {}", last_loud(&out[0]));
+        let mut warped = make(true);
+        warped.note_on(0, 72, 127);
+        let out = run(&mut warped, 96_000);
+        assert!(last_loud(&out[0]).abs_diff(48_000) < 3000, "warped: as long as the sample: {}", last_loud(&out[0]));
+        let f = freq(&out[0][4000..40_000], SR);
+        assert!((f / 880.0 - 1.0).abs() < 0.01, "and an octave up: {f}");
+    }
+
+    #[test]
+    fn warp_follows_the_song_tempo() {
+        let mut s = sampler(mono(SR, sine(440.0, SR, 48_000)));
+        s.set_param("velocity", 0.0);
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 1.0);
+        s.set_param("warp", 1.0);
+        s.set_param("sample_bpm", 120.0);
+        s.set_transport(&transport(60.0, 0.0));
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 144_000);
+        assert!(last_loud(&out[0]).abs_diff(96_000) < 4000, "half the tempo: twice as long: {}", last_loud(&out[0]));
+        let f = freq(&out[0][4000..80_000], SR);
+        assert!((f / 440.0 - 1.0).abs() < 0.01, "at its own pitch: {f}");
+    }
+
+    #[test]
+    fn a_synced_lfo_follows_the_song() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("velocity", 0.0);
+        s.set_param("lfo_shape", 2.0);
+        s.set_param("lfo_volume", 100.0);
+        s.set_param("lfo_sync", 1.0);
+        s.set_param("lfo_division", 3.0); // 1/4: half a second at 120
+        s.set_transport(&transport(120.0, 0.0));
+        s.note_on(0, 60, 127);
+        let out = run(&mut s, 48_000);
+        // Square: silent for the first eighth, open for the second, and so on.
+        assert!(peak(&out[0][1000..11_000]) < 1e-6, "first half of the cycle");
+        assert!((out[0][18_000] - 0.5).abs() < 1e-3, "second half");
+        assert!(peak(&out[0][25_000..35_000]) < 1e-6, "the next cycle");
+        // The phase follows the transport: half a quarter in, the cycle is half done.
+        s.set_transport(&transport(120.0, 0.5));
+        let out = run(&mut s, 512);
+        assert!((out[0][100] - 0.5).abs() < 1e-3, "{}", out[0][100]);
     }
 
     #[test]

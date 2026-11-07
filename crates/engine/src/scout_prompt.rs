@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 use soundcraft_dsp::{Category, ParamInfo, PluginInfo, Unit};
 use std::fmt::Write as _;
 
-/// The prompt stays under this many characters.
-/// (40 000 until Juke: its 33 pad parameters, one line each for all 16 pads, add 2 800.)
-pub const MAX_CHARS: usize = 43_000;
+/// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
+/// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
+/// slice and warp parameters; its 64 slices are one line).
+pub const MAX_CHARS: usize = 45_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".

@@ -118,6 +118,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.theme", "Appearance", "", None),
     ("ui.mix.drawer", "Open Module Drawer", "", None),
     ("ui.mix.full_editor", "Open Full Plugin Editor", "", None),
+    ("ui.mix.instrument_window", "Open Instrument Window", "", None),
     ("ui.mix.ceiling_learn", "Learn CleanQ Ceiling", "", None),
     ("ui.mix.wide_editors", "Plugin Editors as in the VST", "View > Mix Window Views > Plugin Editors as in the VST", None),
     ("ui.mix.slim_editors", "Slim Plugin Editors", "View > Mix Window Views > Slim Plugin Editors", None),
@@ -1375,6 +1376,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         }
         "ui.mix.drawer" => return Some(mix_drawer(app, p)),
         "ui.mix.full_editor" => return Some(full_editor(app, p)),
+        "ui.mix.instrument_window" => return Some(instrument_window(app, p)),
         "ui.mix.wide_editors" => {
             // `{on?: bool}`: sets the flag, or flips it without `on` (the menu item).
             app.ui.wide_editors = match p.get("on") {
@@ -1487,6 +1489,22 @@ fn full_editor(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
 }
 
 /// The track a `{track}` command names: an id or a name.
+/// `{track, open?: bool}`: opens (or with `open: false` closes) an instrument track's instrument
+/// window, as double-clicking its instrument slot does: Lift's editor for the built-in sampler,
+/// the parameter window of another built-in, a hosted plugin's window.
+fn instrument_window(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
+    let id = named_track(app, p)?;
+    let s = app.engine.session();
+    let plugin = s.track(id).and_then(|t| t.instrument.as_ref()).map(|i| i.plugin.clone()).ok_or("the track has no instrument")?;
+    let open = p.get("open").and_then(Value::as_bool).unwrap_or(true);
+    let key = (id, soundcraft_mix::SlotKey::Instrument);
+    app.ui.plugin_windows.retain(|k| *k != key);
+    if open {
+        app.ui.plugin_windows.push(key);
+    }
+    Ok(json!({"track": id.0, "plugin": plugin, "open": open}))
+}
+
 fn named_track(app: &SoundApp, p: &Value) -> Result<soundcraft_model::TrackId, String> {
     let s = app.engine.session();
     match p.get("track") {

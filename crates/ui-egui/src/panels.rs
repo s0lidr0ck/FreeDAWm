@@ -561,6 +561,7 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         let read_only = format!("`{tname}` is frozen. {}", soundcraft_engine::cmd::UNFREEZE_TO_EDIT);
         let module = ins.id;
         let hosted = soundcraft_mix::is_third_party(&ins.plugin);
+        let sampler = instrument && ins.plugin == crate::sampler_window::SAMPLER;
         // A hosted plugin not described (yet) still gets its window, for its editor and picture.
         let info = crate::mix_window::plugin_info(&ins.plugin);
         if info.is_none() && !hosted {
@@ -580,7 +581,7 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         let mut window = egui::Window::new(format!("{tname} · {place} · {name}"))
             .id(wid)
             .open(&mut open)
-            .default_width(340.0)
+            .default_width(if sampler { crate::sampler_window::EDITOR_WIDTH } else { 340.0 })
             .max_height((screen.height() - 48.0).max(120.0))
             .constrain(true);
         if juke {
@@ -651,8 +652,14 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
                 return;
             };
             if instrument && ins.plugin == crate::sampler_window::SAMPLER {
-                crate::sampler_window::sample_strip(app, ui, tid, &ins);
-                ui.add_space(4.0);
+                if frozen {
+                    ui.disable();
+                }
+                let r = ui.scope(|ui| crate::sampler_window::editor(app, ui, tid, &ins)).response;
+                if frozen {
+                    r.on_disabled_hover_text(read_only.as_str());
+                }
+                return;
             }
             if info.id == "eq_7band" || info.id == "eq_1band" {
                 eq_curve(ui, info.id, &ins);

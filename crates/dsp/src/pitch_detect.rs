@@ -108,6 +108,50 @@ pub fn audio_to_notes(audio: &[f32], sample_rate: f32) -> Vec<DetectedNote> {
     notes
 }
 
+/// The pitch a sample sounds at, for a sampler's root note: the median of the pitches YIN finds
+/// in its louder frames, as a fractional MIDI note (69 = A 440). Looks at up to 40 windows in the
+/// first four seconds; `None` when they do not agree on a clear pitch (a drum hit, noise,
+/// silence).
+pub fn sample_root(audio: &[f32], sample_rate: f32) -> Option<f32> {
+    let sr = if sample_rate.is_finite() && sample_rate > 0.0 { sample_rate } else { return None };
+    let win = ((sr * 0.05) as usize).clamp(512, 8192);
+    if audio.len() < win {
+        return None;
+    }
+    let peak = audio.iter().filter(|x| x.is_finite()).fold(0.0f32, |m, x| m.max(x.abs()));
+    if peak < 1e-4 {
+        return None;
+    }
+    // Up to 40 windows spread over the first four seconds (or the whole sample if shorter).
+    let span = audio.len().min((sr * 4.0) as usize).saturating_sub(win);
+    let count = 40usize;
+    let hop = (span / count).max(win / 2);
+    let mut found: Vec<f32> = Vec::new();
+    let mut pos = 0usize;
+    while pos <= span && found.len() < count {
+        let Some(frame) = audio.get(pos..pos + win) else { break };
+        let rms = (frame.iter().map(|x| if x.is_finite() { x * x } else { 0.0 }).sum::<f32>() / win as f32).sqrt();
+        // Louder than a tenth of the peak: the tail of a decaying note says little.
+        if rms > peak * 0.1
+            && let Some(f) = yin(frame, sr, 30.0, 2000.0, 0.15)
+        {
+            let m = 69.0 + 12.0 * (f / 440.0).log2();
+            if m.is_finite() {
+                found.push(m);
+            }
+        }
+        pos += hop;
+    }
+    // Most of the windows that sound must agree on a pitch.
+    if found.len() < 3 {
+        return None;
+    }
+    found.sort_by(f32::total_cmp);
+    let mid = *found.get(found.len() / 2)?;
+    let near = found.iter().filter(|m| (*m - mid).abs() < 0.5).count();
+    (near * 2 >= found.len()).then_some(mid.clamp(0.0, 127.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +176,41 @@ mod tests {
         let n = audio_to_notes(&a, sr);
         let pitches: Vec<u8> = n.iter().map(|x| x.pitch).collect();
         assert_eq!(pitches, vec![60, 67], "{n:?}");
+    }
+
+    #[test]
+    fn a_sample_root_is_its_pitch() {
+        let sr = 48_000.0;
+        // A3 with a fading harmonic, and an octave of decay: still A3.
+        let a: Vec<f32> = (0..96_000)
+            .map(|i| {
+                let t = i as f32 / sr;
+                (-t * 1.5).exp() * (0.5 * (std::f32::consts::TAU * 220.0 * t).sin() + 0.2 * (std::f32::consts::TAU * 440.0 * t).sin())
+            })
+            .collect();
+        let m = sample_root(&a, sr).unwrap();
+        assert!((m - 57.0).abs() < 0.1, "{m}");
+        // 20 cents sharp of C4.
+        let c = tone(261.63 * 2f32.powf(0.2 / 12.0), 1.0, sr);
+        assert!((sample_root(&c, sr).unwrap() - 60.2).abs() < 0.05);
+    }
+
+    #[test]
+    fn noise_silence_and_garbage_have_no_root() {
+        let mut x = 0x1234_5678u32;
+        let noise: Vec<f32> = (0..48_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x as f32 / u32::MAX as f32) - 0.5
+            })
+            .collect();
+        assert_eq!(sample_root(&noise, 48_000.0), None);
+        assert_eq!(sample_root(&vec![0.0; 48_000], 48_000.0), None);
+        assert_eq!(sample_root(&[0.5; 10], 48_000.0), None);
+        assert_eq!(sample_root(&vec![f32::NAN; 48_000], 48_000.0), None);
+        assert_eq!(sample_root(&tone(440.0, 1.0, 48_000.0), f32::NAN), None);
     }
 
     #[test]
