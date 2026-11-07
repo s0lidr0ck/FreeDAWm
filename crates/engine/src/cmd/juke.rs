@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Beat",
             [],
             None,
-            "{name?: 'Beat', start?, bars?: 1-64 (default 2)} -> {track, clip}: an instrument track playing Juke (the default kit) with a first pattern clip",
+            "{name?: 'Beat', start?, bars?: 1-64 (default 2), style?: a style from pattern.grooves, groove?} -> {track, clip}: an instrument track playing Juke (the default kit) with a first pattern clip; with `style`, that style's kit and groove (its first unless `groove` names one)",
             always,
             new_beat
         ),
@@ -171,6 +171,15 @@ fn new_beat(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     s.edit.selected_tracks = vec![t];
     let (clip, _, _) = super::pattern::place_pattern(e, t, at, bars, 16, &super::pattern::DEFAULT_LANES)?;
+    if let Some(name) = str_param(p, "style") {
+        let style = crate::juke_styles::find(name).ok_or_else(|| bad(id, format!("no style `{name}` (pattern.grooves lists them)")))?;
+        kit_load(e, &json!({"track": t, "kit": style.kit}))?;
+        let mut g = json!({"clip": clip.0, "style": style.name});
+        if let Some(v) = p.get("groove") {
+            g["groove"] = v.clone();
+        }
+        super::pattern::groove(e, &g)?;
+    }
     Ok(json!({"track": t, "clip": clip.0}))
 }
 
@@ -828,6 +837,46 @@ mod tests {
             assert!(p > 0.01, "pad {} sounds", pad + 1);
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn styles_load_their_kit_and_groove_in_one_undo_step() {
+        let mut e = Engine::default();
+        let v = e.execute("track.new_beat", &json!({"style": "Worship", "groove": "Ballad"})).unwrap();
+        let t = TrackId(v["track"].as_u64().unwrap());
+        let clip = soundcraft_model::ClipId(v["clip"].as_u64().unwrap());
+        assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, "Worship");
+        assert!(juke(&e, t).kit_effect(KitBus::A, 0).is_some(), "the Worship kit's reverb");
+        let lanes = |e: &Engine| e.session().find_clip(clip).and_then(|(_, c)| c.pattern.clone()).unwrap().pattern.lanes;
+        assert_eq!(lanes(&e).len(), 3, "Ballad: kick, snare, hat");
+        // Another style's groove on the same clip, then undo.
+        let g = e.execute("pattern.groove", &json!({"track": t.0, "style": "Metal", "groove": 3})).unwrap();
+        assert_eq!(g["groove"], "Blast Beat");
+        assert_eq!(g["clip"], clip.0, "the track's pattern clip at the insertion point");
+        assert_eq!(lanes(&e).len(), 3);
+        assert!(lanes(&e)[1].steps.iter().filter(|s| s.on).count() == 8, "blast beat snare");
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(lanes(&e)[0].steps.iter().filter(|s| s.on).count(), 2, "the Ballad kick is back");
+        // The bars play: a bounce of the groove is not silent.
+        let d = dir("styles");
+        assert!(bounce_peak(&mut e, &d, "worship.wav") > 0.01);
+        let _ = std::fs::remove_dir_all(&d);
+        // Refusals.
+        assert!(e.execute("pattern.groove", &json!({"track": t.0, "style": "Polka"})).is_err());
+        assert!(e.execute("pattern.groove", &json!({"track": t.0, "style": "Metal", "groove": 9})).is_err());
+        assert!(e.execute("track.new_beat", &json!({"style": "Polka"})).is_err());
+        let list = e.execute("pattern.grooves", &json!({})).unwrap();
+        assert_eq!(list["styles"].as_array().unwrap().len(), crate::juke_styles::STYLES.len());
+    }
+
+    #[test]
+    fn every_style_loads_and_renders() {
+        for s in crate::juke_styles::STYLES {
+            let mut e = Engine::default();
+            let v = e.execute("track.new_beat", &json!({"style": s.name})).unwrap_or_else(|err| panic!("{}: {err}", s.name));
+            let t = TrackId(v["track"].as_u64().unwrap());
+            assert_eq!(juke(&e, t).kit.as_ref().unwrap().name, s.kit, "{}", s.name);
+        }
     }
 
     #[test]

@@ -136,6 +136,8 @@ struct Out {
     drops: Vec<(Rect, (usize, usize, usize))>,
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
+    /// Open the step grid on the track's pattern clip.
+    open_steps: bool,
     /// Recorded kits: fetch the release's list, download one, cancel the download.
     #[cfg(not(target_arch = "wasm32"))]
     fetch_kits: bool,
@@ -296,6 +298,9 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     if let Some(m) = out.open_fx {
         crate::juke_fx::open(app, tid, m);
     }
+    if out.open_steps {
+        open_steps(app, tid);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         if out.fetch_kits {
@@ -333,6 +338,24 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
             p.audition(tid, note, 110);
             view.held = Some((pad, note));
         }
+    }
+}
+
+/// Shows the step grid of track `tid`'s pattern clip at the insertion point (else its first; one
+/// is made there if it has none): the clip is selected and the MIDI Editor opened.
+pub fn open_steps(app: &mut SoundApp, tid: TrackId) {
+    let at = app.engine.session().edit.selection.start;
+    let found = app.engine.session().track(tid).and_then(|t| {
+        let patterns = || t.clips().iter().filter(|c| c.pattern.is_some());
+        patterns().find(|c| c.range().contains(at)).or_else(|| patterns().next()).map(|c| c.id.0)
+    });
+    let clip = match found {
+        Some(c) => Some(c),
+        None => app.run("pattern.new", json!({"track": tid.0, "bars": 2})).ok().and_then(|v| v["clip"].as_u64()),
+    };
+    if let Some(c) = clip {
+        let _ = app.run("edit.select", json!({"clips": [c]}));
+        app.ui.show_midi_editor = true;
     }
 }
 
@@ -441,20 +464,72 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, record
     let menu = Rect::from_min_size(pos2(next.max.x + 4.0, field.min.y), vec2(52.0, field.height()));
     let resp = ui.put(menu, egui::Button::new(egui::RichText::new("Kits").font(regular(11.0))));
     egui::Popup::menu(&resp).show(|ui| {
-        for k in kits {
+        let starters = soundcraft_engine::juke_kits::STARTER_KITS.min(kits.len());
+        let mut item = |ui: &mut Ui, k: &soundcraft_engine::juke_kits::Kit| {
             let label = if k.rendered { format!("{} (rendered)", k.name) } else { k.name.to_string() };
             if ui.selectable_label(k.name == kit, label).clicked() {
                 out.cmds.push(("mix.kit_load", json!({"track": tid.0, "kit": k.name})));
                 ui.close();
             }
+        };
+        for k in &kits[..starters] {
+            item(ui, k);
         }
+        ui.menu_button("Styles", |ui| {
+            for k in &kits[starters..] {
+                item(ui, k);
+            }
+        });
         #[cfg(not(target_arch = "wasm32"))]
         recorded_menu(ui, tid, &kit, recorded, out);
         #[cfg(target_arch = "wasm32")]
         let _ = recorded;
     });
+    // Grooves: each style's kit and starter grooves, onto the track's pattern clip.
+    let grooves = Rect::from_min_size(pos2(menu.max.x + 4.0, field.min.y), vec2(64.0, field.height()));
+    let resp = ui.put(grooves, egui::Button::new(egui::RichText::new("Grooves").font(regular(11.0))));
+    egui::Popup::menu(&resp).show(|ui| {
+        let styles = soundcraft_engine::juke_styles::STYLES;
+        let mut families: Vec<&str> = Vec::new();
+        for s in styles {
+            if !families.contains(&s.family) {
+                families.push(s.family);
+            }
+        }
+        for family in families {
+            ui.menu_button(family, |ui| {
+                for s in styles.iter().filter(|s| s.family == family) {
+                    ui.menu_button(s.name, |ui| {
+                        if ui.button(format!("Load the {} Kit", s.kit)).clicked() {
+                            out.cmds.push(("mix.kit_load", json!({"track": tid.0, "kit": s.kit})));
+                            ui.close();
+                        }
+                        ui.separator();
+                        for g in s.grooves {
+                            let resp = ui
+                                .button(g.name)
+                                .on_hover_text("Put this groove on the track's pattern clip at the insertion point (one is made if there is none)");
+                            if resp.clicked() {
+                                out.cmds.push(("pattern.groove", json!({"track": tid.0, "style": s.name, "groove": g.name})));
+                                out.open_steps = true;
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    });
+    // Steps: the step grid of the track's pattern clip (in the MIDI Editor).
+    let steps = Rect::from_min_size(pos2(grooves.max.x + 4.0, field.min.y), vec2(52.0, field.height()));
+    let resp = ui
+        .put(steps, egui::Button::new(egui::RichText::new("Steps").font(regular(11.0))))
+        .on_hover_text("Edit the pattern in the step grid: the track's pattern clip at the insertion point (one is made if there is none)");
+    if resp.clicked() {
+        out.open_steps = true;
+    }
     // Kit view or the selected pad's edit view.
-    let tabs = Rect::from_min_size(pos2(menu.max.x + 16.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
+    let tabs = Rect::from_min_size(pos2(steps.max.x + 16.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
     let half = tabs.width() * 0.5;
     let kit_tab = Rect::from_min_size(tabs.min, vec2(half - 2.0, tabs.height()));
     let pad_tab = Rect::from_min_size(pos2(tabs.min.x + half, tabs.min.y), vec2(half, tabs.height()));

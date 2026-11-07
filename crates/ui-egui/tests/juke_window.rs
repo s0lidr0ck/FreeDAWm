@@ -215,3 +215,21 @@ fn an_installed_recorded_kit_loads_from_the_kits_menu() {
     assert!(ins.samples.contains_key("p1.v1.r1"));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn the_steps_button_opens_the_step_grid_on_the_tracks_pattern() {
+    let (mut h, t) = rig(false);
+    h.get_by_label("Steps").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.ui.show_midi_editor, "the MIDI Editor shows the step grid");
+    let s = app.engine.session();
+    let sel = s.edit.selected_clips.first().copied().expect("the pattern clip is selected");
+    let (track, clip) = s.find_clip(sel).unwrap();
+    assert!(track == t && clip.pattern.is_some());
+    // A style's groove from the Grooves menu's command lands on that same clip.
+    let v = h.state_mut().run("pattern.groove", json!({"track": t.0, "style": "Gospel / Shout"})).unwrap();
+    assert_eq!(v["clip"], sel.0);
+    h.run_steps(3);
+    proof(&mut h, "juke-steps-groove");
+}
