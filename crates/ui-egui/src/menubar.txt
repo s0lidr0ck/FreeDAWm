@@ -568,7 +568,7 @@ Window > Vocal Editor
 Window > Vocal Studio = @window.vocal_studio
 Window > Score Editor
 Window > MIDI Event List
-Window > MIDI Keyboard
+Window > Musical Typing
 Window > ---
 Window > ## Transport & session
 Window > Transport

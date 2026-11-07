@@ -53,9 +53,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.task_manager", "Task Manager", "Window > Task Manager", Some("Alt+'")),
     ("window.metadata", "Metadata Inspector", "Window > Metadata Inspector", None),
     ("window.event_list", "MIDI Event List", "Window > MIDI Event List", Some("Alt+=")),
-    ("window.midi_keyboard", "MIDI Keyboard", "Window > MIDI Keyboard", Some("Shift+K")),
+    ("window.midi_keyboard", "Musical Typing", "Window > Musical Typing", Some("Shift+K")),
     // Ctrl+Shift+K is Export Clips as Files (Cmd+Shift+K) off macOS, so computer keys take Cmd+Alt+K.
-    ("ui.musical_typing", "Musical Typing (Computer Keys)", "", Some("Cmd+Alt+K")),
+    ("ui.musical_typing", "Computer Keys Play Notes", "", Some("Cmd+Alt+K")),
     ("window.workspace", "Workspace", "Window > New Workspace > Default", Some("Alt+I")),
     ("window.workspace_presets", "Workspace", "Window > New Workspace > Track Presets", None),
     ("window.workspace_sounds", "Workspace", "Window > New Workspace > Soundbase", None),

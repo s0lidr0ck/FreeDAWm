@@ -40,7 +40,7 @@ Legend: ✅ works · 🟡 partial · ❌ missing.
 | MIDI Thru, input filter | ✅ | 🟡 MIDI Thru (armed tracks echo, on by default); no input filter |
 | MIDI Beat Clock out, MTC generate/chase | ✅ | ❌ |
 | MIDI learn / controller mapping | ✅ (via surfaces and plug-in maps) | ❌ |
-| Virtual MIDI keyboard | ✅ (MIDI Keyboard window) | ✅ Musical Typing: the MIDI Keyboard window and the computer keys are a live port (Play / Step) |
+| Virtual MIDI keyboard | ✅ (MIDI Keyboard window) | ✅ Musical Typing: its window (Play / Step, octave, velocity, sustain) and the computer keys are a live port |
 
 ## Control surfaces
 

@@ -1,13 +1,14 @@
-//! Musical Typing: Window › MIDI Keyboard's on-screen keys and the computer keyboard as a live
+//! Musical Typing: Window › Musical Typing's on-screen keys and the computer keyboard as a live
 //! MIDI input, the port "Musical Typing" (`midi_in::TYPING_NAME`). It plays and records through
 //! the same path as a hardware port: armed or input-monitored instrument tracks whose input is
 //! MIDI: All Inputs or MIDI: Musical Typing hear it, and a take records it.
 //!
 //! Computer keys (while "Computer keys" is on, Ctrl+Alt+K / Cmd+Alt+K): A S D F G H J K L ; are
 //! the white keys from C, W E T Y U O P the black keys; Z / X an octave down / up; C / V velocity
-//! down / up. While it is on, those letter keys don't run their shortcuts (Space and the rest
-//! still do). The window's Play / Step switch: Play sends the notes live; Step enters a note
-//! into the selected MIDI clip at the insertion point and moves on (as before).
+//! down / up; Tab held is the sustain pedal. While it is on, those keys don't run their shortcuts
+//! (Space and the rest still do). The window's Octave and Velocity − / + buttons do the same, and
+//! its Sustain button latches the pedal (MIDI CC 64). The Play / Step switch: Play sends the notes
+//! live; Step enters a note into the selected MIDI clip at the insertion point and moves on.
 
 use crate::SoundApp;
 use egui::Key;
@@ -49,11 +50,13 @@ pub struct TypingState {
     pub held: Vec<(Key, u8)>,
     /// The on-screen key held by the pointer.
     pub mouse: Option<u8>,
+    /// The sustain pedal is down (MIDI CC 64), from the window's Sustain button or Tab held.
+    pub sustain: bool,
 }
 
 impl Default for TypingState {
     fn default() -> Self {
-        TypingState { capture: false, step: false, base: 60, velocity: 100, held: Vec::new(), mouse: None }
+        TypingState { capture: false, step: false, base: 60, velocity: 100, held: Vec::new(), mouse: None, sustain: false }
     }
 }
 
@@ -65,7 +68,37 @@ pub fn note_of(key: Key, base: u8) -> Option<u8> {
 /// Whether Musical Typing takes `key` before the shortcuts: plain note, octave and velocity
 /// keys while computer keys play.
 pub fn owns_key(app: &SoundApp, key: Key, m: egui::Modifiers) -> bool {
-    app.typing.capture && !(m.command || m.ctrl || m.alt) && (note_of(key, 0).is_some() || matches!(key, Key::Z | Key::X | Key::C | Key::V))
+    app.typing.capture
+        && !(m.command || m.ctrl || m.alt)
+        && (note_of(key, 0).is_some() || matches!(key, Key::Z | Key::X | Key::C | Key::V | Key::Tab))
+}
+
+/// Lowest and highest note the A key may play (the octave range), and the velocity step.
+const LOWEST_BASE: u8 = 0;
+const HIGHEST_BASE: u8 = 108;
+const VELOCITY_STEP: u8 = 16;
+
+/// An octave down (`-1`) or up (`1`). Held notes keep sounding and are let go as they started.
+pub fn shift_octave(app: &mut SoundApp, dir: i8) {
+    app.typing.base =
+        if dir < 0 { app.typing.base.saturating_sub(12).max(LOWEST_BASE) } else { app.typing.base.saturating_add(12).min(HIGHEST_BASE) };
+}
+
+/// Softer (`-1`) or harder (`1`).
+pub fn shift_velocity(app: &mut SoundApp, dir: i8) {
+    app.typing.velocity =
+        if dir < 0 { app.typing.velocity.saturating_sub(VELOCITY_STEP).max(1) } else { app.typing.velocity.saturating_add(VELOCITY_STEP).min(127) };
+}
+
+/// Puts the sustain pedal down or lifts it (MIDI CC 64 on the Musical Typing port).
+pub fn set_sustain(app: &mut SoundApp, down: bool) {
+    if app.typing.sustain == down {
+        return;
+    }
+    app.typing.sustain = down;
+    if !app.typing.step {
+        send(app, [0xB0, 64, if down { 127 } else { 0 }]);
+    }
 }
 
 /// Sends a live message on the Musical Typing port (nothing where there is no MIDI hub).
@@ -91,12 +124,13 @@ pub fn release(app: &mut SoundApp, note: u8) {
     }
 }
 
-/// Lets every held note go (capture turned off, the window closed).
+/// Lets every held note go and lifts the pedal (capture turned off, the window closed).
 pub fn release_all(app: &mut SoundApp) {
     let notes: Vec<u8> = app.typing.held.drain(..).map(|(_, n)| n).chain(app.typing.mouse.take()).collect();
     for n in notes {
         release(app, n);
     }
+    set_sustain(app, false);
 }
 
 /// Step input: the note at the insertion point (relative to the selected MIDI clip), an eighth
@@ -120,6 +154,7 @@ pub fn set_capture(app: &mut SoundApp, on: bool) {
         for n in keys {
             release(app, n);
         }
+        set_sustain(app, false);
     }
     app.typing.capture = on;
 }
@@ -141,6 +176,10 @@ pub fn handle_keys(app: &mut SoundApp, ctx: &egui::Context) {
     });
     for (key, pressed, repeat, m) in events {
         if !pressed {
+            if key == Key::Tab {
+                set_sustain(app, false);
+                continue;
+            }
             if let Some(i) = app.typing.held.iter().position(|(k, _)| *k == key) {
                 let (_, n) = app.typing.held.remove(i);
                 release(app, n);
@@ -151,10 +190,11 @@ pub fn handle_keys(app: &mut SoundApp, ctx: &egui::Context) {
             continue;
         }
         match key {
-            Key::Z => app.typing.base = app.typing.base.saturating_sub(12),
-            Key::X => app.typing.base = app.typing.base.saturating_add(12).min(108),
-            Key::C => app.typing.velocity = app.typing.velocity.saturating_sub(16).max(1),
-            Key::V => app.typing.velocity = app.typing.velocity.saturating_add(16).min(127),
+            Key::Z => shift_octave(app, -1),
+            Key::X => shift_octave(app, 1),
+            Key::C => shift_velocity(app, -1),
+            Key::V => shift_velocity(app, 1),
+            Key::Tab => set_sustain(app, true),
             _ => {
                 if let Some(n) = note_of(key, app.typing.base)
                     && !app.typing.held.iter().any(|(k, _)| *k == key)
@@ -194,6 +234,38 @@ mod tests {
         let raw = egui::RawInput { events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| handle_keys(app, ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn tab_holds_the_sustain_pedal_and_turning_keys_off_lifts_it() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let ctx = egui::Context::default();
+        set_capture(&mut app, true);
+        run(&mut app, &ctx, vec![key(Key::Tab, true)]);
+        assert!(app.typing.sustain);
+        run(&mut app, &ctx, vec![key(Key::Tab, false)]);
+        assert!(!app.typing.sustain);
+        assert_eq!(heard(&app), vec![[0xB0, 64, 127], [0xB0, 64, 0]]);
+        // Latched from the window, lifted when the computer keys are turned off.
+        set_sustain(&mut app, true);
+        set_capture(&mut app, false);
+        assert!(!app.typing.sustain);
+        assert_eq!(heard(&app), vec![[0xB0, 64, 127], [0xB0, 64, 0]]);
+    }
+
+    #[test]
+    fn octave_and_velocity_stay_in_range() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        for _ in 0..20 {
+            shift_octave(&mut app, 1);
+            shift_velocity(&mut app, 1);
+        }
+        assert_eq!((app.typing.base, app.typing.velocity), (HIGHEST_BASE, 127));
+        for _ in 0..20 {
+            shift_octave(&mut app, -1);
+            shift_velocity(&mut app, -1);
+        }
+        assert_eq!((app.typing.base, app.typing.velocity), (LOWEST_BASE, 1));
     }
 
     #[test]

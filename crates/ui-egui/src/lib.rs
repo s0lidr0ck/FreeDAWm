@@ -755,7 +755,7 @@ pub struct SoundApp {
     /// Setup › Network: the LAN listener, the remote recorder link and their per-frame glue.
     #[cfg(not(target_arch = "wasm32"))]
     pub net: Option<net_ui::NetState>,
-    /// Musical Typing: the MIDI Keyboard's keys and the computer keys as a live MIDI input.
+    /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,
