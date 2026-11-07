@@ -23,4 +23,5 @@ rimshot, three hi-hats, four toms, two crashes, ride, ride bell, china), trims e
 with a 20 ms fade, and writes `kit.json`. The result is 256 takes, about 216 MB packed.
 
 `.github/workflows/kits.yml` does all of this on GitHub Actions (download, build, pack, check) and
-creates or updates the `kits-v1` release; run it from Actions › Kits, or push a change here.
+creates or updates the `kits-v1` release; run it from Actions › Kits, or merge a change here
+into `main`.

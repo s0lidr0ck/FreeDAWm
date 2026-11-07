@@ -2,8 +2,10 @@
 # tools/kits/, packs it with `cargo xtask kit-package`, checks that it installs and plays on every
 # pad, and creates or updates the `kits-v1` release with the zips and `kits.json`.
 #
-#   Actions › Kits › Run   (re)build and publish the kits
-#   push touching this file or tools/kits/ on a branch   the same, so a kit change publishes
+#   Actions › Kits › Run                              (re)build and publish the kits
+#   push to main touching this file or tools/kits/    the same, so a merged kit change publishes
+#
+# Only main publishes: a branch (a pull request's, or Dependabot's) never replaces the release's files.
 #
 # The kits are big (SM Drums is 216 MB packed from a 2.2 GB source), so they live in this release,
 # never in the repository. Only GITHUB_TOKEN is used.
@@ -12,7 +14,7 @@ name: Kits
 on:
   workflow_dispatch:
   push:
-    branches-ignore: [main]
+    branches: [main]
     paths: [".github/workflows/kits.yml", "tools/kits/**"]
 
 permissions:
