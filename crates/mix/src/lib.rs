@@ -1129,13 +1129,21 @@ impl MixEngine {
     /// `velocity`, or a note-off when it is 0. `false` without a working instrument there.
     /// Allocation-free (the plugin queues the event for its next block): callable on the audio
     /// thread.
+    ///
+    /// With the transport stopped the instrument then runs as after live input is let go (see
+    /// `Strip::live_tail`): until its sound has died away, at most [`LIVE_TAIL_SECS`], so the hit
+    /// is heard without arming the track.
     pub fn audition(&mut self, track: TrackId, note: u8, velocity: u8) -> bool {
-        let Some(inst) = self.strips.get_mut(&track).and_then(|s| s.instrument.as_mut()).filter(|i| !i.failed) else { return false };
+        let tail = (f64::from(self.sample_rate) * LIVE_TAIL_SECS) as usize;
+        let Some(strip) = self.strips.get_mut(&track) else { return false };
+        let Some(inst) = strip.instrument.as_mut().filter(|i| !i.failed) else { return false };
         if velocity > 0 {
             inst.plugin.note_on(0, note.min(127), velocity.min(127));
         } else {
             inst.plugin.note_off(0, note.min(127));
         }
+        strip.live_tail = strip.live_tail.max(tail);
+        strip.tail_quiet = 0;
         true
     }
 
@@ -6164,6 +6172,38 @@ mod tests {
 
     fn loud(out: &[Vec<f32>]) -> f32 {
         chain_peak(out, 512)
+    }
+
+    #[test]
+    fn a_pad_audition_is_heard_with_the_transport_stopped_and_the_track_unarmed() {
+        // Juke's default kit on an unarmed instrument track, the transport stopped.
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        let mut juke = Insert::new("juke");
+        if let Some(info) = soundcraft_dsp::plugin_info("juke") {
+            juke.params = info.params.iter().map(|p| (p.id.to_string(), p.default)).collect();
+        }
+        s.track_mut(t).unwrap().instrument = Some(juke);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.monitor_only = true;
+        stopped_block(&mut eng, &s);
+        assert!(!eng.live_tail(), "nothing to render before the hit");
+        // The kick pad's play button: note 36 on, held a few blocks, let go.
+        assert!(eng.audition(t, 36, 110));
+        assert!(eng.live_tail(), "the hit keeps the stopped mix rendering");
+        let mut heard = 0.0f32;
+        for _ in 0..4 {
+            heard = heard.max(loud(&stopped_block(&mut eng, &s)));
+        }
+        assert!(eng.audition(t, 36, 0));
+        assert!(heard > 0.05, "the pad is heard: {heard}");
+        // The kick dies away and the mix stops rendering again.
+        for _ in 0..(48_000 * 5 / 512) {
+            stopped_block(&mut eng, &s);
+        }
+        assert!(!eng.live_tail(), "the hit's tail is over");
+        // No track, or no instrument: nothing to play.
+        assert!(!eng.audition(TrackId(9999), 36, 100));
     }
 
     #[test]
