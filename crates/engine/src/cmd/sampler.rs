@@ -198,7 +198,7 @@ pub fn sample_root(audio: &soundcraft_model::SourceAudio) -> Option<f32> {
     soundcraft_dsp::pitch_detect::sample_root(&mono, rate as f32)
 }
 
-/// A sample's tempo from beat tracking (its first 30 seconds): `None` without a steady beat.
+/// A sample's tempo (its first 30 seconds): `None` without a steady beat backed by its hits.
 pub fn sample_bpm(audio: &soundcraft_model::SourceAudio) -> Option<f64> {
     let rate = audio.sample_rate();
     let n = audio.frames().min(rate as usize * 30);
@@ -207,8 +207,7 @@ pub fn sample_bpm(audio: &soundcraft_model::SourceAudio) -> Option<f64> {
         return None;
     }
     let mono = soundcraft_dsp::beat::downmix(&audio.window(0, n));
-    let found = soundcraft_dsp::beat::track_beats(&mono, rate as f32, &soundcraft_dsp::beat::BeatOptions::default());
-    (found.bpm.is_finite() && found.bpm > 0.0 && found.beats.len() >= 4).then(|| (found.bpm * 10.0).round() / 10.0)
+    soundcraft_dsp::slices::steady_bpm(&mono, rate as f32)
 }
 
 /// Decodes `bytes` (a file called `name`, for the format hint) into a new session source and
@@ -443,14 +442,12 @@ fn slice(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"track": t, "slices": pct}))
 }
 
-/// A sample's tempo for a beat grid: its `sample_bpm` when set, else what beat tracking finds,
-/// else 120.
+/// A sample's tempo for a beat grid: its `sample_bpm` when set, else its steady beat, else 120.
 fn sample_tempo(ins: &Insert, mono: &[f32], rate: f32) -> f64 {
     if let Some(b) = ins.params.get("sample_bpm").filter(|b| b.is_finite() && **b > 0.0) {
         return f64::from(*b);
     }
-    let found = soundcraft_dsp::beat::track_beats(mono, rate, &soundcraft_dsp::beat::BeatOptions::default()).bpm;
-    if found.is_finite() && found > 0.0 { found } else { 120.0 }
+    soundcraft_dsp::slices::steady_bpm(mono, rate).unwrap_or(120.0)
 }
 
 fn slice_play(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -989,5 +986,24 @@ mod tests {
         let r = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
         let bpm = r["bpm"].as_f64().unwrap();
         assert!((bpm - 100.0).abs() < 1.0, "{r}");
+    }
+
+    #[test]
+    fn detect_gives_no_tempo_for_a_single_note() {
+        let mut e = Engine::default();
+        let t = instrument_track(&mut e);
+        let n = 120_000;
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let tt = i as f32 / 48_000.0;
+                (-tt * 2.2).exp() * 0.5 * (std::f32::consts::TAU * 220.0 * tt).sin()
+            })
+            .collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![x] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+        crate::io::load_sampler_bytes(&mut e, t, "pluck.wav", &soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        let r = e.execute("mix.sampler_detect", &json!({"track": t.0})).unwrap();
+        assert!(r["bpm"].is_null(), "a pluck has no tempo: {r}");
+        assert_eq!(r["note"], 57, "but it has a pitch");
     }
 }

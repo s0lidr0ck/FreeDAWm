@@ -949,8 +949,8 @@ fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     }
 }
 
-/// The sample's tempo from beat tracking (its first 30 seconds), worked out once per sample;
-/// `None` for a sample too short or without a steady beat.
+/// The sample's tempo (its first 30 seconds), worked out once per sample; `None` for a sample
+/// too short or without a steady beat backed by its hits (a single note, a pad).
 fn detected_bpm(app: &SoundApp, ui: &Ui, tid: TrackId, ins: &Insert) -> Option<f64> {
     let src = ins.sample?;
     let key = ui.id().with(("lift-bpm", tid.0, src.0));
@@ -964,8 +964,7 @@ fn detected_bpm(app: &SoundApp, ui: &Ui, tid: TrackId, ins: &Insert) -> Option<f
             return None;
         }
         let mono = soundcraft_dsp::beat::downmix(&audio.window(0, n));
-        let t = soundcraft_dsp::beat::track_beats(&mono, rate as f32, &soundcraft_dsp::beat::BeatOptions::default());
-        (t.bpm.is_finite() && t.bpm > 0.0 && t.beats.len() >= 4).then(|| (t.bpm * 10.0).round() / 10.0)
+        soundcraft_dsp::slices::steady_bpm(&mono, rate as f32)
     });
     ui.ctx().data_mut(|d| d.insert_temp(key, found));
     found
