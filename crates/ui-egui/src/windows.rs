@@ -308,26 +308,29 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
             // Octave: the note the A key plays, in the app's own names (middle C is C3).
             ui.label(egui::RichText::new("Octave").small().color(t.text_dim));
-            if ui.small_button("−").on_hover_text("An octave down (Z)").clicked() {
+            // With computer keys on, each button shows the key that does the same.
+            let keys = app.typing.capture;
+            let label = |sign: &str, key: &str| if keys { format!("{sign} {key}") } else { sign.to_string() };
+            if ui.small_button(label("−", "Z")).on_hover_text("An octave down (Z)").clicked() {
                 crate::musical_typing::shift_octave(app, -1);
             }
             ui.label(egui::RichText::new(soundcraft_midi::note_name(app.typing.base)).monospace());
-            if ui.small_button("+").on_hover_text("An octave up (X)").clicked() {
+            if ui.small_button(label("+", "X")).on_hover_text("An octave up (X)").clicked() {
                 crate::musical_typing::shift_octave(app, 1);
             }
             ui.separator();
             ui.label(egui::RichText::new("Velocity").small().color(t.text_dim));
-            if ui.small_button("−").on_hover_text("Softer (C)").clicked() {
+            if ui.small_button(label("−", "C")).on_hover_text("Softer (C)").clicked() {
                 crate::musical_typing::shift_velocity(app, -1);
             }
             ui.label(egui::RichText::new(format!("{:>3}", app.typing.velocity)).monospace());
-            if ui.small_button("+").on_hover_text("Harder (V)").clicked() {
+            if ui.small_button(label("+", "V")).on_hover_text("Harder (V)").clicked() {
                 crate::musical_typing::shift_velocity(app, 1);
             }
             ui.separator();
             let down = app.typing.sustain;
             if ui
-                .add(egui::Button::selectable(down, "Sustain"))
+                .add(egui::Button::selectable(down, if keys { "Sustain · Tab" } else { "Sustain" }))
                 .on_hover_text("The sustain pedal (MIDI CC 64): click to hold it down or lift it; with computer keys on, hold Tab")
                 .clicked()
             {
@@ -412,6 +415,14 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
             "Play: arm an instrument track on MIDI: All Inputs (or Musical Typing) and play; Record records it."
         };
         ui.label(egui::RichText::new(hint).small());
+        // The computer keys, spelled out (not only in tooltips).
+        let keys_hint = if app.typing.capture {
+            "Computer keys: A S D F G H J K L ; white keys, W E T Y U O P black keys · Z X octave · C V velocity · Tab sustain (held)".to_string()
+        } else {
+            let shortcut = crate::menus::shortcut_text(app, "ui.musical_typing", ui.ctx().os() == egui::os::OperatingSystem::Mac);
+            format!("Tick Computer keys ({shortcut}) to play from your computer keyboard.")
+        };
+        ui.label(egui::RichText::new(keys_hint).small().color(t.text_dim));
     });
     if !open {
         crate::musical_typing::release_all(app);
