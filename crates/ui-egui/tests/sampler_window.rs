@@ -100,9 +100,52 @@ fn dropping_audio_with_a_path_loads_the_sampler() {
     assert_eq!(src.frames, 24_000);
     assert!(h.state().engine.session().pool.get(src.id).is_some());
     assert!(h.state().ui.status.contains("loaded into the sampler"), "{}", h.state().ui.status);
-    // The window now shows the sample strip and the sampler's own parameters.
+    // The window is now Lift's editor: the sample's buttons, the panels and the detected root.
     let _ = h.get_by_label("Load Sample…");
-    let _ = h.get_by_label("Root Note");
+    let _ = h.get_by_label("From Selection");
+    for knob in ["Level", "Cutoff", "Resonance", "Tune", "Glide", "Rate", "To Volume", "Pan", "Release"] {
+        let _ = h.get_by_label(knob);
+    }
+    // A pill sets its choice, one undo step.
+    h.get_by_label("Ping-pong").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    assert_eq!(instrument(&h, keys).params.get("loop_mode").copied(), Some(2.0));
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    // Slice… cuts the sample and switches to Slice mode, where the slice tools show.
+    h.get_by_label("Slice…").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let sliced = instrument(&h, keys);
+    assert_eq!(sliced.params.get("play_mode").copied(), Some(2.0));
+    assert!(sliced.params.get("slice_count").copied().unwrap_or(0.0) >= 1.0);
+    let _ = h.get_by_label("To MIDI");
+    let _ = h.get_by_label("Slice → Keys");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    // Warp and the LFO's Sync are switches.
+    h.get_by_label("On").click();
+    h.get_by_label("Sync").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let warped = instrument(&h, keys);
+    assert_eq!((warped.params.get("warp").copied(), warped.params.get("lfo_sync").copied()), (Some(1.0), Some(1.0)));
+    let _ = h.get_by_label("Division");
+    let _ = h.get_by_label("Sample Tempo");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    // The 220 Hz tone is A (MIDI 57); the root is still middle C until Use as Root.
+    assert_eq!(ins.params.get("root_note").copied(), Some(60.0));
+    h.get_by_label("Use as Root").click();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    assert_eq!(instrument(&h, keys).params.get("root_note").copied(), Some(57.0));
+    assert!(h.query_by_label("Use as Root").is_none(), "nothing left to apply");
+    h.state_mut().engine.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(instrument(&h, keys).params.get("root_note").copied(), Some(60.0), "one undo step");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -151,4 +194,17 @@ fn a_built_in_instruments_menu_opens_its_parameters() {
     h.get_by_label("Edit Parameters…").click();
     h.step();
     assert_eq!(h.state().ui.plugin_windows, vec![(keys, soundcraft_mix::SlotKey::Instrument)]);
+}
+
+#[test]
+fn the_instrument_window_command_opens_and_closes_it() {
+    let engine = soundcraft_engine::demo::demo_engine();
+    let keys = engine.session().tracks.iter().find(|t| t.name == "Keys").unwrap().id;
+    let mut app = SoundApp::new(engine, None, Services::default());
+    let r = app.run("ui.mix.instrument_window", serde_json::json!({"track": "Keys"})).unwrap();
+    assert_eq!(r["plugin"], "subtractive_synth");
+    assert_eq!(app.ui.plugin_windows, vec![(keys, soundcraft_mix::SlotKey::Instrument)]);
+    app.run("ui.mix.instrument_window", serde_json::json!({"track": "Keys", "open": false})).unwrap();
+    assert!(app.ui.plugin_windows.is_empty());
+    assert!(app.run("ui.mix.instrument_window", serde_json::json!({"track": "Kick"})).is_err(), "an audio track has no instrument");
 }

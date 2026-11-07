@@ -1,11 +1,13 @@
-//! The Sampler in its instrument window: a sample strip (the waveform with its start and loop
-//! markers, which drag), Load Sample and Clear, and audio files dropped onto the window or onto
-//! an instrument track. Markers and every other control go through `mix.instrument_param`, so
-//! they undo and script like any edit.
+//! The Sampler in its instrument window, all on one page: the sample (Load Sample, From
+//! Selection, Clear, the detected root note), the waveform with its start, end and loop markers
+//! (which drag), the Pitch, Filter, Amp Envelope, LFO and Output knob panels, and a keyboard
+//! with the key range and root note; and audio files dropped onto the window or onto an
+//! instrument track. Every control goes through `mix.instrument_param` or a sampler command, so
+//! it undoes and scripts like any edit.
 
 use crate::SoundApp;
-use crate::theme::{Tokens, mono, regular};
-use egui::{Align2, Color32, CursorIcon, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use crate::theme::Tokens;
+use egui::{Rect, Stroke, StrokeKind, Ui};
 use serde_json::json;
 use soundcraft_model::{Insert, TrackId};
 use std::path::Path;
@@ -14,10 +16,10 @@ use std::path::Path;
 pub const SAMPLER: &str = "sampler";
 
 /// File extensions a sample can come from (what the audio decoder reads).
-const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf"];
+pub(crate) const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf"];
 
 /// Markers on the sample strip: the parameter each one sets, and whether it needs a loop.
-const MARKERS: [(&str, bool); 3] = [("start", false), ("loop_start", true), ("loop_end", true)];
+pub(crate) const MARKERS: [(&str, bool); 4] = [("start", false), ("end", false), ("loop_start", true), ("loop_end", true)];
 
 /// Whether a file name looks like audio the sampler can load.
 pub fn is_audio_name(name: &str) -> bool {
@@ -44,7 +46,7 @@ pub fn format_param(plugin: &str, p: &soundcraft_dsp::ParamInfo, value: f32) -> 
     p.format(value)
 }
 
-fn param(ins: &Insert, id: &str) -> f32 {
+pub(crate) fn param(ins: &Insert, id: &str) -> f32 {
     let default = soundcraft_dsp::plugin_info(SAMPLER).and_then(|i| i.param(id)).map_or(0.0, |p| p.default);
     ins.params.get(id).copied().unwrap_or(default)
 }
@@ -153,132 +155,12 @@ impl SoundApp {
     }
 }
 
-/// The sample strip and its buttons, shown above the Sampler's parameters.
-pub fn sample_strip(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
-    let t = Tokens::current();
-    let s = app.engine.session();
-    let source = ins.sample.and_then(|id| s.source(id)).cloned();
-    let audio = ins.sample.and_then(|id| s.pool.get(id)).cloned();
-    ui.horizontal(|ui| {
-        let can_pick = app.services.pick_open.is_some();
-        let load = ui.add_enabled(can_pick, egui::Button::new("Load Sample…"));
-        let load = if can_pick { load } else { load.on_disabled_hover_text("Drop an audio file on this window") };
-        if load.clicked()
-            && let Some(pick) = &app.services.pick_open
-            && let Some(path) = pick("mix.sampler_load", AUDIO_EXTS)
-        {
-            let _ = app.run("mix.sampler_load", json!({"track": tid.0, "path": path}));
-        }
-        if ins.sample.is_some() && ui.button("Clear").clicked() {
-            let _ = app.run("mix.sampler_clear", json!({"track": tid.0}));
-        }
-    });
-    let info = match (&source, &audio) {
-        (Some(src), Some(a)) => {
-            let rate = a.sample_rate().max(1);
-            let secs = a.frames() as f64 / f64::from(rate);
-            let width = match a.num_channels() {
-                1 => "mono".to_string(),
-                2 => "stereo".to_string(),
-                n => format!("{n} ch"),
-            };
-            format!("{} · {secs:.2} s · {width} · {:.1} kHz", src.name, f64::from(rate) / 1000.0)
-        }
-        (Some(src), None) => format!("{}: missing", src.name),
-        _ => "No sample".to_string(),
-    };
-    ui.label(egui::RichText::new(info).font(mono(11.0)).color(t.text_dim));
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(300.0), 96.0), Sense::click_and_drag());
-    let p = ui.painter_at(r);
-    p.rect_filled(r, 4.0, t.playlist_bg);
-    p.rect_stroke(r, 4.0, Stroke::new(1.0, t.border), StrokeKind::Inside);
-    let Some(audio) = audio else {
-        p.text(r.center(), Align2::CENTER_CENTER, "Drop an audio file here", regular(12.0), t.text_dim);
-        return;
-    };
-    let frames = audio.frames().max(1);
-    let x_of = |pct: f32| r.min.x + r.width() * (pct / 100.0).clamp(0.0, 1.0);
-    // Loop region under the waveform.
-    let looping = param(ins, "loop_mode") >= 0.5;
-    let (ls, le) = {
-        let (a, b) = (param(ins, "loop_start"), param(ins, "loop_end"));
-        (a.min(b), a.max(b))
-    };
-    if looping {
-        p.rect_filled(Rect::from_x_y_ranges(x_of(ls)..=x_of(le), r.y_range()), 0.0, t.accent.gamma_multiply(0.18));
-    }
-    // One min/max column per point, a lane per channel (two at most).
-    let lanes = audio.peaks.len().clamp(1, 2);
-    let lane_h = r.height() / lanes as f32;
-    let cols = r.width().max(1.0) as usize;
-    let wave = t.text.gamma_multiply(0.8);
-    for (c, peaks) in audio.peaks.iter().take(lanes).enumerate() {
-        let mid = r.min.y + lane_h * (c as f32 + 0.5);
-        let half = lane_h * 0.45;
-        let samples = audio.channel(c).unwrap_or_default();
-        for i in 0..cols {
-            let a = frames.saturating_mul(i) / cols;
-            let b = (frames.saturating_mul(i + 1) / cols).max(a + 1);
-            let (lo, hi) = peaks.minmax(samples, a, b);
-            let x = r.min.x + i as f32 + 0.5;
-            p.line_segment([pos2(x, mid - hi.clamp(-1.0, 1.0) * half), pos2(x, mid - lo.clamp(-1.0, 1.0) * half)], Stroke::new(1.0, wave));
-        }
-    }
-    // Markers: S (sample start), L and E (loop start and end, when looping).
-    let shown: Vec<(&str, f32, Color32, &str)> = MARKERS
-        .iter()
-        .filter(|(_, needs_loop)| !needs_loop || looping)
-        .map(|(id, _)| {
-            let (col, tag) = match *id {
-                "start" => (t.playhead, "S"),
-                "loop_start" => (t.accent, "L"),
-                _ => (t.accent, "E"),
-            };
-            (*id, param(ins, id), col, tag)
-        })
-        .collect();
-    for (_, pct, col, tag) in &shown {
-        let x = x_of(*pct);
-        p.line_segment([pos2(x, r.min.y), pos2(x, r.max.y)], Stroke::new(1.5, *col));
-        let flag = Rect::from_min_size(pos2(x, r.min.y), vec2(12.0, 12.0));
-        p.rect_filled(flag, 1.0, *col);
-        p.text(flag.center(), Align2::CENTER_CENTER, *tag, regular(9.0), t.text_dark);
-    }
-    // Dragging the nearest marker sets its parameter.
-    let grab_id = ui.id().with(("sample_marker", tid.0));
-    let nearest = |x: f32| {
-        shown
-            .iter()
-            .map(|(id, pct, ..)| (*id, (x_of(*pct) - x).abs()))
-            .filter(|(_, d)| *d <= 10.0)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(id, _)| id)
-    };
-    if let Some(h) = resp.hover_pos()
-        && nearest(h.x).is_some()
-    {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
-    }
-    if resp.drag_started()
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
-        let grabbed = nearest(pos.x).map(str::to_string);
-        ui.ctx().data_mut(|d| d.insert_temp(grab_id, grabbed));
-    }
-    let grabbed = ui.ctx().data(|d| d.get_temp::<Option<String>>(grab_id)).flatten();
-    if resp.dragged()
-        && let (Some(id), Some(pos)) = (grabbed.as_deref(), resp.interact_pointer_pos())
-    {
-        let pct = ((pos.x - r.min.x) / r.width().max(1.0) * 100.0).clamp(0.0, 100.0);
-        let _ = app.engine.execute_merged(
-            "mix.instrument_param",
-            &json!({"track": tid.0, "param": id, "value": pct}),
-            &format!("instrument_param:{}:{id}", tid.0),
-        );
-    }
-    if resp.drag_stopped() {
-        ui.ctx().data_mut(|d| d.remove::<Option<String>>(grab_id));
-    }
+/// Width the Sampler's window opens at: Lift's editor.
+pub const EDITOR_WIDTH: f32 = crate::lift::W;
+
+/// Lift - Sampler's editor (see [`crate::lift`]).
+pub fn editor(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
+    crate::lift::editor(app, ui, tid, ins);
 }
 
 #[cfg(test)]

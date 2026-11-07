@@ -31,6 +31,7 @@ pub mod icons;
 pub mod key_knobs;
 pub mod key_ruler;
 pub mod levelup_ui;
+mod lift;
 pub mod link_picker;
 pub mod live_midi;
 pub mod lyric_ruler;
