@@ -291,11 +291,11 @@ fn a_right_clicked_step_opens_its_details_at_the_step() {
 }
 
 #[test]
-fn randomize_and_save_kit_work_from_the_top_bar() {
+fn randomize_presets_and_save_preset_work_from_the_top_bar() {
     let d = std::env::temp_dir().join(format!("juke-ui-save-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     let (mut h, t) = rig(true);
-    h.state_mut().juke_kits.dir = Some(d.clone());
+    h.state_mut().juke_kits.dir = Some(d.join("kits"));
     proof(&mut h, "juke-pad-editor");
     // On the pad view, Randomize takes only that pad.
     let before = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap().params;
@@ -304,14 +304,43 @@ fn randomize_and_save_kit_work_from_the_top_bar() {
     let after = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap().params;
     assert_ne!(before, after);
     assert_eq!(before.get("p2_tone"), after.get("p2_tone"), "the other pads keep their sound");
-    h.get_by_label("Save kit").click();
-    h.run_steps(3);
-    let saved = d.join("my_porch_light").join("kit.json");
-    assert!(saved.is_file(), "{}", h.state().ui.status);
-    // It is listed with the recorded kits.
-    h.get_by_label("Kits").click();
+    // A built-in preset from the Presets menu: its sound, effects and name.
+    h.get_by_label("Presets").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Recorded & saved").is_some());
+    h.get_all_by_label_contains("Drum Machines").next().unwrap().click();
+    h.run_steps(2);
+    proof(&mut h, "juke-presets-menu");
+    assert!(h.query_all_by_label_contains("(download)").next().is_none(), "the drum machines need no download");
+    h.get_by_label("Analog 909").click();
+    h.run_steps(3);
+    let ins = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
+    assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some("Analog 909"));
+    assert_eq!(ins.params.get("p1_decay"), Some(&450.0));
+    assert_eq!(ins.kit_fx.len(), 2);
+    // Recorded presets say they need a download until the kit is installed.
+    h.get_by_label("Presets").click();
+    h.run_steps(2);
+    h.get_all_by_label_contains("Acoustic").next().unwrap().hover();
+    h.run_steps(3);
+    proof(&mut h, "juke-presets-acoustic");
+    assert!(h.get_all_by_label_contains("Arena (download)").next().is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // Save preset: it is listed under My Presets and loads back.
+    h.get_by_label("Save preset").click();
+    h.run_steps(3);
+    let saved = d.join("juke_presets").join("my_analog_909.json");
+    assert!(saved.is_file(), "{}", h.state().ui.status);
+    h.state_mut().run("mix.kit_load", serde_json::json!({"track": t.0, "kit": "Tin Roof"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Presets").click();
+    h.run_steps(2);
+    h.get_all_by_label_contains("My Presets").next().unwrap().hover();
+    h.run_steps(3);
+    h.get_all_by_label("Analog 909").last().unwrap().click();
+    h.run_steps(3);
+    let back = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
+    assert_eq!(back.params, ins.params);
     let _ = std::fs::remove_dir_all(&d);
 }
 

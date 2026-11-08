@@ -115,6 +115,33 @@ pub fn specs() -> Vec<CommandSpec> {
             kit_randomize
         ),
         cmd!(
+            query "mix.kit_presets",
+            "List Kit Presets",
+            [],
+            None,
+            "{} -> {presets: [{name, category, about, source, needs}]}: Juke's built-in presets; `needs` names the recorded kits one needs installed",
+            always,
+            kit_presets
+        ),
+        cmd!(
+            "mix.kit_preset",
+            "Load Kit Preset",
+            [],
+            None,
+            "{track?, preset: a name from mix.kit_presets | path: a preset file, kits_dir?: the recorded kits' folder} -> {preset, kit}: a whole kit sound: its samples (a starter, style or recorded kit, pads borrowed from other recorded kits), every pad's tuning, envelopes, filter, drive, level, pan and sends, the kit's levels and its bus effects with their settings; one undo step",
+            has_selection,
+            kit_preset
+        ),
+        cmd!(
+            noundo "mix.kit_preset_save",
+            "Save Kit Preset",
+            [],
+            None,
+            "{track?, path: a .json file, name?, category?, kits_dir?} -> {path, name, samples}: the Juke kit as a preset file that mix.kit_preset {path} loads back: every setting and bus effect; samples from installed recorded kits are named, any other sample is saved as a WAV beside the file",
+            has_selection,
+            kit_preset_save
+        ),
+        cmd!(
             noundo "mix.kit_save",
             "Save Kit",
             [],
@@ -715,6 +742,250 @@ fn kit_save(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"path": dir.to_string_lossy(), "samples": written, "name": name}))
 }
 
+fn kit_presets(_e: &mut Engine, _p: &Value) -> Result<Value> {
+    let v: Vec<Value> = crate::juke_presets::builtin()
+        .iter()
+        .map(|q| json!({"name": q.name, "category": q.category, "about": q.about, "source": q.source, "needs": q.needs()}))
+        .collect();
+    Ok(json!({"presets": v}))
+}
+
+/// The recorded kits' folder: `kits_dir` when given, else the app's.
+fn kits_dir_param(p: &Value, id: &str) -> Result<std::path::PathBuf> {
+    match str_param(p, "kits_dir").map(str::trim).filter(|s| !s.is_empty()) {
+        Some(d) => Ok(std::path::PathBuf::from(d)),
+        None => crate::juke_presets::default_kits_dir().ok_or_else(|| bad(id, "recorded kits are not available here")),
+    }
+}
+
+/// A recorded kit's folder, or why it can't be used.
+fn recorded_dir(kits: &Path, kit: &str, id: &str) -> Result<std::path::PathBuf> {
+    if !kit.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') || kit.is_empty() {
+        return Err(bad(id, format!("`{kit}` is not a recorded kit's id")));
+    }
+    let dir = kits.join(kit);
+    crate::juke_kits::read_recorded(&dir)
+        .map_err(|_| bad(id, format!("this preset needs the recorded kit `{kit}`: download it from Kits › Recorded & saved")))?;
+    Ok(dir)
+}
+
+fn kit_preset(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_preset";
+    let t = juke_track(e, id, p)?;
+    let (preset, base): (crate::juke_presets::Preset, Option<std::path::PathBuf>) = match (str_param(p, "path"), str_param(p, "preset")) {
+        (Some(path), _) => {
+            let bytes = crate::io::read_file(path)?;
+            let q = serde_json::from_slice(&bytes).map_err(|err| bad(id, format!("{path}: {err}")))?;
+            (q, Path::new(path).parent().map(Path::to_path_buf))
+        }
+        (None, Some(name)) => {
+            let q = crate::juke_presets::find(name).ok_or_else(|| bad(id, format!("no preset `{name}`: mix.kit_presets lists them")))?;
+            (q.clone(), None)
+        }
+        (None, None) => return Err(bad(id, "`preset` (a name) or `path` (a preset file) required")),
+    };
+    let needs = preset.needs();
+    let kits = if needs.is_empty() { None } else { Some(kits_dir_param(p, id)?) };
+    let kit_dir = |k: &str| -> Result<std::path::PathBuf> {
+        match &kits {
+            Some(d) => recorded_dir(d, k, id),
+            None => Err(bad(id, "recorded kits are not available here")),
+        }
+    };
+    // 1. The source: a starter or style kit, a recorded kit, or Juke's defaults.
+    if preset.source.is_empty() {
+        let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+        let mut params: std::collections::BTreeMap<String, f32> = JUKE_INFO.params.iter().map(|q| (q.id.to_string(), q.default)).collect();
+        for pad in 1..=PADS {
+            for k in ["note", "mute", "solo"] {
+                let key = format!("p{pad}_{k}");
+                if let Some(v) = ins.params.get(&key) {
+                    params.insert(key, *v);
+                }
+            }
+        }
+        ins.params = params;
+        ins.samples.clear();
+        ins.kit_fx.clear();
+        ins.kit = Some(default_layout());
+    } else if crate::juke_kits::find(&preset.source).is_some() {
+        kit_load_plain(e, &json!({"track": t.0, "kit": preset.source}))?;
+    } else {
+        let dir = kit_dir(&preset.source)?;
+        recorded_load(e, t, &dir)?;
+    }
+    // 2. Pads taken from other recorded kits.
+    for (pad, b) in &preset.borrow {
+        let to = pad.parse::<usize>().ok().filter(|n| (1..=PADS).contains(n)).ok_or_else(|| bad(id, format!("`borrow`: no pad {pad}")))? - 1;
+        let dir = kit_dir(&b.kit)?;
+        let kit = crate::juke_kits::read_recorded(&dir).map_err(|m| bad(id, m))?;
+        let from = kit.pads.get(b.pad.wrapping_sub(1)).ok_or_else(|| bad(id, format!("`{}` has no pad {}", b.kit, b.pad)))?;
+        if let Some(ins) = juke_mut(e, t) {
+            ins.samples.retain(|k, _| !k.starts_with(&format!("p{}.", to + 1)));
+        }
+        for (key, file) in &from.samples {
+            let Some((layer, robin)) = crate::juke_kits::layer_robin(key) else { continue };
+            let path = dir.join(file);
+            let bytes = crate::io::read_file(&path)?;
+            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("Sample").to_string();
+            attach_sample(e, t, (to, layer, robin), &name, &bytes, Some(&path.to_string_lossy()))?;
+        }
+        let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+        let n = to + 1;
+        let layers =
+            from.samples.keys().filter_map(|k| crate::juke_kits::layer_robin(k)).map(|(l, _)| l).collect::<std::collections::BTreeSet<_>>().len();
+        ins.params.insert(format!("p{n}_source"), 0.0);
+        ins.params.insert(format!("p{n}_velocity"), if layers > 1 { 30.0 } else { 75.0 });
+        for (k, v) in [("decay", 5000.0), ("hold", 0.0), ("attack", 0.0), ("tune", 0.0), ("fine", 0.0), ("pitch_amount", 0.0), ("filter", 0.0)] {
+            ins.params.insert(format!("p{n}_{k}"), v);
+        }
+        ins.params.insert(format!("p{n}_trim"), from.trim.unwrap_or(0.0).clamp(-24.0, 24.0));
+        let layout = ins.kit.get_or_insert_with(default_layout);
+        if let Some(slot) = layout.pads.get_mut(to) {
+            slot.name = from.name.chars().take(32).collect();
+            slot.family = from.family.as_deref().and_then(DrumFamily::from_id).unwrap_or(slot.family);
+        }
+    }
+    // 3. A saved preset's samples and settings.
+    if !preset.samples.is_empty() {
+        if let Some(ins) = juke_mut(e, t) {
+            ins.samples.clear();
+        }
+        for (key, src) in &preset.samples {
+            let (pad, layer, robin) =
+                soundcraft_dsp::plugins::juke::parse_sample_key(key).ok_or_else(|| bad(id, format!("`samples`: no slot {key}")))?;
+            let path = if let Some(rest) = src.strip_prefix("kit:") {
+                let (kit, file) = rest.split_once('/').ok_or_else(|| bad(id, format!("`samples`: {src}")))?;
+                kit_dir(kit)?.join(file)
+            } else if let Some(rest) = src.strip_prefix("file:") {
+                base.clone().ok_or_else(|| bad(id, "a built-in preset names no files"))?.join(rest)
+            } else {
+                return Err(bad(id, format!("`samples`: `{src}` must start with kit: or file:")));
+            };
+            let bytes = crate::io::read_file(&path)?;
+            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("Sample").to_string();
+            attach_sample(e, t, (pad, layer, robin), &name, &bytes, Some(&path.to_string_lossy()))?;
+        }
+    }
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    for (k, v) in &preset.params {
+        if let Some(q) = JUKE_INFO.param(k) {
+            ins.params.insert(k.clone(), q.clamp(*v));
+        }
+    }
+    // 4. Pad settings, from `all` to the pad, and the kit's.
+    let mut layout = ins.kit.clone().unwrap_or_else(default_layout);
+    for pad in 0..PADS {
+        let family = layout.pads.get(pad).map_or(DrumFamily::Percussion, |x| x.family);
+        for (k, v) in preset.pad_settings(pad, family) {
+            match (k, v) {
+                ("name", Value::String(n)) => {
+                    if let Some(slot) = layout.pads.get_mut(pad) {
+                        slot.name = n.chars().take(32).collect();
+                    }
+                }
+                ("family", Value::String(f)) => {
+                    if let (Some(slot), Some(f)) = (layout.pads.get_mut(pad), DrumFamily::from_id(f)) {
+                        slot.family = f;
+                    }
+                }
+                (k, v) => {
+                    let key = format!("p{}_{k}", pad + 1);
+                    let q = JUKE_INFO.param(&key).ok_or_else(|| bad(id, format!("`{}`: no pad setting `{k}`", preset.name)))?;
+                    let x = v.as_f64().ok_or_else(|| bad(id, format!("`{}`: `{k}` must be a number", preset.name)))? as f32;
+                    ins.params.insert(key, q.clamp(x));
+                }
+            }
+        }
+    }
+    for (k, v) in &preset.kit {
+        let q = JUKE_INFO.param(k).ok_or_else(|| bad(id, format!("`{}`: no kit setting `{k}`", preset.name)))?;
+        ins.params.insert(k.clone(), q.clamp(*v));
+    }
+    layout.name = preset.name.chars().take(64).collect();
+    ins.kit = Some(layout);
+    // 5. The bus effects, in place of the source's.
+    if let Some(fx) = &preset.fx {
+        ins.kit_fx.clear();
+        for f in fx {
+            let mut q = f.clone();
+            if let Some(o) = q.as_object_mut() {
+                o.insert("track".into(), json!(t.0));
+                kit_fx(e, &q)?;
+            }
+        }
+    }
+    Ok(json!({"preset": preset.name, "kit": preset.name}))
+}
+
+fn kit_preset_save(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_preset_save";
+    let t = juke_track(e, id, p)?;
+    let path = str_param(p, "path").map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| bad(id, "`path` required: the preset file"))?;
+    let path = Path::new(path);
+    let kits = kits_dir_param(p, id).ok();
+    let s = e.session();
+    let ins = s.track(t).and_then(|tr| tr.instrument.as_ref()).ok_or_else(|| bad(id, "no instrument"))?;
+    let layout = ins.kit.clone().unwrap_or_else(default_layout);
+    let name: String =
+        str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| layout.name.clone(), str::to_string).chars().take(64).collect();
+    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("preset").to_string();
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut samples = std::collections::BTreeMap::new();
+    let mut written = 0;
+    for (key, src) in &ins.samples {
+        let from = s.sources.iter().find(|x| x.id == *src).map(|x| Path::new(&x.path).to_path_buf());
+        // A sample from an installed recorded kit is named, not copied.
+        let in_kit = from.as_ref().zip(kits.as_ref()).and_then(|(f, k)| f.strip_prefix(k).ok().map(Path::to_path_buf));
+        if let Some(rel) = in_kit.filter(|r| r.components().count() >= 2) {
+            samples.insert(key.clone(), format!("kit:{}", rel.to_string_lossy().replace('\\', "/")));
+            continue;
+        }
+        let Some(audio) = s.pool.get(*src) else { continue };
+        let bytes = soundcraft_audio_io::encode(
+            &audio.buffer(),
+            &soundcraft_audio_io::EncodeOptions {
+                format: soundcraft_audio_io::FileFormat::Wav,
+                bit_depth: soundcraft_audio_io::BitDepth::Int24,
+                ..Default::default()
+            },
+        )
+        .map_err(|err| EngineError::Io(format!("{key}: {err}")))?;
+        let rel = format!("{stem}_samples/{}.wav", key.replace('.', "_"));
+        crate::io::make_dir(dir.join(format!("{stem}_samples")))?;
+        crate::io::write_file(&dir.join(&rel).to_string_lossy(), &bytes)?;
+        samples.insert(key.clone(), format!("file:{rel}"));
+        written += 1;
+    }
+    let mut pads = std::collections::BTreeMap::new();
+    for (i, pad) in layout.pads.iter().enumerate() {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("name".to_string(), json!(pad.name));
+        m.insert("family".to_string(), json!(pad.family.id()));
+        pads.insert((i + 1).to_string(), m);
+    }
+    let fx: Vec<Value> = ins
+        .kit_fx
+        .iter()
+        .map(|f| json!({"bus": f.bus.id(), "slot": usize::from(f.slot) + 1, "plugin": f.insert.plugin, "params": f.insert.params, "bypass": f.insert.bypass}))
+        .collect();
+    let preset = crate::juke_presets::Preset {
+        name: name.clone(),
+        category: str_param(p, "category").map(str::trim).filter(|c| !c.is_empty()).unwrap_or("My Presets").to_string(),
+        pads,
+        fx: Some(fx),
+        params: ins.params.clone(),
+        samples,
+        ..Default::default()
+    };
+    let text = serde_json::to_string_pretty(&preset).map_err(|err| EngineError::Io(err.to_string()))?;
+    if !dir.as_os_str().is_empty() {
+        crate::io::make_dir(&dir)?;
+    }
+    crate::io::write_file(&path.to_string_lossy(), text.as_bytes())?;
+    Ok(json!({"path": path.to_string_lossy(), "name": name, "samples": written}))
+}
+
 fn kit_name(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "mix.kit_name";
     let t = juke_track(e, id, p)?;
@@ -1104,6 +1375,90 @@ mod tests {
         assert!(e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Porch Light", "character": "Wobbly"})).is_err());
         let list = e.execute("mix.kit_list", &json!({})).unwrap();
         assert_eq!(list["characters"].as_array().map(Vec::len), Some(crate::juke_kits::CHARACTERS.len()));
+    }
+
+    /// Stand-ins for the three recorded kits: 16 pads, one click each (layer 2, take 1).
+    fn fake_kits(name: &str) -> PathBuf {
+        let d = dir(name);
+        for (id, kit) in [("sm_drums", "SM Drums"), ("sm_drums_17", "SM Drums 17"), ("sm_drums_hybrid", "SM Drums Hybrid")] {
+            let k = d.join(id);
+            std::fs::create_dir_all(&k).unwrap();
+            click_wav(&k.join("c.wav"), 44_100);
+            let pads: Vec<Value> =
+                (1..=PADS).map(|n| json!({"name": format!("{kit} {n}"), "family": "snare", "note": 35 + n, "samples": {"v2.r1": "c.wav"}})).collect();
+            std::fs::write(k.join("kit.json"), json!({"name": kit, "pads": pads}).to_string()).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn every_built_in_preset_loads_its_whole_sound_in_one_undo_step() {
+        let kits = fake_kits("presets");
+        for preset in crate::juke_presets::builtin() {
+            let (mut e, t) = beat();
+            let before = juke(&e, t);
+            e.execute("mix.kit_preset", &json!({"track": t.0, "preset": preset.name, "kits_dir": kits.to_string_lossy()}))
+                .unwrap_or_else(|err| panic!("{}: {err}", preset.name));
+            let ins = juke(&e, t);
+            assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some(preset.name.as_str()));
+            assert_eq!(ins.kit_fx.len(), preset.fx.as_ref().map_or(0, Vec::len), "{}", preset.name);
+            for (k, v) in &preset.kit {
+                assert_eq!(ins.params.get(k), Some(v), "{}: {k}", preset.name);
+            }
+            for (pad, b) in &preset.borrow {
+                let n: usize = pad.parse().unwrap();
+                assert!(ins.samples.contains_key(&format!("p{n}.v2.r1")), "{}: pad {n} from {}", preset.name, b.kit);
+            }
+            e.execute("edit.undo", &json!({})).unwrap();
+            let back = juke(&e, t);
+            assert_eq!(
+                (back.params, back.kit, back.samples.len()),
+                (before.params.clone(), before.kit.clone(), before.samples.len()),
+                "{}",
+                preset.name
+            );
+        }
+        // A family's setting reaches its pads: Arena drives the kick.
+        let (mut e, t) = beat();
+        e.execute("mix.kit_preset", &json!({"track": t.0, "preset": "analog 808"})).unwrap();
+        assert_eq!(juke(&e, t).params.get("p1_decay"), Some(&1200.0));
+        // Without the recorded kit it needs, it says what to download.
+        let empty = dir("presets-empty");
+        let err =
+            e.execute("mix.kit_preset", &json!({"track": t.0, "preset": "Arena", "kits_dir": empty.to_string_lossy()})).unwrap_err().to_string();
+        assert!(err.contains("sm_drums") && err.contains("download"), "{err}");
+        assert!(e.execute("mix.kit_preset", &json!({"track": t.0, "preset": "No Such"})).is_err());
+        let list = e.execute("mix.kit_presets", &json!({})).unwrap();
+        assert_eq!(list["presets"].as_array().map(Vec::len), Some(crate::juke_presets::builtin().len()));
+        let _ = std::fs::remove_dir_all(&kits);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn a_saved_preset_names_kit_samples_copies_its_own_and_loads_back() {
+        let kits = fake_kits("preset-save");
+        let (mut e, t) = beat();
+        let k = kits.to_string_lossy().to_string();
+        e.execute("mix.kit_preset", &json!({"track": t.0, "preset": "Mixed Kit", "kits_dir": k})).unwrap();
+        let own = kits.join("own.wav");
+        click_wav(&own, 48_000);
+        e.execute("mix.kit_sample_load", &json!({"track": t.0, "pad": 1, "path": own.to_string_lossy()})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p9_tune", "value": -4.0})).unwrap();
+        let file = kits.join("presets").join("My Wood.json");
+        let v = e.execute("mix.kit_preset_save", &json!({"track": t.0, "path": file.to_string_lossy(), "name": "My Wood", "kits_dir": k})).unwrap();
+        assert_eq!(v["samples"], 1, "only the pad's own sample is copied");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("kit:sm_drums/c.wav") && text.contains("file:My Wood_samples/p1_v1_r1.wav"), "{text}");
+        let saved = juke(&e, t);
+        let (mut e2, t2) = beat();
+        e2.execute("mix.kit_preset", &json!({"track": t2.0, "path": file.to_string_lossy(), "kits_dir": k})).unwrap();
+        let back = juke(&e2, t2);
+        assert_eq!(back.params, saved.params);
+        assert_eq!(back.samples.keys().collect::<Vec<_>>(), saved.samples.keys().collect::<Vec<_>>());
+        assert_eq!(back.kit.as_ref().map(|x| x.name.as_str()), Some("My Wood"));
+        assert_eq!(back.kit_fx.len(), saved.kit_fx.len());
+        assert_eq!(crate::cmd::juke::pad_layout(&back, 2).name, crate::cmd::juke::pad_layout(&saved, 2).name);
+        let _ = std::fs::remove_dir_all(&kits);
     }
 
     #[test]

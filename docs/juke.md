@@ -259,6 +259,19 @@ over any kit as it loads (`mix.kit_load {…, character}`, listed by `mix.kit_li
 offers each recorded or saved kit as recorded or with any character, so three recordings give 27
 recorded kits.
 
+**Presets (2026-11-08):** a preset is a whole kit sound, not just its samples
+(`juke_presets.rs`, the library in `juke_presets.json`): a `source` (a starter or style kit, a
+recorded kit, or Juke's defaults), pads `borrow`ed from other recorded kits, pad settings by family,
+pad or `all` (tuning, envelopes, filter, drive, level, pan, sends, names), the kit's levels, and its
+bus effects with their settings. `mix.kit_preset {preset | path}` loads one as one undo step,
+`mix.kit_presets` lists the library (with the recorded kits each `needs`), and
+`mix.kit_preset_save` writes the kit as a preset file: every parameter and effect, samples from
+installed recorded kits named (`kit:<id>/<file>`) and any other sample copied beside it. The Juke
+window's **Presets** menu lists 40 built-in presets in seven categories (Acoustic on the recorded
+kits, Rock, Pop & Folk, Church, Hip-Hop, Electronic, Drum Machines) and **My Presets**; **Save
+preset** saves the kit under its name. A preset whose recorded kit is missing is marked "(download)"
+and says which kit to get.
+
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the
 model fields are merged.

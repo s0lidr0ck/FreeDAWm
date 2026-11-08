@@ -48,6 +48,36 @@ impl KitDownloads {
         self.url.clone().unwrap_or_else(kits::kits_manifest_url)
     }
 
+    /// Where presets saved from Juke go: `juke_presets` beside the kits folder.
+    pub fn presets_dir(&self) -> PathBuf {
+        let d = self.dir();
+        d.parent().map_or_else(|| d.join("juke_presets"), |p| p.join("juke_presets"))
+    }
+
+    /// The presets saved from Juke: (name, file), by name.
+    pub fn user_presets(&self) -> Vec<(String, PathBuf)> {
+        read_presets(&self.presets_dir())
+    }
+}
+
+/// The presets in `dir`: (name, file), by name.
+pub fn read_presets(dir: &std::path::Path) -> Vec<(String, PathBuf)> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut v: Vec<(String, PathBuf)> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            let q: soundcraft_engine::juke_presets::Preset = serde_json::from_str(&text).ok()?;
+            Some((q.name, p))
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    v
+}
+
+impl KitDownloads {
     /// The kits installed: (id, name from its kit.json, folder).
     pub fn installed(&self) -> Vec<(String, String, PathBuf)> {
         kits::installed_kits(&self.dir())

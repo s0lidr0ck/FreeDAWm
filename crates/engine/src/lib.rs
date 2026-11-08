@@ -20,6 +20,7 @@ pub mod file_access;
 pub mod inspect;
 pub mod io;
 pub mod juke_kits;
+pub mod juke_presets;
 pub mod juke_styles;
 pub mod lexicon;
 pub mod lyric_text;

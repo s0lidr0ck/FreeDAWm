@@ -159,9 +159,9 @@ struct Out {
     download_kit: Option<soundcraft_engine::ml::kits::KitEntry>,
     #[cfg(not(target_arch = "wasm32"))]
     cancel_kit: bool,
-    /// Save the kit to the kits folder.
+    /// Save the kit as a preset in the presets folder.
     #[cfg(not(target_arch = "wasm32"))]
-    save_kit: bool,
+    save_preset: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -169,6 +169,10 @@ struct Out {
 struct KitsView {
     /// (name, folder) of each installed kit.
     installed: Vec<(String, std::path::PathBuf)>,
+    /// The installed kits' ids, and their folder.
+    ids: Vec<String>,
+    kits_dir: std::path::PathBuf,
+    presets_dir: std::path::PathBuf,
     /// The release's kits not installed yet, once listed; or why the list is not there.
     available: Result<Vec<soundcraft_engine::ml::kits::KitEntry>, String>,
     /// The download running: (kit id, received, expected bytes).
@@ -192,7 +196,16 @@ fn kits_view(app: &mut SoundApp) -> KitsView {
         let (done, total) = a.progress.get();
         (a.id.clone(), done, total)
     });
-    KitsView { installed: installed.into_iter().map(|(_, name, path)| (name, path)).collect(), available, active, note: app.juke_kits.note.clone() }
+    let ids = installed.iter().map(|(id, _, _)| id.clone()).collect();
+    KitsView {
+        installed: installed.into_iter().map(|(_, name, path)| (name, path)).collect(),
+        ids,
+        kits_dir: app.juke_kits.dir(),
+        presets_dir: app.juke_kits.presets_dir(),
+        available,
+        active,
+        note: app.juke_kits.note.clone(),
+    }
 }
 
 impl Out {
@@ -345,8 +358,8 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
         if out.cancel_kit {
             app.juke_kits.cancel();
         }
-        if out.save_kit {
-            save_kit(app, tid);
+        if out.save_preset {
+            save_preset(app, tid);
         }
     }
     if let Some(t) = out.tab {
@@ -391,9 +404,9 @@ pub fn saved_kit_id(name: &str) -> String {
     slug.chars().take(64).collect::<String>().trim_end_matches('_').to_string()
 }
 
-/// Saves track `tid`'s kit into the kits folder, where the Kits menu lists it.
+/// Saves track `tid`'s kit as a preset in the presets folder, where the Presets menu lists it.
 #[cfg(not(target_arch = "wasm32"))]
-fn save_kit(app: &mut SoundApp, tid: TrackId) {
+fn save_preset(app: &mut SoundApp, tid: TrackId) {
     let name = app
         .engine
         .session()
@@ -403,9 +416,10 @@ fn save_kit(app: &mut SoundApp, tid: TrackId) {
         .map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
     let id = saved_kit_id(&name);
     let id = if id == "my" { "my_kit".to_string() } else { id };
-    let dir = app.juke_kits.dir().join(&id);
-    match app.run("mix.kit_save", json!({"track": tid.0, "path": dir.to_string_lossy()})) {
-        Ok(_) => app.ui.status = format!("Saved {name} to your kits (Kits › Recorded & saved)"),
+    let file = app.juke_kits.presets_dir().join(format!("{id}.json"));
+    let kits = app.juke_kits.dir();
+    match app.run("mix.kit_preset_save", json!({"track": tid.0, "path": file.to_string_lossy(), "name": name, "kits_dir": kits.to_string_lossy()})) {
+        Ok(_) => app.ui.status = format!("Saved the preset {name} (Presets › My Presets)"),
         Err(e) => app.ui.status = e,
     }
 }
@@ -585,12 +599,11 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: T
     let p = ui.painter();
     p.rect_filled(r, 4.0, TOP_BAR);
     text(p, pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, "JUKE", bold(14.0), AMBER);
-    text(p, pos2(r.min.x + 52.0, r.center().y), Align2::LEFT_CENTER, "Drum Machine", regular(11.0), LABEL);
     // The kit's name, edited in place.
     let kit = ins.kit.as_ref().map(|k| k.name.clone()).unwrap_or_default();
     let id = egui::Id::new(("juke-kit-name", tid.0));
     let mut name: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| kit.clone());
-    let field = Rect::from_min_size(pos2(r.min.x + 150.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
+    let field = Rect::from_min_size(pos2(r.min.x + 58.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
     let resp = ui.put(field, egui::TextEdit::singleline(&mut name).hint_text("Kit name").font(bold(12.0)));
     if resp.has_focus() {
         ui.ctx().data_mut(|d| d.insert_temp(id, name.clone()));
@@ -650,8 +663,12 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: T
         #[cfg(target_arch = "wasm32")]
         let _ = recorded;
     });
+    // Presets: whole kit sounds (samples, tuning, envelopes, effects), by category.
+    let presets = Rect::from_min_size(pos2(menu.max.x + 4.0, field.min.y), vec2(62.0, field.height()));
+    let resp = ui.put(presets, egui::Button::new(egui::RichText::new("Presets").font(regular(11.0))));
+    egui::Popup::menu(&resp).show(|ui| presets_menu(ui, tid, &kit, recorded, out));
     // Grooves: each style's kit and starter grooves, onto the track's pattern clip.
-    let grooves = Rect::from_min_size(pos2(menu.max.x + 4.0, field.min.y), vec2(64.0, field.height()));
+    let grooves = Rect::from_min_size(pos2(presets.max.x + 4.0, field.min.y), vec2(64.0, field.height()));
     let resp = ui.put(grooves, egui::Button::new(egui::RichText::new("Grooves").font(regular(11.0))));
     egui::Popup::menu(&resp).show(|ui| {
         let styles = soundcraft_engine::juke_styles::STYLES;
@@ -722,12 +739,12 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: T
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let save = Rect::from_min_size(pos2(rnd.max.x + 4.0, field.min.y), vec2(64.0, field.height()));
+        let save = Rect::from_min_size(pos2(rnd.max.x + 4.0, field.min.y), vec2(80.0, field.height()));
         let resp = ui
-            .put(save, egui::Button::new(egui::RichText::new("Save kit").font(regular(11.0))))
-            .on_hover_text("Save the kit (its pads, samples, settings and bus effects) to your kits: Kits › Recorded & saved");
+            .put(save, egui::Button::new(egui::RichText::new("Save preset").font(regular(11.0))))
+            .on_hover_text("Save the whole kit sound (samples, every setting, bus effects) as a preset under its name: Presets › My Presets");
         if resp.clicked() {
-            out.save_kit = true;
+            out.save_preset = true;
         }
     }
     // Humanize, kit-wide.
@@ -908,6 +925,58 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
 
 /// The Kits menu's recorded kits: those installed (click to load), and the kits release's list
 /// with a download for each.
+/// The Presets menu: the built-in presets by category (one that needs a recorded kit not
+/// installed says so), then the presets saved from Juke.
+fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, out: &mut Out) {
+    let lib = soundcraft_engine::juke_presets::builtin();
+    let mut cats: Vec<&str> = Vec::new();
+    for q in lib {
+        if !cats.contains(&q.category.as_str()) {
+            cats.push(&q.category);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let (ids, kits_dir) = (recorded.ids.clone(), recorded.kits_dir.to_string_lossy().to_string());
+    #[cfg(target_arch = "wasm32")]
+    let (ids, kits_dir): (Vec<String>, String) = {
+        let _ = recorded;
+        (Vec::new(), String::new())
+    };
+    for cat in cats {
+        ui.menu_button(cat, |ui| {
+            for q in lib.iter().filter(|q| q.category == cat) {
+                let missing: Vec<String> = q.needs().into_iter().filter(|k| !ids.contains(k)).collect();
+                let label = if missing.is_empty() { q.name.clone() } else { format!("{} (download)", q.name) };
+                let mut tip = q.about.clone();
+                if !missing.is_empty() {
+                    tip = format!("{tip}. Needs the recorded kit {}: Kits › Recorded & saved", missing.join(", "));
+                }
+                let resp = ui.selectable_label(current == q.name, label).on_hover_text(tip);
+                if resp.clicked() {
+                    out.cmds.push(("mix.kit_preset", json!({"track": tid.0, "preset": q.name, "kits_dir": kits_dir})));
+                    ui.close();
+                }
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.separator();
+        ui.menu_button("My Presets", |ui| {
+            let mine = crate::juke_kits_ui::read_presets(&recorded.presets_dir);
+            if mine.is_empty() {
+                ui.label(egui::RichText::new("None yet: Save preset adds the kit here").weak());
+            }
+            for (name, path) in mine {
+                if ui.selectable_label(current == name, &name).clicked() {
+                    out.cmds.push(("mix.kit_preset", json!({"track": tid.0, "path": path.to_string_lossy(), "kits_dir": kits_dir})));
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();

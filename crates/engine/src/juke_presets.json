@@ -1,0 +1,1788 @@
+[
+ {
+  "name": "Studio Dry",
+  "category": "Acoustic",
+  "about": "SM Drums close and dry: shells cut short, a little glue",
+  "source": "sm_drums",
+  "pads": {
+   "kick": {
+    "decay": 700
+   },
+   "snare": {
+    "decay": 900
+   },
+   "tom": {
+    "decay": 1400
+   },
+   "hat": {
+    "decay": 900
+   }
+  },
+  "kit": {
+   "level": -5
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.3,
+     "ratio": 0.35,
+     "attack": 0.6,
+     "release": 0.4,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Studio Room",
+  "category": "Acoustic",
+  "about": "SM Drums in a mid-size room, gently compressed",
+  "source": "sm_drums",
+  "pads": {
+   "all": {
+    "send_a": 25
+   },
+   "kick": {
+    "send_a": 8
+   },
+   "cymbal": {
+    "send_a": 15
+   }
+  },
+  "kit": {
+   "return_a": -5
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.42,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.35,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Arena",
+  "category": "Acoustic",
+  "about": "Big hall reverb on the snare and toms, a driven kick, tape on the bus",
+  "source": "sm_drums",
+  "pads": {
+   "kick": {
+    "tune": -1,
+    "drive": 12
+   },
+   "snare": {
+    "send_a": 45
+   },
+   "tom": {
+    "send_a": 40,
+    "decay": 2500
+   },
+   "cymbal": {
+    "send_a": 12
+   }
+  },
+  "kit": {
+   "return_a": -3
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.75,
+     "size": 0.9,
+     "machine": 2,
+     "mix": 1.0,
+     "preDelay": 0.4
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.5,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.35,
+     "flutter": 0.0,
+     "hiss": 0.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Motown Box",
+  "category": "Acoustic",
+  "about": "Tuned-up snare, dark and narrow, through tape into a small room",
+  "source": "sm_drums",
+  "pads": {
+   "all": {
+    "filter": 1,
+    "cutoff": 6500,
+    "pan": 0
+   },
+   "snare": {
+    "tune": 2,
+    "decay": 450,
+    "send_a": 30
+   },
+   "kick": {
+    "decay": 500
+   }
+  },
+  "kit": {
+   "return_a": -8
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.3,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.55,
+     "flutter": 0.1,
+     "hiss": 0.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Seventies Dead",
+  "category": "Acoustic",
+  "about": "Deadened shells, everything short, tape-warm",
+  "source": "sm_drums_17",
+  "pads": {
+   "all": {
+    "decay": 380
+   },
+   "cymbal": {
+    "decay": 2200
+   },
+   "snare": {
+    "tune": -2
+   },
+   "kick": {
+    "filter": 1,
+    "cutoff": 4000
+   },
+   "tom": {
+    "tune": -2,
+    "decay": 500
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.45,
+     "flutter": 0.05,
+     "hiss": 0.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.3,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Jazz Club",
+  "category": "Acoustic",
+  "about": "The 17\" ride, tuned-up shells, soft dynamics and a small room",
+  "source": "sm_drums_17",
+  "pads": {
+   "kick": {
+    "tune": 2,
+    "decay": 600
+   },
+   "snare": {
+    "tune": 3
+   },
+   "tom": {
+    "tune": 4,
+    "decay": 900
+   },
+   "all": {
+    "velocity": 55,
+    "send_b": 18
+   }
+  },
+  "kit": {
+   "return_b": -6,
+   "humanize": 15
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.35,
+     "size": 0.3,
+     "machine": 0,
+     "mix": 1.0,
+     "preDelay": 0.1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.2,
+     "flutter": 0.0,
+     "hiss": 0.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Ballad Soft",
+  "category": "Acoustic",
+  "about": "Softened attacks, rounded top, a long plate",
+  "source": "sm_drums_17",
+  "pads": {
+   "all": {
+    "attack": 3,
+    "filter": 1,
+    "cutoff": 9000,
+    "send_a": 30
+   },
+   "kick": {
+    "send_a": 10
+   }
+  },
+  "kit": {
+   "return_a": -4
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.65,
+     "size": 0.6,
+     "machine": 3,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.25,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Live 17",
+  "category": "Acoustic",
+  "about": "SM Drums 17 as played: a little loose in level and time, in the room",
+  "source": "sm_drums_17",
+  "pads": {
+   "all": {
+    "hum_level": 1.0,
+    "hum_timing": 3,
+    "hum_pitch": 5,
+    "send_a": 20
+   }
+  },
+  "kit": {
+   "return_a": -6
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.5,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.3,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Garage",
+  "category": "Acoustic",
+  "about": "Pushed hard: everything driven into a saturated bus",
+  "source": "sm_drums_17",
+  "pads": {
+   "all": {
+    "drive": 35,
+    "send_a": 15
+   },
+   "cymbal": {
+    "drive": 15
+   }
+  },
+  "kit": {
+   "level": -8,
+   "return_a": -8
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.25,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.6,
+     "circuit": 2
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 3,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.6,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Metal Tight",
+  "category": "Acoustic",
+  "about": "Clicky driven kick, short toms, transients up and compressed",
+  "source": "sm_drums",
+  "pads": {
+   "kick": {
+    "drive": 25,
+    "decay": 320,
+    "tune": 1
+   },
+   "tom": {
+    "decay": 900,
+    "tune": -1
+   },
+   "snare": {
+    "tune": 1,
+    "decay": 1200
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.8,
+     "sustain": 0.35
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.6,
+     "ratio": 0.6,
+     "attack": 0.3,
+     "release": 0.3,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Hybrid Rock",
+  "category": "Acoustic",
+  "about": "SM Drums with the hybrid snare, punchy in a room",
+  "source": "sm_drums",
+  "borrow": {
+   "3": {
+    "kit": "sm_drums_hybrid",
+    "pad": 3
+   }
+  },
+  "pads": {
+   "snare": {
+    "send_a": 35
+   },
+   "kick": {
+    "drive": 10
+   }
+  },
+  "kit": {
+   "return_a": -5
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.45,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.65,
+     "sustain": 0.5
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.45,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Hybrid Pop",
+  "category": "Acoustic",
+  "about": "The hybrid snares bright and tight, a plate on the snare",
+  "source": "sm_drums_hybrid",
+  "pads": {
+   "snare": {
+    "decay": 900,
+    "send_b": 30
+   },
+   "hat": {
+    "tune": 1
+   },
+   "kick": {
+    "decay": 650
+   }
+  },
+  "kit": {
+   "return_b": -5
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.5,
+     "size": 0.45,
+     "machine": 3,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.7,
+     "sustain": 0.45
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Big Hybrid",
+  "category": "Acoustic",
+  "about": "Hybrid snares over a heavy kick, saturated and glued",
+  "source": "sm_drums_hybrid",
+  "pads": {
+   "kick": {
+    "drive": 20,
+    "tune": -1
+   },
+   "snare": {
+    "send_a": 30
+   },
+   "tom": {
+    "send_a": 25
+   }
+  },
+  "kit": {
+   "return_a": -4
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.55,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.45,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.55,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Gospel Live",
+  "category": "Acoustic",
+  "about": "Tuned-up hybrid snare, a lively room and a little swing in the hands",
+  "source": "sm_drums_hybrid",
+  "pads": {
+   "snare": {
+    "tune": 2
+   },
+   "all": {
+    "send_a": 22,
+    "hum_timing": 2,
+    "hum_level": 0.8
+   }
+  },
+  "kit": {
+   "humanize": 10,
+   "return_a": -5
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.5,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.45,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Worship Wash",
+  "category": "Acoustic",
+  "about": "Long cymbals and toms washed in reverb, gently compressed",
+  "source": "sm_drums_17",
+  "pads": {
+   "cymbal": {
+    "send_a": 50
+   },
+   "tom": {
+    "send_a": 40
+   },
+   "snare": {
+    "send_a": 30
+   },
+   "kick": {
+    "send_a": 10
+   }
+  },
+  "kit": {
+   "return_a": -3
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.85,
+     "size": 0.85,
+     "machine": 2,
+     "mix": 1.0,
+     "preDelay": 0.35
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.3,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Mixed Kit",
+  "category": "Acoustic",
+  "about": "SM Drums 17's cymbals and hats with SM Drums' snare and the hybrid rim",
+  "source": "sm_drums_17",
+  "borrow": {
+   "3": {
+    "kit": "sm_drums",
+    "pad": 3
+   },
+   "4": {
+    "kit": "sm_drums_hybrid",
+    "pad": 5
+   }
+  },
+  "pads": {
+   "all": {
+    "send_a": 15
+   }
+  },
+  "kit": {
+   "return_a": -7
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.4,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.35,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Alt Rock Room",
+  "category": "Rock",
+  "about": "The Alternative kit in a room, compressed",
+  "source": "Alternative",
+  "pads": {
+   "all": {
+    "send_a": 25
+   },
+   "kick": {
+    "send_a": 8
+   }
+  },
+  "kit": {
+   "return_a": -5
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.45,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.45,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Hard Rock Stack",
+  "category": "Rock",
+  "about": "Driven, tuned-down kick and toms through saturation",
+  "source": "Hard Rock",
+  "pads": {
+   "kick": {
+    "drive": 30,
+    "tune": -2
+   },
+   "tom": {
+    "tune": -2,
+    "drive": 15
+   },
+   "snare": {
+    "drive": 15
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.5,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.55,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Rockabilly Slap",
+  "category": "Rock",
+  "about": "A short, bright snare with slapback echo",
+  "source": "Rockabilly",
+  "pads": {
+   "snare": {
+    "decay": 180,
+    "tune": 3,
+    "send_b": 35
+   },
+   "all": {
+    "pan": 0
+   }
+  },
+  "kit": {
+   "return_b": -6
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_delay",
+    "params": {
+     "time": 0.18,
+     "feedback": 0.08,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.4,
+     "flutter": 0.0,
+     "hiss": 0.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Sixties Mono",
+  "category": "Rock",
+  "about": "Mono, dark and taped",
+  "source": "'60s Rock",
+  "pads": {
+   "all": {
+    "pan": 0,
+    "filter": 1,
+    "cutoff": 5000
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.6,
+     "flutter": 0.2,
+     "hiss": 0.05
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.4,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Pop Punch",
+  "category": "Pop & Folk",
+  "about": "Transients up, compressed, a plate on the snare",
+  "source": "Pop",
+  "pads": {
+   "snare": {
+    "send_b": 30
+   },
+   "clap": {
+    "send_b": 25
+   }
+  },
+  "kit": {
+   "return_b": -5
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.5,
+     "size": 0.45,
+     "machine": 3,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.7,
+     "sustain": 0.5
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Folk Porch",
+  "category": "Pop & Folk",
+  "about": "Soft and round, on a wooden porch",
+  "source": "Folk",
+  "pads": {
+   "all": {
+    "filter": 1,
+    "cutoff": 7000,
+    "attack": 2,
+    "send_a": 20
+   }
+  },
+  "kit": {
+   "return_a": -7,
+   "humanize": 15
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.35,
+     "mix": 1.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Country Two-Step",
+  "category": "Pop & Folk",
+  "about": "A dry kit with a quick slap on the snare",
+  "source": "Country",
+  "pads": {
+   "snare": {
+    "send_b": 25,
+    "decay": 300
+   }
+  },
+  "kit": {
+   "return_b": -7
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_delay",
+    "params": {
+     "time": 0.16,
+     "feedback": 0.05,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.35,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Praise Big",
+  "category": "Church",
+  "about": "Big room and glue for a full band",
+  "source": "Praise",
+  "pads": {
+   "all": {
+    "send_a": 30
+   },
+   "kick": {
+    "send_a": 10,
+    "drive": 10
+   }
+  },
+  "kit": {
+   "return_a": -4
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.6,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Worship Pad Wash",
+  "category": "Church",
+  "about": "Long cymbals and a huge reverb under quiet verses",
+  "source": "Worship",
+  "pads": {
+   "cymbal": {
+    "send_a": 60,
+    "decay": 4000
+   },
+   "all": {
+    "send_a": 30
+   }
+  },
+  "kit": {
+   "return_a": -2
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.9,
+     "size": 0.9,
+     "machine": 2,
+     "mix": 1.0,
+     "preDelay": 0.4
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.25,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Shout Church",
+  "category": "Church",
+  "about": "Loud and loose: humanized hands, driven, a lively room",
+  "source": "Gospel / Shout",
+  "pads": {
+   "all": {
+    "hum_timing": 3,
+    "hum_level": 1.2,
+    "send_a": 25,
+    "drive": 12
+   }
+  },
+  "kit": {
+   "humanize": 15,
+   "return_a": -5
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_chamber",
+    "params": {
+     "decay": 0.5,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.35,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 3,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Dusty Boom Bap",
+  "category": "Hip-Hop",
+  "about": "Dark, crunchy and bit-reduced, like a sampled record",
+  "source": "Boom Bap",
+  "pads": {
+   "all": {
+    "filter": 1,
+    "cutoff": 6000,
+    "drive": 20
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "lofi",
+    "params": {
+     "bits": 12,
+     "sample_rate": 26000,
+     "noise": 4,
+     "mix": 100
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Boom Bap on Wood",
+  "category": "Hip-Hop",
+  "about": "Boom Bap's kick under SM Drums' snare and hats, dusted",
+  "source": "Boom Bap",
+  "borrow": {
+   "3": {
+    "kit": "sm_drums",
+    "pad": 3
+   },
+   "5": {
+    "kit": "sm_drums",
+    "pad": 5
+   },
+   "6": {
+    "kit": "sm_drums",
+    "pad": 6
+   },
+   "7": {
+    "kit": "sm_drums",
+    "pad": 7
+   }
+  },
+  "pads": {
+   "all": {
+    "filter": 1,
+    "cutoff": 7000
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "lofi",
+    "params": {
+     "bits": 14,
+     "sample_rate": 30000,
+     "noise": 3,
+     "mix": 100
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Trap 808 Long",
+  "category": "Hip-Hop",
+  "about": "A long, sliding 808 with tight, bright hats",
+  "source": "Trap",
+  "pads": {
+   "kick": {
+    "decay": 1800,
+    "pitch_amount": 12,
+    "pitch_decay": 60,
+    "drive": 15
+   },
+   "hat": {
+    "tune": 2,
+    "decay": 70
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.3,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.45,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Trap Hard",
+  "category": "Hip-Hop",
+  "about": "Hard transients, saturation and a short room on the claps",
+  "source": "Trap",
+  "pads": {
+   "clap": {
+    "send_a": 30
+   },
+   "snare": {
+    "send_a": 25
+   }
+  },
+  "kit": {
+   "return_a": -6
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.3,
+     "size": 0.3,
+     "machine": 0,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.8,
+     "sustain": 0.4
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.45,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 3,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Lo-fi Tape",
+  "category": "Hip-Hop",
+  "about": "Wobbly tape, hiss and a rolled-off top",
+  "source": "Lo-fi",
+  "pads": {
+   "all": {
+    "filter": 1,
+    "cutoff": 3500
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.5,
+     "flutter": 0.45,
+     "hiss": 0.2
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.4,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "House Classic",
+  "category": "Electronic",
+  "about": "Long open hats, a clap in a small room",
+  "source": "House",
+  "pads": {
+   "hat": {
+    "decay": 450
+   },
+   "clap": {
+    "send_a": 25
+   }
+  },
+  "kit": {
+   "return_a": -6
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.35,
+     "size": 0.35,
+     "machine": 0,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.4,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Techno Warehouse",
+  "category": "Electronic",
+  "about": "Driven kick, big reverb and dub delay on the tops",
+  "source": "Techno",
+  "pads": {
+   "kick": {
+    "drive": 30,
+    "decay": 600
+   },
+   "hat": {
+    "send_a": 30,
+    "send_b": 20
+   },
+   "clap": {
+    "send_a": 35
+   },
+   "percussion": {
+    "send_b": 30
+   }
+  },
+  "kit": {
+   "return_a": -5,
+   "return_b": -7
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.8,
+     "size": 0.9,
+     "machine": 2,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_delay",
+    "params": {
+     "time": 0.5,
+     "feedback": 0.45,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.5,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Minimal Click",
+  "category": "Electronic",
+  "about": "Short, clicky and tuned up, echoes on the percussion",
+  "source": "Techno",
+  "pads": {
+   "all": {
+    "decay": 150
+   },
+   "kick": {
+    "decay": 350
+   },
+   "percussion": {
+    "tune": 4,
+    "send_b": 35
+   }
+  },
+  "kit": {
+   "return_b": -6
+  },
+  "fx": [
+   {
+    "bus": "b",
+    "slot": 1,
+    "plugin": "fs_delay",
+    "params": {
+     "time": 0.42,
+     "feedback": 0.4,
+     "mix": 1.0
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.4,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Breakbeat Crunch",
+  "category": "Electronic",
+  "about": "Drum & Bass with crunch and snap",
+  "source": "Drum & Bass",
+  "pads": {
+   "snare": {
+    "drive": 20
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.75,
+     "sustain": 0.5
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.4,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 3,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.55,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Dembow Club",
+  "category": "Electronic",
+  "about": "Reggaeton tight and loud",
+  "source": "Reggaeton",
+  "pads": {
+   "kick": {
+    "drive": 10
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_transient",
+    "params": {
+     "attack": 0.65,
+     "sustain": 0.5
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.55,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Analog 808",
+  "category": "Drum Machines",
+  "about": "Long boomy kick, snappy snare, cowbell and claves",
+  "source": "Porch Light",
+  "pads": {
+   "kick": {
+    "decay": 1200,
+    "pitch_amount": 12,
+    "pitch_decay": 80,
+    "tone": 30
+   },
+   "snare": {
+    "snappy": 80
+   },
+   "hat": {
+    "decay": 60
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_tape",
+    "params": {
+     "drive": 0.3,
+     "flutter": 0.0,
+     "hiss": 0.0
+    }
+   }
+  ]
+ },
+ {
+  "name": "Analog 909",
+  "category": "Drum Machines",
+  "about": "Punchy kick, bright hats, a clap in a small room",
+  "source": "Porch Light",
+  "pads": {
+   "kick": {
+    "decay": 450,
+    "pitch_amount": 8,
+    "drive": 15
+   },
+   "hat": {
+    "decay": 90,
+    "tune": 2
+   },
+   "clap": {
+    "send_a": 20
+   }
+  },
+  "kit": {
+   "return_a": -7
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.3,
+     "size": 0.3,
+     "machine": 0,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.45,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Tin Roof Garage",
+  "category": "Drum Machines",
+  "about": "Tin Roof driven and squashed",
+  "source": "Tin Roof",
+  "pads": {
+   "all": {
+    "drive": 25
+   }
+  },
+  "fx": [
+   {
+    "bus": "out",
+    "slot": 1,
+    "plugin": "fs_sat",
+    "params": {
+     "drive": 0.5,
+     "circuit": 1
+    }
+   },
+   {
+    "bus": "out",
+    "slot": 2,
+    "plugin": "fs_comp",
+    "params": {
+     "amount": 0.6,
+     "ratio": 0.4,
+     "attack": 0.5,
+     "release": 0.5,
+     "makeup": 0.35
+    }
+   }
+  ]
+ },
+ {
+  "name": "Revival Hall",
+  "category": "Drum Machines",
+  "about": "Revival Tent in a big hall",
+  "source": "Revival Tent",
+  "pads": {
+   "all": {
+    "send_a": 35
+   }
+  },
+  "kit": {
+   "return_a": -3
+  },
+  "fx": [
+   {
+    "bus": "a",
+    "slot": 1,
+    "plugin": "fs_reverb",
+    "params": {
+     "decay": 0.75,
+     "size": 0.85,
+     "machine": 2,
+     "mix": 1.0,
+     "preDelay": 0.28
+    }
+   }
+  ]
+ }
+]
