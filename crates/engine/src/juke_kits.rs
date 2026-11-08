@@ -812,6 +812,9 @@ pub struct RecordedPad {
     /// The pad's trim in dB (−24 to +24): the kit's balance between its pads, under the fader.
     #[serde(default)]
     pub trim: Option<f32>,
+    /// Its choke group (0 none, 1–8); absent: the hats choke each other in group 1, the rest none.
+    #[serde(default)]
+    pub choke: Option<u8>,
     #[serde(default)]
     pub samples: std::collections::BTreeMap<String, String>,
 }

@@ -569,6 +569,10 @@ fn recorded_load(e: &mut Engine, t: TrackId, dir: &Path) -> Result<Value> {
         if let Some(t) = pad.trim {
             params.insert(format!("p{}_trim", i + 1), t.clamp(-24.0, 24.0));
         }
+        // Choke groups follow the kit's pads, not the default kit's slots.
+        let hat = pad.family.as_deref() == Some("hat");
+        let choke = pad.choke.map_or(if hat { 1.0 } else { 0.0 }, |c| f32::from(c.min(8)));
+        params.insert(format!("p{}_choke", i + 1), choke);
     }
     {
         let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
@@ -1459,6 +1463,141 @@ mod tests {
         assert_eq!(back.kit_fx.len(), saved.kit_fx.len());
         assert_eq!(crate::cmd::juke::pad_layout(&back, 2).name, crate::cmd::juke::pad_layout(&saved, 2).name);
         let _ = std::fs::remove_dir_all(&kits);
+    }
+
+    /// The library's loudness: the test groove's gated loudness (dB) and its highest peak (dBFS).
+    /// `tools/kits/juke_presets.py --levels` sets each preset's kit level to meet them.
+    const PRESET_TARGET_DB: f32 = -26.0;
+    const PRESET_PEAK_MAX_DB: f32 = -1.0;
+
+    /// One preset's measurement.
+    struct Measured {
+        peak_db: f32,
+        loud_db: f32,
+        /// Left over right, dB.
+        balance_db: f32,
+        /// High-frequency share: the first difference's RMS over the signal's, dB.
+        bright_db: f32,
+        level: f32,
+        wav: Vec<u8>,
+    }
+
+    /// Loads `preset` on a new beat and renders the test groove (two bars of kick, snare with a
+    /// ghost note, eighth hats, an open hat, crash, ride and a tom fill, then a bar of tail).
+    fn measure_preset(preset: &crate::juke_presets::Preset, kits: Option<&Path>, d: &Path) -> Measured {
+        let (mut e, t) = beat();
+        let mut p = json!({"track": t.0, "preset": preset.name});
+        if let Some(k) = kits {
+            p["kits_dir"] = json!(k.to_string_lossy());
+        }
+        e.execute("mix.kit_preset", &p).unwrap_or_else(|err| panic!("{}: {err}", preset.name));
+        let s = e.session();
+        let bar = s.tempo.tick_to_samples(4 * soundcraft_midi::PPQ as i64, s.sample_rate);
+        let v = e.execute("pattern.new", &json!({"track": t.0, "bars": 2, "start": 4 * bar, "lanes": [36, 38, 42, 46, 49, 51, 50, 41]})).unwrap();
+        let clip = v["clip"].as_u64().unwrap();
+        for lane in 0..8 {
+            e.execute("pattern.lane", &json!({"clip": clip, "lane": lane, "length": 32})).unwrap();
+        }
+        let mut hit = |lane: usize, step: usize, vel: u8| {
+            e.execute("pattern.step", &json!({"clip": clip, "lane": lane, "step": step, "on": true, "velocity": vel})).unwrap();
+        };
+        for s in [0, 6, 8, 16, 22, 24] {
+            hit(0, s, 115);
+        }
+        for s in [4, 12, 20, 28] {
+            hit(1, s, 112);
+        }
+        hit(1, 15, 38);
+        for s in (0..32).step_by(2).filter(|s| *s != 14 && *s < 24) {
+            hit(2, s, if s % 4 == 0 { 92 } else { 64 });
+        }
+        hit(3, 14, 90);
+        hit(4, 0, 110);
+        for s in [24, 26] {
+            hit(5, s, 85);
+        }
+        for s in [28, 29] {
+            hit(6, s, 100);
+        }
+        for s in [30, 31] {
+            hit(7, s, 105);
+        }
+        let level = juke(&e, t).params.get("level").copied().unwrap_or(-6.0);
+        let out = d.join(format!("{}.wav", preset.name.replace(['/', ' ', '\'', '&'], "_")));
+        e.execute("file.bounce_mix", &json!({"path": out.to_string_lossy(), "start": 4 * bar, "end": 7 * bar, "bit_depth": "32f", "dither": false}))
+            .unwrap();
+        let wav = std::fs::read(&out).unwrap();
+        let _ = std::fs::remove_file(&out);
+        let (_, buf) = soundcraft_audio_io::decode(&wav, Some("wav")).unwrap();
+        let ch = |i: usize| buf.channels.get(i).or_else(|| buf.channels.first()).cloned().unwrap_or_default();
+        let (l, r) = (ch(0), ch(1));
+        let db = |x: f64| (10.0 * x.max(1e-12).log10()) as f32;
+        let ms = |x: &[f32]| x.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>() / x.len().max(1) as f64;
+        let mono: Vec<f32> = l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect();
+        let diff: Vec<f32> = mono.windows(2).map(|w| w[1] - w[0]).collect();
+        // Gated loudness, as a meter hears it: 100 ms blocks, the near-silent ones (more than
+        // 15 dB under the rest) left out, so short hits and the gaps between them don't read
+        // quiet.
+        let block = (buf.sample_rate as usize / 10).max(1);
+        let blocks: Vec<f64> = mono.chunks(block).map(ms).filter(|m| *m > 1e-7).collect();
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+        let gate = mean(&blocks) * 10f64.powf(-1.5);
+        let loud: Vec<f64> = blocks.iter().copied().filter(|m| *m >= gate).collect();
+        Measured {
+            peak_db: 20.0 * buf.peak().max(1e-9).log10(),
+            loud_db: db(mean(&loud)),
+            balance_db: db(ms(&l)) - db(ms(&r)),
+            bright_db: db(ms(&diff)) - db(ms(&mono)),
+            level,
+            wav,
+        }
+    }
+
+    #[test]
+    fn presets_without_recorded_kits_play_at_the_librarys_level() {
+        let d = dir("preset-levels");
+        for q in crate::juke_presets::builtin().iter().filter(|q| q.needs().is_empty()) {
+            let m = measure_preset(q, None, &d);
+            assert!(m.peak_db <= PRESET_PEAK_MAX_DB + 1.0, "{}: peaks at {:.1} dBFS", q.name, m.peak_db);
+            assert!(
+                (m.loud_db - PRESET_TARGET_DB).abs() <= 2.0 || m.peak_db >= PRESET_PEAK_MAX_DB - 0.5,
+                "{}: plays at {:.1} dB, the library at {PRESET_TARGET_DB} (run tools/kits/juke_presets.py --levels)",
+                q.name,
+                m.loud_db
+            );
+            assert!(m.balance_db.abs() <= 4.0, "{}: leans {:.1} dB", q.name, m.balance_db);
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Renders and measures every preset (with the recorded kits in `FREEDAWM_TEST_KITS_DIR`) and
+    /// writes `report.json` (and each render, with `FREEDAWM_PRESET_WAVS=1`) to
+    /// `FREEDAWM_PRESET_REPORT`, for `tools/kits/juke_presets.py --levels`.
+    #[test]
+    #[ignore = "needs the recorded kits (FREEDAWM_TEST_KITS_DIR) and FREEDAWM_PRESET_REPORT"]
+    fn measure_every_preset() {
+        let kits = std::env::var_os("FREEDAWM_TEST_KITS_DIR").map(PathBuf::from);
+        let out = PathBuf::from(std::env::var_os("FREEDAWM_PRESET_REPORT").expect("FREEDAWM_PRESET_REPORT: where to write"));
+        std::fs::create_dir_all(&out).unwrap();
+        let wavs = std::env::var_os("FREEDAWM_PRESET_WAVS").is_some();
+        let d = dir("preset-measure");
+        let mut report = Vec::new();
+        let only = std::env::var("FREEDAWM_PRESET_ONLY").ok();
+        for q in crate::juke_presets::builtin() {
+            if kits.is_none() && !q.needs().is_empty() || only.as_ref().is_some_and(|o| !o.split(',').any(|n| n == q.name)) {
+                continue;
+            }
+            let m = measure_preset(q, kits.as_deref(), &d);
+            println!(
+                "{:28} peak {:6.1}  loud {:6.1}  bal {:5.1}  bright {:6.1}  level {:5.1}",
+                q.name, m.peak_db, m.loud_db, m.balance_db, m.bright_db, m.level
+            );
+            if wavs {
+                std::fs::write(out.join(format!("{}.wav", q.name.replace(['/', ' ', '\'', '&'], "_"))), &m.wav).unwrap();
+            }
+            report.push(json!({"name": q.name, "category": q.category, "peak_db": m.peak_db, "loud_db": m.loud_db, "balance_db": m.balance_db, "bright_db": m.bright_db, "level": m.level}));
+        }
+        std::fs::write(out.join("report.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();
     }
 
     #[test]
