@@ -670,6 +670,12 @@ pub struct RecordedKit {
     pub credit: String,
     #[serde(default)]
     pub pads: Vec<RecordedPad>,
+    /// Every Juke setting (`p1_tune`, `level`…), in a kit saved from Juke (`mix.kit_save`).
+    #[serde(default)]
+    pub params: std::collections::BTreeMap<String, f32>,
+    /// Its bus effects, as `mix.kit_fx` takes them (`{bus, slot, plugin, params, bypass}`).
+    #[serde(default)]
+    pub fx: Vec<serde_json::Value>,
 }
 
 /// One pad of a [`RecordedKit`].

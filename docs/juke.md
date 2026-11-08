@@ -182,8 +182,20 @@ Instrument parameters go through the existing `mix.instrument_param`.
   drop targets), the synth voice (voice menu, its knobs, a sample↔synth blend), humanize sliders and
   playback options (one-shot or gate, reverse, stack, choke). At the side: the pad's own strip
   (Tune, Pan, sends, fader) beside the buses and the output, all four faders aligned.
-- **Step grid** (a panel under the Edit window, and in the MIDI Editor for pattern clips; look
-  approved 2026-11-06): the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
+  - **As built (2026-11-08):** each envelope row is titled with what it does ("Amp envelope — how
+    the hit rises and dies away"); its ON lamp is lit while it shapes the pad (amp always; pitch with
+    an amount, the filter when one is chosen) and switches the pitch sweep and the filter. The layer
+    rows are named Hard, Medium, Soft and Ghost; several audio files dropped on a cell fill its row
+    from there. The pad's own humanize (`p{n}_hum_level` ±dB, `_hum_pitch` ±cents, `_hum_filter`
+    ±% of an octave on the cutoff, `_hum_timing` up to that many ms late) adds to the kit-wide
+    Humanize. The top bar has **Randomize** (`mix.kit_randomize`: the pad shown in the pad view, else
+    every pad: tuning, decay, tone, snap, drive and the kick and tom sweeps, around what they are)
+    and **Save kit** (`mix.kit_save`: a kit folder with every setting, the samples as WAVs and the
+    bus effects, written to the kits folder and listed in Kits › Recorded & saved). The bus strips
+    carry their subtitles (Room and grit, Space, Kit glue · stereo).
+- **Step grid** (the Juke window's **Steps** view, beside Kit and Pad; also the MIDI Editor's view
+  of a pattern clip; look approved 2026-11-06): the Steps view lists the track's pattern clips as
+  tabs (name and bars, `+ Pattern` adds one after the last) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
   Accent and Humanize knobs, fill bars, Re-roll, Convert to MIDI); one row per lane, its header a band
   in the pad's family colour (name, lane length, choke or rate, mute); steps as raised keys grouped
   by beat. A step's fill height is its velocity in the lane's colour, a cream cap marks an accent,
@@ -192,8 +204,12 @@ Instrument parameters go through the existing `mix.instrument_param`.
   - **Editing:** click a step to turn it on or off; drag across steps to paint or clear a run (the
     first step decides which); new steps take the **New steps** velocity (Full, 75, 50 or 25 %, chosen
     in the pattern bar); drag a step up or down for fine velocity; keys 1–4 over a step set it to
-    Full / 75 / 50 / 25; right-click (or modifier-click) opens the step's details popover (velocity,
-    probability, nudge, roll, accent, flam, when it plays). Lane length handles at the row ends.
+    Full / 75 / 50 / 25; right-click (or modifier-click) opens the step's details popover, hung from
+    the step: Velocity, Probability and Nudge sliders, Roll 1–4, Accent and Flam pills, and when it
+    plays (Always, 1st of 2, 2nd of 2, First pass, Fill bars, Not in fills). Steps per bar and New
+    steps are segmented controls, Shuffle, Accent and Humanize cream dials, Fill every a menu; the
+    step numbers run over the lanes and the gestures are listed under them. Track › New Beat, the
+    Grooves menu and the Steps tab open this view.
 - The menu bar gets **Track › New Beat** (an instrument track with Juke and a starter kit) and
   **Clip › Convert Pattern to MIDI**; `menubar.txt` and the parity checklist update with them.
 

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use soundcraft_dsp::ParamInfo;
 use soundcraft_dsp::plugins::juke::{JUKE_INFO, LAYERS, PADS, ROBINS, SOURCES, VOICE_NAMES, sample_key, unpack_levels};
 use soundcraft_engine::cmd::juke::pad_layout;
-use soundcraft_model::{DrumFamily, Insert, KitBus, KitFx, TrackId};
+use soundcraft_model::{ClipId, DrumFamily, Insert, KitBus, KitFx, TrackId};
 
 pub use soundcraft_engine::cmd::juke::JUKE;
 
@@ -90,7 +90,8 @@ fn value(ins: &Insert, id: &str) -> f32 {
     ins.params.get(id).copied().unwrap_or(default)
 }
 
-fn pad_value(ins: &Insert, pad: usize, name: &str) -> f32 {
+/// Pad `pad`'s parameter `name` (its default when the kit has not set it).
+pub fn pad_value(ins: &Insert, pad: usize, name: &str) -> f32 {
     value(ins, &pad_param(pad, name))
 }
 
@@ -104,11 +105,19 @@ pub fn pad_note(ins: &Insert, pad: usize) -> u8 {
     pad_value(ins, pad, "note").round().clamp(0.0, 127.0) as u8
 }
 
-/// Which pad is selected and whether its edit view is open, per track.
+/// The Juke window's views: the kit's pads, the selected pad's editor, the pattern's steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Kit,
+    Pad,
+    Steps,
+}
+
+/// Which pad is selected, per track.
 #[derive(Debug, Clone, Copy, Default)]
 struct View {
     pad: usize,
-    editing: bool,
     /// The pad being auditioned while the pointer holds its play button.
     held: Option<(usize, u8)>,
 }
@@ -127,7 +136,8 @@ struct Out {
     params: Vec<(String, f32)>,
     cmds: Vec<(&'static str, Value)>,
     select: Option<usize>,
-    editing: Option<bool>,
+    /// The view to show.
+    tab: Option<Tab>,
     /// (pad, layer, robin) to load a sample into from a file picker.
     load: Option<(usize, usize, usize)>,
     /// Press (`Some(note)`) or release (`None`) of the audition button.
@@ -136,8 +146,12 @@ struct Out {
     drops: Vec<(Rect, (usize, usize, usize))>,
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
-    /// Open the step grid on the track's pattern clip.
+    /// Show the Steps view on the track's pattern clip (made if there is none).
     open_steps: bool,
+    /// Show the Steps view on this pattern clip.
+    steps_clip: Option<ClipId>,
+    /// A pattern was just made (`pattern.new`): show it.
+    new_pattern: bool,
     /// Recorded kits: fetch the release's list, download one, cancel the download.
     #[cfg(not(target_arch = "wasm32"))]
     fetch_kits: bool,
@@ -145,6 +159,9 @@ struct Out {
     download_kit: Option<soundcraft_engine::ml::kits::KitEntry>,
     #[cfg(not(target_arch = "wasm32"))]
     cancel_kit: bool,
+    /// Save the kit to the kits folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    save_kit: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -185,7 +202,7 @@ impl Out {
 }
 
 /// The window's default size.
-pub const WINDOW_SIZE: Vec2 = vec2(1000.0, 640.0);
+pub const WINDOW_SIZE: Vec2 = vec2(1000.0, 690.0);
 
 /// Draws the Juke window's contents for track `tid`.
 pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen: bool) {
@@ -212,19 +229,27 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     }
     let inner = full.shrink(6.0);
     let top = Rect::from_min_size(inner.min, vec2(inner.width(), 28.0));
-    top_bar(&mut body, top, tid, ins, &view, &kits, &mut out);
+    let tab = app.ui.juke_tabs.get(&tid).copied().unwrap_or_default();
+    let steps_clip = steps_clip(app, tid);
+    top_bar(&mut body, top, tid, ins, &view, tab, steps_clip, &kits, &mut out);
     let honey_h = 64.0;
     let strips_w = STRIP_W * 3.0 + 12.0;
     let main = Rect::from_min_max(pos2(inner.min.x, top.max.y + 6.0), pos2(inner.max.x - strips_w - 8.0, inner.max.y - honey_h - 8.0));
     let strips = Rect::from_min_max(pos2(main.max.x + 8.0, main.min.y), pos2(inner.max.x, main.max.y));
-    if view.editing {
-        pad_edit(&mut body, main, tid, ins, view.pad, levels[view.pad], &mut out);
-    } else {
-        pad_grid(&mut body, main, tid, ins, &view, &levels, &mut out);
-    }
-    let out_meter = app.meters.get(&tid).map(|m| (m.level, m.hold, m.clip)).unwrap_or_default();
-    bus_strips(&mut body, strips, tid, ins, out_meter, bus_levels, &mut out);
     let honey = Rect::from_min_max(pos2(inner.min.x, inner.max.y - honey_h), inner.max);
+    match tab {
+        Tab::Pad => pad_edit(&mut body, main, tid, ins, view.pad, levels[view.pad], &mut out),
+        Tab::Kit => pad_grid(&mut body, main, tid, ins, &view, &levels, &mut out),
+        Tab::Steps => {
+            // The steps take the strips' room too.
+            let r = Rect::from_min_max(main.min, pos2(inner.max.x, main.max.y));
+            steps_view(app, &mut body, r, tid, steps_clip, &mut out);
+        }
+    }
+    if tab != Tab::Steps {
+        let out_meter = app.meters.get(&tid).map(|m| (m.level, m.hold, m.clip)).unwrap_or_default();
+        bus_strips(&mut body, strips, tid, ins, out_meter, bus_levels, &mut out);
+    }
     honeycomb(&mut body, honey, tid, ins, view.pad, &mut out);
     apply(app, tid, &mut view, out);
     ctx.data_mut(|d| d.insert_temp(view_id(tid), view));
@@ -288,8 +313,14 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
         }
     }
     for (id, p) in out.cmds {
-        if let Err(e) = app.run(id, p) {
-            app.ui.status = e;
+        match app.run(id, p) {
+            Ok(v) if id == "pattern.new" && out.new_pattern => {
+                if let Some(c) = v["clip"].as_u64() {
+                    app.ui.juke_clips.insert(tid, ClipId(c));
+                }
+            }
+            Ok(_) => {}
+            Err(e) => app.ui.status = e,
         }
     }
     if let Some(p) = out.select {
@@ -299,7 +330,9 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
         crate::juke_fx::open(app, tid, m);
     }
     if out.open_steps {
-        open_steps(app, tid);
+        show_steps(app, tid, out.steps_clip);
+    } else if let Some(c) = out.steps_clip {
+        app.ui.juke_clips.insert(tid, c);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -312,9 +345,12 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
         if out.cancel_kit {
             app.juke_kits.cancel();
         }
+        if out.save_kit {
+            save_kit(app, tid);
+        }
     }
-    if let Some(e) = out.editing {
-        view.editing = e;
+    if let Some(t) = out.tab {
+        app.ui.juke_tabs.insert(tid, t);
     }
     if let Some((pad, layer, robin)) = out.load
         && let Some(pick) = &app.services.pick_open
@@ -341,22 +377,150 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     }
 }
 
-/// Shows the step grid of track `tid`'s pattern clip at the insertion point (else its first; one
-/// is made there if it has none): the clip is selected and the MIDI Editor opened.
-pub fn open_steps(app: &mut SoundApp, tid: TrackId) {
-    let at = app.engine.session().edit.selection.start;
-    let found = app.engine.session().track(tid).and_then(|t| {
-        let patterns = || t.clips().iter().filter(|c| c.pattern.is_some());
-        patterns().find(|c| c.range().contains(at)).or_else(|| patterns().next()).map(|c| c.id.0)
-    });
-    let clip = match found {
-        Some(c) => Some(c),
-        None => app.run("pattern.new", json!({"track": tid.0, "bars": 2})).ok().and_then(|v| v["clip"].as_u64()),
-    };
-    if let Some(c) = clip {
-        let _ = app.run("edit.select", json!({"clips": [c]}));
-        app.ui.show_midi_editor = true;
+/// A kit's folder name in the kits folder: `my_` and its name in lower case, letters and digits.
+pub fn saved_kit_id(name: &str) -> String {
+    let mut slug = String::from("my_");
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('_') {
+            slug.push('_');
+        }
     }
+    let slug = slug.trim_end_matches('_');
+    slug.chars().take(64).collect::<String>().trim_end_matches('_').to_string()
+}
+
+/// Saves track `tid`'s kit into the kits folder, where the Kits menu lists it.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_kit(app: &mut SoundApp, tid: TrackId) {
+    let name = app
+        .engine
+        .session()
+        .track(tid)
+        .and_then(|t| t.instrument.as_ref())
+        .and_then(|i| i.kit.as_ref())
+        .map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
+    let id = saved_kit_id(&name);
+    let id = if id == "my" { "my_kit".to_string() } else { id };
+    let dir = app.juke_kits.dir().join(&id);
+    match app.run("mix.kit_save", json!({"track": tid.0, "path": dir.to_string_lossy()})) {
+        Ok(_) => app.ui.status = format!("Saved {name} to your kits (Kits › Recorded & saved)"),
+        Err(e) => app.ui.status = e,
+    }
+}
+
+/// The pattern clip track `tid`'s Steps view edits: the one last shown while it is still there,
+/// else the one at the insertion point, else the first.
+pub fn steps_clip(app: &SoundApp, tid: TrackId) -> Option<ClipId> {
+    let t = app.engine.session().track(tid)?;
+    let patterns = || t.clips().iter().filter(|c| c.pattern.is_some());
+    if let Some(c) = app.ui.juke_clips.get(&tid)
+        && patterns().any(|p| p.id == *c)
+    {
+        return Some(*c);
+    }
+    let at = app.engine.session().edit.selection.start;
+    patterns().find(|c| c.range().contains(at)).or_else(|| patterns().next()).map(|c| c.id)
+}
+
+/// Opens track `tid`'s Juke window on its Steps view, editing `clip` (else the track's pattern clip,
+/// one made at the insertion point if it has none).
+pub fn show_steps(app: &mut SoundApp, tid: TrackId, clip: Option<ClipId>) {
+    let clip = clip
+        .or_else(|| steps_clip(app, tid))
+        .or_else(|| app.run("pattern.new", json!({"track": tid.0, "bars": 2})).ok().and_then(|v| v["clip"].as_u64()).map(ClipId));
+    if let Some(c) = clip {
+        app.ui.juke_clips.insert(tid, c);
+    }
+    app.ui.juke_tabs.insert(tid, Tab::Steps);
+    let key = soundcraft_mix::SlotKey::Instrument;
+    if !app.ui.plugin_windows.contains(&(tid, key)) {
+        app.ui.plugin_windows.push((tid, key));
+    }
+}
+
+/// The Steps view: the track's pattern clips as tabs (and a new one), then the chosen clip's
+/// step grid.
+fn steps_view(app: &mut SoundApp, ui: &mut Ui, r: Rect, tid: TrackId, current: Option<ClipId>, out: &mut Out) {
+    let s = app.engine.session();
+    let sr = s.sample_rate;
+    let mut clips: Vec<(ClipId, String, i64, i64, i64)> = s
+        .track(tid)
+        .map(|t| {
+            t.clips()
+                .iter()
+                .filter(|c| c.pattern.is_some())
+                .map(|c| {
+                    let a = s.tempo.bar_beat_at(c.start, sr).bar;
+                    let t0 = s.tempo.samples_to_ticks(c.start, sr);
+                    let t1 = s.tempo.samples_to_ticks(c.range().end, sr).saturating_sub(1).max(t0);
+                    let end = s.tempo.bar_beat_at_tick(t1).bar;
+                    (c.id, c.name.clone(), a, end, c.range().end)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    clips.sort_by_key(|c| c.2);
+    let tabs = Rect::from_min_size(r.min, vec2(r.width(), 26.0));
+    let p = ui.painter().clone();
+    let mut x = tabs.min.x;
+    for (id, name, a, b, _) in &clips {
+        let label = if a == b { format!("{name} · {a}") } else { format!("{name} · {a}–{b}") };
+        let w = (p.layout_no_wrap(label.clone(), bold(11.0), LABEL).size().x + 20.0).clamp(60.0, 200.0);
+        if x + w > tabs.max.x - 300.0 {
+            break;
+        }
+        let tr = Rect::from_min_size(pos2(x, tabs.min.y), vec2(w, tabs.height()));
+        let on = current == Some(*id);
+        if chip(ui, tr, egui::Id::new(("juke-steps-clip", tid.0, id.0)), &label, on, AMBER)
+            .on_hover_text(format!("Edit {name} (bars {a}–{b})"))
+            .clicked()
+            && !on
+        {
+            out.steps_clip = Some(*id);
+        }
+        x += w + 4.0;
+    }
+    let new_r = Rect::from_min_size(pos2(x, tabs.min.y), vec2(84.0, tabs.height()));
+    if chip(ui, new_r, egui::Id::new(("juke-steps-new", tid.0)), "+ Pattern", false, AMBER)
+        .on_hover_text("A new two-bar pattern after the track's last one")
+        .clicked()
+    {
+        let mut p = json!({"track": tid.0, "bars": 2});
+        if let Some(end) = clips.iter().map(|c| c.4).max() {
+            p["start"] = json!(end);
+        }
+        out.cmds.push(("pattern.new", p));
+        out.new_pattern = true;
+    }
+    let Some(cid) = current else {
+        text(
+            &p,
+            r.center(),
+            Align2::CENTER_CENTER,
+            "No pattern on this track yet: + Pattern makes one, or pick a groove from Grooves.",
+            regular(13.0),
+            LABEL,
+        );
+        return;
+    };
+    let Some(clip) = app.engine.session().find_clip(cid).map(|(_, c)| c.clone()) else { return };
+    let meter = s_meter(app, &clip);
+    if let Some((_, _, a, b, _)) = clips.iter().find(|c| c.0 == cid) {
+        let bars = if a == b { format!("bar {a}") } else { format!("bars {a}–{b}") };
+        text(&p, pos2(tabs.max.x - 4.0, tabs.center().y), Align2::RIGHT_CENTER, format!("Pattern · {bars} · {meter}"), regular(11.0), LABEL);
+    }
+    let grid = Rect::from_min_max(pos2(r.min.x, tabs.max.y + 6.0), r.max);
+    crate::step_grid::show(app, ui, grid, tid, cid, &clip);
+}
+
+/// The clip's time signature where it starts (`4/4`).
+fn s_meter(app: &SoundApp, clip: &soundcraft_model::Clip) -> String {
+    let s = app.engine.session();
+    let t = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
+    let m = s.tempo.meter_at_tick(t);
+    format!("{}/{}", m.numerator, m.denominator)
 }
 
 fn text(p: &egui::Painter, at: egui::Pos2, align: Align2, s: impl ToString, font: egui::FontId, c: Color32) -> Rect {
@@ -416,7 +580,8 @@ type Recorded = KitsView;
 #[cfg(target_arch = "wasm32")]
 type Recorded = ();
 
-fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, recorded: &Recorded, out: &mut Out) {
+#[allow(clippy::too_many_arguments)]
+fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: Tab, steps_clip: Option<ClipId>, recorded: &Recorded, out: &mut Out) {
     let p = ui.painter();
     p.rect_filled(r, 4.0, TOP_BAR);
     text(p, pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, "JUKE", bold(14.0), AMBER);
@@ -425,7 +590,7 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, record
     let kit = ins.kit.as_ref().map(|k| k.name.clone()).unwrap_or_default();
     let id = egui::Id::new(("juke-kit-name", tid.0));
     let mut name: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| kit.clone());
-    let field = Rect::from_min_size(pos2(r.min.x + 150.0, r.min.y + 4.0), vec2(180.0, r.height() - 8.0));
+    let field = Rect::from_min_size(pos2(r.min.x + 150.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
     let resp = ui.put(field, egui::TextEdit::singleline(&mut name).hint_text("Kit name").font(bold(12.0)));
     if resp.has_focus() {
         ui.ctx().data_mut(|d| d.insert_temp(id, name.clone()));
@@ -510,7 +675,12 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, record
                                 .button(g.name)
                                 .on_hover_text("Put this groove on the track's pattern clip at the insertion point (one is made if there is none)");
                             if resp.clicked() {
-                                out.cmds.push(("pattern.groove", json!({"track": tid.0, "style": s.name, "groove": g.name})));
+                                let mut p = json!({"style": s.name, "groove": g.name});
+                                match steps_clip {
+                                    Some(c) => p["clip"] = json!(c.0),
+                                    None => p["track"] = json!(tid.0),
+                                }
+                                out.cmds.push(("pattern.groove", p));
                                 out.open_steps = true;
                                 ui.close();
                             }
@@ -520,37 +690,57 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, record
             });
         }
     });
-    // Steps: the step grid of the track's pattern clip (in the MIDI Editor).
-    let steps = Rect::from_min_size(pos2(grooves.max.x + 4.0, field.min.y), vec2(52.0, field.height()));
-    let resp = ui
-        .put(steps, egui::Button::new(egui::RichText::new("Steps").font(regular(11.0))))
-        .on_hover_text("Edit the pattern in the step grid: the track's pattern clip at the insertion point (one is made if there is none)");
-    if resp.clicked() {
-        out.open_steps = true;
-    }
-    // Kit view or the selected pad's edit view.
-    let tabs = Rect::from_min_size(pos2(steps.max.x + 16.0, r.min.y + 4.0), vec2(150.0, r.height() - 8.0));
-    let half = tabs.width() * 0.5;
-    let kit_tab = Rect::from_min_size(tabs.min, vec2(half - 2.0, tabs.height()));
-    let pad_tab = Rect::from_min_size(pos2(tabs.min.x + half, tabs.min.y), vec2(half, tabs.height()));
-    if chip(ui, kit_tab, egui::Id::new(("juke-tab-kit", tid.0)), "Kit", !view.editing, AMBER).clicked() {
-        out.editing = Some(false);
-    }
+    // The views: the kit's pads, the selected pad, the pattern's steps.
+    let tabs = Rect::from_min_size(pos2(grooves.max.x + 16.0, r.min.y + 4.0), vec2(186.0, r.height() - 8.0));
+    let w = tabs.width() / 3.0;
     let pad_name = pad_layout(ins, view.pad).name;
-    if chip(ui, pad_tab, egui::Id::new(("juke-tab-pad", tid.0)), "Pad", view.editing, AMBER).on_hover_text(format!("Edit {pad_name}")).clicked() {
-        out.editing = Some(true);
+    let pad_tip = format!("Edit {pad_name}");
+    let items: [(Tab, &str, &str); 3] = [
+        (Tab::Kit, "Kit", "The kit's pads and buses"),
+        (Tab::Pad, "Pad", pad_tip.as_str()),
+        (Tab::Steps, "Steps", "The step sequencer: the track's patterns"),
+    ];
+    for (i, (t, label, tip)) in items.into_iter().enumerate() {
+        let tr = Rect::from_min_size(pos2(tabs.min.x + i as f32 * w, tabs.min.y), vec2(w - 2.0, tabs.height()));
+        if chip(ui, tr, egui::Id::new(("juke-tab", tid.0, i)), label, tab == t, AMBER).on_hover_text(tip).clicked() {
+            if t == Tab::Steps {
+                out.open_steps = true;
+            } else {
+                out.tab = Some(t);
+            }
+        }
+    }
+    // Randomize (the pad shown, else the kit) and Save kit.
+    let rnd = Rect::from_min_size(pos2(tabs.max.x + 12.0, field.min.y), vec2(76.0, field.height()));
+    let tip = if tab == Tab::Pad { format!("A new take on {pad_name}'s sound") } else { "A new take on every pad's sound".to_string() };
+    if ui.put(rnd, egui::Button::new(egui::RichText::new("Randomize").font(regular(11.0)))).on_hover_text(tip).clicked() {
+        let mut p = json!({"track": tid.0});
+        if tab == Tab::Pad {
+            p["pad"] = json!(view.pad + 1);
+        }
+        out.cmds.push(("mix.kit_randomize", p));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let save = Rect::from_min_size(pos2(rnd.max.x + 4.0, field.min.y), vec2(64.0, field.height()));
+        let resp = ui
+            .put(save, egui::Button::new(egui::RichText::new("Save kit").font(regular(11.0))))
+            .on_hover_text("Save the kit (its pads, samples, settings and bus effects) to your kits: Kits › Recorded & saved");
+        if resp.clicked() {
+            out.save_kit = true;
+        }
     }
     // Humanize, kit-wide.
     if let Some(info) = info("humanize") {
         let v = value(ins, "humanize");
-        let x = r.max.x - 150.0;
-        text(ui.painter(), pos2(x, r.center().y), Align2::RIGHT_CENTER, "Humanize", regular(11.0), LABEL);
-        let k = Rect::from_center_size(pos2(x + 18.0, r.center().y), vec2(24.0, 24.0));
+        let x = r.max.x - 70.0;
+        text(ui.painter(), pos2(x - 14.0, r.center().y), Align2::RIGHT_CENTER, "Humanize", regular(11.0), LABEL);
+        let k = Rect::from_center_size(pos2(x, r.center().y), vec2(24.0, 24.0));
         let resp = ui.scope_builder(egui::UiBuilder::new().max_rect(k), |ui| widgets::knob(ui, info, v, 18.0, AMBER, KnobStyle::Cream));
         if let Some(nv) = resp.inner.changed {
             out.set("humanize", nv);
         }
-        text(ui.painter(), pos2(x + 34.0, r.center().y), Align2::LEFT_CENTER, info.format(v), mono(11.0), CREAM);
+        text(ui.painter(), pos2(x + 16.0, r.center().y), Align2::LEFT_CENTER, info.format(v), mono(11.0), CREAM);
     }
 }
 
@@ -629,7 +819,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
     }
     if resp.double_clicked() {
         out.select = Some(pad);
-        out.editing = Some(true);
+        out.tab = Some(Tab::Pad);
     }
     let resp = resp.on_hover_text("Drag onto the trigger notes to change the pad's note");
     let _ = resp;
@@ -651,7 +841,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
     let edit = load.translate(vec2(-b - 2.0, 0.0));
     if icon_button(ui, edit, egui::Id::new(("juke-edit", tid.0, pad)), "pencil", "Edit the pad").clicked() {
         out.select = Some(pad);
-        out.editing = Some(true);
+        out.tab = Some(Tab::Pad);
     }
     if icon_button(ui, load, egui::Id::new(("juke-load", tid.0, pad)), "plus", "Load a sample onto the pad").clicked() {
         out.select = Some(pad);
@@ -721,7 +911,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
 #[cfg(not(target_arch = "wasm32"))]
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
-    ui.label(egui::RichText::new("Recorded").strong());
+    ui.label(egui::RichText::new("Recorded & saved").strong());
     for (name, path) in &v.installed {
         if ui.selectable_label(name == current, name).clicked() {
             out.cmds.push(("mix.kit_load", json!({"track": tid.0, "path": path.to_string_lossy()})));
@@ -769,21 +959,24 @@ fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &m
 /// Bus A, Bus B and the output, each a strip with four effect slots, a fader and a meter.
 fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32; 2], [f32; 2], bool), buses: [f32; 2], out: &mut Out) {
     let strips = [
-        ("BUS A", "return_a", SLATE_TOP, SLATE_BOTTOM),
-        ("BUS B", "return_b", SLATE_TOP, SLATE_BOTTOM),
-        ("OUTPUT", "level", BRASS_TOP, BRASS_BOTTOM),
+        ("BUS A", "Room and grit", "return_a", SLATE_TOP, SLATE_BOTTOM),
+        ("BUS B", "Space", "return_b", SLATE_TOP, SLATE_BOTTOM),
+        ("OUTPUT", "Kit glue · stereo", "level", BRASS_TOP, BRASS_BOTTOM),
     ];
-    for (i, (name, param, top, bottom)) in strips.into_iter().enumerate() {
+    let top_y = 34.0;
+    for (i, (name, sub, param, top, bottom)) in strips.into_iter().enumerate() {
         let s = Rect::from_min_size(pos2(r.min.x + i as f32 * (STRIP_W + 6.0), r.min.y), vec2(STRIP_W, r.height()));
         let p = ui.painter().clone();
         p.rect_filled(s.translate(vec2(0.0, 2.0)), 6.0, Color32::from_black_alpha(70));
         widgets::rounded_vgradient(&p, s, 6.0, top, bottom);
         p.rect_stroke(s, 6.0, Stroke::new(1.0, EDGE), StrokeKind::Inside);
-        text(&p, pos2(s.center().x, s.min.y + 12.0), Align2::CENTER_CENTER, name, bold(11.0), CREAM);
+        text(&p, pos2(s.center().x, s.min.y + 11.0), Align2::CENTER_CENTER, name, bold(11.0), CREAM);
+        let sub_c = if i == 2 { Color32::from_rgb(0xE9, 0xD7, 0xAE) } else { Color32::from_rgb(0xC9, 0xDC, 0xDB) };
+        text(&p, pos2(s.center().x, s.min.y + 24.0), Align2::CENTER_CENTER, sub, regular(9.5), sub_c);
         // Effect slots (filled by the effects buses).
         let bus = KitBus::ALL[i];
         for slot in 0..KitFx::SLOTS {
-            let sr = Rect::from_min_size(pos2(s.min.x + 6.0, s.min.y + 24.0 + slot as f32 * 22.0), vec2(s.width() - 12.0, 19.0));
+            let sr = Rect::from_min_size(pos2(s.min.x + 6.0, s.min.y + top_y + slot as f32 * 22.0), vec2(s.width() - 12.0, 19.0));
             match crate::juke_fx::slot(ui, sr, tid, ins, bus, slot) {
                 Some(crate::juke_fx::FxAction::Open(m)) => out.open_fx = Some(m),
                 Some(crate::juke_fx::FxAction::Run(id, p)) => out.cmds.push((id, p)),
@@ -791,7 +984,7 @@ fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32
             }
         }
         let level_y = s.max.y - 20.0;
-        let lane = Rect::from_min_max(pos2(s.min.x + 6.0, s.min.y + 24.0 + 4.0 * 22.0 + 6.0), pos2(s.max.x - 6.0, level_y - 6.0));
+        let lane = Rect::from_min_max(pos2(s.min.x + 6.0, s.min.y + top_y + 4.0 * 22.0 + 6.0), pos2(s.max.x - 6.0, level_y - 6.0));
         let fr = Rect::from_min_max(pos2(lane.min.x, lane.min.y), pos2(lane.min.x + 54.0, lane.max.y));
         let db = value(ins, param);
         if let Some(x) = widgets::fader_cream(ui, fr, db, egui::Id::new(("juke-bus-fader", tid.0, i)), STRIP_CAP) {
@@ -901,7 +1094,7 @@ fn pad_edit(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level:
     p.add(Shape::convex_polygon(vec![pos2(c.x - 4.0, c.y), pos2(c.x + 3.0, c.y - 5.0), pos2(c.x + 3.0, c.y + 5.0)], DARK_TEXT, Stroke::NONE));
     text(&p, pos2(back.center().x + 6.0, back.center().y), Align2::CENTER_CENTER, "Kit", bold(10.5), DARK_TEXT);
     if resp.clicked() {
-        out.editing = Some(false);
+        out.tab = Some(Tab::Kit);
     }
     let note = pad_note(ins, pad);
     text(
@@ -938,20 +1131,28 @@ fn pad_edit(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level:
 
 /// Amp, pitch and filter envelope rows: a hero knob, the curve and the stage knobs.
 fn envelopes(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, color: Color32, out: &mut Out) {
-    let rows: [(&str, &str, &[&str]); 3] = [
+    let rows: [(&str, &str, &str, &[&str]); 3] = [
         // Trim: the kit's balance for this pad (a recorded kit sets it), added to the level.
-        ("AMP", "level", &["attack", "hold", "decay", "velocity", "trim"]),
-        ("PITCH", "tune", &["fine", "pitch_amount", "pitch_decay"]),
-        ("FILTER", "cutoff", &["filter", "resonance", "filter_env", "filter_decay", "drive"]),
+        ("Amp envelope", "how the hit rises and dies away", "level", &["attack", "hold", "decay", "velocity", "trim"]),
+        ("Pitch envelope", "a quick drop gives the snap", "tune", &["fine", "pitch_amount", "pitch_decay"]),
+        ("Filter envelope", "low-pass, opens on hard hits", "cutoff", &["filter", "resonance", "filter_env", "filter_decay", "drive"]),
     ];
     let row_h = r.height() / 3.0;
     let p = ui.painter().clone();
-    for (i, (name, hero, stages)) in rows.into_iter().enumerate() {
+    for (i, (title, hint, hero, stages)) in rows.into_iter().enumerate() {
         let row = Rect::from_min_size(pos2(r.min.x, r.min.y + i as f32 * row_h), vec2(r.width(), row_h - 6.0));
-        text(&p, pos2(row.min.x + 2.0, row.min.y + 6.0), Align2::LEFT_CENTER, name, bold(10.5), LABEL);
-        let hk = Rect::from_min_size(pos2(row.min.x, row.min.y + 12.0), vec2(84.0, row.height() - 12.0));
+        let hk = Rect::from_min_size(pos2(row.min.x, row.min.y + 4.0), vec2(84.0, row.height() - 4.0));
         knob_at(ui, hk, ins, &pad_param(pad, hero), 40.0, KnobStyle::CreamHero, out);
-        let well = Rect::from_min_max(pos2(hk.max.x + 6.0, row.min.y + 12.0), pos2(row.max.x, row.min.y + 12.0 + (row.height() - 12.0) * 0.48));
+        // The envelope's lamp, title and what it does.
+        let head_y = row.min.y + 7.0;
+        envelope_lamp(ui, pos2(hk.max.x + 6.0, head_y), tid, ins, pad, i, out);
+        let t = text(&p, pos2(hk.max.x + 34.0, head_y), Align2::LEFT_CENTER, title, bold(11.0), CREAM);
+        // What it does, where it fits whole.
+        let hint_g = p.layout_no_wrap(hint.to_string(), regular(10.0), LABEL.gamma_multiply(0.75));
+        if t.max.x + 8.0 + hint_g.size().x <= row.max.x {
+            p.galley(pos2(t.max.x + 8.0, head_y - hint_g.size().y * 0.5), hint_g, LABEL);
+        }
+        let well = Rect::from_min_max(pos2(hk.max.x + 6.0, row.min.y + 16.0), pos2(row.max.x, row.min.y + 16.0 + (row.height() - 16.0) * 0.46));
         widgets::inset(&p, well, Color32::from_rgb(0x1A, 0x16, 0x12));
         curve(ui, well, tid, ins, pad, i, color, out);
         let knobs = Rect::from_min_max(pos2(well.min.x, well.max.y + 2.0), pos2(row.max.x, row.max.y));
@@ -959,6 +1160,40 @@ fn envelopes(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, color
         for (j, st) in stages.iter().enumerate() {
             let kr = Rect::from_min_size(pos2(knobs.min.x + j as f32 * kw, knobs.min.y), vec2(kw, knobs.height()));
             knob_at(ui, kr, ins, &pad_param(pad, st), 22.0, KnobStyle::Cream, out);
+        }
+    }
+}
+
+/// Whether envelope row `row` (amp, pitch, filter) shapes the pad: the amp always, the pitch with
+/// an amount, the filter when one is chosen.
+pub fn envelope_on(ins: &Insert, pad: usize, row: usize) -> bool {
+    match row {
+        1 => pad_value(ins, pad, "pitch_amount").abs() > 1.0e-3,
+        2 => pad_value(ins, pad, "filter").round() as i32 != 0,
+        _ => true,
+    }
+}
+
+/// An envelope's ON lamp: lit while it shapes the pad; the pitch and filter ones switch theirs.
+fn envelope_lamp(ui: &mut Ui, at: egui::Pos2, tid: TrackId, ins: &Insert, pad: usize, row: usize, out: &mut Out) {
+    let on = envelope_on(ins, pad, row);
+    let r = Rect::from_min_size(pos2(at.x, at.y - 7.0), vec2(24.0, 14.0));
+    let label = ["Amp envelope on", "Pitch envelope on", "Filter envelope on"].get(row).copied().unwrap_or_default();
+    let resp = ui.interact(r, egui::Id::new(("juke-env-lamp", tid.0, pad, row)), if row == 0 { Sense::hover() } else { Sense::click() });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    let p = ui.painter();
+    p.rect_filled(r, 7.0, if on { AMBER } else { Color32::from_black_alpha(60) });
+    text(p, r.center(), Align2::CENTER_CENTER, "ON", bold(8.5), if on { DARK_TEXT } else { LABEL.gamma_multiply(0.6) });
+    let tip = match row {
+        0 => "The amp envelope always shapes the hit",
+        1 => "Switch the pitch sweep on (+12 st) or off",
+        _ => "Switch the filter on (low-pass) or off",
+    };
+    if resp.on_hover_text(tip).clicked() {
+        match row {
+            1 => out.set(pad_param(pad, "pitch_amount"), if on { 0.0 } else { 12.0 }),
+            2 => out.set(pad_param(pad, "filter"), if on { 0.0 } else { 1.0 }),
+            _ => {}
         }
     }
 }
@@ -1053,51 +1288,142 @@ fn curve(ui: &mut Ui, well: Rect, tid: TrackId, ins: &Insert, pad: usize, row: u
 }
 
 /// The side column: sample layers, the synth voice, playback options.
+/// The velocity layers' names, hardest first.
+pub const LAYER_NAMES: [&str; LAYERS] = ["Hard", "Medium", "Soft", "Ghost"];
+
+/// A section's title in the pad editor's side column.
+fn section(p: &egui::Painter, x: f32, y: f32, s: &str) {
+    text(p, pos2(x, y + 6.0), Align2::LEFT_CENTER, s.to_uppercase(), bold(10.5), LABEL);
+}
+
+/// A horizontal slider for parameter `id` in `r`: an amber run from the left (or from `from`)
+/// under a cream cap. Its change goes to `out`.
+fn hslider(ui: &mut Ui, r: Rect, ins: &Insert, id: &str, out: &mut Out) {
+    let Some(inf) = info(id) else { return };
+    let v = value(ins, id);
+    let p = ui.painter().clone();
+    let track = Rect::from_center_size(r.center(), vec2(r.width() - 12.0, 6.0));
+    let t = inf.to_normalized(v).clamp(0.0, 1.0);
+    let at = |t: f32| track.min.x + track.width() * t;
+    p.rect_filled(track, 3.0, Color32::from_rgb(0x15, 0x11, 0x0E));
+    p.rect_filled(Rect::from_min_max(track.min, pos2(at(t), track.max.y)), 3.0, AMBER.gamma_multiply(0.7));
+    let cap = Rect::from_center_size(pos2(at(t), track.center().y), vec2(11.0, 16.0));
+    p.rect_filled(cap.translate(vec2(0.0, 2.0)), 3.0, Color32::from_black_alpha(90));
+    p.rect_filled(cap, 3.0, Color32::from_rgb(0xE6, 0xD9, 0xC2));
+    p.rect_stroke(cap, 3.0, Stroke::new(1.0, Color32::from_rgb(0x3A, 0x2E, 0x22)), StrokeKind::Inside);
+    let resp = ui.interact(r, egui::Id::new(("juke-hslider", id)), Sense::click_and_drag());
+    let name = short_name(inf.name);
+    resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(v), name));
+    let resp = resp.on_hover_text(format!("{name}: {} (double-click: {})", inf.format(v), inf.format(inf.default)));
+    if resp.double_clicked() {
+        out.set(id, inf.default);
+    } else if (resp.dragged() || resp.clicked())
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let nt = ((pos.x - track.min.x) / track.width().max(1.0)).clamp(0.0, 1.0);
+        let nv = inf.clamp(inf.from_normalized(nt));
+        if (nv - v).abs() > f32::EPSILON {
+            out.set(id, nv);
+        }
+    }
+}
+
+/// A pill toggle on the pad editor.
+fn pad_pill(ui: &mut Ui, r: Rect, id: egui::Id, label: &str, on: bool) -> egui::Response {
+    let resp = ui.interact(r, id, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    let p = ui.painter();
+    let fill = if on {
+        AMBER
+    } else if resp.hovered() {
+        Color32::from_black_alpha(60)
+    } else {
+        Color32::from_black_alpha(38)
+    };
+    p.rect_filled(r, r.height() * 0.5, fill);
+    p.rect_stroke(r, r.height() * 0.5, Stroke::new(1.0, Color32::from_black_alpha(89)), StrokeKind::Inside);
+    text(p, r.center(), Align2::CENTER_CENTER, label, bold(11.0), if on { DARK_TEXT } else { CREAM });
+    resp
+}
+
+/// A choice parameter as a combo box in `r`.
+fn choice_combo(ui: &mut Ui, r: Rect, tid: TrackId, pad: usize, ins: &Insert, id: &str, out: &mut Out) {
+    let Some(inf) = info(id) else { return };
+    let v = value(ins, id);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| {
+        let mut idx = v.round().max(0.0) as usize;
+        let shown = inf.choices.get(idx).copied().map_or_else(|| inf.format(v), str::to_string);
+        egui::ComboBox::from_id_salt(("juke-pb", tid.0, pad, inf.id)).width(r.width() - 8.0).selected_text(shown).show_ui(ui, |ui| {
+            for (i, c) in inf.choices.iter().enumerate() {
+                if ui.selectable_value(&mut idx, i, *c).clicked() {
+                    out.set(id, i as f32);
+                }
+            }
+        });
+    });
+}
+
 fn side_column(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, color: Color32, out: &mut Out) {
     let p = ui.painter().clone();
-    text(&p, pos2(r.min.x, r.min.y + 6.0), Align2::LEFT_CENTER, "SAMPLE LAYERS", bold(10.5), LABEL);
-    text(&p, pos2(r.max.x, r.min.y + 6.0), Align2::RIGHT_CENTER, "velocity ↓  round-robin →", regular(9.0), LABEL);
-    let grid = Rect::from_min_size(pos2(r.min.x, r.min.y + 14.0), vec2(r.width(), 4.0 * 26.0));
+    // Sample layers: a row per velocity layer, hardest on top; round-robins across.
+    section(&p, r.min.x, r.min.y, "Sample layers");
+    text(&p, pos2(r.max.x, r.min.y + 6.0), Align2::RIGHT_CENTER, "round-robin →", regular(9.5), LABEL);
+    let name_w = 46.0;
+    let grid = Rect::from_min_size(pos2(r.min.x + name_w, r.min.y + 15.0), vec2(r.width() - name_w, 4.0 * 24.0));
     let cw = grid.width() / ROBINS as f32;
-    for layer in 0..LAYERS {
+    for row in 0..LAYERS {
+        let layer = LAYERS - 1 - row;
+        let y = grid.min.y + row as f32 * 24.0;
+        text(&p, pos2(r.min.x, y + 11.0), Align2::LEFT_CENTER, LAYER_NAMES.get(row).copied().unwrap_or_default(), regular(10.5), LABEL);
         for robin in 0..ROBINS {
-            let cell = Rect::from_min_size(pos2(grid.min.x + robin as f32 * cw, grid.min.y + layer as f32 * 26.0), vec2(cw - 3.0, 23.0));
-            let key = sample_key(pad, LAYERS - 1 - layer, robin);
+            let cell = Rect::from_min_size(pos2(grid.min.x + robin as f32 * cw, y), vec2(cw - 3.0, 21.0));
+            let key = sample_key(pad, layer, robin);
             let filled = ins.samples.contains_key(&key);
-            let resp = ui.interact(cell, egui::Id::new(("juke-layer", tid.0, pad, layer, robin)), Sense::click());
-            drop_target(ui, cell, (pad, LAYERS - 1 - layer, robin), out);
-            let tip = format!("Velocity layer {}, round-robin {}", LAYERS - layer, robin + 1);
+            let resp = ui.interact(cell, egui::Id::new(("juke-layer", tid.0, pad, row, robin)), Sense::click());
+            drop_target(ui, cell, (pad, layer, robin), out);
+            let tip = format!("{} layer, round-robin {}", LAYER_NAMES.get(row).copied().unwrap_or_default(), robin + 1);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
             if filled {
-                p.rect_filled(cell, 3.0, color.gamma_multiply(0.85));
+                p.rect_filled(cell, 5.0, color.gamma_multiply(1.0 - row as f32 * 0.15));
                 let mid = cell.center().y;
-                for k in 0..10 {
-                    let x = cell.min.x + 4.0 + k as f32 * (cell.width() - 8.0) / 9.0;
-                    let a = (1.0 - k as f32 / 10.0) * 7.0;
-                    p.vline(x, mid - a..=mid + a, Stroke::new(1.5, DARK_TEXT.gamma_multiply(0.7)));
+                let mut pts = Vec::new();
+                for k in 0..=24 {
+                    let x = k as f32 / 24.0;
+                    let e = (-x * 5.0).exp();
+                    pts.push(pos2(cell.min.x + 3.0 + x * (cell.width() - 6.0), mid - 7.0 * e * (x * (14.0 + robin as f32 * 3.0)).sin()));
                 }
+                p.add(Shape::line(pts, Stroke::new(1.2, DARK_TEXT.gamma_multiply(0.75))));
             } else {
-                p.rect_stroke(cell, 3.0, Stroke::new(1.0, LABEL.gamma_multiply(0.4)), StrokeKind::Inside);
-                text(&p, cell.center(), Align2::CENTER_CENTER, "+", regular(12.0), LABEL.gamma_multiply(0.6));
+                let c = if resp.hovered() { LABEL } else { LABEL.gamma_multiply(0.35) };
+                let rr = cell.shrink(0.5);
+                for w in [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()].windows(2) {
+                    if let [a, b] = w {
+                        p.add(Shape::dashed_line(&[*a, *b], Stroke::new(1.0, c), 3.0, 2.0));
+                    }
+                }
+                text(&p, cell.center(), Align2::CENTER_CENTER, "+", regular(12.0), c);
             }
             let resp = resp.on_hover_text(if filled {
                 format!("{tip}. Click to replace, right-click to clear")
             } else {
-                format!("{tip}. Click to load a sample")
+                format!("{tip}. Click to load a sample, or drop files (several fill the row)")
             });
             if resp.clicked() {
-                out.load = Some((pad, LAYERS - 1 - layer, robin));
+                out.load = Some((pad, layer, robin));
             }
             if resp.secondary_clicked() && filled {
-                out.cmds.push(("mix.kit_sample_clear", json!({"track": tid.0, "pad": pad + 1, "layer": LAYERS - layer, "robin": robin + 1})));
+                out.cmds.push(("mix.kit_sample_clear", json!({"track": tid.0, "pad": pad + 1, "layer": layer + 1, "robin": robin + 1})));
             }
         }
     }
-    let mut y = grid.max.y + 10.0;
-    text(&p, pos2(r.min.x, y + 6.0), Align2::LEFT_CENTER, "SYNTH VOICE", bold(10.5), LABEL);
-    y += 14.0;
+    let mut y = grid.max.y + 2.0;
+    text(&p, pos2(r.min.x, y + 6.0), Align2::LEFT_CENTER, "Drop files on a cell; several fill its row.", regular(9.0), LABEL.gamma_multiply(0.8));
+    y += 18.0;
+    // Synth voice: the voice, its tone and snap, and the blend with the samples.
+    section(&p, r.min.x, y + 2.0, "Synth voice");
     let voice_id = pad_param(pad, "voice");
     let voice = value(ins, &voice_id).round().max(0.0) as usize;
-    let combo = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width() * 0.5, 22.0));
+    let combo = Rect::from_min_size(pos2(r.min.x + 96.0, y), vec2(r.width() - 96.0, 22.0));
     ui.scope_builder(egui::UiBuilder::new().max_rect(combo), |ui| {
         egui::ComboBox::from_id_salt(("juke-voice", tid.0, pad))
             .width(combo.width() - 8.0)
@@ -1111,48 +1437,77 @@ fn side_column(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, col
             });
     });
     y += 26.0;
-    let kw = r.width() / 3.0;
-    for (j, st) in ["tone", "snappy", "blend"].iter().enumerate() {
-        let kr = Rect::from_min_size(pos2(r.min.x + j as f32 * kw, y), vec2(kw, 58.0));
-        knob_at(ui, kr, ins, &pad_param(pad, st), 22.0, KnobStyle::Cream, out);
+    let kw = r.width() / 2.0;
+    for (j, st) in ["tone", "snappy"].iter().enumerate() {
+        let kr = Rect::from_min_size(pos2(r.min.x + j as f32 * kw, y), vec2(kw, 52.0));
+        knob_at(ui, kr, ins, &pad_param(pad, st), 20.0, KnobStyle::Cream, out);
     }
-    y += 62.0;
-    text(&p, pos2(r.min.x, y + 6.0), Align2::LEFT_CENTER, "PLAYBACK", bold(10.5), LABEL);
-    y += 16.0;
-    let mut row = |ui: &mut Ui, y: f32, label: &str, id: String| {
-        let lr = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), 22.0));
-        text(ui.painter(), pos2(lr.min.x, lr.center().y), Align2::LEFT_CENTER, label, regular(11.0), LABEL);
-        let Some(inf) = info(&id) else { return };
+    y += 54.0;
+    let blend = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), 18.0));
+    text(&p, pos2(blend.min.x, blend.center().y), Align2::LEFT_CENTER, "Sample", regular(10.5), LABEL);
+    text(&p, pos2(blend.max.x, blend.center().y), Align2::RIGHT_CENTER, "Synth", regular(10.5), LABEL);
+    hslider(ui, Rect::from_min_max(pos2(blend.min.x + 46.0, blend.min.y), pos2(blend.max.x - 40.0, blend.max.y)), ins, &pad_param(pad, "blend"), out);
+    y += 24.0;
+    // Humanize: this pad's own, per hit.
+    section(&p, r.min.x, y, "Humanize");
+    y += 15.0;
+    for (label, name) in [("Level", "hum_level"), ("Pitch", "hum_pitch"), ("Filter", "hum_filter"), ("Timing", "hum_timing")] {
+        let id = pad_param(pad, name);
+        let row = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), 18.0));
+        text(&p, pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, label, regular(10.5), LABEL);
         let v = value(ins, &id);
-        let cr = Rect::from_min_max(pos2(lr.min.x + 70.0, lr.min.y), lr.max);
-        ui.scope_builder(egui::UiBuilder::new().max_rect(cr), |ui| {
-            let mut idx = v.round().max(0.0) as usize;
-            let shown = inf.choices.get(idx).copied().map_or_else(|| inf.format(v), str::to_string);
-            egui::ComboBox::from_id_salt(("juke-pb", tid.0, pad, inf.id)).width(cr.width() - 8.0).selected_text(shown).show_ui(ui, |ui| {
-                for (i, c) in inf.choices.iter().enumerate() {
-                    if ui.selectable_value(&mut idx, i, *c).clicked() {
-                        out.set(id.as_str(), i as f32);
-                    }
-                }
-            });
-        });
-    };
-    row(ui, y, "Play", pad_param(pad, "mode"));
-    row(ui, y + 24.0, "Choke", pad_param(pad, "choke"));
-    row(ui, y + 48.0, "Stack 1", pad_param(pad, "stack1"));
-    row(ui, y + 72.0, "Stack 2", pad_param(pad, "stack2"));
+        let shown = match name {
+            "hum_level" => format!("±{v:.1} dB"),
+            "hum_pitch" => format!("±{v:.0} c"),
+            "hum_filter" => format!("±{v:.0}%"),
+            _ => format!("≤{v:.1} ms"),
+        };
+        text(&p, pos2(row.max.x, row.center().y), Align2::RIGHT_CENTER, shown, mono(10.5), CREAM);
+        hslider(ui, Rect::from_min_max(pos2(row.min.x + 46.0, row.min.y), pos2(row.max.x - 62.0, row.max.y)), ins, &id, out);
+        y += 19.0;
+    }
+    y += 4.0;
+    // Playback: one-shot or gate, reverse, the choke group and the stacked pads.
+    section(&p, r.min.x, y, "Playback");
+    y += 16.0;
+    let mode_id = pad_param(pad, "mode");
+    let gate = value(ins, &mode_id) >= 0.5;
+    let pills: [(&str, bool, &str); 2] = [("One-shot", !gate, "The hit plays out whole"), ("Gate", gate, "The hit stops when the note ends")];
+    let mut x = r.min.x;
+    for (i, (label, on, tip)) in pills.into_iter().enumerate() {
+        let pr = Rect::from_min_size(pos2(x, y), vec2(if i == 0 { 70.0 } else { 46.0 }, 22.0));
+        if pad_pill(ui, pr, egui::Id::new(("juke-mode", tid.0, pad, i)), label, on).on_hover_text(tip).clicked() && !on {
+            out.set(mode_id.as_str(), i as f32);
+        }
+        x = pr.max.x + 4.0;
+    }
     let rev_id = pad_param(pad, "reverse");
     let rev = value(ins, &rev_id) >= 0.5;
-    let rr = Rect::from_min_size(pos2(r.min.x, y + 98.0), vec2(80.0, 20.0));
-    if chip(ui, rr, egui::Id::new(("juke-rev", tid.0, pad)), "Reverse", rev, AMBER).on_hover_text("Play the pad's samples backwards").clicked() {
+    let rr = Rect::from_min_size(pos2(x, y), vec2(64.0, 22.0));
+    if pad_pill(ui, rr, egui::Id::new(("juke-rev", tid.0, pad)), "Reverse", rev).on_hover_text("Play the pad's samples backwards").clicked() {
         out.set(rev_id, if rev { 0.0 } else { 1.0 });
     }
-    let kw = (r.width() - 90.0) * 0.5;
-    for (j, st) in ["stack1_ms", "stack2_ms"].iter().enumerate() {
-        let kr = Rect::from_min_size(pos2(r.min.x + 90.0 + j as f32 * kw, y + 96.0), vec2(kw, 58.0));
-        if kr.max.y <= r.max.y {
-            knob_at(ui, kr, ins, &pad_param(pad, st), 20.0, KnobStyle::Cream, out);
+    y += 26.0;
+    let rows = [("Choke", "choke", None), ("Stack 1", "stack1", Some("stack1_ms")), ("Stack 2", "stack2", Some("stack2_ms"))];
+    for (label, name, ms) in rows {
+        if y + 22.0 > r.max.y {
+            break;
         }
+        text(&p, pos2(r.min.x, y + 11.0), Align2::LEFT_CENTER, label, regular(10.5), LABEL);
+        let end = if ms.is_some() { r.max.x - 64.0 } else { r.max.x };
+        choice_combo(ui, Rect::from_min_max(pos2(r.min.x + 56.0, y), pos2(end, y + 22.0)), tid, pad, ins, &pad_param(pad, name), out);
+        if let Some(ms) = ms {
+            let id = pad_param(pad, ms);
+            let mut v = value(ins, &id);
+            let dr = Rect::from_min_max(pos2(r.max.x - 60.0, y + 1.0), pos2(r.max.x, y + 21.0));
+            let resp = ui
+                .put(dr, egui::DragValue::new(&mut v).range(0.0..=50.0).speed(0.25).suffix(" ms").max_decimals(1))
+                .on_hover_text("How late the stacked pad plays");
+            if resp.changed() {
+                out.set(id, v);
+            }
+        }
+        y += 24.0;
     }
 }
 

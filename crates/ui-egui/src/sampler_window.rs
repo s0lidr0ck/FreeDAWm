@@ -86,7 +86,8 @@ impl SampleRead {
 
 impl SoundApp {
     /// Takes this frame's dropped files: audio dropped on an instrument track or a Sampler window
-    /// loads into that track's sampler (the sampler becomes its instrument). A file with a full
+    /// loads into that track's sampler (the sampler becomes its instrument); on a Juke sample cell,
+    /// several files fill its row from there (one per round-robin). A file with a full
     /// path loads straight away; one without (the browser) waits in [`SoundApp::take_sample_reads`]
     /// for the shell to read. Everything else is returned for the shell to open or import.
     pub fn take_dropped_files(&mut self, ctx: &egui::Context) -> Vec<egui::DroppedFileHandle> {
@@ -96,13 +97,19 @@ impl SoundApp {
         }
         let Some((track, kit)) = self.drop_track(pos) else { return files };
         let mut rest = Vec::new();
-        let mut claimed = false;
+        let mut claimed = 0;
+        // A Juke cell takes several files along its row (round-robins); the sampler takes one.
+        let room = match kit {
+            Some((_, _, robin)) => soundcraft_dsp::plugins::juke::ROBINS.saturating_sub(robin).max(1),
+            None => 1,
+        };
         for f in files {
-            if claimed || !is_audio_name(&f.path().to_string_lossy()) {
+            if claimed >= room || !is_audio_name(&f.path().to_string_lossy()) {
                 rest.push(f);
                 continue;
             }
-            claimed = true;
+            let kit = kit.map(|(pad, layer, robin)| (pad, layer, robin + claimed));
+            claimed += 1;
             if f.path().is_absolute() {
                 let path = f.path().to_string_lossy().into_owned();
                 let r = match kit {

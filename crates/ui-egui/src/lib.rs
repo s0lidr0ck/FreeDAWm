@@ -226,6 +226,12 @@ pub struct UiState {
     /// Open full editor windows of built-in modules (their VST-faithful editor, at full size,
     /// in a window of its own: the tile's ⤢ button).
     pub full_editors: Vec<(TrackId, soundcraft_model::ModuleId)>,
+    /// Per Juke track: the view its window shows (Kit, Pad or Steps).
+    #[serde(skip)]
+    pub juke_tabs: HashMap<TrackId, juke_window::Tab>,
+    /// Per Juke track: the pattern clip its Steps view edits.
+    #[serde(skip)]
+    pub juke_clips: HashMap<TrackId, soundcraft_model::ClipId>,
     /// The module whose drawer is open on each Mix window strip (at most one per track).
     pub drawers: HashMap<TrackId, soundcraft_model::ModuleId>,
     /// Mix window strips whose band drawer is open (a musician's controls, beside the strip).
@@ -447,6 +453,8 @@ impl Default for UiState {
             track_tint: 0.5,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
+            juke_tabs: HashMap::new(),
+            juke_clips: HashMap::new(),
             drawers: HashMap::new(),
             band_drawers: HashSet::new(),
             gr_history: HashMap::new(),
@@ -1151,6 +1159,13 @@ impl SoundApp {
                     // in the session, so the app hands it to the player itself.
                     self.send_module_action(&v);
                 }
+                if id == "track.new_beat"
+                    && let Some(t) = v["track"].as_u64()
+                {
+                    // A new beat opens on its steps, in the Juke window.
+                    let clip = v["clip"].as_u64().map(soundcraft_model::ClipId);
+                    juke_window::show_steps(self, TrackId(t), clip);
+                }
                 if id == "track.freeze" || id == "track.unfreeze" {
                     self.ui.status = freeze_status(&self.engine, &v);
                 }
@@ -1187,6 +1202,8 @@ impl SoundApp {
         self.ui.gr_history.clear();
         self.ui.plugin_windows.clear();
         self.ui.full_editors.clear();
+        self.ui.juke_tabs.clear();
+        self.ui.juke_clips.clear();
         // A marker or chord picked in the old session.
         ruler_items::unpick(self);
     }

@@ -7,13 +7,17 @@ use egui_kittest::kittest::Queryable;
 use serde_json::json;
 use soundcraft_mix::SlotKey;
 use soundcraft_model::TrackId;
+use soundcraft_ui_egui::juke_window::Tab;
 use soundcraft_ui_egui::{Services, SoundApp};
 
 fn rig(editing: bool) -> (Harness<'static, SoundApp>, TrackId) {
     let mut app = SoundApp::new(soundcraft_engine::Engine::new(soundcraft_model::Session::default()), None, Services::default());
     let v = app.run("track.new_beat", json!({})).unwrap();
     let tid: TrackId = serde_json::from_value(v["track"].clone()).unwrap();
-    app.ui.plugin_windows.push((tid, SlotKey::Instrument));
+    // A new beat opens its window on the steps; these start on the kit.
+    assert_eq!(app.ui.juke_tabs.get(&tid), Some(&Tab::Steps));
+    assert!(app.ui.plugin_windows.contains(&(tid, SlotKey::Instrument)));
+    app.ui.juke_tabs.insert(tid, Tab::Kit);
     let mut builder = Harness::builder().with_size(vec2(1280.0, 860.0)).with_step_dt(0.1);
     if proof_dir().is_some() {
         builder = builder.wgpu();
@@ -85,6 +89,7 @@ fn grid() -> (Harness<'static, SoundApp>, soundcraft_model::ClipId) {
     let clip: soundcraft_model::ClipId = serde_json::from_value(v["clip"].clone()).unwrap();
     app.run("edit.select", json!({"clips": [clip.0]})).unwrap();
     app.ui.show_midi_editor = true;
+    app.ui.plugin_windows.clear();
     let mut builder = Harness::builder().with_size(vec2(1280.0, 860.0)).with_step_dt(0.1);
     if proof_dir().is_some() {
         builder = builder.wgpu();
@@ -124,7 +129,7 @@ fn the_step_grid_shows_a_pattern_clip_and_its_bar_edits_it() {
     h.run_steps(2);
     proof(&mut h, "juke-steps");
     // The New steps tiers and the lane mutes are there.
-    h.get_by_label("75%").click();
+    h.get_by_label("75").click();
     h.run_steps(2);
     assert!(h.get_all_by_label("Mute the lane").count() >= 4);
     h.get_all_by_label("Mute the lane").next().unwrap().click();
@@ -217,19 +222,101 @@ fn an_installed_recorded_kit_loads_from_the_kits_menu() {
 }
 
 #[test]
-fn the_steps_button_opens_the_step_grid_on_the_tracks_pattern() {
+fn the_steps_tab_shows_the_tracks_patterns_in_the_juke_window() {
     let (mut h, t) = rig(false);
     h.get_by_label("Steps").click();
     h.run_steps(3);
     let app = h.state();
-    assert!(app.ui.show_midi_editor, "the MIDI Editor shows the step grid");
-    let s = app.engine.session();
-    let sel = s.edit.selected_clips.first().copied().expect("the pattern clip is selected");
-    let (track, clip) = s.find_clip(sel).unwrap();
-    assert!(track == t && clip.pattern.is_some());
-    // A style's groove from the Grooves menu's command lands on that same clip.
-    let v = h.state_mut().run("pattern.groove", json!({"track": t.0, "style": "Gospel / Shout"})).unwrap();
-    assert_eq!(v["clip"], sel.0);
+    assert_eq!(app.ui.juke_tabs.get(&t), Some(&Tab::Steps));
+    assert!(!app.ui.show_midi_editor, "the steps are in the Juke window, not the MIDI Editor");
+    let first = *app.ui.juke_clips.get(&t).expect("the Steps view edits a pattern clip");
+    assert!(app.engine.session().find_clip(first).is_some_and(|(track, c)| track == t && c.pattern.is_some()));
+    assert!(h.get_all_by_label("Mute the lane").count() >= 4);
+    // A groove from the Grooves menu's command lands on the clip shown.
+    let v = h.state_mut().run("pattern.groove", json!({"clip": first.0, "style": "Gospel / Shout"})).unwrap();
+    assert_eq!(v["clip"], first.0);
     h.run_steps(3);
-    proof(&mut h, "juke-steps-groove");
+    proof(&mut h, "juke-steps-tab");
+    // + Pattern makes a second clip and shows it; the first one's tab brings it back.
+    h.get_by_label("+ Pattern").click();
+    h.run_steps(3);
+    let second = *h.state().ui.juke_clips.get(&t).unwrap();
+    assert_ne!(second, first);
+    let name = h.state().engine.session().find_clip(first).unwrap().1.name.clone();
+    h.get_all_by_label_contains(&format!("{name} · ")).next().expect("the clips show as tabs").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.juke_clips.get(&t), Some(&first));
+    // Kit goes back to the pads.
+    h.get_by_label("Kit").click();
+    h.run_steps(2);
+    assert!(h.get_all_by_label("Edit the pad").count() >= 6);
+}
+
+#[test]
+fn a_right_clicked_step_opens_its_details_at_the_step() {
+    let (mut h, t) = rig(false);
+    h.get_by_label("Steps").click();
+    h.run_steps(3);
+    let clip = *h.state().ui.juke_clips.get(&t).unwrap();
+    let lane = pattern(&h, clip).lanes.iter().position(|_| true).unwrap();
+    let lanes: Vec<_> = h.get_all_by_label_contains(" steps").filter(|n| n.rect().width() > 300.0).collect();
+    lanes[0].click_secondary();
+    h.run_steps(3);
+    proof(&mut h, "juke-step-popover");
+    for pill in ["Always", "1st of 2", "2nd of 2", "First pass", "Fill bars", "Not in fills", "Accent", "Flam"] {
+        assert!(h.query_by_label(pill).is_some(), "{pill}");
+    }
+    h.get_by_label("Accent").click();
+    h.run_steps(2);
+    h.get_by_label("Fill bars").click();
+    h.run_steps(2);
+    let p = pattern(&h, clip);
+    let step = p.lanes[lane].steps.iter().find(|s| s.accent).expect("the step took the accent");
+    assert_eq!(step.condition, soundcraft_midi::pattern::Condition::Fill);
+    h.get_by_label("Close the step details").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Fill bars").is_none());
+}
+
+#[test]
+fn randomize_and_save_kit_work_from_the_top_bar() {
+    let d = std::env::temp_dir().join(format!("juke-ui-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let (mut h, t) = rig(true);
+    h.state_mut().juke_kits.dir = Some(d.clone());
+    proof(&mut h, "juke-pad-editor");
+    // On the pad view, Randomize takes only that pad.
+    let before = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap().params;
+    h.get_by_label("Randomize").click();
+    h.run_steps(2);
+    let after = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap().params;
+    assert_ne!(before, after);
+    assert_eq!(before.get("p2_tone"), after.get("p2_tone"), "the other pads keep their sound");
+    h.get_by_label("Save kit").click();
+    h.run_steps(3);
+    let saved = d.join("my_porch_light").join("kit.json");
+    assert!(saved.is_file(), "{}", h.state().ui.status);
+    // It is listed with the recorded kits.
+    h.get_by_label("Kits").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Recorded & saved").is_some());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn the_pad_editor_has_its_humanize_layers_and_envelope_lamps() {
+    let (mut h, t) = rig(true);
+    for label in ["Hard layer, round-robin 1", "Ghost layer, round-robin 4", "Humanize Level", "Humanize Timing", "One-shot", "Gate", "Reverse"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "{label}");
+    }
+    // The filter's lamp switches the filter on (low-pass) and off.
+    h.get_by_label("Filter envelope on").click();
+    h.run_steps(2);
+    assert_eq!(param(&h, t, "p1_filter"), Some(1.0));
+    h.get_by_label("Pitch envelope on").click();
+    h.run_steps(2);
+    assert_eq!(param(&h, t, "p1_pitch_amount").map(|v| v.abs() > 0.0), Some(true));
+    h.get_by_label("Gate").click();
+    h.run_steps(2);
+    assert_eq!(param(&h, t, "p1_mode"), Some(1.0));
 }
