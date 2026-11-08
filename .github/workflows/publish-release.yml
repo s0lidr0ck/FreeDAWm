@@ -1,0 +1,73 @@
+# Publishes a draft release that the Release workflow built (Actions › Release › Run makes a
+# draft `v<version>`; a tag push publishes directly, but not every clone can push tags).
+#
+#   Actions › Publish Release › Run [tag]   publish the draft `tag` (default: `v` + the version in
+#                                           Cargo.toml on the chosen branch) and mark it latest
+#
+# Refuses a tag that has no draft, a draft whose commit is not on main, and a tag whose version is
+# a pre-release when asked to mark it latest. Only GITHUB_TOKEN is used. See docs/releasing.md.
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The draft to publish, e.g. v0.9.4 (default: v + Cargo.toml's version)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish the draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            version="$(awk '/^\[/ { p = ($0 == "[workspace.package]"); next } p && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }' Cargo.toml)"
+            [ -n "$version" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
+            tag="v$version"
+          fi
+          case "$tag" in v[0-9]*) ;; *) echo "::error::'$tag' is not a release tag (v<version>)"; exit 1;; esac
+          # Drafts have no tag yet, so find the release by its tag name in the list.
+          release="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$tag\")" | head -c 100000)"
+          [ -n "$release" ] || { echo "::error::no release named $tag"; exit 1; }
+          id="$(printf '%s' "$release" | jq -r '.id' | head -n 1)"
+          draft="$(printf '%s' "$release" | jq -r '.draft' | head -n 1)"
+          target="$(printf '%s' "$release" | jq -r '.target_commitish' | head -n 1)"
+          assets="$(printf '%s' "$release" | jq -r '.assets | length' | head -n 1)"
+          if [ "$draft" != true ]; then
+            echo "::error::$tag is already published"
+            exit 1
+          fi
+          if [ "$assets" -lt 1 ]; then
+            echo "::error::the draft $tag has no assets; run the Release workflow first"
+            exit 1
+          fi
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$target" origin/main; then
+            echo "::error::the draft $tag was built from $target, which is not on main"
+            exit 1
+          fi
+          latest=true
+          case "$tag" in *-*) latest=false;; esac
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false -F make_latest="$latest" --jq '.html_url'
+          echo "published $tag from ${target::12} ($assets assets)" >>"$GITHUB_STEP_SUMMARY"

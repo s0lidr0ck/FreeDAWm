@@ -7,7 +7,8 @@
 #                             (a pre-release when the version has a `-suffix`). The tag must match
 #                             `[workspace.package] version` in Cargo.toml.
 #   Actions › Release › Run   build everything and create or update a *draft* release
-#                             `v<version>` (nobody sees it until a maintainer publishes it)
+#                             `v<version>` (nobody sees it until a maintainer publishes it, on the
+#                             Releases page or with Actions › Publish Release)
 #   pull request touching     build and package everything as a check; no release
 #   packaging or this file
 #

@@ -32,6 +32,11 @@ User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase
    (reusing the draft from step 2 if there is one). A version with a pre-release suffix
    (`-rc.1`) is published as a pre-release.
 
+   **Or publish the draft:** where a tag can't be pushed (a cloud session's clone refuses them),
+   *Actions › Publish Release › Run workflow* publishes the draft from step 2 under its tag and
+   marks it latest (`publish-release.yml`). It refuses a draft with no assets, one whose commit
+   is not on `main`, and a tag that is already published.
+
 Once a version is published the workflow refuses to touch it again, so bump the version first.
 Pull requests that change `packaging/`, the app icons or `release.yml` run the build and packaging
 jobs as a check, without making a release.
