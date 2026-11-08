@@ -912,11 +912,23 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
     ui.label(egui::RichText::new("Recorded & saved").strong());
+    // Each kit as recorded, or with a character laid over it.
     for (name, path) in &v.installed {
-        if ui.selectable_label(name == current, name).clicked() {
-            out.cmds.push(("mix.kit_load", json!({"track": tid.0, "path": path.to_string_lossy()})));
-            ui.close();
-        }
+        let shown = if current == name || current.starts_with(&format!("{name} · ")) { format!("{name} ✓") } else { name.clone() };
+        ui.menu_button(shown, |ui| {
+            if ui.selectable_label(current == name, "As recorded").clicked() {
+                out.cmds.push(("mix.kit_load", json!({"track": tid.0, "path": path.to_string_lossy()})));
+                ui.close();
+            }
+            ui.separator();
+            for c in soundcraft_engine::juke_kits::CHARACTERS {
+                let on = current == format!("{name} · {}", c.name);
+                if ui.selectable_label(on, c.name).on_hover_text(c.about).clicked() {
+                    out.cmds.push(("mix.kit_load", json!({"track": tid.0, "path": path.to_string_lossy(), "character": c.name})));
+                    ui.close();
+                }
+            }
+        });
     }
     match &v.active {
         Some((id, done, total)) => {

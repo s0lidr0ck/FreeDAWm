@@ -25,6 +25,129 @@ pub struct Kit {
 
 use DrumFamily::{Clap, Hat, Kick, Percussion, Snare, Tom};
 
+/// A change a [`Character`] makes to a pad parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Op {
+    Set(f32),
+    Add(f32),
+    Times(f32),
+}
+
+/// A character for a kit: settings and bus effects laid over it when it loads, so one recording
+/// gives several kits (`mix.kit_load {…, character}`).
+#[derive(Debug, Clone, Copy)]
+pub struct Character {
+    pub name: &'static str,
+    pub about: &'static str,
+    /// (the pad families it touches, every pad when empty; a pad parameter without its `pN_`;
+    /// the change).
+    pub pads: &'static [(&'static [DrumFamily], &'static str, Op)],
+    /// Kit-wide parameters (`level`, `return_a`, `humanize`…).
+    pub kit: &'static [(&'static str, f32)],
+    /// Effects on the buses: (bus, slot from 0, plugin, its parameter changes).
+    pub fx: &'static [(KitBus, u8, &'static str, &'static [(&'static str, f32)])],
+}
+
+const DRUMS: &[DrumFamily] = &[Kick, Snare, Clap, Tom, Percussion];
+const SHELLS: &[DrumFamily] = &[Kick, Snare, Tom];
+
+/// The characters, for any kit and above all the recorded ones.
+pub static CHARACTERS: &[Character] = &[
+    Character {
+        name: "Tight",
+        about: "short, dry and compressed: every hit stops quickly",
+        pads: &[(DRUMS, "decay", Op::Set(320.0)), (&[Hat], "decay", Op::Set(260.0)), (&[DrumFamily::Cymbal], "decay", Op::Set(1400.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[])],
+    },
+    Character {
+        name: "Punch",
+        about: "drums driven a little, transients and compression on the output",
+        pads: &[(SHELLS, "drive", Op::Set(18.0)), (&[Kick], "level", Op::Add(1.5))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_transient", &[]), (KitBus::Out, 1, "fs_comp", &[])],
+    },
+    Character {
+        name: "Big Room",
+        about: "every pad sent to a chamber on bus A",
+        pads: &[(&[], "send_a", Op::Set(35.0)), (&[Kick], "send_a", Op::Set(15.0))],
+        kit: &[("return_a", -3.0)],
+        fx: &[(KitBus::A, 0, "fs_chamber", &[])],
+    },
+    Character {
+        name: "Vintage",
+        about: "tuned down a little, the top rolled off, through tape",
+        pads: &[(&[], "tune", Op::Add(-1.0)), (&[], "filter", Op::Set(1.0)), (&[], "cutoff", Op::Set(7500.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_tape", &[])],
+    },
+    Character {
+        name: "Lo-fi",
+        about: "dark, crunchy and narrow, like a sampled record",
+        pads: &[(&[], "filter", Op::Set(1.0)), (&[], "cutoff", Op::Set(3800.0)), (&[], "drive", Op::Set(30.0)), (&[], "pan", Op::Times(0.4))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "lofi", &[]), (KitBus::Out, 1, "fs_comp", &[])],
+    },
+    Character {
+        name: "Tuned Up",
+        about: "shells tuned up, short toms and a small room: a jazz or funk kit",
+        pads: &[(SHELLS, "tune", Op::Add(3.0)), (&[Tom], "decay", Op::Set(700.0)), (&[], "send_b", Op::Set(15.0))],
+        kit: &[("return_b", -6.0)],
+        fx: &[(KitBus::B, 0, "fs_reverb", &[])],
+    },
+    Character {
+        name: "Tuned Down",
+        about: "shells tuned down and driven, glued on the output: a heavy kit",
+        pads: &[(SHELLS, "tune", Op::Add(-3.0)), (SHELLS, "drive", Op::Set(15.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[]), (KitBus::Out, 1, "fs_sat", &[])],
+    },
+    Character {
+        name: "Loose",
+        about: "humanized: every pad varies in level, pitch and timing",
+        pads: &[(&[], "hum_level", Op::Set(1.5)), (&[], "hum_pitch", Op::Set(8.0)), (&[], "hum_timing", Op::Set(4.0))],
+        kit: &[("humanize", 20.0)],
+        fx: &[],
+    },
+];
+
+/// The character named `name` (case and spaces ignored).
+pub fn character(name: &str) -> Option<&'static Character> {
+    let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let k = key(name);
+    CHARACTERS.iter().find(|c| key(c.name) == k)
+}
+
+/// Lays `c`'s settings over `params` (a Juke's parameters); `family` gives each pad's family.
+/// Values stay within each parameter's range.
+pub fn apply_character(c: &Character, params: &mut std::collections::BTreeMap<String, f32>, family: impl Fn(usize) -> DrumFamily) {
+    let info = &soundcraft_dsp::plugins::juke::JUKE_INFO;
+    let current = |params: &std::collections::BTreeMap<String, f32>, k: &str| {
+        params.get(k).copied().or_else(|| info.param(k).map(|q| q.default)).unwrap_or(0.0)
+    };
+    for pad in 0..PADS {
+        for (families, name, op) in c.pads {
+            if !families.is_empty() && !families.contains(&family(pad)) {
+                continue;
+            }
+            let key = format!("p{}_{name}", pad + 1);
+            let Some(q) = info.param(&key) else { continue };
+            let v = current(params, &key);
+            let nv = match op {
+                Op::Set(x) => *x,
+                Op::Add(x) => v + x,
+                Op::Times(x) => v * x,
+            };
+            params.insert(key, q.clamp(nv));
+        }
+    }
+    for (k, v) in c.kit {
+        if let Some(q) = info.param(k) {
+            params.insert((*k).to_string(), q.clamp(*v));
+        }
+    }
+}
+
 /// The kits: the five starter kits (the default first), then one per style ([`crate::juke_styles`]).
 pub static KITS: &[Kit] = &[
     Kit { name: "Porch Light", rendered: false, pads: &[], params: &[], fx: &[] },

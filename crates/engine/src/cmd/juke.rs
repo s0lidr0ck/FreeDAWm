@@ -123,13 +123,21 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             kit_save
         ),
-        cmd!(query "mix.kit_list", "List Kits", [], None, "{} -> {kits: [{name, rendered}]}: Juke's starter kits", always, kit_list),
+        cmd!(
+            query "mix.kit_list",
+            "List Kits",
+            [],
+            None,
+            "{} -> {kits: [{name, rendered}], characters: [{name, about}]}: Juke's starter kits, and the characters mix.kit_load can lay over any kit",
+            always,
+            kit_list
+        ),
         cmd!(
             "mix.kit_load",
             "Load Kit",
             [],
             None,
-            "{track?, kit: name | path: an installed recorded kit's folder} -> {kit, samples}: a starter kit (or a recorded kit downloaded from the kits release) on the Juke track: its sounds, names and bus effects; the pads keep their notes (unless a recorded kit gives them), mutes and solos. A rendered kit's pads play samples made from their synth voices",
+            "{track?, kit: name | path: an installed recorded kit's folder, character?: a name from mix.kit_list (Tight, Punch, Big Room…)} -> {kit, samples, character?}: a starter kit (or a recorded kit downloaded from the kits release) on the Juke track: its sounds, names and bus effects; the pads keep their notes (unless a recorded kit gives them), mutes and solos. A rendered kit's pads play samples made from their synth voices. A character lays its settings and bus effects over the kit (named `Kit · Character`)",
             has_selection,
             kit_load
         ),
@@ -401,10 +409,40 @@ fn kit_fx(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn kit_list(_e: &mut Engine, _p: &Value) -> Result<Value> {
     let kits: Vec<Value> = crate::juke_kits::KITS.iter().map(|k| json!({"name": k.name, "rendered": k.rendered})).collect();
-    Ok(json!({"kits": kits}))
+    let characters: Vec<Value> = crate::juke_kits::CHARACTERS.iter().map(|c| json!({"name": c.name, "about": c.about})).collect();
+    Ok(json!({"kits": kits, "characters": characters}))
 }
 
 fn kit_load(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_load";
+    let character = match p.get("character").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(c) => Some(crate::juke_kits::character(c).ok_or_else(|| {
+            let names = crate::juke_kits::CHARACTERS.iter().map(|c| c.name).collect::<Vec<_>>().join(", ");
+            bad(id, format!("`character` must be one of: {names}"))
+        })?),
+    };
+    let t = juke_track(e, id, p)?;
+    let mut v = kit_load_plain(e, p)?;
+    if let Some(c) = character {
+        let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+        let layout = ins.kit.clone().unwrap_or_else(default_layout);
+        let mut params = std::mem::take(&mut ins.params);
+        crate::juke_kits::apply_character(c, &mut params, |pad| layout.pads.get(pad).map_or(DrumFamily::Percussion, |p| p.family));
+        ins.params = params;
+        let name: String = format!("{} · {}", layout.name, c.name).chars().take(64).collect();
+        ins.kit.get_or_insert_with(default_layout).name = name.clone();
+        for (bus, slot, plugin, ps) in c.fx {
+            let params: serde_json::Map<String, Value> = ps.iter().map(|(k, v)| ((*k).to_string(), json!(v))).collect();
+            kit_fx(e, &json!({"track": t.0, "bus": bus.id(), "slot": usize::from(*slot) + 1, "plugin": plugin, "params": params}))?;
+        }
+        v["kit"] = json!(name);
+        v["character"] = json!(c.name);
+    }
+    Ok(v)
+}
+
+fn kit_load_plain(e: &mut Engine, p: &Value) -> Result<Value> {
     use crate::juke_kits::{KITS, LAYER_VELOCITIES, find, render_pad, takes};
     let id = "mix.kit_load";
     let t = juke_track(e, id, p)?;
@@ -1038,6 +1076,34 @@ mod tests {
         }
         assert_eq!(back.kit_effect(KitBus::A, 1).and_then(|f| f.insert.params.get("gain").copied()), Some(-3.0));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn every_character_lays_its_settings_and_effects_over_a_kit_in_one_undo_step() {
+        for c in crate::juke_kits::CHARACTERS {
+            let (mut e, t) = beat();
+            let before = juke(&e, t);
+            let v = e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Muddy Water", "character": c.name.to_lowercase()})).unwrap();
+            assert_eq!(v["character"], c.name);
+            let ins = juke(&e, t);
+            assert_eq!(ins.kit.as_ref().map(|k| k.name.clone()), Some(format!("Muddy Water · {}", c.name)));
+            for (bus, slot, plugin, _) in c.fx {
+                assert_eq!(ins.kit_effect(*bus, usize::from(*slot)).map(|f| f.insert.plugin.as_str()), Some(*plugin), "{}", c.name);
+            }
+            for (k, x) in c.kit {
+                assert_eq!(ins.params.get(*k), Some(x), "{}", c.name);
+            }
+            e.execute("edit.undo", &json!({})).unwrap();
+            let back = juke(&e, t);
+            assert_eq!((back.params, back.kit, back.kit_fx.len()), (before.params.clone(), before.kit.clone(), before.kit_fx.len()), "{}", c.name);
+        }
+        // Tight shortens the drums, not the cymbals as much; an unknown character is refused.
+        let (mut e, t) = beat();
+        e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Porch Light", "character": "Tight"})).unwrap();
+        assert_eq!(juke(&e, t).params.get("p1_decay"), Some(&320.0));
+        assert!(e.execute("mix.kit_load", &json!({"track": t.0, "kit": "Porch Light", "character": "Wobbly"})).is_err());
+        let list = e.execute("mix.kit_list", &json!({})).unwrap();
+        assert_eq!(list["characters"].as_array().map(Vec::len), Some(crate::juke_kits::CHARACTERS.len()));
     }
 
     #[test]

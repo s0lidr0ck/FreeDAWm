@@ -1,6 +1,7 @@
 # Juke's recorded kits release (`kits-v1`, docs/juke.md): makes each kit from its source with
-# tools/kits/, packs it with `cargo xtask kit-package`, checks that it installs and plays on every
-# pad, and creates or updates the `kits-v1` release with the zips and `kits.json`.
+# tools/kits/ (SM Drums and the two kits made from the pieces it leaves out), packs each with
+# `cargo xtask kit-package`, checks that each installs and plays on every pad, and creates or updates
+# the `kits-v1` release with the zips and `kits.json`.
 #
 #   Actions › Kits › Run                              (re)build and publish the kits
 #   push to main touching this file or tools/kits/    the same, so a merged kit change publishes
@@ -29,6 +30,7 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_TOOLCHAIN: "1.97.1"
   TAG: kits-v1
+  KITS: sm_drums sm_drums_17 sm_drums_hybrid
 
 jobs:
   kits:
@@ -72,18 +74,24 @@ jobs:
           # The 1.2 zip is 2,409,313,871 bytes; anything else is not the file the kit was made from.
           test "$size" = 2409313871
 
-      - name: Build and pack SM Drums
+      - name: Build and pack the kits (SM Drums, SM Drums 17, SM Drums Hybrid)
         run: |
           set -euo pipefail
-          python3 -I tools/kits/build_smdrums.py "$RUNNER_TEMP/src/smdrums.zip" "$RUNNER_TEMP/kits/sm_drums"
+          for kit in $KITS; do
+            python3 -I tools/kits/build_smdrums.py "$RUNNER_TEMP/src/smdrums.zip" "$RUNNER_TEMP/kits/$kit" "$kit"
+            cargo xtask kit-package "$RUNNER_TEMP/kits/$kit" --id "$kit" --out "$RUNNER_TEMP/release"
+            rm -rf "$RUNNER_TEMP/kits/$kit"
+          done
           rm -f "$RUNNER_TEMP/src/smdrums.zip"
-          cargo xtask kit-package "$RUNNER_TEMP/kits/sm_drums" --id sm_drums --out "$RUNNER_TEMP/release"
           cat "$RUNNER_TEMP/release/kits.json"
 
-      - name: Check the packed kit installs and plays
-        run: cargo test -p soundcraft-engine --lib -- --ignored a_packed_kit_installs_and_plays --nocapture
-        env:
-          FREEDAWM_TEST_KIT_ZIP: ${{ runner.temp }}/release/sm_drums.zip
+      - name: Check each packed kit installs and plays
+        run: |
+          set -euo pipefail
+          for kit in $KITS; do
+            FREEDAWM_TEST_KIT_ZIP="$RUNNER_TEMP/release/$kit.zip" \
+              cargo test -p soundcraft-engine --lib -- --ignored a_packed_kit_installs_and_plays --nocapture
+          done
 
       - name: Publish the kits-v1 release
         run: |
@@ -98,14 +106,18 @@ jobs:
             DSmolken (smmdrums.wordpress.com), trimmed to Juke's 4 velocity layers × 4 takes on
             16 pads. Public domain as listed by SFZ Instruments; the authors offer it free of charge
             for any use.
+          - **SM Drums 17**: the same recordings' other pieces: the 6.7" snare, a dry 6.5", loose and
+            half-open hats, 15" and 17" crashes and the 17" ride.
+          - **SM Drums Hybrid**: the same kit with its three hybrid snares and their rimshot.
 
           Made by `.github/workflows/kits.yml` from `tools/kits/`.
           EOF
+          files=("$RUNNER_TEMP"/release/*.zip "$RUNNER_TEMP/release/kits.json")
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$RUNNER_TEMP/release/sm_drums.zip" "$RUNNER_TEMP/release/kits.json" --clobber
+            gh release upload "$TAG" "${files[@]}" --clobber
             gh release edit "$TAG" --notes-file "$notes"
           else
-            gh release create "$TAG" "$RUNNER_TEMP/release/sm_drums.zip" "$RUNNER_TEMP/release/kits.json" \
+            gh release create "$TAG" "${files[@]}" \
               --title "Juke recorded kits" --notes-file "$notes" --target "$GITHUB_SHA" --latest=false
           fi
           gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size)"'

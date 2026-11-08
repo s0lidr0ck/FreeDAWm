@@ -213,10 +213,22 @@ fn an_installed_recorded_kit_loads_from_the_kits_menu() {
     h.run_steps(2);
     h.get_by_label("Kits").click();
     h.run_steps(2);
-    h.get_by_label("Porch Test").click();
+    h.get_all_by_label_contains("Porch Test").next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("As recorded").click();
     h.run_steps(3);
     let ins = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
     assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some("Porch Test"));
+    assert!(ins.samples.contains_key("p1.v1.r1"));
+    // With a character laid over it.
+    h.get_by_label("Kits").click();
+    h.run_steps(2);
+    h.get_all_by_label_contains("Porch Test ✓").next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Big Room").click();
+    h.run_steps(3);
+    let ins = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
+    assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some("Porch Test · Big Room"));
     assert!(ins.samples.contains_key("p1.v1.r1"));
     let _ = std::fs::remove_dir_all(&d);
 }

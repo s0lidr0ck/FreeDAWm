@@ -1,6 +1,7 @@
-"""Builds Juke's SM Drums kit folder from SMDrums_Sforzando_1.2.zip.
+"""Builds a Juke kit folder from SMDrums_Sforzando_1.2.zip: SM Drums, or one of the kits made
+from the pieces it leaves out (SM Drums 17, SM Drums Hybrid).
 
-usage: python3 -I build_smdrums.py <zip> <out folder>
+usage: python3 -I build_smdrums.py <zip> <out folder> [sm_drums | sm_drums_17 | sm_drums_hybrid]
 Reads the zip directly (nothing is extracted but the chosen samples), picks four velocity layers and
 up to four round-robin takes per pad from the SFZ mappings, trims each take's tail with a fade, and
 writes <out>/kit.json, with each pad's trim balancing the pads by loudness (the samples themselves
@@ -9,27 +10,72 @@ are not changed).
 import json, math, os, re, struct, sys, zipfile
 
 ZIP, OUT = sys.argv[1], sys.argv[2]
+KIT = sys.argv[3] if len(sys.argv) > 3 else "sm_drums"
 LAYER_VELS = [40, 72, 100, 124]
 TAKES = 4
-# (pad name, family, note, mapping, seconds kept)
-PADS = [
-    ("Kick", "kick", 36, "kick", 2.5),
-    ("Side stick", "percussion", 37, "sidestick", 1.5),
-    ("Snare", "snare", 38, "snare65reg", 2.5),
-    ("Rimshot", "snare", 40, "rimshot", 2.5),
-    ("Closed hat", "hat", 42, "closedhat", 1.5),
-    ("Pedal hat", "hat", 44, "foothat", 1.5),
-    ("Open hat", "hat", 46, "openhat", 5.0),
-    ("Floor tom", "tom", 41, "tom4", 3.0),
-    ("Low tom", "tom", 45, "tom3", 3.0),
-    ("Mid tom", "tom", 48, "tom2", 3.0),
-    ("Crash", "cymbal", 49, "crash16", 6.0),
-    ("Ride", "cymbal", 51, "ride20tip", 5.0),
-    ("Ride bell", "cymbal", 53, "ride20bell", 5.0),
-    ("China", "cymbal", 52, "china", 6.0),
-    ("Crash 13", "cymbal", 57, "crash13", 6.0),
-    ("High tom", "tom", 50, "tom1", 3.0),
-]
+# Each kit: its name, what it is, and its pads: (pad name, family, note, mapping, seconds kept).
+KITS = {
+    "sm_drums": ("SM Drums", "the 6.5\" snare, 16\" and 13\" crashes, the 20\" ride and a china", [
+        ("Kick", "kick", 36, "kick", 2.5),
+        ("Side stick", "percussion", 37, "sidestick", 1.5),
+        ("Snare", "snare", 38, "snare65reg", 2.5),
+        ("Rimshot", "snare", 40, "rimshot", 2.5),
+        ("Closed hat", "hat", 42, "closedhat", 1.5),
+        ("Pedal hat", "hat", 44, "foothat", 1.5),
+        ("Open hat", "hat", 46, "openhat", 5.0),
+        ("Floor tom", "tom", 41, "tom4", 3.0),
+        ("Low tom", "tom", 45, "tom3", 3.0),
+        ("Mid tom", "tom", 48, "tom2", 3.0),
+        ("Crash", "cymbal", 49, "crash16", 6.0),
+        ("Ride", "cymbal", 51, "ride20tip", 5.0),
+        ("Ride bell", "cymbal", 53, "ride20bell", 5.0),
+        ("China", "cymbal", 52, "china", 6.0),
+        ("Crash 13", "cymbal", 57, "crash13", 6.0),
+        ("High tom", "tom", 50, "tom1", 3.0),
+    ]),
+    # The same kit with the pieces SM Drums leaves out: the 6.7" snare (no rattle), the loose and
+    # half-open hats, the 15" and 17" crashes and the 17" ride.
+    "sm_drums_17": ("SM Drums 17", "the 6.7\" snare, loose hats, 15\" and 17\" crashes and the 17\" ride", [
+        ("Kick", "kick", 36, "kick", 2.5),
+        ("Side stick", "percussion", 37, "sidestick", 1.5),
+        ("Snare 6.7", "snare", 38, "snare67nr", 2.5),
+        ("Snare 6.5 dry", "snare", 40, "snare65nr", 2.5),
+        ("Closed hat", "hat", 42, "closedhat", 1.5),
+        ("Pedal open hat", "hat", 44, "footopenhat", 2.5),
+        ("Loose hat", "hat", 46, "loosehat", 4.0),
+        ("Floor tom", "tom", 41, "tom4", 3.0),
+        ("Low tom", "tom", 45, "tom3", 3.0),
+        ("Mid tom", "tom", 48, "tom2", 3.0),
+        ("Crash 15", "cymbal", 49, "crash15", 6.0),
+        ("Ride 17", "cymbal", 51, "ride17tip", 5.0),
+        ("Ride 17 bell", "cymbal", 53, "ride17bell", 5.0),
+        ("Half-open hat", "hat", 55, "closedopenhat", 3.0),
+        ("Crash 17", "cymbal", 57, "crash17", 6.0),
+        ("High tom", "tom", 50, "tom1", 3.0),
+    ]),
+    # The three hybrid snares and their rimshot over the kit.
+    "sm_drums_hybrid": ("SM Drums Hybrid", "three hybrid snares and their rimshot", [
+        ("Kick", "kick", 36, "kick", 2.5),
+        ("Side stick", "percussion", 37, "sidestick", 1.5),
+        ("Hybrid snare", "snare", 38, "snarehy1", 2.5),
+        ("Hybrid snare 2", "snare", 39, "snarehy2", 2.5),
+        ("Hybrid rim", "snare", 40, "snarehyrim", 2.5),
+        ("Closed hat", "hat", 42, "closedhat", 1.5),
+        ("Pedal hat", "hat", 44, "foothat", 1.5),
+        ("Open hat", "hat", 46, "openhat", 5.0),
+        ("Floor tom", "tom", 41, "tom4", 3.0),
+        ("Low tom", "tom", 45, "tom3", 3.0),
+        ("Mid tom", "tom", 48, "tom2", 3.0),
+        ("Crash", "cymbal", 49, "crash16", 6.0),
+        ("Ride", "cymbal", 51, "ride20tip", 5.0),
+        ("Hybrid snare 3", "snare", 54, "snarehy3", 2.5),
+        ("Crash 17", "cymbal", 57, "crash17", 6.0),
+        ("High tom", "tom", 50, "tom1", 3.0),
+    ]),
+}
+if KIT not in KITS:
+    raise SystemExit(f"no kit {KIT}: one of {', '.join(KITS)}")
+KIT_NAME, KIT_WHAT, PADS = KITS[KIT]
 
 
 def regions(text):
@@ -191,9 +237,9 @@ for i, (name, family, note, mapping, secs) in enumerate(PADS):
     pads.append({"name": name, "family": family, "note": note, "trim": trim, "samples": samples})
     print(f"{name}: {len(samples)} samples ({rate} Hz, {ch} ch, {bits} bit), loudness {db:.1f} dB, trim {trim:+.1f} dB")
 kit = {
-    "name": "SM Drums",
+    "name": KIT_NAME,
     "license": "Public domain (as listed by SFZ Instruments; the authors offer it free of charge for any use: smmdrums.wordpress.com)",
-    "credit": "SM Drums by Scott McLean, Tod Stillwell and Suleiman Ali (samples, editing), SFZ programming by DSmolken; trimmed to Juke's 4 velocity layers x 4 takes",
+    "credit": "SM Drums by Scott McLean, Tod Stillwell and Suleiman Ali (samples, editing), SFZ programming by DSmolken; trimmed to Juke's 4 velocity layers x 4 takes: " + KIT_WHAT,
     "pads": pads,
 }
 with open(os.path.join(OUT, "kit.json"), "w") as f:

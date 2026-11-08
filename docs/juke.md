@@ -250,6 +250,15 @@ recorded kit, **SM Drums** (16 pads × 4 velocity layers × 4 takes, 216 MB), is
 authors' download by `.github/workflows/kits.yml` with `tools/kits/` (2026-11-07). Phase 1 is
 complete.
 
+**2026-11-08:** two more recorded kits from the same source, from the pieces SM Drums leaves out:
+**SM Drums 17** (the 6.7" snare, a dry 6.5", pedal-open, loose and half-open hats, 15" and 17"
+crashes, the 17" ride and bell) and **SM Drums Hybrid** (three hybrid snares and their rimshot);
+the kits workflow builds, checks and publishes all three. **Characters** (`juke_kits::CHARACTERS`:
+Tight, Punch, Big Room, Vintage, Lo-fi, Tuned Up, Tuned Down, Loose) lay settings and bus effects
+over any kit as it loads (`mix.kit_load {…, character}`, listed by `mix.kit_list`); the Kits menu
+offers each recorded or saved kit as recorded or with any character, so three recordings give 27
+recorded kits.
+
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the
 model fields are merged.
