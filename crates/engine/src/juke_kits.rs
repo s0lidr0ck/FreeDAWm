@@ -25,8 +25,131 @@ pub struct Kit {
 
 use DrumFamily::{Clap, Hat, Kick, Percussion, Snare, Tom};
 
-/// The starter kits, the default first.
-pub static KITS: [Kit; 5] = [
+/// A change a [`Character`] makes to a pad parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Op {
+    Set(f32),
+    Add(f32),
+    Times(f32),
+}
+
+/// A character for a kit: settings and bus effects laid over it when it loads, so one recording
+/// gives several kits (`mix.kit_load {…, character}`).
+#[derive(Debug, Clone, Copy)]
+pub struct Character {
+    pub name: &'static str,
+    pub about: &'static str,
+    /// (the pad families it touches, every pad when empty; a pad parameter without its `pN_`;
+    /// the change).
+    pub pads: &'static [(&'static [DrumFamily], &'static str, Op)],
+    /// Kit-wide parameters (`level`, `return_a`, `humanize`…).
+    pub kit: &'static [(&'static str, f32)],
+    /// Effects on the buses: (bus, slot from 0, plugin, its parameter changes).
+    pub fx: &'static [(KitBus, u8, &'static str, &'static [(&'static str, f32)])],
+}
+
+const DRUMS: &[DrumFamily] = &[Kick, Snare, Clap, Tom, Percussion];
+const SHELLS: &[DrumFamily] = &[Kick, Snare, Tom];
+
+/// The characters, for any kit and above all the recorded ones.
+pub static CHARACTERS: &[Character] = &[
+    Character {
+        name: "Tight",
+        about: "short, dry and compressed: every hit stops quickly",
+        pads: &[(DRUMS, "decay", Op::Set(320.0)), (&[Hat], "decay", Op::Set(260.0)), (&[DrumFamily::Cymbal], "decay", Op::Set(1400.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[])],
+    },
+    Character {
+        name: "Punch",
+        about: "drums driven a little, transients and compression on the output",
+        pads: &[(SHELLS, "drive", Op::Set(18.0)), (&[Kick], "level", Op::Add(1.5))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_transient", &[]), (KitBus::Out, 1, "fs_comp", &[])],
+    },
+    Character {
+        name: "Big Room",
+        about: "every pad sent to a chamber on bus A",
+        pads: &[(&[], "send_a", Op::Set(35.0)), (&[Kick], "send_a", Op::Set(15.0))],
+        kit: &[("return_a", -3.0)],
+        fx: &[(KitBus::A, 0, "fs_chamber", &[])],
+    },
+    Character {
+        name: "Vintage",
+        about: "tuned down a little, the top rolled off, through tape",
+        pads: &[(&[], "tune", Op::Add(-1.0)), (&[], "filter", Op::Set(1.0)), (&[], "cutoff", Op::Set(7500.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_tape", &[])],
+    },
+    Character {
+        name: "Lo-fi",
+        about: "dark, crunchy and narrow, like a sampled record",
+        pads: &[(&[], "filter", Op::Set(1.0)), (&[], "cutoff", Op::Set(3800.0)), (&[], "drive", Op::Set(30.0)), (&[], "pan", Op::Times(0.4))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "lofi", &[]), (KitBus::Out, 1, "fs_comp", &[])],
+    },
+    Character {
+        name: "Tuned Up",
+        about: "shells tuned up, short toms and a small room: a jazz or funk kit",
+        pads: &[(SHELLS, "tune", Op::Add(3.0)), (&[Tom], "decay", Op::Set(700.0)), (&[], "send_b", Op::Set(15.0))],
+        kit: &[("return_b", -6.0)],
+        fx: &[(KitBus::B, 0, "fs_reverb", &[])],
+    },
+    Character {
+        name: "Tuned Down",
+        about: "shells tuned down and driven, glued on the output: a heavy kit",
+        pads: &[(SHELLS, "tune", Op::Add(-3.0)), (SHELLS, "drive", Op::Set(15.0))],
+        kit: &[],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[]), (KitBus::Out, 1, "fs_sat", &[])],
+    },
+    Character {
+        name: "Loose",
+        about: "humanized: every pad varies in level, pitch and timing",
+        pads: &[(&[], "hum_level", Op::Set(1.5)), (&[], "hum_pitch", Op::Set(8.0)), (&[], "hum_timing", Op::Set(4.0))],
+        kit: &[("humanize", 20.0)],
+        fx: &[],
+    },
+];
+
+/// The character named `name` (case and spaces ignored).
+pub fn character(name: &str) -> Option<&'static Character> {
+    let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let k = key(name);
+    CHARACTERS.iter().find(|c| key(c.name) == k)
+}
+
+/// Lays `c`'s settings over `params` (a Juke's parameters); `family` gives each pad's family.
+/// Values stay within each parameter's range.
+pub fn apply_character(c: &Character, params: &mut std::collections::BTreeMap<String, f32>, family: impl Fn(usize) -> DrumFamily) {
+    let info = &soundcraft_dsp::plugins::juke::JUKE_INFO;
+    let current = |params: &std::collections::BTreeMap<String, f32>, k: &str| {
+        params.get(k).copied().or_else(|| info.param(k).map(|q| q.default)).unwrap_or(0.0)
+    };
+    for pad in 0..PADS {
+        for (families, name, op) in c.pads {
+            if !families.is_empty() && !families.contains(&family(pad)) {
+                continue;
+            }
+            let key = format!("p{}_{name}", pad + 1);
+            let Some(q) = info.param(&key) else { continue };
+            let v = current(params, &key);
+            let nv = match op {
+                Op::Set(x) => *x,
+                Op::Add(x) => v + x,
+                Op::Times(x) => v * x,
+            };
+            params.insert(key, q.clamp(nv));
+        }
+    }
+    for (k, v) in c.kit {
+        if let Some(q) = info.param(k) {
+            params.insert((*k).to_string(), q.clamp(*v));
+        }
+    }
+}
+
+/// The kits: the five starter kits (the default first), then one per style ([`crate::juke_styles`]).
+pub static KITS: &[Kit] = &[
     Kit { name: "Porch Light", rendered: false, pads: &[], params: &[], fx: &[] },
     Kit {
         name: "Tin Roof",
@@ -128,7 +251,407 @@ pub static KITS: [Kit; 5] = [
         ],
         fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::B, 0, "fs_delay", &[])],
     },
+    // Style kits (crate::juke_styles), each named after its style.
+    Kit {
+        name: "Boom Bap",
+        rendered: true,
+        pads: &[("Dusty kick", Kick), ("Rim", Percussion), ("Crack snare", Snare), ("Clap", Clap), ("Closed hat", Hat)],
+        params: &[
+            ("p1_tune", -2.0),
+            ("p1_decay", 380.0),
+            ("p1_drive", 30.0),
+            ("p1_pitch_amount", 6.0),
+            ("p1_pitch_decay", 40.0),
+            ("p3_tone", 40.0),
+            ("p3_snappy", 75.0),
+            ("p3_decay", 240.0),
+            ("p3_drive", 20.0),
+            ("p5_filter", 1.0),
+            ("p5_cutoff", 7000.0),
+            ("p7_filter", 1.0),
+            ("p7_cutoff", 7000.0),
+            ("humanize", 20.0),
+        ],
+        fx: &[(KitBus::Out, 0, "fs_sat", &[])],
+    },
+    Kit {
+        name: "Trap",
+        rendered: false,
+        pads: &[("808", Kick), ("Rim", Percussion), ("Snare", Snare), ("Clap", Clap), ("Hat", Hat), ("Pedal hat", Hat), ("Open hat", Hat)],
+        params: &[
+            ("p1_tune", -7.0),
+            ("p1_decay", 2200.0),
+            ("p1_pitch_amount", 12.0),
+            ("p1_pitch_decay", 70.0),
+            ("p1_drive", 25.0),
+            ("p3_tone", 70.0),
+            ("p3_snappy", 85.0),
+            ("p3_decay", 160.0),
+            ("p4_decay", 220.0),
+            ("p4_send_a", 25.0),
+            ("p5_decay", 40.0),
+            ("p5_tone", 80.0),
+            ("p7_decay", 350.0),
+            ("return_a", -10.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "House",
+        rendered: false,
+        pads: &[("House kick", Kick), ("Rim", Percussion), ("Snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_decay", 320.0),
+            ("p1_pitch_amount", 10.0),
+            ("p1_pitch_decay", 30.0),
+            ("p4_decay", 260.0),
+            ("p4_send_a", 20.0),
+            ("p5_decay", 50.0),
+            ("p5_tone", 70.0),
+            ("p7_decay", 260.0),
+            ("return_a", -12.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Techno",
+        rendered: false,
+        pads: &[("Techno kick", Kick), ("Rim", Percussion)],
+        params: &[
+            ("p1_tune", -3.0),
+            ("p1_decay", 400.0),
+            ("p1_drive", 40.0),
+            ("p2_decay", 50.0),
+            ("p2_send_b", 30.0),
+            ("p5_decay", 35.0),
+            ("p12_decay", 900.0),
+            ("return_b", -12.0),
+        ],
+        fx: &[(KitBus::B, 0, "fs_delay", &[])],
+    },
+    Kit {
+        name: "Lo-fi",
+        rendered: true,
+        pads: &[("Soft kick", Kick), ("Rim", Percussion), ("Soft snare", Snare)],
+        params: &[
+            ("p1_filter", 1.0),
+            ("p1_cutoff", 4500.0),
+            ("p1_drive", 25.0),
+            ("p3_filter", 1.0),
+            ("p3_cutoff", 4500.0),
+            ("p3_tone", 35.0),
+            ("p5_filter", 1.0),
+            ("p5_cutoff", 4500.0),
+            ("p7_filter", 1.0),
+            ("p7_cutoff", 4500.0),
+            ("humanize", 30.0),
+        ],
+        fx: &[(KitBus::Out, 0, "fs_tape", &[])],
+    },
+    Kit {
+        name: "Funk",
+        rendered: true,
+        pads: &[("Tight kick", Kick), ("Rim", Percussion), ("Funk snare", Snare)],
+        params: &[
+            ("p1_decay", 300.0),
+            ("p1_tone", 60.0),
+            ("p3_tone", 65.0),
+            ("p3_snappy", 70.0),
+            ("p3_decay", 180.0),
+            ("p5_decay", 55.0),
+            ("p7_decay", 500.0),
+            ("humanize", 15.0),
+        ],
+        fx: &[],
+    },
+    Kit {
+        name: "Reggaeton",
+        rendered: false,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Dembow snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_tune", -4.0),
+            ("p1_decay", 600.0),
+            ("p1_pitch_amount", 8.0),
+            ("p3_tone", 60.0),
+            ("p3_decay", 150.0),
+            ("p3_send_a", 15.0),
+            ("p4_send_a", 15.0),
+            ("return_a", -12.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Drum & Bass",
+        rendered: false,
+        pads: &[("Break kick", Kick), ("Rim", Percussion), ("Break snare", Snare)],
+        params: &[
+            ("p1_decay", 250.0),
+            ("p1_tone", 60.0),
+            ("p1_pitch_amount", 14.0),
+            ("p1_pitch_decay", 25.0),
+            ("p3_tune", 3.0),
+            ("p3_tone", 75.0),
+            ("p3_snappy", 80.0),
+            ("p3_decay", 200.0),
+            ("p3_send_a", 15.0),
+            ("p5_decay", 30.0),
+            ("return_a", -12.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Country",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Brush snare", Snare)],
+        params: &[
+            ("p1_decay", 350.0),
+            ("p1_tone", 40.0),
+            ("p3_tone", 35.0),
+            ("p3_snappy", 40.0),
+            ("p3_decay", 260.0),
+            ("p5_decay", 60.0),
+            ("humanize", 25.0),
+        ],
+        fx: &[],
+    },
+    Kit {
+        name: "Alternative",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Snare", Snare)],
+        params: &[
+            ("p1_decay", 400.0),
+            ("p1_drive", 15.0),
+            ("p3_tone", 55.0),
+            ("p3_snappy", 65.0),
+            ("p3_decay", 300.0),
+            ("p3_send_a", 20.0),
+            ("p11_send_a", 15.0),
+            ("return_a", -10.0),
+            ("humanize", 15.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Soft Rock",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Cross-stick", Percussion), ("Snare", Snare)],
+        params: &[
+            ("p1_decay", 380.0),
+            ("p1_tone", 40.0),
+            ("p3_tone", 40.0),
+            ("p3_snappy", 45.0),
+            ("p3_decay", 260.0),
+            ("p3_send_a", 25.0),
+            ("p5_decay", 60.0),
+            ("p5_tone", 40.0),
+            ("return_a", -10.0),
+            ("humanize", 15.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Hard Rock",
+        rendered: true,
+        pads: &[("Big kick", Kick), ("Rim", Percussion), ("Big snare", Snare)],
+        params: &[
+            ("p1_decay", 380.0),
+            ("p1_drive", 30.0),
+            ("p1_tone", 60.0),
+            ("p3_tone", 60.0),
+            ("p3_snappy", 70.0),
+            ("p3_decay", 340.0),
+            ("p3_drive", 25.0),
+            ("p3_send_a", 25.0),
+            ("p8_drive", 20.0),
+            ("p9_drive", 20.0),
+            ("p10_drive", 20.0),
+            ("return_a", -8.0),
+            ("humanize", 10.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::Out, 0, "fs_comp", &[])],
+    },
+    Kit {
+        name: "Metal",
+        rendered: true,
+        pads: &[("Click kick", Kick), ("Rim", Percussion), ("Metal snare", Snare)],
+        params: &[
+            ("p1_decay", 180.0),
+            ("p1_tone", 85.0),
+            ("p1_pitch_amount", 6.0),
+            ("p1_pitch_decay", 15.0),
+            ("p1_drive", 20.0),
+            ("p3_tone", 70.0),
+            ("p3_snappy", 75.0),
+            ("p3_decay", 250.0),
+            ("p3_drive", 20.0),
+            ("p8_decay", 350.0),
+            ("p9_decay", 350.0),
+            ("p10_decay", 350.0),
+        ],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[])],
+    },
+    Kit {
+        name: "'50s Rock",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Snare", Snare)],
+        params: &[
+            ("p1_decay", 300.0),
+            ("p1_tone", 30.0),
+            ("p1_level", -3.0),
+            ("p3_tone", 35.0),
+            ("p3_snappy", 55.0),
+            ("p3_decay", 200.0),
+            ("p3_send_a", 20.0),
+            ("p12_decay", 1200.0),
+            ("p12_filter", 1.0),
+            ("p12_cutoff", 8000.0),
+            ("p11_filter", 1.0),
+            ("p11_cutoff", 8000.0),
+            ("return_a", -12.0),
+            ("humanize", 25.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "'60s Rock",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Snare", Snare)],
+        params: &[
+            ("p1_decay", 350.0),
+            ("p1_tone", 40.0),
+            ("p3_tone", 45.0),
+            ("p3_snappy", 60.0),
+            ("p3_decay", 260.0),
+            ("p3_send_a", 15.0),
+            ("p5_pan", -60.0),
+            ("p6_pan", -60.0),
+            ("p7_pan", -60.0),
+            ("p8_pan", 50.0),
+            ("p9_pan", 30.0),
+            ("p10_pan", 10.0),
+            ("return_a", -12.0),
+            ("humanize", 20.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::Out, 0, "fs_tape", &[])],
+    },
+    Kit {
+        name: "Rockabilly",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Slap snare", Snare)],
+        params: &[
+            ("p1_decay", 250.0),
+            ("p1_tone", 50.0),
+            ("p1_level", -3.0),
+            ("p3_tone", 60.0),
+            ("p3_snappy", 70.0),
+            ("p3_decay", 150.0),
+            ("p3_send_b", 30.0),
+            ("return_b", -10.0),
+            ("humanize", 20.0),
+        ],
+        fx: &[(KitBus::B, 0, "fs_delay", &[])],
+    },
+    Kit {
+        name: "Pop",
+        rendered: true,
+        pads: &[("Pop kick", Kick), ("Rim", Percussion), ("Snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_decay", 400.0),
+            ("p1_pitch_amount", 8.0),
+            ("p3_tone", 65.0),
+            ("p4_send_a", 25.0),
+            ("p5_decay", 45.0),
+            ("p5_tone", 70.0),
+            ("return_a", -10.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::Out, 0, "fs_comp", &[])],
+    },
+    Kit {
+        name: "Folk",
+        rendered: true,
+        pads: &[("Soft kick", Kick), ("Rim", Percussion), ("Brush snare", Snare)],
+        params: &[
+            ("p1_decay", 450.0),
+            ("p1_tone", 30.0),
+            ("p1_level", -4.0),
+            ("p3_tone", 30.0),
+            ("p3_snappy", 35.0),
+            ("p3_decay", 200.0),
+            ("p3_send_a", 15.0),
+            ("p13_level", 2.0),
+            ("p15_level", 2.0),
+            ("return_a", -12.0),
+            ("humanize", 30.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Praise",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Bright snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_decay", 380.0),
+            ("p1_tone", 55.0),
+            ("p3_tone", 60.0),
+            ("p3_snappy", 65.0),
+            ("p3_decay", 240.0),
+            ("p3_send_a", 20.0),
+            ("p4_send_a", 20.0),
+            ("return_a", -10.0),
+            ("humanize", 10.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[])],
+    },
+    Kit {
+        name: "Worship",
+        rendered: true,
+        pads: &[("Deep kick", Kick), ("Rim", Percussion), ("Wide snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_tune", -2.0),
+            ("p1_decay", 600.0),
+            ("p1_tone", 35.0),
+            ("p3_tone", 45.0),
+            ("p3_snappy", 50.0),
+            ("p3_decay", 360.0),
+            ("p3_send_a", 40.0),
+            ("p3_send_b", 15.0),
+            ("p8_decay", 700.0),
+            ("p8_send_a", 30.0),
+            ("p9_decay", 650.0),
+            ("p9_send_a", 30.0),
+            ("p10_decay", 600.0),
+            ("p10_send_a", 30.0),
+            ("p11_send_a", 25.0),
+            ("p12_send_a", 25.0),
+            ("return_a", -6.0),
+            ("return_b", -14.0),
+        ],
+        fx: &[(KitBus::A, 0, "fs_reverb", &[]), (KitBus::B, 0, "fs_delay", &[])],
+    },
+    Kit {
+        name: "Gospel / Shout",
+        rendered: true,
+        pads: &[("Kick", Kick), ("Rim", Percussion), ("Shout snare", Snare), ("Clap", Clap)],
+        params: &[
+            ("p1_decay", 280.0),
+            ("p1_tone", 60.0),
+            ("p3_tune", 2.0),
+            ("p3_tone", 70.0),
+            ("p3_snappy", 80.0),
+            ("p3_decay", 180.0),
+            ("p5_decay", 40.0),
+            ("p5_tone", 65.0),
+            ("p8_tune", 2.0),
+            ("p9_tune", 2.0),
+            ("p10_tune", 2.0),
+            ("humanize", 10.0),
+        ],
+        fx: &[(KitBus::Out, 0, "fs_comp", &[])],
+    },
 ];
+
+/// How many of [`KITS`] are the starter kits (the rest are the styles').
+pub const STARTER_KITS: usize = 5;
 
 /// The kit named `name` (any case).
 pub fn find(name: &str) -> Option<&'static Kit> {
@@ -219,7 +742,7 @@ mod tests {
 
     #[test]
     fn every_kit_names_real_parameters_and_effects() {
-        for k in &KITS {
+        for k in KITS {
             for (id, v) in k.params {
                 let p = JUKE_INFO.param(id).unwrap_or_else(|| panic!("{}: no parameter {id}", k.name));
                 assert!((p.min..=p.max).contains(v), "{}: {id} = {v}", k.name);
@@ -255,7 +778,7 @@ mod tests {
 ///
 /// ```json
 /// {"name": "SM Drums", "license": "Public domain", "credit": "…",
-///  "pads": [{"name": "Kick", "family": "kick", "note": 36,
+///  "pads": [{"name": "Kick", "family": "kick", "note": 36, "trim": -2.5,
 ///            "samples": {"v1.r1": "kick/v1r1.wav", "v4.r2": "kick/v4r2.wav"}}]}
 /// ```
 ///
@@ -270,6 +793,12 @@ pub struct RecordedKit {
     pub credit: String,
     #[serde(default)]
     pub pads: Vec<RecordedPad>,
+    /// Every Juke setting (`p1_tune`, `level`…), in a kit saved from Juke (`mix.kit_save`).
+    #[serde(default)]
+    pub params: std::collections::BTreeMap<String, f32>,
+    /// Its bus effects, as `mix.kit_fx` takes them (`{bus, slot, plugin, params, bypass}`).
+    #[serde(default)]
+    pub fx: Vec<serde_json::Value>,
 }
 
 /// One pad of a [`RecordedKit`].
@@ -280,6 +809,12 @@ pub struct RecordedPad {
     pub family: Option<String>,
     #[serde(default)]
     pub note: Option<u8>,
+    /// The pad's trim in dB (−24 to +24): the kit's balance between its pads, under the fader.
+    #[serde(default)]
+    pub trim: Option<f32>,
+    /// Its choke group (0 none, 1–8); absent: the hats choke each other in group 1, the rest none.
+    #[serde(default)]
+    pub choke: Option<u8>,
     #[serde(default)]
     pub samples: std::collections::BTreeMap<String, String>,
 }
@@ -301,6 +836,11 @@ pub fn read_recorded(dir: &std::path::Path) -> Result<RecordedKit, String> {
             && DrumFamily::from_id(f).is_none()
         {
             return Err(format!("pad {}: no family `{f}`", i + 1));
+        }
+        if let Some(t) = pad.trim
+            && !(t.is_finite() && (-24.0..=24.0).contains(&t))
+        {
+            return Err(format!("pad {}: trim {t} dB is outside -24 to +24", i + 1));
         }
         for (key, file) in &pad.samples {
             if layer_robin(key).is_none() {
@@ -341,6 +881,7 @@ mod recorded_tests {
             r#"{"name":"T","pads":[{"name":"K","samples":{"v5.r1":"k.wav"}}]}"#,
             r#"{"name":"T","pads":[{"name":"K","samples":{"v1.r1":"../k.wav"}}]}"#,
             r#"{"name":"T","pads":[{"name":"K","family":"bongo"}]}"#,
+            r#"{"name":"T","pads":[{"name":"K","trim":30}]}"#,
         ] {
             write(bad);
             assert!(read_recorded(&d).is_err(), "{bad}");

@@ -145,6 +145,14 @@ Instrument parameters go through the existing `mix.instrument_param`.
 
 ### 5. UI (`crates/ui-egui`)
 
+As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
+
+![The Steps view](images/juke/steps.png)
+![A step's details](images/juke/step-popover.png)
+![The pad editor](images/juke/pad-editor.png)
+![The Presets menu](images/juke/presets-menu.png)
+
+
 - **Juke window, kit view** (the instrument window for `juke`; look approved by the owner,
   2026-11-06, from the mockup canvas):
   - **Pads as channel strips:** a 3-column grid of pad cards (9 showing, scrolling to 16). Each
@@ -182,8 +190,20 @@ Instrument parameters go through the existing `mix.instrument_param`.
   drop targets), the synth voice (voice menu, its knobs, a sample↔synth blend), humanize sliders and
   playback options (one-shot or gate, reverse, stack, choke). At the side: the pad's own strip
   (Tune, Pan, sends, fader) beside the buses and the output, all four faders aligned.
-- **Step grid** (a panel under the Edit window, and in the MIDI Editor for pattern clips; look
-  approved 2026-11-06): the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
+  - **As built (2026-11-08):** each envelope row is titled with what it does ("Amp envelope — how
+    the hit rises and dies away"); its ON lamp is lit while it shapes the pad (amp always; pitch with
+    an amount, the filter when one is chosen) and switches the pitch sweep and the filter. The layer
+    rows are named Hard, Medium, Soft and Ghost; several audio files dropped on a cell fill its row
+    from there. The pad's own humanize (`p{n}_hum_level` ±dB, `_hum_pitch` ±cents, `_hum_filter`
+    ±% of an octave on the cutoff, `_hum_timing` up to that many ms late) adds to the kit-wide
+    Humanize. The top bar has **Randomize** (`mix.kit_randomize`: the pad shown in the pad view, else
+    every pad: tuning, decay, tone, snap, drive and the kick and tom sweeps, around what they are)
+    and **Save kit** (`mix.kit_save`: a kit folder with every setting, the samples as WAVs and the
+    bus effects, written to the kits folder and listed in Kits › Recorded & saved). The bus strips
+    carry their subtitles (Room and grit, Space, Kit glue · stereo).
+- **Step grid** (the Juke window's **Steps** view, beside Kit and Pad; also the MIDI Editor's view
+  of a pattern clip; look approved 2026-11-06): the Steps view lists the track's pattern clips as
+  tabs (name and bars, `+ Pattern` adds one after the last) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
   Accent and Humanize knobs, fill bars, Re-roll, Convert to MIDI); one row per lane, its header a band
   in the pad's family colour (name, lane length, choke or rate, mute); steps as raised keys grouped
   by beat. A step's fill height is its velocity in the lane's colour, a cream cap marks an accent,
@@ -192,8 +212,12 @@ Instrument parameters go through the existing `mix.instrument_param`.
   - **Editing:** click a step to turn it on or off; drag across steps to paint or clear a run (the
     first step decides which); new steps take the **New steps** velocity (Full, 75, 50 or 25 %, chosen
     in the pattern bar); drag a step up or down for fine velocity; keys 1–4 over a step set it to
-    Full / 75 / 50 / 25; right-click (or modifier-click) opens the step's details popover (velocity,
-    probability, nudge, roll, accent, flam, when it plays). Lane length handles at the row ends.
+    Full / 75 / 50 / 25; right-click (or modifier-click) opens the step's details popover, hung from
+    the step: Velocity, Probability and Nudge sliders, Roll 1–4, Accent and Flam pills, and when it
+    plays (Always, 1st of 2, 2nd of 2, First pass, Fill bars, Not in fills). Steps per bar and New
+    steps are segmented controls, Shuffle, Accent and Humanize cream dials, Fill every a menu; the
+    step numbers run over the lanes and the gestures are listed under them. Track › New Beat, the
+    Grooves menu and the Steps tab open this view.
 - The menu bar gets **Track › New Beat** (an instrument track with Juke and a starter kit) and
   **Clip › Convert Pattern to MIDI**; `menubar.txt` and the parity checklist update with them.
 
@@ -233,6 +257,31 @@ recorded kit, **SM Drums** (16 pads × 4 velocity layers × 4 takes, 216 MB), is
 [`kits-v1` release](https://github.com/s0lidr0ck/FreeDAWm/releases/tag/kits-v1), built from the
 authors' download by `.github/workflows/kits.yml` with `tools/kits/` (2026-11-07). Phase 1 is
 complete.
+
+**2026-11-08:** two more recorded kits from the same source, from the pieces SM Drums leaves out:
+**SM Drums 17** (the 6.7" snare, a dry 6.5", pedal-open, loose and half-open hats, 15" and 17"
+crashes, the 17" ride and bell) and **SM Drums Hybrid** (three hybrid snares and their rimshot);
+the kits workflow builds, checks and publishes all three. **Characters** (`juke_kits::CHARACTERS`:
+Tight, Punch, Big Room, Vintage, Lo-fi, Tuned Up, Tuned Down, Loose) lay settings and bus effects
+over any kit as it loads (`mix.kit_load {…, character}`, listed by `mix.kit_list`); the Kits menu
+offers each recorded or saved kit as recorded or with any character, so three recordings give 27
+recorded kits.
+
+**Presets (2026-11-08):** a preset is a whole kit sound, not just its samples
+(`juke_presets.rs`, the library in `juke_presets.json`): a `source` (a starter or style kit, a
+recorded kit, or Juke's defaults), pads `borrow`ed from other recorded kits, pad settings by family,
+pad or `all` (tuning, envelopes, filter, drive, level, pan, sends, names), the kit's levels, and its
+bus effects with their settings. `mix.kit_preset {preset | path}` loads one as one undo step,
+`mix.kit_presets` lists the library (with the recorded kits each `needs`), and
+`mix.kit_preset_save` writes the kit as a preset file: every parameter and effect, samples from
+installed recorded kits named (`kit:<id>/<file>`) and any other sample copied beside it. The Juke
+window's **Presets** menu lists the built-in presets (101 since the second pass: designed pad by
+pad with full effect chains by `tools/kits/juke_presets.py`, each with a `demo` groove from the
+styles, rendered, measured and levelled to one loudness; the tape, saturation and Vint circuits at
+drives calibrated to be heard) in seven categories (Acoustic on the recorded
+kits, Rock, Pop & Folk, Church, Hip-Hop, Electronic, Drum Machines) and **My Presets**; **Save
+preset** saves the kit under its name. A preset whose recorded kit is missing is marked "(download)"
+and says which kit to get.
 
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The
 three parts of phase 1 (instrument DSP, model plus commands, UI) can run as parallel agents once the

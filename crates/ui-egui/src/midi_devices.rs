@@ -124,7 +124,7 @@ pub fn input_choices(app: &SoundApp, current: Option<&MidiIn>) -> Vec<(String, O
     for p in &ports {
         out.push((format!("MIDI: {p}"), Some(p.clone()), true));
     }
-    // The MIDI Keyboard's keys and the computer keys (Window › MIDI Keyboard).
+    // Musical Typing's on-screen keys and the computer keys (Window › Musical Typing).
     let typing = soundcraft_playback::midi_in::TYPING_NAME.to_string();
     if app.midi_hub.is_some() {
         out.push((format!("MIDI: {typing}"), Some(typing.clone()), true));

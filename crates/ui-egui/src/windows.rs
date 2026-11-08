@@ -277,7 +277,7 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     }
     let t = crate::theme::Tokens::current();
-    egui::Window::new("MIDI Keyboard").open(&mut open).default_size(vec2(680.0, 150.0)).show(ctx, |ui| {
+    egui::Window::new("Musical Typing").open(&mut open).default_size(vec2(680.0, 150.0)).show(ctx, |ui| {
         ui.horizontal(|ui| {
             let step = app.typing.step;
             if ui
@@ -300,15 +300,42 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
             let shortcut = crate::menus::shortcut_text(app, "ui.musical_typing", ui.ctx().os() == egui::os::OperatingSystem::Mac);
             if ui
                 .checkbox(&mut on, "Computer keys")
-                .on_hover_text(format!("A S D F… white keys, W E T… black keys, Z/X octave, C/V velocity ({shortcut})"))
+                .on_hover_text(format!("A S D F… white keys, W E T… black keys, Z/X octave, C/V velocity, Tab sustain ({shortcut})"))
                 .changed()
             {
                 crate::musical_typing::set_capture(app, on);
             }
             ui.separator();
-            let octave = i32::from(app.typing.base / 12) - 1;
-            ui.label(egui::RichText::new(format!("Octave C{octave}")).small().color(t.text_dim));
-            ui.label(egui::RichText::new(format!("Velocity {}", app.typing.velocity)).small().color(t.text_dim));
+            // Octave: the note the A key plays, in the app's own names (middle C is C3).
+            ui.label(egui::RichText::new("Octave").small().color(t.text_dim));
+            // With computer keys on, each button shows the key that does the same.
+            let keys = app.typing.capture;
+            let label = |sign: &str, key: &str| if keys { format!("{sign} {key}") } else { sign.to_string() };
+            if ui.small_button(label("−", "Z")).on_hover_text("An octave down (Z)").clicked() {
+                crate::musical_typing::shift_octave(app, -1);
+            }
+            ui.label(egui::RichText::new(soundcraft_midi::note_name(app.typing.base)).monospace());
+            if ui.small_button(label("+", "X")).on_hover_text("An octave up (X)").clicked() {
+                crate::musical_typing::shift_octave(app, 1);
+            }
+            ui.separator();
+            ui.label(egui::RichText::new("Velocity").small().color(t.text_dim));
+            if ui.small_button(label("−", "C")).on_hover_text("Softer (C)").clicked() {
+                crate::musical_typing::shift_velocity(app, -1);
+            }
+            ui.label(egui::RichText::new(format!("{:>3}", app.typing.velocity)).monospace());
+            if ui.small_button(label("+", "V")).on_hover_text("Harder (V)").clicked() {
+                crate::musical_typing::shift_velocity(app, 1);
+            }
+            ui.separator();
+            let down = app.typing.sustain;
+            if ui
+                .add(egui::Button::selectable(down, if keys { "Sustain · Tab" } else { "Sustain" }))
+                .on_hover_text("The sustain pedal (MIDI CC 64): click to hold it down or lift it; with computer keys on, hold Tab")
+                .clicked()
+            {
+                crate::musical_typing::set_sustain(app, !down);
+            }
         });
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(400.0), 80.0), Sense::click_and_drag());
         let whites = 28;
@@ -388,9 +415,19 @@ fn midi_keyboard(app: &mut SoundApp, ctx: &egui::Context) {
             "Play: arm an instrument track on MIDI: All Inputs (or Musical Typing) and play; Record records it."
         };
         ui.label(egui::RichText::new(hint).small());
+        // The computer keys, spelled out (not only in tooltips).
+        let keys_hint = if app.typing.capture {
+            "Computer keys: A S D F G H J K L ; white keys, W E T Y U O P black keys · Z X octave · C V velocity · Tab sustain (held)".to_string()
+        } else {
+            let shortcut = crate::menus::shortcut_text(app, "ui.musical_typing", ui.ctx().os() == egui::os::OperatingSystem::Mac);
+            format!("Tick Computer keys ({shortcut}) to play from your computer keyboard.")
+        };
+        ui.label(egui::RichText::new(keys_hint).small().color(t.text_dim));
     });
     if !open {
+        // Closed: the keys it played go back to their shortcuts.
         crate::musical_typing::release_all(app);
+        crate::musical_typing::set_capture(app, false);
     }
     app.ui.show_midi_keyboard = open;
 }

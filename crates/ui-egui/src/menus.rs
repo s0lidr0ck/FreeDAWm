@@ -53,9 +53,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.task_manager", "Task Manager", "Window > Task Manager", Some("Alt+'")),
     ("window.metadata", "Metadata Inspector", "Window > Metadata Inspector", None),
     ("window.event_list", "MIDI Event List", "Window > MIDI Event List", Some("Alt+=")),
-    ("window.midi_keyboard", "MIDI Keyboard", "Window > MIDI Keyboard", Some("Shift+K")),
+    ("window.midi_keyboard", "Musical Typing", "Window > Musical Typing", Some("Shift+K")),
     // Ctrl+Shift+K is Export Clips as Files (Cmd+Shift+K) off macOS, so computer keys take Cmd+Alt+K.
-    ("ui.musical_typing", "Musical Typing (Computer Keys)", "", Some("Cmd+Alt+K")),
+    ("ui.musical_typing", "Computer Keys Play Notes", "", Some("Cmd+Alt+K")),
     ("window.workspace", "Workspace", "Window > New Workspace > Default", Some("Alt+I")),
     ("window.workspace_presets", "Workspace", "Window > New Workspace > Track Presets", None),
     ("window.workspace_sounds", "Workspace", "Window > New Workspace > Soundbase", None),
@@ -1284,7 +1284,16 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.task_manager" => toggle(&mut app.ui.show_task_manager),
         "window.metadata" => toggle(&mut app.ui.show_metadata),
         "window.event_list" => toggle(&mut app.ui.show_event_list),
-        "window.midi_keyboard" => toggle(&mut app.ui.show_midi_keyboard),
+        // Musical Typing opens ready to play: the computer keys on with the window, off with it.
+        "window.midi_keyboard" => {
+            let open = !app.ui.show_midi_keyboard;
+            app.ui.show_midi_keyboard = open;
+            crate::musical_typing::set_capture(app, open);
+            if !open {
+                crate::musical_typing::release_all(app);
+            }
+            json!({"value": open})
+        }
         "window.workspace" | "window.workspace_presets" | "window.workspace_sounds" | "window.workspace_front" => {
             app.ui.show_workspace = true;
             json!({"value": true})

@@ -878,7 +878,7 @@ unplugged port closes, one plugged back in reopens if enabled.
 | `ui.musical_typing` | `{value?: bool}` | Musical Typing's computer keys (Cmd+Alt+K, Ctrl+Alt+K off macOS): A S D F G H J K L ; play the white keys from C, W E T Y U O P the black keys, Z/X an octave down/up, C/V velocity down/up; while on, those keys don't run shortcuts. Toggles without `value`. Returns `{value}`. |
 | `window.midi_editor_separate` | `{value?: bool}` | Window › MIDI Editor in Separate Window (also the editor's Window/Dock button): the MIDI Editor in its own resizable window, remembered in `ui.json` (`midi_editor.separate`, `midi_editor.window`); closing that window docks it back. Toggles without `value`. Returns `{value}`. |
 
-**Musical Typing.** Window › MIDI Keyboard's keys and the computer keys are a port of their own,
+**Musical Typing.** Window › Musical Typing's keys and the computer keys are a port of their own,
 "Musical Typing" (`track.input {input: "midi:Musical Typing"}`, or All Inputs). The window's
 Play / Step switch: Play sends the keys live, Step enters notes into the selected MIDI clip at the
 insertion point.

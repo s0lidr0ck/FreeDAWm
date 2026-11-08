@@ -67,6 +67,16 @@ pub fn specs() -> Vec<CommandSpec> {
             settings
         ),
         cmd!("pattern.reroll", "Re-roll Pattern", [], None, "{clip} -> {seed}: draws every chance again", always, reroll),
+        cmd!(query "pattern.grooves", "List Grooves", [], None, "{} -> {styles: [{name, family, kit, grooves: [name]}]}: Juke's styles and their starter grooves", always, grooves),
+        cmd!(
+            "pattern.groove",
+            "Use Groove",
+            [],
+            None,
+            "{clip? | track?, style, groove?: name or number from 1 (default 1)} -> {clip, style, groove}: a style's starter groove as the pattern clip's lanes and steps (its steps per bar and shuffle too). With `track` and no `clip`: the track's pattern clip at the insertion point, else its first, else a new 2-bar one there",
+            always,
+            groove
+        ),
         cmd!(
             "pattern.to_midi",
             "Convert Pattern to MIDI",
@@ -369,6 +379,57 @@ fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let out = pat.clone();
     Ok(json!({"pattern": out}))
+}
+
+fn grooves(_e: &mut Engine, _p: &Value) -> Result<Value> {
+    let styles: Vec<Value> = crate::juke_styles::STYLES
+        .iter()
+        .map(|s| json!({"name": s.name, "family": s.family, "kit": s.kit, "grooves": s.grooves.iter().map(|g| g.name).collect::<Vec<_>>()}))
+        .collect();
+    Ok(json!({"styles": styles}))
+}
+
+/// The pattern clip `track` plays at `at`, else its first pattern clip.
+pub(crate) fn track_pattern_clip(e: &Engine, track: TrackId, at: Samples) -> Option<ClipId> {
+    let t = e.session().track(track)?;
+    let patterns = || t.clips().iter().filter(|c| c.pattern.is_some());
+    patterns().find(|c| c.range().contains(at)).or_else(|| patterns().next()).map(|c| c.id)
+}
+
+pub(crate) fn groove(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.groove";
+    let style_name = str_param(p, "style").ok_or_else(|| bad(id, "`style` required"))?;
+    let style = crate::juke_styles::find(style_name).ok_or_else(|| {
+        let names: Vec<&str> = crate::juke_styles::STYLES.iter().map(|s| s.name).collect();
+        bad(id, format!("`style` must be one of: {}", names.join(", ")))
+    })?;
+    let which = match p.get("groove") {
+        None => "1".to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(v) => v.as_str().ok_or_else(|| bad(id, "`groove` must be a name or a number"))?.to_string(),
+    };
+    let g = style.groove(&which).ok_or_else(|| {
+        let names: Vec<&str> = style.grooves.iter().map(|g| g.name).collect();
+        bad(id, format!("{} has the grooves: {}", style.name, names.join(", ")))
+    })?;
+    let clip = match p.get("clip") {
+        Some(_) => clip_id(p, id)?,
+        None => {
+            let track = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "`clip` or `track` required"))?;
+            if !matches!(e.session().track(track).map(|t| t.kind), Some(TrackKind::Instrument | TrackKind::Midi)) {
+                return Err(bad(id, "patterns go on instrument and MIDI tracks"));
+            }
+            let at = e.session().edit.selection.start;
+            match track_pattern_clip(e, track, at) {
+                Some(c) => c,
+                None => place_pattern(e, track, at, 2, g.steps_per_bar, &[])?.0,
+            }
+        }
+    };
+    let pat = pattern_mut(e, clip, id)?;
+    let fresh = crate::juke_styles::pattern(g, pat.seed);
+    *pat = Pattern { accent: pat.accent, humanize: pat.humanize, fill_every: pat.fill_every, ..fresh };
+    Ok(json!({"clip": clip.0, "style": style.name, "groove": g.name}))
 }
 
 fn reroll(e: &mut Engine, p: &Value) -> Result<Value> {

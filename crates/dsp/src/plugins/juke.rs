@@ -38,7 +38,7 @@ pub const LAYERS: usize = 4;
 /// Round-robin variations per layer.
 pub const ROBINS: usize = 4;
 /// Parameters per pad (see [`PadParam`]).
-const K: usize = 33;
+const K: usize = 38;
 const VOICES: usize = 64;
 const MAX_PENDING: usize = 64;
 /// Envelopes below this are silent.
@@ -99,6 +99,11 @@ enum PadParam {
     Stack1Ms,
     Stack2,
     Stack2Ms,
+    Trim,
+    HumLevel,
+    HumPitch,
+    HumFilter,
+    HumTiming,
 }
 
 // Kit-wide parameters, after the pads.
@@ -146,6 +151,13 @@ macro_rules! juke_table {
                 lin(concat!("p", $n, "_stack1_ms"), concat!("Pad ", $n, " Stack 1 Delay"), 0.0, 50.0, 0.0, Unit::Ms),
                 choice(concat!("p", $n, "_stack2"), concat!("Pad ", $n, " Stack 2"), &STACKS, 0),
                 lin(concat!("p", $n, "_stack2_ms"), concat!("Pad ", $n, " Stack 2 Delay"), 0.0, 50.0, 0.0, Unit::Ms),
+                // A kit's balance between its pads (a recorded kit sets it), under the fader.
+                lin(concat!("p", $n, "_trim"), concat!("Pad ", $n, " Trim"), -24.0, 24.0, 0.0, Unit::Db),
+                // The pad's own humanize, per hit: level up or down, pitch, cutoff, and up to this late.
+                lin(concat!("p", $n, "_hum_level"), concat!("Pad ", $n, " Humanize Level"), 0.0, 6.0, 0.0, Unit::Db),
+                lin(concat!("p", $n, "_hum_pitch"), concat!("Pad ", $n, " Humanize Pitch"), 0.0, 50.0, 0.0, Unit::Cents),
+                lin(concat!("p", $n, "_hum_filter"), concat!("Pad ", $n, " Humanize Filter"), 0.0, 100.0, 0.0, Unit::Percent),
+                lin(concat!("p", $n, "_hum_timing"), concat!("Pad ", $n, " Humanize Timing"), 0.0, 20.0, 0.0, Unit::Ms),
             )*
             lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
             lin("humanize", "Humanize", 0.0, 100.0, 0.0, Unit::Percent),
@@ -343,7 +355,8 @@ pub struct Juke {
     voices: [Voice; VOICES],
     events: EventQueue,
     /// Stacked hits waiting their delay: (samples left, pad, velocity).
-    pending: [(u32, usize, u8); MAX_PENDING],
+    /// Hits to come: (frames left, pad, velocity, with its stacks).
+    pending: [(u32, usize, u8, bool); MAX_PENDING],
     pending_len: usize,
     counter: u64,
     /// The next round-robin, per pad and velocity layer.
@@ -430,7 +443,7 @@ impl Juke {
             ch: 2,
             voices,
             events: EventQueue::new(),
-            pending: [(0, 0, 0); MAX_PENDING],
+            pending: [(0, 0, 0, false); MAX_PENDING],
             pending_len: 0,
             counter: 0,
             robin: [0; PADS * LAYERS],
@@ -510,12 +523,12 @@ impl Juke {
         (0..PADS).any(|pad| self.pv(pad, PadParam::Solo) >= 0.5)
     }
 
-    fn schedule(&mut self, delay: u32, pad: usize, vel: u8) {
+    fn schedule(&mut self, delay: u32, pad: usize, vel: u8, stacks: bool) {
         if delay == 0 {
-            self.trigger(pad, vel, false);
+            self.trigger(pad, vel, stacks);
         } else if let Some(slot) = self.pending.get_mut(self.pending_len) {
             // Counted down from the next frame on.
-            *slot = (delay, pad, vel);
+            *slot = (delay, pad, vel, stacks);
             self.pending_len += 1;
         }
     }
@@ -527,7 +540,10 @@ impl Juke {
         }
         for pad in 0..PADS {
             if self.pv(pad, PadParam::Note).round() as i32 == i32::from(note) {
-                self.trigger(pad, vel, true);
+                // The pad's timing humanize: up to its amount late.
+                let late = self.pv(pad, PadParam::HumTiming);
+                let delay = if late > 0.0 { ms_to_samples(late * (self.rng.bipolar() * 0.5 + 0.5), self.sr).max(0.0) as u32 } else { 0 };
+                self.schedule(delay, pad, vel, true);
             }
         }
     }
@@ -558,7 +574,7 @@ impl Juke {
                 let to = self.pc(pad, target);
                 if to > 0 && to - 1 != pad {
                     let delay = ms_to_samples(self.pv(pad, ms), sr).max(0.0) as u32;
-                    self.schedule(delay, to - 1, vel);
+                    self.schedule(delay, to - 1, vel, false);
                 }
             }
         }
@@ -587,20 +603,22 @@ impl Juke {
             (true, false) => (1.0, 0.0),
             _ => (0.0, 1.0),
         };
-        // Humanize: a little level and pitch per hit.
+        // Humanize: a little level and pitch per hit, kit-wide and the pad's own (and its cutoff).
         let h = self.p.v(G_HUMANIZE) / 100.0;
-        let hum_db = h * 2.0 * self.rng.bipolar();
-        let hum_cents = h * 20.0 * self.rng.bipolar();
+        let hum_db = h * 2.0 * self.rng.bipolar() + self.pv(pad, PadParam::HumLevel) * self.rng.bipolar();
+        let hum_cents = h * 20.0 * self.rng.bipolar() + self.pv(pad, PadParam::HumPitch) * self.rng.bipolar();
+        let hum_oct = self.pv(pad, PadParam::HumFilter) / 100.0 * self.rng.bipolar();
         let sens = self.pv(pad, PadParam::Velocity) / 100.0;
         let vel01 = f32::from(vel.min(127)) / 127.0;
-        let gain = db_to_gain(self.pv(pad, PadParam::Level) + hum_db) * (1.0 - sens + sens * vel01);
+        let gain = db_to_gain(self.pv(pad, PadParam::Level) + self.pv(pad, PadParam::Trim) + hum_db) * (1.0 - sens + sens * vel01);
         let pan = (self.pv(pad, PadParam::Pan) / 100.0).clamp(-1.0, 1.0);
         let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
         let semis = self.pv(pad, PadParam::Tune) + (self.pv(pad, PadParam::Fine) + hum_cents) / 100.0;
         let ratio = 2f32.powf(semis / 12.0);
         let voice_kind = self.pc(pad, PadParam::Voice);
         let (tone, snappy) = (self.pv(pad, PadParam::Tone) / 100.0, self.pv(pad, PadParam::Snappy) / 100.0);
-        let (filter, cutoff, reso) = (self.pc(pad, PadParam::Filter), self.pv(pad, PadParam::Cutoff), self.pv(pad, PadParam::Resonance) / 100.0);
+        let cutoff = (self.pv(pad, PadParam::Cutoff) * 2f32.powf(hum_oct)).clamp(20.0, 20_000.0);
+        let (filter, reso) = (self.pc(pad, PadParam::Filter), self.pv(pad, PadParam::Resonance) / 100.0);
         let reverse = self.pv(pad, PadParam::Reverse) >= 0.5;
         let step = match sample {
             Some((layer, robin)) => {
@@ -765,11 +783,11 @@ impl Juke {
             let due = match self.pending.get_mut(i) {
                 Some(slot) => {
                     slot.0 = slot.0.saturating_sub(1);
-                    (slot.0 == 0).then_some((slot.1, slot.2))
+                    (slot.0 == 0).then_some((slot.1, slot.2, slot.3))
                 }
                 None => None,
             };
-            if let Some((pad, vel)) = due {
+            if let Some((pad, vel, stacks)) = due {
                 // Remove by moving the last one in.
                 let last = self.pending_len - 1;
                 if let Some(&tail) = self.pending.get(last)
@@ -778,7 +796,7 @@ impl Juke {
                     *slot = tail;
                 }
                 self.pending_len = last;
-                self.trigger(pad, vel, false);
+                self.trigger(pad, vel, stacks);
             } else {
                 i += 1;
             }
@@ -1347,6 +1365,49 @@ mod tests {
         // Let the return's 20 ms glide settle before the hit.
         let wet = peak(&run(&mut j, 4900, &[(4800, 36, 127)]).0[4800..]);
         assert!((wet / dry - 2.0).abs() < 0.01, "dry plus a full send at unity: {}", wet / dry);
+    }
+
+    #[test]
+    fn a_pads_trim_adds_to_its_level() {
+        let hit = |trim: f32| {
+            let mut j = juke();
+            set(&mut j, "p1_source", 0.0);
+            set(&mut j, "p1_trim", trim);
+            assert!(j.set_asset("p1.v1.r1", Some(click(10, 1.0))));
+            peak(&run(&mut j, 100, &[(0, 36, 127)]).0)
+        };
+        let (flat, up) = (hit(0.0), hit(6.0206));
+        assert!((up / flat - 2.0).abs() < 0.01, "+6 dB of trim doubles the pad: {}", up / flat);
+    }
+
+    #[test]
+    fn a_pads_own_humanize_varies_its_hits_and_leaves_the_others() {
+        // Eight clicks on pad 1 (level and timing humanize) and on pad 2 (none).
+        let hits = |pad_note: u8, hum: bool| {
+            let mut j = juke();
+            for p in ["p1", "p2"] {
+                set(&mut j, &format!("{p}_source"), 0.0);
+                assert!(j.set_asset(&format!("{p}.v1.r1"), Some(click(10, 1.0))));
+            }
+            if hum {
+                set(&mut j, "p1_hum_level", 6.0);
+                set(&mut j, "p1_hum_timing", 10.0);
+            }
+            let events: Vec<_> = (0..8).map(|k| (k * 4800, pad_note, 127)).collect();
+            let out = run(&mut j, 8 * 4800, &events).0;
+            let peaks: Vec<f32> = (0..8).map(|k| peak(&out[k * 4800..(k + 1) * 4800])).collect();
+            let late: Vec<usize> = (0..8).map(|k| onsets(&out[k * 4800..(k + 1) * 4800], 0.01).first().copied().unwrap_or(0)).collect();
+            (peaks, late)
+        };
+        let (flat, on_time) = hits(36, false);
+        assert!(flat.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-6), "no humanize: every hit alike");
+        assert!(on_time.iter().all(|&l| l == 0));
+        let (varied, late) = hits(36, true);
+        assert!(varied.iter().any(|p| (p - flat[0]).abs() > 0.05), "level humanize varies the hits: {varied:?}");
+        assert!(late.iter().any(|&l| l > 0) && late.iter().all(|&l| l <= 480 + 1), "up to 10 ms late: {late:?}");
+        // Pad 2 has none of pad 1's.
+        let (other, other_late) = hits(37, true);
+        assert!(other.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-6) && other_late.iter().all(|&l| l == 0));
     }
 
     #[test]
