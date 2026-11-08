@@ -316,7 +316,8 @@ fn randomize_presets_and_save_preset_work_from_the_top_bar() {
     let ins = h.state().engine.session().track(t).and_then(|t| t.instrument.clone()).unwrap();
     assert_eq!(ins.kit.as_ref().map(|k| k.name.as_str()), Some("Analog 909"));
     assert_eq!(ins.params.get("p1_decay"), Some(&450.0));
-    assert_eq!(ins.kit_fx.len(), 2);
+    let library_fx = soundcraft_engine::juke_presets::find("Analog 909").and_then(|p| p.fx.as_ref()).map_or(0, Vec::len);
+    assert_eq!(ins.kit_fx.len(), library_fx);
     // Recorded presets say they need a download until the kit is installed.
     h.get_by_label("Presets").click();
     h.run_steps(2);

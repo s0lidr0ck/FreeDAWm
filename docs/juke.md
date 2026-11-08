@@ -145,6 +145,14 @@ Instrument parameters go through the existing `mix.instrument_param`.
 
 ### 5. UI (`crates/ui-egui`)
 
+As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
+
+![The Steps view](images/juke/steps.png)
+![A step's details](images/juke/step-popover.png)
+![The pad editor](images/juke/pad-editor.png)
+![The Presets menu](images/juke/presets-menu.png)
+
+
 - **Juke window, kit view** (the instrument window for `juke`; look approved by the owner,
   2026-11-06, from the mockup canvas):
   - **Pads as channel strips:** a 3-column grid of pad cards (9 showing, scrolling to 16). Each
