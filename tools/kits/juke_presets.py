@@ -546,9 +546,9 @@ preset("Grunge", "Rock", "Fat, low snare and a dirty room, through a fuzz", "Alt
        every={"drive": 10}, kit={"return_a": -5},
        effects=[room(20, 26, 12, "Painted Concrete", "Painted Concrete", "Drywall", 0.9, drive=30), grit(6, 4, 4), comp("1176", 60, 70, 25, 30, 3, slot=2)],
        demo=("Alternative", "Straight 8ths"))
-preset("Surf Spring", "Rock", "Bright and splashy, drowned in spring", "'60s Rock",
+preset("Surf Spring", "Rock", "Bright and splashy, mono, drowned in spring", "'60s Rock",
        {"snare": {"send_a": 40}, "tom_hi": {"send_a": 35}, "tom_mid": {"send_a": 35}, "tom_lo": {"send_a": 35}},
-       every={"send_a": 20}, kit={"return_a": -4}, spread=False,
+       every={"send_a": 20, "pan": 0}, kit={"return_a": -4}, spread=False,
        effects=[reverb("Spring", 2.2, 50, 0, 200, 6000, 5000), tape("Two-Track", "15 ips", 13, 10)],
        demo=("'60s Rock", "Surf"))
 preset("Arena Synth Rock", "Rock", "Hard Rock's kit in a big hall with hot tape on the bus", "Hard Rock",
