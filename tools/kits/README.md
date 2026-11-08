@@ -46,7 +46,15 @@ FREEDAWM_TEST_KITS_DIR=<folder with the three recorded kits> FREEDAWM_PRESET_REP
 python3 -I tools/kits/juke_presets.py --levels target/presets/report.json
 ```
 
-The test renders every preset playing one groove and reports its gated loudness, peak, balance and
+The test renders every preset playing its own demo groove (`demo` in the preset: a style and groove
+from `juke_styles.rs`, four bars and a tail) and reports its gated loudness, peak, balance and
 brightness; `--levels` moves each preset's kit level to the library's loudness (-26 dB gated, peaks
 under -1 dBFS) and keeps the levels in `juke_preset_levels.json`. A CI test holds the presets that
 need no recorded kit to that level.
+
+The effect drives in the generator were calibrated by rendering one kit dry and through each
+effect, then comparing octave-band energies and crest factor (a time-domain null is useless here:
+the plugins add latency and phase shift). Tape is heard as tape from about 0.6 of its drive range
+(+12 dB) upward: the crest factor falls from 21 to 12 dB, the lows and low-mids swell and the top
+rolls off. Saturation needs about 0.8 (+18 dB) before it adds harmonics. Vint's Console circuit at
+a few dB is a gentle EQ; the Passive, British, Sampler, Air and Enhancer circuits change the sound.

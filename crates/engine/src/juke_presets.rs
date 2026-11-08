@@ -21,6 +21,15 @@ pub struct Borrow {
     pub pad: usize,
 }
 
+/// The groove a preset is shown off with: a style from `juke_styles` and one of its grooves (its
+/// first when `groove` is empty). The preset renders (`tools/kits/`) and any "hear it" button use it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Demo {
+    pub style: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub groove: String,
+}
+
 /// A preset.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Preset {
@@ -49,6 +58,9 @@ pub struct Preset {
     /// absent: the source's are kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fx: Option<Vec<Value>>,
+    /// The groove it is demonstrated with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demo: Option<Demo>,
     /// A saved preset: every Juke parameter.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, f32>,
@@ -134,6 +146,9 @@ mod tests {
         assert_eq!(names.len(), lib.len(), "names are unique");
         for p in lib {
             assert!(!p.category.is_empty(), "{}", p.name);
+            let demo = p.demo.as_ref().unwrap_or_else(|| panic!("{}: no demo groove", p.name));
+            let style = crate::juke_styles::find(&demo.style).unwrap_or_else(|| panic!("{}: no style {}", p.name, demo.style));
+            assert!(demo.groove.is_empty() || style.groove(&demo.groove).is_some(), "{}: no groove {} in {}", p.name, demo.groove, demo.style);
             if !p.source.is_empty() && crate::juke_kits::find(&p.source).is_none() {
                 assert!(p.source.starts_with("sm_drums"), "{}: source {}", p.name, p.source);
             }

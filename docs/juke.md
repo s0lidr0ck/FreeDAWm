@@ -268,8 +268,9 @@ bus effects with their settings. `mix.kit_preset {preset | path}` loads one as o
 `mix.kit_preset_save` writes the kit as a preset file: every parameter and effect, samples from
 installed recorded kits named (`kit:<id>/<file>`) and any other sample copied beside it. The Juke
 window's **Presets** menu lists the built-in presets (101 since the second pass: designed pad by
-pad with full effect chains by `tools/kits/juke_presets.py`, rendered, measured and levelled to one
-loudness) in seven categories (Acoustic on the recorded
+pad with full effect chains by `tools/kits/juke_presets.py`, each with a `demo` groove from the
+styles, rendered, measured and levelled to one loudness; the tape, saturation and Vint circuits at
+drives calibrated to be heard) in seven categories (Acoustic on the recorded
 kits, Rock, Pop & Folk, Church, Hip-Hop, Electronic, Drum Machines) and **My Presets**; **Save
 preset** saves the kit under its name. A preset whose recorded kit is missing is marked "(download)"
 and says which kit to get.

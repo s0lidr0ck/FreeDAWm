@@ -1482,8 +1482,9 @@ mod tests {
         wav: Vec<u8>,
     }
 
-    /// Loads `preset` on a new beat and renders the test groove (two bars of kick, snare with a
-    /// ghost note, eighth hats, an open hat, crash, ride and a tom fill, then a bar of tail).
+    /// Loads `preset` on a new beat and renders its demo groove (four bars, then a bar of tail);
+    /// without one, a fixed two-bar groove: kick, snare with a ghost note, eighth hats, an open hat,
+    /// crash, ride and a tom fill.
     fn measure_preset(preset: &crate::juke_presets::Preset, kits: Option<&Path>, d: &Path) -> Measured {
         let (mut e, t) = beat();
         let mut p = json!({"track": t.0, "preset": preset.name});
@@ -1493,39 +1494,51 @@ mod tests {
         e.execute("mix.kit_preset", &p).unwrap_or_else(|err| panic!("{}: {err}", preset.name));
         let s = e.session();
         let bar = s.tempo.tick_to_samples(4 * soundcraft_midi::PPQ as i64, s.sample_rate);
-        let v = e.execute("pattern.new", &json!({"track": t.0, "bars": 2, "start": 4 * bar, "lanes": [36, 38, 42, 46, 49, 51, 50, 41]})).unwrap();
+        let bars = if preset.demo.is_some() { 4 } else { 2 };
+        let v = e.execute("pattern.new", &json!({"track": t.0, "bars": bars, "start": 4 * bar, "lanes": [36, 38, 42, 46, 49, 51, 50, 41]})).unwrap();
         let clip = v["clip"].as_u64().unwrap();
-        for lane in 0..8 {
-            e.execute("pattern.lane", &json!({"clip": clip, "lane": lane, "length": 32})).unwrap();
-        }
-        let mut hit = |lane: usize, step: usize, vel: u8| {
-            e.execute("pattern.step", &json!({"clip": clip, "lane": lane, "step": step, "on": true, "velocity": vel})).unwrap();
-        };
-        for s in [0, 6, 8, 16, 22, 24] {
-            hit(0, s, 115);
-        }
-        for s in [4, 12, 20, 28] {
-            hit(1, s, 112);
-        }
-        hit(1, 15, 38);
-        for s in (0..32).step_by(2).filter(|s| *s != 14 && *s < 24) {
-            hit(2, s, if s % 4 == 0 { 92 } else { 64 });
-        }
-        hit(3, 14, 90);
-        hit(4, 0, 110);
-        for s in [24, 26] {
-            hit(5, s, 85);
-        }
-        for s in [28, 29] {
-            hit(6, s, 100);
-        }
-        for s in [30, 31] {
-            hit(7, s, 105);
+        if let Some(demo) = &preset.demo {
+            let mut g = json!({"clip": clip, "style": demo.style});
+            if !demo.groove.is_empty() {
+                g["groove"] = json!(demo.groove);
+            }
+            e.execute("pattern.groove", &g).unwrap_or_else(|err| panic!("{}: {err}", preset.name));
+        } else {
+            for lane in 0..8 {
+                e.execute("pattern.lane", &json!({"clip": clip, "lane": lane, "length": 32})).unwrap();
+            }
+            let mut hit = |lane: usize, step: usize, vel: u8| {
+                e.execute("pattern.step", &json!({"clip": clip, "lane": lane, "step": step, "on": true, "velocity": vel})).unwrap();
+            };
+            for s in [0, 6, 8, 16, 22, 24] {
+                hit(0, s, 115);
+            }
+            for s in [4, 12, 20, 28] {
+                hit(1, s, 112);
+            }
+            hit(1, 15, 38);
+            for s in (0..32).step_by(2).filter(|s| *s != 14 && *s < 24) {
+                hit(2, s, if s % 4 == 0 { 92 } else { 64 });
+            }
+            hit(3, 14, 90);
+            hit(4, 0, 110);
+            for s in [24, 26] {
+                hit(5, s, 85);
+            }
+            for s in [28, 29] {
+                hit(6, s, 100);
+            }
+            for s in [30, 31] {
+                hit(7, s, 105);
+            }
         }
         let level = juke(&e, t).params.get("level").copied().unwrap_or(-6.0);
         let out = d.join(format!("{}.wav", preset.name.replace(['/', ' ', '\'', '&'], "_")));
-        e.execute("file.bounce_mix", &json!({"path": out.to_string_lossy(), "start": 4 * bar, "end": 7 * bar, "bit_depth": "32f", "dither": false}))
-            .unwrap();
+        e.execute(
+            "file.bounce_mix",
+            &json!({"path": out.to_string_lossy(), "start": 4 * bar, "end": (5 + bars) * bar, "bit_depth": "32f", "dither": false}),
+        )
+        .unwrap();
         let wav = std::fs::read(&out).unwrap();
         let _ = std::fs::remove_file(&out);
         let (_, buf) = soundcraft_audio_io::decode(&wav, Some("wav")).unwrap();
