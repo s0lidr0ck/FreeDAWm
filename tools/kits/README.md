@@ -33,3 +33,20 @@ with a 20 ms fade, and writes `kit.json`. The result is 256 takes, about 216 MB 
 `.github/workflows/kits.yml` does all of this for each kit on GitHub Actions (download, build, pack, check) and
 creates or updates the `kits-v1` release; run it from Actions › Kits, or merge a change here
 into `main`.
+
+## Juke's presets
+
+`juke_presets.py` writes the built-in preset library (`crates/engine/src/juke_presets.json`): each
+preset designed pad by pad (roles such as snare, rim, ride or floor tom, mapped to each kit's pads)
+with its bus effects in real units. Levels are measured, not guessed:
+
+```sh
+FREEDAWM_TEST_KITS_DIR=<folder with the three recorded kits> FREEDAWM_PRESET_REPORT=target/presets \
+  cargo test -p soundcraft-engine --lib -- --ignored measure_every_preset   # FREEDAWM_PRESET_WAVS=1 keeps the renders
+python3 -I tools/kits/juke_presets.py --levels target/presets/report.json
+```
+
+The test renders every preset playing one groove and reports its gated loudness, peak, balance and
+brightness; `--levels` moves each preset's kit level to the library's loudness (-26 dB gated, peaks
+under -1 dBFS) and keeps the levels in `juke_preset_levels.json`. A CI test holds the presets that
+need no recorded kit to that level.
