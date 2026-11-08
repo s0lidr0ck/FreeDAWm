@@ -162,6 +162,9 @@ struct Out {
     /// Save the kit as a preset in the presets folder.
     #[cfg(not(target_arch = "wasm32"))]
     save_preset: bool,
+    /// Write the kit to a folder the user picks.
+    #[cfg(not(target_arch = "wasm32"))]
+    export_kit: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -360,6 +363,23 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
         }
         if out.save_preset {
             save_preset(app, tid);
+        }
+        if out.export_kit
+            && let Some(pick) = &app.services.pick_folder
+            && let Some(dir) = pick("mix.kit_save")
+        {
+            let name = app
+                .engine
+                .session()
+                .track(tid)
+                .and_then(|t| t.instrument.as_ref())
+                .and_then(|i| i.kit.as_ref())
+                .map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
+            let path = std::path::Path::new(&dir).join(saved_kit_id(&name).trim_start_matches("my_"));
+            match app.run("mix.kit_save", json!({"track": tid.0, "path": path.to_string_lossy()})) {
+                Ok(_) => app.ui.status = format!("Exported {name} to {}", path.display()),
+                Err(e) => app.ui.status = e,
+            }
         }
     }
     if let Some(t) = out.tab {
@@ -981,6 +1001,11 @@ fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, o
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
     ui.label(egui::RichText::new("Recorded & saved").strong());
+    if ui.button("Export Kit Folder…").on_hover_text("Write the kit (samples as WAVs, every setting, bus effects) to a folder, to share it").clicked()
+    {
+        out.export_kit = true;
+        ui.close();
+    }
     // Each kit as recorded, or with a character laid over it.
     for (name, path) in &v.installed {
         let shown = if current == name || current.starts_with(&format!("{name} · ")) { format!("{name} ✓") } else { name.clone() };
