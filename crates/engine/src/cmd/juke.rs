@@ -630,7 +630,7 @@ fn kit_save(e: &mut Engine, p: &Value) -> Result<Value> {
     let dir = Path::new(dir);
     let s = e.session();
     let ins = s.track(t).and_then(|tr| tr.instrument.as_ref()).ok_or_else(|| bad(id, "no instrument"))?;
-    std::fs::create_dir_all(dir).map_err(|err| EngineError::Io(format!("{}: {err}", dir.display())))?;
+    crate::io::make_dir(dir)?;
     let name = ins.kit.as_ref().map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
     let mut pads = Vec::new();
     let mut written = 0;
@@ -652,7 +652,7 @@ fn kit_save(e: &mut Engine, p: &Value) -> Result<Value> {
                 )
                 .map_err(|err| EngineError::Io(format!("pad {}: {err}", pad + 1)))?;
                 let file = format!("p{}_v{}_r{}.wav", pad + 1, layer + 1, robin + 1);
-                std::fs::write(dir.join(&file), bytes).map_err(|err| EngineError::Io(format!("{file}: {err}")))?;
+                crate::io::write_file(&dir.join(&file).to_string_lossy(), &bytes)?;
                 samples.insert(format!("v{}.r{}", layer + 1, robin + 1), json!(file));
                 written += 1;
             }
@@ -673,7 +673,7 @@ fn kit_save(e: &mut Engine, p: &Value) -> Result<Value> {
         .collect();
     let kit = json!({"name": name, "license": "", "credit": "", "pads": pads, "params": ins.params, "fx": fx});
     let text = serde_json::to_string_pretty(&kit).map_err(|err| EngineError::Io(err.to_string()))?;
-    std::fs::write(dir.join("kit.json"), text).map_err(|err| EngineError::Io(format!("kit.json: {err}")))?;
+    crate::io::write_file(&dir.join("kit.json").to_string_lossy(), text.as_bytes())?;
     Ok(json!({"path": dir.to_string_lossy(), "samples": written, "name": name}))
 }
 
