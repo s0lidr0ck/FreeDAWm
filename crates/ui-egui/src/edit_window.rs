@@ -1476,9 +1476,8 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
                 let name =
                     track.instrument.as_ref().and_then(|i| crate::mix_window::plugin_info(&i.plugin)).map_or("no instrument", |p| p.short_name);
                 ui.painter().with_clip_rect(field).text(pos2(field.min.x + 5.0, field.center().y), Align2::LEFT_CENTER, name, bold(10.0), t.text);
-                egui::Popup::menu(&resp.on_hover_text("Instrument"))
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| crate::mix_window::instrument_menu(app, ui, id));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Instrument"));
+                crate::mix_window::instrument_click(app, &resp, id);
             } else {
                 let c = pos2(field.min.x + 7.0, field.center().y);
                 ui.painter().line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 1.0)], Stroke::new(1.0, t.text));
@@ -3197,7 +3196,8 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         let _ = app.run("automation.set_point", json!({"track": track.id.0, "param": automation_id(param), "at": at, "value": value}));
         return;
     }
-    // A double-click selects the clip; on a MIDI clip it opens the MIDI Editor with any tool.
+    // A double-click selects the clip; on a MIDI clip it opens the MIDI Editor with any tool, on
+    // a Juke pattern clip the Juke window's Steps view (where patterns are edited).
     if resp.double_clicked()
         && !pitch_claimed
         && curve_handle.is_none()
@@ -3208,7 +3208,9 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         if eff != Tool::Pencil || midi {
             let _ = app.run("edit.select", json!({"clips": [c.id.0]}));
         }
-        if midi {
+        if midi && c.pattern.is_some() {
+            crate::juke_window::show_steps(app, track.id, Some(c.id));
+        } else if midi {
             app.ui.show_midi_editor = true;
         }
     }

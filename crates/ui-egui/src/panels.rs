@@ -4,7 +4,7 @@ use crate::SoundApp;
 use crate::theme::{Tokens, bold, mono, regular, rgb};
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
-use soundcraft_model::{ClipId, SourceId};
+use soundcraft_model::{ClipId, SourceId, TrackId};
 
 /// Drag a Tracks list row to reorder the tracks: a line marks the gap it will land in. Rows are
 /// counted as the list shows them (a closed folder's members left out), then mapped back to the
@@ -558,10 +558,7 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }) else {
             continue;
         };
-        let read_only = format!("`{tname}` is frozen. {}", soundcraft_engine::cmd::UNFREEZE_TO_EDIT);
-        let module = ins.id;
         let hosted = soundcraft_mix::is_third_party(&ins.plugin);
-        let sampler = instrument && ins.plugin == crate::sampler_window::SAMPLER;
         // A hosted plugin not described (yet) still gets its window, for its editor and picture.
         let info = crate::mix_window::plugin_info(&ins.plugin);
         if info.is_none() && !hosted {
@@ -569,181 +566,306 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }
         let name = crate::chain_view::plugin_name(&ins.plugin);
         let place = if instrument { "instrument".to_string() } else { format!("{}", pos + 1) };
-        let mut open = true;
-        let wid = egui::Id::new(("plugin", tid.0, key));
-        let screen = ctx.content_rect();
-        let anchor = ctx.data(|d| d.get_temp::<egui::Pos2>(egui::Id::new(("plugin-anchor", tid.0, key))));
-        let start = match anchor {
-            Some(_) => window_place(anchor, vec2(356.0, 320.0), screen).min,
-            None => egui::pos2(screen.width() - 380.0, 120.0),
-        };
         let juke = instrument && ins.plugin == crate::juke_window::JUKE && info.is_some();
-        let mut window = egui::Window::new(format!("{tname} · {place} · {name}"))
-            .id(wid)
-            .open(&mut open)
-            .default_width(if sampler { crate::sampler_window::EDITOR_WIDTH } else { 340.0 })
-            .max_height((screen.height() - 48.0).max(120.0))
-            .constrain(true);
-        if juke {
-            let size = crate::juke_window::WINDOW_SIZE.min(screen.size() - vec2(24.0, 48.0));
-            window = window.default_size(size).resizable(true);
-        }
-        // Always wholly on screen, also a remembered position that no longer is (spec 2026-11-02
-        // item 6).
-        window = match back_on_screen(ctx, wid, screen) {
-            Some(p) => window.current_pos(p),
-            None => window.default_pos(start),
+        let sampler = instrument && ins.plugin == crate::sampler_window::SAMPLER;
+        let view = PluginView { tid, key, ins: &ins, info, frozen, tname: &tname, name: &name, hosted, juke, sampler };
+        let open = if app.ui.detached_plugins.contains(&(tid, key)) {
+            detached_plugin_window(app, ctx, &view)
+        } else {
+            docked_plugin_window(app, ctx, &view, &place)
         };
-        let shown = window.show(ctx, |ui| {
-            if juke {
-                crate::juke_window::draw(app, ui, tid, &ins, frozen);
-                if frozen {
-                    ui.label(egui::RichText::new(read_only.as_str()).color(Tokens::current().text_dim));
-                }
-                return;
-            }
-            ui.horizontal(|ui| {
-                // Bypass and presets act on insert slots.
-                if !instrument && let Some(info) = info {
-                    ui.label(egui::RichText::new(&ins.preset).color(Tokens::current().text_dim));
-                    let label = if ins.bypass { "BYPASSED" } else { "Bypass" };
-                    if ui.button(label).clicked() {
-                        let _ = app.run("mix.module_bypass", json!({"track": tid.0, "module": module.0}));
-                    }
-                    ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, module, info, &ins));
-                }
-                if hosted {
-                    let open = app.player.as_ref().is_some_and(|p| p.editor_open(tid, key));
-                    let available = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
-                    let label = if open { "Close Plugin Editor" } else { "Open Plugin Editor" };
-                    let resp = ui.add_enabled(available, egui::Button::new(label));
-                    let resp =
-                        if available { resp } else { resp.on_disabled_hover_text("This plugin has no editor of its own, or it is not loaded") };
-                    if resp.clicked()
-                        && let Some(p) = &app.player
-                    {
-                        if open {
-                            p.close_editor(tid, key);
-                        } else if let Err(e) = p.open_editor(tid, key) {
-                            app.ui.status = format!("{name}: {e}");
-                        }
-                    }
-                    let can = crate::browser::thumbs::can_capture_now(app, (tid, key));
-                    let resp = ui.add_enabled(can, egui::Button::new("Capture Thumbnail Now"));
-                    let resp = resp
-                        .on_hover_text("Take the plugin browser's picture of this plugin from its open editor, now")
-                        .on_disabled_hover_text("Open the plugin's editor first");
-                    if resp.clicked() {
-                        crate::browser::thumbs::capture_now(app, (tid, key));
-                    }
-                }
-            });
-            let Some(info) = info.filter(|_| !(instrument && hosted)) else {
-                // A hosted instrument keeps its sounds and settings in its own editor.
-                let loaded = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
-                let note = if info.is_none() && !loaded {
-                    "This plugin is not installed on this computer, or it is not loaded."
-                } else if instrument {
-                    "Load and edit sounds in the plugin's own editor."
-                } else {
-                    "Edit this plugin in its own editor."
-                };
-                ui.label(egui::RichText::new(note).color(Tokens::current().text_dim));
-                return;
-            };
-            if instrument && ins.plugin == crate::sampler_window::SAMPLER {
-                if frozen {
-                    ui.disable();
-                }
-                let r = ui.scope(|ui| crate::sampler_window::editor(app, ui, tid, &ins)).response;
-                if frozen {
-                    r.on_disabled_hover_text(read_only.as_str());
-                }
-                return;
-            }
-            if info.id == "eq_7band" || info.id == "eq_1band" {
-                eq_curve(ui, info.id, &ins);
-            }
-            // What the drawer offers, by the drawer's names (a FireStation engine's own
-            // bypass and a model's unused switches are not here).
-            let params = crate::module_drawer::window_params(&ins, info);
-            let grid = egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new(("pg", tid.0, key)).num_columns(3).show(ui, |ui| {
-                    if frozen {
-                        ui.disable();
-                    }
-                    for p in params {
-                        let v = ins.params.get(p.id).copied().unwrap_or(p.default);
-                        ui.label(crate::module_drawer::dial_name(&ins, p.id).unwrap_or(p.name));
-                        let mut x = v;
-                        let choices = crate::module_drawer::choice_names(&ins, p);
-                        let resp = if !choices.is_empty() {
-                            let mut idx = x.round().max(0.0) as usize;
-                            let r = egui::ComboBox::from_id_salt(("pc", tid.0, key, p.id))
-                                .selected_text(choices.get(idx).copied().unwrap_or("?"))
-                                .show_ui(ui, |ui| {
-                                    for (i, c) in choices.iter().enumerate() {
-                                        ui.selectable_value(&mut idx, i, *c);
-                                    }
-                                });
-                            x = idx as f32;
-                            r.response
-                        } else {
-                            let mut sl = egui::Slider::new(&mut x, p.min..=p.max).show_value(false);
-                            if instrument && crate::sampler_window::whole_number(&ins.plugin, p.id) {
-                                sl = sl.integer();
-                            }
-                            if p.taper == soundcraft_dsp::Taper::Log && p.min > 0.0 {
-                                sl = sl.logarithmic(true);
-                            }
-                            ui.add(sl)
-                        };
-                        if (x - v).abs() > f32::EPSILON && instrument {
-                            // A refusal (the track is frozen) shows in the status line.
-                            if let Err(e) = app.engine.execute_merged(
-                                "mix.instrument_param",
-                                &json!({"track": tid.0, "param": p.id, "value": x}),
-                                &format!("instrument_param:{}:{}", tid.0, p.id),
-                            ) {
-                                app.ui.status = e.to_string();
-                            }
-                        } else if (x - v).abs() > f32::EPSILON {
-                            let _ = app.engine.execute_merged(
-                                "mix.module_param",
-                                &json!({"track": tid.0, "module": module.0, "param": p.id, "value": x}),
-                                &format!("modparam:{}:{}:{}", tid.0, module.0, p.id),
-                            );
-                            if let Some(pl) = &app.player {
-                                // Keep the plugin's own editor in step.
-                                pl.editor_set_param(tid, key, p.id, x);
-                            }
-                        }
-                        let _ = resp;
-                        let shown = if instrument {
-                            crate::sampler_window::format_param(&ins.plugin, p, x)
-                        } else {
-                            app.player.as_ref().and_then(|pl| pl.editor_value_text(tid, key, p.id, x)).unwrap_or_else(|| p.format(x))
-                        };
-                        ui.label(egui::RichText::new(shown).font(mono(11.0)));
-                        ui.end_row();
-                    }
-                })
-            });
-            if frozen {
-                grid.inner.response.on_disabled_hover_text(read_only.as_str());
-            }
-        });
-        if let Some(w) = shown
-            && instrument
-            && ins.plugin == crate::sampler_window::SAMPLER
-        {
-            crate::sampler_window::drop_target(app, ctx, w.response.rect, tid);
-        }
         if open {
             keep.push((tid, key));
         }
     }
     app.ui.plugin_windows = keep;
+}
+
+/// What a plugin window shows: a slot's plugin, with what it is.
+struct PluginView<'a> {
+    tid: TrackId,
+    key: soundcraft_mix::SlotKey,
+    ins: &'a soundcraft_model::Insert,
+    info: Option<&'static soundcraft_dsp::PluginInfo>,
+    frozen: bool,
+    tname: &'a str,
+    name: &'a str,
+    hosted: bool,
+    /// The Juke drum machine's own window.
+    juke: bool,
+    /// The Lift sampler's own editor.
+    sampler: bool,
+}
+
+/// The default size of a plugin's window: Juke's, the sampler editor's, or a parameter list's.
+fn plugin_window_size(v: &PluginView) -> egui::Vec2 {
+    if v.juke {
+        crate::juke_window::WINDOW_SIZE
+    } else if v.sampler {
+        vec2(crate::sampler_window::EDITOR_WIDTH + 24.0, 640.0)
+    } else {
+        vec2(380.0, 520.0)
+    }
+}
+
+/// A plugin window inside the main (or Mix) window. Returns whether it stays open.
+fn docked_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginView, place: &str) -> bool {
+    let (tid, key) = (v.tid, v.key);
+    let mut open = true;
+    let wid = egui::Id::new(("plugin", tid.0, key));
+    let screen = ctx.content_rect();
+    let anchor = ctx.data(|d| d.get_temp::<egui::Pos2>(egui::Id::new(("plugin-anchor", tid.0, key))));
+    let start = match anchor {
+        Some(_) => window_place(anchor, vec2(356.0, 320.0), screen).min,
+        None => egui::pos2(screen.width() - 380.0, 120.0),
+    };
+    let mut window = egui::Window::new(format!("{} · {place} · {}", v.tname, v.name))
+        .id(wid)
+        .open(&mut open)
+        .default_width(if v.sampler { crate::sampler_window::EDITOR_WIDTH } else { 340.0 })
+        .max_height((screen.height() - 48.0).max(120.0))
+        .constrain(true);
+    if v.juke {
+        let size = (crate::juke_window::WINDOW_SIZE + vec2(0.0, DETACH_BAR_H)).min(screen.size() - vec2(24.0, 48.0));
+        window = window.default_size(size).resizable(true);
+    }
+    // Always wholly on screen, also a remembered position that no longer is (spec 2026-11-02
+    // item 6).
+    window = match back_on_screen(ctx, wid, screen) {
+        Some(p) => window.current_pos(p),
+        None => window.default_pos(start),
+    };
+    let shown = window.show(ctx, |ui| {
+        detach_bar(app, ui, v, false);
+        plugin_contents(app, ui, v);
+    });
+    if let Some(w) = shown
+        && v.sampler
+    {
+        crate::sampler_window::drop_target(app, ctx, w.response.rect, tid);
+    }
+    open
+}
+
+/// The height of the row with the Detach (or Dock) button over a plugin window's contents.
+const DETACH_BAR_H: f32 = 22.0;
+
+/// The row over a plugin window's contents: Detach (in the main window) or Dock (in its own).
+fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
+    let key = (v.tid, v.key);
+    ui.horizontal(|ui| {
+        ui.set_height(DETACH_BAR_H - 6.0);
+        if detached {
+            let r = ui.small_button("⇲ Dock").on_hover_text("Put this window back inside the main window");
+            if r.clicked() {
+                app.ui.detached_plugins.retain(|k| *k != key);
+            }
+        } else {
+            let r = ui
+                .small_button("⇱ Detach")
+                .on_hover_text("Move this window out of the main window, into a window of its own that you can put anywhere (another screen too)");
+            if r.clicked() && !app.ui.detached_plugins.contains(&key) {
+                app.ui.detached_plugins.push(key);
+            }
+        }
+        ui.label(egui::RichText::new(format!("{} · {}", v.tname, v.name)).color(Tokens::current().text_dim).small());
+    });
+}
+
+/// The viewport of a detached plugin window.
+pub fn plugin_viewport(tid: TrackId, key: soundcraft_mix::SlotKey) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("soundcraft.plugin", tid.0, key))
+}
+
+/// A plugin window in a native window of its own (a backend without windows embeds it). Its
+/// place and size are remembered per plugin. Closing it closes the plugin window; the plugin
+/// stays detached, so the window comes back out when opened again. Returns whether it stays open.
+fn detached_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginView) -> bool {
+    let (tid, key) = (v.tid, v.key);
+    let title = format!("{} · {}", v.tname, v.name);
+    let mut builder = egui::ViewportBuilder::default().with_title(title).with_resizable(true).with_min_inner_size([320.0, 200.0]);
+    let remembered = app.ui.plugin_window_rects.get(&v.ins.plugin).copied();
+    match remembered.filter(|r| r.iter().all(|x| x.is_finite()) && r[2] >= 200.0 && r[3] >= 120.0) {
+        Some([x, y, w, h]) => builder = builder.with_position([x, y]).with_inner_size([w, h]),
+        None => builder = builder.with_inner_size(plugin_window_size(v) + vec2(0.0, DETACH_BAR_H)),
+    }
+    let mut open = true;
+    ctx.show_viewport_immediate(plugin_viewport(tid, key), builder, |ui, _class| {
+        ui.set_style(ui.ctx().global_style());
+        let own = ui.ctx().viewport_id() != egui::ViewportId::ROOT;
+        if own {
+            // Its keys: transport, undo, save… work from here too.
+            crate::shortcuts::handle(app, ui.ctx());
+            let info = ui.ctx().input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
+            if let (Some(outer), Some(inner)) = info {
+                app.ui.plugin_window_rects.insert(v.ins.plugin.clone(), [outer.min.x, outer.min.y, inner.width(), inner.height()]);
+            }
+        }
+        let full = ui.max_rect();
+        ui.painter().rect_filled(full, 0.0, ui.visuals().panel_fill);
+        let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(full.shrink(6.0)));
+        detach_bar(app, &mut inner, v, true);
+        egui::ScrollArea::both().auto_shrink([false, false]).show(&mut inner, |ui| {
+            plugin_contents(app, ui, v);
+        });
+        if v.sampler {
+            crate::sampler_window::drop_target(app, ui.ctx(), full, tid);
+        }
+        if own {
+            // Files dropped on this window (the sampler's or Juke's cells).
+            let _ = app.take_dropped_files(ui.ctx());
+        }
+        if ui.ctx().input(|i| i.viewport().close_requested()) {
+            open = false;
+        }
+    });
+    open
+}
+
+/// A plugin window's contents: Juke's window, the sampler editor, a hosted plugin's buttons or
+/// the generic parameter list.
+fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
+    let PluginView { tid, key, ins, info, frozen, tname, name, hosted, juke, .. } = *v;
+    let instrument = key == soundcraft_mix::SlotKey::Instrument;
+    let read_only = format!("`{tname}` is frozen. {}", soundcraft_engine::cmd::UNFREEZE_TO_EDIT);
+    let module = ins.id;
+    if juke {
+        crate::juke_window::draw(app, ui, tid, ins, frozen);
+        if frozen {
+            ui.label(egui::RichText::new(read_only.as_str()).color(Tokens::current().text_dim));
+        }
+        return;
+    }
+    ui.horizontal(|ui| {
+        // Bypass and presets act on insert slots.
+        if !instrument && let Some(info) = info {
+            ui.label(egui::RichText::new(&ins.preset).color(Tokens::current().text_dim));
+            let label = if ins.bypass { "BYPASSED" } else { "Bypass" };
+            if ui.button(label).clicked() {
+                let _ = app.run("mix.module_bypass", json!({"track": tid.0, "module": module.0}));
+            }
+            ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, module, info, ins));
+        }
+        if hosted {
+            let open = app.player.as_ref().is_some_and(|p| p.editor_open(tid, key));
+            let available = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
+            let label = if open { "Close Plugin Editor" } else { "Open Plugin Editor" };
+            let resp = ui.add_enabled(available, egui::Button::new(label));
+            let resp = if available { resp } else { resp.on_disabled_hover_text("This plugin has no editor of its own, or it is not loaded") };
+            if resp.clicked()
+                && let Some(p) = &app.player
+            {
+                if open {
+                    p.close_editor(tid, key);
+                } else if let Err(e) = p.open_editor(tid, key) {
+                    app.ui.status = format!("{name}: {e}");
+                }
+            }
+            let can = crate::browser::thumbs::can_capture_now(app, (tid, key));
+            let resp = ui.add_enabled(can, egui::Button::new("Capture Thumbnail Now"));
+            let resp = resp
+                .on_hover_text("Take the plugin browser's picture of this plugin from its open editor, now")
+                .on_disabled_hover_text("Open the plugin's editor first");
+            if resp.clicked() {
+                crate::browser::thumbs::capture_now(app, (tid, key));
+            }
+        }
+    });
+    let Some(info) = info.filter(|_| !(instrument && hosted)) else {
+        // A hosted instrument keeps its sounds and settings in its own editor.
+        let loaded = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
+        let note = if info.is_none() && !loaded {
+            "This plugin is not installed on this computer, or it is not loaded."
+        } else if instrument {
+            "Load and edit sounds in the plugin's own editor."
+        } else {
+            "Edit this plugin in its own editor."
+        };
+        ui.label(egui::RichText::new(note).color(Tokens::current().text_dim));
+        return;
+    };
+    if instrument && ins.plugin == crate::sampler_window::SAMPLER {
+        if frozen {
+            ui.disable();
+        }
+        let r = ui.scope(|ui| crate::sampler_window::editor(app, ui, tid, ins)).response;
+        if frozen {
+            r.on_disabled_hover_text(read_only.as_str());
+        }
+        return;
+    }
+    if info.id == "eq_7band" || info.id == "eq_1band" {
+        eq_curve(ui, info.id, ins);
+    }
+    // What the drawer offers, by the drawer's names (a FireStation engine's own
+    // bypass and a model's unused switches are not here).
+    let params = crate::module_drawer::window_params(ins, info);
+    let grid = egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new(("pg", tid.0, key)).num_columns(3).show(ui, |ui| {
+            if frozen {
+                ui.disable();
+            }
+            for p in params {
+                let v = ins.params.get(p.id).copied().unwrap_or(p.default);
+                ui.label(crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name));
+                let mut x = v;
+                let choices = crate::module_drawer::choice_names(ins, p);
+                let resp = if !choices.is_empty() {
+                    let mut idx = x.round().max(0.0) as usize;
+                    let r = egui::ComboBox::from_id_salt(("pc", tid.0, key, p.id)).selected_text(choices.get(idx).copied().unwrap_or("?")).show_ui(
+                        ui,
+                        |ui| {
+                            for (i, c) in choices.iter().enumerate() {
+                                ui.selectable_value(&mut idx, i, *c);
+                            }
+                        },
+                    );
+                    x = idx as f32;
+                    r.response
+                } else {
+                    let mut sl = egui::Slider::new(&mut x, p.min..=p.max).show_value(false);
+                    if instrument && crate::sampler_window::whole_number(&ins.plugin, p.id) {
+                        sl = sl.integer();
+                    }
+                    if p.taper == soundcraft_dsp::Taper::Log && p.min > 0.0 {
+                        sl = sl.logarithmic(true);
+                    }
+                    ui.add(sl)
+                };
+                if (x - v).abs() > f32::EPSILON && instrument {
+                    // A refusal (the track is frozen) shows in the status line.
+                    if let Err(e) = app.engine.execute_merged(
+                        "mix.instrument_param",
+                        &json!({"track": tid.0, "param": p.id, "value": x}),
+                        &format!("instrument_param:{}:{}", tid.0, p.id),
+                    ) {
+                        app.ui.status = e.to_string();
+                    }
+                } else if (x - v).abs() > f32::EPSILON {
+                    let _ = app.engine.execute_merged(
+                        "mix.module_param",
+                        &json!({"track": tid.0, "module": module.0, "param": p.id, "value": x}),
+                        &format!("modparam:{}:{}:{}", tid.0, module.0, p.id),
+                    );
+                    if let Some(pl) = &app.player {
+                        // Keep the plugin's own editor in step.
+                        pl.editor_set_param(tid, key, p.id, x);
+                    }
+                }
+                let _ = resp;
+                let shown = if instrument {
+                    crate::sampler_window::format_param(&ins.plugin, p, x)
+                } else {
+                    app.player.as_ref().and_then(|pl| pl.editor_value_text(tid, key, p.id, x)).unwrap_or_else(|| p.format(x))
+                };
+                ui.label(egui::RichText::new(shown).font(mono(11.0)));
+                ui.end_row();
+            }
+        })
+    });
+    if frozen {
+        grid.inner.response.on_disabled_hover_text(read_only.as_str());
+    }
 }
 
 fn eq_curve(ui: &mut Ui, id: &str, ins: &soundcraft_model::Insert) {

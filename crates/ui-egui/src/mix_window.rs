@@ -885,13 +885,12 @@ fn below_chain_height(app: &SoundApp, track: &Track, views: &[String], inner_w: 
     h + 22.0 + 26.0 + 64.0
 }
 
-/// An instrument track's INSTRUMENT row: click opens a hosted instrument's own editor (else its
-/// generic window), right-click (or click, when none is set) picks another instrument and offers
-/// "Show Parameters…" and "Capture Thumbnail Now". A built-in's parameters
-/// open from that menu. Dropping an audio file on it loads the sampler.
+/// An instrument track's INSTRUMENT row: click opens the instrument (see [`instrument_click`]),
+/// right-click (or click, when none is set) picks another instrument and offers
+/// "Show Parameters…" and "Capture Thumbnail Now". Dropping an audio file on it loads the sampler.
 pub(crate) fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r: Rect) {
     let t = Tokens::current();
-    let (id, slot) = (track.id, soundcraft_mix::SlotKey::Instrument);
+    let id = track.id;
     let ins = track.instrument.as_ref();
     let info = ins.and_then(|i| plugin_info(&i.plugin));
     let resp = ui.interact(r, ui.id().with(("instrument", id.0)), Sense::click());
@@ -900,15 +899,7 @@ pub(crate) fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r:
         Some(info) => used_slot(ui.painter(), r, t.slot_face, Mark::Dot, info.short_name, t.text, None),
         None => empty_slot(ui.painter(), r, resp.hovered(), Mark::Dot),
     }
-    let hosted = ins.is_some_and(|i| soundcraft_mix::is_third_party(&i.plugin));
-    if resp.clicked() && hosted {
-        crate::chain_view::open_hosted(app, id, slot);
-    }
-    let menu_resp =
-        if hosted { resp.clone().on_hover_text("Click: open instrument · right-click: change, parameters, thumbnail") } else { resp.clone() };
-    let popup = if hosted { egui::Popup::context_menu(&menu_resp) } else { egui::Popup::menu(&menu_resp) };
-    let popup = popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    popup.show(|ui| instrument_menu(app, ui, id));
+    instrument_click(app, &resp, id);
     crate::sampler_window::drop_target(app, ui.ctx(), r, id);
     crate::browser::drop::target(app, ui, r, crate::browser::drop::DropTarget::InstrumentSlot(id));
 }
@@ -1261,6 +1252,30 @@ pub(crate) fn replace_module(app: &mut SoundApp, track: TrackId, old: ModuleId, 
         app.ui.drawers.remove(&track);
     }
     r.map_err(|e| e.to_string())
+}
+
+/// What clicking an instrument track's instrument (its Mix slot, its Edit window field) does:
+/// opens the instrument itself, a hosted one's own editor (else its generic window), a built-in's
+/// window (Juke, Lift, the parameters of the others). The picker with every instrument is on
+/// right-click, or on click while the track has no instrument.
+pub(crate) fn instrument_click(app: &mut SoundApp, resp: &egui::Response, id: TrackId) {
+    let slot = soundcraft_mix::SlotKey::Instrument;
+    let has = app
+        .engine
+        .session()
+        .track(id)
+        .and_then(|t| t.instrument.as_ref())
+        .is_some_and(|i| soundcraft_mix::is_third_party(&i.plugin) || plugin_info(&i.plugin).is_some());
+    if resp.clicked() && has {
+        crate::chain_view::open_hosted(app, id, slot);
+    }
+    let menu_resp = if has {
+        resp.clone().on_hover_text("Click: open the instrument · right-click: change it, parameters, thumbnail")
+    } else {
+        resp.clone().on_hover_text("Instrument")
+    };
+    let popup = if has { egui::Popup::context_menu(&menu_resp) } else { egui::Popup::menu(&menu_resp) };
+    popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| instrument_menu(app, ui, id));
 }
 
 /// The instrument picker of an instrument track: a search field that takes typing at once, then
