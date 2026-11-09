@@ -147,7 +147,7 @@ fn build_input<T>(
     config: &cpal::StreamConfig,
     capture: &Arc<Capture>,
     feed: &Arc<InputFeed>,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
@@ -161,12 +161,12 @@ where
     let chunk = scratch.len();
     crate::guarded_build(move || {
         device.build_input_stream(
-            config,
+            *config,
             move |data: &[T], info: &cpal::InputCallbackInfo| {
                 crate::mark_audio_thread();
                 // The reported input latency: from capture until this callback.
                 let at = info.timestamp();
-                if let Some(d) = at.callback.duration_since(&at.capture) {
+                if let Some(d) = at.callback.checked_duration_since(at.capture) {
                     feed.set_input_latency(d);
                 }
                 sh.guarded(|| {
@@ -182,7 +182,7 @@ where
             move |e| {
                 // Possibly the audio thread (see `crate::mark_audio_thread`).
                 crate::mark_audio_thread();
-                if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
                     let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
                 }
                 log::warn!("input stream error: {e}");
@@ -218,17 +218,16 @@ pub(crate) fn build_input_stream(
 ) -> Result<InputStream, String> {
     use cpal::traits::DeviceTrait;
     // On JACK the stream goes by the device it is connected to (see `jack`).
-    #[allow(deprecated)]
-    let name = route.map(|r| r.group.name.clone()).unwrap_or_else(|| device.name().unwrap_or_else(|_| "Input".into()));
+    let name = route.map(|r| r.group.name.clone()).unwrap_or_else(|| device.description().map_or_else(|_| "Input".into(), |d| d.name().to_string()));
     // At the chosen rate when the device offers it, so input and output run together: the
     // best format first, then the most channels.
     let at_rate = rate.and_then(|r| {
         device
             .supported_input_configs()
             .ok()?
-            .filter(|c| crate::devices::format_rank(c.sample_format()).is_some() && c.min_sample_rate().0 <= r && c.max_sample_rate().0 >= r)
+            .filter(|c| crate::devices::format_rank(c.sample_format()).is_some() && c.min_sample_rate() <= r && c.max_sample_rate() >= r)
             .min_by_key(|c| (crate::devices::format_rank(c.sample_format()), std::cmp::Reverse(c.channels())))
-            .map(|c| c.with_sample_rate(cpal::SampleRate(r)))
+            .map(|c| c.with_sample_rate(r))
     });
     let cfg = match at_rate {
         Some(c) => c,
@@ -244,7 +243,7 @@ pub(crate) fn build_input_stream(
         config.channels = r.channels();
     }
     let channels = usize::from(config.channels).max(1);
-    let feed = make_feed(channels, config.sample_rate.0);
+    let feed = make_feed(channels, config.sample_rate);
     let capture = Capture::for_rate(session_rate, channels);
     let build = |config: &cpal::StreamConfig| match format {
         cpal::SampleFormat::I32 => build_input::<i32>(device, config, &capture, &feed),
@@ -261,7 +260,7 @@ pub(crate) fn build_input_stream(
         }
         Err(e) => return Err(e.to_string()),
     };
-    Ok(InputStream { stream, feed, capture, name, rate: config.sample_rate.0, channels })
+    Ok(InputStream { stream, feed, capture, name, rate: config.sample_rate, channels })
 }
 
 #[cfg(target_os = "freebsd")]

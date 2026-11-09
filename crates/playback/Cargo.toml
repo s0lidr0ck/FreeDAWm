@@ -20,7 +20,7 @@ serde.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpal.workspace = true
 # Hardware MIDI input ports (WinMM on Windows, CoreMIDI, ALSA): see `midi_in`.
-midir = "0.10"
+midir = "0.11"
 # The ASIO driver's own latency figures (only with the `asio` feature).
 soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio"] }
 

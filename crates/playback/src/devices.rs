@@ -64,21 +64,49 @@ pub struct AudioSystem {
     pub inputs: Vec<DeviceInfo>,
 }
 
-#[allow(deprecated)]
-fn device_name(d: &cpal::Device) -> Option<String> {
-    d.name().ok()
+/// Names for devices whose systems give them `(name, driver id)`: the name, with the driver id
+/// after it ("HDA Intel PCH (hw:CARD=PCH,DEV=0)") when another device has the same name. ALSA
+/// lists each variant of a card (`hw:`, `plughw:`, `front:`…) under the card's name.
+pub(crate) fn unique_names(items: &[(String, Option<String>)]) -> Vec<String> {
+    items
+        .iter()
+        .map(|(name, driver)| match driver {
+            Some(d) if items.iter().filter(|(n, _)| n == name).count() > 1 && d != name => format!("{name} ({d})"),
+            _ => name.clone(),
+        })
+        .collect()
 }
 
-fn describe(d: &cpal::Device, default_name: Option<&str>, output: bool) -> Option<DeviceInfo> {
-    let name = device_name(d)?;
+/// `host`'s output (or input) devices under the names FreeDAWm shows and stores (see
+/// [`unique_names`]).
+pub(crate) fn named_devices(host: &cpal::Host, output: bool) -> Vec<(String, cpal::Device)> {
+    let devices: Vec<cpal::Device> = if output { host.output_devices().ok() } else { host.input_devices().ok() }.into_iter().flatten().collect();
+    let described: Vec<(cpal::Device, (String, Option<String>))> = devices
+        .into_iter()
+        .filter_map(|d| {
+            let desc = d.description().ok()?;
+            let named = (desc.name().to_string(), desc.driver().map(str::to_string));
+            Some((d, named))
+        })
+        .collect();
+    let names = unique_names(&described.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>());
+    names.into_iter().zip(described.into_iter().map(|(d, _)| d)).collect()
+}
+
+/// The name FreeDAWm gives `d`, one of `host`'s output (or input) devices.
+pub(crate) fn device_name(host: &cpal::Host, d: &cpal::Device, output: bool) -> Option<String> {
+    named_devices(host, output).into_iter().find(|(_, x)| x == d).map(|(n, _)| n).or_else(|| d.description().ok().map(|x| x.name().to_string()))
+}
+
+fn describe(name: String, d: &cpal::Device, default: Option<&cpal::Device>, output: bool) -> Option<DeviceInfo> {
+    let is_default = default == Some(d);
     let ranges: Vec<cpal::SupportedStreamConfigRange> = if output {
         d.supported_output_configs().ok()?.filter(|c| format_rank(c.sample_format()).is_some()).collect()
     } else {
         d.supported_input_configs().ok()?.filter(|c| format_rank(c.sample_format()).is_some()).collect()
     };
     let max_channels = ranges.iter().map(cpal::SupportedStreamConfigRange::channels).max().unwrap_or(0);
-    let sample_rates =
-        STANDARD_RATES.iter().copied().filter(|r| ranges.iter().any(|c| c.min_sample_rate().0 <= *r && c.max_sample_rate().0 >= *r)).collect();
+    let sample_rates = STANDARD_RATES.iter().copied().filter(|r| ranges.iter().any(|c| c.contains_rate(*r))).collect();
     let (mut buffer_min, mut buffer_max) = (None::<u32>, None::<u32>);
     for c in &ranges {
         if let cpal::SupportedBufferSize::Range { min, max } = c.buffer_size() {
@@ -86,7 +114,7 @@ fn describe(d: &cpal::Device, default_name: Option<&str>, output: bool) -> Optio
             buffer_max = Some(buffer_max.map_or(*max, |m| m.max(*max)));
         }
     }
-    Some(DeviceInfo { is_default: default_name == Some(name.as_str()), name, max_channels, sample_rates, buffer_min, buffer_max })
+    Some(DeviceInfo { is_default, name, max_channels, sample_rates, buffer_min, buffer_max })
 }
 
 /// The device a [`crate::Player`] has open, as [`audio_systems_with`] needs it.
@@ -133,10 +161,9 @@ pub fn audio_systems_with(live: Option<&LiveDevice>) -> Vec<AudioSystem> {
                 return crate::jack::probe().map(|s| jack_system(&s, is_default));
             }
             let host = cpal::host_from_id(id).ok()?;
-            let def_out = host.default_output_device().as_ref().and_then(device_name);
-            let def_in = host.default_input_device().as_ref().and_then(device_name);
-            let outputs = host.output_devices().map(|ds| ds.filter_map(|d| describe(&d, def_out.as_deref(), true)).collect()).unwrap_or_default();
-            let inputs = host.input_devices().map(|ds| ds.filter_map(|d| describe(&d, def_in.as_deref(), false)).collect()).unwrap_or_default();
+            let (def_out, def_in) = (host.default_output_device(), host.default_input_device());
+            let outputs = named_devices(&host, true).into_iter().filter_map(|(n, d)| describe(n, &d, def_out.as_ref(), true)).collect();
+            let inputs = named_devices(&host, false).into_iter().filter_map(|(n, d)| describe(n, &d, def_in.as_ref(), false)).collect();
             Some(AudioSystem { name: id.name().to_string(), is_default, outputs, inputs })
         })
         .collect()
@@ -227,7 +254,7 @@ pub(crate) fn input_device_name(host: &cpal::Host, name: Option<&str>) -> Option
     if crate::jack::is_jack(host.id().name()) {
         return crate::jack::probe().and_then(|s| crate::jack::pick(&s.sources, name).map(|g| g.name.clone()));
     }
-    device(host, name, false).as_ref().and_then(device_name)
+    device(host, name, false).and_then(|d| device_name(host, &d, false))
 }
 
 /// The per-machine record offset's key (see the UI's preferences): `"{system}|{device}|{buffer}|{rate}"`,
@@ -263,8 +290,7 @@ pub(crate) fn device(host: &cpal::Host, name: Option<&str>, output: bool) -> Opt
         return if output { host.default_output_device() } else { host.default_input_device() };
     }
     if let Some(want) = name {
-        let found = if output { host.output_devices().ok() } else { host.input_devices().ok() }
-            .and_then(|mut ds| ds.find(|d| device_name(d).as_deref() == Some(want)));
+        let found = named_device(host, want, output);
         if found.is_some() {
             return found;
         }
@@ -281,8 +307,7 @@ pub(crate) fn named_device(host: &cpal::Host, name: &str, output: bool) -> Optio
         let groups = if output { &server.sinks } else { &server.sources };
         return groups.iter().any(|g| g.name == name).then(|| device(host, None, output)).flatten();
     }
-    if output { host.output_devices().ok() } else { host.input_devices().ok() }
-        .and_then(|mut ds| ds.find(|d| device_name(d).as_deref() == Some(name)))
+    named_devices(host, output).into_iter().find(|(n, _)| n == name).map(|(_, d)| d)
 }
 
 /// The buffer to request: the chosen size when the device's range allows it, else the default.
@@ -374,8 +399,20 @@ mod tests {
         assert_eq!(host(&cfg).id(), cpal::default_host().id());
         // No device with this name exists: the default (or none, on a machine without audio).
         let h = cpal::default_host();
-        let fallback = device(&h, Some("No Such Device 1234"), true).as_ref().and_then(device_name);
-        assert_eq!(fallback, h.default_output_device().as_ref().and_then(device_name));
+        let fallback = device(&h, Some("No Such Device 1234"), true);
+        assert_eq!(fallback, h.default_output_device());
+    }
+
+    #[test]
+    fn devices_sharing_a_name_are_told_apart_by_their_driver_id() {
+        let item = |n: &str, d: Option<&str>| (n.to_string(), d.map(str::to_string));
+        let names = unique_names(&[
+            item("HDA Intel PCH", Some("hw:CARD=PCH,DEV=0")),
+            item("HDA Intel PCH", Some("plughw:CARD=PCH,DEV=0")),
+            item("Speakers (Realtek)", Some("Speakers (Realtek)")),
+            item("default", None),
+        ]);
+        assert_eq!(names, ["HDA Intel PCH (hw:CARD=PCH,DEV=0)", "HDA Intel PCH (plughw:CARD=PCH,DEV=0)", "Speakers (Realtek)", "default"]);
     }
 
     #[test]

@@ -22,6 +22,11 @@ pub const SYSTEM: &str = "JACK";
 /// JACK's audio port type.
 const AUDIO: &str = "32 bit float mono audio";
 
+/// The JACK client cpal names a stream of this process: `cpal_client_<pid>_out` (or `_in`).
+pub(crate) fn cpal_client(output: bool) -> String {
+    format!("cpal_client_{}_{}", std::process::id(), if output { "out" } else { "in" })
+}
+
 /// Whether `system` names JACK.
 pub(crate) fn is_jack(system: &str) -> bool {
     system.eq_ignore_ascii_case(SYSTEM)

@@ -1920,14 +1920,14 @@ impl Player {
                 let duplex_device = if asio { Some(&device) } else { named_input.as_ref() };
                 let input_route = named_input.as_ref().and_then(|d| jack_input_route(&host, d, cfg.input.as_deref()));
                 // The chosen buffer size first; if the device refuses it, its default.
-                let mut attempts = vec![config.clone()];
+                let mut attempts = vec![config];
                 if config.buffer_size != cpal::BufferSize::Default {
                     attempts.push(cpal::StreamConfig { buffer_size: cpal::BufferSize::Default, ..config });
                 }
                 let opened = first_started(
                     attempts,
-                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::BuildStreamError> {
-                        let rate = config.sample_rate.0;
+                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::Error> {
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let max_block = max_block_of(config);
                         let (tx, rx) = channel();
@@ -1972,7 +1972,7 @@ impl Player {
                         }
                         // The streams run, so the driver's buffers exist: its latency is valid now.
                         let driver_latency = if asio { asio_driver_latency() } else { None };
-                        let rate = config.sample_rate.0;
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let buffer = match config.buffer_size {
                             cpal::BufferSize::Fixed(n) => Some(n),
@@ -2967,20 +2967,18 @@ fn duplex_input(
         cpal::BufferSize::Fixed(n) => Some(n),
         cpal::BufferSize::Default => None,
     };
-    record::build_input_stream(device, Some(output.sample_rate.0), buffer, session_rate, route, |ch, rate| {
+    record::build_input_stream(device, Some(output.sample_rate), buffer, session_rate, route, |ch, rate| {
         duplex_feed(asio, ch, rate, session_rate, max_block)
     })
 }
 
 /// On JACK, the route for an input stream on `device` (cpal's one input) to the device named
 /// `want` (else the first); `None` elsewhere.
-pub(crate) fn jack_input_route(host: &cpal::Host, device: &cpal::Device, want: Option<&str>) -> Option<jack::Route> {
+pub(crate) fn jack_input_route(host: &cpal::Host, _device: &cpal::Device, want: Option<&str>) -> Option<jack::Route> {
     if !jack::is_jack(host.id().name()) {
         return None;
     }
-    #[allow(deprecated)]
-    let cpal_name = cpal::traits::DeviceTrait::name(device).ok()?;
-    jack::Route::prepare(&cpal_name, want, false)
+    jack::Route::prepare(&jack::cpal_client(false), want, false)
 }
 
 /// Build and start the attempts in order; the first that builds and starts wins. A build error or
@@ -3010,7 +3008,7 @@ fn build_output<T>(
     channels: usize,
     fault: &Arc<Fault>,
     shared: &Arc<Shared>,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
@@ -3020,10 +3018,10 @@ where
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
     #[cfg(not(target_arch = "wasm32"))]
-    let (rate, mut timing) = (f64::from(config.sample_rate.0), Timing::new(config.buffer_size));
+    let (rate, mut timing) = (f64::from(config.sample_rate), Timing::new(config.buffer_size));
     guarded_build(move || {
         device.build_output_stream(
-            config,
+            *config,
             move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
                 mark_audio_thread();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -3037,7 +3035,7 @@ where
                 }
                 // The reported output latency: from this callback until its audio plays.
                 let at = info.timestamp();
-                if let Some(d) = at.playback.duration_since(&at.callback) {
+                if let Some(d) = at.playback.checked_duration_since(at.callback) {
                     guard.out_latency_ns.store(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -3045,9 +3043,9 @@ where
             },
             // cpal may call this on the audio thread (on ALSA in a loop while the device stays
             // broken): marked, so the logger hands the record off instead of writing it.
-            move |e: cpal::StreamError| {
+            move |e: cpal::Error| {
                 mark_audio_thread();
-                if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
                     gone.gone.store(true, Ordering::Relaxed);
                 }
                 log::warn!("audio stream error: {e}");
@@ -3059,12 +3057,10 @@ where
 
 /// Builds a stream, a panic inside the backend reported as a build error (cpal's JACK host
 /// unwraps the client's activation): the caller falls back as for any device that will not open.
-pub(crate) fn guarded_build(build: impl FnOnce() -> Result<cpal::Stream, cpal::BuildStreamError>) -> Result<cpal::Stream, cpal::BuildStreamError> {
+pub(crate) fn guarded_build(build: impl FnOnce() -> Result<cpal::Stream, cpal::Error>) -> Result<cpal::Stream, cpal::Error> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(build)).unwrap_or_else(|p| {
         let description = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
-        Err(cpal::BuildStreamError::BackendSpecific {
-            err: cpal::BackendSpecificError { description: format!("the audio backend failed: {description}") },
-        })
+        Err(cpal::Error::with_message(cpal::ErrorKind::BackendError, format!("the audio backend failed: {description}")))
     })
 }
 
@@ -3115,7 +3111,7 @@ impl Timing {
         self.next = (self.next + 1) % RECENT;
         let period = self.period();
         let origin = *self.origin.get_or_insert(at);
-        let now = at.duration_since(&origin);
+        let now = at.checked_duration_since(origin);
         let gapped = matches!((self.expected, now), (Some(expected), Some(now)) if gap(expected, now, period, rate));
         if late(elapsed, period, rate) || gapped {
             shared.underruns.fetch_add(1, Ordering::Relaxed);
@@ -3141,11 +3137,10 @@ fn open_device(
     use cpal::traits::DeviceTrait;
     let host = devices::host(cfg);
     let device = devices::device(&host, cfg.output.as_deref(), true).ok_or_else(|| "no output device".to_string())?;
-    #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Audio device".into());
+    let name = devices::device_name(&host, &device, true).unwrap_or_else(|| "Audio device".into());
     // On JACK the stream is cpal's one output, connected to the chosen device once it runs; it
     // goes by that device's name.
-    let route = jack::is_jack(host.id().name()).then(|| jack::Route::prepare(&name, cfg.output.as_deref(), true)).flatten();
+    let route = jack::is_jack(host.id().name()).then(|| jack::Route::prepare(&jack::cpal_client(true), cfg.output.as_deref(), true)).flatten();
     let name = route.as_ref().map_or(name, |r| r.group.name.clone());
     // Prefer a config at the chosen (else session) rate; else the device default (we resample).
     let rates: Vec<u32> = cfg.sample_rate.into_iter().chain(Some(want_rate)).collect();
@@ -3160,13 +3155,13 @@ fn open_device(
         for rate in rates {
             for c in &configs {
                 if devices::format_rank(c.sample_format()).is_some()
-                    && c.min_sample_rate().0 <= rate
-                    && c.max_sample_rate().0 >= rate
+                    && c.min_sample_rate() <= rate
+                    && c.max_sample_rate() >= rate
                     && c.channels() >= 2
                     && usize::from(c.channels()) <= MAX_DEVICE_CHANNELS
                     && chosen.as_ref().is_none_or(|x| better(c, x))
                 {
-                    chosen = Some((c.with_sample_rate(cpal::SampleRate(rate)).config(), *c.buffer_size(), c.sample_format()));
+                    chosen = Some((c.with_sample_rate(rate).config(), *c.buffer_size(), c.sample_format()));
                 }
             }
             if chosen.is_some() {
@@ -3208,11 +3203,17 @@ mod tests {
     }
 
     impl cpal::traits::StreamTrait for Fake {
-        fn play(&self) -> Result<(), cpal::PlayStreamError> {
-            if self.starts { Ok(()) } else { Err(cpal::PlayStreamError::DeviceNotAvailable) }
+        fn play(&self) -> Result<(), cpal::Error> {
+            if self.starts { Ok(()) } else { Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)) }
         }
-        fn pause(&self) -> Result<(), cpal::PauseStreamError> {
+        fn pause(&self) -> Result<(), cpal::Error> {
             Ok(())
+        }
+        fn buffer_size(&self) -> Result<cpal::FrameCount, cpal::Error> {
+            Ok(256)
+        }
+        fn now(&self) -> cpal::StreamInstant {
+            cpal::StreamInstant::new(0, 0)
         }
     }
 
@@ -3249,12 +3250,12 @@ mod tests {
         assert_eq!(player.system, "JACK");
         assert_eq!(player.device_name, sink.name);
         assert_eq!(usize::from(player.device_channels), sink.ports.len());
-        check("^cpal_client_out", &sink.ports);
+        check(&format!("^{}", jack::cpal_client(true)), &sink.ports);
         // The input, on its own stream: the source's name, one channel per port, connected.
         let recorder = player.open_input(&cfg).expect("the JACK input opens");
         assert_eq!(recorder.device_name, source.name);
         assert_eq!(recorder.channels, source.ports.len());
-        check("^cpal_client_in", &source.ports);
+        check(&format!("^{}", jack::cpal_client(false)), &source.ports);
         drop(recorder);
         drop(player);
     }

@@ -53,7 +53,7 @@ zip = { version = "9", default-features = false }
 miniz_oxide = "0.8"
 # DAWproject import/export: project.xml (pure Rust, MIT).
 quick-xml = "0.41"
-cpal = "0.16"
+cpal = "0.18.2"
 
 # Which file paths stored in a session may be opened.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
