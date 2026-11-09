@@ -82,14 +82,13 @@ fn the_pad_view_shows_the_selected_pad() {
     assert!(h.get_all_by_label("Edit the pad").count() >= 6);
 }
 
-/// A new beat's pattern clip, selected, with the MIDI Editor showing its step grid.
+/// A new beat's pattern clip, selected, with the Juke window open on its steps (as New Beat
+/// leaves it).
 fn grid() -> (Harness<'static, SoundApp>, soundcraft_model::ClipId) {
     let mut app = SoundApp::new(soundcraft_engine::Engine::new(soundcraft_model::Session::default()), None, Services::default());
     let v = app.run("track.new_beat", json!({})).unwrap();
     let clip: soundcraft_model::ClipId = serde_json::from_value(v["clip"].clone()).unwrap();
     app.run("edit.select", json!({"clips": [clip.0]})).unwrap();
-    app.ui.show_midi_editor = true;
-    app.ui.plugin_windows.clear();
     let mut builder = Harness::builder().with_size(vec2(1280.0, 860.0)).with_step_dt(0.1);
     if proof_dir().is_some() {
         builder = builder.wgpu();
@@ -140,6 +139,66 @@ fn the_step_grid_shows_a_pattern_clip_and_its_bar_edits_it() {
     h.get_by_label("Convert to MIDI").click();
     h.run_steps(2);
     assert!(h.state().engine.session().find_clip(clip).is_some_and(|(_, c)| c.pattern.is_none()));
+}
+
+#[test]
+fn the_midi_editor_sends_a_pattern_clip_to_the_juke_window() {
+    let (mut h, clip) = grid();
+    let tid = h.state().engine.session().find_clip(clip).map(|(t, _)| t).unwrap();
+    // The Juke window closed, the MIDI Editor open on the pattern clip: no step grid there.
+    {
+        let app = h.state_mut();
+        app.ui.plugin_windows.clear();
+        app.ui.show_midi_editor = true;
+    }
+    h.run_steps(3);
+    assert!(h.query_by_label("Re-roll").is_none(), "the steps are not edited in the MIDI Editor");
+    h.get_by_label("Open in Juke").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.ui.plugin_windows.contains(&(tid, SlotKey::Instrument)), "the Juke window opened");
+    assert_eq!(app.ui.juke_tabs.get(&tid), Some(&Tab::Steps));
+    assert_eq!(app.ui.juke_clips.get(&tid), Some(&clip));
+    assert!(h.query_by_label("Re-roll").is_some(), "with the step grid");
+}
+
+#[test]
+fn detach_moves_the_juke_window_out_and_dock_brings_it_back() {
+    let (mut h, t) = rig(false);
+    h.get_by_label("⇱ Detach").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.detached_plugins, vec![(t, SlotKey::Instrument)]);
+    // Embedded here (no second native window), the Juke window still draws with its pads.
+    assert!(h.get_all_by_label("Edit the pad").count() >= 6);
+    assert!(h.query_by_label("⇱ Detach").is_none());
+    h.get_by_label("⇲ Dock").click();
+    h.run_steps(3);
+    assert!(h.state().ui.detached_plugins.is_empty());
+    assert!(h.query_by_label("⇱ Detach").is_some(), "back inside the main window");
+    assert!(h.state().ui.plugin_windows.contains(&(t, SlotKey::Instrument)), "still open");
+}
+
+#[test]
+fn clicking_the_instrument_in_the_edit_window_opens_the_juke_window() {
+    let (mut h, t) = rig(false);
+    {
+        let app = h.state_mut();
+        app.ui.plugin_windows.clear();
+        app.ui.juke_tabs.insert(t, Tab::Steps);
+        // A tall track header shows its instrument field.
+        app.run("track.height", json!({"tracks": [t.0], "height": "large"})).unwrap();
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("Re-roll").is_none());
+    h.get_by_label("Instrument").click();
+    h.run_steps(3);
+    assert!(h.state().ui.plugin_windows.contains(&(t, SlotKey::Instrument)), "the instrument's window, not the picker");
+    assert!(h.query_by_label("Edit Parameters…").is_none(), "no picker on click");
+    assert!(h.query_by_label("Re-roll").is_some());
+    // The picker is on right-click.
+    h.get_by_label("Instrument").click_secondary();
+    h.run_steps(2);
+    assert!(h.query_by_label("Edit Parameters…").is_some());
 }
 
 #[test]
@@ -262,6 +321,33 @@ fn the_steps_tab_shows_the_tracks_patterns_in_the_juke_window() {
     h.get_by_label("Kit").click();
     h.run_steps(2);
     assert!(h.get_all_by_label("Edit the pad").count() >= 6);
+}
+
+#[test]
+fn duplicate_copies_the_pattern_right_after_itself_and_shows_the_copy() {
+    let (mut h, t) = rig(false);
+    h.get_by_label("Steps").click();
+    h.run_steps(3);
+    let first = *h.state().ui.juke_clips.get(&t).unwrap();
+    h.state_mut().run("pattern.step", json!({"clip": first.0, "lane": 0, "step": 0, "on": true, "velocity": 120})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Duplicate").click();
+    h.run_steps(3);
+    let app = h.state();
+    let copy = *app.ui.juke_clips.get(&t).expect("the copy is shown");
+    assert_ne!(copy, first);
+    let s = app.engine.session();
+    let (a, b) = (s.find_clip(first).unwrap().1, s.find_clip(copy).unwrap().1);
+    assert_eq!(b.start, a.range().end, "right after the original");
+    assert_eq!(b.length, a.length);
+    let (pa, pb) = (a.pattern.as_ref().unwrap(), b.pattern.as_ref().unwrap());
+    assert!(pa.pattern.lanes[0].steps[0].on);
+    assert_eq!(pb.pattern, pa.pattern, "the same steps");
+    // Editing the copy leaves the original.
+    h.state_mut().run("pattern.step", json!({"clip": copy.0, "lane": 2, "step": 0, "on": true})).unwrap();
+    let s = h.state().engine.session();
+    assert!(s.find_clip(copy).unwrap().1.pattern.as_ref().unwrap().pattern.lanes[2].steps[0].on);
+    assert!(!s.find_clip(first).unwrap().1.pattern.as_ref().unwrap().pattern.lanes[2].steps[0].on);
 }
 
 #[test]

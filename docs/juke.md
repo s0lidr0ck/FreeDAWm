@@ -201,9 +201,12 @@ As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
     and **Save kit** (`mix.kit_save`: a kit folder with every setting, the samples as WAVs and the
     bus effects, written to the kits folder and listed in Kits › Recorded & saved). The bus strips
     carry their subtitles (Room and grit, Space, Kit glue · stereo).
-- **Step grid** (the Juke window's **Steps** view, beside Kit and Pad; also the MIDI Editor's view
-  of a pattern clip; look approved 2026-11-06): the Steps view lists the track's pattern clips as
-  tabs (name and bars, `+ Pattern` adds one after the last) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
+- **Step grid** (the Juke window's **Steps** view, beside Kit and Pad, the one place a pattern's
+  steps are edited; the MIDI Editor shows a pattern clip as a note with **Open in Juke** and
+  **Convert to MIDI**, and a double-click on a pattern clip in the Edit window opens the Steps
+  view on it; look approved 2026-11-06): the Steps view lists the track's pattern clips as
+  tabs (name and bars; `+ Pattern` adds an empty one after the last, `Duplicate` copies the one
+  shown right after itself, to change for the next part of the song) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
   Accent and Humanize knobs, fill bars, Re-roll, Convert to MIDI); one row per lane, its header a band
   in the pad's family colour (name, lane length, choke or rate, mute); steps as raised keys grouped
   by beat. A step's fill height is its velocity in the lane's colour, a cream cap marks an accent,
@@ -220,6 +223,13 @@ As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
     Grooves menu and the Steps tab open this view.
 - The menu bar gets **Track › New Beat** (an instrument track with Juke and a starter kit) and
   **Clip › Convert Pattern to MIDI**; `menubar.txt` and the parity checklist update with them.
+- **Opening and placing the windows**: clicking a track's instrument (the Mix strip's INSTRUMENT
+  slot, the Edit window's instrument field) opens the instrument itself, Juke or Lift (a hosted
+  instrument's own editor); the picker with every instrument is on right-click, or on click
+  while the track has none. Every plugin window has **Detach** over its contents: it moves out of
+  the main window into a native window of its own, to put anywhere (another screen too), with
+  **Dock** to come back. A detached window closed comes back detached, where its plugin's window
+  last was (`ui.json`, `plugin_windows.rects`).
 
 ### 6. Starter content
 
@@ -245,7 +255,7 @@ commit. Both kinds ship (owner's decision):
 | 3 | Motion (a slot morphs through samples over time, driven by an envelope, a controller or aftertouch), a modulation matrix, more synth voice types | ≈ 25–40 h |
 
 **Phase 1 status (2026-11-06):** built, except the recorded kit. Juke, the pattern clips and the
-step grid (in the MIDI Editor for a pattern clip), the Juke window (kit view, pad edit view,
+step grid (first in the MIDI Editor, since 0.9.6 only in the Juke window), the Juke window (kit view, pad edit view,
 honeycomb), Track › New Beat, the effects buses (`mix.kit_fx`; each effect is a module with an id
 from `KitFx::module_id`, so the module commands and FireStation's full editors work on it) and five
 starter kits (`mix.kit_load`, `mix.kit_list`; three rendered from Juke's own voices). The pads and

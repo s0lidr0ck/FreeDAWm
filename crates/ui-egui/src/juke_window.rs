@@ -152,6 +152,8 @@ struct Out {
     steps_clip: Option<ClipId>,
     /// A pattern was just made (`pattern.new`): show it.
     new_pattern: bool,
+    /// Copy this pattern clip right after itself (`edit.duplicate`) and show the copy.
+    duplicate_pattern: Option<ClipId>,
     /// Recorded kits: fetch the release's list, download one, cancel the download.
     #[cfg(not(target_arch = "wasm32"))]
     fetch_kits: bool,
@@ -350,6 +352,9 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     } else if let Some(c) = out.steps_clip {
         app.ui.juke_clips.insert(tid, c);
     }
+    if let Some(c) = out.duplicate_pattern {
+        duplicate_pattern(app, tid, c);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         if out.fetch_kits {
@@ -441,6 +446,23 @@ fn save_preset(app: &mut SoundApp, tid: TrackId) {
     match app.run("mix.kit_preset_save", json!({"track": tid.0, "path": file.to_string_lossy(), "name": name, "kits_dir": kits.to_string_lossy()})) {
         Ok(_) => app.ui.status = format!("Saved the preset {name} (Presets › My Presets)"),
         Err(e) => app.ui.status = e,
+    }
+}
+
+/// Copies pattern clip `cid` right after itself (`edit.duplicate` on its range) and shows the copy
+/// in the Steps view.
+fn duplicate_pattern(app: &mut SoundApp, tid: TrackId, cid: ClipId) {
+    let Some(range) = app.engine.session().find_clip(cid).map(|(_, c)| c.range()) else { return };
+    if app.run("edit.duplicate", json!({"tracks": [tid.0], "start": range.start, "end": range.end})).is_err() {
+        return;
+    }
+    let copy = app
+        .engine
+        .session()
+        .track(tid)
+        .and_then(|t| t.clips().iter().find(|c| c.pattern.is_some() && c.start == range.end && c.id != cid).map(|c| c.id));
+    if let Some(c) = copy {
+        app.ui.juke_clips.insert(tid, c);
     }
 }
 
@@ -539,6 +561,14 @@ fn steps_view(app: &mut SoundApp, ui: &mut Ui, r: Rect, tid: TrackId, current: O
         );
         return;
     };
+    // Duplicate: a copy of this pattern right after it, to go on from (the hats come in, a fill).
+    let dup_r = Rect::from_min_size(pos2(new_r.max.x + 4.0, tabs.min.y), vec2(76.0, tabs.height()));
+    if chip(ui, dup_r, egui::Id::new(("juke-steps-dup", tid.0)), "Duplicate", false, AMBER)
+        .on_hover_text("A copy of this pattern right after it, with the same steps: change the copy for the next part of the song")
+        .clicked()
+    {
+        out.duplicate_pattern = Some(cid);
+    }
     let Some(clip) = app.engine.session().find_clip(cid).map(|(_, c)| c.clone()) else { return };
     let meter = s_meter(app, &clip);
     if let Some((_, _, a, b, _)) = clips.iter().find(|c| c.0 == cid) {

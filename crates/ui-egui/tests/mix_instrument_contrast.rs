@@ -161,12 +161,13 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 
-    // Exercise the same painted control's ordinary click/picker path after palette changes.
+    // Exercise the same painted control's picker path after palette changes (a filled slot's
+    // picker is on right-click; a click opens the instrument).
     let at = slot(harness.output(), "SubSynth").rect.center();
     for pressed in [true, false] {
         harness.input_mut().events.push(Event::PointerButton {
             pos: at,
-            button: egui::PointerButton::Primary,
+            button: egui::PointerButton::Secondary,
             pressed,
             modifiers: Default::default(),
         });

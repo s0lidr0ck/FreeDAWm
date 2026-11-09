@@ -226,6 +226,15 @@ pub struct UiState {
     /// Open full editor windows of built-in modules (their VST-faithful editor, at full size,
     /// in a window of its own: the tile's ⤢ button).
     pub full_editors: Vec<(TrackId, soundcraft_model::ModuleId)>,
+    /// Plugin windows moved out of the main window, each into a native window of its own
+    /// (the window's Detach button). A key stays here while its window is closed, so the
+    /// window comes back detached.
+    #[serde(skip)]
+    pub detached_plugins: Vec<(TrackId, SlotKey)>,
+    /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
+    /// the next detached window of that plugin opens there.
+    #[serde(default, rename = "plugin_windows.rects")]
+    pub plugin_window_rects: HashMap<String, [f32; 4]>,
     /// Per Juke track: the view its window shows (Kit, Pad or Steps).
     #[serde(skip)]
     pub juke_tabs: HashMap<TrackId, juke_window::Tab>,
@@ -453,6 +462,8 @@ impl Default for UiState {
             track_tint: 0.5,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
+            detached_plugins: Vec::new(),
+            plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),
             drawers: HashMap::new(),
@@ -1202,6 +1213,7 @@ impl SoundApp {
         self.ui.gr_history.clear();
         self.ui.plugin_windows.clear();
         self.ui.full_editors.clear();
+        self.ui.detached_plugins.clear();
         self.ui.juke_tabs.clear();
         self.ui.juke_clips.clear();
         // A marker or chord picked in the old session.
