@@ -187,8 +187,8 @@ fn asio_driver_names() -> Vec<String> {
     windows_registry::LOCAL_MACHINE
         .open("SOFTWARE\\ASIO")
         .ok()
-        .and_then(|key| key.keys().ok())
-        .map(|keys| keys.filter(|k| !k.is_empty()).collect())
+        // The iterator borrows the key: collect while it lives.
+        .and_then(|key| key.keys().ok().map(|keys| keys.filter(|k| !k.is_empty()).collect::<Vec<String>>()))
         .unwrap_or_default()
 }
 
