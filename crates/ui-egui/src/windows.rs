@@ -531,13 +531,15 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// The audio systems as last enumerated (enumerating probes devices: done when the window opens
-/// and on Refresh, not every frame).
-fn audio_systems(ctx: &egui::Context, refresh: bool) -> Arc<Vec<AudioSystem>> {
+/// and on Refresh, not every frame). The open device is passed so a streaming ASIO driver is
+/// never probed (`devices::audio_systems_with`).
+fn audio_systems(app: &SoundApp, ctx: &egui::Context, refresh: bool) -> Arc<Vec<AudioSystem>> {
     let id = egui::Id::new("audio_systems");
     if !refresh && let Some(s) = ctx.data(|d| d.get_temp::<Arc<Vec<AudioSystem>>>(id)) {
         return s;
     }
-    let s = Arc::new(soundcraft_playback::devices::audio_systems());
+    let live = app.player.as_ref().filter(|p| !p.silent).map(soundcraft_playback::Player::live_device);
+    let s = Arc::new(soundcraft_playback::devices::audio_systems_with(live.as_ref()));
     ctx.data_mut(|d| d.insert_temp(id, Arc::clone(&s)));
     s
 }
@@ -562,7 +564,9 @@ fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices
     egui::ComboBox::from_id_salt(id).width(300.0).selected_text(shown).show_ui(ui, |ui| {
         ui.selectable_value(value, None, format!("Default ({default})"));
         for d in devices {
-            ui.selectable_value(value, Some(d.name.clone()), format!("{} ({} ch)", d.name, d.max_channels));
+            // An ASIO driver not loaded shows no channel count: it is asked when chosen.
+            let label = if d.max_channels > 0 { format!("{} ({} ch)", d.name, d.max_channels) } else { d.name.clone() };
+            ui.selectable_value(value, Some(d.name.clone()), label);
         }
     });
 }
@@ -594,7 +598,7 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
     let mut draft = ctx.data(|d| d.get_temp::<AudioConfig>(draft_id)).unwrap_or_else(|| app.ui.audio.clone());
     let mut refresh = false;
     let mut apply = false;
-    let systems = audio_systems(ctx, false);
+    let systems = audio_systems(app, ctx, false);
     win(ctx, &mut open, "Playback Engine", vec2(460.0, 360.0), |ui| {
         egui::Grid::new("pe").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             ui.label("Audio system");
@@ -681,7 +685,7 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
         }
     });
     if refresh {
-        audio_systems(ctx, true);
+        audio_systems(app, ctx, true);
     }
     if apply && let Err(e) = app.apply_audio_config(draft.clone()) {
         app.ui.status = e;
@@ -890,7 +894,8 @@ pub fn audio_device_command(app: &mut SoundApp, p: &serde_json::Value) -> Result
     });
     let mut out = json!({"config": app.ui.audio, "device": device});
     if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
-        out["systems"] = json!(soundcraft_playback::devices::audio_systems());
+        let live = app.player.as_ref().filter(|p| !p.silent).map(soundcraft_playback::Player::live_device);
+        out["systems"] = json!(soundcraft_playback::devices::audio_systems_with(live.as_ref()));
     }
     Ok(out)
 }
