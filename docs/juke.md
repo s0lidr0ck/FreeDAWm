@@ -139,8 +139,8 @@ Everything is a command, so the UI, MCP and the control channel share it:
 - `mix.kit_pad_analyze` `{track, pad, paths? | selection?, family?}` / `mix.kit_pad_pick`
   `{take, picks: [{hit, layer}]}`: the hit picker's two steps
 - `mix.kit_pad_import` `{track, pad, paths, family?}`: drum takes become a pad (see *Your own
-  kits* below); `mix.kit_pad_from_selection` `{track, pad, from?, start?, end?, family?}`: the same
-  from the selected range of an audio track; `mix.kit_import` `{track, folder? | paths?, name?}`:
+  kits* below); the selected range of an audio track goes through `mix.kit_pad_analyze`
+  `{selection: true}` and the picker; `mix.kit_import` `{track, folder? | paths?, name?}`:
   a whole kit, each file to its pad by name
 - `mix.kit_fx` `{track, bus: a|b|out, slot: 1-4, plugin?: id|null, params?: {...}, return?}`
 - `mix.kit_randomize` `{track, slots?, amount?}` (DrumComputer: new sounds within each slot's role)

@@ -105,15 +105,6 @@ pub fn specs() -> Vec<CommandSpec> {
             pad_import
         ),
         cmd!(
-            "mix.kit_pad_from_selection",
-            "Pad from Selection",
-            [],
-            None,
-            "{track: the Juke track, pad: 1-16, from?, start?, end?, family?} -> as mix.kit_pad_import: the range (default the edit selection) of audio track `from` (default the first selected audio track), rendered as its clips play, imported into the pad: its hits trimmed, sorted into layers and round-robins, the pad levelled; named for the clip under the selection",
-            has_selection,
-            pad_from_selection
-        ),
-        cmd!(
             noundo "mix.kit_pad_analyze",
             "Analyze Pad Takes",
             [],
@@ -691,13 +682,6 @@ fn selection_audio(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, usize, S
         tr.clips().iter().find(|c| c.range().start < range.end && c.range().end > range.start).map_or_else(|| tr.name.clone(), |c| c.name.clone());
     let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
     Ok((t, pad, name, buf))
-}
-
-fn pad_from_selection(e: &mut Engine, p: &Value) -> Result<Value> {
-    let id = "mix.kit_pad_from_selection";
-    let family = family_param(id, p)?;
-    let (t, pad, name, buf) = selection_audio(e, id, p)?;
-    import_pad_audio(e, id, t, pad, &name, &[buf], soundcraft_audio_io::FileFormat::Wav, family)
 }
 
 /// Reads each file: (its name, its bytes).
@@ -1918,29 +1902,35 @@ mod tests {
     }
 
     #[test]
-    fn a_selection_on_an_audio_track_becomes_a_pad() {
+    fn a_selection_on_an_audio_track_is_analyzed_for_a_pad() {
         let d = dir("pad-selection");
         let wav = d.join("Floor Tom.wav");
         take_wav(&wav, 48_000, &[0.1, 0.3, 0.9, 0.2, 0.6, 0.15]);
         let (mut e, t) = beat();
         e.execute("file.import_audio", &json!({"path": wav.to_string_lossy()})).unwrap();
         let audio = e.session().tracks.iter().find(|tr| tr.kind == TrackKind::Audio).map(|tr| tr.id).unwrap();
-        // All six hits selected.
-        let v = e.execute("mix.kit_pad_from_selection", &json!({"track": t.0, "pad": 8, "from": audio.0, "start": 0, "end": 48_000 * 4})).unwrap();
-        assert_eq!(v["hits"], 6, "{v}");
-        assert!(v["layers"].as_u64().unwrap() >= 2, "{v}");
+        let analyze = |e: &mut Engine, end: i64| {
+            e.execute("mix.kit_pad_analyze", &json!({"track": t.0, "pad": 8, "selection": true, "from": audio.0, "start": 0, "end": end}))
+        };
+        // All six hits selected, named for the clip under the selection.
+        let v = analyze(&mut e, 48_000 * 4).unwrap();
+        assert_eq!(v["hits"].as_array().unwrap().len(), 6, "{v}");
         assert_eq!(v["name"], "Floor Tom");
         assert_eq!(v["family"], "tom");
+        let picks: Vec<Value> =
+            v["hits"].as_array().unwrap().iter().filter(|h| !h["pick"].is_null()).map(|h| json!({"hit": h["hit"], "layer": h["band"]})).collect();
+        e.execute("mix.kit_pad_pick", &json!({"take": v["take"], "picks": picks})).unwrap();
         assert_eq!(juke(&e, t).samples.keys().filter(|k| k.starts_with("p8.")).count(), 6);
         // Just the first two hits (200 ms of silence, then 600 ms a hit).
-        let v =
-            e.execute("mix.kit_pad_from_selection", &json!({"track": t.0, "pad": 8, "from": audio.0, "start": 0, "end": 48_000 * 13 / 10})).unwrap();
-        assert_eq!(v["hits"], 2, "{v}");
+        assert_eq!(analyze(&mut e, 48_000 * 13 / 10).unwrap()["hits"].as_array().unwrap().len(), 2);
         // An empty or silent selection refuses.
-        assert!(e.execute("mix.kit_pad_from_selection", &json!({"track": t.0, "pad": 8, "from": audio.0, "start": 0, "end": 0})).is_err());
+        assert!(analyze(&mut e, 0).is_err());
         assert!(
-            e.execute("mix.kit_pad_from_selection", &json!({"track": t.0, "pad": 8, "from": audio.0, "start": 48_000 * 60, "end": 48_000 * 61}))
-                .is_err()
+            e.execute(
+                "mix.kit_pad_analyze",
+                &json!({"track": t.0, "pad": 8, "selection": true, "from": audio.0, "start": 48_000 * 60, "end": 48_000 * 61})
+            )
+            .is_err()
         );
         let _ = std::fs::remove_dir_all(&d);
     }
