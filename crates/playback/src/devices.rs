@@ -89,21 +89,112 @@ fn describe(d: &cpal::Device, default_name: Option<&str>, output: bool) -> Optio
     Some(DeviceInfo { is_default: default_name == Some(name.as_str()), name, max_channels, sample_rates, buffer_min, buffer_max })
 }
 
-/// Every audio system on this machine with its devices. Enumerating can take a moment (some
-/// systems probe each device): call it when the settings window opens, not every frame.
+/// The device a [`crate::Player`] has open, as [`audio_systems_with`] needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveDevice {
+    /// The audio system (cpal host name).
+    pub system: String,
+    pub output: String,
+    pub input: Option<String>,
+    pub rate: u32,
+    pub out_channels: u16,
+    pub in_channels: Option<u16>,
+    pub buffer: Option<u32>,
+}
+
+/// Every audio system on this machine with its devices, when **no device is open**: each system
+/// is probed (ASIO loads every driver to ask it). With a device open, call
+/// [`audio_systems_with`]. Enumerating can take a moment: call it when the settings window
+/// opens, not every frame.
 pub fn audio_systems() -> Vec<AudioSystem> {
+    audio_systems_with(None)
+}
+
+/// Every audio system with its devices, `live` being the device the player has open.
+///
+/// ASIO is the special case: the SDK keeps one driver per process, cpal makes a new ASIO host
+/// (and a new driver slot) for every `host_from_id`, and dropping a probed driver tears it down.
+/// Probing ASIO while a driver streams therefore initialised the running driver a second time and
+/// then destroyed it under the audio thread (an access violation in the Playback Engine window
+/// on Windows, 0.9.4). So with a device open, ASIO is listed from the registry without loading
+/// anything: the running driver with its live figures, the others by name alone (their channels
+/// and rates show once chosen).
+pub fn audio_systems_with(live: Option<&LiveDevice>) -> Vec<AudioSystem> {
     let default_id = cpal::default_host().id();
     cpal::available_hosts()
         .into_iter()
         .filter_map(|id| {
+            let is_default = id == default_id;
+            if id.name().eq_ignore_ascii_case("ASIO") && live.is_some() {
+                return Some(asio_system(asio_driver_names(), live, is_default));
+            }
             let host = cpal::host_from_id(id).ok()?;
             let def_out = host.default_output_device().as_ref().and_then(device_name);
             let def_in = host.default_input_device().as_ref().and_then(device_name);
             let outputs = host.output_devices().map(|ds| ds.filter_map(|d| describe(&d, def_out.as_deref(), true)).collect()).unwrap_or_default();
             let inputs = host.input_devices().map(|ds| ds.filter_map(|d| describe(&d, def_in.as_deref(), false)).collect()).unwrap_or_default();
-            Some(AudioSystem { name: id.name().to_string(), is_default: id == default_id, outputs, inputs })
+            Some(AudioSystem { name: id.name().to_string(), is_default, outputs, inputs })
         })
         .collect()
+}
+
+/// The ASIO system from its drivers' names, without loading any: the running driver (when `live`
+/// is on ASIO) carries its live channels, rate and buffer; the others are names, with every
+/// standard rate offered and no channel count (0) until they are chosen.
+fn asio_system(mut names: Vec<String>, live: Option<&LiveDevice>, is_default: bool) -> AudioSystem {
+    let running = live.filter(|l| l.system.eq_ignore_ascii_case("ASIO"));
+    if let Some(l) = running
+        && !names.contains(&l.output)
+    {
+        names.push(l.output.clone());
+    }
+    names.sort();
+    names.dedup();
+    let info = |name: &str, input: bool| -> DeviceInfo {
+        match running.filter(|l| l.output == name) {
+            Some(l) => DeviceInfo {
+                name: name.to_string(),
+                is_default: true,
+                max_channels: if input { l.in_channels.unwrap_or(0) } else { l.out_channels },
+                sample_rates: vec![l.rate],
+                // The driver's own buffer range is not asked for; the standard sizes are offered.
+                buffer_min: None,
+                buffer_max: None,
+            },
+            None => DeviceInfo {
+                name: name.to_string(),
+                is_default: false,
+                max_channels: 0,
+                sample_rates: STANDARD_RATES.to_vec(),
+                buffer_min: None,
+                buffer_max: None,
+            },
+        }
+    };
+    AudioSystem {
+        name: "ASIO".into(),
+        is_default,
+        outputs: names.iter().map(|n| info(n, false)).collect(),
+        // ASIO devices are duplex: the same drivers are the inputs.
+        inputs: names.iter().map(|n| info(n, true)).collect(),
+    }
+}
+
+/// The ASIO drivers installed, by name, as the SDK lists them: the subkeys of
+/// `HKEY_LOCAL_MACHINE\SOFTWARE\ASIO`. Nothing is loaded.
+#[cfg(windows)]
+fn asio_driver_names() -> Vec<String> {
+    windows_registry::LOCAL_MACHINE
+        .open("SOFTWARE\\ASIO")
+        .ok()
+        // The iterator borrows the key: collect while it lives.
+        .and_then(|key| key.keys().ok().map(|keys| keys.filter(|k| !k.is_empty()).collect::<Vec<String>>()))
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn asio_driver_names() -> Vec<String> {
+    Vec::new()
 }
 
 /// The name of the input device `name` chooses (else the system default) on `host`, without
@@ -184,6 +275,37 @@ mod tests {
         assert_eq!(serde_json::from_str::<AudioConfig>(&s).unwrap(), c);
         assert_eq!(serde_json::from_str::<AudioConfig>("{}").unwrap(), AudioConfig::default());
         assert_eq!(serde_json::from_str::<AudioConfig>(r#"{"output":"X","unknown":1}"#).unwrap().output.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn the_asio_list_names_every_driver_and_describes_only_the_running_one() {
+        let live = LiveDevice {
+            system: "ASIO".into(),
+            output: "Steinberg built-in ASIO Driver".into(),
+            input: Some("Steinberg built-in ASIO Driver".into()),
+            rate: 48_000,
+            out_channels: 2,
+            in_channels: Some(2),
+            buffer: Some(480),
+        };
+        let names = vec!["Focusrite USB ASIO".to_string(), "Steinberg built-in ASIO Driver".to_string(), "Focusrite USB ASIO".to_string()];
+        let s = asio_system(names, Some(&live), false);
+        assert_eq!(s.name, "ASIO");
+        assert_eq!(s.outputs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["Focusrite USB ASIO", "Steinberg built-in ASIO Driver"]);
+        let running = &s.outputs[1];
+        assert!(running.is_default && running.max_channels == 2 && running.sample_rates == [48_000]);
+        assert_eq!(running.buffer_sizes().len(), STANDARD_BUFFERS.len(), "the driver's buffer range is not probed");
+        let other = &s.outputs[0];
+        assert!(!other.is_default && other.max_channels == 0 && other.sample_rates == STANDARD_RATES && other.buffer_min.is_none());
+        assert_eq!(s.inputs[1].max_channels, 2);
+        // A running driver the registry doesn't list (a portable install) is still listed.
+        let s = asio_system(vec![], Some(&live), true);
+        assert_eq!(s.outputs.len(), 1);
+        assert!(s.is_default);
+        // With the player on WASAPI, every ASIO driver is a name.
+        let wasapi = LiveDevice { system: "WASAPI".into(), ..live };
+        let s = asio_system(vec!["X".into()], Some(&wasapi), false);
+        assert!(!s.outputs[0].is_default && s.outputs[0].max_channels == 0);
     }
 
     #[test]

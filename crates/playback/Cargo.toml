@@ -24,6 +24,10 @@ midir = "0.10"
 # The ASIO driver's own latency figures (only with the `asio` feature).
 soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio"] }
 
+[target.'cfg(windows)'.dependencies]
+# The installed ASIO drivers' names (HKLM\SOFTWARE\ASIO), listed without loading them.
+windows-registry = "0.6"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cpal = { workspace = true, features = ["wasm-bindgen"] }
 

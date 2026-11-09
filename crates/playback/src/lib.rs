@@ -1845,6 +1845,21 @@ pub struct Player {
 }
 
 impl Player {
+    /// The device this player has open, for [`devices::audio_systems_with`] (the settings window
+    /// must not probe a streaming ASIO driver). `in_channels` is unknown here: the recorder opens
+    /// the input.
+    pub fn live_device(&self) -> devices::LiveDevice {
+        devices::LiveDevice {
+            system: self.system.clone(),
+            output: self.device_name.clone(),
+            input: self.input_name.clone(),
+            rate: self.device_rate,
+            out_channels: self.device_channels,
+            in_channels: None,
+            buffer: self.device_buffer,
+        }
+    }
+
     /// Open the default output device. Never fails: without a device it runs a silent clock.
     pub fn new(session: Arc<Session>) -> Player {
         Player::with_config(session, &AudioConfig::default())

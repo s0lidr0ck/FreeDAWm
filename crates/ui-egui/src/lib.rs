@@ -1840,6 +1840,10 @@ impl SoundApp {
         self.recorder_failed = false;
         // Rigs already back on the old player are stored before it goes.
         scout::drain(self);
+        // The old player goes first: with ASIO, the SDK holds one driver per process, and opening
+        // the new device while the old streams would initialise (or replace) the running driver
+        // and then destroy it under the audio thread.
+        self.player = None;
         let player = soundcraft_playback::Player::with_config(self.engine.session_arc(), &self.ui.audio);
         player.locate(at);
         self.player = Some(player);
