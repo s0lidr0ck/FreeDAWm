@@ -24,6 +24,13 @@ midir = "0.10"
 # The ASIO driver's own latency figures (only with the `asio` feature).
 soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# JACK as a second audio system on Linux (PipeWire answers JACK clients through pipewire-jack):
+# cpal's streams, and `jack` itself to list the devices and connect the streams' ports to the
+# chosen one (see `jack`). libjack is loaded at run time, so a machine without it still runs.
+cpal = { workspace = true, features = ["jack"] }
+jack = "0.13"
+
 [target.'cfg(windows)'.dependencies]
 # The installed ASIO drivers' names (HKLM\SOFTWARE\ASIO), listed without loading them.
 windows-registry = "0.6"

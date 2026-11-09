@@ -156,35 +156,37 @@ where
     let frame = usize::from(config.channels).max(1);
     let mut scratch = vec![0.0f32; 8192 * frame];
     let chunk = scratch.len();
-    device.build_input_stream(
-        config,
-        move |data: &[T], info: &cpal::InputCallbackInfo| {
-            crate::mark_audio_thread();
-            // The reported input latency: from capture until this callback.
-            let at = info.timestamp();
-            if let Some(d) = at.callback.duration_since(&at.capture) {
-                feed.set_input_latency(d);
-            }
-            sh.guarded(|| {
-                for part in data.chunks(chunk) {
-                    let Some(s) = scratch.get_mut(..part.len()) else { return };
-                    for (o, x) in s.iter_mut().zip(part) {
-                        *o = f32::from_sample(*x);
-                    }
-                    feed.push(s);
+    crate::guarded_build(move || {
+        device.build_input_stream(
+            config,
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                crate::mark_audio_thread();
+                // The reported input latency: from capture until this callback.
+                let at = info.timestamp();
+                if let Some(d) = at.callback.duration_since(&at.capture) {
+                    feed.set_input_latency(d);
                 }
-            });
-        },
-        move |e| {
-            // Possibly the audio thread (see `crate::mark_audio_thread`).
-            crate::mark_audio_thread();
-            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
-                let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
-            }
-            log::warn!("input stream error: {e}");
-        },
-        None,
-    )
+                sh.guarded(|| {
+                    for part in data.chunks(chunk) {
+                        let Some(s) = scratch.get_mut(..part.len()) else { return };
+                        for (o, x) in s.iter_mut().zip(part) {
+                            *o = f32::from_sample(*x);
+                        }
+                        feed.push(s);
+                    }
+                });
+            },
+            move |e| {
+                // Possibly the audio thread (see `crate::mark_audio_thread`).
+                crate::mark_audio_thread();
+                if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                    let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
+                }
+                log::warn!("input stream error: {e}");
+            },
+            None,
+        )
+    })
 }
 
 /// An input stream, built but not started, and what it feeds.
@@ -208,11 +210,13 @@ pub(crate) fn build_input_stream(
     rate: Option<u32>,
     buffer: Option<u32>,
     session_rate: u32,
+    route: Option<&crate::jack::Route>,
     make_feed: impl Fn(usize, u32) -> Arc<InputFeed>,
 ) -> Result<InputStream, String> {
     use cpal::traits::DeviceTrait;
+    // On JACK the stream goes by the device it is connected to (see `jack`).
     #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Input".into());
+    let name = route.map(|r| r.group.name.clone()).unwrap_or_else(|| device.name().unwrap_or_else(|_| "Input".into()));
     // At the chosen rate when the device offers it, so input and output run together: the
     // best format first, then the most channels.
     let at_rate = rate.and_then(|r| {
@@ -233,6 +237,9 @@ pub(crate) fn build_input_stream(
     }
     let mut config = cfg.config();
     config.buffer_size = crate::devices::buffer_size(buffer, cfg.buffer_size());
+    if let Some(r) = route {
+        config.channels = r.channels();
+    }
     let channels = usize::from(config.channels).max(1);
     let feed = make_feed(channels, config.sample_rate.0);
     let capture = Capture::for_rate(session_rate, channels);
@@ -260,6 +267,7 @@ pub(crate) fn build_input_stream(
     _rate: Option<u32>,
     _buffer: Option<u32>,
     _session_rate: u32,
+    _route: Option<&crate::jack::Route>,
     _make_feed: impl Fn(usize, u32) -> Arc<InputFeed>,
 ) -> Result<InputStream, String> {
     Err("recording is not supported on this platform yet".into())
@@ -291,10 +299,14 @@ impl Recorder {
         let host = crate::devices::host(audio);
         let device = crate::devices::device(&host, audio.input.as_deref(), false).ok_or("no audio input device")?;
         let (session_rate, max_block) = (player.session_rate(), player.max_block);
-        let input = build_input_stream(&device, audio.sample_rate, audio.buffer_size, session_rate, |ch, rate| {
+        let route = crate::jack_input_route(&host, &device, audio.input.as_deref());
+        let input = build_input_stream(&device, audio.sample_rate, audio.buffer_size, session_rate, route.as_ref(), |ch, rate| {
             InputFeed::drift(ch, rate, session_rate, max_block)
         })?;
         input.stream.play().map_err(|e| e.to_string())?;
+        if let Some(r) = &route {
+            r.connect();
+        }
         player.attach_input(Arc::clone(&input.feed), Arc::clone(&input.capture));
         let mut r = Recorder::attached(input.capture, input.name, input.rate, session_rate, input.channels);
         r._stream = Some(input.stream);

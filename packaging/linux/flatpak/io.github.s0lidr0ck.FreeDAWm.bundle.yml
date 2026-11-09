@@ -28,9 +28,11 @@ finish-args:
   # Playback and recording. cpal talks to ALSA; the runtime's alsa-lib routes ALSA through its
   # PulseAudio plugin to this socket, which PipeWire's pulse server provides on modern desktops
   # (and PulseAudio itself on older ones). Deliberately not granted: --device=all (raw /dev/snd
-  # for direct ALSA hardware access, which would bypass the sound server) and JACK, which
-  # FreeDAWm doesn't use (cpal's jack feature is off; there is no live MIDI I/O either).
+  # for direct ALSA hardware access, which would bypass the sound server).
   - --socket=pulseaudio
+  # The JACK audio system: the runtime's libjack is PipeWire's, which talks to the PipeWire
+  # socket, and lists each sound card as its own device in Playback Engine.
+  - --filesystem=xdg-run/pipewire-0
   # Open/Save dialogs use the file-chooser portal (rfd) and drag-and-drop the document portal,
   # so broad filesystem access isn't needed. Music is granted for sessions and their
   # "Audio Files" folders opened by path from the command line.

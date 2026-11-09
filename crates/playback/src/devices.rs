@@ -128,6 +128,10 @@ pub fn audio_systems_with(live: Option<&LiveDevice>) -> Vec<AudioSystem> {
             if id.name().eq_ignore_ascii_case("ASIO") && live.is_some() {
                 return Some(asio_system(asio_driver_names(), live, is_default));
             }
+            // JACK lists its devices itself (see `jack`), and only while a server runs.
+            if crate::jack::is_jack(id.name()) {
+                return crate::jack::probe().map(|s| jack_system(&s, is_default));
+            }
             let host = cpal::host_from_id(id).ok()?;
             let def_out = host.default_output_device().as_ref().and_then(device_name);
             let def_in = host.default_input_device().as_ref().and_then(device_name);
@@ -197,9 +201,32 @@ fn asio_driver_names() -> Vec<String> {
     Vec::new()
 }
 
+/// JACK as the settings window lists it: each device with its port count, at the server's rate
+/// and buffer (JACK runs at those; the mix resamples).
+fn jack_system(server: &crate::jack::Server, is_default: bool) -> AudioSystem {
+    let info = |groups: &[crate::jack::Group]| {
+        groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| DeviceInfo {
+                name: g.name.clone(),
+                is_default: i == 0,
+                max_channels: u16::try_from(g.ports.len()).unwrap_or(u16::MAX),
+                sample_rates: vec![server.rate],
+                buffer_min: Some(server.buffer),
+                buffer_max: Some(server.buffer),
+            })
+            .collect()
+    };
+    AudioSystem { name: crate::jack::SYSTEM.to_string(), is_default, outputs: info(&server.sinks), inputs: info(&server.sources) }
+}
+
 /// The name of the input device `name` chooses (else the system default) on `host`, without
 /// opening it; `None` when there is none.
 pub(crate) fn input_device_name(host: &cpal::Host, name: Option<&str>) -> Option<String> {
+    if crate::jack::is_jack(host.id().name()) {
+        return crate::jack::probe().and_then(|s| crate::jack::pick(&s.sources, name).map(|g| g.name.clone()));
+    }
     device(host, name, false).as_ref().and_then(device_name)
 }
 
@@ -218,6 +245,8 @@ pub(crate) fn host(cfg: &AudioConfig) -> cpal::Host {
     cfg.system
         .as_deref()
         .and_then(|want| cpal::available_hosts().into_iter().find(|id| id.name().eq_ignore_ascii_case(want)))
+        // JACK only with a server running: cpal's JACK host would come up with no devices.
+        .filter(|id| !crate::jack::is_jack(id.name()) || crate::jack::probe().is_some())
         .and_then(|id| cpal::host_from_id(id).ok())
         .unwrap_or_else(|| {
             if let Some(s) = &cfg.system {
@@ -227,8 +256,12 @@ pub(crate) fn host(cfg: &AudioConfig) -> cpal::Host {
         })
 }
 
-/// The named output (or input) device of `host`, else its default device.
+/// The named output (or input) device of `host`, else its default device. On JACK there is one
+/// cpal device each way, whatever the name: `jack::Route` connects it to the named device.
 pub(crate) fn device(host: &cpal::Host, name: Option<&str>, output: bool) -> Option<cpal::Device> {
+    if crate::jack::is_jack(host.id().name()) {
+        return if output { host.default_output_device() } else { host.default_input_device() };
+    }
     if let Some(want) = name {
         let found = if output { host.output_devices().ok() } else { host.input_devices().ok() }
             .and_then(|mut ds| ds.find(|d| device_name(d).as_deref() == Some(want)));
@@ -243,6 +276,11 @@ pub(crate) fn device(host: &cpal::Host, name: Option<&str>, output: bool) -> Opt
 /// The input (or output) device of `host` named exactly `name`; `None` when there is none (no
 /// fallback to the default).
 pub(crate) fn named_device(host: &cpal::Host, name: &str, output: bool) -> Option<cpal::Device> {
+    if crate::jack::is_jack(host.id().name()) {
+        let server = crate::jack::probe()?;
+        let groups = if output { &server.sinks } else { &server.sources };
+        return groups.iter().any(|g| g.name == name).then(|| device(host, None, output)).flatten();
+    }
     if output { host.output_devices().ok() } else { host.input_devices().ok() }
         .and_then(|mut ds| ds.find(|d| device_name(d).as_deref() == Some(name)))
 }
@@ -338,6 +376,17 @@ mod tests {
         let h = cpal::default_host();
         let fallback = device(&h, Some("No Such Device 1234"), true).as_ref().and_then(device_name);
         assert_eq!(fallback, h.default_output_device().as_ref().and_then(device_name));
+    }
+
+    #[test]
+    fn without_a_jack_server_jack_is_not_listed_and_a_jack_choice_falls_back() {
+        if crate::jack::probe().is_some() {
+            println!("SKIPPED: a JACK server is running");
+            return;
+        }
+        assert!(!audio_systems().iter().any(|s| crate::jack::is_jack(&s.name)));
+        let cfg = AudioConfig { system: Some("JACK".into()), ..Default::default() };
+        assert_eq!(host(&cfg).id(), cpal::default_host().id());
     }
 
     #[test]

@@ -23,7 +23,8 @@ description: |-
   Includes freedawm-cli, a headless editor, bounce tool and MCP server.
 
 # The app links glibc, libgcc_s and ALSA (libasound, for audio I/O through cpal; PulseAudio and
-# PipeWire are reached through their ALSA plugins). Windowing (X11/Wayland, xkbcommon) and the GPU
+# PipeWire are reached through their ALSA plugins). libjack is loaded at runtime when present (the
+# JACK audio system; PipeWire's own libjack lets it list each sound card), hence only suggested. Windowing (X11/Wayland, xkbcommon) and the GPU
 # (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here rather
 # than ELF NEEDED entries.
 overrides:
@@ -45,6 +46,8 @@ overrides:
       - mesa-vulkan-drivers
       - xdg-desktop-portal
       - pipewire-alsa | pulseaudio
+    suggests:
+      - pipewire-jack | libjack-jackd2-0
   rpm:
     depends:
       - alsa-lib
@@ -60,6 +63,8 @@ overrides:
       - mesa-vulkan-drivers
       - xdg-desktop-portal
       - (pipewire-alsa or alsa-plugins-pulseaudio)
+    suggests:
+      - (pipewire-jack-audio-connection-kit or jack-audio-connection-kit)
 
 contents:
   - src: ${STAGE}/usr/bin/freedawm

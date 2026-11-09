@@ -19,7 +19,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 
 | # | Gap | Dimension | Doc | Est. (h) |
 |---|---|---|---|---:|
-| G-01 | **Closed pending the owner's hardware pass** ([hardware-checklist.md](hardware-checklist.md)). Left: ASIO in official builds (owner decision), JACK, macOS/Linux verification | Hardware | [hardware-parity.md](hardware-parity.md) | 5–15 |
+| G-01 | **Closed pending the owner's hardware pass** ([hardware-checklist.md](hardware-checklist.md)). Left: ASIO in official builds (owner decision), macOS/Linux verification (JACK included) | Hardware | [hardware-parity.md](hardware-parity.md) | 5–15 |
 | G-02 | **Alpha blocker.** No MIDI device input or output | Hardware / MIDI | [hardware-parity.md](hardware-parity.md) | 20–35 |
 | G-03 | **Alpha blocker.** Cannot exchange sessions with Pro Tools (no AAF/OMF, no `.ptx`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
 | G-04 | Open correctness bugs in features counted as done (~25 issues) | Stability | this file | 25–40 |
@@ -62,11 +62,11 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
     trip, plus a manual offset, plus the mix's live delay. Takes land at their measured position.
   - The Playback Engine window shows the mix block, the reported latency, the offset, Measure and
     Cancel, the underruns with Reset, and the DSP load. Recording at half speed is refused.
-- **Left:** ASIO in official builds (owner decision: Steinberg's SDK is proprietary or GPLv3), JACK,
-  verification on macOS and Linux, and aggregate devices. Known limits, in the checklist: the input
+- **Left:** ASIO in official builds (owner decision: Steinberg's SDK is proprietary or GPLv3),
+  verification on macOS and Linux (JACK and PipeWire through it included), and aggregate devices. Known limits, in the checklist: the input
   count is unknown until the input opens (menus offer In 1–8 until then); a measured split WASAPI
   setup reads "not measured" until its input opens.
-- **Estimate:** ≈ 5–15 h (macOS/Linux verification and fixes; JACK not included).
+- **Estimate:** ≈ 5–15 h (macOS/Linux verification and fixes).
 
 ### G-02. MIDI devices
 
