@@ -144,6 +144,17 @@ struct Out {
     audition: Option<Option<(usize, u8)>>,
     /// Places a dropped audio file loads into: (where, (pad, layer, robin)).
     drops: Vec<(Rect, (usize, usize, usize))>,
+    /// Places dropped drum takes are imported: a pad (`Some`) or the whole kit (`None`).
+    imports: Vec<(Rect, Option<usize>)>,
+    /// Import takes picked from a file dialog into this pad.
+    import_pad: Option<usize>,
+    /// Whether the session has an edit selection (for From Selection).
+    has_selection: bool,
+    /// Import the selected range of an audio track into this pad.
+    from_selection: Option<usize>,
+    /// Build the kit from a folder the user picks.
+    #[cfg(not(target_arch = "wasm32"))]
+    import_folder: bool,
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
     /// Show the Steps view on the track's pattern clip (made if there is none).
@@ -236,10 +247,12 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     }
     #[cfg(target_arch = "wasm32")]
     let kits = ();
-    let mut out = Out::default();
+    let mut out = Out { has_selection: !app.engine.session().edit.selection.is_empty(), ..Out::default() };
     let full = ui.available_rect_before_wrap();
     let full = Rect::from_min_size(full.min, vec2(full.width().max(760.0), full.height().max(520.0)));
     ui.allocate_rect(full, Sense::hover());
+    // Drum takes dropped anywhere in the window (not on a pad or a cell) build a kit.
+    import_target(ui, full, None, &mut out);
     ui.painter().rect_filled(full, 4.0, GROUND);
     let mut body = ui.new_child(egui::UiBuilder::new().max_rect(full.shrink(6.0)));
     if frozen {
@@ -319,8 +332,55 @@ fn drop_target(ui: &Ui, r: Rect, slot: (usize, usize, usize), out: &mut Out) {
     }
 }
 
+/// Remembers `r` as a place dropped drum takes are imported: into `pad`, or (`None`) as a kit.
+/// Outlined, with what a drop does, while files are dragged over it.
+fn import_target(ui: &Ui, r: Rect, pad: Option<usize>, out: &mut Out) {
+    let r = r.intersect(ui.clip_rect());
+    if !r.is_positive() {
+        return;
+    }
+    out.imports.push((r, pad));
+    let over = ui.ctx().input(|i| !i.raw.hovered_files.is_empty() && i.pointer.latest_pos().is_some_and(|p| r.contains(p)));
+    // The window's own outline only where no pad claims the pointer.
+    let under_pad =
+        pad.is_none() && out.imports.iter().any(|(pr, p)| p.is_some() && ui.ctx().input(|i| i.pointer.latest_pos().is_some_and(|q| pr.contains(q))));
+    if over && !under_pad {
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("juke-import")));
+        painter.rect_stroke(r, 4.0, Stroke::new(2.0, AMBER), StrokeKind::Inside);
+        let hint = match pad {
+            Some(_) => "Drop takes: hits trimmed, sorted soft to hard into layers, levelled",
+            None => "Drop takes or a folder: a kit, each file to its pad by name",
+        };
+        let at = pos2(r.center().x, r.max.y - 14.0);
+        let galley = painter.layout_no_wrap(hint.to_string(), regular(11.0), DARK_TEXT);
+        painter.rect_filled(Rect::from_center_size(at, galley.size() + vec2(12.0, 6.0)), 4.0, AMBER);
+        painter.galley(at - galley.size() / 2.0, galley, DARK_TEXT);
+    }
+}
+
 fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     app.kit_drop_targets.extend(out.drops.iter().map(|(r, slot)| (*r, tid, *slot)));
+    // The window first, so a pad (registered after it) is found before it.
+    app.kit_import_targets.extend(out.imports.iter().map(|(r, pad)| (*r, tid, *pad)));
+    if let Some(pad) = out.from_selection {
+        let r = app.run("mix.kit_pad_from_selection", json!({"track": tid.0, "pad": pad + 1}));
+        app.ui.status = import_status(r);
+    }
+    if let Some(pad) = out.import_pad
+        && let Some(pick) = &app.services.pick_open
+        && let Some(path) = pick("mix.kit_pad_import", crate::sampler_window::AUDIO_EXTS)
+    {
+        let r = app.run("mix.kit_pad_import", json!({"track": tid.0, "pad": pad + 1, "paths": [path]}));
+        app.ui.status = import_status(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if out.import_folder
+        && let Some(pick) = &app.services.pick_folder
+        && let Some(dir) = pick("mix.kit_import")
+    {
+        let r = app.run("mix.kit_import", json!({"track": tid.0, "folder": dir}));
+        app.ui.status = kit_import_status(r);
+    }
     for (id, v) in out.params {
         if let Err(e) = app.engine.execute_merged(
             "mix.instrument_param",
@@ -850,6 +910,23 @@ fn pad_menu(ui: &mut Ui, tid: TrackId, ins: &Insert, pad: usize, out: &mut Out) 
         }
     });
     ui.separator();
+    if ui
+        .button("Import Takes…")
+        .on_hover_text("A recording of the drum (one hit or a run of them, soft to hard): the hits trimmed, sorted into layers and round-robins, the pad levelled. Or drop files on the pad")
+        .clicked()
+    {
+        out.import_pad = Some(pad);
+        ui.close();
+    }
+    if ui
+        .add_enabled(out.has_selection, egui::Button::new("From Selection"))
+        .on_hover_text("The selected range of an audio track, as it plays, imported like takes")
+        .on_disabled_hover_text("Select a range of drum hits on an audio track first")
+        .clicked()
+    {
+        out.from_selection = Some(pad);
+        ui.close();
+    }
     if ui.button("Load Sample…").clicked() {
         out.load = Some((pad, 0, 0));
         ui.close();
@@ -870,7 +947,7 @@ fn pad_card(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, view: 
     if ui.interact(r, egui::Id::new(("juke-card", tid.0, pad)), Sense::click()).clicked() {
         out.select = Some(pad);
     }
-    drop_target(ui, r, (pad, 0, 0), out);
+    import_target(ui, r, Some(pad), out);
     let p = ui.painter().clone();
     p.rect_filled(r.translate(vec2(0.0, 2.0)), 6.0, Color32::from_black_alpha(70));
     widgets::rounded_vgradient(&p, r, 6.0, CARD_TOP, CARD_BOTTOM);
@@ -1031,6 +1108,14 @@ fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, o
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
     ui.label(egui::RichText::new("Recorded & saved").strong());
+    if ui
+        .button("Import Kit Folder…")
+        .on_hover_text("Build the kit from a folder of your drum takes: each file to its pad by name (kick, snare, hat…), hits trimmed, sorted into layers and levelled")
+        .clicked()
+    {
+        out.import_folder = true;
+        ui.close();
+    }
     if ui.button("Export Kit Folder…").on_hover_text("Write the kit (samples as WAVs, every setting, bus effects) to a folder, to share it").clicked()
     {
         out.export_kit = true;
@@ -1241,6 +1326,16 @@ fn pad_edit(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level:
         bold(12.0),
         DARK_TEXT,
     );
+    // From Selection, as Lift's: the selected range of an audio track becomes the pad.
+    let from = Rect::from_min_size(pos2(head.max.x - 332.0, head.min.y + 5.0), vec2(120.0, 20.0));
+    let resp = ui
+        .add_enabled_ui(out.has_selection, |ui| chip(ui, from, egui::Id::new(("juke-from-sel", tid.0)), "From Selection", false, AMBER))
+        .inner
+        .on_hover_text("The selected range of an audio track, as it plays: its hits trimmed, sorted soft to hard into layers, the pad levelled")
+        .on_disabled_hover_text("Select a range of drum hits on an audio track first");
+    if resp.clicked() {
+        out.from_selection = Some(pad);
+    }
     // Sample / Synth / Both.
     let src_id = pad_param(pad, "source");
     let src = value(ins, &src_id).round() as usize;
@@ -1673,6 +1768,47 @@ fn pad_strip(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, level
     widgets::meter(ui, mr, level, level, false);
     let fmt = info(&lid).map_or_else(|| format!("{db:.1}"), |i| i.format(db));
     text(&p, pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, fmt, mono(11.0), AMBER);
+}
+
+/// What a pad import did, for the status line.
+pub(crate) fn import_status(r: Result<Value, String>) -> String {
+    match r {
+        Ok(v) => {
+            let name = v.get("name").and_then(Value::as_str).unwrap_or("Pad");
+            let hits = v.get("hits").and_then(Value::as_u64).unwrap_or(0);
+            let layers = v.get("layers").and_then(Value::as_u64).unwrap_or(0);
+            let trim = v.get("trim").and_then(Value::as_f64).unwrap_or(0.0);
+            let dropped = v.get("dropped").and_then(Value::as_u64).unwrap_or(0);
+            let off = v.get("off_pitch").and_then(Value::as_u64).unwrap_or(0);
+            let mut extra = String::new();
+            if off > 0 {
+                extra += &format!("; {off} at other notes left out");
+            }
+            if dropped > 0 {
+                extra += &format!("; {dropped} more than the pad holds left out");
+            }
+            format!(
+                "{name}: {hits} hit{} in {layers} layer{}, trim {trim:+.1} dB{extra}",
+                if hits == 1 { "" } else { "s" },
+                if layers == 1 { "" } else { "s" }
+            )
+        }
+        Err(e) => e,
+    }
+}
+
+/// What a kit import did, for the status line.
+pub(crate) fn kit_import_status(r: Result<Value, String>) -> String {
+    match r {
+        Ok(v) => {
+            let pads = v.get("pads").and_then(Value::as_array).map_or(0, Vec::len);
+            let kit = v.get("kit").and_then(Value::as_str).map(|k| format!(" into {k}")).unwrap_or_default();
+            let skipped = v.get("skipped").and_then(Value::as_array).map_or(0, Vec::len);
+            let extra = if skipped > 0 { format!("; {skipped} left out (no free pad, or no hits)") } else { String::new() };
+            format!("Imported {pads} pad{}{kit}{extra}", if pads == 1 { "" } else { "s" })
+        }
+        Err(e) => e,
+    }
 }
 
 #[cfg(test)]

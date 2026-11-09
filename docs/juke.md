@@ -133,6 +133,10 @@ Everything is a command, so the UI, MCP and the control channel share it:
 
 - `mix.kit_slot` `{track, slot, name?, note?, source?: sample|synth|both, voice?, stack?: [...], choke?, color?}`
 - `mix.kit_sample_load` `{track, slot, path, layer?, round_robin?}` / `mix.kit_sample_clear`
+- `mix.kit_pad_import` `{track, pad, paths, family?}`: drum takes become a pad (see *Your own
+  kits* below); `mix.kit_pad_from_selection` `{track, pad, from?, start?, end?, family?}`: the same
+  from the selected range of an audio track; `mix.kit_import` `{track, folder? | paths?, name?}`:
+  a whole kit, each file to its pad by name
 - `mix.kit_fx` `{track, bus: a|b|out, slot: 1-4, plugin?: id|null, params?: {...}, return?}`
 - `mix.kit_randomize` `{track, slots?, amount?}` (DrumComputer: new sounds within each slot's role)
 - `mix.kit_preset_save` / `mix.kit_preset_load` (a kit file holding its samples)
@@ -230,6 +234,59 @@ As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
   the main window into a native window of its own, to put anywhere (another screen too), with
   **Dock** to come back. A detached window closed comes back detached, where its plugin's window
   last was (`ui.json`, `plugin_windows.rects`).
+
+### Your own kits: importing drum takes
+
+Recording your own drums and dropping the files on Juke is enough: the import does the editing
+(`soundcraft_dsp::drum_import`, `mix.kit_pad_import`, `mix.kit_import`).
+
+**What it does with a pad's takes.** A file can hold one hit or a whole run of them. Each hit is
+found, cut from just before its attack (no silence before it, so it plays on the beat) to where it
+has rung out or the next hit starts, with a short fade at the end. Bleed and room noise 40 dB under
+the loudest hit are left out. The hits are measured (the loudest 50 ms of each) and sorted:
+
+- played at one strength (within 4 dB), they become round-robins of one layer;
+- played soft to hard, they fill as many velocity layers as the playing spans (about one per 6 dB,
+  up to four), the softest hits in layer 1, up to four round-robins a layer.
+
+A hit is a jump of 9 dB over the ring of what came before, so a long 808 tail stays one hit. A
+pitched drum (a kick, an 808, toms: at least 40% of its hits ring at a readable note) keeps the
+hits at its most common note; hits clearly at other notes (an 808 line's) are left out, and hits
+whose pitch cannot be read stay.
+
+The pad switches to Sample, takes the file's name (take numbers and words like *hard* or *soft*
+left out) and the trim that levels it with the other pads: drums to the kick's level, hats and
+cymbals 4 dB under it, never lifting a peak past the ceiling. Everything is one undo step.
+
+**Where to drop.**
+
+- **On a pad card** (Kit view), or the pad's ▾ menu › **Import Takes…**: the takes replace that
+  pad's samples.
+- **From the timeline**: put the recording on an audio track, select the hits you want, then
+  **From Selection** in the pad's header (Pad view) or its ▾ menu, as Lift's. The selection is
+  rendered as it plays (clip gain and fades, not the track's plugins) and imported like takes; the
+  pad is named for the clip under the selection.
+- **Anywhere else in the Juke window** (several files or a folder), or Kits › **Import Kit
+  Folder…**: a kit. Each file goes to its pad by its name or its sub-folder's name: kick/BD,
+  rim/sidestick, snare/SD, clap, hat/HH (closed), pedal hat, open hat/OH, floor/low tom (or tom 3),
+  mid tom (tom 2), high/rack tom (tom 1), crash, ride, tambourine, cowbell, shaker, clave. Several
+  files naming one drum are its takes; files of no known drum take the free pads. A folder names
+  the kit.
+- **On a cell** in the Pad view: that one slot, as before, for placing a sample by hand.
+
+**Recording takes that import well.**
+
+1. One drum per file (or per sub-folder): close-mic it, or record the kit mics and bounce the
+   drum's own hits.
+2. Play each drum about 16 times, from very soft to as hard as you would play it, with space
+   between hits for the ring (half a second for drums, more for cymbals). Order does not matter:
+   the import sorts by strength. For one strength only, play four or more alike hits.
+3. Record at the session's rate or higher; leave a little silence before the first hit and peak
+   under 0 dBFS.
+4. Name the files for the drum (`Kick.wav`, `Snare.wav`, `HH closed.wav`…) or put each drum's
+   files in a folder named for it, then drop the folder on the Juke window.
+5. Dial in with the pad's Tune, envelopes and Trim, then Kits › **Export Kit Folder…** or
+   **Save preset** to keep it.
 
 ### 6. Starter content
 

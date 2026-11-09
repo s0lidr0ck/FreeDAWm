@@ -839,6 +839,9 @@ pub struct SoundApp {
     pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
     /// Juke pad slots `(pad, layer, robin)` drawn this frame that take a dropped audio file.
     pub kit_drop_targets: Vec<(egui::Rect, TrackId, (usize, usize, usize))>,
+    /// Places dropped drum takes are imported: a pad card (`Some(pad)`: the takes become the
+    /// pad's layers and round-robins) or a Juke window (`None`: a kit, the takes to pads by name).
+    pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
     /// This frame's places a dragged browser card can land (see `browser::drop`).
     pub(crate) plugin_drop_targets: Vec<browser::drop::Registered>,
     sample_reads: Vec<sampler_window::SampleRead>,
@@ -1002,6 +1005,7 @@ impl SoundApp {
             synthetic: Vec::new(),
             sample_drop_targets: Vec::new(),
             kit_drop_targets: Vec::new(),
+            kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
             sample_reads: Vec::new(),
             synthetic_grace: 0,
@@ -2370,6 +2374,7 @@ impl SoundApp {
         self.ui.wide_key_owner.remove(&ctx.viewport_id());
         self.sample_drop_targets.clear();
         self.kit_drop_targets.clear();
+        self.kit_import_targets.clear();
         self.plugin_drop_targets.clear();
         if !self.native_menu_bar {
             menus::menu_bar(self, ui);

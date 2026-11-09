@@ -17,6 +17,7 @@ pub mod analysis;
 pub mod beat;
 pub mod biquad;
 pub mod derive;
+pub mod drum_import;
 pub mod link;
 pub mod meter;
 pub mod offline;
