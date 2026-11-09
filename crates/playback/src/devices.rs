@@ -144,7 +144,7 @@ pub fn audio_systems_with(live: Option<&LiveDevice>) -> Vec<AudioSystem> {
 fn asio_system(mut names: Vec<String>, live: Option<&LiveDevice>, is_default: bool) -> AudioSystem {
     let running = live.filter(|l| l.system.eq_ignore_ascii_case("ASIO"));
     if let Some(l) = running
-        && !names.iter().any(|n| *n == l.output)
+        && !names.contains(&l.output)
     {
         names.push(l.output.clone());
     }
