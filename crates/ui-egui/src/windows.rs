@@ -932,75 +932,153 @@ fn io_heading(ui: &mut egui::Ui, title: &str, device: Option<(&str, Option<usize
     });
 }
 
-/// A path's name field: renames through `setup.io` when it loses focus. A refused name (taken,
-/// reserved) puts the old one back and says why in the status bar.
-fn io_name_field(app: &mut SoundApp, ui: &mut egui::Ui, kind: &str, name: &str, action: &str) {
+/// A path's name field: the new name once it loses focus changed (a refused name, taken or
+/// reserved, puts the old one back and says why in the status bar).
+fn io_name_field(ui: &mut egui::Ui, kind: &str, name: &str) -> Option<String> {
     let key = egui::Id::new((kind, "name", name.to_string()));
     let mut edit: String = ui.ctx().memory(|m| m.data.get_temp(key)).unwrap_or_else(|| name.to_string());
     let r = ui.add_sized(vec2(150.0, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut edit));
-    if r.lost_focus() && edit != name {
-        if let Err(e) = app.run("setup.io", json!({"action": action, "name": name, "new_name": edit})) {
-            app.ui.status = e;
-        }
+    if r.lost_focus() {
         ui.ctx().memory_mut(|m| m.data.remove::<String>(key));
-    } else {
-        ui.ctx().memory_mut(|m| m.data.insert_temp(key, edit));
+        return (edit != name).then_some(edit);
     }
+    ui.ctx().memory_mut(|m| m.data.insert_temp(key, edit));
+    None
 }
 
-/// The 1-based first-channel field and the range it covers, then "not available" when the open
-/// device lacks it. A drag is one undo step.
-fn io_channel_field(app: &mut SoundApp, ui: &mut egui::Ui, name: &str, first: u16, width: usize, action: &str, fits: bool) {
+/// How a menu shows the device channels a path of `width` from `first` (0-based) covers: "7",
+/// "7–8", and the channels' names when the device gives them ("7 · Mic", "1–2 · L + R").
+pub(crate) fn channel_label(first: usize, width: usize, names: &[String]) -> String {
+    let (from, width) = (first + 1, width.max(1));
+    let numbers = if width > 1 { format!("{from}–{}", from + width - 1) } else { from.to_string() };
+    let named: Vec<&str> = (first..first + width).filter_map(|c| names.get(c)).map(String::as_str).filter(|n| !n.is_empty()).collect();
+    if named.is_empty() { numbers } else { format!("{numbers} · {}", named.join(" + ")) }
+}
+
+/// The device channel a path starts on, as a menu of the device's channels (8 when no device is
+/// open, and always the path's own): the new first channel (0-based) when one is picked. "not
+/// available" follows when the open device lacks the path's channels.
+fn io_channel_menu(
+    ui: &mut egui::Ui,
+    salt: (&str, &str),
+    first: u16,
+    width: usize,
+    device: Option<usize>,
+    names: &[String],
+    fits: bool,
+) -> Option<u16> {
     let t = Tokens::current();
-    let mut ch = u32::from(first) + 1;
-    let r = ui.add(egui::DragValue::new(&mut ch).range(1..=1024).speed(0.1).prefix("ch "));
-    if r.changed() {
-        let params = json!({"action": action, "name": name, "first_channel": ch.saturating_sub(1)});
-        if let Err(e) = app.engine.execute_merged("setup.io", &params, &format!("io-channel:{action}:{name}")) {
-            app.ui.status = e.to_string();
-        }
-    }
-    // A multichannel path's span ("ch 5" covers 5–6).
-    let span = if width > 1 { format!("{ch}–{}", ch as usize + width - 1) } else { String::new() };
-    ui.label(egui::RichText::new(span).color(t.text_dim));
+    let (first_ch, width) = (usize::from(first), width.max(1));
+    let count = device.filter(|n| *n > 0).unwrap_or(8).max(names.len()).max(first_ch + width).min(1024);
+    let mut picked = None;
+    egui::ComboBox::from_id_salt((salt.0, "channel", salt.1.to_string())).width(190.0).selected_text(channel_label(first_ch, width, names)).show_ui(
+        ui,
+        |ui| {
+            for k in 0..=count.saturating_sub(width) {
+                if ui.selectable_label(k == first_ch, channel_label(k, width, names)).clicked() && k != first_ch {
+                    picked = u16::try_from(k).ok();
+                }
+            }
+        },
+    );
     if fits {
         ui.label("");
     } else {
         ui.label(egui::RichText::new(crate::mix_window::NOT_AVAILABLE.trim()).color(t.rec));
     }
+    picked
 }
 
-/// Mono or stereo, for an input or a hardware output.
-fn io_format_combo(app: &mut SoundApp, ui: &mut egui::Ui, kind: &str, name: &str, format: ChannelFormat, action: &str) {
+/// Mono or stereo, for an input or a hardware output: the new format when one is picked.
+fn io_format_combo(ui: &mut egui::Ui, kind: &str, name: &str, format: ChannelFormat) -> Option<ChannelFormat> {
+    let mut picked = None;
     egui::ComboBox::from_id_salt((kind, "format", name.to_string())).width(72.0).selected_text(format.label()).show_ui(ui, |ui| {
         for f in [ChannelFormat::Mono, ChannelFormat::Stereo] {
             if ui.selectable_label(f == format, f.label()).clicked() && f != format {
-                let _ = app.run("setup.io", json!({"action": action, "name": name, "format": f.label()}));
+                picked = Some(f);
             }
         }
     });
+    picked
+}
+
+/// A grid's column headings, dim and small.
+fn io_headings(ui: &mut egui::Ui, headings: &[&str]) {
+    let t = Tokens::current();
+    for h in headings {
+        ui.label(egui::RichText::new(*h).small().color(t.text_dim));
+    }
+    ui.end_row();
+}
+
+/// One line of explanation under a section heading.
+fn io_note(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).small().color(Tokens::current().text_dim));
+}
+
+/// Runs a row's change. A row of the default inputs first makes them real (`auto_inputs`), in
+/// the same undo step as the change.
+fn io_apply(app: &mut SoundApp, params: serde_json::Value, defaults: Option<usize>) {
+    let r = match defaults {
+        Some(n) => {
+            let key = format!("io-defaults:{:?}", std::time::Instant::now());
+            app.engine
+                .execute_merged("setup.io", &json!({"action": "auto_inputs", "channels": n}), &key)
+                .and_then(|_| app.engine.execute_merged("setup.io", &params, &key))
+                .map_err(|e| e.to_string())
+        }
+        None => app.run("setup.io", params),
+    };
+    if let Err(e) = r {
+        app.ui.status = e;
+    }
 }
 
 fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
     io_heading(ui, "Inputs", Some(("Input", device)));
-    let inputs = app.engine.session().inputs.clone();
-    if inputs.is_empty() {
-        let t = Tokens::current();
-        ui.label(egui::RichText::new("No named inputs: tracks use In 1, In 2…").small().color(t.text_dim));
+    io_note(ui, "Each input is one or two channels of the input device. Tracks pick their input by these names.");
+    let names = app.input_channel_names();
+    let named = app.engine.session().inputs.clone();
+    // Without named inputs the tracks use In 1…In N, one per device channel: shown as rows to
+    // edit like any other (the first change makes them the session's own).
+    let defaults = named.is_empty().then(|| device.filter(|n| *n > 0).unwrap_or(8).min(64));
+    let rows: Vec<soundcraft_model::InputPath> = match defaults {
+        Some(n) => (0..n)
+            .map(|k| soundcraft_model::InputPath {
+                name: format!("In {}", k + 1),
+                first_channel: u16::try_from(k).unwrap_or(0),
+                format: ChannelFormat::Mono,
+            })
+            .collect(),
+        None => named,
+    };
+    if defaults.is_some() {
+        io_note(ui, "These are the default inputs, one per device channel. Change any of them to make the list your own.");
     }
-    egui::Grid::new("io_inputs").num_columns(6).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-        for i in &inputs {
+    let mut change = None;
+    egui::Grid::new("io_inputs").num_columns(5).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+        io_headings(ui, &["Name", "Format", "Device input", "", ""]);
+        for i in &rows {
             let width = i.format.channels().clamp(1, 2);
-            io_name_field(app, ui, "input", &i.name, "rename_input");
-            io_format_combo(app, ui, "input", &i.name, i.format, "set_input_format");
+            if let Some(to) = io_name_field(ui, "input", &i.name) {
+                change = Some(json!({"action": "rename_input", "name": i.name, "new_name": to}));
+            }
+            if let Some(f) = io_format_combo(ui, "input", &i.name, i.format) {
+                change = Some(json!({"action": "set_input_format", "name": i.name, "format": f.label()}));
+            }
             let fits = crate::mix_window::path_fits(usize::from(i.first_channel), width, device);
-            io_channel_field(app, ui, &i.name, i.first_channel, width, "set_input_channel", fits);
-            if ui.small_button("Delete").clicked() {
-                let _ = app.run("setup.io", json!({"action": "delete_input", "name": i.name}));
+            if let Some(ch) = io_channel_menu(ui, ("input", &i.name), i.first_channel, width, device, &names, fits) {
+                change = Some(json!({"action": "set_input_channel", "name": i.name, "first_channel": ch}));
+            }
+            if defaults.is_none() && ui.small_button("Delete").clicked() {
+                change = Some(json!({"action": "delete_input", "name": i.name}));
             }
             ui.end_row();
         }
     });
+    if let Some(params) = change {
+        io_apply(app, params, defaults);
+    }
     ui.horizontal(|ui| {
         if ui.button("New Input").clicked() {
             let s = app.engine.session();
@@ -1012,9 +1090,11 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
             let next = s.inputs.iter().map(|i| usize::from(i.first_channel) + i.format.channels().clamp(1, 2)).max().unwrap_or(0);
             let _ = app.run("setup.io", json!({"action": "create_input", "name": format!("Input {n}"), "format": "mono", "first_channel": next}));
         }
-        let n = device.filter(|n| *n > 0).unwrap_or(8).min(64);
-        if ui.button(format!("Add In 1–{n}")).on_hover_text("A mono input per device channel (names that exist are kept)").clicked() {
-            let _ = app.run("setup.io", json!({"action": "auto_inputs", "channels": n}));
+        if defaults.is_none() {
+            let n = device.filter(|n| *n > 0).unwrap_or(8).min(64);
+            if ui.button(format!("Add In 1–{n}")).on_hover_text("A mono input per device channel (names that exist are kept)").clicked() {
+                let _ = app.run("setup.io", json!({"action": "auto_inputs", "channels": n}));
+            }
         }
     });
 }
@@ -1046,14 +1126,20 @@ fn io_busses(app: &mut SoundApp, ui: &mut egui::Ui) {
 
 fn io_outputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
     io_heading(ui, "Outputs", Some(("Output", device)));
+    io_note(ui, "Each output is channels of the output device. The main mix plays on the first one.");
+    let names = app.output_channel_names();
     let outputs = app.engine.session().outputs.clone();
     let choices = crate::mix_window::output_choices(app.engine.session(), device);
     let main = app.engine.session().main_format();
-    egui::Grid::new("io_outputs").num_columns(6).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+    let mut change = None;
+    egui::Grid::new("io_outputs").num_columns(5).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+        io_headings(ui, &["Name", "Format", "Device output", "", ""]);
         for (i, o) in outputs.iter().enumerate() {
             let fits = choices.get(i).is_none_or(|c| c.1);
-            io_name_field(app, ui, "output", &o.name, "rename_output");
-            if i == 0 {
+            if let Some(to) = io_name_field(ui, "output", &o.name) {
+                change = Some(json!({"action": "rename_output", "name": o.name, "new_name": to}));
+            }
+            let width = if i == 0 {
                 // The main's format is the session's main format (the mix and master follow it).
                 egui::ComboBox::from_id_salt("main_output_format").width(72.0).selected_text(main.label()).show_ui(ui, |ui| {
                     for f in ChannelFormat::ALL.into_iter().filter(|f| (2..=16).contains(&f.channels())) {
@@ -1066,18 +1152,27 @@ fn io_outputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
                         }
                     }
                 });
-                io_channel_field(app, ui, &o.name, o.first_channel, main.channels(), "set_output_channel", fits);
-                ui.label(egui::RichText::new("main").small().color(Tokens::current().text_dim));
+                main.channels()
             } else {
-                io_format_combo(app, ui, "output", &o.name, o.format, "set_output_format");
-                io_channel_field(app, ui, &o.name, o.first_channel, o.format.channels(), "set_output_channel", fits);
-                if ui.small_button("Delete").clicked() {
-                    let _ = app.run("setup.io", json!({"action": "delete_output", "name": o.name}));
+                if let Some(f) = io_format_combo(ui, "output", &o.name, o.format) {
+                    change = Some(json!({"action": "set_output_format", "name": o.name, "format": f.label()}));
                 }
+                o.format.channels()
+            };
+            if let Some(ch) = io_channel_menu(ui, ("output", &o.name), o.first_channel, width, device, &names, fits) {
+                change = Some(json!({"action": "set_output_channel", "name": o.name, "first_channel": ch}));
+            }
+            if i == 0 {
+                ui.label(egui::RichText::new("main").small().color(Tokens::current().text_dim));
+            } else if ui.small_button("Delete").clicked() {
+                change = Some(json!({"action": "delete_output", "name": o.name}));
             }
             ui.end_row();
         }
     });
+    if let Some(params) = change {
+        io_apply(app, params, None);
+    }
     if ui.button("New Output").clicked() {
         let s = app.engine.session();
         let next = s.outputs.iter().map(|o| usize::from(o.first_channel) + o.format.channels()).max().unwrap_or(2).max(2);
@@ -1186,5 +1281,41 @@ mod audio_health_tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| audio_health(&mut app, ui.ctx()));
         output.textures_delta.clear();
         assert!(app.audio_health_report.is_some());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod io_setup_tests {
+    use super::*;
+
+    #[test]
+    fn channel_labels_number_from_one_and_name_the_channels_when_known() {
+        assert_eq!(channel_label(6, 1, &[]), "7");
+        assert_eq!(channel_label(0, 2, &[]), "1–2");
+        let names: Vec<String> = ["Mic", "", "L", "R"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(channel_label(0, 1, &names), "1 · Mic");
+        assert_eq!(channel_label(1, 1, &names), "2");
+        assert_eq!(channel_label(2, 2, &names), "3–4 · L + R");
+        // Past the names: the numbers alone.
+        assert_eq!(channel_label(9, 1, &names), "10");
+    }
+
+    #[test]
+    fn editing_a_default_input_makes_the_defaults_real_in_one_undo_step() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        assert!(app.engine.session().inputs.is_empty());
+        // "In 1" is device input 7: the defaults become the session's, then the change applies.
+        io_apply(&mut app, json!({"action": "set_input_channel", "name": "In 1", "first_channel": 6}), Some(8));
+        let inputs = &app.engine.session().inputs;
+        assert_eq!(inputs.len(), 8);
+        assert_eq!((inputs[0].name.as_str(), inputs[0].first_channel), ("In 1", 6));
+        assert_eq!((inputs[1].name.as_str(), inputs[1].first_channel), ("In 2", 1));
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.engine.session().inputs.is_empty(), "one undo takes back both");
+        // A named list: the change alone.
+        app.run("setup.io", json!({"action": "create_input", "name": "Vox", "first_channel": 0})).unwrap();
+        io_apply(&mut app, json!({"action": "rename_input", "name": "Vox", "new_name": "Lead"}), None);
+        assert_eq!(app.engine.session().inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["Lead"]);
     }
 }

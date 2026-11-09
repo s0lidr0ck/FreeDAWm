@@ -1836,6 +1836,9 @@ pub struct Player {
     pub device_rate: u32,
     /// Output channels the device was opened with (0 for the silent clock).
     pub device_channels: u16,
+    /// The output device's channel names, in channel order, when it gives them (JACK's ports);
+    /// empty otherwise.
+    pub output_channel_names: Vec<String>,
     /// The device buffer in frames when one was chosen (`None`: the device default).
     pub device_buffer: Option<u32>,
     /// The largest mix block, and the block size plugins are prepared for
@@ -1993,6 +1996,7 @@ impl Player {
                             system: host.id().name().to_string(),
                             input_name: if asio { Some(name.clone()) } else { devices::input_device_name(&host, cfg.input.as_deref()) },
                             device_name: name,
+                            output_channel_names: route.as_ref().map(jack::Route::channel_names).unwrap_or_default(),
                             device_rate: rate,
                             device_channels: config.channels,
                             device_buffer: buffer,
@@ -2068,6 +2072,7 @@ impl Player {
             driver_latency: None,
             system: "None".into(),
             device_name: "No audio device (silent)".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate: rate,
             device_channels: 0,
@@ -2106,6 +2111,7 @@ impl Player {
             driver_latency: None,
             system: "Offline".into(),
             device_name: "Offline".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate,
             device_channels: u16::try_from(device_channels).unwrap_or(u16::MAX),
@@ -2137,6 +2143,7 @@ impl Player {
             driver_latency: None,
             system: "None".into(),
             device_name: "No audio device".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate: session.sample_rate.hz(),
             device_channels: 0,

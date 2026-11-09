@@ -1804,6 +1804,17 @@ impl SoundApp {
         (input, output)
     }
 
+    /// The input device's channel names, in channel order, when it gives them (JACK's ports);
+    /// empty otherwise.
+    pub fn input_channel_names(&self) -> Vec<String> {
+        self.recorder.as_ref().map(|r| r.channel_names.clone()).unwrap_or_default()
+    }
+
+    /// The output device's channel names, in channel order, when it gives them; empty otherwise.
+    pub fn output_channel_names(&self) -> Vec<String> {
+        self.player.as_ref().map(|p| p.output_channel_names.clone()).unwrap_or_default()
+    }
+
     /// Whether the meters are live: while playing, and while armed or input-monitored tracks are heard.
     pub(crate) fn meters_live(&self) -> bool {
         self.engine.transport.playing

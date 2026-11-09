@@ -198,6 +198,11 @@ impl Route {
         Some(Route { prefix: cpal_name.to_string(), before: imp::clients_named(cpal_name), group, output })
     }
 
+    /// The device's channel names: its ports' own names (`playback_FL`).
+    pub(crate) fn channel_names(&self) -> Vec<String> {
+        self.group.ports.iter().map(|p| p.split_once(':').map_or(p.as_str(), |(_, n)| n).to_string()).collect()
+    }
+
     /// The stream's channel count: one per port of the device.
     pub(crate) fn channels(&self) -> u16 {
         u16::try_from(self.group.ports.len()).unwrap_or(u16::MAX).clamp(1, 64)

@@ -124,6 +124,9 @@ pub struct Recorder {
     #[cfg(not(target_os = "freebsd"))]
     _stream: Option<cpal::Stream>,
     pub device_name: String,
+    /// The device's channel names, in channel order, when it gives them (JACK's ports); empty
+    /// otherwise.
+    pub channel_names: Vec<String>,
     /// The input device's rate.
     pub device_rate: u32,
     /// The rate takes are written at: the session's (they are captured from the mix's input).
@@ -281,6 +284,7 @@ impl Recorder {
             #[cfg(not(target_os = "freebsd"))]
             _stream: None,
             device_name,
+            channel_names: Vec::new(),
             device_rate,
             sample_rate: session_rate.max(1),
             channels: channels.max(1),
@@ -309,6 +313,7 @@ impl Recorder {
         }
         player.attach_input(Arc::clone(&input.feed), Arc::clone(&input.capture));
         let mut r = Recorder::attached(input.capture, input.name, input.rate, session_rate, input.channels);
+        r.channel_names = route.as_ref().map(crate::jack::Route::channel_names).unwrap_or_default();
         r._stream = Some(input.stream);
         Ok(r)
     }
