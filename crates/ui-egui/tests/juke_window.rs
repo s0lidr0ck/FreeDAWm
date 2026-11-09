@@ -265,6 +265,33 @@ fn the_steps_tab_shows_the_tracks_patterns_in_the_juke_window() {
 }
 
 #[test]
+fn duplicate_copies_the_pattern_right_after_itself_and_shows_the_copy() {
+    let (mut h, t) = rig(false);
+    h.get_by_label("Steps").click();
+    h.run_steps(3);
+    let first = *h.state().ui.juke_clips.get(&t).unwrap();
+    h.state_mut().run("pattern.step", json!({"clip": first.0, "lane": 0, "step": 0, "on": true, "velocity": 120})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Duplicate").click();
+    h.run_steps(3);
+    let app = h.state();
+    let copy = *app.ui.juke_clips.get(&t).expect("the copy is shown");
+    assert_ne!(copy, first);
+    let s = app.engine.session();
+    let (a, b) = (s.find_clip(first).unwrap().1, s.find_clip(copy).unwrap().1);
+    assert_eq!(b.start, a.range().end, "right after the original");
+    assert_eq!(b.length, a.length);
+    let (pa, pb) = (a.pattern.as_ref().unwrap(), b.pattern.as_ref().unwrap());
+    assert!(pa.pattern.lanes[0].steps[0].on);
+    assert_eq!(pb.pattern, pa.pattern, "the same steps");
+    // Editing the copy leaves the original.
+    h.state_mut().run("pattern.step", json!({"clip": copy.0, "lane": 2, "step": 0, "on": true})).unwrap();
+    let s = h.state().engine.session();
+    assert!(s.find_clip(copy).unwrap().1.pattern.as_ref().unwrap().pattern.lanes[2].steps[0].on);
+    assert!(!s.find_clip(first).unwrap().1.pattern.as_ref().unwrap().pattern.lanes[2].steps[0].on);
+}
+
+#[test]
 fn a_right_clicked_step_opens_its_details_at_the_step() {
     let (mut h, t) = rig(false);
     h.get_by_label("Steps").click();

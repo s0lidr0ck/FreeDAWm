@@ -203,7 +203,8 @@ As built (renders from the window tests, `SOUNDCRAFT_JUKE_PROOF_DIR`):
     carry their subtitles (Room and grit, Space, Kit glue · stereo).
 - **Step grid** (the Juke window's **Steps** view, beside Kit and Pad; also the MIDI Editor's view
   of a pattern clip; look approved 2026-11-06): the Steps view lists the track's pattern clips as
-  tabs (name and bars, `+ Pattern` adds one after the last) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
+  tabs (name and bars; `+ Pattern` adds an empty one after the last, `Duplicate` copies the one
+  shown right after itself, to change for the next part of the song) over the pattern bar (name, steps per bar, **New steps** velocity, Shuffle,
   Accent and Humanize knobs, fill bars, Re-roll, Convert to MIDI); one row per lane, its header a band
   in the pad's family colour (name, lane length, choke or rate, mute); steps as raised keys grouped
   by beat. A step's fill height is its velocity in the lane's colour, a cream cap marks an accent,
