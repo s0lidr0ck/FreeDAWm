@@ -46,6 +46,12 @@ const HONEY_LOW: u8 = 36;
 const HONEY_HIGH: u8 = 95;
 
 /// A drum family's colour (pad headers and trigger cells share it).
+/// `a` toward `b` by `t` (0..1).
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
 pub fn family_color(f: DrumFamily) -> Color32 {
     match f {
         DrumFamily::Kick => Color32::from_rgb(0xE8, 0x70, 0x4F),
@@ -78,7 +84,7 @@ pub fn pad_param(pad: usize, name: &str) -> String {
 
 /// A pad parameter's name without its pad (`Pad 3 Send A` → `Send A`).
 pub fn short_name(name: &'static str) -> &'static str {
-    name.strip_prefix("Pad ").and_then(|rest| rest.split_once(' ')).map_or(name, |(_, n)| n)
+    name.strip_prefix("Pad ").or_else(|| name.strip_prefix("Variant ")).and_then(|rest| rest.split_once(' ')).map_or(name, |(_, n)| n)
 }
 
 fn info(id: &str) -> Option<&'static ParamInfo> {
@@ -120,6 +126,19 @@ struct View {
     pad: usize,
     /// The pad being auditioned while the pointer holds its play button.
     held: Option<(usize, u8)>,
+    /// The pad (or note variant) copied in the honeycomb (its right-click menu), to paste onto
+    /// another note.
+    copied: Option<Copied>,
+    /// The note variant shown in the Pad view instead of its pad (from 0).
+    variant: Option<usize>,
+}
+
+/// What the honeycomb copied.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Copied {
+    Pad(usize),
+    /// A note variant (from 0): its pad and its settings.
+    Variant(usize),
 }
 
 fn view_id(t: TrackId) -> egui::Id {
@@ -148,6 +167,10 @@ struct Out {
     imports: Vec<(Rect, Option<usize>)>,
     /// Import takes picked from a file dialog into this pad.
     import_pad: Option<usize>,
+    /// Copy this pad or variant (the honeycomb's right-click menu), to paste onto another note.
+    copy: Option<Copied>,
+    /// Show this note variant in the Pad view (`Some(None)`: back to its pad).
+    show_variant: Option<Option<usize>>,
     /// Whether the session has an edit selection (for From Selection).
     has_selection: bool,
     /// Import the selected range of an audio track into this pad.
@@ -284,7 +307,10 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
                 crate::hit_picker::draw(&mut body, r, pk, app.ui.hit_playing, &mut asks);
             }
         }
-        Tab::Pad => pad_edit(&mut body, main, tid, ins, view.pad, levels[view.pad], &mut out),
+        Tab::Pad => match view.variant.filter(|v| soundcraft_engine::cmd::juke::variant_on(ins, variant_note(ins, *v)) == Some(*v)) {
+            Some(v) => variant_edit(&mut body, main, tid, ins, v, &mut out),
+            None => pad_edit(&mut body, main, tid, ins, view.pad, levels[view.pad], &mut out),
+        },
         Tab::Kit => pad_grid(&mut body, main, tid, ins, &view, &levels, &mut out),
         Tab::Steps => {
             // The steps take the strips' room too.
@@ -296,7 +322,8 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
         let out_meter = app.meters.get(&tid).map(|m| (m.level, m.hold, m.clip)).unwrap_or_default();
         bus_strips(&mut body, strips, tid, ins, out_meter, bus_levels, &mut out);
     }
-    honeycomb(&mut body, honey, tid, ins, view.pad, &mut out);
+    let lit = lit_notes(app, &ctx, tid);
+    honeycomb(&mut body, honey, tid, ins, &view, &levels, &lit, &mut out);
     apply(app, tid, &mut view, out);
     crate::hit_picker::apply(app, asks);
     ctx.data_mut(|d| d.insert_temp(view_id(tid), view));
@@ -374,7 +401,7 @@ fn import_target(ui: &Ui, r: Rect, pad: Option<usize>, out: &mut Out) {
     }
 }
 
-fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
+fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, mut out: Out) {
     app.kit_drop_targets.extend(out.drops.iter().map(|(r, slot)| (*r, tid, *slot)));
     // The window first, so a pad (registered after it) is found before it.
     app.kit_import_targets.extend(out.imports.iter().map(|(r, pad)| (*r, tid, *pad)));
@@ -411,12 +438,41 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
                     app.ui.juke_clips.insert(tid, ClipId(c));
                 }
             }
+            Ok(v) if id == "mix.kit_note_variant" => {
+                if let Some(n) = v["variant"].as_u64() {
+                    view.variant = Some((n as usize).saturating_sub(1));
+                    view.pad = (v["pad"].as_u64().unwrap_or(1) as usize).saturating_sub(1).min(PADS - 1);
+                    app.ui.juke_tabs.insert(tid, Tab::Pad);
+                }
+                let note = v["note"].as_u64().map(|n| soundcraft_midi::note_name(n.min(127) as u8)).unwrap_or_default();
+                app.ui.status = format!("{note} plays pad {} with its own settings: set them in the Pad view", v["pad"]);
+            }
+            Ok(v) if id == "mix.kit_pad_copy" => {
+                // The pasted pad shows, ready for its own tune and sends.
+                if let Some(pd) = v["pad"].as_u64() {
+                    view.pad = (pd as usize).saturating_sub(1).min(PADS - 1);
+                }
+                let note = v["note"].as_u64().map(|n| soundcraft_midi::note_name(n.min(127) as u8)).unwrap_or_default();
+                app.ui.status =
+                    format!("{} on {note}: change its tune, sends and the rest in the Pad view", v["name"].as_str().unwrap_or("The copy"));
+            }
             Ok(_) => {}
             Err(e) => app.ui.status = e,
         }
     }
+    if let Some(c) = out.copy {
+        view.copied = Some(c);
+        app.ui.status = "Copied: right-click another key and Paste. On a free key it plays the same samples with that key's own settings".into();
+    }
     if let Some(p) = out.select {
         view.pad = p.min(PADS - 1);
+        view.variant = None;
+    }
+    if let Some(v) = out.show_variant {
+        view.variant = v;
+        if v.is_some() {
+            out.tab = Some(Tab::Pad);
+        }
     }
     if let Some(m) = out.open_fx {
         crate::juke_fx::open(app, tid, m);
@@ -1239,15 +1295,192 @@ fn bus_strips(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, out_meter: ([f32
     }
 }
 
+/// How lit each key is (0..1): a note the track's clips play at the playhead (while playing) or
+/// Musical Typing holds lights at once and fades over a quarter second after.
+fn lit_notes(app: &SoundApp, ctx: &egui::Context, tid: TrackId) -> [f32; 128] {
+    let id = egui::Id::new(("juke-lit", tid.0));
+    let now = ctx.input(|i| i.time);
+    let mut last: [f64; 128] = ctx.data(|d| d.get_temp(id)).unwrap_or([f64::NEG_INFINITY; 128]);
+    let s = app.engine.session();
+    if app.is_playing()
+        && let Some(tr) = s.track(tid)
+    {
+        let pos = app.position();
+        let sr = s.sample_rate;
+        let at = s.tempo.samples_to_ticks(pos, sr);
+        for c in tr.clips().iter().filter(|c| c.range().contains(pos) && !c.muted) {
+            if let soundcraft_model::ClipContent::Midi { sequence } = &c.content {
+                let rel = at - s.tempo.samples_to_ticks(c.start, sr);
+                for n in sequence.notes.iter().filter(|n| n.start <= rel && rel < n.start + n.length.max(1)) {
+                    if let Some(t) = last.get_mut(usize::from(n.pitch.min(127))) {
+                        *t = now;
+                    }
+                }
+            }
+        }
+    }
+    // Musical Typing plays the tracks live MIDI reaches (armed or monitoring).
+    if s.track(tid).is_some_and(|t| soundcraft_mix::hears_live_midi(t, true)) {
+        for n in crate::musical_typing::sounding(app) {
+            if let Some(t) = last.get_mut(usize::from(n.min(127))) {
+                *t = now;
+            }
+        }
+    }
+    let mut out = [0.0f32; 128];
+    let mut fading = false;
+    for (o, t) in out.iter_mut().zip(last.iter()) {
+        let age = (now - t) as f32;
+        if age < 0.25 {
+            *o = 1.0 - (age / 0.25).max(0.0);
+            fading = true;
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(id, last));
+    if fading || app.is_playing() {
+        ctx.request_repaint();
+    }
+    out
+}
+
+/// A key's right-click menu: copy what is on it; paste the copy over its pad, or (a free key, or
+/// one with a variant) as a note variant; remove a variant.
+#[allow(clippy::too_many_arguments)]
+fn honey_menu(ui: &mut Ui, tid: TrackId, ins: &Insert, note: u8, pad: Option<usize>, variant: Option<usize>, copied: Option<Copied>, out: &mut Out) {
+    let key = soundcraft_midi::note_name(note);
+    let name_of = |c: Copied| match c {
+        Copied::Pad(p) => pad_layout(ins, p).name,
+        Copied::Variant(v) => format!("{} ({})", pad_layout(ins, soundcraft_engine::cmd::juke::variant_pad(ins, v)).name, variant_note_name(ins, v)),
+    };
+    if let Some(pd) = pad
+        && ui.button(format!("Copy {}", pad_layout(ins, pd).name)).on_hover_text("Copy this pad, to play it on another key").clicked()
+    {
+        out.copy = Some(Copied::Pad(pd));
+        ui.close();
+    }
+    if let Some(v) = variant
+        && ui.button(format!("Copy {key}'s variant")).on_hover_text("Copy this key's pad and settings, to paste on another key").clicked()
+    {
+        out.copy = Some(Copied::Variant(v));
+        ui.close();
+    }
+    match (copied, pad) {
+        // Over another pad: the whole pad, samples and all.
+        (Some(Copied::Pad(c)), Some(pd)) if c != pd => {
+            if ui
+                .button(format!("Paste {} over {}", name_of(Copied::Pad(c)), pad_layout(ins, pd).name))
+                .on_hover_text("This pad becomes a copy: samples and every setting, on its own key")
+                .clicked()
+            {
+                out.cmds.push(("mix.kit_pad_copy", json!({"track": tid.0, "from": c + 1, "to": pd + 1})));
+                ui.close();
+            }
+        }
+        // On a free key (or a variant's): the same samples, this key's own settings.
+        (Some(c), None) => {
+            let tip = "The pad's samples on this key, with this key's own tune, level, pan, sends, decay and cutoff";
+            if ui.button(format!("Paste {} on {key}", name_of(c))).on_hover_text(tip).clicked() {
+                let mut params = json!({"track": tid.0, "note": note});
+                match c {
+                    Copied::Pad(p) => params["pad"] = json!(p + 1),
+                    Copied::Variant(v) => {
+                        params["pad"] = json!(soundcraft_engine::cmd::juke::variant_pad(ins, v) + 1);
+                        params["like"] = json!(v + 1);
+                    }
+                }
+                out.cmds.push(("mix.kit_note_variant", params));
+                ui.close();
+            }
+        }
+        (None, None) => {
+            ui.add_enabled(false, egui::Button::new("Paste")).on_disabled_hover_text("Right-click a pad's key and Copy it first");
+        }
+        _ => {}
+    }
+    if variant.is_some() && ui.button(format!("Remove {key}'s variant")).clicked() {
+        out.cmds.push(("mix.kit_note_variant_clear", json!({"track": tid.0, "note": note})));
+        out.show_variant = Some(None);
+        ui.close();
+    }
+}
+
+/// The key variant `v` is on.
+fn variant_note(ins: &Insert, v: usize) -> u8 {
+    value(ins, &format!("var{}_note", v + 1)).round().clamp(0.0, 127.0) as u8
+}
+
+/// A note variant in the Pad view: its key and pad, and its own settings as offsets from the
+/// pad's (the samples stay the pad's).
+fn variant_edit(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, v: usize, out: &mut Out) {
+    let pad = soundcraft_engine::cmd::juke::variant_pad(ins, v);
+    let layout = pad_layout(ins, pad);
+    let color = family_color(layout.family);
+    let p = ui.painter().clone();
+    widgets::rounded_vgradient(&p, r, 6.0, CARD_TOP, CARD_BOTTOM);
+    p.rect_stroke(r, 6.0, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+    let head = Rect::from_min_size(r.min, vec2(r.width(), 30.0));
+    p.rect_filled(head, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, color.gamma_multiply(0.62));
+    let back = Rect::from_min_size(pos2(head.min.x + 6.0, head.min.y + 5.0), vec2(96.0, 20.0));
+    let resp = ui
+        .interact(back, egui::Id::new(("juke-var-back", tid.0)), Sense::click())
+        .on_hover_text("The pad itself: its samples, envelopes and the rest");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Edit the pad"));
+    p.rect_filled(back, 3.0, if resp.hovered() { Color32::from_black_alpha(60) } else { Color32::from_black_alpha(35) });
+    let c = pos2(back.min.x + 12.0, back.center().y);
+    p.add(Shape::convex_polygon(vec![pos2(c.x - 4.0, c.y), pos2(c.x + 3.0, c.y - 5.0), pos2(c.x + 3.0, c.y + 5.0)], CREAM, Stroke::NONE));
+    text(&p, pos2(back.center().x + 6.0, back.center().y), Align2::CENTER_CENTER, format!("Pad {}", pad + 1), bold(10.5), CREAM);
+    if resp.clicked() {
+        out.select = Some(pad);
+        out.show_variant = Some(None);
+    }
+    let key = variant_note_name(ins, v);
+    text(&p, pos2(back.max.x + 10.0, head.center().y), Align2::LEFT_CENTER, format!("{key} · {} · key variant", layout.name), bold(12.0), CREAM);
+    let remove = Rect::from_min_size(pos2(head.max.x - 128.0, head.min.y + 5.0), vec2(120.0, 20.0));
+    if chip(ui, remove, egui::Id::new(("juke-var-remove", tid.0)), "Remove variant", false, AMBER).clicked() {
+        out.cmds.push(("mix.kit_note_variant_clear", json!({"track": tid.0, "note": variant_note(ins, v)})));
+        out.select = Some(pad);
+        out.show_variant = Some(None);
+    }
+    let inner = Rect::from_min_max(pos2(r.min.x + 16.0, head.max.y + 12.0), pos2(r.max.x - 16.0, r.max.y - 12.0));
+    let note = format!(
+        "{key} plays pad {} ({}): the same samples, with these settings of its own on top of the pad's. At zero it sounds as the pad does; change the pad and this key follows.",
+        pad + 1,
+        layout.name
+    );
+    let galley = p.layout(note, regular(11.0), LABEL, inner.width());
+    p.galley(inner.min, galley, LABEL);
+    // Two rows of four knobs.
+    let ids = soundcraft_engine::cmd::juke::VARIANT_OFFSETS;
+    let cell = vec2((inner.width() / 4.0).min(170.0), 110.0);
+    for (i, k) in ids.iter().enumerate() {
+        let (row, col) = (i / 4, i % 4);
+        let at = Rect::from_min_size(pos2(inner.min.x + col as f32 * cell.x, inner.min.y + 44.0 + row as f32 * (cell.y + 10.0)), cell);
+        knob_at(ui, at, ins, &format!("var{}_{k}", v + 1), 40.0, KnobStyle::CreamHero, out);
+    }
+    let hint = "Decay is a share of the pad's (100% the same); Cutoff is in octaves from the pad's; Pan and the sends add to the pad's.";
+    let galley = p.layout(hint.to_string(), regular(10.0), LABEL.gamma_multiply(0.75), inner.width());
+    p.galley(pos2(inner.min.x, inner.max.y - galley.size().y), galley, LABEL);
+}
+fn variant_note_name(ins: &Insert, v: usize) -> String {
+    let n = value(ins, &format!("var{}_note", v + 1)).round().clamp(0.0, 127.0) as u8;
+    soundcraft_midi::note_name(n)
+}
+
 /// Whether `note` is a black key.
 fn is_black(note: u8) -> bool {
     matches!(note % 12, 1 | 3 | 6 | 8 | 10)
 }
 
 /// The trigger notes as a two-row honeycomb: white keys along the bottom, each black key nested
-/// above between its neighbours. Click a cell to select its pad; drop a pad header on one to move
-/// the pad's note there.
-fn honeycomb(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, selected: usize, out: &mut Out) {
+/// above between its neighbours, coloured by the pad on the note (a note variant's darker, with a
+/// dot). A key lights as its note plays (`lit`: the track's clips at the playhead, Musical
+/// Typing), a pad's own key also as the pad sounds (its level: live MIDI, auditions). Click
+/// selects the pad (or variant), a dropped pad header moves the pad's note there, right-click
+/// copies a pad or variant and pastes it: over another pad (`mix.kit_pad_copy`), or on a free key
+/// as a note variant (`mix.kit_note_variant`: the pad's samples, the key's own settings).
+#[allow(clippy::too_many_arguments)]
+fn honeycomb(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, levels: &[f32; PADS], lit: &[f32; 128], out: &mut Out) {
+    let selected = view.pad;
     let p = ui.painter().clone();
     p.rect_filled(r, 4.0, TOP_BAR);
     let whites = (HONEY_LOW..=HONEY_HIGH).filter(|n| !is_black(*n)).count() as f32;
@@ -1277,27 +1510,49 @@ fn honeycomb(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, selected: usize, 
         };
         let cell = Rect::from_center_size(c, vec2(w - 2.0, h));
         let pad = pad_for_note(ins, note);
+        let variant = if pad.is_none() { soundcraft_engine::cmd::juke::variant_on(ins, note) } else { None };
+        let vpad = variant.map(|v| soundcraft_engine::cmd::juke::variant_pad(ins, v));
         let resp = ui.interact(cell, egui::Id::new(("juke-honey", tid.0, note)), Sense::click());
-        let resp = match pad {
-            Some(pd) => resp.on_hover_text(format!("{} · {}", soundcraft_midi::note_name(note), pad_layout(ins, pd).name)),
-            None => resp.on_hover_text(soundcraft_midi::note_name(note)),
+        let key_label = format!("Key {}", soundcraft_midi::note_name(note));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &key_label));
+        let resp = match (pad, vpad) {
+            (Some(pd), _) => resp.on_hover_text(format!("{} · {}", soundcraft_midi::note_name(note), pad_layout(ins, pd).name)),
+            (None, Some(pd)) => resp.on_hover_text(format!(
+                "{} · {} with this key's own settings (right-click for more)",
+                soundcraft_midi::note_name(note),
+                pad_layout(ins, pd).name
+            )),
+            _ => resp.on_hover_text(soundcraft_midi::note_name(note)),
         };
-        if resp.clicked()
-            && let Some(pd) = pad
-        {
-            out.select = Some(pd);
+        if resp.clicked() {
+            if let Some(pd) = pad {
+                out.select = Some(pd);
+                out.show_variant = Some(None);
+            } else if let (Some(v), Some(pd)) = (variant, vpad) {
+                out.select = Some(pd);
+                out.show_variant = Some(Some(v));
+            }
         }
         if let Some(drag) = resp.dnd_release_payload::<PadDrag>() {
             out.set(pad_param(drag.0, "note"), f32::from(note));
             out.select = Some(drag.0);
         }
+        resp.context_menu(|ui| honey_menu(ui, tid, ins, note, pad, variant, view.copied, out));
         let hovered_drop = resp.dnd_hover_payload::<PadDrag>().is_some();
-        let fill = match pad {
-            Some(pd) => family_color(pad_layout(ins, pd).family),
-            None if black => Color32::from_rgb(0x3A, 0x32, 0x2B),
-            None => Color32::from_rgb(0x4A, 0x40, 0x37),
+        let base = match (pad, vpad) {
+            (Some(pd), _) => family_color(pad_layout(ins, pd).family),
+            (None, Some(pd)) => family_color(pad_layout(ins, pd).family).gamma_multiply(0.62),
+            (None, None) if black => Color32::from_rgb(0x3A, 0x32, 0x2B),
+            _ => Color32::from_rgb(0x4A, 0x40, 0x37),
         };
-        let stroke = if pad == Some(selected) {
+        // Lit as the note plays (and a pad's own key as the pad sounds): toward cream.
+        let level = pad.and_then(|pd| levels.get(pd)).map_or(0.0, |l| ((20.0 * l.max(1e-6).log10() + 48.0) / 42.0).clamp(0.0, 1.0));
+        let glow = level.max(lit.get(usize::from(note)).copied().unwrap_or(0.0));
+        let fill = if glow > 0.0 { lerp_color(base, Color32::from_rgb(0xFF, 0xF4, 0xDC), glow * 0.85) } else { base };
+        let selected_variant = variant.is_some() && view.variant == variant;
+        let stroke = if glow > 0.3 {
+            Stroke::new(2.0, Color32::WHITE.gamma_multiply(glow))
+        } else if (pad == Some(selected) && view.variant.is_none()) || selected_variant {
             Stroke::new(2.0, CREAM)
         } else if hovered_drop || resp.hovered() {
             Stroke::new(1.5, AMBER)
@@ -1305,6 +1560,9 @@ fn honeycomb(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, selected: usize, 
             Stroke::new(1.0, EDGE)
         };
         p.add(Shape::convex_polygon(hex(c), fill, stroke));
+        if variant.is_some() {
+            p.circle_filled(pos2(c.x, c.y + h * 0.22), 2.2, CREAM);
+        }
         if note % 12 == 0 {
             let tc = if pad.is_some() { DARK_TEXT } else { LABEL };
             text(&p, c, Align2::CENTER_CENTER, soundcraft_midi::note_name(note), regular(8.5), tc);

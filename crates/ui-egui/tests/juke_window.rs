@@ -448,3 +448,35 @@ fn the_pad_editor_has_its_humanize_layers_and_envelope_lamps() {
     h.run_steps(2);
     assert_eq!(param(&h, t, "p1_mode"), Some(1.0));
 }
+
+#[test]
+fn a_pad_copied_in_the_keys_pastes_on_a_free_key_as_a_variant() {
+    let (mut h, t) = rig(false);
+    let kick = soundcraft_midi::note_name(36);
+    // A free key a fifth up (no pad on G1/43).
+    let free = soundcraft_midi::note_name(43);
+    h.get_by_label(&format!("Key {kick}")).click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Copy Kick").click();
+    h.run_steps(2);
+    h.get_by_label(&format!("Key {free}")).click_secondary();
+    h.run_steps(2);
+    h.get_by_label(&format!("Paste Kick on {free}")).click();
+    h.run_steps(3);
+    let ins = h.state().engine.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+    assert_eq!(soundcraft_engine::cmd::juke::variant_on(&ins, 43), Some(0));
+    assert_eq!(soundcraft_engine::cmd::juke::variant_pad(&ins, 0), 0);
+    // The variant shows in the Pad view, its own knobs there.
+    assert_eq!(h.state().ui.juke_tabs.get(&t), Some(&Tab::Pad));
+    assert!(h.query_by_label("Remove variant").is_some());
+    h.state_mut().run("mix.instrument_param", json!({"track": t.0, "param": "var1_tune", "value": -5.0})).unwrap();
+    h.run_steps(2);
+    proof(&mut h, "juke-key-variant");
+    // Its menu removes it.
+    h.get_by_label(&format!("Key {free}")).click_secondary();
+    h.run_steps(2);
+    h.get_by_label(&format!("Remove {free}'s variant")).click();
+    h.run_steps(2);
+    let ins = h.state().engine.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+    assert_eq!(soundcraft_engine::cmd::juke::variant_on(&ins, 43), None);
+}

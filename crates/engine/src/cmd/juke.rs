@@ -132,6 +132,33 @@ pub fn specs() -> Vec<CommandSpec> {
             pad_pick
         ),
         cmd!(
+            "mix.kit_pad_copy",
+            "Copy Pad",
+            [],
+            None,
+            "{track?, from: 1-16, to?: 1-16, note?: 0-127} -> {track, pad, name, note}: pad `to` (or the pad on `note`) becomes a copy of pad `from` (its samples, every setting, its name and family) on its own note",
+            has_selection,
+            pad_copy
+        ),
+        cmd!(
+            "mix.kit_note_variant",
+            "Note Variant",
+            [],
+            None,
+            "{track?, note: 0-127, pad: 1-16, like?: 1-16 (a variant to copy the settings of)} -> {track, variant, note, pad}: pad `pad` also plays on `note`, with that note's own tune, fine, level, pan, sends, decay and cutoff (offsets from the pad's, set with mix.instrument_param `var{n}_…`; all zero, or variant `like`'s); its samples stay the pad's. The note's variant is reused, else a free one of sixteen",
+            has_selection,
+            note_variant
+        ),
+        cmd!(
+            "mix.kit_note_variant_clear",
+            "Clear Note Variant",
+            [],
+            None,
+            "{track?, note: 0-127} -> {cleared}: the note no longer plays a variant",
+            has_selection,
+            note_variant_clear
+        ),
+        cmd!(
             "mix.kit_import",
             "Import Kit",
             [],
@@ -393,6 +420,124 @@ fn pad_import(e: &mut Engine, p: &Value) -> Result<Value> {
 /// The strings in `p[key]` (an array of strings).
 fn string_list(p: &Value, key: &str) -> Vec<String> {
     p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
+fn pad_copy(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_pad_copy";
+    let t = juke_track(e, id, p)?;
+    let pad_of = |key: &str| -> Result<usize> {
+        p.get(key)
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .filter(|n| (1..=PADS).contains(n))
+            .map(|n| n - 1)
+            .ok_or_else(|| bad(id, format!("`{key}` required: a pad 1-16")))
+    };
+    let from = pad_of("from")?;
+    let to = match (p.get("to"), p.get("note").and_then(Value::as_u64)) {
+        (Some(_), _) => pad_of("to")?,
+        (None, Some(note)) if note <= 127 => {
+            let note = note as u8;
+            let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap_or_else(juke_insert);
+            let on_note = (0..PADS).find(|&pd| pad_note_of(&ins, pd) == note);
+            on_note.ok_or_else(|| bad(id, "no pad is on that note: mix.kit_note_variant plays a pad there with its own settings"))?
+        }
+        _ => return Err(bad(id, "`to` (a pad 1-16) or `note` (0-127) required")),
+    };
+    if from == to {
+        return Err(bad(id, "copy a pad onto another pad"));
+    }
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let (src, dst) = (format!("p{}_", from + 1), format!("p{}_", to + 1));
+    // Every setting but the note: the copy plays on its own key.
+    let params: Vec<(String, f32)> =
+        ins.params.iter().filter_map(|(k, v)| k.strip_prefix(&src).filter(|rest| *rest != "note").map(|rest| (format!("{dst}{rest}"), *v))).collect();
+    ins.params.extend(params);
+    let (src_s, dst_s) = (format!("p{}.", from + 1), format!("p{}.", to + 1));
+    ins.samples.retain(|k, _| !k.starts_with(&dst_s));
+    let samples: Vec<(String, soundcraft_model::SourceId)> =
+        ins.samples.iter().filter_map(|(k, v)| k.strip_prefix(&src_s).map(|rest| (format!("{dst_s}{rest}"), *v))).collect();
+    ins.samples.extend(samples);
+    let layout = ins.kit.get_or_insert_with(default_layout);
+    while layout.pads.len() < PADS {
+        let i = layout.pads.len();
+        let (n, f) = DEFAULT_PADS.get(i).copied().unwrap_or(("Pad", DrumFamily::Percussion));
+        layout.pads.push(KitPad { name: n.into(), family: f });
+    }
+    let entry = layout.pads.get(from).cloned().unwrap_or(KitPad { name: "Pad".into(), family: DrumFamily::Percussion });
+    let name: String = format!("{} 2", entry.name).chars().take(32).collect();
+    if let Some(d) = layout.pads.get_mut(to) {
+        *d = KitPad { name: name.clone(), family: entry.family };
+    }
+    let note = juke_mut(e, t).map_or(0, |i| pad_note_of(i, to));
+    Ok(json!({"track": t, "pad": to + 1, "name": name, "note": note}))
+}
+
+/// The offsets a note variant has besides its note and pad.
+pub const VARIANT_OFFSETS: [&str; 8] = ["tune", "fine", "level", "pan", "send_a", "send_b", "decay", "cutoff"];
+
+/// The variant (from 0) on `note` of a Juke, if any.
+pub fn variant_on(ins: &Insert, note: u8) -> Option<usize> {
+    (0..soundcraft_dsp::plugins::juke::VARIANTS).find(|v| param_of(ins, &format!("var{}_note", v + 1)).round() as i32 == i32::from(note))
+}
+
+/// The pad (from 0) variant `v` plays.
+pub fn variant_pad(ins: &Insert, v: usize) -> usize {
+    (param_of(ins, &format!("var{}_pad", v + 1)).round().max(0.0) as usize).min(PADS - 1)
+}
+
+fn param_of(ins: &Insert, key: &str) -> f32 {
+    ins.params.get(key).copied().unwrap_or_else(|| JUKE_INFO.param(key).map_or(0.0, |p| p.default))
+}
+
+fn note_variant(e: &mut Engine, p: &Value) -> Result<Value> {
+    use soundcraft_dsp::plugins::juke::VARIANTS;
+    let id = "mix.kit_note_variant";
+    let t = juke_track(e, id, p)?;
+    let note = p.get("note").and_then(Value::as_u64).filter(|n| *n <= 127).ok_or_else(|| bad(id, "`note` required: 0-127"))? as u8;
+    let pad = pad_param(p, id)?;
+    let like = match p.get("like") {
+        Some(v) => {
+            Some(v.as_u64().map(|n| n as usize).filter(|n| (1..=VARIANTS).contains(n)).ok_or_else(|| bad(id, "`like` is a variant 1-16"))? - 1)
+        }
+        None => None,
+    };
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    if (0..PADS).any(|pd| pad_note_of(ins, pd) == note) {
+        return Err(bad(id, "a pad is on that note: move it, or copy over it with mix.kit_pad_copy"));
+    }
+    let slot = variant_on(ins, note)
+        .or_else(|| (0..VARIANTS).find(|v| param_of(ins, &format!("var{}_note", v + 1)) < 0.0))
+        .ok_or_else(|| bad(id, "all sixteen note variants are in use: clear one first"))?;
+    let offsets: Vec<(String, f32)> = VARIANT_OFFSETS
+        .iter()
+        .map(|k| {
+            let key = format!("var{}_{k}", slot + 1);
+            let v = like.map_or_else(|| JUKE_INFO.param(&key).map_or(0.0, |p| p.default), |l| param_of(ins, &format!("var{}_{k}", l + 1)));
+            (key, v)
+        })
+        .collect();
+    ins.params.extend(offsets);
+    ins.params.insert(format!("var{}_note", slot + 1), f32::from(note));
+    ins.params.insert(format!("var{}_pad", slot + 1), pad as f32);
+    Ok(json!({"track": t, "variant": slot + 1, "note": note, "pad": pad + 1}))
+}
+
+fn note_variant_clear(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_note_variant_clear";
+    let t = juke_track(e, id, p)?;
+    let note = p.get("note").and_then(Value::as_u64).filter(|n| *n <= 127).ok_or_else(|| bad(id, "`note` required: 0-127"))? as u8;
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let Some(v) = variant_on(ins, note) else { return Ok(json!({"cleared": 0})) };
+    ins.params.insert(format!("var{}_note", v + 1), -1.0);
+    Ok(json!({"cleared": 1, "variant": v + 1}))
+}
+
+/// Pad `pad`'s note.
+fn pad_note_of(ins: &Insert, pad: usize) -> u8 {
+    let key = format!("p{}_note", pad + 1);
+    let default = JUKE_INFO.param(&key).map_or(36.0, |p| p.default);
+    ins.params.get(&key).copied().unwrap_or(default).round().clamp(0.0, 127.0) as u8
 }
 
 fn pad_analyze(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1839,6 +1984,72 @@ mod tests {
         assert!(e.execute("mix.kit_pad_pick", &json!({"take": take, "picks": [{"hit": 0, "layer": 1}, {"hit": 0, "layer": 2}]})).is_err());
         assert!(e.execute("mix.kit_pad_pick", &json!({"take": take + 1, "picks": [{"hit": 0, "layer": 1}]})).is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_pad_copied_to_another_plays_the_same_sound_on_its_own_note() {
+        let d = dir("pad-copy");
+        let wav = d.join("Kick.wav");
+        take_wav(&wav, 48_000, &[0.3, 0.8]);
+        let (mut e, t) = beat();
+        e.execute("mix.kit_pad_import", &json!({"track": t.0, "pad": 1, "paths": [wav.to_string_lossy()]})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p1_tune", "value": -3.0})).unwrap();
+        let note9 = juke(&e, t).params.get("p9_note").copied();
+        let v = e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "to": 9})).unwrap();
+        assert_eq!(v["name"], "Kick 2");
+        let ins = juke(&e, t);
+        assert_eq!(ins.params.get("p9_tune"), Some(&-3.0));
+        assert_eq!(ins.params.get("p9_note").copied(), note9, "the copy keeps its own note");
+        assert_ne!(ins.params.get("p9_note"), ins.params.get("p1_note"));
+        let mut a: Vec<_> = ins.samples.iter().filter(|(k, _)| k.starts_with("p1.")).map(|(k, v)| (k.replacen("p1.", "", 1), *v)).collect();
+        let mut b: Vec<_> = ins.samples.iter().filter(|(k, _)| k.starts_with("p9.")).map(|(k, v)| (k.replacen("p9.", "", 1), *v)).collect();
+        a.sort();
+        b.sort();
+        assert!(!a.is_empty() && a == b, "the same samples, not copies of the audio");
+        assert_eq!(pad_layout(&ins, 8).family, pad_layout(&ins, 0).family);
+        // Its own tune from here on.
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p9_tune", "value": 5.0})).unwrap();
+        assert_eq!(juke(&e, t).params.get("p1_tune"), Some(&-3.0));
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!juke(&e, t).samples.keys().any(|k| k.starts_with("p9.")), "undo takes the copy back");
+        assert!(e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 2, "to": 2})).is_err());
+        // Onto an empty note: refused (that is a note variant's job).
+        let used: Vec<u8> = (0..PADS).map(|pd| pad_note_of(&juke(&e, t), pd)).collect();
+        let empty = (24u8..96).find(|n| !used.contains(n)).unwrap();
+        assert!(e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "note": empty})).is_err());
+        // Onto a pad's note: that pad.
+        let v = e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "note": used[2]})).unwrap();
+        assert_eq!(v["pad"], 3);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_note_variant_plays_a_pad_on_another_note_with_its_own_settings() {
+        let (mut e, t) = beat();
+        let kick = pad_note_of(&juke(&e, t), 0);
+        let used: Vec<u8> = (0..PADS).map(|pd| pad_note_of(&juke(&e, t), pd)).collect();
+        let free: Vec<u8> = (24u8..96).filter(|n| !used.contains(n)).take(2).collect();
+        let (note, other) = (free[0], free[1]);
+        let v = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": note, "pad": 1})).unwrap();
+        assert_eq!((v["variant"].as_u64(), v["pad"].as_u64()), (Some(1), Some(1)));
+        let ins = juke(&e, t);
+        assert_eq!(variant_on(&ins, note), Some(0));
+        assert_eq!(variant_pad(&ins, 0), 0);
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "var1_tune", "value": 7.0})).unwrap();
+        // A second variant like the first, then the same note again reuses its slot.
+        let v2 = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": other, "pad": 1, "like": 1})).unwrap();
+        assert_eq!(v2["variant"], 2);
+        assert_eq!(juke(&e, t).params.get("var2_tune"), Some(&7.0));
+        let again = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": note, "pad": 3})).unwrap();
+        assert_eq!(again["variant"], 1);
+        assert_eq!(juke(&e, t).params.get("var1_tune"), Some(&0.0), "made anew: offsets back to zero");
+        // Not on a pad's own note; cleared, the note is free.
+        assert!(e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": kick, "pad": 2})).is_err());
+        assert_eq!(e.execute("mix.kit_note_variant_clear", &json!({"track": t.0, "note": note})).unwrap()["cleared"], 1);
+        assert_eq!(variant_on(&juke(&e, t), note), None);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(variant_on(&juke(&e, t), note), Some(0), "undo brings it back");
     }
 
     #[test]
