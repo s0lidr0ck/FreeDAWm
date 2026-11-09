@@ -2,10 +2,14 @@
 # draft `v<version>`; a tag push publishes directly, but not every clone can push tags).
 #
 #   Actions › Publish Release › Run [tag]   publish the draft `tag` (default: `v` + the version in
-#                                           Cargo.toml on the chosen branch) and mark it latest
+#                                           Cargo.toml on the chosen branch) and mark it latest,
+#                                           with its notes from docs/releases/<tag>.md
+#   … with "notes only" ticked              rewrite a release's notes from docs/releases/<tag>.md,
+#                                           published or not
 #
-# Refuses a tag that has no draft, a draft whose commit is not on main, and a tag whose version is
-# a pre-release when asked to mark it latest. Only GITHUB_TOKEN is used. See docs/releasing.md.
+# Refuses a tag that has no release, a draft with no assets, a release whose commit is not on
+# main, and publishing a tag that is already published. Only GITHUB_TOKEN is used. See
+# docs/releasing.md.
 name: Publish Release
 
 on:
@@ -15,6 +19,10 @@ on:
         description: "The draft to publish, e.g. v0.9.4 (default: v + Cargo.toml's version)"
         required: false
         default: ""
+      notes_only:
+        description: "Only rewrite the release's notes from docs/releases/<tag>.md (works on a published release)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,20 +62,27 @@ jobs:
           draft="$(printf '%s' "$release" | jq -r '.draft' | head -n 1)"
           target="$(printf '%s' "$release" | jq -r '.target_commitish' | head -n 1)"
           assets="$(printf '%s' "$release" | jq -r '.assets | length' | head -n 1)"
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$target" origin/main; then
+            echo "::error::the release $tag was built from $target, which is not on main"
+            exit 1
+          fi
+          notes="$RUNNER_TEMP/notes.md"
+          bash packaging/release-notes.sh "$tag" "$target" >"$notes"
+          if [ "${{ inputs.notes_only }}" = true ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F "body=@$notes" --jq '.html_url'
+            echo "notes of $tag rewritten from docs/releases/$tag.md" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ "$draft" != true ]; then
-            echo "::error::$tag is already published"
+            echo "::error::$tag is already published (tick 'notes only' to rewrite its notes)"
             exit 1
           fi
           if [ "$assets" -lt 1 ]; then
             echo "::error::the draft $tag has no assets; run the Release workflow first"
             exit 1
           fi
-          git fetch -q origin main
-          if ! git merge-base --is-ancestor "$target" origin/main; then
-            echo "::error::the draft $tag was built from $target, which is not on main"
-            exit 1
-          fi
           latest=true
           case "$tag" in *-*) latest=false;; esac
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false -F make_latest="$latest" --jq '.html_url'
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false -F make_latest="$latest" -F "body=@$notes" --jq '.html_url'
           echo "published $tag from ${target::12} ($assets assets)" >>"$GITHUB_STEP_SUMMARY"

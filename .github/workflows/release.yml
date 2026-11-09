@@ -12,7 +12,8 @@
 #   pull request touching     build and package everything as a check; no release
 #   packaging or this file
 #
-# Only GITHUB_TOKEN is used. See docs/releasing.md.
+# The release notes are `docs/releases/v<version>.md` (what's new) and the Downloads section
+# `packaging/release-notes.sh` writes. Only GITHUB_TOKEN is used. See docs/releasing.md.
 name: Release
 
 on:
@@ -183,16 +184,8 @@ jobs:
           prerelease=()
           case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           notes="$RUNNER_TEMP/notes.md"
-          cat >"$notes" <<EOF
-          Unsigned builds made by GitHub Actions from ${GITHUB_SHA::12}.
-
-          - **Windows x64**: \`.msi\` installer or \`-portable.zip\`. The files are not code-signed, so SmartScreen may say "Windows protected your PC": choose *More info › Run anyway*. Audio goes through ASIO or WASAPI. This Windows build includes Steinberg's ASIO SDK under GPLv3, so it is distributed under GPLv3 as a whole (see \`ASIO-NOTICE.txt\`); FreeDAWm's source stays MIT OR Apache-2.0.
-          - **macOS 11+ on Apple silicon** (no Intel build yet): open the \`.dmg\` and drag FreeDAWm to Applications. The app is not notarized: the first time, right-click (Control-click) FreeDAWm in Applications and choose *Open*, then *Open* again. On macOS 15 and later, if there is no *Open* button, go to *System Settings › Privacy & Security* and click *Open Anyway* under the FreeDAWm message (or run \`xattr -dr com.apple.quarantine /Applications/FreeDAWm.app\`).
-          - **Linux x86_64** (glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 40 or newer): \`.AppImage\` (\`chmod +x\` and run), \`.deb\`, \`.rpm\` or \`.tar.gz\`.
-
-          Check downloads against \`SHA256SUMS.txt\`.
-          EOF
-          sed -i 's/^          //' "$notes"
+          # What's new (docs/releases/<tag>.md, when written) and the Downloads section.
+          bash packaging/release-notes.sh "$tag" "$GITHUB_SHA" >"$notes"
           if gh release view "$tag" --json isDraft --jq .isDraft >"$RUNNER_TEMP/draft" 2>/dev/null; then
             if [ "$(cat "$RUNNER_TEMP/draft")" != true ] ; then
               echo "::error::release $tag is already published; bump the version first"

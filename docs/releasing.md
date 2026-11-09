@@ -23,7 +23,11 @@ User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase
    cargo xtask version set 0.2.0       # or 0.2.0-rc.1; updates Cargo.toml and Cargo.lock
    ```
 
-   Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
+   Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow, with the
+   release notes: `docs/releases/v0.2.0.md`, a "## What's new in 0.2.0" section in plain words
+   for users (see the earlier files there). The workflows put it above the Downloads section of
+   the release (`packaging/release-notes.sh`); to change published notes later, edit the file and
+   run *Publish Release* with *notes only* ticked.
 2. **Optional dry run:** *Actions › Release › Run workflow* on `main` builds everything and
    creates (or updates) a **draft** release `v0.2.0` with every package and `SHA256SUMS.txt`.
    Nobody sees a draft until a maintainer publishes it; download a package or two and try them.
