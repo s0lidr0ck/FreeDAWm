@@ -84,6 +84,16 @@ different input and output devices on WASAPI it means within about 1 ms (best ef
 - [ ] Take alignment against the click track. Expected: within ±1 sample, with LLM off and on.
 - [ ] Routing: the "Out 5-6" track is heard only on 5–6.
 
+### X32 as the controller (Setup › X32 Control)
+
+- [ ] Patch Bus 16 to no output. In Setup › X32 Control type the desk's IP. Expected: "Connected to X32 <firmware> at <IP>" within a few seconds.
+- [ ] On the desk press Sends on Fader and select Bus 16. Move channel 1's fader. Expected: the session's first track's fader follows; the room's mix (mains, monitors) does not change.
+- [ ] Move channel 1 to unity (0 dB on the desk). Expected: the track reads 0.0 dB. At the bottom: -inf (-144).
+- [ ] Bus 16's master fader. Expected: the session's master follows (switch it off: it doesn't).
+- [ ] Link Buses 15–16, pick Stereo pair › Buses 15–16. Turn a channel's send pan. Expected: the track's pan follows.
+- [ ] Touch mode on a track, play, ride its fader on the desk. Expected: automation written, one undo step for the ride.
+- [ ] Leave Sends on Fader. Expected: the faders go back to the live mix and nothing in the session moves.
+
 ## 4. Focusrite Scarlett 2i2
 
 For the loopback, connect output 1 to input 1 with the cable. Turn input 1's gain down, and switch

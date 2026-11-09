@@ -257,6 +257,11 @@ download.
   a few hundred milliseconds away over the internet. Editing stays on the host. Your own
   session is put aside and comes back when you stop.
 
+- **An X32 as the controller.** Setup › X32 Control: the desk's faders move this session through
+  one bus's sends (Sends on Fader), so the room's mix never changes. Pick a mono bus, or a
+  stereo pair for pan too; the bus master moves the master. Moves write automation like any
+  fader.
+
 <p align="center">
   <img alt="Setup › Network as the host: this network and the internet switched on, an invite for a mixer ready to copy, a map of who is connected, and the trusted devices" src="docs/images/network.png" width="60%">
 </p>

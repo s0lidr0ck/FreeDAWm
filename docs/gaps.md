@@ -157,9 +157,10 @@ native-speaker review.
 
 ### G-10. Control surfaces
 
-None: no HUI or Mackie Control, no EUCON (Avid-proprietary, needs Avid's SDK: owner decision),
+No HUI or Mackie Control, no EUCON (Avid-proprietary, needs Avid's SDK: owner decision),
 no generic MIDI controller mapping. Pro Tools users on S1/S3/S4/S6/Dock or HUI devices can't
-switch. ≈ 40–70 h for HUI/MCU plus a mapping layer; hardware needed to verify.
+switch. ≈ 40–70 h for HUI/MCU plus a mapping layer; hardware needed to verify. Built so far: a
+Behringer X32 over OSC, one way, through a controller bus's sends (Setup › X32 Control).
 
 ### G-11. Sync
 

@@ -23,6 +23,7 @@ pub mod pairing;
 pub mod proto;
 pub mod sync;
 pub mod take;
+pub mod x32;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod discovery;

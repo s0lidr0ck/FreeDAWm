@@ -113,6 +113,8 @@ pub mod widgets;
 pub mod window_sync;
 pub mod windows;
 pub mod word_finder;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod x32_ui;
 
 use serde_json::{Value, json};
 use soundcraft_engine::{Engine, TransportRequest};
@@ -308,6 +310,9 @@ pub struct UiState {
     /// Setup › Network… (`net_ui`).
     #[serde(default)]
     pub show_network: bool,
+    /// Setup › X32 Control… (`x32_ui`).
+    #[serde(default)]
+    pub show_x32: bool,
     /// MIDI input ports enabled (true) or not, by port name (`midi.inputs`): per machine. A
     /// port not named is enabled.
     #[serde(default, rename = "midi.inputs")]
@@ -493,6 +498,7 @@ impl Default for UiState {
             show_io_setup: false,
             show_midi_inputs: false,
             show_network: false,
+            show_x32: false,
             midi_inputs: std::collections::BTreeMap::new(),
             midi_thru: true,
             show_shortcuts: false,
@@ -2298,6 +2304,8 @@ impl SoundApp {
         net_ui::step(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         remote_mix::step(self);
+        #[cfg(not(target_arch = "wasm32"))]
+        x32_ui::step(self);
         // Preferences › Operation › Copy imported audio into the project (this computer's).
         self.engine.copy_imported_audio = self.ui.copy_imported_audio;
         // Stop the old playback before sending a replacement session to the audio thread.

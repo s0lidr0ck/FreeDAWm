@@ -541,6 +541,7 @@ Setup > ## Recording & MIDI
 Setup > Click/Countoff... = soon
 Setup > MIDI Input Devices... = @window.midi_inputs
 Setup > Network... = @window.network [desktop]
+Setup > X32 Control... = @window.x32 [desktop]
 Setup > ---
 Setup > ## Session & keys
 Setup > Session

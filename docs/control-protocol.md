@@ -1152,6 +1152,24 @@ Over the internet the remote PC connects through the same local bridge as a perf
 |---|---|---|
 | `net.remote_mix` | `{on?: bool, hear?: bool}` (toggles without `on`) | `{on, hear, connected, status}`. Mixes the host found and paired (or joined) in Setup › Network, or stops. Refused while recording with it, or before pairing. |
 
+## X32 bus control
+
+Spec: `docs/superpowers/specs/2026-11-09-x32-bus-control-design.md`; code: `soundcraft_net::x32`,
+`crates/ui-egui/src/x32_ui.rs`. Desktop only.
+
+A Behringer X32 (or Midas M32) moves this session's faders through one bus's sends: on the desk,
+Sends on Fader with that bus selected. Channel `N`'s send level is the `N`th track's volume
+(from the top; master, folders and video tracks skipped), the bus master the session's master
+(`master`), and with a stereo pair (linked on the desk) each send's pan the track's pan. The
+moves are `mix.volume` / `mix.pan`, one undo step per gesture (moves less than a second apart),
+and write automation like any fader. OSC over UDP to the desk's port 10023 (`/xremote` renewed
+every 8 s, `/info`).
+
+| Command | Params | Result |
+|---|---|---|
+| `window.x32` | `{value?: bool}` | Setup › X32 Control…: shows or hides the window. |
+| `setup.x32` | `{enabled?, address?, bus?: 1..16, stereo?: bool, master?: bool}` | `{enabled, address, bus, stereo, controller, master, connected, console, error}`. A stereo pair is kept as its odd bus (`bus: 16, stereo: true` is Buses 15–16). `connected`: heard from within 20 s; `console`: `X32 4.06`. |
+
 ## Record offset and loopback measure
 
 Takes are placed earlier than they were captured by the record offset. It is kept per machine

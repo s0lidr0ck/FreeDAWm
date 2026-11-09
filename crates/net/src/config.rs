@@ -119,6 +119,9 @@ pub struct NetConfig {
     pub internet_host: bool,
     #[serde(default)]
     pub relay_url: String,
+    /// A Behringer X32 as a control surface (Setup › X32 Control).
+    #[serde(default)]
+    pub x32: crate::x32::X32Config,
 }
 
 impl Default for NetConfig {
@@ -136,6 +139,7 @@ impl Default for NetConfig {
             internet_key: String::new(),
             internet_host: false,
             relay_url: String::new(),
+            x32: crate::x32::X32Config::default(),
         }
     }
 }

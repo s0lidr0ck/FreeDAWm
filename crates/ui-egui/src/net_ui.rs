@@ -99,6 +99,9 @@ pub struct NetState {
     /// The QR code for the remote page is shown; the host is being changed (step 1 open again).
     show_qr: bool,
     change_host: bool,
+    /// The X32 link (Setup › X32 Control) and its gestures (`x32_ui`).
+    pub(crate) x32: Option<soundcraft_net::x32::X32Link>,
+    pub(crate) x32_apply: soundcraft_net::x32::Apply,
 }
 
 impl NetState {
@@ -143,6 +146,8 @@ impl NetState {
             copied: None,
             show_qr: false,
             change_host: false,
+            x32: None,
+            x32_apply: soundcraft_net::x32::Apply::default(),
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
