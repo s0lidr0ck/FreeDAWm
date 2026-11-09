@@ -209,6 +209,22 @@ struct Inner {
     position: Mutex<f64>,
     /// Wakes the UI thread when a request comes in.
     waker: Mutex<Option<Waker>>,
+    /// Remote mixing: the session in pieces and the meters for the mixers, and the mixers
+    /// connected (their names).
+    mix: Mutex<MixStore>,
+    mix_changed: Condvar,
+    mixers: Mutex<Vec<(u64, String)>>,
+}
+
+/// The session in pieces as last published for the mixers, each with the change counter it was
+/// last changed at, and the latest meter frame (its JSON line).
+#[derive(Default)]
+struct MixStore {
+    seq: u64,
+    rest: (u64, Arc<String>),
+    order: (u64, Arc<String>),
+    tracks: Vec<(u64, u64, Arc<String>)>,
+    meters: (u64, Arc<String>),
 }
 
 /// Wakes the app's UI thread (egui's `request_repaint`).
@@ -255,6 +271,9 @@ impl Hub {
                 warning: Mutex::new(None),
                 position: Mutex::new(0.0),
                 waker: Mutex::new(None),
+                mix: Mutex::new(MixStore::default()),
+                mix_changed: Condvar::new(),
+                mixers: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -311,6 +330,17 @@ impl Hub {
             w();
         }
         sent
+    }
+
+    /// What wakes the UI thread (for other links of this PC).
+    pub fn waker(&self) -> Option<Waker> {
+        lock(&self.inner.waker).clone()
+    }
+
+    fn wake(&self) {
+        if let Some(w) = lock(&self.inner.waker).clone() {
+            w();
+        }
     }
 
     pub fn set_waker(&self, w: Option<Waker>) {
@@ -527,6 +557,117 @@ impl Hub {
 
     /// The player's tap on the main mix, and the session rate (once a frame from the UI thread;
     /// `None` without a player).
+    /// The PCs mixing this one remotely now (their names).
+    pub fn mixers(&self) -> Vec<String> {
+        lock(&self.inner.mixers).iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    /// Publishes the session for the mixers: only the pieces that changed go out.
+    pub fn publish_mix(&self, p: crate::mixer::Pieces) {
+        let mut m = lock(&self.inner.mix);
+        let seq = m.seq + 1;
+        let mut changed = false;
+        if *m.rest.1 != p.rest {
+            m.rest = (seq, Arc::new(p.rest));
+            changed = true;
+        }
+        let order = json!(p.order).to_string();
+        if *m.order.1 != order {
+            m.order = (seq, Arc::new(order));
+            changed = true;
+        }
+        let old = std::mem::take(&mut m.tracks);
+        for (id, text) in p.tracks {
+            match old.iter().find(|(i, _, _)| *i == id) {
+                Some((_, v, t)) if **t == text => m.tracks.push((id, *v, Arc::clone(t))),
+                _ => {
+                    m.tracks.push((id, seq, Arc::new(text)));
+                    changed = true;
+                }
+            }
+        }
+        changed |= old.len() != m.tracks.len();
+        if changed {
+            m.seq = seq;
+            drop(m);
+            self.inner.mix_changed.notify_all();
+        }
+    }
+
+    /// Publishes the meters and transport for the mixers.
+    pub fn publish_meters(&self, f: &crate::mixer::MeterFrame) {
+        let line = json!({"event": "mix.meters", "params": f}).to_string();
+        let mut m = lock(&self.inner.mix);
+        let seq = m.meters.0 + 1;
+        m.meters = (seq, Arc::new(line));
+        drop(m);
+        self.inner.mix_changed.notify_all();
+    }
+
+    /// Pushes the session's pieces (those changed since last sent, then `mix.rev`) and the
+    /// meters to one mixer while it is connected.
+    fn push_mix(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool) {
+        let mut sent_rest = 0;
+        let mut sent_order = 0;
+        let mut sent_tracks: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mut sent_meters = 0;
+        let mut seen = u64::MAX;
+        loop {
+            let (lines, meters) = {
+                let m = lock(&self.inner.mix);
+                let (m, _) = self
+                    .inner
+                    .mix_changed
+                    .wait_timeout_while(m, Duration::from_secs(5), |m| {
+                        m.seq == seen && m.meters.0 == sent_meters && !done.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst)
+                    })
+                    .unwrap_or_else(PoisonError::into_inner);
+                let mut lines: Vec<String> = Vec::new();
+                if m.seq != seen && m.seq > 0 {
+                    seen = m.seq;
+                    if m.rest.0 != sent_rest {
+                        sent_rest = m.rest.0;
+                        lines.push(format!("{{\"event\":\"mix.rest\",\"params\":{{\"rest\":{}}}}}", m.rest.1));
+                    }
+                    for (id, v, t) in &m.tracks {
+                        if sent_tracks.get(id) != Some(v) {
+                            sent_tracks.insert(*id, *v);
+                            lines.push(format!("{{\"event\":\"mix.track\",\"params\":{{\"id\":{id},\"track\":{t}}}}}"));
+                        }
+                    }
+                    if m.order.0 != sent_order {
+                        sent_order = m.order.0;
+                        sent_tracks.retain(|id, _| m.tracks.iter().any(|(i, _, _)| i == id));
+                        lines.push(format!("{{\"event\":\"mix.order\",\"params\":{{\"order\":{}}}}}", m.order.1));
+                    }
+                    lines.push(format!("{{\"event\":\"mix.rev\",\"params\":{{\"seq\":{}}}}}", m.seq));
+                }
+                let meters = (m.meters.0 != sent_meters && m.meters.0 > 0).then(|| {
+                    sent_meters = m.meters.0;
+                    Arc::clone(&m.meters.1)
+                });
+                (lines, meters)
+            };
+            if done.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let mut w = lock(out);
+            let mut ok = true;
+            for l in lines.iter().map(String::as_str).chain(meters.as_deref().map(String::as_str)) {
+                ok = writeln!(w, "{l}").is_ok();
+                if !ok {
+                    break;
+                }
+            }
+            if lines.is_empty() && meters.is_none() {
+                ok = writeln!(w, "{{\"event\":\"tick\"}}").is_ok();
+            }
+            if !ok || w.flush().is_err() {
+                break;
+            }
+        }
+    }
+
     pub fn set_tap(&self, tap: Option<Arc<soundcraft_playback::stream::MixTap>>, rate: u32) {
         let mut cur = lock(&self.inner.tap);
         let same = match (&*cur, &tap) {
@@ -911,6 +1052,8 @@ impl Hub {
         let mut who: Option<PairedDevice> = None;
         let mut link: Option<u64> = None;
         let mut pusher: Option<Arc<AtomicBool>> = None;
+        // A mixer connection: its id (for the stream), and its pusher.
+        let mut mixer: Option<u64> = None;
         loop {
             if self.stopped(stop) {
                 break;
@@ -959,7 +1102,21 @@ impl Hub {
                     match self.device(token) {
                         None => Some(json!({"ok": false, "error": "not paired", "pair": true})),
                         Some(dev) => {
-                            let follower = params.get("role").and_then(Value::as_str) == Some("follower");
+                            let role = params.get("role").and_then(Value::as_str).unwrap_or("");
+                            let follower = role == "follower";
+                            if role == "mixer" && mixer.is_none() {
+                                let m = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+                                mixer = Some(m);
+                                lock(&self.inner.mixers).push((m, dev.name.clone()));
+                                let flag = Arc::new(AtomicBool::new(false));
+                                pusher = Some(Arc::clone(&flag));
+                                let hub = self.clone();
+                                let out = Arc::clone(&out);
+                                let stop = Arc::clone(stop);
+                                let _ =
+                                    std::thread::Builder::new().name("freedawm-mixer-push".into()).spawn(move || hub.push_mix(&out, &flag, &stop));
+                                self.wake();
+                            }
                             if follower {
                                 let report: FollowerReport =
                                     params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default();
@@ -974,7 +1131,17 @@ impl Hub {
                                     .name("freedawm-net-push".into())
                                     .spawn(move || hub.push_transport(&out, &flag, &stop));
                             }
-                            log::info!("network: {} connected from {addr}{}", dev.name, if follower { " as a remote recorder" } else { "" });
+                            log::info!(
+                                "network: {} connected from {addr}{}",
+                                dev.name,
+                                if follower {
+                                    " as a remote recorder"
+                                } else if mixer.is_some() {
+                                    " to mix remotely"
+                                } else {
+                                    ""
+                                }
+                            );
                             let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport()}});
                             who = Some(dev);
                             Some(r)
@@ -982,6 +1149,8 @@ impl Hub {
                     }
                 }
                 _ if who.is_none() => Some(json!({"ok": false, "error": "not paired: send pair.request / pair.confirm, then hello", "pair": true})),
+                // A mixer may change the mix and run the transport, nothing else.
+                m if mixer.is_some() && !mixer_allows(m, &params) => Some(json!({"ok": false, "error": format!("a remote mixer can't run `{m}`")})),
                 "sync.ping" => {
                     let now = self.clock_now();
                     match (arrived, now) {
@@ -1009,12 +1178,12 @@ impl Hub {
                 }
                 "stream.subscribe" => {
                     let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
-                    match link {
+                    match link.or(mixer) {
                         Some(l) => {
                             self.subscribe(l, &out, on);
                             Some(json!({"ok": true, "result": {"on": on}}))
                         }
-                        None => Some(json!({"ok": false, "error": "only a remote recorder hears the mix"})),
+                        None => Some(json!({"ok": false, "error": "only a remote recorder or a remote mixer hears the mix"})),
                     }
                 }
                 "take.offer" => Some(answer(who.as_ref().map_or(Err("not paired".into()), |d| self.take_offer(&d.name, &params)))),
@@ -1047,6 +1216,12 @@ impl Hub {
         if let Some(l) = link {
             self.subscribe(l, &out, false);
             self.close_link(l);
+        }
+        if let Some(m) = mixer {
+            self.subscribe(m, &out, false);
+            lock(&self.inner.mixers).retain(|(id, _)| *id != m);
+            self.inner.mix_changed.notify_all();
+            self.wake();
         }
     }
 
@@ -1317,6 +1492,18 @@ impl Hub {
             let room = MAX_SKETCH.saturating_sub(s.notes.len());
             s.notes.extend(notes.into_iter().filter(|n| n.at.is_finite()).take(room));
         }
+    }
+}
+
+/// What a mixer connection may call: the mix, automation and transport commands, and reading.
+fn mixer_allows(method: &str, params: &Value) -> bool {
+    match method {
+        "engine.execute" | "command" => {
+            let id = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str).unwrap_or("");
+            crate::mixer::host_allows(id)
+        }
+        "session.inspect" | "document.inspect" | "engine.commands" | "stream.subscribe" | "sync.ping" => true,
+        _ => false,
     }
 }
 

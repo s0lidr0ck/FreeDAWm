@@ -73,6 +73,8 @@ pub mod preferences;
 mod recent;
 pub mod record_offset;
 pub mod recovery;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod remote_mix;
 pub mod render;
 pub mod ruler_items;
 pub mod sampler_window;
@@ -763,6 +765,9 @@ pub struct SoundApp {
     /// Setup › Network: the LAN listener, the remote recorder link and their per-frame glue.
     #[cfg(not(target_arch = "wasm32"))]
     pub net: Option<net_ui::NetState>,
+    /// Mixing another PC remotely: the link, and this PC's own session put aside meanwhile.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub remote_mix: Option<remote_mix::RemoteMix>,
     /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
     /// Input capture, opened on first record.
@@ -950,6 +955,8 @@ impl SoundApp {
             countoff: None,
             #[cfg(not(target_arch = "wasm32"))]
             net: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            remote_mix: None,
             typing: musical_typing::TypingState::default(),
             recorder: None,
             record_start: 0,
@@ -1256,6 +1263,10 @@ impl SoundApp {
     /// a copy with only the previewed track soloed, or, while a Convert to MIDI audition plays,
     /// that copy.
     pub(crate) fn player_session(&self) -> std::sync::Arc<soundcraft_model::Session> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if remote_mix::active(self) {
+            return remote_mix::player_session(self);
+        }
         if let Some(a) = &self.audition_session {
             return a.clone();
         }
@@ -1646,6 +1657,11 @@ impl SoundApp {
     /// Autosave a modified session within a second of every change, also while recording. The
     /// plugins' own state reaches the session every two minutes (`autosave`).
     fn autosave_changes(&mut self) {
+        // The document on screen is another PC's: this PC's own autosave stays as it is.
+        #[cfg(not(target_arch = "wasm32"))]
+        if remote_mix::active(self) {
+            return;
+        }
         if let Some(e) = self.autosaver.as_ref().and_then(soundcraft_engine::autosave::Autosaver::failure) {
             self.ui.status = format!("Autosave failed: {e}");
         }
@@ -1694,6 +1710,9 @@ impl SoundApp {
     /// launch, unless the user quit with FreeDAWm's Quit; a take still recording is finished
     /// and always stays.
     pub fn close_autosave(&mut self) {
+        // This PC's own session first, if another PC's is on screen.
+        #[cfg(not(target_arch = "wasm32"))]
+        remote_mix::stop(self);
         let recording = self.engine.transport.recording;
         if recording {
             self.stop_play();
@@ -1718,6 +1737,8 @@ impl SoundApp {
         if let Some(p) = &self.player {
             p.close_editors();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        remote_mix::stop(self);
         if !self.engine.is_dirty() {
             return true;
         }
@@ -2025,6 +2046,12 @@ impl SoundApp {
                 held.push((*track, p));
             }
         }
+        // Mixing another PC: it writes; what is held here keeps touching it there.
+        #[cfg(not(target_arch = "wasm32"))]
+        if remote_mix::active(self) {
+            remote_mix::hold(self, &held);
+            return;
+        }
         self.engine.automation_ui_held(held);
         let playing = self.is_playing();
         self.engine.automation_pass(playing);
@@ -2131,6 +2158,12 @@ impl SoundApp {
                 TransportRequest::ScoutStart { capture, strips, start, end } => scout::start(self, capture, &strips, start, end),
                 TransportRequest::ScoutStop => scout::stop(self),
             }
+        }
+        // Mixing another PC: its meters and transport.
+        #[cfg(not(target_arch = "wasm32"))]
+        if remote_mix::active(self) {
+            remote_mix::read_back(self, dt, ballistics);
+            return;
         }
         // Read back the position.
         if let Some(p) = &self.player {
@@ -2261,6 +2294,8 @@ impl SoundApp {
         // time for this frame's transport handling.
         #[cfg(not(target_arch = "wasm32"))]
         net_ui::step(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        remote_mix::step(self);
         // Preferences › Operation › Copy imported audio into the project (this computer's).
         self.engine.copy_imported_audio = self.ui.copy_imported_audio;
         // Stop the old playback before sending a replacement session to the audio thread.

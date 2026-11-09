@@ -249,6 +249,11 @@ download.
   when routers block it; you can run your own relay. The performer hears your live mix (Opus),
   and their take lands where they played against it. They also get a level window with a big
   meter, a clip light, plain advice and a 10-second level check.
+- **Mix from another PC.** On the same network, another FreeDAWm PC can *mix the booth*: it
+  shows the booth's session in its own Mix window with the booth's meters and transport, plays
+  the booth's mix, and every fader, pan, plugin, automation and transport change goes to the
+  booth (a fader drag is one undo step there, and automation writes as if done at the booth).
+  Editing stays on the booth. Your own session is put aside and comes back when you stop.
 
 <p align="center">
   <img alt="Setup › Network: paired devices (Phone, Stage PC, Piano PC as a remote recorder), Follow a booth, Hear the booth's mix, and Connect over the internet with invites and a relay" src="docs/images/network.png" width="60%">

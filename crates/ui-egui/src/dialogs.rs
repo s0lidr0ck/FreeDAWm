@@ -454,6 +454,15 @@ pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
     {
         return false;
     }
+    // Mixing another PC: quitting puts this PC's own session back first (it may need saving);
+    // the session commands are refused while mixing.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::remote_mix::active(app) {
+        if id != "app.quit" {
+            return false;
+        }
+        crate::remote_mix::stop(app);
+    }
     if app.engine.transport.recording {
         app.stop_play();
     }

@@ -86,6 +86,10 @@ pub struct NetState {
     invite_edit: String,
     join: PairJob,
     join_status: String,
+    /// Mix this booth remotely (on) or stop (off): asked in the window, done once it is drawn.
+    mix_request: Option<bool>,
+    /// This PC is mixing the booth now (a copy of `SoundApp::remote_mix.is_some()` for the window).
+    mixing: bool,
 }
 
 impl NetState {
@@ -122,6 +126,8 @@ impl NetState {
             invite_edit: String::new(),
             join: PairJob::default(),
             join_status: String::new(),
+            mix_request: None,
+            mixing: false,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -304,6 +310,13 @@ impl RigHost for AppHost<'_> {
             punch: a.punch,
             counting_off: a.countoff_status().is_some(),
         }
+    }
+    fn mix_meters(&self) -> soundcraft_net::mixer::MeterFrame {
+        use soundcraft_net::mixer::{Meter, MeterFrame};
+        let a = &*self.0;
+        let tracks = a.meters.iter().map(|(id, m)| Meter { id: id.0, l: m.level[0], r: m.level[1], gr: m.gr }).collect();
+        let main = Meter { id: 0, l: a.main_meter.level[0], r: a.main_meter.level[1], gr: 0.0 };
+        MeterFrame { tracks, main, ..MeterFrame::default() }
     }
     fn level(&self, track: TrackId) -> f32 {
         let m = self.0.meters.get(&track).map_or(0.0, |m| m.level[0].max(m.level[1]));
@@ -505,6 +518,16 @@ pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     pairing_prompt(app, ctx);
     performer_panel(app, ctx);
+    mixing_banner(app, ctx);
+    if let Some(on) = app.net.as_mut().and_then(|n| n.mix_request.take())
+        && let Err(e) = remote_mix_command(app, &json!({"on": on}))
+    {
+        app.ui.status = e;
+    }
+    let mixing = crate::remote_mix::active(app);
+    if let Some(n) = app.net.as_mut() {
+        n.mixing = mixing;
+    }
     let mut open = app.ui.show_network;
     if !open {
         return;
@@ -618,9 +641,12 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Follow a booth");
             ui.label(
-                egui::RichText::new("This PC records with the booth (its MIDI inputs and armed audio tracks) and sends each take there.")
-                    .small()
-                    .color(t.text_dim),
+                egui::RichText::new(
+                    "Pick the booth and pair with it. Follow it: this PC records with the booth (its MIDI inputs and armed audio tracks) and \
+                     sends each take there. Or mix it from here.",
+                )
+                .small()
+                .color(t.text_dim),
             );
             follow_section(ui, &mut net, ctx, app.services.pick_folder.as_deref());
             ui.add_space(6.0);
@@ -742,8 +768,9 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             }
         });
     }
+    let mixing = net.mixing;
     let mut follow = cfg.follow.enabled;
-    if ui.add_enabled(paired || follow, egui::Checkbox::new(&mut follow, "Follow this booth")).changed() {
+    if ui.add_enabled((paired || follow) && !mixing, egui::Checkbox::new(&mut follow, "Follow this booth")).changed() {
         net.hub.update_config(|c| c.follow.enabled = follow);
         if follow { net.start_following(ctx) } else { net.stop_following() }
     }
@@ -778,6 +805,23 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             }
         });
     }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let label = if mixing { "Stop mixing this booth" } else { "Mix this booth from here" };
+        if ui
+            .add_enabled((paired && net.follower.is_none()) || mixing, egui::Button::new(label))
+            .on_hover_text(
+                "This PC shows the booth's session in its Mix window and plays its mix: faders, pan, plugins, automation and the \
+                 transport go to the booth. Your own session comes back when you stop.",
+            )
+            .clicked()
+        {
+            net.mix_request = Some(!mixing);
+        }
+        if !mixing && net.follower.is_some() {
+            ui.label(egui::RichText::new("(stop following first)").small().color(t.text_dim));
+        }
+    });
     if let Some(f) = &net.follower {
         let badge = net.follow.badge(f);
         let detail = if f.connected() { String::new() } else { format!(" ({})", f.state()) };
@@ -999,6 +1043,74 @@ pub fn follower_demo(app: &mut SoundApp, state: &str) -> Result<(), String> {
 }
 
 /// A QR code, `size` points square, dark modules on white with a quiet zone.
+/// `net.remote_mix`: mix the booth picked in Setup › Network (`on: true`), stop (`on: false`),
+/// toggle (no `on`); `hear` turns its mix in this PC's speakers on or off.
+pub fn remote_mix_command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
+    let mixing = crate::remote_mix::active(app);
+    let on = p.get("on").and_then(Value::as_bool).unwrap_or(!mixing);
+    if let Some(h) = p.get("hear").and_then(Value::as_bool)
+        && let Some(rm) = app.remote_mix.as_mut()
+    {
+        rm.hear = h;
+    }
+    if on && !mixing {
+        let Some(net) = &app.net else { return Err("the network is not ready yet".into()) };
+        if net.follower.is_some() {
+            return Err("Stop following the booth before mixing it".into());
+        }
+        let cfg = net.hub.config();
+        if cfg.follow.token.is_empty() || cfg.follow.booth_addr.is_empty() {
+            return Err("Pick the booth and pair with it first (Setup › Network)".into());
+        }
+        let target = soundcraft_net::mixer::MixerTarget {
+            host_name: cfg.follow.booth_name.clone(),
+            addr: cfg.follow.booth_addr.clone(),
+            token: cfg.follow.token.clone(),
+            my_name: net.hub.pc_name(),
+        };
+        let waker = net.hub.waker();
+        crate::remote_mix::start(app, target, waker)?;
+    } else if !on && mixing {
+        crate::remote_mix::stop(app);
+    }
+    let rm = app.remote_mix.as_ref();
+    Ok(json!({
+        "on": rm.is_some(),
+        "hear": rm.is_some_and(|r| r.hear),
+        "connected": rm.is_some_and(|r| r.client.connected()),
+        "status": rm.map(|r| r.client.status()),
+    }))
+}
+
+/// While this PC mixes another: what it mixes and how the link is, Hear, and Stop.
+fn mixing_banner(app: &mut SoundApp, ctx: &egui::Context) {
+    let Some(text) = crate::remote_mix::banner(app) else { return };
+    let t = Tokens::current();
+    let mut stop = false;
+    let mut hear = app.remote_mix.as_ref().is_some_and(|r| r.hear);
+    egui::Area::new(egui::Id::new("remote-mix-banner")).anchor(egui::Align2::CENTER_TOP, vec2(0.0, 30.0)).order(egui::Order::Foreground).show(
+        ctx,
+        |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(text).strong().color(t.text));
+                    ui.checkbox(&mut hear, "Hear its mix");
+                    if ui.button("Stop mixing").clicked() {
+                        stop = true;
+                    }
+                });
+            });
+        },
+    );
+    if let Some(rm) = app.remote_mix.as_mut() {
+        rm.hear = hear;
+    }
+    if stop {
+        crate::remote_mix::stop(app);
+    }
+    ctx.request_repaint_after(Duration::from_millis(250));
+}
+
 fn draw_qr(ui: &mut egui::Ui, w: usize, m: &[bool], size: f32) {
     let (r, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let p = ui.painter();
@@ -1683,6 +1795,89 @@ mod tests {
         assert_eq!(h.state().ui.status, "Take sent to Booth");
         assert!(booth.e.session().tracks.iter().any(|t| !t.clips().is_empty()), "the booth has the take");
         f.stop();
+        hub.stop();
+    }
+
+    /// This app mixes a booth in the same process: the booth's session is on screen in place of
+    /// its own, a fader change lands at the booth, the booth's transport and the banner show, and
+    /// stopping brings its own session back as it was.
+    #[test]
+    fn this_pc_mixes_a_booth_and_gets_its_own_session_back() {
+        use egui_kittest::kittest::Queryable;
+        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), ..NetConfig::default() }, None);
+        hub.update_config(|c| {
+            c.paired = vec![PairedDevice { name: "Mixer PC".into(), kind: "pc".into(), token: "mixer".into(), follows: false }];
+        });
+        let port = hub.listen(0).unwrap();
+        let mut booth = Booth { e: Engine::default(), view: HostView::default() };
+        booth.e.execute("track.new", &json!({"count": 1, "format": "Mono", "name": "Lead Vox"})).unwrap();
+        let vox = booth.e.session().tracks.iter().find(|t| t.name == "Lead Vox").unwrap().id;
+        let mut bglue = BoothGlue::default();
+        let mut app = SoundApp::new(Engine::default(), None, crate::Services::default());
+        app.engine.execute("track.new", &json!({"count": 1, "format": "Mono", "name": "Mine"})).unwrap();
+        let mine_steps = app.engine.undo_history();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+            |ui, app: &mut SoundApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.step();
+        let target = soundcraft_net::mixer::MixerTarget {
+            host_name: "Booth".into(),
+            addr: format!("127.0.0.1:{port}"),
+            token: "mixer".into(),
+            my_name: "Mixer PC".into(),
+        };
+        crate::remote_mix::start(h.state_mut(), target, None).unwrap();
+        let frames = |h: &mut egui_kittest::Harness<'_, SoundApp>,
+                      bglue: &mut BoothGlue,
+                      booth: &mut Booth,
+                      what: &str,
+                      done: &dyn Fn(&SoundApp, &Booth) -> bool| {
+            let end = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                for r in bglue.step(booth, &hub) {
+                    if let HubRequest::Control { params, reply, .. } = r {
+                        let id = params["command"].as_str().unwrap_or("").to_string();
+                        let p = params.get("params").cloned().unwrap_or(json!({}));
+                        let got = match params.get("merge").and_then(Value::as_str) {
+                            Some(k) => booth.e.execute_merged(&id, &p, k),
+                            None => booth.e.execute(&id, &p),
+                        };
+                        let _ = reply.send(got.map_or_else(|e| json!({"ok": false, "error": e.to_string()}), |v| json!({"ok": true, "result": v})));
+                    }
+                }
+                h.step();
+                if done(h.state(), booth) {
+                    return;
+                }
+                assert!(std::time::Instant::now() < end, "timed out: {what} (status: {})", h.state().ui.status);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        frames(&mut h, &mut bglue, &mut booth, "the booth's session arrives", &|a, _| a.engine.session().tracks.iter().any(|t| t.name == "Lead Vox"));
+        assert!(!h.state().engine.session().tracks.iter().any(|t| t.name == "Mine"));
+        assert_eq!(h.state().ui.window, crate::MainWindow::Mix);
+        assert!(h.query_by_label_contains("Mixing Booth remotely: changes go to Booth").is_some(), "the banner");
+        // A fader change here lands at the booth.
+        h.state_mut().run("mix.volume", json!({"track": vox.0, "db": -4.5})).unwrap();
+        assert_eq!(h.state().engine.session().track(vox).unwrap().mixer.volume_db, -4.5, "at once here");
+        frames(&mut h, &mut bglue, &mut booth, "the booth's fader moves", &|_, b| b.e.session().track(vox).unwrap().mixer.volume_db == -4.5);
+        // The booth's transport shows here; nothing renders here.
+        booth.view = HostView { playing: true, position: 96_000, ..HostView::default() };
+        frames(&mut h, &mut bglue, &mut booth, "the booth plays", &|a, _| a.is_playing() && a.engine.transport.position == 96_000);
+        // Editing is refused here, and saving never touches this PC's own session.
+        assert!(h.state_mut().run("track.new", json!({"count": 1})).is_err());
+        assert!(!h.state().engine.is_dirty());
+        // Stop mixing: this PC's own session is back, history and all.
+        crate::remote_mix::stop(h.state_mut());
+        h.step();
+        assert!(h.state().engine.session().tracks.iter().any(|t| t.name == "Mine"));
+        assert_eq!(h.state().engine.undo_history(), mine_steps);
+        assert!(!h.state().is_playing());
+        assert!(h.query_by_label_contains("Mixing Booth remotely").is_none());
         hub.stop();
     }
 

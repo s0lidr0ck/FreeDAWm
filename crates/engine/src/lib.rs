@@ -243,7 +243,31 @@ pub struct Engine {
     /// Files/…`, beside its takes): the app's autosave folder. `None`: such audio stays in memory
     /// until the first save ([`spill`]).
     pub unsaved_audio_root: Option<std::path::PathBuf>,
+    /// Remote mixing: on the remote PC the document is a copy of the host's, and this decides
+    /// for every command whether it runs here, at the host, or both ([`Relay`]). `None` runs
+    /// everything here.
+    pub relay: Option<RelayFn>,
+    /// The gesture key of the [`Engine::execute_merged`] call running now, for the relay.
+    relay_merge: Option<String>,
 }
+
+/// What [`Engine::relay`] makes of a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relay {
+    /// It runs here only (a view, a selection, a query).
+    Local,
+    /// It runs here at once and the relay has sent it to the host, which stays the source of truth.
+    Both,
+    /// Only the host runs it (the relay has sent it); here it returns `{"relayed": true}`.
+    Remote,
+    /// Refused here, with the reason.
+    Refuse(String),
+}
+
+/// The relay's decision for a command: its id, its params and the gesture key while it is part
+/// of a merged gesture (a fader drag), which the host merges the same way. The relay sends what
+/// it forwards itself.
+pub type RelayFn = Box<dyn FnMut(&str, &Value, Option<&str>) -> Relay + Send>;
 
 impl Default for Engine {
     fn default() -> Self {
@@ -291,7 +315,21 @@ impl Engine {
             auto_write: cmd::auto_write::AutoWriter::new(),
             copy_imported_audio: true,
             unsaved_audio_root: None,
+            relay: None,
+            relay_merge: None,
         }
+    }
+
+    /// Puts `s` in place as a copy of another PC's document (remote mixing): the view, selection
+    /// and other edit state stay this PC's, the history stays as it is, nothing is marked
+    /// modified and no transport request is made. Gestures in progress keep merging.
+    pub fn mirror_session(&mut self, mut s: Session) {
+        s.edit = self.doc.edit.clone();
+        crate::cmd::module_ceiling::prepare_states(&mut s);
+        self.doc = Arc::new(s);
+        self.saved = Arc::clone(&self.doc);
+        self.revision = self.revision.wrapping_add(1);
+        self.dirty = false;
     }
 
     /// The Band Library the band plays from (the embedded one until a user folder is set).
@@ -453,7 +491,8 @@ impl Engine {
     /// Whether the document changed since it was opened or saved. Selecting, locating and zooming
     /// don't count, and undoing back to the saved state makes it clean again.
     pub fn is_dirty(&self) -> bool {
-        if !self.dirty {
+        // A relayed document is another PC's (remote mixing): nothing here to save.
+        if !self.dirty || self.relay.is_some() {
             return false;
         }
         let (rev, dirty) = self.dirty_at.get();
@@ -648,6 +687,16 @@ impl Engine {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let id = cmd::canonical_id(id);
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if self.relay.is_some() {
+            let merge = self.relay_merge.clone();
+            if let Some(relay) = self.relay.as_mut() {
+                match relay(id, params, merge.as_deref()) {
+                    Relay::Local | Relay::Both => {}
+                    Relay::Remote => return Ok(json!({"relayed": true})),
+                    Relay::Refuse(why) => return Err(EngineError::Disabled(id.to_string(), why)),
+                }
+            }
+        }
         if self.blocked_while_recording(id) {
             return Err(EngineError::Disabled(id.to_string(), "stop recording first".into()));
         }
@@ -792,7 +841,9 @@ impl Engine {
         // The gesture's first step clears Redo; kept aside in case the gesture is discarded
         // (`execute` drops it with the key each step, so a continuing step carries it across).
         let mut redo = if continuing { self.merge_redo.take() } else { Some(self.redo.clone()) };
+        self.relay_merge = Some(key.clone());
         let r = self.execute(id, params);
+        self.relay_merge = None;
         self.history_limit = limit;
         if continuing {
             self.merge_redo = redo.take();

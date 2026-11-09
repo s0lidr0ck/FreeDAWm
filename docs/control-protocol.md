@@ -40,7 +40,7 @@ Errors: `{"id": 1, "ok": false, "error": "bad parameters for `mix.volume`: no tr
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` (alias `command`) | `{command, params}` | Run a command programmatically. **Never opens a dialog**; empty params use defaults or the current selection. |
+| `engine.execute` (alias `command`) | `{command, params, merge?}` | Run a command programmatically. **Never opens a dialog**; empty params use defaults or the current selection. With `merge` (a gesture key), consecutive calls with the same key are one undo step, as a fader drag is (remote mixing sends its drags this way). |
 | `engine.commands` | `{filter?}` | Every command: id, label, menu path, shortcut (the one in effect: the user's override, else the registry's), params doc, enabled + reason. Includes UI-layer commands (`window.*`). |
 | `engine.parity` | `{}` | Parity report against the incumbent's menu catalog. |
 | `session.inspect` | `{detail?: "summary"|"full"}` | The document: tracks, clips (with times), inserts (+params when full), sends, routing, automation, markers, groups, busses, sources (`loaded` true when decoded audio is in the pool), selection, zoom (`samples_per_px`, `scroll`), transport, undo label. |
@@ -1089,6 +1089,52 @@ and mix delay. The network runs on its own threads; nothing touches the audio th
 | `window.network` | `{value?: bool}` | Setup › Network…: shows or hides the window. |
 
 Preview the page without a booth: `cargo run -p soundcraft-net --example remote_demo [port]`.
+
+## Remote mixing
+
+Spec: `docs/superpowers/specs/2026-11-09-remote-mixing-design.md`; code: `soundcraft_net::mixer`,
+`crates/ui-egui/src/remote_mix.rs`. Desktop only, LAN only for now.
+
+Another FreeDAWm PC mixes this one: it shows this session in its own Mix window, plays this PC's
+mix and sends mix, automation and transport changes here. On the remote PC: Setup › Network,
+pick the booth and pair (as for following), then **Mix this booth from here** (not while
+following it). Its own session is put aside and comes back with **Stop mixing** (the banner at
+the top of the window, which also has **Hear its mix**), on quitting, or with `net.remote_mix
+{on: false}`.
+
+On the remote PC every command goes where `soundcraft_net::mixer::route` says, through
+`Engine::relay`: `mix.*` and `automation.*` changes run there at once and here; `transport.*`,
+`edit.undo` and `edit.redo` run only here; views, selections and queries stay there; any other
+command that edits or replaces the session is refused there ("while mixing another PC remotely,
+only mix, automation and transport changes are possible"). A fader drag is one undo step here
+(`engine.execute` with `merge`). A control held still there touches it here every 200 ms
+(`automation.touch`), so writing in Touch keeps going and a dropped link lets go within half a
+second. The copy there is never "modified": nothing there saves it, and this PC's autosave is not
+touched.
+
+JSON lines, after `hello {token, name, role: "mixer"}`: the mixer may call `engine.execute` for
+the commands above, `session.inspect`, `engine.commands` and `stream.subscribe` (anything else:
+"a remote mixer can't run `…`"). This PC pushes:
+
+| Event | Params | When |
+|---|---|---|
+| `mix.rest` | `{rest}`: the session JSON with `tracks: []` | when it changed |
+| `mix.track` | `{id, track}`: one track's JSON | when that track changed |
+| `mix.order` | `{order}`: track ids, top to bottom | when tracks were added, removed or moved |
+| `mix.rev` | `{seq}` | after the pieces above: they make a whole |
+| `mix.meters` | `{tracks: [{id, l, r, gr}], main: {id: 0, l, r}, playing, recording, position}` | ~30 a second (linear peaks; `position` in session samples) |
+| `stream` | as for remote recorders | while subscribed and this PC plays |
+
+The session goes out at most 20 times a second, and only the pieces whose JSON changed. The
+remote PC puts it in place (`Engine::mirror_session`: its own view, selection and zoom stay)
+only when none of its commands is waiting for an answer and 120 ms after the last answer, so a
+piece sent before this PC ran its change never pulls a fader back. Its meters and playhead are
+delayed by the stream's jitter buffer, so they move with what it hears. Its player is handed an
+empty session at this session's rate: nothing renders there but the stream.
+
+| Command | Params | Result |
+|---|---|---|
+| `net.remote_mix` | `{on?: bool, hear?: bool}` (toggles without `on`) | `{on, hear, connected, status}`. Mixes the booth picked and paired in Setup › Network, or stops. Refused while following it, or before pairing. |
 
 ## Record offset and loopback measure
 

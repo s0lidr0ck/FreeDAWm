@@ -37,7 +37,6 @@ const KNOWN_UNREACHED: &[&str] = &[
 /// change nothing a user can see yet, so a menu item only misled. They stay for agents and the control channel. Wiring one up (a reader for its
 /// flag, a dialog) means giving it a menu-bar line again and removing it from here.
 const OFF_THE_MENUS: &[(&str, &str)] = &[
-    ("automation.touch", "for control surfaces and agents: the app's controls touch through Engine::automation_ui_held"),
     ("automation.trim", "for control surfaces and agents: the Mix fader in Trim mode calls Engine::automation_trim"),
     ("automation.write_range", "Glide to Current was mis-aliased to it: needs a param and value"),
     ("event.renumber_bars", "a no-op (bars start at 1)"),

@@ -98,6 +98,13 @@ pub(crate) fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlReque
         "engine.execute" | "command" => {
             let id = p.get("command").or_else(|| p.get("id")).and_then(Value::as_str).unwrap_or("");
             let params = p.get("params").cloned().unwrap_or(json!({}));
+            // Part of a gesture (a remote mixer's fader drag): one undo step, as a drag here is.
+            if let Some(key) = p.get("merge").and_then(Value::as_str) {
+                return Some(match app.engine.execute_merged(id, &params, key) {
+                    Ok(v) => ok(v),
+                    Err(e) => err(e),
+                });
+            }
             // Synchronous, as headless hosts are: the session is in place when the reply goes.
             match app.run_sync(id, params) {
                 Ok(v) => ok(v),

@@ -102,6 +102,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.io_setup", "I/O Setup", "", None),
     ("window.midi_inputs", "MIDI Input Devices", "Setup > MIDI > MIDI Input Devices...", None),
     ("window.network", "Network", "Setup > Network...", None),
+    ("net.remote_mix", "Mix Another PC Remotely", "", None),
     ("window.shortcuts", "Keyboard Shortcuts", "", None),
     ("window.preferences", "Preferences", "", None),
     ("ui.meter_ballistics", "Meter Ballistics", "", None),
@@ -1277,6 +1278,8 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.io_setup" => toggle(&mut app.ui.show_io_setup),
         "window.midi_inputs" => toggle(&mut app.ui.show_midi_inputs),
         "window.network" => toggle(&mut app.ui.show_network),
+        #[cfg(not(target_arch = "wasm32"))]
+        "net.remote_mix" => return Some(crate::net_ui::remote_mix_command(app, p)),
         "window.shortcuts" => toggle(&mut app.ui.show_shortcuts),
         "window.color_palette" => toggle(&mut app.ui.show_color_palette),
         "window.disk_usage" => toggle(&mut app.ui.show_disk_usage),

@@ -7,6 +7,7 @@
 //! - [`discovery`]: DNS-SD over mDNS (`_freedawm._tcp`), so PCs find each other by name.
 //! - [`glue`]: what the app does each frame with all of that, written against [`glue::RigHost`]
 //!   so tests run it on plain engines.
+//! - [`mixer`]: remote mixing (another PC mixes this session; this PC mixes another).
 //! - [`sync`] and [`take`]: clock alignment and landing remote takes (MIDI now; audio later
 //!   through the same envelope).
 //!
@@ -17,6 +18,7 @@
 pub mod audio;
 pub mod config;
 pub mod guard;
+pub mod mixer;
 pub mod pairing;
 pub mod proto;
 pub mod sync;

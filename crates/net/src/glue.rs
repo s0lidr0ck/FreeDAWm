@@ -33,6 +33,10 @@ pub trait RigHost {
     fn level(&self, _track: TrackId) -> f32 {
         0.0
     }
+    /// Every track's meter and the main's (linear peaks), for remote mixing.
+    fn mix_meters(&self) -> crate::mixer::MeterFrame {
+        crate::mixer::MeterFrame::default()
+    }
     fn disk_free(&self) -> Option<u64> {
         None
     }
@@ -205,7 +209,16 @@ pub struct BoothGlue {
     last_pos: Samples,
     record_began: Option<Instant>,
     last_publish: Option<Instant>,
+    /// Remote mixing: the revision last published for the mixers and when, and the meters.
+    mix_rev: Option<u64>,
+    mix_at: Option<Instant>,
+    meters_at: Option<Instant>,
 }
+
+/// The most the session goes to the mixers (a fader drag changes it every frame).
+const MIX_EVERY: Duration = Duration::from_millis(50);
+/// The meters' rate for the mixers.
+const METERS_EVERY: Duration = Duration::from_millis(33);
 
 impl BoothGlue {
     /// One frame. Returns the paired PCs' control-protocol requests, for the app's control
@@ -229,9 +242,38 @@ impl BoothGlue {
         }
         self.transport(host, hub);
         self.publish(host, hub, false);
+        self.publish_mix(host, hub);
         let s = host.engine().session();
         hub.set_project(ProjectInfo { folder: host.project_folder(), rate: s.sample_rate.hz(), bits: crate::audio::bits_of(s.bit_depth) });
         control
+    }
+
+    /// Remote mixing: the session (its pieces that changed) and the meters, while a PC mixes
+    /// this one.
+    pub fn publish_mix(&mut self, host: &dyn RigHost, hub: &Hub) {
+        if hub.mixers().is_empty() {
+            self.mix_rev = None;
+            return;
+        }
+        let now = Instant::now();
+        let rev = host.engine().revision;
+        if self.mix_rev != Some(rev) && self.mix_at.is_none_or(|t| now.duration_since(t) >= MIX_EVERY) {
+            match crate::mixer::pieces(host.engine().session()) {
+                Ok(p) => hub.publish_mix(p),
+                Err(e) => log::warn!("remote mixing: {e}"),
+            }
+            self.mix_rev = Some(rev);
+            self.mix_at = Some(now);
+        }
+        if self.meters_at.is_none_or(|t| now.duration_since(t) >= METERS_EVERY) {
+            let v = host.view();
+            let mut f = host.mix_meters();
+            f.playing = v.playing;
+            f.recording = v.recording;
+            f.position = v.position;
+            hub.publish_meters(&f);
+            self.meters_at = Some(now);
+        }
     }
 
     /// A service remote button.
