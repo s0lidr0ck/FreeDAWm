@@ -169,3 +169,49 @@ fn an_unpaired_pc_is_not_let_in() {
     client.stop();
     hub.stop();
 }
+
+/// Over the internet transport (iroh, direct on this machine, no relay): a mixer's invite pairs
+/// the remote PC, which mixes the host through a local bridge; the host knows it is an internet
+/// mixer and how late its moves arrive, and its moves land.
+#[test]
+fn a_remote_pc_mixes_the_host_over_the_internet_with_an_invite() {
+    use soundcraft_net::internet::{Internet, Invite, ROLE_MIX, Relays, new_key};
+    let (hub, _, mut host) = host();
+    let mut published = 0;
+    let inet = Internet::start(new_key(), Relays::LocalOnly).unwrap();
+    inet.serve_to(hub.listen_internet().unwrap());
+    let code =
+        Invite { addr: inet.addr(Duration::from_secs(1)), secret: hub.new_invite_secret(), name: "Booth".into(), role: ROLE_MIX.into() }.code();
+    // The mixer pastes it.
+    let got = Invite::parse(&code).unwrap();
+    assert_eq!(got.role, ROLE_MIX);
+    let mine = Internet::start(new_key(), Relays::LocalOnly).unwrap();
+    let bridge = mine.bridge_to(got.addr.clone()).unwrap().to_string();
+    let (token, booth) = soundcraft_net::follower::pair_invite(&bridge, &got.secret, "Home PC").unwrap();
+    let client = MixerClient::start(MixerTarget { host_name: booth, addr: bridge, token, my_name: "Home PC".into() });
+    let mut mirror = relayed(&client);
+    until(&hub, &mut host, &mut published, |_| {
+        if let Some(s) = client.take_session() {
+            mirror.mirror_session(s.unwrap());
+            true
+        } else {
+            false
+        }
+    });
+    let links = hub.mixer_links();
+    assert_eq!(links.len(), 1);
+    assert!(links[0].internet, "the host knows this mixer is across the internet");
+    let t = first_track(&host);
+    for db in [-2.0, -4.0] {
+        mirror.execute_merged("mix.volume", &json!({"track": t.0, "db": db}), "fader").unwrap();
+    }
+    until(&hub, &mut host, &mut published, |h| h.session().track(t).unwrap().mixer.volume_db == -4.0);
+    // It reports how late its moves arrive (its round trip, without the stream).
+    until(&hub, &mut host, &mut published, |_| hub.mixer_delay() > Duration::ZERO);
+    assert!(client.rtt_ms().is_some());
+    assert!(hub.mixer_delay() < Duration::from_millis(500), "{:?}", hub.mixer_delay());
+    client.stop();
+    until(&hub, &mut host, &mut published, |_| hub.mixers().is_empty());
+    assert_eq!(hub.mixer_delay(), Duration::ZERO);
+    hub.stop();
+}

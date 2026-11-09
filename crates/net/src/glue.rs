@@ -213,6 +213,8 @@ pub struct BoothGlue {
     mix_rev: Option<u64>,
     mix_at: Option<Instant>,
     meters_at: Option<Instant>,
+    /// The automation delay was set for the mixers (and goes back to 0 when they leave).
+    mix_delay: bool,
 }
 
 /// The most the session goes to the mixers (a fader drag changes it every frame).
@@ -250,11 +252,21 @@ impl BoothGlue {
 
     /// Remote mixing: the session (its pieces that changed) and the meters, while a PC mixes
     /// this one.
-    pub fn publish_mix(&mut self, host: &dyn RigHost, hub: &Hub) {
+    pub fn publish_mix(&mut self, host: &mut dyn RigHost, hub: &Hub) {
         if hub.mixers().is_empty() {
             self.mix_rev = None;
+            if self.mix_delay {
+                host.engine_mut().automation_delay = 0;
+                self.mix_delay = false;
+            }
             return;
         }
+        // The mixers' moves are written where they made them.
+        let late = host.engine().session().sample_rate.samples(hub.mixer_delay().as_secs_f64());
+        if host.engine().automation_delay != late {
+            host.engine_mut().automation_delay = late;
+        }
+        self.mix_delay = true;
         let now = Instant::now();
         let rev = host.engine().revision;
         if self.mix_rev != Some(rev) && self.mix_at.is_none_or(|t| now.duration_since(t) >= MIX_EVERY) {
@@ -382,7 +394,7 @@ impl BoothGlue {
             hub.clear_audio(None);
             let missing = hub.missing_followers();
             if !missing.is_empty() {
-                host.notify(format!("{} not reachable: the booth records anyway", missing.join(", ")));
+                host.notify(format!("{} not reachable: the host records anyway", missing.join(", ")));
             }
         }
         if state == TransportState::Recording {
@@ -414,7 +426,7 @@ impl BoothGlue {
         let missing = hub.missing_followers();
         let warning = (state == TransportState::Recording && !missing.is_empty()).then(|| {
             let who = missing.join(", ");
-            format!("{who} not reachable. The booth is recording; {who} will send its take when it reconnects.")
+            format!("{who} not reachable. The host is recording; {who} will send its take when it reconnects.")
         });
         hub.set_warning(warning);
     }
@@ -565,7 +577,7 @@ pub fn booth_name(f: &Follower) -> String {
         return pc;
     }
     let t = f.target();
-    if t.booth_name.is_empty() { "the booth".to_string() } else { t.booth_name }
+    if t.booth_name.is_empty() { "the host".to_string() } else { t.booth_name }
 }
 
 impl FollowerGlue {
@@ -595,7 +607,7 @@ impl FollowerGlue {
         }
         // The booth has been away too long: end the take here (it is sent when the booth is back).
         if self.current.is_some() && v.recording && f.since_contact().is_some_and(|d| d >= contact_timeout) && !f.connected() {
-            host.notify("The booth has been away too long: the take ends here and is sent when it is back".into());
+            host.notify("The host has been away too long: the take ends here and is sent when it is back".into());
             self.stop_local(host, f, None);
         }
         let midi = host.take_finished();

@@ -1,5 +1,5 @@
-// FreeDAWm service remote: served by the booth, plain JS, no install.
-// Pairing (4-digit code from the booth's screen) → a token kept in this browser; the status
+// FreeDAWm service remote: served by the host, plain JS, no install.
+// Pairing (4-digit code from the host's screen) → a token kept in this browser; the status
 // arrives as server-sent events (/api/events); the buttons POST /api/action.
 "use strict";
 (function () {
@@ -43,13 +43,13 @@
     myName = ($("pair-name").value || defaultName()).trim();
     store.set(NAME, myName);
     api("POST", "/api/pair/request", { name: myName }).then(function (r) {
-      if (r._code !== 200) { $("pair-msg").textContent = r.error || "The booth said no."; return; }
+      if (r._code !== 200) { $("pair-msg").textContent = r.error || "The host said no."; return; }
       request = r.request;
       $("pair-code-row").hidden = false;
       $("pair-code").value = "";
       $("pair-code").focus();
-      $("pair-msg").textContent = "Type the 4 digits " + (r.pc || "the booth") + " shows.";
-    }).catch(function () { $("pair-msg").textContent = "Cannot reach the booth."; });
+      $("pair-msg").textContent = "Type the 4 digits " + (r.pc || "the host") + " shows.";
+    }).catch(function () { $("pair-msg").textContent = "Cannot reach the host."; });
   };
   $("pair-ok").onclick = function () {
     api("POST", "/api/pair/confirm", { request: request, code: $("pair-code").value.trim() }).then(function (r) {
@@ -78,7 +78,7 @@
     };
     source.onerror = function () {
       // A forgotten token: back to pairing. Otherwise EventSource reconnects by itself.
-      api("GET", "/api/status").then(function (r) { if (r._code === 401) { store.del(KEY); token = ""; showPair("This browser was forgotten by the booth: pair again."); } })
+      api("GET", "/api/status").then(function (r) { if (r._code === 401) { store.del(KEY); token = ""; showPair("This browser was forgotten by the host: pair again."); } })
         .catch(function () {});
     };
   }
@@ -121,7 +121,7 @@
     $("session").textContent = s.session || "Untitled";
     var missing = (s.remotes || []).filter(function (r) { return r.state === "not reachable"; }).length;
     var connected = 1 + (s.remotes || []).length - missing + (s.clients || []).length;
-    $("rig-line").textContent = (s.pc || "Booth") + " · " + (missing ? missing + " PC" + (missing > 1 ? "s" : "") + " missing" : connected + " connected");
+    $("rig-line").textContent = (s.pc || "Host") + " · " + (missing ? missing + " PC" + (missing > 1 ? "s" : "") + " missing" : connected + " connected");
     $("rec-badge").hidden = !rec;
     $("warning").hidden = !s.warning;
     $("warning").textContent = s.warning ? "⚠ " + s.warning : "";
@@ -138,7 +138,7 @@
     var rig = $("rig");
     rig.textContent = "";
     var left = s.record_hours_left != null ? " · " + Math.floor(s.record_hours_left) + " h left" : "";
-    rig.appendChild(pcCard(s.pc || "Booth", gb(s.disk_free) + left, rec ? "● recording" : (playing ? "▶ playing" : "ready"), rec ? "r" : ""));
+    rig.appendChild(pcCard(s.pc || "Host", gb(s.disk_free) + left, rec ? "● recording" : (playing ? "▶ playing" : "ready"), rec ? "r" : ""));
     (s.remotes || []).forEach(function (r) {
       var detail = r.state === "not reachable" && r.last_seen != null ? "last seen " + ms(r.last_seen) + " ago" : [r.detail, r.disk_free != null ? gb(r.disk_free) : ""].filter(Boolean).join(" · ");
       var cls = r.warning ? "w" : (r.state === "recording" ? "r" : (r.state === "take received" ? "g" : ""));
@@ -196,9 +196,9 @@
   function act(body) {
     return api("POST", "/api/action", body).then(function (r) {
       if (r._code === 401) { showPair("Pair again."); return r; }
-      if (r._code !== 200) toast(r.error || "The booth said no.", true);
+      if (r._code !== 200) toast(r.error || "The host said no.", true);
       return r;
-    }).catch(function () { toast("Cannot reach the booth.", true); });
+    }).catch(function () { toast("Cannot reach the host.", true); });
   }
   function rename(id, old) {
     var name = window.prompt("Marker name", old || "");
@@ -248,9 +248,9 @@
   stopBtn.addEventListener("pointercancel", holdCancel);
   stopBtn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
-  // A silent booth: say so.
+  // A silent host: say so.
   setInterval(function () {
-    if (!$("remote").hidden && lastEvent && Date.now() - lastEvent > 15000) $("rig-line").textContent = "Booth not answering… reconnecting";
+    if (!$("remote").hidden && lastEvent && Date.now() - lastEvent > 15000) $("rig-line").textContent = "Host not answering… reconnecting";
   }, 3000);
 
   if (token) start(); else showPair("");

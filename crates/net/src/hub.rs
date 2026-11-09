@@ -213,7 +213,19 @@ struct Inner {
     /// connected (their names).
     mix: Mutex<MixStore>,
     mix_changed: Condvar,
-    mixers: Mutex<Vec<(u64, String)>>,
+    mixers: Mutex<Vec<Mixer>>,
+}
+
+/// A PC mixing this one now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mixer {
+    id: u64,
+    pub name: String,
+    /// Over the internet (else on the LAN).
+    pub internet: bool,
+    /// How late its moves arrive after the moment it heard (its report): the automation it
+    /// writes is moved back by this.
+    pub delay_ms: f64,
 }
 
 /// The session in pieces as last published for the mixers, each with the change counter it was
@@ -559,7 +571,18 @@ impl Hub {
     /// `None` without a player).
     /// The PCs mixing this one remotely now (their names).
     pub fn mixers(&self) -> Vec<String> {
-        lock(&self.inner.mixers).iter().map(|(_, n)| n.clone()).collect()
+        lock(&self.inner.mixers).iter().map(|m| m.name.clone()).collect()
+    }
+
+    /// The PCs mixing this one remotely now, with their link and delay.
+    pub fn mixer_links(&self) -> Vec<Mixer> {
+        lock(&self.inner.mixers).clone()
+    }
+
+    /// How late the remote mixers' moves arrive (the largest), for the automation writer.
+    pub fn mixer_delay(&self) -> Duration {
+        let ms = lock(&self.inner.mixers).iter().map(|m| m.delay_ms).fold(0.0, f64::max);
+        Duration::from_secs_f64(ms.clamp(0.0, MAX_MIXER_DELAY_MS) / 1000.0)
     }
 
     /// Publishes the session for the mixers: only the pieces that changed go out.
@@ -606,7 +629,13 @@ impl Hub {
 
     /// Pushes the session's pieces (those changed since last sent, then `mix.rev`) and the
     /// meters to one mixer while it is connected.
-    fn push_mix(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool) {
+    fn push_mix(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool, internet: bool) {
+        // Over the internet, through a relay that may carry ~300 kb/s with the stream: the
+        // session at most 4 times a second and the meters 10.
+        let (piece_gap, meter_gap) =
+            if internet { (Duration::from_millis(250), Duration::from_millis(100)) } else { (Duration::ZERO, Duration::ZERO) };
+        let mut pieces_at: Option<Instant> = None;
+        let mut meters_at: Option<Instant> = None;
         let mut sent_rest = 0;
         let mut sent_order = 0;
         let mut sent_tracks: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
@@ -623,7 +652,8 @@ impl Hub {
                     })
                     .unwrap_or_else(PoisonError::into_inner);
                 let mut lines: Vec<String> = Vec::new();
-                if m.seq != seen && m.seq > 0 {
+                if m.seq != seen && m.seq > 0 && pieces_at.is_none_or(|t| t.elapsed() >= piece_gap) {
+                    pieces_at = Some(Instant::now());
                     seen = m.seq;
                     if m.rest.0 != sent_rest {
                         sent_rest = m.rest.0;
@@ -642,7 +672,8 @@ impl Hub {
                     }
                     lines.push(format!("{{\"event\":\"mix.rev\",\"params\":{{\"seq\":{}}}}}", m.seq));
                 }
-                let meters = (m.meters.0 != sent_meters && m.meters.0 > 0).then(|| {
+                let meters = (m.meters.0 != sent_meters && m.meters.0 > 0 && meters_at.is_none_or(|t| t.elapsed() >= meter_gap)).then(|| {
+                    meters_at = Some(Instant::now());
                     sent_meters = m.meters.0;
                     Arc::clone(&m.meters.1)
                 });
@@ -659,11 +690,17 @@ impl Hub {
                     break;
                 }
             }
-            if lines.is_empty() && meters.is_none() {
+            let idle = lines.is_empty() && meters.is_none();
+            if idle {
                 ok = writeln!(w, "{{\"event\":\"tick\"}}").is_ok();
             }
             if !ok || w.flush().is_err() {
                 break;
+            }
+            drop(w);
+            // Throttled: something waits for its gap (the wait above would return at once).
+            if internet {
+                std::thread::sleep(Duration::from_millis(20));
             }
         }
     }
@@ -1083,7 +1120,7 @@ impl Hub {
             }
             let reply: Option<Value> = match method.as_str() {
                 "pair.request" | "pair.confirm" if internet => {
-                    Some(json!({"ok": false, "error": "over the internet, pair with an invite from the booth", "pair": true}))
+                    Some(json!({"ok": false, "error": "over the internet, pair with an invite from the host", "pair": true}))
                 }
                 "pair.invite" => Some(answer(self.pair_invite(
                     params.get("secret").and_then(Value::as_str).unwrap_or(""),
@@ -1107,14 +1144,15 @@ impl Hub {
                             if role == "mixer" && mixer.is_none() {
                                 let m = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
                                 mixer = Some(m);
-                                lock(&self.inner.mixers).push((m, dev.name.clone()));
+                                lock(&self.inner.mixers).push(Mixer { id: m, name: dev.name.clone(), internet, delay_ms: 0.0 });
                                 let flag = Arc::new(AtomicBool::new(false));
                                 pusher = Some(Arc::clone(&flag));
                                 let hub = self.clone();
                                 let out = Arc::clone(&out);
                                 let stop = Arc::clone(stop);
-                                let _ =
-                                    std::thread::Builder::new().name("freedawm-mixer-push".into()).spawn(move || hub.push_mix(&out, &flag, &stop));
+                                let _ = std::thread::Builder::new()
+                                    .name("freedawm-mixer-push".into())
+                                    .spawn(move || hub.push_mix(&out, &flag, &stop, internet));
                                 self.wake();
                             }
                             if follower {
@@ -1155,7 +1193,7 @@ impl Hub {
                     let now = self.clock_now();
                     match (arrived, now) {
                         (Some(b1), Some(b2)) => Some(json!({"ok": true, "result": {"b1": b1, "b2": b2}})),
-                        _ => Some(json!({"ok": false, "error": "the booth is stopped"})),
+                        _ => Some(json!({"ok": false, "error": "the host is stopped"})),
                     }
                 }
                 "follower.report" => {
@@ -1173,6 +1211,14 @@ impl Hub {
                 "feed.audio" => {
                     if let Some(dev) = &who {
                         self.feed_audio(&dev.name, &params);
+                    }
+                    None
+                }
+                "mixer.delay" => {
+                    if let (Some(m), Some(ms)) = (mixer, params.get("ms").and_then(Value::as_f64).filter(|v| v.is_finite())) {
+                        for x in lock(&self.inner.mixers).iter_mut().filter(|x| x.id == m) {
+                            x.delay_ms = ms.clamp(0.0, MAX_MIXER_DELAY_MS);
+                        }
                     }
                     None
                 }
@@ -1219,7 +1265,7 @@ impl Hub {
         }
         if let Some(m) = mixer {
             self.subscribe(m, &out, false);
-            lock(&self.inner.mixers).retain(|(id, _)| *id != m);
+            lock(&self.inner.mixers).retain(|x| x.id != m);
             self.inner.mix_changed.notify_all();
             self.wake();
         }
@@ -1233,9 +1279,9 @@ impl Hub {
         let (tx, rx) = channel();
         let id = t.id.clone();
         if !self.send(HubRequest::Take { take: Box::new(t), prepared, reply: tx }) {
-            return Err("the booth is not taking takes".into());
+            return Err("the host is not taking takes".into());
         }
-        rx.recv_timeout(Duration::from_secs(60)).map_err(|_| "the booth did not answer".to_string())??;
+        rx.recv_timeout(Duration::from_secs(60)).map_err(|_| "the host did not answer".to_string())??;
         Ok(json!({"landed": id}))
     }
 
@@ -1495,6 +1541,9 @@ impl Hub {
     }
 }
 
+/// The most a mixer's moves are moved back (a report beyond is a broken link, not a delay).
+const MAX_MIXER_DELAY_MS: f64 = 2000.0;
+
 /// What a mixer connection may call: the mix, automation and transport commands, and reading.
 fn mixer_allows(method: &str, params: &Value) -> bool {
     match method {
@@ -1502,7 +1551,7 @@ fn mixer_allows(method: &str, params: &Value) -> bool {
             let id = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str).unwrap_or("");
             crate::mixer::host_allows(id)
         }
-        "session.inspect" | "document.inspect" | "engine.commands" | "stream.subscribe" | "sync.ping" => true,
+        "session.inspect" | "document.inspect" | "engine.commands" | "stream.subscribe" | "sync.ping" | "mixer.delay" => true,
         _ => false,
     }
 }

@@ -1093,14 +1093,17 @@ Preview the page without a booth: `cargo run -p soundcraft-net --example remote_
 ## Remote mixing
 
 Spec: `docs/superpowers/specs/2026-11-09-remote-mixing-design.md`; code: `soundcraft_net::mixer`,
-`crates/ui-egui/src/remote_mix.rs`. Desktop only, LAN only for now.
+`crates/ui-egui/src/remote_mix.rs`. Desktop only; on this network or over the internet.
 
-Another FreeDAWm PC mixes this one: it shows this session in its own Mix window, plays this PC's
-mix and sends mix, automation and transport changes here. On the remote PC: Setup › Network,
-pick the booth and pair (as for following), then **Mix this booth from here** (not while
-following it). Its own session is put aside and comes back with **Stop mixing** (the banner at
-the top of the window, which also has **Hear its mix**), on quitting, or with `net.remote_mix
-{on: false}`.
+Another FreeDAWm PC mixes this one (the host): it shows this session in its own Mix window,
+plays this PC's mix and sends mix, automation and transport changes here. On the remote PC:
+Setup › Network › **Connect to a host**: find it on this network and pair with its code, or
+paste an invite, then **Mix it** › Start. On the host, **Invite a mixer** (the internet switched
+on) makes an invite that starts mixing as soon as it is joined; **Invite a performer** makes one
+that records with the host, as before (the invite's `r`: `mix`, or absent). The remote PC's own
+session is put aside and comes back with **Stop mixing** (in the banner at the top of the
+window, which also has **Hear its mix**, or in the Network window), on quitting, or with
+`net.remote_mix {on: false}`.
 
 On the remote PC every command goes where `soundcraft_net::mixer::route` says, through
 `Engine::relay`: `mix.*` and `automation.*` changes run there at once and here; `transport.*`,
@@ -1109,12 +1112,20 @@ command that edits or replaces the session is refused there ("while mixing anoth
 only mix, automation and transport changes are possible"). A fader drag is one undo step here
 (`engine.execute` with `merge`). A control held still there touches it here every 200 ms
 (`automation.touch`), so writing in Touch keeps going and a dropped link lets go within half a
-second. The copy there is never "modified": nothing there saves it, and this PC's autosave is not
+second. The copy there is never "modified": nothing there saves it, and its own autosave is not
 touched.
 
+**Automation lands where the mixer heard it.** Each second the remote PC measures the round trip
+(`sync.ping`; the answer is the pong, refused or not) and reports its delay (`mixer.delay {ms}`):
+the round trip, plus the stream's jitter buffer and 22.5 ms of Opus frame and lookahead while it
+hears the mix. While mixers are connected this PC sets `Engine::automation_delay` to the largest
+report (at most 2 s), and live automation writing puts each point that much earlier on the
+timeline (`automation.set_point`'s `at` and `from`), so a ride made against what the mixer heard
+lands there and not a few hundred milliseconds late. With no mixer it is 0.
+
 JSON lines, after `hello {token, name, role: "mixer"}`: the mixer may call `engine.execute` for
-the commands above, `session.inspect`, `engine.commands` and `stream.subscribe` (anything else:
-"a remote mixer can't run `…`"). This PC pushes:
+the commands above, `session.inspect`, `engine.commands`, `stream.subscribe`, `sync.ping` and
+`mixer.delay` (anything else: "a remote mixer can't run `…`"). This PC pushes:
 
 | Event | Params | When |
 |---|---|---|
@@ -1125,16 +1136,21 @@ the commands above, `session.inspect`, `engine.commands` and `stream.subscribe` 
 | `mix.meters` | `{tracks: [{id, l, r, gr}], main: {id: 0, l, r}, playing, recording, position}` | ~30 a second (linear peaks; `position` in session samples) |
 | `stream` | as for remote recorders | while subscribed and this PC plays |
 
-The session goes out at most 20 times a second, and only the pieces whose JSON changed. The
-remote PC puts it in place (`Engine::mirror_session`: its own view, selection and zoom stay)
-only when none of its commands is waiting for an answer and 120 ms after the last answer, so a
-piece sent before this PC ran its change never pulls a fader back. Its meters and playhead are
-delayed by the stream's jitter buffer, so they move with what it hears. Its player is handed an
-empty session at this session's rate: nothing renders there but the stream.
+The session goes out at most 20 times a second, and only the pieces whose JSON changed. Over the
+internet (a mixer that came through the internet listener) at most 4 times a second, and the
+meters 10, so they fit beside the stream through a relay. The remote PC puts the session in place
+(`Engine::mirror_session`: its own view, selection and zoom stay) only when none of its commands
+is waiting for an answer and 120 ms after the last answer, so a piece sent before this PC ran its
+change never pulls a fader back. Its meters and playhead are delayed by the stream's jitter
+buffer, so they move with what it hears. Its player is handed an empty session at this
+session's rate: nothing renders there but the stream.
+
+Over the internet the remote PC connects through the same local bridge as a performer
+(`Internet::bridge_to`); the host must have the internet switched on (`internet_host`).
 
 | Command | Params | Result |
 |---|---|---|
-| `net.remote_mix` | `{on?: bool, hear?: bool}` (toggles without `on`) | `{on, hear, connected, status}`. Mixes the booth picked and paired in Setup › Network, or stops. Refused while following it, or before pairing. |
+| `net.remote_mix` | `{on?: bool, hear?: bool}` (toggles without `on`) | `{on, hear, connected, status}`. Mixes the host found and paired (or joined) in Setup › Network, or stops. Refused while recording with it, or before pairing. |
 
 ## Record offset and loopback measure
 

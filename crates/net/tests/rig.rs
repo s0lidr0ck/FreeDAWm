@@ -1041,7 +1041,7 @@ fn the_rig_runs_unchanged_over_the_internet_transport_with_an_invite() {
     // The booth: its endpoint, bridged to its internet listener; an invite for the friend.
     let host = Internet::start(new_key(), Relays::LocalOnly).unwrap();
     host.serve_to(rig.hub.listen_internet().unwrap());
-    let invite = Invite { addr: host.addr(Duration::from_secs(1)), secret: rig.hub.new_invite_secret(), name: "Booth".into() };
+    let invite = Invite { addr: host.addr(Duration::from_secs(1)), secret: rig.hub.new_invite_secret(), name: "Booth".into(), role: String::new() };
     let code = invite.code();
     assert_eq!(rig.hub.open_invites().len(), 1);
     // The friend pastes the code: his endpoint, a local bridge to the booth, paired by the invite.

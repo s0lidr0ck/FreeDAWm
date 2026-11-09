@@ -261,10 +261,12 @@ impl Engine {
         let from = std::mem::replace(&mut self.auto_write.last_at, if playing { pos } else { i64::MIN });
         let writes = self.due_writes(pos, hold);
         let mut n = 0;
+        // Moves that arrive late (a remote mixer's) are written where they were made.
+        let late = self.automation_delay.clamp(0, rate.samples(2.0));
         for (t, param, v) in writes {
-            let mut point = json!({"track": t.0, "param": param.id(), "at": pos, "value": v});
+            let mut point = json!({"track": t.0, "param": param.id(), "at": pos.saturating_sub(late).max(0), "value": v});
             if from != i64::MIN {
-                point["from"] = from.into();
+                point["from"] = from.saturating_sub(late).max(0).into();
             }
             if self.execute_merged("automation.set_point", &point, PASS).is_ok() {
                 n += 1;
@@ -437,6 +439,22 @@ mod tests {
         assert_eq!(og.last(), Some(&(10 * q, 0.8)));
         // A send without a lane is not written in Write mode unless touched.
         assert!(points(&e, t, &AutoParam::SendLevel(0)).is_empty());
+    }
+
+    /// A remote mixer's moves arrive late: with `automation_delay` they are written that much
+    /// earlier, where the mixer made them against what it heard.
+    #[test]
+    fn late_moves_are_written_where_they_were_made() {
+        let (mut e, t, _, q) = kick("latch");
+        e.automation_delay = q / 4;
+        play(&mut e, q);
+        e.execute("mix.volume", &json!({"track": t.0, "db": -6.0})).unwrap();
+        play(&mut e, 2 * q);
+        stop(&mut e, 3 * q);
+        let v = points(&e, t, &AutoParam::Volume);
+        assert!(v.contains(&(2 * q - q / 4, -6.0)), "{v:?}");
+        assert!(v.contains(&(3 * q - q / 4, -6.0)), "{v:?}");
+        assert!(!v.contains(&(2 * q, -6.0)) && !v.contains(&(3 * q, -6.0)), "nothing at the arrival time: {v:?}");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Remote mixing
 
-Status: step 1 built (LAN). Owner decisions: LAN first, the internet through the same code next; a
+Status: built on this network and over the internet (steps 1 and 2). Owner decisions: LAN first, the internet through the same code next; a
 remote mixer changes the mix and runs the transport, nothing else; the remote screen is the
 FreeDAWm desktop app.
 
@@ -80,16 +80,30 @@ session back first, so the usual save prompt and autosave apply to it.
   loopback port, a mixer refused anything else, an unpaired PC refused (net), and a whole app
   mixing a booth and getting its own session back (UI).
 
+## Built (step 2: over the internet)
+
+- The mixer link through the same local bridge as a performer's (`Internet::bridge_to`); the
+  host's internet listener lets a mixer in after `pair.invite` as it does a performer.
+- Invites say what they are for (`r: "mix"`): *Invite a mixer* / *Invite a performer* on the
+  host; joining a mixer's invite starts mixing at once.
+- Internet mixers get the session at most 4 times a second and the meters 10 (the hub knows a
+  connection came through the internet listener).
+- Automation timing: the remote PC measures its round trip every second and reports its delay
+  (round trip + jitter buffer + Opus frame and lookahead) with `mixer.delay`; the host sets
+  `Engine::automation_delay` to the largest and writes live automation that much earlier, so a
+  ride lands where it was heard. Per-move timestamps were weighed and left: the delay is steady
+  within a few ms on a link the stream can play over, and one number keeps the writer simple.
+- Setup › Network redesigned around two tasks (This PC is the host / Connect to a host): two
+  switches for who can connect, an invite card, a map of who is connected and how, trusted
+  devices; and a two-step connect flow (find the host, then Record with it or Mix it). The UI
+  says "host" where it said "booth".
+
 ## Next
 
-1. Over the internet: the mixer link through iroh as the follower's is (`Internet::bridge_to`),
-   with the stream at a lower rate and the latency shown.
-2. Automation timing over a long link: stamp each remote move with the timeline position the
-   remote PC was hearing, and have the host write it there instead of now.
-3. The stream while stopped (auditioning a plugin change with the transport stopped), and a
+1. The stream while stopped (auditioning a plugin change with the transport stopped), and a
    lossless stream on the LAN.
-4. Third-party plugin windows: a generic parameter editor on the remote PC (names and ranges
+2. Third-party plugin windows: a generic parameter editor on the remote PC (names and ranges
    are already known for automation lanes); built-in editors already work on the copy.
-5. A mixer pairing kind, so a device paired as a mixer can never be anything more.
-6. Control surfaces (the X32 over OSC, Mackie Control/HUI) sending the same commands, so a
+3. A mixer pairing kind, so a device paired as a mixer can never be anything more.
+4. Control surfaces (the X32 over OSC, Mackie Control/HUI) sending the same commands, so a
    surface on the remote PC mixes the host too.

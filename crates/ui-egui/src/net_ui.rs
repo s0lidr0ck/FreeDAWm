@@ -75,7 +75,6 @@ pub struct NetState {
     addr_edit: String,
     code_edit: String,
     pair: PairJob,
-    pair_status: String,
     /// For renders (`follower_demo`): the badge shown instead of the follower's.
     demo_badge: Option<FollowBadge>,
     /// The performer's level window (`performer_panel`).
@@ -85,11 +84,21 @@ pub struct NetState {
     invite: Option<(String, std::time::Instant)>,
     invite_edit: String,
     join: PairJob,
-    join_status: String,
     /// Mix this booth remotely (on) or stop (off): asked in the window, done once it is drawn.
     mix_request: Option<bool>,
     /// This PC is mixing the booth now (a copy of `SoundApp::remote_mix.is_some()` for the window).
     mixing: bool,
+    /// Hear the booth's mix while mixing it: asked in the window.
+    hear_request: Option<bool>,
+    /// The tab shown, and what pairing or joining a booth says.
+    pub tab: NetTab,
+    connect_status: String,
+    /// The invite shown is for a mixer (`mix`) or a performer; when it was copied.
+    invite_role: String,
+    copied: Option<std::time::Instant>,
+    /// The QR code for the remote page is shown; the host is being changed (step 1 open again).
+    show_qr: bool,
+    change_host: bool,
 }
 
 impl NetState {
@@ -118,16 +127,22 @@ impl NetState {
             addr_edit: cfg.follow.booth_addr.clone(),
             code_edit: String::new(),
             pair: PairJob::default(),
-            pair_status: String::new(),
             demo_badge: None,
             guard: Guard::default(),
             internet: None,
             invite: None,
             invite_edit: String::new(),
             join: PairJob::default(),
-            join_status: String::new(),
             mix_request: None,
             mixing: false,
+            hear_request: None,
+            // A PC that connects to a booth (and isn't one) opens on that tab.
+            tab: if !cfg.follow.token.is_empty() && !cfg.enabled && !cfg.internet_host { NetTab::Connect } else { NetTab::Host },
+            connect_status: String::new(),
+            invite_role: String::new(),
+            copied: None,
+            show_qr: false,
+            change_host: false,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -251,10 +266,11 @@ impl NetState {
     }
 
     /// Makes an invite (valid 30 minutes, once): the code to send the performer.
-    fn make_invite(&mut self) -> Result<String, String> {
+    /// `role`: what the invited PC does (`""` records with this one, `mix` mixes it).
+    fn make_invite(&mut self, role: &str) -> Result<String, String> {
         let addr = self.internet()?.addr(Duration::from_secs(5));
         let secret = self.hub.new_invite_secret();
-        Ok(soundcraft_net::internet::Invite { addr, secret, name: self.hub.pc_name() }.code())
+        Ok(soundcraft_net::internet::Invite { addr, secret, name: self.hub.pc_name(), role: role.to_string() }.code())
     }
 
     fn stop_following(&mut self) {
@@ -389,14 +405,14 @@ impl RigHost for AppHost<'_> {
 }
 
 /// A remote recorder keeps its local session (the take's backup) on disk: saved where it is, or,
-/// never saved, as its own project folder "<PC> – <booth session> – <date>" in the remote takes
+/// never saved, as its own project folder "<PC> – <host session> – <date>" in the remote takes
 /// folder (Setup › Network). Returns the session's project folder: the take waiting to be sent is
 /// kept there too.
 fn keep_session(app: &mut SoundApp, booth_session: &str) -> Option<std::path::PathBuf> {
     if app.engine.path.is_none() {
         let dir = app.net.as_ref().and_then(NetState::takes_dir)?;
         let pc = app.net.as_ref().map(|n| n.hub.pc_name()).unwrap_or_default();
-        let booth = if booth_session.is_empty() { "Booth" } else { booth_session };
+        let booth = if booth_session.is_empty() { "Host" } else { booth_session };
         let name: String = format!("{pc} – {booth} – {}", today()).chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { '-' } else { c }).collect();
         let name = name.trim().trim_end_matches('.').to_string();
         // Another run the same day gets its own folder.
@@ -515,6 +531,27 @@ pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
     ctx.request_repaint_after(Duration::from_millis(500));
 }
 
+/// Which half of Setup › Network is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NetTab {
+    /// This PC is the host: who may connect, invites, who is connected.
+    #[default]
+    Host,
+    /// This PC connects to a host: find it, then record with it or mix it.
+    Connect,
+}
+
+/// What the window shows about this PC mixing the host (copied from the app before drawing).
+#[derive(Debug, Clone, Default)]
+struct MixShown {
+    on: bool,
+    connected: bool,
+    hear: bool,
+    status: String,
+    rtt_ms: Option<f64>,
+    delay_ms: Option<f64>,
+}
+
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     pairing_prompt(app, ctx);
     performer_panel(app, ctx);
@@ -522,11 +559,26 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     if let Some(on) = app.net.as_mut().and_then(|n| n.mix_request.take())
         && let Err(e) = remote_mix_command(app, &json!({"on": on}))
     {
-        app.ui.status = e;
+        app.ui.status = e.clone();
+        if let Some(n) = app.net.as_mut() {
+            n.connect_status = e;
+        }
     }
-    let mixing = crate::remote_mix::active(app);
+    if let Some(h) = app.net.as_mut().and_then(|n| n.hear_request.take())
+        && let Some(rm) = app.remote_mix.as_mut()
+    {
+        rm.hear = h;
+    }
+    let shown = app.remote_mix.as_ref().map_or_else(MixShown::default, |r| MixShown {
+        on: true,
+        connected: r.client.connected(),
+        hear: r.hear,
+        status: r.client.status(),
+        rtt_ms: r.client.rtt_ms(),
+        delay_ms: r.client.delay_ms(),
+    });
     if let Some(n) = app.net.as_mut() {
-        n.mixing = mixing;
+        n.mixing = shown.on;
     }
     let mut open = app.ui.show_network;
     if !open {
@@ -537,228 +589,523 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     };
     let t = Tokens::current();
-    egui::Window::new("Network").open(&mut open).default_size(vec2(560.0, 860.0)).resizable(true).show(ctx, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let cfg = net.hub.config();
-            ui.heading("This PC");
-            ui.horizontal(|ui| {
-                ui.label("Name on the network:");
-                let mut name = net.name_edit.clone().unwrap_or_else(|| net.hub.pc_name());
-                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(180.0));
-                if r.changed() {
-                    net.name_edit = Some(name.clone());
+    egui::Window::new("Network")
+        .open(&mut open)
+        .default_size(vec2(700.0, 780.0))
+        .min_width(600.0)
+        .resizable(true)
+        .frame(egui::Frame::window(&ctx.global_style()).fill(t.window_bg).inner_margin(egui::Margin::same(18)))
+        .show(ctx, |ui| {
+            header(ui, &mut net, &shown);
+            ui.add_space(12.0);
+            egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                match net.tab {
+                    NetTab::Host => host_tab(ui, &mut net, ctx),
+                    NetTab::Connect => connect_tab(ui, &mut net, ctx, &shown, app.services.pick_folder.as_deref()),
                 }
-                if r.lost_focus() && net.name_edit.is_some() {
-                    let n = name.trim().to_string();
-                    net.hub.update_config(|c| c.pc_name = n);
-                    net.name_edit = None;
-                    if net.hub.listening_port().is_some() {
-                        net.start_listening();
-                    }
-                }
+                ui.add_space(8.0);
             });
-            let mut allow = cfg.enabled;
-            if ui
-                .checkbox(&mut allow, "Allow control from this network")
-                .on_hover_text("The service remote page, and remote recorders following this PC. Paired devices only.")
-                .changed()
-            {
-                net.hub.update_config(|c| c.enabled = allow);
-                if allow { net.start_listening() } else { net.stop_listening() }
-            }
-            ui.horizontal(|ui| {
-                ui.label("Port:");
-                let mut port = i64::from(cfg.port);
-                if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
-                    let p = u16::try_from(port).unwrap_or(soundcraft_net::config::DEFAULT_PORT);
-                    net.hub.update_config(|c| c.port = p);
-                }
-                ui.label(egui::RichText::new("(the page and the control channel share it)").small().color(t.text_dim));
-            });
-            if let Some(e) = &net.error {
-                ui.colored_label(t.rec, e);
-            }
-            if let Some(url) = net.url() {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if net.qr.as_ref().is_none_or(|(u, _, _)| *u != url) {
-                        net.qr = soundcraft_net::sys::qr_matrix(&url).map(|(w, m)| (url.clone(), w, m));
-                    }
-                    if let Some((_, w, m)) = &net.qr {
-                        draw_qr(ui, *w, m, 132.0);
-                    }
-                    ui.vertical(|ui| {
-                        ui.label("Service remote (any browser on this network):");
-                        ui.hyperlink_to(egui::RichText::new(&url).size(16.0).strong(), &url);
-                        ui.label(
-                            egui::RichText::new("Scan with the phone's camera. The first visit asks for the code shown here.")
-                                .small()
-                                .color(t.text_dim),
-                        );
-                        let clients = net.hub.clients();
-                        ui.label(if clients.is_empty() { "No browser watching".to_string() } else { format!("Watching: {}", clients.join(", ")) });
-                        for r in net.hub.remotes() {
-                            let c = if r.warning { Color32::from_rgb(240, 198, 116) } else { t.text };
-                            ui.colored_label(
-                                c,
-                                format!("{}: {}{}", r.name, r.state, if r.detail.is_empty() { String::new() } else { format!(" · {}", r.detail) }),
-                            );
-                        }
-                    });
-                });
-            } else {
-                ui.label(egui::RichText::new("Off: nothing on the network can reach this PC.").color(t.text_dim));
-            }
-            ui.add_space(6.0);
-            ui.heading("Paired devices");
-            if cfg.paired.is_empty() {
-                ui.label(egui::RichText::new("None yet.").color(t.text_dim));
-            }
-            let mut forget = None;
-            egui::Grid::new("net-paired").num_columns(3).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
-                for d in &cfg.paired {
-                    ui.label(&d.name);
-                    ui.label(
-                        egui::RichText::new(if d.follows {
-                            "PC · remote recorder"
-                        } else if d.kind == "pc" {
-                            "PC"
-                        } else {
-                            "browser"
-                        })
-                        .color(t.text_dim),
-                    );
-                    if ui.button("Forget").clicked() {
-                        forget = Some(d.token.clone());
-                    }
-                    ui.end_row();
-                }
-            });
-            if let Some(tok) = forget {
-                net.hub.forget(&tok);
-            }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.heading("Follow a booth");
-            ui.label(
-                egui::RichText::new(
-                    "Pick the booth and pair with it. Follow it: this PC records with the booth (its MIDI inputs and armed audio tracks) and \
-                     sends each take there. Or mix it from here.",
-                )
-                .small()
-                .color(t.text_dim),
-            );
-            follow_section(ui, &mut net, ctx, app.services.pick_folder.as_deref());
-            ui.add_space(6.0);
-            ui.separator();
-            ui.heading("Connect over the internet");
-            internet_section(ui, &mut net, ctx);
         });
-    });
     app.net = Some(net);
     app.ui.show_network = open;
 }
 
-fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pick_folder: Option<&dyn Fn(&str) -> Option<String>>) {
+/// This PC (its name, editable, and a sentence on what it is doing), and Host / Connect.
+fn header(ui: &mut egui::Ui, net: &mut NetState, mix: &MixShown) {
+    use crate::net_look::{Icon, avatar, segmented};
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    let lan = net.hub.listening_port().is_some();
+    let others = net.hub.clients().len() + net.hub.remotes().iter().filter(|r| r.state != "not reachable").count() + net.hub.mixers().len();
+    let status = if mix.on {
+        format!("Mixing {}", if cfg.follow.booth_name.is_empty() { "a host" } else { &cfg.follow.booth_name })
+    } else if net.follower.is_some() {
+        format!("Recording with {}", if cfg.follow.booth_name.is_empty() { "a host" } else { &cfg.follow.booth_name })
+    } else {
+        let doors = match (lan, cfg.internet_host) {
+            (true, true) => "Open on this network and the internet",
+            (true, false) => "Open on this network",
+            (false, true) => "Open to invites over the internet",
+            (false, false) => "Private: nothing can connect",
+        };
+        if others > 0 { format!("{doors} · {others} connected") } else { doors.to_string() }
+    };
+    ui.horizontal(|ui| {
+        let busy = mix.on || net.follower.is_some() || others > 0;
+        avatar(ui, 46.0, Icon::Pc, if busy || lan || cfg.internet_host { t.accent } else { t.button }, Color32::WHITE);
+        ui.add_space(6.0);
+        ui.vertical(|ui| {
+            let mut name = net.name_edit.clone().unwrap_or_else(|| net.hub.pc_name());
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .font(egui::FontId::proportional(20.0))
+                    .frame(egui::Frame::NONE)
+                    .desired_width(240.0)
+                    .hint_text("This PC's name"),
+            );
+            let r = r.on_hover_text("This PC's name on the network: click to change it");
+            if r.changed() {
+                net.name_edit = Some(name.clone());
+            }
+            if r.lost_focus() && net.name_edit.is_some() {
+                let n = name.trim().to_string();
+                net.hub.update_config(|c| c.pc_name = n);
+                net.name_edit = None;
+                if net.hub.listening_port().is_some() {
+                    net.start_listening();
+                }
+            }
+            ui.label(egui::RichText::new(status).size(12.5).color(t.text_dim));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let selected = usize::from(net.tab == NetTab::Connect);
+            if let Some(i) = segmented(ui, ["This PC is the host", "Connect to a host"], selected) {
+                net.tab = if i == 0 { NetTab::Host } else { NetTab::Connect };
+            }
+        });
+    });
+    if let Some(e) = net.error.clone() {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.colored_label(t.rec, &e);
+            if ui.small_button("✕").clicked() {
+                net.error = None;
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// This PC is the host
+
+fn host_tab(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) {
+    use crate::net_look::{Icon, primary, secondary, section, switch, tile, tile_head};
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    section(ui, "Who can connect");
+    ui.columns(2, |cols| {
+        // This network.
+        let lan = cfg.enabled;
+        tile(&mut cols[0], lan, |ui| {
+            let mut on = lan;
+            tile_head(ui, Icon::Wifi, lan, "This network", "Phones, the stage PC and other PCs on the same Wi-Fi or cable", |ui| {
+                if switch(ui, &mut on, "On this network").changed() {
+                    net.hub.update_config(|c| c.enabled = on);
+                    if on { net.start_listening() } else { net.stop_listening() }
+                }
+            });
+            if let Some(url) = net.url() {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    crate::net_look::pill(ui, url.trim_start_matches("http://").trim_end_matches('/'), t.text, t.button);
+                    let label = if net.show_qr { "Hide QR code" } else { "QR code for a phone" };
+                    if ui.small_button(label).clicked() {
+                        net.show_qr = !net.show_qr;
+                    }
+                });
+                if net.show_qr {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if net.qr.as_ref().is_none_or(|(u, _, _)| *u != url) {
+                            net.qr = soundcraft_net::sys::qr_matrix(&url).map(|(w, m)| (url.clone(), w, m));
+                        }
+                        if let Some((_, w, m)) = &net.qr {
+                            draw_qr(ui, *w, m, 120.0);
+                        }
+                        ui.label(
+                            egui::RichText::new("Scan with the phone's camera for the remote page. Its first visit asks for a code shown here.")
+                                .size(11.5)
+                                .color(t.text_dim),
+                        );
+                    });
+                }
+            } else {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Off").size(11.5).color(t.text_dim));
+            }
+        });
+        // The internet.
+        let host = cfg.internet_host;
+        tile(&mut cols[1], host, |ui| {
+            let mut on = host;
+            tile_head(ui, Icon::Globe, host, "The internet", "Anyone you send an invite to. Encrypted, direct when the routers allow", |ui| {
+                if switch(ui, &mut on, "Over the internet").changed() {
+                    net.hub.update_config(|c| c.internet_host = on);
+                    if on {
+                        net.start_internet_host();
+                    } else {
+                        net.hub.stop_internet();
+                        net.invite = None;
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            if host {
+                ui.horizontal(|ui| {
+                    for (label, role, main) in [("Invite a mixer", soundcraft_net::internet::ROLE_MIX, true), ("Invite a performer", "", false)] {
+                        let r = if main { primary(ui, label) } else { secondary(ui, label) };
+                        let r = r.on_hover_text(if main {
+                            "They mix this session from their PC and hear its mix"
+                        } else {
+                            "They record at home against this PC's mix; their take lands here"
+                        });
+                        if r.clicked() {
+                            match net.make_invite(role) {
+                                Ok(code) => {
+                                    net.invite = Some((code, std::time::Instant::now()));
+                                    net.invite_role = role.to_string();
+                                }
+                                Err(e) => net.error = Some(e),
+                            }
+                        }
+                    }
+                });
+            } else {
+                ui.label(egui::RichText::new("Off").size(11.5).color(t.text_dim));
+            }
+        });
+    });
+    if let Some((code, made)) = net.invite.clone()
+        && cfg.internet_host
+    {
+        ui.add_space(10.0);
+        invite_card(ui, net, ctx, &code, made);
+    }
+    section(ui, "Connected now");
+    let nodes = connected_nodes(net);
+    let me = net.hub.pc_name();
+    crate::net_look::map(ui, &me, &nodes, "Nobody yet. Open a door above, then pair or invite someone.");
+    internet_warning(ui, net);
+    section(ui, "Trusted devices");
+    trusted(ui, net);
+    advanced(ui, net, ctx);
+}
+
+/// The invite just made: who it is for, the code, Copy, and how long it lasts.
+fn invite_card(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, code: &str, made: std::time::Instant) {
+    use crate::net_look::{pill, primary, tile};
+    let t = Tokens::current();
+    let mix = net.invite_role == soundcraft_net::internet::ROLE_MIX;
+    let left = (30.0 - made.elapsed().as_secs_f64() / 60.0).ceil().max(0.0);
+    tile(ui, true, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(if mix { "Invite for a mixer" } else { "Invite for a performer" }).size(15.0).strong().color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Discard").clicked() {
+                    net.invite = None;
+                }
+                pill(ui, &format!("expires in {left:.0} min · works once"), t.text_dim, t.button);
+            });
+        });
+        ui.add_space(6.0);
+        let short = if code.len() > 64 { format!("{}…{}", &code[..40], &code[code.len() - 16..]) } else { code.to_string() };
+        egui::Frame::new().fill(t.window_bg).corner_radius(7.0).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(short).monospace().size(12.0).color(t.text)).on_hover_text(code);
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if primary(ui, "Copy invite").clicked() {
+                ctx.copy_text(code.to_string());
+                net.copied = Some(std::time::Instant::now());
+            }
+            let copied = net.copied.is_some_and(|c| c.elapsed() < Duration::from_secs(3));
+            ui.label(
+                egui::RichText::new(if copied {
+                    "Copied. Send it by email or chat."
+                } else {
+                    "Send it by email or chat. They paste it in Network › Connect to a host."
+                })
+                .size(11.5)
+                .color(if copied { crate::net_look::LAN } else { t.text_dim }),
+            );
+        });
+    });
+}
+
+/// Everyone connected to this PC, for the map.
+fn connected_nodes(net: &NetState) -> Vec<crate::net_look::Node> {
+    use crate::net_look::{Icon, Link, Node};
+    let quality = net.internet.as_ref().map(soundcraft_net::internet::Internet::quality).unwrap_or_default();
+    // The internet links are not named per device: the first one's quality stands for them.
+    let inet = |rtt: Option<f64>| match quality.first() {
+        Some(q) => Link::Internet { direct: q.direct, rtt_ms: Some(q.rtt_ms) },
+        None => Link::Internet { direct: true, rtt_ms: rtt },
+    };
+    let mut v = Vec::new();
+    for c in net.hub.clients() {
+        v.push(Node { name: c, role: "remote page".into(), icon: Icon::Phone, link: Link::Lan, warn: false });
+    }
+    let internet_names: Vec<String> = net.hub.config().paired.iter().filter(|_| net.hub.internet_port().is_some()).map(|d| d.name.clone()).collect();
+    for r in net.hub.remotes().into_iter().filter(|r| r.state != "not reachable") {
+        let over = net.hub.internet_port().is_some() && internet_names.contains(&r.name) && !quality.is_empty();
+        v.push(Node {
+            name: r.name.clone(),
+            role: format!("records · {}", r.state),
+            icon: Icon::Mic,
+            link: if over { inet(None) } else { Link::Lan },
+            warn: r.warning,
+        });
+    }
+    for m in net.hub.mixer_links() {
+        v.push(Node {
+            name: m.name.clone(),
+            role: if m.delay_ms > 0.0 { format!("mixing · {:.0} ms behind", m.delay_ms) } else { "mixing".into() },
+            icon: Icon::Faders,
+            link: if m.internet { inet(None) } else { Link::Lan },
+            warn: false,
+        });
+    }
+    v
+}
+
+/// A weak internet link, in plain words.
+fn internet_warning(ui: &mut egui::Ui, net: &NetState) {
+    let Some(inet) = &net.internet else { return };
+    if inet.quality().iter().any(soundcraft_net::internet::Quality::weak) {
+        ui.add_space(6.0);
+        ui.colored_label(
+            crate::net_look::RELAY,
+            "The internet link is weak: the mix may drop out. Recorded takes are safe: they are recorded on the remote PC.",
+        );
+    }
+}
+
+/// The devices paired with this PC, with Forget.
+fn trusted(ui: &mut egui::Ui, net: &mut NetState) {
+    use crate::net_look::{Icon, avatar};
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    if cfg.paired.is_empty() {
+        ui.label(egui::RichText::new("None yet: a device you pair or invite stays trusted until you forget it.").size(12.0).color(t.text_dim));
+        return;
+    }
+    let mut forget = None;
+    egui::Frame::new().fill(t.panel_bg2).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for (i, d) in cfg.paired.iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            ui.horizontal(|ui| {
+                let ic = if d.kind == "browser" { Icon::Phone } else { Icon::Pc };
+                avatar(ui, 26.0, ic, t.button, t.text_dim);
+                ui.label(egui::RichText::new(&d.name).color(t.text));
+                ui.label(
+                    egui::RichText::new(if d.kind == "browser" {
+                        "phone or browser"
+                    } else if d.follows {
+                        "PC · has recorded with this one"
+                    } else {
+                        "PC"
+                    })
+                    .size(11.5)
+                    .color(t.text_dim),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Forget").on_hover_text("It has to pair again to connect").clicked() {
+                        forget = Some(d.token.clone());
+                    }
+                });
+            });
+        }
+    });
+    if let Some(tok) = forget {
+        net.hub.forget(&tok);
+    }
+}
+
+/// The port and the relay.
+fn advanced(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) {
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    ui.add_space(10.0);
+    egui::CollapsingHeader::new(egui::RichText::new("Advanced").color(t.text_dim)).id_salt("net-advanced").show(ui, |ui| {
+        egui::Grid::new("net-advanced-grid").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+            ui.label("Port");
+            ui.horizontal(|ui| {
+                let mut port = i64::from(cfg.port);
+                if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
+                    let p = u16::try_from(port).unwrap_or(soundcraft_net::config::DEFAULT_PORT);
+                    net.hub.update_config(|c| c.port = p);
+                    if net.hub.listening_port().is_some() {
+                        net.start_listening();
+                    }
+                }
+                ui.label(egui::RichText::new("on this network (the remote page and the PCs)").size(11.5).color(t.text_dim));
+            });
+            ui.end_row();
+            ui.label("Internet relay");
+            ui.vertical(|ui| {
+                let mut relay = cfg.relay_url.clone();
+                let r = ui.add(egui::TextEdit::singleline(&mut relay).hint_text("the free public relays").desired_width(280.0));
+                if r.changed() {
+                    net.hub.update_config(|c| c.relay_url = relay.trim().to_string());
+                }
+                if r.lost_focus() && net.internet.is_some() {
+                    // Starts again on the new relay.
+                    net.internet = None;
+                    if net.hub.config().internet_host {
+                        net.start_internet_host();
+                    }
+                    if net.follower.is_some() && !net.hub.config().follow.internet.is_empty() {
+                        net.start_following(ctx);
+                    }
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Only used when two routers block a direct connection. Empty: n0's free public relays. Your own iroh-relay: its address.",
+                    )
+                    .size(11.0)
+                    .color(t.text_dim),
+                );
+            });
+            ui.end_row();
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connect to a host
+
+fn connect_tab(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, mix: &MixShown, pick_folder: Option<&dyn Fn(&str) -> Option<String>>) {
+    use crate::net_look::{Icon, avatar, step, tile};
+    let t = Tokens::current();
+    take_join_result(net, ctx);
+    let busy = net.follower.is_some() || mix.on;
+    let cfg = net.hub.config();
+    let paired = !cfg.follow.token.is_empty();
+    ui.add_space(4.0);
+    step(ui, 1, paired && !net.change_host, "Find the host");
+    if paired && !net.change_host {
+        tile(ui, false, |ui| {
+            ui.horizontal(|ui| {
+                avatar(ui, 40.0, Icon::Pc, t.accent, Color32::WHITE);
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    let name = if cfg.follow.booth_name.is_empty() { cfg.follow.booth_addr.clone() } else { cfg.follow.booth_name.clone() };
+                    ui.label(egui::RichText::new(name).size(17.0).strong().color(t.text));
+                    let (how, col) = if cfg.follow.internet.is_empty() {
+                        (format!("On this network · {}", cfg.follow.booth_addr), crate::net_look::LAN)
+                    } else {
+                        ("Over the internet · paired with an invite".to_string(), crate::net_look::NET)
+                    };
+                    ui.label(egui::RichText::new(how).size(12.0).color(col));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Change host").corner_radius(7.0))
+                        .on_disabled_hover_text("Stop recording or mixing first")
+                        .clicked()
+                    {
+                        net.change_host = true;
+                    }
+                });
+            });
+        });
+    } else {
+        ui.columns(2, |cols| {
+            tile(&mut cols[0], false, |ui| {
+                crate::net_look::tile_head(ui, Icon::Wifi, true, "On this network", "Pair with the 4-digit code the host shows", |_| {});
+                ui.add_space(8.0);
+                find_on_lan(ui, net, ctx);
+            });
+            tile(&mut cols[1], false, |ui| {
+                crate::net_look::tile_head(ui, Icon::Globe, true, "Over the internet", "Paste the invite the host sent you", |_| {});
+                ui.add_space(8.0);
+                join_with_invite(ui, net, ctx);
+            });
+        });
+        if paired && ui.small_button("Keep the host I had").clicked() {
+            net.change_host = false;
+        }
+    }
+    if !net.connect_status.is_empty() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(&net.connect_status).size(12.5).color(t.text_dim));
+    }
+    ui.add_space(14.0);
+    let ready = paired && !net.change_host;
+    step(ui, 2, busy, "Choose what this PC does");
+    ui.add_enabled_ui(ready, |ui| {
+        ui.columns(2, |cols| {
+            record_choice(&mut cols[0], net, ctx, mix.on);
+            mix_choice(&mut cols[1], net, mix);
+        });
+        if net.follower.is_some() || !mix.on {
+            recording_options(ui, net, pick_folder);
+        }
+    });
+    internet_warning(ui, net);
+    advanced(ui, net, ctx);
+}
+
+/// The hosts found on this network (or an address), and pairing with its code.
+fn find_on_lan(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) {
+    use crate::net_look::primary;
     let t = Tokens::current();
     let cfg = net.hub.config();
     let found = net.discovery.as_ref().map(Discovery::found).unwrap_or_default();
     let me = net.hub.pc_name();
-    ui.horizontal(|ui| {
-        ui.label("Booth:");
-        let shown = if cfg.follow.booth_name.is_empty() { "Pick a booth…".to_string() } else { cfg.follow.booth_name.clone() };
-        egui::ComboBox::from_id_salt("net-booth").selected_text(shown).show_ui(ui, |ui| {
-            for f in found.iter().filter(|f| f.name != me) {
-                if ui.selectable_label(f.name == cfg.follow.booth_name, format!("{} ({})", f.name, f.addr)).clicked() {
-                    let (name, addr) = (f.name.clone(), f.addr.clone());
-                    net.addr_edit = addr.clone();
-                    net.hub.update_config(|c| {
-                        if c.follow.booth_name != name {
-                            c.follow.token.clear();
-                        }
-                        c.follow.booth_name = name;
-                        c.follow.booth_addr = addr;
-                    });
-                }
+    let pick = |net: &mut NetState, name: String, addr: String| {
+        net.addr_edit = addr.clone();
+        net.hub.update_config(|c| {
+            if c.follow.booth_addr != addr || !c.follow.internet.is_empty() {
+                c.follow.token.clear();
             }
-            if found.is_empty() {
-                ui.label("Looking…");
-            }
+            c.follow.booth_name = name;
+            c.follow.booth_addr = addr;
+            c.follow.internet.clear();
         });
-        if ui.button("Search").on_hover_text("Look for FreeDAWm PCs on this network").clicked()
+    };
+    let others: Vec<_> = found.iter().filter(|f| f.name != me).cloned().collect();
+    if others.is_empty() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(egui::RichText::new("Looking for hosts…").size(12.0).color(t.text_dim));
+        });
+    }
+    for f in &others {
+        let on = cfg.follow.internet.is_empty() && cfg.follow.booth_addr == f.addr;
+        let r = ui.add(egui::Button::selectable(on, format!("{}   {}", f.name, f.addr)).min_size(vec2(ui.available_width(), 28.0)));
+        if r.clicked() {
+            pick(net, f.name.clone(), f.addr.clone());
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.small_button("Search again").clicked()
             && let Some(d) = net.discovery()
         {
             let _ = d.browse();
         }
-    });
-    ui.horizontal(|ui| {
-        ui.label("or address:");
-        if ui.add(egui::TextEdit::singleline(&mut net.addr_edit).hint_text("192.168.1.20:48100").desired_width(180.0)).lost_focus() {
-            let a = net.addr_edit.trim().to_string();
-            net.hub.update_config(|c| c.follow.booth_addr = a);
-        }
-    });
-    // Pairing with the booth: it shows a code; type it here.
-    let paired = !cfg.follow.token.is_empty();
-    ui.horizontal(|ui| {
-        if paired {
-            ui.label(egui::RichText::new("✔ Paired").color(Color32::from_rgb(63, 185, 80)));
-        }
-        let addr = cfg.follow.booth_addr.clone();
-        if ui
-            .add_enabled(!addr.is_empty(), egui::Button::new(if paired { "Pair again…" } else { "Pair…" }))
-            .on_hover_text("The booth shows a 4-digit code")
-            .clicked()
-        {
-            let job = Arc::clone(&net.pair.result);
-            *job.lock().unwrap_or_else(PoisonError::into_inner) = None;
-            net.pair.request = None;
-            net.pair_status = "Asking the booth…".into();
-            let me = me.clone();
-            let c = ctx.clone();
-            std::thread::spawn(move || {
-                let r = pair_request(&addr, &me).map(|id| json!({"request": id}));
-                *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
-                c.request_repaint();
-            });
-        }
-    });
-    let got = net.pair.result.lock().unwrap_or_else(PoisonError::into_inner).take();
-    if let Some(r) = got {
-        match r {
-            Ok(v) if v.get("request").is_some() => {
-                net.pair.request = v["request"].as_str().map(str::to_string);
-                net.pair_status = "Type the code the booth shows:".into();
+        ui.label(egui::RichText::new("or").size(11.5).color(t.text_dim));
+        let r = ui.add(egui::TextEdit::singleline(&mut net.addr_edit).hint_text("address, e.g. 192.168.1.20").desired_width(150.0));
+        if r.lost_focus() {
+            let mut a = net.addr_edit.trim().to_string();
+            if !a.is_empty() && !a.contains(':') {
+                a = format!("{a}:{}", soundcraft_net::config::DEFAULT_PORT);
             }
-            Ok(v) => {
-                let token = v["token"].as_str().unwrap_or("").to_string();
-                let booth = v["pc"].as_str().unwrap_or("").to_string();
-                net.hub.update_config(|c| {
-                    c.follow.token = token;
-                    if !booth.is_empty() {
-                        c.follow.booth_name = booth;
-                    }
-                });
-                net.pair.request = None;
-                net.pair_status = "Paired.".into();
-                if net.follower.is_some() {
-                    net.start_following(ctx);
-                }
-            }
-            Err(e) => {
-                net.pair_status = e;
+            if a != cfg.follow.booth_addr {
+                pick(net, String::new(), a);
             }
         }
-    }
-    if !net.pair_status.is_empty() {
-        ui.label(egui::RichText::new(&net.pair_status).color(t.text_dim));
-    }
+    });
+    ui.add_space(6.0);
+    let addr = net.hub.config().follow.booth_addr;
     if let Some(req) = net.pair.request.clone() {
+        let host = if cfg.follow.booth_name.is_empty() { "the host".to_string() } else { cfg.follow.booth_name.clone() };
+        ui.label(egui::RichText::new(format!("Type the code {host} shows")).size(12.5).color(t.text));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut net.code_edit).desired_width(70.0).hint_text("0000"));
-            if ui.button("Pair").clicked() {
+            ui.add(
+                egui::TextEdit::singleline(&mut net.code_edit)
+                    .font(egui::FontId::monospace(20.0))
+                    .desired_width(80.0)
+                    .hint_text("0000")
+                    .char_limit(4),
+            );
+            if primary(ui, "Pair").clicked() {
                 let job = Arc::clone(&net.pair.result);
-                let (addr, code, c) = (cfg.follow.booth_addr.clone(), net.code_edit.trim().to_string(), ctx.clone());
+                let (addr, code, c) = (addr.clone(), net.code_edit.trim().to_string(), ctx.clone());
                 net.code_edit.clear();
                 std::thread::spawn(move || {
                     let r = pair_confirm(&addr, &req, &code).map(|(token, pc)| json!({"token": token, "pc": pc}));
@@ -767,230 +1114,240 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
                 });
             }
         });
-    }
-    let mixing = net.mixing;
-    let mut follow = cfg.follow.enabled;
-    if ui.add_enabled((paired || follow) && !mixing, egui::Checkbox::new(&mut follow, "Follow this booth")).changed() {
-        net.hub.update_config(|c| c.follow.enabled = follow);
-        if follow { net.start_following(ctx) } else { net.stop_following() }
-    }
-    let mut hear = cfg.follow.hear_mix;
-    if ui
-        .checkbox(&mut hear, "Hear the booth's mix (a performer away from the booth)")
-        .on_hover_text("The booth streams what it hears to this PC; your take lands where you played it against what you heard")
-        .changed()
+    } else if ui.add_enabled_ui(!addr.is_empty(), |ui| primary(ui, "Pair")).inner.on_disabled_hover_text("Pick a host or type its address").clicked()
     {
-        net.hub.update_config(|c| c.follow.hear_mix = hear);
-    }
-    let mut at_launch = cfg.follow.at_launch;
-    if ui.checkbox(&mut at_launch, "Start following when FreeDAWm starts").changed() {
-        net.hub.update_config(|c| c.follow.at_launch = at_launch);
-    }
-    ui.horizontal(|ui| {
-        ui.label("If the booth is away, end the take after");
-        let mut min = cfg.contact_timeout_s / 60;
-        if ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min")).changed() {
-            net.hub.update_config(|c| c.contact_timeout_s = min.max(1) * 60);
-        }
-    });
-    if let Some(dir) = net.takes_dir() {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("A session never saved is saved, with its takes, as its own project folder in").small().color(t.text_dim));
-            ui.label(egui::RichText::new(dir.display().to_string()).small().monospace());
-            if let Some(pick) = pick_folder
-                && ui.small_button("Change…").clicked()
-                && let Some(chosen) = pick(&dir.to_string_lossy())
-            {
-                net.hub.update_config(|c| c.follow.takes_folder = chosen);
-            }
+        let job = Arc::clone(&net.pair.result);
+        *job.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        net.connect_status = "Asking the host for a code…".into();
+        let me = me.clone();
+        let c = ctx.clone();
+        std::thread::spawn(move || {
+            let r = pair_request(&addr, &me).map(|id| json!({"request": id}));
+            *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+            c.request_repaint();
         });
     }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let label = if mixing { "Stop mixing this booth" } else { "Mix this booth from here" };
-        if ui
-            .add_enabled((paired && net.follower.is_none()) || mixing, egui::Button::new(label))
-            .on_hover_text(
-                "This PC shows the booth's session in its Mix window and plays its mix: faders, pan, plugins, automation and the \
-                 transport go to the booth. Your own session comes back when you stop.",
-            )
-            .clicked()
-        {
-            net.mix_request = Some(!mixing);
+    let got = net.pair.result.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(r) = got {
+        match r {
+            Ok(v) if v.get("request").is_some() => {
+                net.pair.request = v["request"].as_str().map(str::to_string);
+                net.connect_status.clear();
+            }
+            Ok(v) => {
+                let token = v["token"].as_str().unwrap_or("").to_string();
+                let host = v["pc"].as_str().unwrap_or("").to_string();
+                net.hub.update_config(|c| {
+                    c.follow.token = token;
+                    c.follow.internet.clear();
+                    if !host.is_empty() {
+                        c.follow.booth_name = host;
+                    }
+                });
+                net.pair.request = None;
+                net.change_host = false;
+                net.connect_status = "Paired. Now choose what this PC does.".into();
+            }
+            Err(e) => {
+                net.pair.request = None;
+                net.connect_status = e;
+            }
         }
-        if !mixing && net.follower.is_some() {
-            ui.label(egui::RichText::new("(stop following first)").small().color(t.text_dim));
-        }
-    });
-    if let Some(f) = &net.follower {
-        let badge = net.follow.badge(f);
-        let detail = if f.connected() { String::new() } else { format!(" ({})", f.state()) };
-        ui.colored_label(if badge.recording() { t.rec } else { t.text }, format!("{}{detail}", badge.text()));
     }
 }
 
-/// Setup › Network › Connect over the internet: the host invites a performer (a code to send
-/// him, valid 30 minutes, once); the performer pastes it and joins; both see how the connection
-/// is doing. The relay is configurable (empty: the free public relays).
-fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) {
-    let t = Tokens::current();
-    let amber = Color32::from_rgb(240, 198, 116);
-    let cfg = net.hub.config();
-    ui.label(
-        egui::RichText::new(
-            "Direct and encrypted between the two PCs; through a relay only when the routers block that. Talk on Zoom or Meet as usual.",
-        )
-        .small()
-        .color(t.text_dim),
+/// Paste an invite and join: this PC pairs with the host across the internet.
+fn join_with_invite(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) {
+    use crate::net_look::primary;
+    ui.add(
+        egui::TextEdit::multiline(&mut net.invite_edit)
+            .hint_text("freedawm-invite:…")
+            .desired_rows(3)
+            .desired_width(f32::INFINITY)
+            .font(egui::TextStyle::Monospace),
     );
-    // The host.
-    let mut host = cfg.internet_host;
-    if ui.checkbox(&mut host, "Let a performer join this PC over the internet").changed() {
-        net.hub.update_config(|c| c.internet_host = host);
-        if host {
-            net.start_internet_host();
-        } else {
-            net.hub.stop_internet();
-            net.invite = None;
-        }
-    }
-    if host {
-        ui.horizontal(|ui| {
-            if ui.button("Invite…").on_hover_text("A code for the performer: valid for 30 minutes, once").clicked() {
-                match net.make_invite() {
-                    Ok(code) => net.invite = Some((code, std::time::Instant::now())),
-                    Err(e) => net.error = Some(e),
-                }
-            }
-            let open = net.hub.open_invites();
-            if let Some(left) = open.iter().copied().fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b)))) {
-                ui.label(egui::RichText::new(format!("Invite waiting: {} min left", (left / 60.0).ceil())).color(t.text_dim));
-            }
-        });
-        if let Some((code, _)) = net.invite.clone() {
-            let mut shown = code.clone();
-            ui.add(egui::TextEdit::multiline(&mut shown).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
-            ui.horizontal(|ui| {
-                if ui.button("Copy").clicked() {
-                    ctx.copy_text(code.clone());
-                }
-                ui.label(
-                    egui::RichText::new("Send it to the performer (email, chat). He pastes it in his FreeDAWm: Setup › Network › Join.")
-                        .small()
-                        .color(t.text_dim),
-                );
-            });
-        }
-    }
-    if let Some(inet) = &net.internet {
-        if host {
-            for r in net.hub.remotes().iter().filter(|r| r.state != "not reachable") {
-                let detail = if r.detail.is_empty() { String::new() } else { format!(" · {}", r.detail) };
-                ui.label(format!("{}: {}{detail}", r.name, r.state));
-            }
-        }
-        let q = inet.quality();
-        for c in &q {
-            ui.colored_label(if c.weak() { amber } else { t.text }, format!("Internet link: {}", c.text()))
-                .on_hover_text(format!("The other PC's key: {}", c.peer));
-            if c.weak() {
-                ui.colored_label(amber, "The connection is weak: the mix may drop out (the take is safe: it is recorded on his PC).");
-            }
-        }
-    }
-    // The performer.
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label("Join with an invite:");
-        ui.add(egui::TextEdit::singleline(&mut net.invite_edit).hint_text("freedawm-invite:…").desired_width(240.0));
-        if ui.add_enabled(!net.invite_edit.trim().is_empty(), egui::Button::new("Join")).clicked() {
-            match soundcraft_net::internet::Invite::parse(&net.invite_edit) {
-                Err(e) => net.join_status = e,
-                Ok(inv) => {
-                    let addr_json = serde_json::to_string(&inv.addr).unwrap_or_default();
-                    match net.bridge(&addr_json) {
-                        Err(e) => net.join_status = e,
-                        Ok(bridge) => {
-                            net.join_status = format!("Joining {}…", inv.name);
-                            let job = Arc::clone(&net.join.result);
-                            let me = net.hub.pc_name();
-                            let c = ctx.clone();
-                            let booth = inv.name.clone();
-                            std::thread::spawn(move || {
-                                let r = soundcraft_net::follower::pair_invite(&bridge, &inv.secret, &me)
-                                    .map(|(token, pc)| json!({"token": token, "pc": if pc.is_empty() { booth } else { pc }, "addr": addr_json}));
-                                *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
-                                c.request_repaint();
-                            });
-                        }
+    ui.add_space(6.0);
+    let ready = !net.invite_edit.trim().is_empty();
+    if ui.add_enabled_ui(ready, |ui| primary(ui, "Join")).inner.clicked() {
+        match soundcraft_net::internet::Invite::parse(&net.invite_edit) {
+            Err(e) => net.connect_status = e,
+            Ok(inv) => {
+                let addr_json = serde_json::to_string(&inv.addr).unwrap_or_default();
+                match net.bridge(&addr_json) {
+                    Err(e) => net.connect_status = e,
+                    Ok(bridge) => {
+                        net.connect_status = format!("Joining {}…", inv.name);
+                        let job = Arc::clone(&net.join.result);
+                        let me = net.hub.pc_name();
+                        let c = ctx.clone();
+                        let host = inv.name.clone();
+                        let role = inv.role.clone();
+                        std::thread::spawn(move || {
+                            let r = soundcraft_net::follower::pair_invite(&bridge, &inv.secret, &me).map(
+                                |(token, pc)| json!({"token": token, "pc": if pc.is_empty() { host } else { pc }, "addr": addr_json, "role": role}),
+                            );
+                            *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+                            c.request_repaint();
+                        });
                     }
                 }
             }
         }
-    });
+    }
+}
+
+/// An invite accepted: paired across the internet; a performer's invite starts recording with
+/// the host (hearing its mix), a mixer's starts mixing it.
+fn take_join_result(net: &mut NetState, ctx: &egui::Context) {
     let got = net.join.result.lock().unwrap_or_else(PoisonError::into_inner).take();
-    if let Some(r) = got {
-        match r {
-            Ok(v) => {
-                let (token, pc, addr) = (
-                    v["token"].as_str().unwrap_or("").to_string(),
-                    v["pc"].as_str().unwrap_or("").to_string(),
-                    v["addr"].as_str().unwrap_or("").to_string(),
-                );
-                net.hub.update_config(|c| {
-                    c.follow.token = token;
-                    c.follow.booth_name = pc.clone();
-                    c.follow.internet = addr;
+    let Some(r) = got else { return };
+    match r {
+        Ok(v) => {
+            let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+            let (token, pc, addr, role) = (s("token"), s("pc"), s("addr"), s("role"));
+            let mix = role == soundcraft_net::internet::ROLE_MIX;
+            net.hub.update_config(|c| {
+                c.follow.token = token;
+                c.follow.booth_name = pc.clone();
+                c.follow.internet = addr;
+                if !mix {
                     c.follow.enabled = true;
                     c.follow.hear_mix = true;
-                });
-                net.invite_edit.clear();
-                net.join_status = format!("Joined {pc}: following it and hearing its mix.");
-                net.start_following(ctx);
-            }
-            Err(e) => net.join_status = e,
-        }
-    }
-    if !net.join_status.is_empty() {
-        ui.label(egui::RichText::new(&net.join_status).color(t.text_dim));
-    }
-    if !cfg.follow.internet.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label(format!("Following {} over the internet.", cfg.follow.booth_name));
-            if ui.small_button("Back to the local network").clicked() {
-                net.hub.update_config(|c| c.follow.internet.clear());
-                if net.follower.is_some() {
-                    net.start_following(ctx);
                 }
-            }
-        });
-    }
-    // The relay.
-    ui.horizontal(|ui| {
-        ui.label("Relay:");
-        let mut relay = cfg.relay_url.clone();
-        let r = ui.add(egui::TextEdit::singleline(&mut relay).hint_text("the free public relays").desired_width(240.0));
-        if r.changed() {
-            net.hub.update_config(|c| c.relay_url = relay.trim().to_string());
-        }
-        if r.lost_focus() && net.internet.is_some() {
-            // Starts again on the new relay.
-            net.internet = None;
-            if net.hub.config().internet_host {
-                net.start_internet_host();
-            }
-            if net.follower.is_some() && !net.hub.config().follow.internet.is_empty() {
+            });
+            net.invite_edit.clear();
+            net.change_host = false;
+            if mix {
+                net.connect_status = format!("Joined {pc}: mixing it.");
+                net.mix_request = Some(true);
+            } else {
+                net.connect_status = format!("Joined {pc}: recording with it and hearing its mix.");
                 net.start_following(ctx);
+            }
+        }
+        Err(e) => net.connect_status = e,
+    }
+}
+
+/// The choice "Record with it": a tile that starts and stops it.
+fn record_choice(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, mixing: bool) {
+    use crate::net_look::{Icon, tile, tile_head};
+    let t = Tokens::current();
+    let on = net.follower.is_some();
+    tile(ui, on, |ui| {
+        tile_head(ui, Icon::Mic, on, "Record with it", "This PC records, plays and stops with the host; each take lands there", |_| {});
+        ui.add_space(10.0);
+        if let Some(f) = &net.follower {
+            let badge = net.follow.badge(f);
+            let detail = if f.connected() { String::new() } else { format!(" ({})", f.state()) };
+            ui.colored_label(if badge.recording() { t.rec } else { crate::net_look::LAN }, format!("● {}{detail}", badge.text()));
+            ui.add_space(6.0);
+        }
+        let r = if on {
+            crate::net_look::secondary(ui, "Stop recording with it")
+        } else {
+            ui.add_enabled_ui(!mixing, |ui| crate::net_look::primary(ui, "Start")).inner.on_disabled_hover_text("Stop mixing first")
+        };
+        if r.clicked() {
+            net.hub.update_config(|c| c.follow.enabled = !on);
+            if on { net.stop_following() } else { net.start_following(ctx) }
+        }
+    });
+}
+
+/// The choice "Mix it": a tile that starts and stops it, with Hear and the link.
+fn mix_choice(ui: &mut egui::Ui, net: &mut NetState, mix: &MixShown) {
+    use crate::net_look::{Icon, switch, tile, tile_head};
+    let t = Tokens::current();
+    tile(ui, mix.on, |ui| {
+        tile_head(
+            ui,
+            Icon::Faders,
+            mix.on,
+            "Mix it",
+            "Its session in your Mix window, its mix in your speakers. Mix and transport go to the host",
+            |_| {},
+        );
+        ui.add_space(10.0);
+        if mix.on {
+            if mix.connected {
+                let mut line = "● Connected".to_string();
+                if let Some(r) = mix.rtt_ms {
+                    line.push_str(&format!(" · {r:.0} ms round trip"));
+                }
+                ui.colored_label(crate::net_look::LAN, line);
+                if let Some(d) = mix.delay_ms {
+                    ui.label(
+                        egui::RichText::new(format!("You hear it {d:.0} ms late; your automation lands where you heard it."))
+                            .size(11.5)
+                            .color(t.text_dim),
+                    );
+                }
+            } else {
+                ui.colored_label(crate::net_look::RELAY, format!("● {}", mix.status));
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let mut hear = mix.hear;
+                if switch(ui, &mut hear, "Hear its mix").changed() {
+                    net.hear_request = Some(hear);
+                }
+                ui.label("Hear its mix");
+            });
+            ui.add_space(6.0);
+            if crate::net_look::secondary(ui, "Stop mixing").clicked() {
+                net.mix_request = Some(false);
+            }
+        } else {
+            let r = ui
+                .add_enabled_ui(net.follower.is_none(), |ui| crate::net_look::primary(ui, "Start"))
+                .inner
+                .on_disabled_hover_text("Stop recording with it first");
+            if r.clicked() {
+                net.mix_request = Some(true);
             }
         }
     });
-    ui.label(
-        egui::RichText::new(
-            "Empty: n0's free public relays (rate-limited). Your own iroh-relay server: its address here, e.g. https://relay.example.org",
-        )
-        .small()
-        .color(t.text_dim),
-    );
+}
+
+/// Recording with the host: hear its mix, start at launch, the timeout and the takes folder.
+fn recording_options(ui: &mut egui::Ui, net: &mut NetState, pick_folder: Option<&dyn Fn(&str) -> Option<String>>) {
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    ui.add_space(6.0);
+    egui::CollapsingHeader::new(egui::RichText::new("Recording options").color(t.text_dim)).id_salt("net-record-options").show(ui, |ui| {
+        let mut hear = cfg.follow.hear_mix;
+        if ui
+            .checkbox(&mut hear, "Hear the host's mix")
+            .on_hover_text("For a performer away from the host: the take lands where you played it against what you heard")
+            .changed()
+        {
+            net.hub.update_config(|c| c.follow.hear_mix = hear);
+        }
+        let mut at_launch = cfg.follow.at_launch;
+        if ui.checkbox(&mut at_launch, "Start recording with it when FreeDAWm starts").changed() {
+            net.hub.update_config(|c| c.follow.at_launch = at_launch);
+        }
+        ui.horizontal(|ui| {
+            ui.label("If the host goes away, end the take after");
+            let mut min = cfg.contact_timeout_s / 60;
+            if ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min")).changed() {
+                net.hub.update_config(|c| c.contact_timeout_s = min.max(1) * 60);
+            }
+        });
+        if let Some(dir) = net.takes_dir() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("Unsaved sessions are kept in").size(11.5).color(t.text_dim));
+                ui.label(egui::RichText::new(dir.display().to_string()).size(11.5).monospace());
+                if let Some(pick) = pick_folder
+                    && ui.small_button("Change…").clicked()
+                    && let Some(chosen) = pick(&dir.to_string_lossy())
+                {
+                    net.hub.update_config(|c| c.follow.takes_folder = chosen);
+                }
+            });
+        }
+    });
 }
 
 /// What this PC's screen says about the booth it follows (the toolbar badge), while following.
@@ -1054,17 +1411,20 @@ pub fn remote_mix_command(app: &mut SoundApp, p: &Value) -> Result<Value, String
         rm.hear = h;
     }
     if on && !mixing {
-        let Some(net) = &app.net else { return Err("the network is not ready yet".into()) };
+        let Some(net) = app.net.as_mut() else { return Err("the network is not ready yet".into()) };
         if net.follower.is_some() {
-            return Err("Stop following the booth before mixing it".into());
+            return Err("Stop recording with the host before mixing it".into());
         }
         let cfg = net.hub.config();
-        if cfg.follow.token.is_empty() || cfg.follow.booth_addr.is_empty() {
-            return Err("Pick the booth and pair with it first (Setup › Network)".into());
+        let over_internet = !cfg.follow.internet.is_empty();
+        if cfg.follow.token.is_empty() || (cfg.follow.booth_addr.is_empty() && !over_internet) {
+            return Err("Find the host and pair with it first (Setup › Network › Connect to a host)".into());
         }
+        // Over the internet: through a local bridge to the booth, as recording with it is.
+        let addr = if over_internet { net.bridge(&cfg.follow.internet)? } else { cfg.follow.booth_addr.clone() };
         let target = soundcraft_net::mixer::MixerTarget {
             host_name: cfg.follow.booth_name.clone(),
-            addr: cfg.follow.booth_addr.clone(),
+            addr,
             token: cfg.follow.token.clone(),
             my_name: net.hub.pc_name(),
         };
@@ -1351,14 +1711,14 @@ pub fn demo_internet(app: &mut SoundApp) -> Result<(), String> {
     let Some(mut net) = app.net.take() else { return Err("no network state yet (run a frame first)".into()) };
     let key = new_key();
     net.hub.update_config(|c| {
-        c.pc_name = "Booth".into();
+        c.pc_name = "Main PC".into();
         c.internet_host = true;
         c.internet_key = key_hex(&key);
     });
     let host = Internet::start(key, Relays::LocalOnly)?;
     host.serve_to(net.hub.listen_internet()?);
     net.internet = Some(host);
-    let code = net.make_invite()?;
+    let code = net.make_invite(soundcraft_net::internet::ROLE_MIX)?;
     net.invite = Some((code, std::time::Instant::now()));
     // The friend: his own endpoint, joined with a second invite.
     let friend = Internet::start(new_key(), Relays::LocalOnly)?;
@@ -1366,7 +1726,7 @@ pub fn demo_internet(app: &mut SoundApp) -> Result<(), String> {
     let bridge = friend.bridge_to(addr.clone())?.to_string();
     let secret = net.hub.new_invite_secret();
     let (token, _) = soundcraft_net::follower::pair_invite(&bridge, &secret, "Dave's PC")?;
-    let f = Follower::start(FollowTarget { booth_name: "Booth".into(), addr: bridge, token, my_name: "Dave's PC".into() }, None, None);
+    let f = Follower::start(FollowTarget { booth_name: "Main PC".into(), addr: bridge, token, my_name: "Dave's PC".into() }, None, None);
     f.set_report(soundcraft_net::proto::FollowerReport {
         state: "connected".into(),
         inputs: vec!["Vocal Mic".into()],
@@ -1380,6 +1740,17 @@ pub fn demo_internet(app: &mut SoundApp) -> Result<(), String> {
     // Kept running for the render (this process's own "friend").
     std::mem::forget(f);
     std::mem::forget(friend);
+    net.hub.update_config(|c| {
+        c.enabled = true;
+        c.paired.push(soundcraft_net::config::PairedDevice {
+            name: "Alex's phone".into(),
+            kind: "browser".into(),
+            token: "demo-phone".into(),
+            follows: false,
+        });
+    });
+    net.start_listening();
+    net.invite_role = soundcraft_net::internet::ROLE_MIX.into();
     app.net = Some(net);
     app.ui.show_network = true;
     Ok(())
@@ -1454,7 +1825,7 @@ pub fn demo_audio(app: &mut SoundApp) -> Result<(), String> {
     let Some(mut net) = app.net.take() else { return Ok(()) };
     let _ = net.booth.step(&mut AppHost(app), &net.hub);
     net.hub.feed_audio_sketch("Guitar PC", "In 1", &peaks, &clips);
-    app.ui.status = "Recording · Guitar PC recording with this booth".into();
+    app.ui.status = "Recording · Guitar PC recording with this host".into();
     app.net = Some(net);
     Ok(())
 }
@@ -1604,14 +1975,14 @@ pub fn performer_panel(app: &mut SoundApp, ctx: &egui::Context) {
                 let line = match (&health, &net.guard.demo) {
                     (Some(h), _) if h.packets > 0 => {
                         let loss = if h.packets > 0 { h.lost as f64 * 100.0 / h.packets as f64 } else { 0.0 };
-                        format!("Mix: {:.0} ms behind the booth · {loss:.1} % lost", h.buffer_ms)
+                        format!("Mix: {:.0} ms behind the host · {loss:.1} % lost", h.buffer_ms)
                     }
-                    (_, Some(_)) => "Mix: 150 ms behind the booth · 0.0 % lost".to_string(),
-                    _ => "Mix: waiting for the booth to play".to_string(),
+                    (_, Some(_)) => "Mix: 150 ms behind the host · 0.0 % lost".to_string(),
+                    _ => "Mix: waiting for the host to play".to_string(),
                 };
                 ui.label(egui::RichText::new(line).small().color(t.text_dim));
                 ui.label(
-                    egui::RichText::new("You hear yourself straight from this PC (no delay); the booth hears you on the call.")
+                    egui::RichText::new("You hear yourself straight from this PC (no delay); the host hears you on the call.")
                         .small()
                         .color(t.text_dim),
                 );
@@ -1793,7 +2164,7 @@ mod tests {
         });
         assert_eq!(h.state().engine.session().track(TrackId(piano)).unwrap().clips().len(), 1, "the local copy");
         assert_eq!(h.state().ui.status, "Take sent to Booth");
-        assert!(booth.e.session().tracks.iter().any(|t| !t.clips().is_empty()), "the booth has the take");
+        assert!(booth.e.session().tracks.iter().any(|t| !t.clips().is_empty()), "the host has the take");
         f.stop();
         hub.stop();
     }
@@ -1857,17 +2228,17 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         };
-        frames(&mut h, &mut bglue, &mut booth, "the booth's session arrives", &|a, _| a.engine.session().tracks.iter().any(|t| t.name == "Lead Vox"));
+        frames(&mut h, &mut bglue, &mut booth, "the host's session arrives", &|a, _| a.engine.session().tracks.iter().any(|t| t.name == "Lead Vox"));
         assert!(!h.state().engine.session().tracks.iter().any(|t| t.name == "Mine"));
         assert_eq!(h.state().ui.window, crate::MainWindow::Mix);
         assert!(h.query_by_label_contains("Mixing Booth remotely: changes go to Booth").is_some(), "the banner");
         // A fader change here lands at the booth.
         h.state_mut().run("mix.volume", json!({"track": vox.0, "db": -4.5})).unwrap();
         assert_eq!(h.state().engine.session().track(vox).unwrap().mixer.volume_db, -4.5, "at once here");
-        frames(&mut h, &mut bglue, &mut booth, "the booth's fader moves", &|_, b| b.e.session().track(vox).unwrap().mixer.volume_db == -4.5);
+        frames(&mut h, &mut bglue, &mut booth, "the host's fader moves", &|_, b| b.e.session().track(vox).unwrap().mixer.volume_db == -4.5);
         // The booth's transport shows here; nothing renders here.
         booth.view = HostView { playing: true, position: 96_000, ..HostView::default() };
-        frames(&mut h, &mut bglue, &mut booth, "the booth plays", &|a, _| a.is_playing() && a.engine.transport.position == 96_000);
+        frames(&mut h, &mut bglue, &mut booth, "the host plays", &|a, _| a.is_playing() && a.engine.transport.position == 96_000);
         // Editing is refused here, and saving never touches this PC's own session.
         assert!(h.state_mut().run("track.new", json!({"count": 1})).is_err());
         assert!(!h.state().engine.is_dirty());

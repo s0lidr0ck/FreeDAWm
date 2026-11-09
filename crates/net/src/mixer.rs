@@ -159,6 +159,10 @@ mod client {
     /// After the last answer to a command of ours, the host's document waits this long before it
     /// replaces ours: a piece the host sent before it ran our change must not pull a fader back.
     const HOLD: Duration = Duration::from_millis(120);
+    /// A stream frame (20 ms) and Opus's lookahead (2.5 ms) before the first sample is heard.
+    const AUDIO_FRAME_MS: f64 = 22.5;
+    /// How often the round trip is measured and the delay reported.
+    const PING_EVERY: Duration = Duration::from_secs(1);
 
     #[derive(Default)]
     struct State {
@@ -176,6 +180,9 @@ mod client {
         outstanding: usize,
         last_answer: Option<Instant>,
         errors: Vec<String>,
+        /// Pings out (id, when) and the round trip as measured (ms, leaning to the best).
+        pings: Vec<(String, Instant)>,
+        rtt_ms: Option<f64>,
     }
 
     struct Inner {
@@ -336,6 +343,22 @@ mod client {
             }
         }
 
+        /// The round trip to the host (ms), once measured.
+        pub fn rtt_ms(&self) -> Option<f64> {
+            lock(&self.inner.state).rtt_ms
+        }
+
+        /// How late a move made here arrives at the host after the moment heard here: the audio's
+        /// way here (half the round trip and the jitter buffer, plus Opus's frame and lookahead),
+        /// and the move's way back (the other half). Without the stream, the meters' way.
+        pub fn delay_ms(&self) -> Option<f64> {
+            let rtt = self.rtt_ms()?;
+            Some(match self.stream_delay() {
+                Some(buf) => rtt + buf.as_secs_f64() * 1000.0 + AUDIO_FRAME_MS,
+                None => rtt,
+            })
+        }
+
         /// The jitter buffer's delay (what the audio heard lags the host by), while hearing it.
         pub fn stream_delay(&self) -> Option<Duration> {
             if !self.inner.want_stream.load(Ordering::SeqCst) {
@@ -427,9 +450,15 @@ mod client {
             let pump = {
                 let me = self.clone();
                 let done = Arc::clone(&done);
+                let out = Arc::clone(&out);
                 std::thread::Builder::new().name("freedawm-mixer-pump".into()).spawn(move || {
+                    let mut pinged: Option<Instant> = None;
                     while !done.load(Ordering::SeqCst) && !me.stopped() {
                         me.pump_stream();
+                        if pinged.is_none_or(|t| t.elapsed() >= PING_EVERY) {
+                            pinged = Some(Instant::now());
+                            me.ping(&out);
+                        }
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 })
@@ -451,6 +480,22 @@ mod client {
                 let _ = h.join();
             }
             r
+        }
+
+        /// Measures the round trip (the answer, refused or not, is the pong) and reports the
+        /// delay, so the host writes this PC's moves where they were made.
+        fn ping(&self, out: &Arc<Mutex<TcpStream>>) {
+            let n = self.inner.next.fetch_add(1, Ordering::Relaxed);
+            let id = format!("p:{n}");
+            {
+                let mut s = lock(&self.inner.state);
+                s.pings.retain(|(_, t)| t.elapsed() < Duration::from_secs(10));
+                s.pings.push((id.clone(), Instant::now()));
+            }
+            write(out, &json!({"id": id, "method": "sync.ping", "params": {"t0": 0.0}}));
+            if let Some(ms) = self.delay_ms() {
+                write(out, &json!({"method": "mixer.delay", "params": {"ms": ms}}));
+            }
         }
 
         fn pump_stream(&self) {
@@ -508,6 +553,17 @@ mod client {
                 }
                 Some(_) => return,
                 None => {}
+            }
+            // A pong.
+            if let Some(id) = v["id"].as_str().filter(|id| id.starts_with("p:")) {
+                let mut s = lock(&self.inner.state);
+                if let Some(i) = s.pings.iter().position(|(p, _)| p == id) {
+                    let (_, sent) = s.pings.remove(i);
+                    let ms = sent.elapsed().as_secs_f64() * 1000.0;
+                    // The best recent round trip, drifting up slowly when the link gets slower.
+                    s.rtt_ms = Some(s.rtt_ms.map_or(ms, |r| if ms < r { ms } else { r * 0.9 + ms * 0.1 }));
+                }
+                return;
             }
             // An answer to a command of ours.
             if v["id"].as_str().is_some_and(|id| id.starts_with("c:")) {

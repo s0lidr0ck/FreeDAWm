@@ -204,11 +204,11 @@ impl Internet {
                                     *cur = Some(c);
                                 }
                                 Ok(Err(e)) => {
-                                    log::info!("internet: cannot reach the booth: {e}");
+                                    log::info!("internet: cannot reach the host: {e}");
                                     return;
                                 }
                                 Err(_) => {
-                                    log::info!("internet: the booth did not answer");
+                                    log::info!("internet: the host did not answer");
                                     return;
                                 }
                             }
@@ -228,8 +228,7 @@ impl Internet {
 
     /// [`Internet::bridge_to`] the address an invite carried, as JSON (kept in the settings).
     pub fn bridge_to_json(&self, addr: &str) -> Result<SocketAddr, String> {
-        let a: EndpointAddr =
-            serde_json::from_str(addr).map_err(|_| "the booth's internet address is damaged: join with a new invite".to_string())?;
+        let a: EndpointAddr = serde_json::from_str(addr).map_err(|_| "the host's internet address is damaged: join with a new invite".to_string())?;
         self.bridge_to(a)
     }
 
@@ -284,7 +283,13 @@ pub struct Invite {
     pub secret: String,
     #[serde(rename = "n")]
     pub name: String,
+    /// What the invited PC does: `mix` (mixes the host), else it records with it (a performer).
+    #[serde(rename = "r", default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
 }
+
+/// An invite's `role` for a remote mixer.
+pub const ROLE_MIX: &str = "mix";
 
 const PREFIX: &str = "freedawm-invite:";
 
@@ -314,7 +319,7 @@ mod tests {
         assert_eq!(key_from_hex(&key_hex(&k)), Some(k));
         assert!(key_from_hex("zz").is_none());
         let addr = EndpointAddr::new(SecretKey::from_bytes(&k).public()).with_ip_addr("192.168.1.5:4433".parse().unwrap());
-        let inv = Invite { addr, secret: "abc123".into(), name: "Booth".into() };
+        let inv = Invite { addr, secret: "abc123".into(), name: "Booth".into(), role: String::new() };
         let code = inv.code();
         assert!(code.starts_with("freedawm-invite:"));
         // Pasted from a chat window, wrapped.
@@ -322,6 +327,10 @@ mod tests {
         assert_eq!(Invite::parse(&wrapped).unwrap(), inv);
         assert!(Invite::parse("hello").is_err());
         assert!(Invite::parse(&code[..code.len() - 8]).is_err());
+        // A mixer's invite says so; one from before roles reads as a performer's.
+        let mix = Invite { role: ROLE_MIX.into(), ..inv.clone() };
+        assert_eq!(Invite::parse(&mix.code()).unwrap().role, "mix");
+        assert!(!serde_json::to_string(&inv).unwrap().contains("\"r\""), "a performer's invite reads as before");
     }
 
     #[test]

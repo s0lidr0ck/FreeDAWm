@@ -11,11 +11,11 @@
 <main class="phone">
   <section id="pair" hidden>
     <h1>FreeDAWm Remote</h1>
-    <p class="dim">This browser is not paired with the booth yet. Ask for a code: the booth shows 4 digits on its screen.</p>
+    <p class="dim">This browser is not paired with the host yet. Ask for a code: the host shows 4 digits on its screen.</p>
     <label>This device's name <input id="pair-name" maxlength="40" autocomplete="off"></label>
-    <button id="pair-ask" class="b2 wide">Ask the booth for a code</button>
+    <button id="pair-ask" class="b2 wide">Ask the host for a code</button>
     <div id="pair-code-row" hidden>
-      <label>Code shown on the booth <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code"></label>
+      <label>Code shown on the host <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code"></label>
       <button id="pair-ok" class="b2 wide">Pair</button>
     </div>
     <p id="pair-msg" class="dim"></p>

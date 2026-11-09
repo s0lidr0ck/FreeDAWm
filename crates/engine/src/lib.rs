@@ -249,6 +249,10 @@ pub struct Engine {
     pub relay: Option<RelayFn>,
     /// The gesture key of the [`Engine::execute_merged`] call running now, for the relay.
     relay_merge: Option<String>,
+    /// How late the moves being written arrive (samples): live automation is written this much
+    /// earlier on the timeline. Remote mixing sets it to the remote PC's delay (what it heard
+    /// to when its move arrived here), so a remote fader ride lands where it was made. 0 here.
+    pub automation_delay: soundcraft_time::Samples,
 }
 
 /// What [`Engine::relay`] makes of a command.
@@ -317,6 +321,7 @@ impl Engine {
             unsaved_audio_root: None,
             relay: None,
             relay_merge: None,
+            automation_delay: 0,
         }
     }
 

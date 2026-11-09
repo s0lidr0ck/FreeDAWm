@@ -653,7 +653,7 @@ impl Follower {
                         let _ = std::fs::remove_file(dir.join(format!("{}.json", file_safe(take))));
                         let _ = std::fs::remove_file(dir.join(format!("{}.{POINTER}", file_safe(take))));
                     }
-                    log::info!("remote take {take} landed on the booth");
+                    log::info!("remote take {take} landed on the host");
                 } else {
                     log::warn!("remote take {take}: {}", v["error"]);
                     *lock(&self.inner.retry_after) = Some(Instant::now() + Duration::from_secs(10));
@@ -894,7 +894,7 @@ fn q_rate(s: &Option<(Arc<soundcraft_playback::stream::StreamIn>, u32)>) -> u32 
 /// One request to a booth on a fresh connection (pairing), its `result`.
 fn one_call(addr: &str, msg: &Value) -> Result<Value, String> {
     let a = addr.to_socket_addrs().map_err(|e| e.to_string())?.find(SocketAddr::is_ipv4).ok_or("no address")?;
-    let mut s = TcpStream::connect_timeout(&a, Duration::from_secs(3)).map_err(|e| format!("cannot reach the booth: {e}"))?;
+    let mut s = TcpStream::connect_timeout(&a, Duration::from_secs(3)).map_err(|e| format!("cannot reach the host: {e}"))?;
     // Over the internet the first call also makes the connection (hole punching): give it time.
     s.set_read_timeout(Some(Duration::from_secs(20))).map_err(|e| e.to_string())?;
     writeln!(s, "{msg}").map_err(|e| e.to_string())?;

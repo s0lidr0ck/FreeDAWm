@@ -382,7 +382,7 @@ fn follow_badge(app: &mut SoundApp, ui: &mut Ui) {
     }
     p.text(pos2(dot.x + 12.0, dot.y), Align2::LEFT_CENTER, &text, bold(11.0), fg);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
-    if resp.on_hover_text("Following a booth (Setup › Network). Click for the Network window.").clicked() {
+    if resp.on_hover_text("Following a host (Setup › Network). Click for the Network window.").clicked() {
         app.ui.show_network = true;
     }
 }

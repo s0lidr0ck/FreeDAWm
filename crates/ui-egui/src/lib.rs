@@ -63,6 +63,8 @@ pub mod module_drawer;
 pub mod module_graphs;
 pub mod musical_typing;
 #[cfg(not(target_arch = "wasm32"))]
+mod net_look;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod net_ui;
 pub mod notes_panel;
 pub mod open_progress;
