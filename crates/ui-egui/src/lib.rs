@@ -27,6 +27,7 @@ pub mod extra_windows;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
+pub mod hit_picker;
 pub mod icons;
 pub mod juke_fx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -241,6 +242,15 @@ pub struct UiState {
     /// Per Juke track: the pattern clip its Steps view edits.
     #[serde(skip)]
     pub juke_clips: HashMap<TrackId, soundcraft_model::ClipId>,
+    /// Juke's hit picker, open on drum takes for a pad.
+    #[serde(skip)]
+    pub hit_picker: Option<hit_picker::HitPicker>,
+    /// The hit the picker last played (outlined).
+    #[serde(skip)]
+    pub hit_playing: Option<usize>,
+    /// A Juke pad to show in its window's Pad view next frame: (track, pad from 0).
+    #[serde(skip)]
+    pub juke_pad_select: Option<(TrackId, usize)>,
     /// The module whose drawer is open on each Mix window strip (at most one per track).
     pub drawers: HashMap<TrackId, soundcraft_model::ModuleId>,
     /// Mix window strips whose band drawer is open (a musician's controls, beside the strip).
@@ -466,6 +476,9 @@ impl Default for UiState {
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),
+            hit_picker: None,
+            hit_playing: None,
+            juke_pad_select: None,
             drawers: HashMap::new(),
             band_drawers: HashSet::new(),
             gr_history: HashMap::new(),
@@ -1220,6 +1233,8 @@ impl SoundApp {
         self.ui.detached_plugins.clear();
         self.ui.juke_tabs.clear();
         self.ui.juke_clips.clear();
+        self.ui.hit_picker = None;
+        self.engine.take_hits = None;
         // A marker or chord picked in the old session.
         ruler_items::unpick(self);
     }

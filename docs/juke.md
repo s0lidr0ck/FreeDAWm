@@ -133,6 +133,8 @@ Everything is a command, so the UI, MCP and the control channel share it:
 
 - `mix.kit_slot` `{track, slot, name?, note?, source?: sample|synth|both, voice?, stack?: [...], choke?, color?}`
 - `mix.kit_sample_load` `{track, slot, path, layer?, round_robin?}` / `mix.kit_sample_clear`
+- `mix.kit_pad_analyze` `{track, pad, paths? | selection?, family?}` / `mix.kit_pad_pick`
+  `{take, picks: [{hit, layer}]}`: the hit picker's two steps
 - `mix.kit_pad_import` `{track, pad, paths, family?}`: drum takes become a pad (see *Your own
   kits* below); `mix.kit_pad_from_selection` `{track, pad, from?, start?, end?, family?}`: the same
   from the selected range of an audio track; `mix.kit_import` `{track, folder? | paths?, name?}`:
@@ -257,6 +259,18 @@ whose pitch cannot be read stay.
 The pad switches to Sample, takes the file's name (take numbers and words like *hard* or *soft*
 left out) and the trim that levels it with the other pads: drums to the kick's level, hats and
 cymbals 4 dB under it, never lifting a peak past the ceiling. Everything is one undo step.
+
+**The hit picker.** Importing into one pad (a drop on its card, Import Takes…, From Selection)
+opens the picker over the Juke window (`mix.kit_pad_analyze`, then `mix.kit_pad_pick`): every hit
+found, as a tile with its outline, loudness, length and note, in four colour bands from Ghost
+(blue) through Soft (green) and Medium (amber) to Hard (red), the bands spread across the strengths
+it was played at. The sixteen the automatic import would keep are ticked (RR1–RR4 in each band,
+the layer's round-robins); a hit ringing at another note than the drum's shows its note in red with
+≠. Click a tile to hear it (`Player::preview`, over the mix, transport stopped or not), tick its
+box to keep it (four a band), drag it to another band; **Best 16** puts back the suggestion,
+**Clear** unticks all; **Apply** builds the pad from the ticked hits, softest first in each
+layer, as one undo step, and shows the pad. Dropping takes elsewhere in the window (a kit) stays
+automatic, as does `mix.kit_pad_import`.
 
 **Where to drop.**
 

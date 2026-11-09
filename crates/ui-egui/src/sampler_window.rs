@@ -156,8 +156,8 @@ impl SoundApp {
         }
         if let Some(pad) = pad {
             if !paths.is_empty() {
-                let r = self.run("mix.kit_pad_import", json!({"track": track.0, "pad": pad + 1, "paths": paths}));
-                self.ui.status = crate::juke_window::import_status(r);
+                // The picker opens on the hits found, the best sixteen ticked.
+                crate::hit_picker::open(self, track, pad, json!({"paths": paths}));
             }
             return rest;
         }

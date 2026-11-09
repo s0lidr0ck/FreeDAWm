@@ -237,6 +237,12 @@ pub const WINDOW_SIZE: Vec2 = vec2(1000.0, 690.0);
 pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen: bool) {
     let ctx = ui.ctx().clone();
     let mut view: View = ctx.data(|d| d.get_temp(view_id(tid))).unwrap_or_default();
+    if let Some((t, pad)) = app.ui.juke_pad_select
+        && t == tid
+    {
+        view.pad = pad;
+        app.ui.juke_pad_select = None;
+    }
     view.pad = view.pad.min(PADS - 1);
     let (levels, bus_levels) = pad_levels(app, &ctx, tid);
     #[cfg(not(target_arch = "wasm32"))]
@@ -268,7 +274,16 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     let main = Rect::from_min_max(pos2(inner.min.x, top.max.y + 6.0), pos2(inner.max.x - strips_w - 8.0, inner.max.y - honey_h - 8.0));
     let strips = Rect::from_min_max(pos2(main.max.x + 8.0, main.min.y), pos2(inner.max.x, main.max.y));
     let honey = Rect::from_min_max(pos2(inner.min.x, inner.max.y - honey_h), inner.max);
+    let picker = app.ui.hit_picker.clone().filter(|p| p.track == tid);
+    let mut asks = Vec::new();
     match tab {
+        // The hit picker takes the strips' room, over whichever view is shown.
+        _ if picker.is_some() => {
+            let r = Rect::from_min_max(main.min, pos2(inner.max.x, main.max.y));
+            if let Some(pk) = &picker {
+                crate::hit_picker::draw(&mut body, r, pk, app.ui.hit_playing, &mut asks);
+            }
+        }
         Tab::Pad => pad_edit(&mut body, main, tid, ins, view.pad, levels[view.pad], &mut out),
         Tab::Kit => pad_grid(&mut body, main, tid, ins, &view, &levels, &mut out),
         Tab::Steps => {
@@ -277,12 +292,13 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
             steps_view(app, &mut body, r, tid, steps_clip, &mut out);
         }
     }
-    if tab != Tab::Steps {
+    if tab != Tab::Steps && picker.is_none() {
         let out_meter = app.meters.get(&tid).map(|m| (m.level, m.hold, m.clip)).unwrap_or_default();
         bus_strips(&mut body, strips, tid, ins, out_meter, bus_levels, &mut out);
     }
     honeycomb(&mut body, honey, tid, ins, view.pad, &mut out);
     apply(app, tid, &mut view, out);
+    crate::hit_picker::apply(app, asks);
     ctx.data_mut(|d| d.insert_temp(view_id(tid), view));
 }
 
@@ -348,7 +364,7 @@ fn import_target(ui: &Ui, r: Rect, pad: Option<usize>, out: &mut Out) {
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("juke-import")));
         painter.rect_stroke(r, 4.0, Stroke::new(2.0, AMBER), StrokeKind::Inside);
         let hint = match pad {
-            Some(_) => "Drop takes: hits trimmed, sorted soft to hard into layers, levelled",
+            Some(_) => "Drop takes: pick the hits for each layer, soft to hard",
             None => "Drop takes or a folder: a kit, each file to its pad by name",
         };
         let at = pos2(r.center().x, r.max.y - 14.0);
@@ -363,15 +379,13 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, out: Out) {
     // The window first, so a pad (registered after it) is found before it.
     app.kit_import_targets.extend(out.imports.iter().map(|(r, pad)| (*r, tid, *pad)));
     if let Some(pad) = out.from_selection {
-        let r = app.run("mix.kit_pad_from_selection", json!({"track": tid.0, "pad": pad + 1}));
-        app.ui.status = import_status(r);
+        crate::hit_picker::open(app, tid, pad, json!({"selection": true}));
     }
     if let Some(pad) = out.import_pad
         && let Some(pick) = &app.services.pick_open
         && let Some(path) = pick("mix.kit_pad_import", crate::sampler_window::AUDIO_EXTS)
     {
-        let r = app.run("mix.kit_pad_import", json!({"track": tid.0, "pad": pad + 1, "paths": [path]}));
-        app.ui.status = import_status(r);
+        crate::hit_picker::open(app, tid, pad, json!({"paths": [path]}));
     }
     #[cfg(not(target_arch = "wasm32"))]
     if out.import_folder
