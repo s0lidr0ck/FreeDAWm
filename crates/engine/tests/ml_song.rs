@@ -139,7 +139,7 @@ fn a_yue2_song_lands_with_its_score_as_midi() {
     assert_eq!(v["score"]["bpm"], 120.0);
     // The request YuE2 got: style, lyrics, the plan, the seeds and float WAV.
     let synth: Value = serde_json::from_str(&log.lock().unwrap().iter().find(|x| x.1 == "/synth").unwrap().2).unwrap();
-    assert_eq!((synth["cot"].as_str(), synth["seed"].as_i64(), synth["output_format"].as_str()), (Some("full"), Some(11), Some("wav32")));
+    assert_eq!((synth["cot"].as_str(), synth["seed"].as_i64(), synth["output_format"].as_str()), (Some("full"), Some(11), Some("wav24")));
     let s = e.session();
     // The audio at the edit cursor, 2 s long.
     let song = s.tracks.iter().find(|t| t.name == "YuE2 Song").unwrap();
@@ -172,7 +172,7 @@ fn ace_step_plans_then_renders_the_planned_request() {
     let lm: Value = serde_json::from_str(&log.lock().unwrap().iter().find(|x| x.1 == "/lm").unwrap().2).unwrap();
     assert_eq!((lm["caption"].as_str(), lm["lyrics"].as_str()), (Some("lofi hip hop"), Some("[Instrumental]")));
     let synth: Value = serde_json::from_str(&log.lock().unwrap().iter().find(|x| x.1 == "/synth").unwrap().2).unwrap();
-    assert_eq!((synth["audio_codes"].as_str(), synth["output_format"].as_str()), (Some("1,2,3"), Some("wav32")));
+    assert_eq!((synth["audio_codes"].as_str(), synth["output_format"].as_str()), (Some("1,2,3"), Some("wav24")));
     // Without the planner: /synth alone.
     let (url, log) = server(0, false);
     let mut e = session();

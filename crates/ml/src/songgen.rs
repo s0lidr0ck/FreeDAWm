@@ -11,7 +11,9 @@
 //! planner: metadata, lyrics and audio codes) answers with the enriched request as JSON, which
 //! then goes to `POST /synth`.
 //!
-//! The audio comes back as 32-bit float WAV (`output_format: "wav32"`, no normalisation).
+//! The audio comes back as 24-bit WAV (`output_format: "wav24"`), which both servers normalise
+//! (their `peak_clip` percentile, as in their WebUIs); `wav32` would come back unnormalised, as
+//! the model left it (YuE2 peaked at 0.39 on a test song, ACE-Step at 0.97).
 
 use crate::job::Ctx;
 use crate::{MlError, Result};
@@ -235,7 +237,7 @@ impl SongOptions {
                     "duration": self.seconds,
                     "seed": seed,
                     "lm_seed": seed,
-                    "output_format": "wav32",
+                    "output_format": "wav24",
                 });
                 if !self.score.is_empty() {
                     r["abc"] = serde_json::json!(self.score.as_str());
@@ -252,7 +254,7 @@ impl SongOptions {
                     "keyscale": self.key.as_str(),
                     "seed": seed,
                     "lm_mode": "generate",
-                    "output_format": "wav32",
+                    "output_format": "wav24",
                 })
             }
         }
@@ -466,7 +468,7 @@ pub fn generate(opts: &SongOptions, ctx: &Ctx) -> Result<Song> {
                     _ => return Err(MlError::Runtime("the planner returned no request".into())),
                 };
                 request = first;
-                request["output_format"] = serde_json::json!("wav32");
+                request["output_format"] = serde_json::json!("wav24");
             }
             let id = client.submit("/synth", &request)?;
             let (ctype, body) = client.wait(&id, "Rendering (ACE-Step DiT and VAE)", ctx, if opts.planner { 0.4 } else { 0.0 }, 1.0)?;
