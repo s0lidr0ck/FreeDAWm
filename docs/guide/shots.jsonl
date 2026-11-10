@@ -1,0 +1,5 @@
+{"steps": 6}
+{"shot": "docs/guide/images/edit-window.png"}
+{"method":"engine.execute","params":{"command":"window.mix","params":{}}}
+{"steps": 6}
+{"shot": "docs/guide/images/mix-window.png"}

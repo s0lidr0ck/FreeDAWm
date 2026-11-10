@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeDAWm: The Guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+
+<!-- 1 · Cover -->
+<section class="page cover">
+  <div>
+    <div class="title">Find Your<br>Way Around</div>
+    <div class="sub">The FreeDAWm Guide</div>
+  </div>
+  <img class="bird" src="../../assets/app-icon/freedawm-1024.png" alt="The FreeDAWm bird">
+  <div class="tag">One page, one idea:<br>cheat sheets for recording, editing and mixing</div>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+</section>
+
+<!-- 2 · Welcome -->
+<section class="page">
+  <div class="card grow prose">
+    <h1>Welcome to FreeDAWm</h1>
+    <p class="quote">A free, open-source studio for recording, editing and mixing music, on the computer you already have.</p>
+    <div class="cols">
+      <div>
+        <p>FreeDAWm is a digital audio workstation. It runs on macOS, Windows, Linux and FreeBSD, and in a web browser.</p>
+        <p>You work in two main windows. The <b>Edit</b> window is the timeline, where you record, cut and arrange. The <b>Mix</b> window is the mixer, where you balance and shape the sound.</p>
+      </div>
+      <div>
+        <p>This guide is a binder of cheat sheets, not a manual to read from start to finish. Each page covers one idea, and most are a picture with labels.</p>
+        <p>Keep the page you need open beside FreeDAWm, or print it and pin it up.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>How to read a sheet</h3>
+      <ul>
+        <li>The lettered dots on a picture match the lettered notes under it.</li>
+        <li>Keys look like this: <kbd>Cmd</kbd> <kbd>S</kbd>. Hold the first, press the second.</li>
+        <li>On Windows, Linux and FreeBSD, press <kbd>Ctrl</kbd> wherever a sheet says <kbd>Cmd</kbd>.</li>
+        <li>Menu items are written as a path: Setup › Keyboard Shortcuts.</li>
+      </ul>
+    </div>
+    <p>The pictures show <b>Midnight Groove</b>, the demo song that comes with FreeDAWm, so your screen can match the page while you follow along.</p>
+  </div>
+  <div class="folio">2</div>
+</section>
+
+<!-- 3 · Contents -->
+<section class="page">
+  <div class="card grow prose toc">
+    <h1>Contents</h1>
+    <h3>Section 1: Getting Around</h3>
+    <ol>
+      <li>The Edit Window <span>5</span></li>
+      <li>The Mix Window <span>6</span></li>
+      <li>Edit Modes &amp; Tools <span>7</span></li>
+      <li>Keyboard Shortcuts <span>8</span></li>
+    </ol>
+    <h3 class="later">Still to come</h3>
+    <ol class="later">
+      <li>Section 2: Recording <span>–</span></li>
+      <li>Section 3: Editing <span>–</span></li>
+      <li>Section 4: Mixing <span>–</span></li>
+      <li>Section 5: Finishing &amp; Export <span>–</span></li>
+      <li>Glossary <span>–</span></li>
+    </ol>
+  </div>
+  <div class="folio">3</div>
+</section>
+
+<!-- 4 · Section opener -->
+<section class="page cover">
+  <div>
+    <div class="kicker">Section 1</div>
+    <div class="title" style="margin-top:0.2in">Getting<br>Around</div>
+  </div>
+  <p class="lede">The two windows you will spend your time in, the four ways clips can move, and the keys worth learning first.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+  <div class="folio">4</div>
+</section>
+
+<!-- 5 · The Edit window -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The Edit Window</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Know what each part of the timeline window is for, so you can find a control without hunting. Open it with Window › Edit, or press <kbd>Cmd</kbd> <kbd>=</kbd> to flip between Edit and Mix.</p></div>
+  <div class="card grow">
+    <figure class="shot">
+      <img src="images/edit-window.png" alt="The Edit window showing the demo song Midnight Groove">
+      <div class="zone c1" style="left:0.7%;top:0.8%;width:40.4%;height:2.8%"><span class="pin c1" style="left:100%;top:50%">A</span></div>
+      <div class="zone c2" style="left:1%;top:4%;width:9.8%;height:6.6%"><span class="pin c2" style="left:50%;top:100%">B</span></div>
+      <div class="zone c3" style="left:11.2%;top:4%;width:30.8%;height:6.6%"><span class="pin c3" style="left:50%;top:100%">C</span></div>
+      <div class="zone c4" style="left:42.4%;top:4%;width:22.3%;height:7.1%"><span class="pin c4" style="left:50%;top:100%">D</span></div>
+      <div class="zone c1" style="left:65.1%;top:4%;width:12%;height:6.6%"><span class="pin c1" style="left:50%;top:100%">E</span></div>
+      <div class="zone c2" style="left:77.5%;top:4%;width:14.9%;height:7.1%"><span class="pin c2" style="left:50%;top:100%">F</span></div>
+      <div class="zone c3" style="left:0.6%;top:12.3%;width:11.1%;height:81.5%"><span class="pin c3" style="left:50%;top:50%">G</span></div>
+      <div class="zone c4" style="left:12.4%;top:12.6%;width:70.2%;height:9.3%"><span class="pin c4" style="left:100%;top:50%">H</span></div>
+      <div class="zone c1" style="left:12.4%;top:22.3%;width:9.5%;height:70.6%"><span class="pin c1" style="left:50%;top:50%">I</span></div>
+      <div class="zone c2" style="left:22.1%;top:22.3%;width:60.5%;height:70.6%"><span class="pin c2" style="left:50%;top:50%">J</span></div>
+      <div class="zone c3" style="left:83.5%;top:12.3%;width:16%;height:81.5%"><span class="pin c3" style="left:50%;top:50%">K</span></div>
+      <div class="zone c4" style="left:0.6%;top:94.3%;width:98.9%;height:2.5%"><span class="pin c4" style="left:50%;top:50%">L</span></div>
+    </figure>
+    <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Menu bar</b>Every command lives here. If you forget a key, look in the menus.</div></li>
+      <li><span class="pin c3">G</span><div><b>Tracks and Groups</b>Every track in the song. Click the dot beside a name to show or hide that track.</div></li>
+      <li><span class="pin c2">B</span><div><b>Edit modes</b>Shuffle, Slip, Spot and Grid decide how clips move when you drag them. See page 7.</div></li>
+      <li><span class="pin c4">H</span><div><b>Rulers</b>Time in bars and in minutes, then tempo, meter and markers.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom and tools</b>Zoom buttons and five zoom presets, then the editing tools. See page 7.</div></li>
+      <li><span class="pin c1">I</span><div><b>Track controls</b>Record, input monitor (I), solo (S) and mute (M), then the track's view and automation mode.</div></li>
+      <li><span class="pin c4">D</span><div><b>Counter</b>Where the cursor is, and the start, end and length of your selection.</div></li>
+      <li><span class="pin c2">J</span><div><b>Timeline</b>Your clips. Audio is drawn as waveforms and MIDI as notes. Time runs left to right.</div></li>
+      <li><span class="pin c1">E</span><div><b>Grid and Nudge</b>The size of a grid step and of a nudge. Nudge with <kbd>+</kbd> and <kbd>−</kbd>.</div></li>
+      <li><span class="pin c3">K</span><div><b>Clips list</b>Every clip in the session. Type in Find clips to search it.</div></li>
+      <li><span class="pin c2">F</span><div><b>Transport</b>Loop, stop, play and record on top, and the buttons that jump or wind underneath.</div></li>
+      <li><span class="pin c4">L</span><div><b>Panel tabs</b>Click a tab to open the Vocal Editor, MIDI Editor, Undo History and more.</div></li>
+    </ul>
+  </div>
+  <div class="folio">5</div>
+</section>
+
+<!-- 6 · The Mix window -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The Mix Window</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Read a channel strip from top to bottom. Sound enters at the top of a strip and leaves at the fader, so the order on screen is the order the sound travels.</p></div>
+  <div class="card grow">
+    <figure class="shot">
+      <img src="images/mix-window.png" alt="The Mix window showing nine channel strips">
+      <div class="zone c1" style="left:1%;top:4%;width:54.6%;height:3.6%"><span class="pin c1" style="left:100%;top:50%">A</span></div>
+      <div class="zone c2" style="left:12.4%;top:8.2%;width:23.6%;height:2.4%"><span class="pin c2" style="left:100%;top:50%">B</span></div>
+      <div class="zone c3" style="left:12.6%;top:11.4%;width:10.2%;height:28.6%"><span class="pin c3" style="left:50%;top:50%">C</span></div>
+      <div class="zone c4" style="left:23.1%;top:40.3%;width:10.2%;height:11.5%"><span class="pin c4" style="left:50%;top:60%">D</span></div>
+      <div class="zone c1" style="left:33.6%;top:52.4%;width:10.2%;height:7.5%"><span class="pin c1" style="left:50%;top:50%">E</span></div>
+      <div class="zone c2" style="left:44.1%;top:61.4%;width:10.2%;height:8.4%"><span class="pin c2" style="left:22%;top:50%">F</span></div>
+      <div class="zone c3" style="left:54.6%;top:70%;width:10.2%;height:4.9%"><span class="pin c3" style="left:50%;top:0">G</span></div>
+      <div class="zone c4" style="left:65.1%;top:76.3%;width:10.2%;height:15.6%"><span class="pin c4" style="left:50%;top:50%">H</span></div>
+      <div class="zone c1" style="left:75.6%;top:92.2%;width:10.2%;height:6.2%"><span class="pin c1" style="left:50%;top:0">I</span></div>
+      <div class="zone c2" style="left:86.1%;top:53.6%;width:10.2%;height:2.3%"><span class="pin c2" style="left:50%;top:0">J</span></div>
+    </figure>
+    <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Transport and counter</b>The same play, stop and record controls as the Edit window.</div></li>
+      <li><span class="pin c2">F</span><div><b>Group and pan</b>The knob places the sound left or right. Stereo tracks get one knob per side.</div></li>
+      <li><span class="pin c2">B</span><div><b>Channel width</b>Slim strips fit more on screen. Wide strips show each effect's knobs.</div></li>
+      <li><span class="pin c3">G</span><div><b>Strip buttons</b>Input monitor, record and freeze, then solo (S) and mute (M).</div></li>
+      <li><span class="pin c3">C</span><div><b>Effects</b>EQ, compressors and the rest, processed from top to bottom. Click + to add one.</div></li>
+      <li><span class="pin c4">H</span><div><b>Fader and meter</b>The fader sets the track's level. The meter beside it shows how loud it is.</div></li>
+      <li><span class="pin c4">D</span><div><b>Sends</b>Slots a to e each send a copy of the track somewhere else, often to a shared reverb.</div></li>
+      <li><span class="pin c1">I</span><div><b>Level and name</b>The fader's value in dB, the track type, and the track name.</div></li>
+      <li><span class="pin c1">E</span><div><b>I/O</b>Where the track's sound comes from and goes to, then its automation mode.</div></li>
+      <li><span class="pin c2">J</span><div><b>Aux input</b>Verb is an aux track. It takes whatever the other strips send to Verb.</div></li>
+    </ul>
+  </div>
+  <div class="note"><b>Good to know</b><p>The list on the left is the same Tracks and Groups list as in the Edit window. The coloured bar under each name matches that track's clips on the timeline.</p></div>
+  <div class="folio">6</div>
+</section>
+
+<!-- 7 · Edit modes and tools -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Edit Modes &amp; Tools</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>The edit mode decides where a clip lands when you move it. The tool decides what a click or drag does. Pick both before you edit.</p></div>
+  <div class="card">
+    <h2>The four edit modes</h2>
+    <div class="quad">
+      <span class="axis n">By hand</span>
+      <span class="axis s">By the clock</span>
+      <span class="axis w">Stays where you put it</span>
+      <span class="axis e">Snaps into place</span>
+
+      <div class="mode">
+        <div class="name">Slip</div>
+        <div class="keys">F2 or Alt+2</div>
+        <svg viewBox="0 0 230 62" role="img" aria-label="A clip dropped between two others, leaving gaps">
+          <rect x="0" y="12" width="230" height="38" rx="5" fill="#0d0e1c"/>
+          <rect x="8" y="17" width="58" height="28" rx="4" fill="#6a4bd6"/>
+          <rect x="94" y="17" width="52" height="28" rx="4" fill="#f28a2e"/>
+          <rect x="168" y="17" width="54" height="28" rx="4" fill="#6a4bd6"/>
+          <path d="M120 3v7m-4-4 4 4 4-4" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p>Clips go exactly where you drop them. Gaps and overlaps are allowed. This is the mode FreeDAWm starts in.</p>
+      </div>
+
+      <div class="mode">
+        <div class="name">Shuffle</div>
+        <div class="keys">F1 or Alt+1</div>
+        <svg viewBox="0 0 230 62" role="img" aria-label="Clips pushed together end to end">
+          <rect x="0" y="12" width="230" height="38" rx="5" fill="#0d0e1c"/>
+          <rect x="8" y="17" width="58" height="28" rx="4" fill="#6a4bd6"/>
+          <rect x="67" y="17" width="52" height="28" rx="4" fill="#f28a2e"/>
+          <rect x="120" y="17" width="54" height="28" rx="4" fill="#6a4bd6"/>
+          <path d="M214 31h-30m6-5-6 5 6 5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p>Clips close up end to end. Cut a piece out and everything after it slides left to fill the gap.</p>
+      </div>
+
+      <div class="mode">
+        <div class="name">Spot</div>
+        <div class="keys">F3 or Alt+3</div>
+        <svg viewBox="0 0 230 62" role="img" aria-label="A clip placed at a typed position">
+          <rect x="0" y="12" width="230" height="38" rx="5" fill="#0d0e1c"/>
+          <rect x="94" y="17" width="62" height="28" rx="4" fill="#f28a2e"/>
+          <path d="M94 12v38" stroke="#fff" stroke-width="1.4" stroke-dasharray="3 3"/>
+          <rect x="20" y="20" width="62" height="22" rx="4" fill="#fff"/>
+          <text x="51" y="35" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#14152a">9| 1| 000</text>
+        </svg>
+        <p>FreeDAWm asks for an exact position, and the clip goes there. Use it when you know the time and not the place.</p>
+      </div>
+
+      <div class="mode">
+        <div class="name">Grid</div>
+        <div class="keys">F4 or Alt+4</div>
+        <svg viewBox="0 0 230 62" role="img" aria-label="Clips lined up on grid lines">
+          <rect x="0" y="12" width="230" height="38" rx="5" fill="#0d0e1c"/>
+          <path d="M38 6v50M86 6v50M134 6v50M182 6v50" stroke="#fff" stroke-opacity="0.55" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <rect x="38" y="17" width="48" height="28" rx="4" fill="#6a4bd6"/>
+          <rect x="134" y="17" width="48" height="28" rx="4" fill="#f28a2e"/>
+        </svg>
+        <p>Clips and selections jump to the nearest grid line. Press F4 again for Relative Grid, which keeps a clip's offset from the line.</p>
+      </div>
+    </div>
+    <div class="axes-key">
+      <p><b>Left and right:</b> does the clip stay where you put it, or does FreeDAWm line it up for you?</p>
+      <p><b>Up and down:</b> do you place it by hand, or by a time on the ruler?</p>
+    </div>
+  </div>
+  <div class="card">
+    <h2>The tools</h2>
+    <div class="tools">
+      <div class="tool"><kbd>F5</kbd><div><b>Zoomer</b><br>Drag across an area to zoom in on it.</div></div>
+      <div class="tool"><kbd>F6</kbd><div><b>Trim</b><br>Drag a clip's edge to make it shorter or longer.</div></div>
+      <div class="tool"><kbd>F7</kbd><div><b>Selector</b><br>Click to place the cursor. Drag to select a range.</div></div>
+      <div class="tool"><kbd>F8</kbd><div><b>Grabber</b><br>Drag a clip to move it.</div></div>
+      <div class="tool"><kbd>F9</kbd><div><b>Scrubber</b><br>Drag over audio to hear it under the pointer.</div></div>
+      <div class="tool"><kbd>F10</kbd><div><b>Pencil</b><br>Draw notes and automation.</div></div>
+    </div>
+  </div>
+  <div class="note"><b>Smart Tool</b><p>Press <kbd>F6</kbd> and <kbd>F7</kbd> together for three tools in one. Near a clip's edge it trims, in the upper half of a clip it selects, and in the lower half it grabs.</p></div>
+  <div class="folio">7</div>
+</section>
+
+<!-- 8 · Keyboard shortcuts -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Keyboard Shortcuts</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Learn these first. They cover most of a session, and each one saves a trip to the menus. On Windows, Linux and FreeBSD, press <kbd>Ctrl</kbd> wherever you see <kbd>Cmd</kbd>.</p></div>
+  <div class="keys-grid">
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c1">Play and record</h2>
+        <table>
+          <tr><td>Play or stop</td><td><kbd>Space</kbd></td></tr>
+          <tr><td>Record</td><td><kbd>F12</kbd> or <kbd>Cmd</kbd> <kbd>Space</kbd></td></tr>
+          <tr><td>Play at half speed</td><td><kbd>Shift</kbd> <kbd>Space</kbd></td></tr>
+          <tr><td>Back to the start</td><td><kbd>Home</kbd></td></tr>
+          <tr><td>Go to the end</td><td><kbd>End</kbd></td></tr>
+          <tr><td>Add a marker</td><td><kbd>Enter</kbd></td></tr>
+          <tr><td>Loop playback on or off</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>L</kbd></td></tr>
+          <tr><td>Play the selection</td><td><kbd>Alt</kbd> <kbd>[</kbd></td></tr>
+        </table>
+      </div>
+      <div class="keyset">
+        <h2 class="c2">Tracks</h2>
+        <table>
+          <tr><td>New track</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>N</kbd></td></tr>
+          <tr><td>Record enable</td><td><kbd>Shift</kbd> <kbd>R</kbd></td></tr>
+          <tr><td>Solo</td><td><kbd>Shift</kbd> <kbd>S</kbd></td></tr>
+          <tr><td>Mute</td><td><kbd>Shift</kbd> <kbd>M</kbd></td></tr>
+          <tr><td>Input monitoring</td><td><kbd>Shift</kbd> <kbd>I</kbd></td></tr>
+          <tr><td>Group tracks</td><td><kbd>Cmd</kbd> <kbd>G</kbd></td></tr>
+        </table>
+      </div>
+      <div class="keyset">
+        <h2 class="c3">Session</h2>
+        <table>
+          <tr><td>New session</td><td><kbd>Cmd</kbd> <kbd>N</kbd></td></tr>
+          <tr><td>Open a session</td><td><kbd>Cmd</kbd> <kbd>O</kbd></td></tr>
+          <tr><td>Save</td><td><kbd>Cmd</kbd> <kbd>S</kbd></td></tr>
+          <tr><td>Save as</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>S</kbd></td></tr>
+          <tr><td>Import audio</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>I</kbd></td></tr>
+          <tr><td>Bounce the mix to a file</td><td><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>B</kbd></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c4">Editing</h2>
+        <table>
+          <tr><td>Undo</td><td><kbd>Cmd</kbd> <kbd>Z</kbd></td></tr>
+          <tr><td>Redo</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>Z</kbd></td></tr>
+          <tr><td>Cut, copy, paste</td><td><kbd>Cmd</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd></td></tr>
+          <tr><td>Duplicate</td><td><kbd>Cmd</kbd> <kbd>D</kbd></td></tr>
+          <tr><td>Select all</td><td><kbd>Cmd</kbd> <kbd>A</kbd></td></tr>
+          <tr><td>Split at the selection</td><td><kbd>Cmd</kbd> <kbd>E</kbd></td></tr>
+          <tr><td>Heal a split</td><td><kbd>Cmd</kbd> <kbd>H</kbd></td></tr>
+          <tr><td>Trim to the selection</td><td><kbd>Cmd</kbd> <kbd>T</kbd></td></tr>
+          <tr><td>Create fades</td><td><kbd>Cmd</kbd> <kbd>F</kbd></td></tr>
+          <tr><td>Mute a clip</td><td><kbd>Cmd</kbd> <kbd>M</kbd></td></tr>
+          <tr><td>Clear the selection</td><td><kbd>Cmd</kbd> <kbd>B</kbd> or <kbd>Delete</kbd></td></tr>
+          <tr><td>Nudge later or earlier</td><td><kbd>+</kbd> <kbd>−</kbd></td></tr>
+        </table>
+      </div>
+      <div class="keyset">
+        <h2 class="c1">Zoom and view</h2>
+        <table>
+          <tr><td>Zoom out or in</td><td><kbd>R</kbd> <kbd>T</kbd></td></tr>
+          <tr><td>Fit the whole session</td><td><kbd>Alt</kbd> <kbd>A</kbd></td></tr>
+          <tr><td>Zoom to the selection</td><td><kbd>Alt</kbd> <kbd>F</kbd></td></tr>
+          <tr><td>Zoom toggle</td><td><kbd>E</kbd></td></tr>
+          <tr><td>Jump to the next clip edge</td><td><kbd>Tab</kbd></td></tr>
+          <tr><td>Switch between Mix and Edit</td><td><kbd>Cmd</kbd> <kbd>=</kbd></td></tr>
+          <tr><td>Edit modes</td><td><kbd>F1</kbd> to <kbd>F4</kbd></td></tr>
+          <tr><td>Tools</td><td><kbd>F5</kbd> to <kbd>F10</kbd></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Make them yours</b><p>Change any shortcut in Setup › Keyboard Shortcuts. A few keys are fixed, including Space, Enter, Tab and the F keys.</p></div>
+  <div class="folio">8</div>
+</section>
+
+</body>
+</html>
