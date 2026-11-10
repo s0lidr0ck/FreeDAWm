@@ -1,0 +1,4 @@
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"path":"Setup > Playback Engine..."}}
+{"steps": 6}
+{"shot": "docs/guide/images/playback-engine.png"}

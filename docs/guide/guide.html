@@ -59,9 +59,15 @@
       <li>Edit Modes &amp; Tools <span>7</span></li>
       <li>Keyboard Shortcuts <span>8</span></li>
     </ol>
+    <h3>Section 2: Recording</h3>
+    <ol>
+      <li>Set Up Your Sound <span>10</span></li>
+      <li>Inputs &amp; New Tracks <span>11</span></li>
+      <li>Record a Take <span>12</span></li>
+      <li>Punch, Loop &amp; Comp <span>13</span></li>
+    </ol>
     <h3 class="later">Still to come</h3>
     <ol class="later">
-      <li>Section 2: Recording <span>–</span></li>
       <li>Section 3: Editing <span>–</span></li>
       <li>Section 4: Mixing <span>–</span></li>
       <li>Section 5: Finishing &amp; Export <span>–</span></li>
@@ -327,6 +333,212 @@
   </div>
   <div class="note"><b>Make them yours</b><p>Change any shortcut in Setup › Keyboard Shortcuts. A few keys are fixed, including Space, Enter, Tab and the F keys.</p></div>
   <div class="folio">8</div>
+</section>
+
+<!-- 9 · Section opener -->
+<section class="page cover">
+  <div>
+    <div class="kicker">Section 2</div>
+    <div class="title" style="margin-top:0.2in">Recording</div>
+  </div>
+  <p class="lede">Get sound into FreeDAWm: choose your audio device, make a track, record a take, and fix the part that went wrong without redoing the rest.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+  <div class="folio">9</div>
+</section>
+
+<!-- 10 · Playback Engine -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Set Up Your Sound</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Tell FreeDAWm which device to play through and record from. You do this once per device, in Setup › Playback Engine.</p></div>
+  <div class="card">
+    <div class="duo">
+      <figure class="shot plain">
+        <img src="images/playback-engine.png" alt="The Playback Engine window">
+        <span class="pin c1" style="left:93%;top:14.5%">A</span><span class="pin c2" style="left:85%;top:21.7%">B</span><span class="pin c3" style="left:93%;top:28.8%">C</span><span class="pin c4" style="left:85%;top:35.9%">D</span><span class="pin c1" style="left:93%;top:43%">E</span><span class="pin c2" style="left:42%;top:50.5%">F</span><span class="pin c3" style="left:70%;top:65.5%">G</span><span class="pin c4" style="left:42%;top:95.3%">H</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Audio system</b>How FreeDAWm talks to your sound hardware. Leave it on Default unless your interface needs another.</div></li>
+      <li><span class="pin c2">B</span><div><b>Output device</b>Where you hear the mix: your interface, speakers or headphones.</div></li>
+      <li><span class="pin c3">C</span><div><b>Input device</b>Where recordings come from: your interface or a microphone.</div></li>
+      <li><span class="pin c4">D</span><div><b>Sample rate</b>The detail of the sound. Device default is a safe choice.</div></li>
+      <li><span class="pin c1">E</span><div><b>Buffer size</b>How much sound is handled at a time. See below.</div></li>
+      <li><span class="pin c2">F</span><div><b>Refresh and Apply</b>Refresh after you plug something in. Apply makes your choices take effect.</div></li>
+      <li><span class="pin c3">G</span><div><b>Status</b>What is open right now, and the session's sample rate.</div></li>
+      <li><span class="pin c4">H</span><div><b>Reconnect</b>Click this if the sound stops after a device was unplugged.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Buffer size: a trade</h2>
+    <div class="scale">
+      <div class="bar"></div>
+      <div class="stops"><span>SMALL</span><span>LARGE</span></div>
+      <div class="end"><h3>Small buffer</h3><p>You hear yourself with almost no delay, but the computer works harder and may crackle. Best while recording.</p></div>
+      <div class="end"><h3>Large buffer</h3><p>Steady playback with lots of effects, but a delay you can hear when you play or sing. Best while mixing.</p></div>
+    </div>
+  </div>
+  <div class="note"><b>Good to know</b><p>On the picture the input reads "opened on first record or monitor". FreeDAWm only opens your microphone when you arm a track or turn on monitoring.</p></div>
+  <div class="folio">10</div>
+</section>
+
+<!-- 11 · Inputs and tracks -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Inputs &amp; New Tracks</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Give your inputs names you will recognise, then make a track to record on. Named inputs save you from guessing which socket is which.</p></div>
+  <div class="card">
+    <div class="duo" style="grid-template-columns:2.6in 1fr">
+      <figure class="shot plain">
+        <img src="images/io-setup.png" alt="The I/O Setup window">
+        <span class="pin c1" style="left:14%;top:24%">A</span><span class="pin c2" style="left:36%;top:19.5%">B</span><span class="pin c3" style="left:60%;top:19.5%">C</span><span class="pin c4" style="left:32%;top:70%">D</span><span class="pin c1" style="left:14%;top:92.2%">E</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Input names</b>Open Setup › I/O and type over a name: Vocal Mic, Guitar DI. Tracks pick their input by these names.</div></li>
+      <li><span class="pin c2">B</span><div><b>Format</b>Mono is one channel, for a single mic or cable. Stereo is a pair.</div></li>
+      <li><span class="pin c3">C</span><div><b>Device input</b>Which socket on your interface this name stands for.</div></li>
+      <li><span class="pin c4">D</span><div><b>Busses</b>Paths inside FreeDAWm, used to send several tracks to one place.</div></li>
+      <li><span class="pin c1">E</span><div><b>Outputs</b>Where sound leaves. The main mix plays on the first one.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Make a track</h2>
+    <figure class="shot plain" style="width:5.3in;margin:0 auto">
+      <img src="images/new-tracks.png" alt="The New Tracks dialog">
+      <span class="pin c1" style="left:13.5%;top:63%">1</span><span class="pin c2" style="left:33%;top:63%">2</span><span class="pin c3" style="left:52.5%;top:63%">3</span><span class="pin c4" style="left:75.5%;top:63%">4</span><span class="pin c1" style="left:95%;top:63%">5</span>
+    </figure>
+    <p class="caption">Track › New, or <kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>N</kbd></p>
+    <ul class="steps" style="margin-top:0.12in;grid-template-columns:1fr 1fr 1fr">
+      <li><span class="pin c1">1</span><div><b>How many</b>Make several tracks in one go.</div></li>
+      <li><span class="pin c2">2</span><div><b>Mono or stereo</b>Match the input you will record.</div></li>
+      <li><span class="pin c3">3</span><div><b>Track type</b>See the table below.</div></li>
+      <li><span class="pin c4">4</span><div><b>Samples or ticks</b>Ticks make clips follow tempo changes.</div></li>
+      <li><span class="pin c1">5</span><div><b>Name</b>Name it now. Recordings take the track's name.</div></li>
+    </ul>
+  </div>
+  <div class="card grow">
+    <table class="kinds">
+      <tr><td>Audio Track</td><td>Records and plays sound: a voice, a guitar, a drum mic.</td></tr>
+      <tr><td>Instrument Track</td><td>Plays a software instrument from the notes you record or draw.</td></tr>
+      <tr><td>MIDI Track</td><td>Holds notes only, to drive an instrument somewhere else.</td></tr>
+      <tr><td>Aux Input</td><td>Has no clips. It takes sound from a bus, often for a shared reverb.</td></tr>
+      <tr><td>Master Fader</td><td>Controls the level of an output, usually the whole mix.</td></tr>
+    </table>
+  </div>
+  <div class="folio">11</div>
+</section>
+
+<!-- 12 · Record a take -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Record a Take</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Record your first take in six steps. The first three happen on the track, the last three on the transport.</p></div>
+  <div class="card">
+    <h2>On the track</h2>
+    <div class="pair">
+      <figure class="shot plain">
+        <img src="images/armed-track.png" alt="A track named Vocal with its record button lit">
+        <span class="pin c1" style="left:12.9%;top:53%">1</span><span class="pin c2" style="left:22.5%;top:53%">2</span><span class="pin c3" style="left:49.8%;top:75%">3</span>
+      </figure>
+      <ul class="steps" style="grid-template-columns:1fr">
+        <li><span class="pin c1">1</span><div><b>Arm the track</b>Click its record button so it lights red, or select the track and press <kbd>Shift</kbd> <kbd>R</kbd>.</div></li>
+        <li><span class="pin c2">2</span><div><b>Hear yourself</b>Click I to monitor the input through the track, effects included. <kbd>Shift</kbd> <kbd>I</kbd> does the same.</div></li>
+        <li><span class="pin c3">3</span><div><b>Check the level</b>Play or sing your loudest part and watch the meter. Turn the input down on your interface if it reaches the red at the top.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card">
+    <h2>On the transport</h2>
+    <figure class="shot plain">
+      <img src="images/record-transport.png" alt="The transport buttons and the Count Off panel">
+      <span class="pin c1" style="left:72.8%;top:3%">4</span><span class="pin c2" style="left:34.5%;top:3%">5</span><span class="pin c3" style="left:19.6%;top:3%">6</span>
+    </figure>
+    <ul class="steps" style="margin-top:0.16in;grid-template-columns:1fr 1fr 1fr">
+      <li><span class="pin c1">4</span><div><b>Count yourself in</b>Click Count Off to hear two bars of click before the take starts.</div></li>
+      <li><span class="pin c2">5</span><div><b>Record</b>Click the red button, or press <kbd>F12</kbd> or <kbd>Cmd</kbd> <kbd>Space</kbd>.</div></li>
+      <li><span class="pin c3">6</span><div><b>Stop</b>Press <kbd>Space</kbd>. Your take appears as a clip on the track.</div></li>
+    </ul>
+  </div>
+  <div class="card grow">
+    <h2>Also on the transport</h2>
+    <table class="kinds">
+      <tr><td>Metronome</td><td>The icon beside Tempo turns the click on or off during the take.</td></tr>
+      <tr><td>LLM</td><td>Low Latency Monitoring. It bypasses the effects that add delay on the tracks you are recording.</td></tr>
+      <tr><td>Loop</td><td>Plays the selection round and round. See the next page for recording in a loop.</td></tr>
+      <tr><td>Tempo and Meter</td><td>Set these before you record to a click. Drag the tempo, or click it to type a number.</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Not happy?</b><p>Press <kbd>Cmd</kbd> <kbd>Z</kbd> to undo the take, then record again. FreeDAWm autosaves as you work and can recover a session after a crash.</p></div>
+  <div class="folio">12</div>
+</section>
+
+<!-- 13 · Punch, loop and comp -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Punch, Loop &amp; Comp</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Fix one line without redoing the song, record several tries in a row, and build one good take from the best parts of each.</p></div>
+  <div class="card grow" style="display:flex;flex-direction:column;gap:0.2in">
+    <div class="way">
+      <svg viewBox="0 0 270 96" role="img" aria-label="A clip with a selected range in the middle being replaced">
+        <rect x="12" y="34" width="246" height="34" rx="5" fill="#6a4bd6"/>
+        <rect x="104" y="26" width="70" height="50" rx="4" fill="#d9358a"/>
+        <path d="M104 14v72M174 14v72" stroke="#fff" stroke-width="1.4" stroke-dasharray="3 3"/>
+        <text x="139" y="55" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.5" font-weight="700" fill="#fff">NEW TAKE</text>
+        <text x="58" y="88" text-anchor="middle" font-family="Inter, sans-serif" font-size="8" font-weight="600" fill="#b9bcdc">kept</text>
+        <text x="216" y="88" text-anchor="middle" font-family="Inter, sans-serif" font-size="8" font-weight="600" fill="#b9bcdc">kept</text>
+      </svg>
+      <div><h3>Punch in</h3><p>Select the part you want to redo, then record. Only the selection is replaced. Everything around it stays.</p><p>No selection? Press Record while the song plays to drop in at that moment.</p></div>
+    </div>
+    <div class="way">
+      <svg viewBox="0 0 270 96" role="img" aria-label="Playback starting before a selection and ending after it">
+        <rect x="12" y="34" width="246" height="34" rx="5" fill="#6a4bd6"/>
+        <rect x="104" y="34" width="70" height="34" fill="#d9358a"/>
+        <path d="M104 14v72M174 14v72" stroke="#fff" stroke-width="1.4" stroke-dasharray="3 3"/>
+        <path d="M50 20h48m-6-5 6 5-6 5M180 20h48m-6-5 6 5-6 5" stroke="#f6b56e" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="74" y="88" text-anchor="middle" font-family="Inter, sans-serif" font-size="8" font-weight="700" fill="#f6b56e">PRE-ROLL</text>
+        <text x="204" y="88" text-anchor="middle" font-family="Inter, sans-serif" font-size="8" font-weight="700" fill="#f6b56e">POST-ROLL</text>
+      </svg>
+      <div><h3>Pre-roll and post-roll</h3><p>Turn on Options › Pre/Post-Roll, or press <kbd>Cmd</kbd> <kbd>K</kbd>. Playback starts a little before the punch so you can play along into it, and carries on a little after.</p></div>
+    </div>
+    <div class="way">
+      <svg viewBox="0 0 270 96" role="img" aria-label="Three takes stacked over the same range">
+        <path d="M70 12v76M200 12v76" stroke="#fff" stroke-width="1.4" stroke-dasharray="3 3"/>
+        <rect x="70" y="18" width="130" height="18" rx="4" fill="#2f86f6"/>
+        <rect x="70" y="40" width="130" height="18" rx="4" fill="#d9358a"/>
+        <rect x="70" y="62" width="130" height="18" rx="4" fill="#f28a2e"/>
+        <text x="135" y="31" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" font-weight="700" fill="#fff">TAKE 1</text>
+        <text x="135" y="53" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" font-weight="700" fill="#fff">TAKE 2</text>
+        <text x="135" y="75" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" font-weight="700" fill="#fff">TAKE 3</text>
+        <path d="M218 30c22 4 22 34 0 38m6-9-6 9 10 2" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div><h3>Loop record</h3><p>Turn on Options › Loop Record, or press <kbd>Alt</kbd> <kbd>L</kbd>. Select the bars to repeat and record. Each time round makes a new take, so you can keep trying without stopping.</p></div>
+    </div>
+    <div class="way">
+      <svg viewBox="0 0 270 96" role="img" aria-label="A comp built from parts of three takes">
+        <rect x="14" y="10" width="80" height="20" rx="4" fill="#2f86f6"/>
+        <rect x="95" y="10" width="90" height="20" rx="4" fill="#f28a2e"/>
+        <rect x="186" y="10" width="70" height="20" rx="4" fill="#d9358a"/>
+        <text x="135" y="24" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" font-weight="700" fill="#fff">COMP</text>
+        <rect x="14" y="40" width="242" height="14" rx="3" fill="#2f86f6" fill-opacity="0.3"/>
+        <rect x="14" y="40" width="80" height="14" rx="3" fill="#2f86f6" stroke="#fff"/>
+        <rect x="14" y="58" width="242" height="14" rx="3" fill="#d9358a" fill-opacity="0.3"/>
+        <rect x="186" y="58" width="70" height="14" rx="3" fill="#d9358a" stroke="#fff"/>
+        <rect x="14" y="76" width="242" height="14" rx="3" fill="#f28a2e" fill-opacity="0.3"/>
+        <rect x="95" y="76" width="90" height="14" rx="3" fill="#f28a2e" stroke="#fff"/>
+      </svg>
+      <div><h3>Comp the best parts</h3><p>Click the small arrow before the track name to show its take layers. Drag across the part of a take you like and it is copied up into the track, with a short crossfade at each join.</p></div>
+    </div>
+  </div>
+  <div class="folio">13</div>
 </section>
 
 </body>

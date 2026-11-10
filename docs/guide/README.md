@@ -20,11 +20,14 @@ Open `guide.html` in a browser to read the pages without building.
 
 ## Screenshots
 
-Render them from the current app, from the repository root, so they never go stale:
+Render them from the current app so they never go stale (needs Pillow for the crops):
 
 ```sh
-cargo run -p soundcraft-ui-egui --example ui_shot -- /tmp/last.png docs/guide/shots.jsonl --size 1440x900 --system-theme dark
+python3 docs/guide/shots.py            # every shot
+python3 docs/guide/shots.py armed io   # only these
 ```
+
+Each shot is a `ui_shot` script in `shots/`; `shots.py` lists its window size, flags and crops.
 
 The callouts are positioned in percentages of the picture (`.zone` boxes in `guide.html`), so after
 a layout change in the app, check that each box still sits on its part of the window.

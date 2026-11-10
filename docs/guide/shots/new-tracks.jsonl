@@ -1,0 +1,4 @@
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"path":"Track > New..."}}
+{"steps": 6}
+{"shot": "docs/guide/images/new-tracks.png"}

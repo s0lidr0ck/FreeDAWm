@@ -1,0 +1,7 @@
+{"steps": 4}
+{"method":"engine.execute","params":{"command":"track.new","params":{"count":1,"format":"mono","kind":"audio","name":"Vocal"}}}
+{"method":"engine.execute","params":{"command":"mix.record_arm","params":{"tracks":["Vocal"]}}}
+{"method":"engine.execute","params":{"command":"options.countoff","params":{}}}
+{"method":"engine.execute","params":{"command":"options.click","params":{}}}
+{"steps": 6}
+{"shot": "docs/guide/images/armed-track.png"}
