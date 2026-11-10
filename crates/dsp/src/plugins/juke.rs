@@ -112,10 +112,37 @@ const G_HUMANIZE: usize = PADS * K + 1;
 const G_RETURN_A: usize = PADS * K + 2;
 const G_RETURN_B: usize = PADS * K + 3;
 
+/// Note variants: a pad played on another note with its own tune, level, pan, sends, decay and
+/// cutoff, as offsets from the pad's (`var1_…` to `var16_…`, after the kit-wide parameters). A
+/// variant whose note is -1 is off.
+pub const VARIANTS: usize = 16;
+/// Parameters per variant (see [`VarParam`]).
+const VK: usize = 10;
+const VAR_BASE: usize = PADS * K + 4;
+
+/// A variant parameter's offset within its block.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum VarParam {
+    Note,
+    Pad,
+    Tune,
+    Fine,
+    Level,
+    Pan,
+    SendA,
+    SendB,
+    Decay,
+    Cutoff,
+}
+
+/// The pads a variant plays, by number.
+const VAR_PADS: [&str; 16] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"];
+
 /// The parameter table: every pad's block (`p1_…` to `p16_…`, its defaults given per pad), then
 /// the kit-wide ones.
 macro_rules! juke_table {
-    ($( ($n:literal, $note:literal, $voice:literal, $tune:literal, $decay:literal, $choke:literal, $pan:literal) ),* $(,)?) => {
+    ($( ($n:literal, $note:literal, $voice:literal, $tune:literal, $decay:literal, $choke:literal, $pan:literal) ),* ; $($v:literal),* $(,)?) => {
         [
             $(
                 lin(concat!("p", $n, "_note"), concat!("Pad ", $n, " Note"), 0.0, 127.0, $note, Unit::None),
@@ -163,13 +190,25 @@ macro_rules! juke_table {
             lin("humanize", "Humanize", 0.0, 100.0, 0.0, Unit::Percent),
             lin("return_a", "Return A", -48.0, 6.0, -6.0, Unit::Db),
             lin("return_b", "Return B", -48.0, 6.0, -6.0, Unit::Db),
+            $(
+                lin(concat!("var", $v, "_note"), concat!("Variant ", $v, " Note"), -1.0, 127.0, -1.0, Unit::None),
+                choice(concat!("var", $v, "_pad"), concat!("Variant ", $v, " Pad"), &VAR_PADS, 0),
+                lin(concat!("var", $v, "_tune"), concat!("Variant ", $v, " Tune"), -24.0, 24.0, 0.0, Unit::Semitones),
+                lin(concat!("var", $v, "_fine"), concat!("Variant ", $v, " Fine"), -100.0, 100.0, 0.0, Unit::Cents),
+                lin(concat!("var", $v, "_level"), concat!("Variant ", $v, " Level"), -24.0, 12.0, 0.0, Unit::Db),
+                lin(concat!("var", $v, "_pan"), concat!("Variant ", $v, " Pan"), -100.0, 100.0, 0.0, Unit::None),
+                lin(concat!("var", $v, "_send_a"), concat!("Variant ", $v, " Send A"), -100.0, 100.0, 0.0, Unit::Percent),
+                lin(concat!("var", $v, "_send_b"), concat!("Variant ", $v, " Send B"), -100.0, 100.0, 0.0, Unit::Percent),
+                lin(concat!("var", $v, "_decay"), concat!("Variant ", $v, " Decay"), 25.0, 400.0, 100.0, Unit::Percent),
+                lin(concat!("var", $v, "_cutoff"), concat!("Variant ", $v, " Cutoff"), -4.0, 4.0, 0.0, Unit::None),
+            )*
         ]
     };
 }
 
 /// The default kit: General MIDI drum notes, a synth voice each, the hats in choke group 1.
 /// (pad, note, voice, tune, decay ms, choke, pan)
-static JUKE_PARAMS: [ParamInfo; PADS * K + 4] = juke_table![
+static JUKE_PARAMS: [ParamInfo; PADS * K + 4 + VARIANTS * VK] = juke_table![
     ("1", 36.0, 0, 0.0, 450.0, 0, 0.0),
     ("2", 37.0, 7, 0.0, 60.0, 0, -10.0),
     ("3", 38.0, 1, 0.0, 220.0, 0, 0.0),
@@ -185,7 +224,8 @@ static JUKE_PARAMS: [ParamInfo; PADS * K + 4] = juke_table![
     ("13", 54.0, 9, 4.0, 250.0, 0, 30.0),
     ("14", 56.0, 8, 0.0, 300.0, 0, -15.0),
     ("15", 70.0, 9, 0.0, 150.0, 0, -30.0),
-    ("16", 75.0, 7, 7.0, 80.0, 0, 10.0),
+    ("16", 75.0, 7, 7.0, 80.0, 0, 10.0);
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16",
 ];
 
 pub static JUKE_INFO: PluginInfo = PluginInfo {
@@ -356,7 +396,8 @@ pub struct Juke {
     events: EventQueue,
     /// Stacked hits waiting their delay: (samples left, pad, velocity).
     /// Hits to come: (frames left, pad, velocity, with its stacks).
-    pending: [(u32, usize, u8, bool); MAX_PENDING],
+    /// The variant (`u8::MAX`: none) a hit plays.
+    pending: [(u32, usize, u8, bool, u8); MAX_PENDING],
     pending_len: usize,
     counter: u64,
     /// The next round-robin, per pad and velocity layer.
@@ -443,7 +484,7 @@ impl Juke {
             ch: 2,
             voices,
             events: EventQueue::new(),
-            pending: [(0, 0, 0, false); MAX_PENDING],
+            pending: [(0, 0, 0, false, u8::MAX); MAX_PENDING],
             pending_len: 0,
             counter: 0,
             robin: [0; PADS * LAYERS],
@@ -523,12 +564,22 @@ impl Juke {
         (0..PADS).any(|pad| self.pv(pad, PadParam::Solo) >= 0.5)
     }
 
-    fn schedule(&mut self, delay: u32, pad: usize, vel: u8, stacks: bool) {
+    #[inline]
+    fn vv(&self, var: usize, k: VarParam) -> f32 {
+        self.p.v(VAR_BASE + var * VK + k as usize)
+    }
+
+    /// The pad variant `var` plays, when it is on.
+    fn var_pad(&self, var: usize) -> Option<usize> {
+        (var < VARIANTS && self.vv(var, VarParam::Note) >= 0.0).then(|| self.p.choice(VAR_BASE + var * VK + VarParam::Pad as usize).min(PADS - 1))
+    }
+
+    fn schedule(&mut self, delay: u32, pad: usize, vel: u8, stacks: bool, var: Option<usize>) {
         if delay == 0 {
-            self.trigger(pad, vel, stacks);
+            self.trigger(pad, vel, stacks, var);
         } else if let Some(slot) = self.pending.get_mut(self.pending_len) {
             // Counted down from the next frame on.
-            *slot = (delay, pad, vel, stacks);
+            *slot = (delay, pad, vel, stacks, var.and_then(|v| u8::try_from(v).ok()).unwrap_or(u8::MAX));
             self.pending_len += 1;
         }
     }
@@ -543,7 +594,17 @@ impl Juke {
                 // The pad's timing humanize: up to its amount late.
                 let late = self.pv(pad, PadParam::HumTiming);
                 let delay = if late > 0.0 { ms_to_samples(late * (self.rng.bipolar() * 0.5 + 0.5), self.sr).max(0.0) as u32 } else { 0 };
-                self.schedule(delay, pad, vel, true);
+                self.schedule(delay, pad, vel, true, None);
+            }
+        }
+        // Note variants on this note: their pad, with their own settings.
+        for var in 0..VARIANTS {
+            if self.vv(var, VarParam::Note).round() as i32 == i32::from(note)
+                && let Some(pad) = self.var_pad(var)
+            {
+                let late = self.pv(pad, PadParam::HumTiming);
+                let delay = if late > 0.0 { ms_to_samples(late * (self.rng.bipolar() * 0.5 + 0.5), self.sr).max(0.0) as u32 } else { 0 };
+                self.schedule(delay, pad, vel, true, Some(var));
             }
         }
     }
@@ -551,7 +612,8 @@ impl Juke {
     fn note_off_now(&mut self, note: u8) {
         let rel = decay60(40.0, self.sr);
         for pad in 0..PADS {
-            if self.pv(pad, PadParam::Note).round() as i32 == i32::from(note) && self.pc(pad, PadParam::Mode) == 1 {
+            let on_variant = (0..VARIANTS).any(|v| self.vv(v, VarParam::Note).round() as i32 == i32::from(note) && self.var_pad(v) == Some(pad));
+            if (self.pv(pad, PadParam::Note).round() as i32 == i32::from(note) || on_variant) && self.pc(pad, PadParam::Mode) == 1 {
                 for v in self.voices.iter_mut().filter(|v| v.active && v.pad == pad) {
                     v.releasing = true;
                     v.release = v.release.min(rel);
@@ -560,8 +622,9 @@ impl Juke {
         }
     }
 
-    /// Plays `pad` at `vel`; with `stacks`, also fires the pads it stacks.
-    fn trigger(&mut self, pad: usize, vel: u8, stacks: bool) {
+    /// Plays `pad` at `vel` (as note variant `var`, with its offsets, when given); with `stacks`,
+    /// also fires the pads it stacks.
+    fn trigger(&mut self, pad: usize, vel: u8, stacks: bool, var: Option<usize>) {
         if pad >= PADS || vel == 0 {
             return;
         }
@@ -574,7 +637,7 @@ impl Juke {
                 let to = self.pc(pad, target);
                 if to > 0 && to - 1 != pad {
                     let delay = ms_to_samples(self.pv(pad, ms), sr).max(0.0) as u32;
-                    self.schedule(delay, to - 1, vel, false);
+                    self.schedule(delay, to - 1, vel, false, None);
                 }
             }
         }
@@ -610,14 +673,18 @@ impl Juke {
         let hum_oct = self.pv(pad, PadParam::HumFilter) / 100.0 * self.rng.bipolar();
         let sens = self.pv(pad, PadParam::Velocity) / 100.0;
         let vel01 = f32::from(vel.min(127)) / 127.0;
-        let gain = db_to_gain(self.pv(pad, PadParam::Level) + self.pv(pad, PadParam::Trim) + hum_db) * (1.0 - sens + sens * vel01);
-        let pan = (self.pv(pad, PadParam::Pan) / 100.0).clamp(-1.0, 1.0);
+        // A note variant's offsets (none: the pad as it is).
+        let off = |k: VarParam, none: f32| var.map_or(none, |v| self.vv(v, k));
+        let gain = db_to_gain(self.pv(pad, PadParam::Level) + self.pv(pad, PadParam::Trim) + hum_db + off(VarParam::Level, 0.0))
+            * (1.0 - sens + sens * vel01);
+        let pan = ((self.pv(pad, PadParam::Pan) + off(VarParam::Pan, 0.0)) / 100.0).clamp(-1.0, 1.0);
         let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
-        let semis = self.pv(pad, PadParam::Tune) + (self.pv(pad, PadParam::Fine) + hum_cents) / 100.0;
+        let semis =
+            self.pv(pad, PadParam::Tune) + off(VarParam::Tune, 0.0) + (self.pv(pad, PadParam::Fine) + off(VarParam::Fine, 0.0) + hum_cents) / 100.0;
         let ratio = 2f32.powf(semis / 12.0);
         let voice_kind = self.pc(pad, PadParam::Voice);
         let (tone, snappy) = (self.pv(pad, PadParam::Tone) / 100.0, self.pv(pad, PadParam::Snappy) / 100.0);
-        let cutoff = (self.pv(pad, PadParam::Cutoff) * 2f32.powf(hum_oct)).clamp(20.0, 20_000.0);
+        let cutoff = (self.pv(pad, PadParam::Cutoff) * 2f32.powf(hum_oct + off(VarParam::Cutoff, 0.0))).clamp(20.0, 20_000.0);
         let (filter, reso) = (self.pc(pad, PadParam::Filter), self.pv(pad, PadParam::Resonance) / 100.0);
         let reverse = self.pv(pad, PadParam::Reverse) >= 0.5;
         let step = match sample {
@@ -629,11 +696,12 @@ impl Juke {
         };
         let attack = ms_to_samples(self.pv(pad, PadParam::Attack), sr).max(0.0) as u32;
         let hold = ms_to_samples(self.pv(pad, PadParam::Hold), sr).max(0.0) as u32;
-        let decay = decay60(self.pv(pad, PadParam::Decay), sr);
+        let decay = decay60(self.pv(pad, PadParam::Decay) * off(VarParam::Decay, 100.0) / 100.0, sr);
         let (pitch_amt, pitch_coef) = (self.pv(pad, PadParam::PitchAmount), decay60(self.pv(pad, PadParam::PitchDecay), sr));
         let (fenv_amt, fenv_coef) = (self.pv(pad, PadParam::FilterEnv), decay60(self.pv(pad, PadParam::FilterDecay), sr));
         let drive = self.pv(pad, PadParam::Drive) / 100.0;
-        let (send_a, send_b) = (self.pv(pad, PadParam::SendA) / 100.0, self.pv(pad, PadParam::SendB) / 100.0);
+        let send = |k: PadParam, o: VarParam| ((self.pv(pad, k) + off(o, 0.0)) / 100.0).clamp(0.0, 1.0);
+        let (send_a, send_b) = (send(PadParam::SendA, VarParam::SendA), send(PadParam::SendB, VarParam::SendB));
         self.counter += 1;
         let counter = self.counter;
         let idx = self
@@ -783,11 +851,11 @@ impl Juke {
             let due = match self.pending.get_mut(i) {
                 Some(slot) => {
                     slot.0 = slot.0.saturating_sub(1);
-                    (slot.0 == 0).then_some((slot.1, slot.2, slot.3))
+                    (slot.0 == 0).then_some((slot.1, slot.2, slot.3, slot.4))
                 }
                 None => None,
             };
-            if let Some((pad, vel, stacks)) = due {
+            if let Some((pad, vel, stacks, var)) = due {
                 // Remove by moving the last one in.
                 let last = self.pending_len - 1;
                 if let Some(&tail) = self.pending.get(last)
@@ -796,7 +864,7 @@ impl Juke {
                     *slot = tail;
                 }
                 self.pending_len = last;
-                self.trigger(pad, vel, stacks);
+                self.trigger(pad, vel, stacks, (var != u8::MAX).then_some(usize::from(var)));
             } else {
                 i += 1;
             }
@@ -1378,6 +1446,36 @@ mod tests {
         };
         let (flat, up) = (hit(0.0), hit(6.0206));
         assert!((up / flat - 2.0).abs() < 0.01, "+6 dB of trim doubles the pad: {}", up / flat);
+    }
+
+    #[test]
+    fn a_note_variant_plays_its_pad_with_its_own_offsets() {
+        let hit = |note: u8, level: f32, tune: f32| {
+            let mut j = juke();
+            set(&mut j, "p1_source", 0.0);
+            // A steady 200-frame sample: its length shows the pitch.
+            let steady: Arc<dyn SampleSource> = Arc::new(SampleBuffer { sample_rate: SR, channels: vec![vec![0.5; 200]] });
+            assert!(j.set_asset("p1.v1.r1", Some(steady)));
+            set(&mut j, "p1_decay", 2000.0);
+            set(&mut j, "var1_note", 60.0);
+            set(&mut j, "var1_pad", 0.0);
+            set(&mut j, "var1_level", level);
+            set(&mut j, "var1_tune", tune);
+            let out = run(&mut j, 400, &[(0, note, 127)]).0;
+            // Frames until the click has played out: a pitch up shortens it.
+            let last = out.iter().rposition(|x| x.abs() > 1e-4).unwrap_or(0);
+            (peak(&out), last)
+        };
+        let (pad, pad_len) = hit(36, 0.0, 0.0);
+        let (same, _) = hit(60, 0.0, 0.0);
+        assert!((same / pad - 1.0).abs() < 0.01, "a variant with no offsets is its pad: {same} {pad}");
+        let (down, _) = hit(60, -6.0206, 0.0);
+        assert!((down / pad - 0.5).abs() < 0.01, "-6 dB: {}", down / pad);
+        let (_, up_len) = hit(60, 0.0, 12.0);
+        assert!((up_len as f32) < pad_len as f32 * 0.6, "an octave up plays in half the time: {up_len} vs {pad_len}");
+        // Off (note -1), or a note it is not on: silence.
+        let (none, _) = hit(61, 0.0, 0.0);
+        assert_eq!(none, 0.0);
     }
 
     #[test]

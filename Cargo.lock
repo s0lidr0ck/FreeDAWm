@@ -5922,7 +5922,7 @@ checksum = "ea06cc588e43c632923a55450401b8f25e628131571d4e1baea1bdfdb2b5ed06"
 
 [[package]]
 name = "soundcraft"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "eframe",
  "egui",
@@ -5942,7 +5942,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-asio-latency"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "asio-sys",
  "cc",
@@ -5950,7 +5950,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-au-host"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "serde",
@@ -5960,7 +5960,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-audio-io"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "proptest",
@@ -5974,7 +5974,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-automation"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "serde_json",
@@ -5984,7 +5984,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-band"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -5993,7 +5993,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-clap-host"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "clap-sys",
  "libloading 0.8.9",
@@ -6007,7 +6007,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-cli"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "serde_json",
  "soundcraft-audio-io",
@@ -6021,7 +6021,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-dsp"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "proptest",
@@ -6033,7 +6033,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-engine"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "craft-docpath",
  "log",
@@ -6061,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-midi"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "proptest",
  "serde",
@@ -6071,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-mix"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "rayon",
@@ -6091,7 +6091,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-ml"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "deep_filter",
  "flate2",
@@ -6112,7 +6112,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-model"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "proptest",
  "serde",
@@ -6127,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-net"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "fs4",
  "gethostname",
@@ -6150,7 +6150,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-playback"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "cpal",
  "jack",
@@ -6171,7 +6171,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-plugin-scan"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "log",
  "serde",
@@ -6180,7 +6180,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-scan"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "soundcraft-clap-host",
  "soundcraft-plugin-scan",
@@ -6189,7 +6189,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-sysmem"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -6197,7 +6197,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-time"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "proptest",
  "serde",
@@ -6207,7 +6207,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-ui-egui"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "craft-ui",
  "egui",
@@ -6237,7 +6237,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-video"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "image",
  "proptest",
@@ -6248,7 +6248,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-vocal"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "rustfft",
  "serde",
@@ -6258,7 +6258,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-vst3-host"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "image",
  "libloading 0.8.9",
@@ -6276,7 +6276,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-web"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "eframe",
  "egui",
@@ -8391,7 +8391,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "serde",
  "serde_json",

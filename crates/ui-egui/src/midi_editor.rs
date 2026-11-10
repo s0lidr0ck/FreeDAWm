@@ -375,11 +375,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     };
     let Some((track, clip)) = app.engine.session().find_clip(cid).map(|(t, c)| (t, c.clone())) else { return };
     let ClipContent::Midi { sequence } = &clip.content else { return };
-    // A pattern clip edits as its step grid.
+    // A pattern clip's steps are edited in one place, the Juke window's Steps view.
     if clip.pattern.is_some() {
         ui.painter().text(pos2(header.min.x + 110.0, header.center().y), Align2::LEFT_CENTER, &clip.name, regular(11.0), t.text_dim);
         let body = Rect::from_min_max(pos2(full.min.x, full.min.y + 22.0), full.max);
-        crate::step_grid::show(app, ui, body, track, cid, &clip);
+        pattern_notice(app, ui, body, track, cid, &clip.name);
         return;
     }
     let track_color = app.engine.session().track(track).map_or([120, 120, 200], |t| t.color);
@@ -1390,4 +1390,25 @@ pub fn snap_selection(app: &mut SoundApp, cid: ClipId) {
     {
         app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
     }
+}
+
+/// What the editor shows for a Juke pattern clip: its steps live in the Juke window, so a note,
+/// a button that opens the Juke window on this pattern, and one that converts it to plain MIDI
+/// notes to edit here.
+fn pattern_notice(app: &mut SoundApp, ui: &mut Ui, body: Rect, track: soundcraft_model::TrackId, cid: ClipId, name: &str) {
+    let t = Tokens::current();
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(24.0)));
+    inner.label(egui::RichText::new(format!("{name} is a Juke pattern")).strong().size(14.0));
+    inner.add_space(4.0);
+    inner
+        .label(egui::RichText::new("Its steps are edited in the Juke window's Steps view, with the rest of the track's patterns.").color(t.text_dim));
+    inner.add_space(10.0);
+    inner.horizontal(|ui| {
+        if ui.button("Open in Juke").on_hover_text("The Juke window, on this pattern's steps").clicked() {
+            crate::juke_window::show_steps(app, track, Some(cid));
+        }
+        if ui.button("Convert to MIDI").on_hover_text("Keep the notes as a plain MIDI clip, to edit them here by hand").clicked() {
+            let _ = app.run("pattern.to_midi", json!({"clip": cid.0}));
+        }
+    });
 }

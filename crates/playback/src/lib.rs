@@ -91,6 +91,13 @@ pub type PluginStates = Vec<(TrackId, SlotKey, Vec<u8>)>;
 /// A parameter edit made in a plugin's own editor: `(track, slot, param id, value)`.
 pub type EditorEdit = (TrackId, SlotKey, String, f32);
 
+/// Audio to preview ([`Player::preview`]): planar, at `rate`.
+#[derive(Debug, Default)]
+pub struct PreviewAudio {
+    pub channels: Vec<Vec<f32>>,
+    pub rate: u32,
+}
+
 enum Cmd {
     /// A new snapshot plus the third-party instances it needs (created on the UI thread).
     Session(Arc<Session>, Vec<PreparedInstance>),
@@ -118,6 +125,10 @@ enum Cmd {
     Action(TrackId, ModuleId, &'static str),
     /// A note played on a track's instrument now (note-off at velocity 0): auditions.
     Audition(TrackId, u8, u8),
+    /// Audio played straight to the output now, over the mix (`None` stops it): a preview of
+    /// audio that is not in the session, as Juke's hit picker's. The UI keeps a clone of each, so
+    /// the audio thread never frees one.
+    Preview(Option<Arc<PreviewAudio>>),
     /// Where the callback sends Scout rigs back (finished, or refused while another is armed).
     ScoutReturn(SyncSender<Box<ScoutRig>>),
     /// Arm a Scout capture (built on the UI thread with `ScoutRig::new`).
@@ -368,6 +379,8 @@ fn guarded_block(fault: &Fault, shared: &Shared, out: &mut [f32], fill: impl FnO
 
 /// State owned by the audio callback.
 struct AudioState {
+    /// The preview playing ([`Cmd::Preview`]) and its read position, in its own frames.
+    preview: Option<(Arc<PreviewAudio>, f64)>,
     rx: Receiver<Cmd>,
     shared: Arc<Shared>,
     session: Arc<Session>,
@@ -508,6 +521,7 @@ impl AudioState {
         let sr = session.sample_rate.as_f64() as f32;
         let nch = main_channels(&session);
         AudioState {
+            preview: None,
             garbage,
             old_sessions: None,
             scout_done: None,
@@ -661,6 +675,10 @@ impl AudioState {
                 Cmd::Audition(track, note, velocity) => {
                     // (no allocation: a lookup and the plugin's event queue)
                     self.mix.audition(track, note, velocity);
+                }
+                Cmd::Preview(p) => {
+                    // (no free: the UI holds a clone of the one replaced)
+                    self.preview = p.map(|a| (a, 0.0));
                 }
                 Cmd::Shutdown => {
                     // Plugin stability, part 2: the instances go back to the UI thread, which
@@ -1047,6 +1065,44 @@ impl AudioState {
     /// rendered at the session rate and resampled to the device. Both read `pending` from `read`,
     /// so switching paths plays out what the other rendered rather than dropping it.
     fn fill(&mut self, out: &mut [f32], channels: usize) {
+        self.fill_mix(out, channels);
+        self.add_preview(out, channels);
+    }
+
+    /// Adds the preview playing, if any, to the first two device channels (a mono preview to
+    /// both), resampled to the device rate. Never allocates or frees.
+    fn add_preview(&mut self, out: &mut [f32], channels: usize) {
+        let Some((audio, pos)) = self.preview.as_mut() else { return };
+        let channels = channels.max(1);
+        let frames = out.len() / channels;
+        let len = audio.channels.iter().map(Vec::len).min().unwrap_or(0);
+        let step = f64::from(audio.rate.max(1)) / self.device_rate.max(1.0);
+        let at = |c: usize, x: f64| -> f32 {
+            let ch = audio.channels.get(c).or_else(|| audio.channels.first());
+            let i = x as usize;
+            let f = (x - i as f64) as f32;
+            let a = ch.and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+            let b = ch.and_then(|v| v.get(i + 1)).copied().unwrap_or(a);
+            a + (b - a) * f
+        };
+        for n in 0..frames {
+            if *pos >= len as f64 {
+                break;
+            }
+            for c in 0..channels.min(2) {
+                if let Some(o) = out.get_mut(n * channels + c) {
+                    *o += at(c, *pos);
+                }
+            }
+            *pos += step;
+        }
+        if *pos >= len as f64 {
+            // Ended: the UI still holds its clone, so this drop frees nothing.
+            self.preview = None;
+        }
+    }
+
+    fn fill_mix(&mut self, out: &mut [f32], channels: usize) {
         self.drain();
         if self.shut {
             out.iter_mut().for_each(|x| *x = 0.0);
@@ -1325,6 +1381,9 @@ fn resampled_pops(read: f64, len: usize, frames: usize, step: f64, quantum: usiz
 
 /// UI-thread bookkeeping of the third-party instances the audio thread holds.
 struct Side {
+    /// The last previews sent ([`Player::preview`]): held here so the audio thread, dropping the
+    /// one it replaces, never frees it.
+    previews: Vec<Arc<PreviewAudio>>,
     /// Per slot: the plugin id, channel count and `state_load` its instance was made for, and
     /// whether it could be made.
     shadow: HashMap<(TrackId, SlotKey), (String, usize, u64, bool)>,
@@ -1477,6 +1536,7 @@ struct Loan {
 impl Side {
     fn new(rate: f32, max_block: usize, garbage: Receiver<Garbage>) -> Side {
         Side {
+            previews: Vec::new(),
             shadow: HashMap::new(),
             rate,
             max_block,
@@ -2594,6 +2654,24 @@ impl Player {
     /// audition): a note-on at `velocity`, a note-off at 0.
     pub fn audition(&self, track: TrackId, note: u8, velocity: u8) {
         let _ = self.tx.send(Cmd::Audition(track, note, velocity));
+    }
+
+    /// Plays `audio` (planar, at `rate`) straight to the output now, over the mix, whether or not
+    /// the transport runs: a preview of audio that is not in the session (Juke's hit picker).
+    /// A new preview replaces the one playing; an empty one stops it.
+    pub fn preview(&self, channels: Vec<Vec<f32>>, rate: u32) {
+        if channels.iter().all(Vec::is_empty) {
+            let _ = self.tx.send(Cmd::Preview(None));
+            return;
+        }
+        let audio = Arc::new(PreviewAudio { channels, rate });
+        let mut side = self.side();
+        // The audio thread drops the preview it replaces: the two latest stay held here.
+        side.previews.push(audio.clone());
+        let extra = side.previews.len().saturating_sub(3);
+        side.previews.drain(..extra);
+        drop(side);
+        let _ = self.tx.send(Cmd::Preview(Some(audio)));
     }
 
     pub fn locate(&self, at: Samples) {
@@ -5056,6 +5134,30 @@ mod tests {
         s.outputs[0].format = soundcraft_model::ChannelFormat::Surround51;
         let st = clock_state(channel().1, Arc::new(Shared::new()), Arc::new(s), channel().0);
         assert_eq!((st.pending.len(), st.out.device_channels()), (2, 2));
+    }
+
+    #[test]
+    fn a_preview_plays_over_a_stopped_transport_and_ends() {
+        let (player, mut st) = Player::offline(Arc::new(Session::default()), 48_000, 256, 2);
+        // 300 frames of a mono ramp at 24 kHz: 600 device frames, on both channels.
+        let ramp: Vec<f32> = (0..300).map(|i| 0.5 + i as f32 / 1000.0).collect();
+        player.preview(vec![ramp], 24_000);
+        let mut out = vec![0.0f32; 2 * 512];
+        st.fill(&mut out, 2);
+        assert!((out[0] - 0.5).abs() < 1e-3 && (out[1] - 0.5).abs() < 1e-3, "{:?}", &out[..4]);
+        assert!(out.iter().step_by(2).all(|x| *x > 0.49), "the whole callback sounds");
+        st.fill(&mut out, 2);
+        // 88 frames were left of it, then silence.
+        assert!(out[2 * 80] > 0.4 && out[2 * 100] == 0.0, "{} {}", out[2 * 80], out[2 * 100]);
+        st.fill(&mut out, 2);
+        assert!(out.iter().all(|x| *x == 0.0), "it ended");
+        // An empty preview stops one that plays.
+        player.preview(vec![vec![0.3; 48_000]], 48_000);
+        st.fill(&mut out, 2);
+        assert!(out[0] > 0.29);
+        player.preview(Vec::new(), 48_000);
+        st.fill(&mut out, 2);
+        assert!(out.iter().all(|x| *x == 0.0));
     }
 
     #[test]

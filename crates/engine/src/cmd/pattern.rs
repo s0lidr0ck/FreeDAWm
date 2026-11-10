@@ -571,6 +571,35 @@ mod tests {
     }
 
     #[test]
+    fn duplicating_a_pattern_clip_copies_its_steps_into_a_pattern_clip_after_it() {
+        let (mut e, t) = engine();
+        let c = new_clip(&mut e, t, json!({"bars": 2}));
+        e.execute("pattern.step", &json!({"clip": c, "lane": 1, "step": 4, "on": true, "velocity": 99})).unwrap();
+        let (start, end) = {
+            let (_, clip) = e.session().find_clip(ClipId(c)).unwrap();
+            (clip.start, clip.range().end)
+        };
+        e.execute("edit.duplicate", &json!({"tracks": [t], "start": start, "end": end})).unwrap();
+        let clips = e.session().tracks[0].clips();
+        assert_eq!(clips.len(), 2);
+        let copy = clips.iter().find(|k| k.start == end).expect("the copy follows the original");
+        assert!(copy.pattern.is_some(), "the copy is a pattern clip");
+        assert_eq!(copy.pattern.as_ref().map(|p| &p.pattern), clips[0].pattern.as_ref().map(|p| &p.pattern));
+        let notes_of = |k: &Clip| match &k.content {
+            ClipContent::Midi { sequence } => sequence.notes.len(),
+            _ => 0,
+        };
+        // One lit step on a 16-step lane over two bars: a hit in each bar, in the copy as well.
+        assert_eq!(notes_of(copy), 2, "its notes are made");
+        assert_eq!(notes_of(copy), notes_of(&clips[0]));
+        // The copy is its own pattern: a step on it leaves the original.
+        let copy_id = copy.id.0;
+        e.execute("pattern.step", &json!({"clip": copy_id, "lane": 0, "step": 0, "on": true})).unwrap();
+        let clips = e.session().tracks[0].clips();
+        assert!(!clips[0].pattern.as_ref().unwrap().pattern.lanes[0].steps[0].on);
+    }
+
+    #[test]
     fn splitting_a_pattern_clip_keeps_every_hit_where_it_was() {
         let (mut e, t) = engine();
         let c = new_clip(&mut e, t, json!({"bars": 2}));

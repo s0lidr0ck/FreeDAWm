@@ -27,6 +27,7 @@ pub mod extra_windows;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
+pub mod hit_picker;
 pub mod icons;
 pub mod juke_fx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,12 +236,30 @@ pub struct UiState {
     /// Open full editor windows of built-in modules (their VST-faithful editor, at full size,
     /// in a window of its own: the tile's ⤢ button).
     pub full_editors: Vec<(TrackId, soundcraft_model::ModuleId)>,
+    /// Plugin windows moved out of the main window, each into a native window of its own
+    /// (the window's Detach button). A key stays here while its window is closed, so the
+    /// window comes back detached.
+    #[serde(skip)]
+    pub detached_plugins: Vec<(TrackId, SlotKey)>,
+    /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
+    /// the next detached window of that plugin opens there.
+    #[serde(default, rename = "plugin_windows.rects")]
+    pub plugin_window_rects: HashMap<String, [f32; 4]>,
     /// Per Juke track: the view its window shows (Kit, Pad or Steps).
     #[serde(skip)]
     pub juke_tabs: HashMap<TrackId, juke_window::Tab>,
     /// Per Juke track: the pattern clip its Steps view edits.
     #[serde(skip)]
     pub juke_clips: HashMap<TrackId, soundcraft_model::ClipId>,
+    /// Juke's hit picker, open on drum takes for a pad.
+    #[serde(skip)]
+    pub hit_picker: Option<hit_picker::HitPicker>,
+    /// The hit the picker last played (outlined).
+    #[serde(skip)]
+    pub hit_playing: Option<usize>,
+    /// A Juke pad to show in its window's Pad view next frame: (track, pad from 0).
+    #[serde(skip)]
+    pub juke_pad_select: Option<(TrackId, usize)>,
     /// The module whose drawer is open on each Mix window strip (at most one per track).
     pub drawers: HashMap<TrackId, soundcraft_model::ModuleId>,
     /// Mix window strips whose band drawer is open (a musician's controls, beside the strip).
@@ -462,8 +481,13 @@ impl Default for UiState {
             track_tint: 0.5,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
+            detached_plugins: Vec::new(),
+            plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),
+            hit_picker: None,
+            hit_playing: None,
+            juke_pad_select: None,
             drawers: HashMap::new(),
             band_drawers: HashSet::new(),
             gr_history: HashMap::new(),
@@ -841,6 +865,9 @@ pub struct SoundApp {
     pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
     /// Juke pad slots `(pad, layer, robin)` drawn this frame that take a dropped audio file.
     pub kit_drop_targets: Vec<(egui::Rect, TrackId, (usize, usize, usize))>,
+    /// Places dropped drum takes are imported: a pad card (`Some(pad)`: the takes become the
+    /// pad's layers and round-robins) or a Juke window (`None`: a kit, the takes to pads by name).
+    pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
     /// This frame's places a dragged browser card can land (see `browser::drop`).
     pub(crate) plugin_drop_targets: Vec<browser::drop::Registered>,
     sample_reads: Vec<sampler_window::SampleRead>,
@@ -1006,6 +1033,7 @@ impl SoundApp {
             synthetic: Vec::new(),
             sample_drop_targets: Vec::new(),
             kit_drop_targets: Vec::new(),
+            kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
             sample_reads: Vec::new(),
             synthetic_grace: 0,
@@ -1217,8 +1245,11 @@ impl SoundApp {
         self.ui.gr_history.clear();
         self.ui.plugin_windows.clear();
         self.ui.full_editors.clear();
+        self.ui.detached_plugins.clear();
         self.ui.juke_tabs.clear();
         self.ui.juke_clips.clear();
+        self.ui.hit_picker = None;
+        self.engine.take_hits = None;
         // A marker or chord picked in the old session.
         ruler_items::unpick(self);
     }
@@ -2430,6 +2461,7 @@ impl SoundApp {
         self.ui.wide_key_owner.remove(&ctx.viewport_id());
         self.sample_drop_targets.clear();
         self.kit_drop_targets.clear();
+        self.kit_import_targets.clear();
         self.plugin_drop_targets.clear();
         if !self.native_menu_bar {
             menus::menu_bar(self, ui);

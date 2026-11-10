@@ -95,6 +95,18 @@ impl SoundApp {
         if files.is_empty() {
             return files;
         }
+        // Drum takes on a Juke pad card, or elsewhere in a Juke window (a cell there loads
+        // into itself instead); files with full paths only (the browser's are read later).
+        if let Some(p) = pos
+            && files.iter().all(|f| f.path().is_absolute())
+        {
+            let pad = self.kit_import_targets.iter().rev().find(|(r, _, pad)| pad.is_some() && r.contains(p)).map(|(_, t, pad)| (*t, *pad));
+            let cell = self.kit_drop_targets.iter().any(|(r, _, _)| r.contains(p));
+            let window = || self.kit_import_targets.iter().rev().find(|(r, _, pad)| pad.is_none() && r.contains(p)).map(|(_, t, _)| (*t, None));
+            if let Some((track, pad)) = pad.or_else(|| if cell { None } else { window() }) {
+                return self.import_takes(track, pad, files);
+            }
+        }
         let Some((track, kit)) = self.drop_track(pos) else { return files };
         let mut rest = Vec::new();
         let mut claimed = 0;
@@ -121,6 +133,48 @@ impl SoundApp {
             } else {
                 self.sample_reads.push(SampleRead { track, file: f, kit });
             }
+        }
+        rest
+    }
+
+    /// Imports dropped drum takes into `pad` of `track`'s Juke (`mix.kit_pad_import`), or with
+    /// no pad builds its kit from them (`mix.kit_import`: a dropped folder, or the files to pads
+    /// by name). Returns the files it did not take.
+    fn import_takes(&mut self, track: TrackId, pad: Option<usize>, files: Vec<egui::DroppedFileHandle>) -> Vec<egui::DroppedFileHandle> {
+        let mut paths = Vec::new();
+        let mut folders = Vec::new();
+        let mut rest = Vec::new();
+        for f in files {
+            let path = f.path().to_string_lossy().into_owned();
+            if is_audio_name(&path) {
+                paths.push(path);
+            } else if pad.is_none() && f.path().extension().is_none() {
+                folders.push(path);
+            } else {
+                rest.push(f);
+            }
+        }
+        if let Some(pad) = pad {
+            if !paths.is_empty() {
+                // The picker opens on the hits found, the best sixteen ticked.
+                crate::hit_picker::open(self, track, pad, json!({"paths": paths}));
+            }
+            return rest;
+        }
+        // A folder names the kit; loose files go along with the first folder's.
+        let mut first = true;
+        for dir in folders {
+            let mut params = json!({"track": track.0, "folder": dir});
+            if first && !paths.is_empty() {
+                params["paths"] = json!(std::mem::take(&mut paths));
+            }
+            first = false;
+            let r = self.run("mix.kit_import", params);
+            self.ui.status = crate::juke_window::kit_import_status(r);
+        }
+        if !paths.is_empty() {
+            let r = self.run("mix.kit_import", json!({"track": track.0, "paths": paths}));
+            self.ui.status = crate::juke_window::kit_import_status(r);
         }
         rest
     }
