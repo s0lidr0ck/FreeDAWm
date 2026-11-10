@@ -30,8 +30,8 @@ finish-args:
   # (and PulseAudio itself on older ones). Deliberately not granted: --device=all (raw /dev/snd
   # for direct ALSA hardware access, which would bypass the sound server).
   - --socket=pulseaudio
-  # The JACK audio system: the runtime's libjack is PipeWire's, which talks to the PipeWire
-  # socket, and lists each sound card as its own device in Playback Engine.
+  # PipeWire, the default audio system (and its "All sources" input), and JACK, whose libjack in
+  # the runtime is PipeWire's: both talk to the PipeWire socket.
   - --filesystem=xdg-run/pipewire-0
   # Open/Save dialogs use the file-chooser portal (rfd) and drag-and-drop the document portal,
   # so broad filesystem access isn't needed. Music is granted for sessions and their

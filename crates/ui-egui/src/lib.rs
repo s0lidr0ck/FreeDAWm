@@ -122,6 +122,15 @@ use std::sync::mpsc::Receiver;
 pub use control::ControlRequest;
 pub use record_offset::{RecordOffset, rate_warning, record_latency};
 
+/// PipeWire's "All sources" input as I/O Setup shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllSources {
+    /// Every source to pick from.
+    pub sources: Vec<soundcraft_playback::pw::Source>,
+    /// What each input channel records (`node:port`), in channel order.
+    pub chosen: Vec<String>,
+}
+
 /// Which main window is in front (Window › Mix / Edit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MainWindow {
@@ -793,6 +802,10 @@ pub struct SoundApp {
     /// Folder for user plugin presets (native apps set it).
     pub preset_dir: Option<std::path::PathBuf>,
     last_autosave: Option<std::time::Instant>,
+    /// PipeWire's sources and the "All sources" channels in effect (`None` off "All sources"),
+    /// looked up at most every two seconds: I/O Setup asks every frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    all_sources: Option<(std::time::Instant, Option<AllSources>)>,
     pub dialogs: dialogs::Dialogs,
     pub meters: HashMap<TrackId, MeterDisplay>,
     pub main_meter: MeterDisplay,
@@ -968,6 +981,8 @@ impl SoundApp {
             panic_rev: 0,
             preset_dir: None,
             last_autosave: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            all_sources: None,
             dialogs: dialogs::Dialogs::default(),
             meters: HashMap::new(),
             main_meter: MeterDisplay::default(),
@@ -1804,10 +1819,56 @@ impl SoundApp {
         (input, output)
     }
 
-    /// The input device's channel names, in channel order, when it gives them (JACK's ports);
-    /// empty otherwise.
-    pub fn input_channel_names(&self) -> Vec<String> {
-        self.recorder.as_ref().map(|r| r.channel_names.clone()).unwrap_or_default()
+    /// The input device's channel names, in channel order, when it gives them (JACK's ports,
+    /// PipeWire's sources); empty otherwise.
+    pub fn input_channel_names(&mut self) -> Vec<String> {
+        if let Some(r) = &self.recorder {
+            return r.channel_names.clone();
+        }
+        self.all_sources().map(|a| soundcraft_playback::pw::labels(&a.chosen, &a.sources)).unwrap_or_default()
+    }
+
+    /// On PipeWire's "All sources" input: every source and the ones its channels record now.
+    pub fn all_sources(&mut self) -> Option<AllSources> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some((at, view)) = &self.all_sources
+                && at.elapsed() < std::time::Duration::from_secs(2)
+            {
+                return view.clone();
+            }
+            let view = self.ui.audio.all_sources().then(|| AllSources {
+                sources: soundcraft_playback::pw::sources(),
+                chosen: soundcraft_playback::pw::effective_sources(&self.ui.audio.input_sources),
+            });
+            self.all_sources = Some((std::time::Instant::now(), view.clone()));
+            view
+        }
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
+    /// Records `keys` too on "All sources" (after its channels in use); the input reopens with
+    /// them. The first new channel (0-based), or why not (while recording the input stays).
+    pub fn add_sources(&mut self, keys: &[String]) -> Result<u16, String> {
+        if self.engine.transport.recording {
+            return Err("stop recording before adding a source".into());
+        }
+        let mut chosen = self.all_sources().ok_or("the input is not PipeWire's All sources")?.chosen;
+        let first = chosen.len();
+        if first + keys.len() > 64 {
+            return Err("All sources records at most 64 channels".into());
+        }
+        chosen.extend(keys.iter().cloned());
+        self.ui.audio.input_sources = chosen;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.all_sources = None;
+        }
+        // The input reopens with the new channels on the next record or monitor.
+        self.recorder = None;
+        self.recorder_failed = false;
+        u16::try_from(first).map_err(|e| e.to_string())
     }
 
     /// The output device's channel names, in channel order, when it gives them; empty otherwise.

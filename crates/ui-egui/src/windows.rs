@@ -955,9 +955,34 @@ pub(crate) fn channel_label(first: usize, width: usize, names: &[String]) -> Str
     if named.is_empty() { numbers } else { format!("{numbers} · {}", named.join(" + ")) }
 }
 
+/// What a device channel menu picked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChannelPick {
+    /// The path starts on this device channel (0-based).
+    Channel(u16),
+    /// These sources join PipeWire's "All sources" and the path records them.
+    Add(Vec<String>),
+}
+
+/// The sources a path of `width` channels could add to "All sources": each source not recorded
+/// yet for a mono path; for a stereo one, each pair of a node's channels in order.
+pub(crate) fn sources_to_add(all: &crate::AllSources, width: usize) -> Vec<(String, Vec<String>)> {
+    let free: Vec<&soundcraft_playback::pw::Source> = all.sources.iter().filter(|s| !all.chosen.contains(&s.key)).collect();
+    if width < 2 {
+        return free.iter().map(|s| (s.label.clone(), vec![s.key.clone()])).collect();
+    }
+    free.windows(2)
+        .filter(|w| w[0].node_label == w[1].node_label)
+        .map(|w| {
+            let channel = |s: &soundcraft_playback::pw::Source| s.label.rsplit_once(" · ").map_or(s.label.clone(), |(_, c)| c.to_string());
+            (format!("{} · {} + {}", w[0].node_label, channel(w[0]), channel(w[1])), vec![w[0].key.clone(), w[1].key.clone()])
+        })
+        .collect()
+}
+
 /// The device channel a path starts on, as a menu of the device's channels (8 when no device is
-/// open, and always the path's own): the new first channel (0-based) when one is picked. "not
-/// available" follows when the open device lacks the path's channels.
+/// open, and always the path's own), then `adds` (PipeWire sources to record too): what was
+/// picked. "not available" follows when the open device lacks the path's channels.
 fn io_channel_menu(
     ui: &mut egui::Ui,
     salt: (&str, &str),
@@ -966,7 +991,8 @@ fn io_channel_menu(
     device: Option<usize>,
     names: &[String],
     fits: bool,
-) -> Option<u16> {
+    adds: &[(String, Vec<String>)],
+) -> Option<ChannelPick> {
     let t = Tokens::current();
     let (first_ch, width) = (usize::from(first), width.max(1));
     let count = device.filter(|n| *n > 0).unwrap_or(8).max(names.len()).max(first_ch + width).min(1024);
@@ -976,7 +1002,16 @@ fn io_channel_menu(
         |ui| {
             for k in 0..=count.saturating_sub(width) {
                 if ui.selectable_label(k == first_ch, channel_label(k, width, names)).clicked() && k != first_ch {
-                    picked = u16::try_from(k).ok();
+                    picked = u16::try_from(k).ok().map(ChannelPick::Channel);
+                }
+            }
+            if !adds.is_empty() {
+                ui.separator();
+                ui.label(egui::RichText::new("Add a source").small().color(t.text_dim));
+                for (label, keys) in adds {
+                    if ui.selectable_label(false, format!("+ {label}")).clicked() {
+                        picked = Some(ChannelPick::Add(keys.clone()));
+                    }
                 }
             }
         },
@@ -1038,6 +1073,12 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
     io_heading(ui, "Inputs", Some(("Input", device)));
     io_note(ui, "Each input is one or two channels of the input device. Tracks pick their input by these names.");
     let names = app.input_channel_names();
+    // PipeWire's "All sources": its channels are the sources chosen so far; more can be added.
+    let all = app.all_sources();
+    let device = device.or(all.as_ref().map(|a| a.chosen.len()));
+    if all.is_some() {
+        io_note(ui, "All sources: pick any PipeWire source (a device, a virtual device, an app) under \"Add a source\".");
+    }
     let named = app.engine.session().inputs.clone();
     // Without named inputs the tracks use In 1…In N, one per device channel: shown as rows to
     // edit like any other (the first change makes them the session's own).
@@ -1056,6 +1097,7 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
         io_note(ui, "These are the default inputs, one per device channel. Change any of them to make the list your own.");
     }
     let mut change = None;
+    let mut add: Option<(String, Vec<String>)> = None;
     egui::Grid::new("io_inputs").num_columns(5).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         io_headings(ui, &["Name", "Format", "Device input", "", ""]);
         for i in &rows {
@@ -1067,8 +1109,11 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
                 change = Some(json!({"action": "set_input_format", "name": i.name, "format": f.label()}));
             }
             let fits = crate::mix_window::path_fits(usize::from(i.first_channel), width, device);
-            if let Some(ch) = io_channel_menu(ui, ("input", &i.name), i.first_channel, width, device, &names, fits) {
-                change = Some(json!({"action": "set_input_channel", "name": i.name, "first_channel": ch}));
+            let adds = all.as_ref().map(|a| sources_to_add(a, width)).unwrap_or_default();
+            match io_channel_menu(ui, ("input", &i.name), i.first_channel, width, device, &names, fits, &adds) {
+                Some(ChannelPick::Channel(ch)) => change = Some(json!({"action": "set_input_channel", "name": i.name, "first_channel": ch})),
+                Some(ChannelPick::Add(keys)) => add = Some((i.name.clone(), keys)),
+                None => {}
             }
             if defaults.is_none() && ui.small_button("Delete").clicked() {
                 change = Some(json!({"action": "delete_input", "name": i.name}));
@@ -1076,6 +1121,12 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
             ui.end_row();
         }
     });
+    if let Some((name, keys)) = add {
+        match app.add_sources(&keys) {
+            Ok(first) => change = Some(json!({"action": "set_input_channel", "name": name, "first_channel": first})),
+            Err(e) => app.ui.status = e,
+        }
+    }
     if let Some(params) = change {
         io_apply(app, params, defaults);
     }
@@ -1159,7 +1210,7 @@ fn io_outputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
                 }
                 o.format.channels()
             };
-            if let Some(ch) = io_channel_menu(ui, ("output", &o.name), o.first_channel, width, device, &names, fits) {
+            if let Some(ChannelPick::Channel(ch)) = io_channel_menu(ui, ("output", &o.name), o.first_channel, width, device, &names, fits, &[]) {
                 change = Some(json!({"action": "set_output_channel", "name": o.name, "first_channel": ch}));
             }
             if i == 0 {
@@ -1299,6 +1350,32 @@ mod io_setup_tests {
         assert_eq!(channel_label(2, 2, &names), "3–4 · L + R");
         // Past the names: the numbers alone.
         assert_eq!(channel_label(9, 1, &names), "10");
+    }
+
+    #[test]
+    fn sources_to_add_skip_the_recorded_ones_and_pair_a_nodes_channels() {
+        let src = |key: &str, node: &str, ch: &str| soundcraft_playback::pw::Source {
+            key: key.into(),
+            label: format!("{node} · {ch}"),
+            node_label: node.into(),
+        };
+        let all = crate::AllSources {
+            sources: vec![
+                src("mic:capture_MONO", "Mic", "MONO"),
+                src("weir:capture_FL", "Stream Mic (Weir)", "FL"),
+                src("weir:capture_FR", "Stream Mic (Weir)", "FR"),
+                src("spk:monitor_FL", "Monitor of Speakers", "FL"),
+                src("spk:monitor_FR", "Monitor of Speakers", "FR"),
+            ],
+            chosen: vec!["mic:capture_MONO".into(), "spk:monitor_FL".into()],
+        };
+        let mono: Vec<String> = sources_to_add(&all, 1).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(mono, ["Stream Mic (Weir) · FL", "Stream Mic (Weir) · FR", "Monitor of Speakers · FR"]);
+        // Stereo: pairs within one node only, never across nodes or with a recorded channel.
+        assert_eq!(
+            sources_to_add(&all, 2),
+            [("Stream Mic (Weir) · FL + FR".to_string(), vec!["weir:capture_FL".to_string(), "weir:capture_FR".to_string()])]
+        );
     }
 
     #[test]

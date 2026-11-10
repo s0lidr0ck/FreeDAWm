@@ -32,6 +32,21 @@ pub struct AudioConfig {
     pub sample_rate: Option<u32>,
     /// Device buffer in frames.
     pub buffer_size: Option<u32>,
+    /// PipeWire's "All sources" input: the source each input channel records, in channel order
+    /// (`node.name:port.name`, see `pw`). Empty: the system's default source.
+    pub input_sources: Vec<String>,
+}
+
+impl AudioConfig {
+    /// The audio system this configuration opens: the chosen one, else the default.
+    pub fn system_name(&self) -> String {
+        self.system.clone().unwrap_or_else(default_system)
+    }
+
+    /// Whether the input is PipeWire's "All sources" (the default input on PipeWire).
+    pub fn all_sources(&self) -> bool {
+        crate::pw::is_pipewire(&self.system_name()) && self.input.as_deref().is_none_or(|i| i == crate::pw::ALL_SOURCES)
+    }
 }
 
 /// One device as the settings window lists it.
@@ -163,7 +178,13 @@ pub fn audio_systems_with(live: Option<&LiveDevice>) -> Vec<AudioSystem> {
             let host = cpal::host_from_id(id).ok()?;
             let (def_out, def_in) = (host.default_output_device(), host.default_input_device());
             let outputs = named_devices(&host, true).into_iter().filter_map(|(n, d)| describe(n, &d, def_out.as_ref(), true)).collect();
-            let inputs = named_devices(&host, false).into_iter().filter_map(|(n, d)| describe(n, &d, def_in.as_ref(), false)).collect();
+            let mut inputs: Vec<DeviceInfo> =
+                named_devices(&host, false).into_iter().filter_map(|(n, d)| describe(n, &d, def_in.as_ref(), false)).collect();
+            // PipeWire: "All sources" first, the default (I/O Setup picks its channels).
+            if crate::pw::is_pipewire(id.name()) {
+                inputs.iter_mut().for_each(|i| i.is_default = false);
+                inputs.insert(0, all_sources_info());
+            }
             Some(AudioSystem { name: id.name().to_string(), is_default, outputs, inputs })
         })
         .collect()
@@ -248,9 +269,51 @@ fn jack_system(server: &crate::jack::Server, is_default: bool) -> AudioSystem {
     AudioSystem { name: crate::jack::SYSTEM.to_string(), is_default, outputs: info(&server.sinks), inputs: info(&server.sources) }
 }
 
+/// The default audio system's name, without opening it (cpal prefers PipeWire on Linux when its
+/// socket is there).
+fn default_system() -> String {
+    #[cfg(target_os = "linux")]
+    if <cpal::platform::PipeWireHost as cpal::traits::HostTrait>::is_available() {
+        return "PipeWire".into();
+    }
+    cpal::default_host().id().name().to_string()
+}
+
+/// PipeWire's "All sources" as the settings window lists it: as many channels as there are
+/// sources to pick from, at any standard rate (PipeWire converts).
+fn all_sources_info() -> DeviceInfo {
+    DeviceInfo {
+        name: crate::pw::ALL_SOURCES.to_string(),
+        is_default: true,
+        max_channels: u16::try_from(crate::pw::sources().len()).unwrap_or(u16::MAX).min(64),
+        sample_rates: STANDARD_RATES.to_vec(),
+        buffer_min: None,
+        buffer_max: None,
+    }
+}
+
+/// The host and device for `cfg`'s "All sources" input: PipeWire's default input, which this
+/// host leaves unconnected (`pw::connect` links it).
+#[cfg(target_os = "linux")]
+pub(crate) fn all_sources_input() -> Option<(cpal::Host, cpal::Device)> {
+    let mut host = cpal::platform::PipeWireHost::new().ok()?;
+    host.set_connect_automatically(false);
+    let host: cpal::Host = host.into();
+    let device = host.default_input_device()?;
+    Some((host, device))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn all_sources_input() -> Option<(cpal::Host, cpal::Device)> {
+    None
+}
+
 /// The name of the input device `name` chooses (else the system default) on `host`, without
 /// opening it; `None` when there is none.
 pub(crate) fn input_device_name(host: &cpal::Host, name: Option<&str>) -> Option<String> {
+    if crate::pw::is_pipewire(host.id().name()) && name.is_none_or(|n| n == crate::pw::ALL_SOURCES) {
+        return Some(crate::pw::ALL_SOURCES.to_string());
+    }
     if crate::jack::is_jack(host.id().name()) {
         return crate::jack::probe().and_then(|s| crate::jack::pick(&s.sources, name).map(|g| g.name.clone()));
     }
@@ -333,6 +396,7 @@ mod tests {
             input: None,
             sample_rate: Some(48_000),
             buffer_size: Some(256),
+            input_sources: vec!["weir-stream:capture_FL".into()],
         };
         let s = serde_json::to_string(&c).unwrap();
         assert_eq!(serde_json::from_str::<AudioConfig>(&s).unwrap(), c);

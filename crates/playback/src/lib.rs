@@ -1,5 +1,5 @@
-//! Realtime playback through the system audio device (cpal: CoreAudio, WASAPI, ALSA/Pulse/
-//! PipeWire via ALSA, JACK, WebAudio).
+//! Realtime playback through the system audio device (cpal: CoreAudio, WASAPI, PipeWire with its
+//! "All sources" input (see `pw`), ALSA, JACK, WebAudio).
 //!
 //! The UI thread owns a [`Player`]; the audio callback owns the [`MixEngine`] and a snapshot of
 //! the session (`Arc<Session>`) that the UI swaps whenever the document changes. Commands go to
@@ -34,6 +34,7 @@ pub mod jack;
 pub mod measure;
 pub mod midi_in;
 mod outmap;
+pub mod pw;
 pub mod record;
 pub mod stream;
 
@@ -2967,7 +2968,8 @@ fn duplex_input(
         cpal::BufferSize::Fixed(n) => Some(n),
         cpal::BufferSize::Default => None,
     };
-    record::build_input_stream(device, Some(output.sample_rate), buffer, session_rate, route, |ch, rate| {
+    let shape = route.map(|r| (r.group.name.clone(), r.channels()));
+    record::build_input_stream(device, Some(output.sample_rate), buffer, session_rate, shape, |ch, rate| {
         duplex_feed(asio, ch, rate, session_rate, max_block)
     })
 }
@@ -3256,6 +3258,39 @@ mod tests {
         assert_eq!(recorder.device_name, source.name);
         assert_eq!(recorder.channels, source.ports.len());
         check(&format!("^{}", jack::cpal_client(false)), &source.ports);
+        drop(recorder);
+        drop(player);
+    }
+
+    /// Needs a PipeWire server (and a session manager) with at least two source channels;
+    /// skipped without.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn all_sources_records_each_chosen_source_on_its_own_channel() {
+        let sources = pw::sources();
+        if sources.len() < 2 {
+            println!("SKIPPED: no PipeWire server with two sources");
+            return;
+        }
+        // The second source on channel 1, the first on channel 2: the order is the list's.
+        let keys = vec![sources[1].key.clone(), sources[0].key.clone()];
+        let cfg = AudioConfig { system: Some("PipeWire".into()), input_sources: keys.clone(), ..Default::default() };
+        assert!(cfg.all_sources());
+        let listed = devices::audio_systems();
+        let pipewire = listed.iter().find(|s| pw::is_pipewire(&s.name)).expect("PipeWire is listed");
+        assert_eq!(pipewire.inputs.first().map(|d| (d.name.as_str(), d.is_default)), Some((pw::ALL_SOURCES, true)));
+        let player = Player::with_config(Arc::new(Session::new("PW", soundcraft_time::SampleRate::new(48_000).unwrap_or_default())), &cfg);
+        assert_eq!(player.input_name.as_deref(), Some(pw::ALL_SOURCES));
+        let recorder = player.open_input(&cfg).expect("the All sources input opens");
+        assert_eq!(recorder.device_name, pw::ALL_SOURCES);
+        assert_eq!(recorder.channels, 2);
+        assert_eq!(recorder.channel_names, [sources[1].label.clone(), sources[0].label.clone()]);
+        let linked = pw::graph().expect("PipeWire runs").our_sources(std::process::id());
+        assert_eq!(linked, [vec![keys[0].clone()], vec![keys[1].clone()]], "each channel hears its own source, only it");
+        // Linked, the stream runs: its callbacks keep coming.
+        let first = recorder.beats();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(recorder.beats() > first, "the input stream runs once linked");
         drop(recorder);
         drop(player);
     }

@@ -28,8 +28,12 @@ soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio
 # JACK as a second audio system on Linux (PipeWire answers JACK clients through pipewire-jack):
 # cpal's streams, and `jack` itself to list the devices and connect the streams' ports to the
 # chosen one (see `jack`). libjack is loaded at run time, so a machine without it still runs.
-cpal = { workspace = true, features = ["jack"] }
+cpal = { workspace = true, features = ["jack", "pipewire"] }
 jack = "0.13"
+# PipeWire itself, to list every source (devices, virtual devices, app streams) and link the
+# chosen ones to the input stream (see `pw`). The same version cpal's PipeWire host uses.
+pipewire = "0.10"
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The installed ASIO drivers' names (HKLM\SOFTWARE\ASIO), listed without loading them.
