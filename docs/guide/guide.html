@@ -66,9 +66,15 @@
       <li>Record a Take <span>12</span></li>
       <li>Punch, Loop &amp; Comp <span>13</span></li>
     </ol>
+    <h3>Section 3: Editing</h3>
+    <ol>
+      <li>Cut, Move &amp; Tidy <span>15</span></li>
+      <li>Fades &amp; Crossfades <span>16</span></li>
+      <li>The MIDI Editor <span>17</span></li>
+      <li>Markers &amp; Moving Around <span>18</span></li>
+    </ol>
     <h3 class="later">Still to come</h3>
     <ol class="later">
-      <li>Section 3: Editing <span>–</span></li>
       <li>Section 4: Mixing <span>–</span></li>
       <li>Section 5: Finishing &amp; Export <span>–</span></li>
       <li>Glossary <span>–</span></li>
@@ -539,6 +545,193 @@
     </div>
   </div>
   <div class="folio">13</div>
+</section>
+
+<!-- 14 · Section opener -->
+<section class="page cover">
+  <div>
+    <div class="kicker">Section 3</div>
+    <div class="title" style="margin-top:0.2in">Editing</div>
+  </div>
+  <p class="lede">Shape what you recorded: cut and move clips, smooth the joins with fades, fix notes in the MIDI Editor, and find your way round a long song.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+  <div class="folio">14</div>
+</section>
+
+<!-- 15 · Clip edits -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Cut, Move &amp; Tidy</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Six edits do most of the work. Each one acts on the selection, so select first: drag across a clip with the Selector, or click once to place the cursor.</p></div>
+  <div class="ops">
+    <div class="op">
+      <header><h3>Split</h3><span><kbd>Cmd</kbd> <kbd>E</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="One clip becoming three"><rect x="16" y="8" width="224" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="96" y="4" width="64" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="16" y="8" width="79" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="96" y="8" width="64" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="161" y="8" width="79" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/></g></svg>
+      <p>Cuts the clip at both edges of the selection. With only a cursor, it cuts once.</p>
+    </div>
+    <div class="op">
+      <header><h3>Heal</h3><span><kbd>Cmd</kbd> <kbd>H</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="Two clips becoming one"><rect x="16" y="8" width="111" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="128" y="8" width="112" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="100" y="4" width="56" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="16" y="8" width="224" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/></g></svg>
+      <p>Select across a cut and heal it. The two pieces become one clip again.</p>
+    </div>
+    <div class="op">
+      <header><h3>Trim to selection</h3><span><kbd>Cmd</kbd> <kbd>T</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="A clip cut down to the selection"><rect x="16" y="8" width="224" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="96" y="4" width="64" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="96" y="8" width="64" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/></g></svg>
+      <p>Keeps the selected part of the clip and removes the rest.</p>
+    </div>
+    <div class="op">
+      <header><h3>Duplicate</h3><span><kbd>Cmd</kbd> <kbd>D</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="A clip copied beside itself"><rect x="16" y="8" width="72" height="24" rx="4" fill="#f28a2e" fill-opacity="1"/><rect x="16" y="4" width="72" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="16" y="8" width="72" height="24" rx="4" fill="#f28a2e" fill-opacity="1"/><rect x="89" y="8" width="72" height="24" rx="4" fill="#f28a2e" fill-opacity="1"/></g></svg>
+      <p>Places a copy straight after the selection. Press it again for another.</p>
+    </div>
+    <div class="op">
+      <header><h3>Mute</h3><span><kbd>Cmd</kbd> <kbd>M</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="A clip turned faint"><rect x="16" y="8" width="110" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="128" y="8" width="112" height="24" rx="4" fill="#f28a2e" fill-opacity="1"/><rect x="128" y="4" width="112" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="16" y="8" width="110" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="128" y="8" width="112" height="24" rx="4" fill="#f28a2e" fill-opacity="0.3"/></g></svg>
+      <p>The clip stays where it is but makes no sound. Press again to bring it back.</p>
+    </div>
+    <div class="op">
+      <header><h3>Consolidate</h3><span><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd></span></header>
+      <svg viewBox="0 0 256 108" role="img" aria-label="Three clips and gaps becoming one clip"><rect x="16" y="8" width="60" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="92" y="8" width="50" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="170" y="8" width="70" height="24" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="16" y="4" width="224" height="32" fill="#fff" fill-opacity="0.22" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3"/><path d="M128 50v12m-5-5 5 5 5-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(0,64)"><rect x="16" y="8" width="224" height="24" rx="4" fill="#d9358a" fill-opacity="1"/></g></svg>
+      <p>Turns the selection, gaps included, into one new clip.</p>
+    </div>
+  </div>
+  <div class="note"><b>Good to know</b><p>These edits change clips, not your recordings. To get trimmed sound back, drag the clip's edge out again with the Trim tool. <kbd>Cmd</kbd> <kbd>Z</kbd> undoes any of them.</p></div>
+  <div class="folio">15</div>
+</section>
+
+<!-- 16 · Fades -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Fades &amp; Crossfades</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>A cut that lands in the middle of a sound can click. A fade ramps the level so the join is smooth. Put one on every edit you can hear.</p></div>
+  <div class="card">
+    <h2>Three kinds</h2>
+    <div class="trio">
+      <div><svg viewBox="0 0 150 70" role="img" aria-label="A clip getting louder at its start"><rect x="14" y="18" width="122" height="34" rx="4" fill="#6a4bd6" fill-opacity="1"/><path d="M14 52 Q40 20 62 18 L14 18Z" fill="#171930"/><path d="M14 52 Q40 20 62 18" stroke="#fff" stroke-width="1.8" fill="none"/></svg><h3>Fade in</h3><p>Select from before a clip's start to where the sound should be at full level.</p></div>
+      <div><svg viewBox="0 0 150 70" role="img" aria-label="A clip getting quieter at its end"><rect x="14" y="18" width="122" height="34" rx="4" fill="#6a4bd6" fill-opacity="1"/><path d="M136 52 Q110 20 88 18 L136 18Z" fill="#171930"/><path d="M136 52 Q110 20 88 18" stroke="#fff" stroke-width="1.8" fill="none"/></svg><h3>Fade out</h3><p>Select from where the fade should begin to past the clip's end.</p></div>
+      <div><svg viewBox="0 0 150 70" role="img" aria-label="One clip fading out while the next fades in"><rect x="14" y="18" width="61" height="34" rx="4" fill="#6a4bd6" fill-opacity="1"/><rect x="75" y="18" width="61" height="34" rx="4" fill="#f28a2e" fill-opacity="1"/><path d="M52 18 Q75 20 98 52M98 18 Q75 20 52 52" stroke="#fff" stroke-width="1.8" fill="none"/></svg><h3>Crossfade</h3><p>Select across the join between two clips. One fades out as the other fades in.</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Make one</h2>
+    <ul class="steps" style="grid-template-columns:1fr 1fr 1fr">
+      <li><span class="pin c1">1</span><div><b>Select</b>Drag across the start, the end or the join, as shown above.</div></li>
+      <li><span class="pin c2">2</span><div><b>Create</b>Press <kbd>Cmd</kbd> <kbd>F</kbd>, or choose Edit › Fades › Create.</div></li>
+      <li><span class="pin c3">3</span><div><b>Pick a shape</b>Choose one of the five below and click OK.</div></li>
+    </ul>
+  </div>
+  <div class="card grow">
+    <h2>Five shapes</h2>
+    <div class="five">
+      <div><svg viewBox="0 0 100 68" role="img"><path d="M10 12v44h80" stroke="#fff" stroke-opacity="0.35" stroke-width="1" fill="none"/><polyline points="10.0,56.0 10.8,55.6 11.6,55.1 12.4,54.7 13.2,54.2 14.0,53.8 14.8,53.4 15.6,52.9 16.4,52.5 17.2,52.0 18.0,51.6 18.8,51.2 19.6,50.7 20.4,50.3 21.2,49.8 22.0,49.4 22.8,49.0 23.6,48.5 24.4,48.1 25.2,47.6 26.0,47.2 26.8,46.8 27.6,46.3 28.4,45.9 29.2,45.4 30.0,45.0 30.8,44.6 31.6,44.1 32.4,43.7 33.2,43.2 34.0,42.8 34.8,42.4 35.6,41.9 36.4,41.5 37.2,41.0 38.0,40.6 38.8,40.2 39.6,39.7 40.4,39.3 41.2,38.8 42.0,38.4 42.8,38.0 43.6,37.5 44.4,37.1 45.2,36.6 46.0,36.2 46.8,35.8 47.6,35.3 48.4,34.9 49.2,34.4 50.0,34.0 50.8,33.6 51.6,33.1 52.4,32.7 53.2,32.2 54.0,31.8 54.8,31.4 55.6,30.9 56.4,30.5 57.2,30.0 58.0,29.6 58.8,29.2 59.6,28.7 60.4,28.3 61.2,27.8 62.0,27.4 62.8,27.0 63.6,26.5 64.4,26.1 65.2,25.6 66.0,25.2 66.8,24.8 67.6,24.3 68.4,23.9 69.2,23.4 70.0,23.0 70.8,22.6 71.6,22.1 72.4,21.7 73.2,21.2 74.0,20.8 74.8,20.4 75.6,19.9 76.4,19.5 77.2,19.0 78.0,18.6 78.8,18.2 79.6,17.7 80.4,17.3 81.2,16.8 82.0,16.4 82.8,16.0 83.6,15.5 84.4,15.1 85.2,14.6 86.0,14.2 86.8,13.8 87.6,13.3 88.4,12.9 89.2,12.4 90.0,12.0" stroke="#f6b56e" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><h3>Linear</h3><p>A straight ramp.</p></div>
+      <div><svg viewBox="0 0 100 68" role="img"><path d="M10 12v44h80" stroke="#fff" stroke-opacity="0.35" stroke-width="1" fill="none"/><polyline points="10.0,56.0 10.8,55.3 11.6,54.6 12.4,53.9 13.2,53.2 14.0,52.5 14.8,51.9 15.6,51.2 16.4,50.5 17.2,49.8 18.0,49.1 18.8,48.4 19.6,47.8 20.4,47.1 21.2,46.4 22.0,45.7 22.8,45.1 23.6,44.4 24.4,43.7 25.2,43.1 26.0,42.4 26.8,41.7 27.6,41.1 28.4,40.4 29.2,39.8 30.0,39.2 30.8,38.5 31.6,37.9 32.4,37.3 33.2,36.6 34.0,36.0 34.8,35.4 35.6,34.8 36.4,34.2 37.2,33.6 38.0,33.0 38.8,32.4 39.6,31.8 40.4,31.3 41.2,30.7 42.0,30.1 42.8,29.6 43.6,29.0 44.4,28.5 45.2,28.0 46.0,27.4 46.8,26.9 47.6,26.4 48.4,25.9 49.2,25.4 50.0,24.9 50.8,24.4 51.6,23.9 52.4,23.5 53.2,23.0 54.0,22.5 54.8,22.1 55.6,21.7 56.4,21.2 57.2,20.8 58.0,20.4 58.8,20.0 59.6,19.6 60.4,19.2 61.2,18.8 62.0,18.5 62.8,18.1 63.6,17.8 64.4,17.4 65.2,17.1 66.0,16.8 66.8,16.5 67.6,16.2 68.4,15.9 69.2,15.6 70.0,15.3 70.8,15.1 71.6,14.8 72.4,14.6 73.2,14.4 74.0,14.2 74.8,13.9 75.6,13.7 76.4,13.6 77.2,13.4 78.0,13.2 78.8,13.1 79.6,12.9 80.4,12.8 81.2,12.7 82.0,12.5 82.8,12.4 83.6,12.3 84.4,12.3 85.2,12.2 86.0,12.1 86.8,12.1 87.6,12.0 88.4,12.0 89.2,12.0 90.0,12.0" stroke="#f6b56e" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><h3>Equal Power</h3><p>Keeps a crossfade's level steady. The usual choice.</p></div>
+      <div><svg viewBox="0 0 100 68" role="img"><path d="M10 12v44h80" stroke="#fff" stroke-opacity="0.35" stroke-width="1" fill="none"/><polyline points="10.0,56.0 10.8,56.0 11.6,56.0 12.4,55.9 13.2,55.8 14.0,55.7 14.8,55.6 15.6,55.5 16.4,55.3 17.2,55.1 18.0,54.9 18.8,54.7 19.6,54.5 20.4,54.2 21.2,53.9 22.0,53.6 22.8,53.3 23.6,52.9 24.4,52.6 25.2,52.2 26.0,51.8 26.8,51.4 27.6,51.0 28.4,50.5 29.2,50.0 30.0,49.6 30.8,49.1 31.6,48.5 32.4,48.0 33.2,47.5 34.0,46.9 34.8,46.4 35.6,45.8 36.4,45.2 37.2,44.6 38.0,44.0 38.8,43.4 39.6,42.7 40.4,42.1 41.2,41.5 42.0,40.8 42.8,40.1 43.6,39.5 44.4,38.8 45.2,38.1 46.0,37.4 46.8,36.8 47.6,36.1 48.4,35.4 49.2,34.7 50.0,34.0 50.8,33.3 51.6,32.6 52.4,31.9 53.2,31.2 54.0,30.6 54.8,29.9 55.6,29.2 56.4,28.5 57.2,27.9 58.0,27.2 58.8,26.5 59.6,25.9 60.4,25.3 61.2,24.6 62.0,24.0 62.8,23.4 63.6,22.8 64.4,22.2 65.2,21.6 66.0,21.1 66.8,20.5 67.6,20.0 68.4,19.5 69.2,18.9 70.0,18.4 70.8,18.0 71.6,17.5 72.4,17.0 73.2,16.6 74.0,16.2 74.8,15.8 75.6,15.4 76.4,15.1 77.2,14.7 78.0,14.4 78.8,14.1 79.6,13.8 80.4,13.5 81.2,13.3 82.0,13.1 82.8,12.9 83.6,12.7 84.4,12.5 85.2,12.4 86.0,12.3 86.8,12.2 87.6,12.1 88.4,12.0 89.2,12.0 90.0,12.0" stroke="#f6b56e" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><h3>S-Curve</h3><p>Gentle at both ends.</p></div>
+      <div><svg viewBox="0 0 100 68" role="img"><path d="M10 12v44h80" stroke="#fff" stroke-opacity="0.35" stroke-width="1" fill="none"/><polyline points="10.0,56.0 10.8,56.0 11.6,56.0 12.4,56.0 13.2,56.0 14.0,56.0 14.8,56.0 15.6,56.0 16.4,56.0 17.2,56.0 18.0,56.0 18.8,55.9 19.6,55.9 20.4,55.9 21.2,55.9 22.0,55.9 22.8,55.8 23.6,55.8 24.4,55.7 25.2,55.7 26.0,55.6 26.8,55.6 27.6,55.5 28.4,55.5 29.2,55.4 30.0,55.3 30.8,55.2 31.6,55.1 32.4,55.0 33.2,54.9 34.0,54.8 34.8,54.7 35.6,54.6 36.4,54.4 37.2,54.3 38.0,54.1 38.8,53.9 39.6,53.8 40.4,53.6 41.2,53.4 42.0,53.2 42.8,53.0 43.6,52.7 44.4,52.5 45.2,52.3 46.0,52.0 46.8,51.7 47.6,51.4 48.4,51.1 49.2,50.8 50.0,50.5 50.8,50.2 51.6,49.8 52.4,49.4 53.2,49.1 54.0,48.7 54.8,48.3 55.6,47.9 56.4,47.4 57.2,47.0 58.0,46.5 58.8,46.0 59.6,45.5 60.4,45.0 61.2,44.5 62.0,43.9 62.8,43.4 63.6,42.8 64.4,42.2 65.2,41.5 66.0,40.9 66.8,40.3 67.6,39.6 68.4,38.9 69.2,38.2 70.0,37.4 70.8,36.7 71.6,35.9 72.4,35.1 73.2,34.3 74.0,33.5 74.8,32.6 75.6,31.7 76.4,30.8 77.2,29.9 78.0,29.0 78.8,28.0 79.6,27.0 80.4,26.0 81.2,25.0 82.0,23.9 82.8,22.8 83.6,21.7 84.4,20.6 85.2,19.5 86.0,18.3 86.8,17.1 87.6,15.8 88.4,14.6 89.2,13.3 90.0,12.0" stroke="#f6b56e" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><h3>Exponential</h3><p>Starts slowly, then rises fast.</p></div>
+      <div><svg viewBox="0 0 100 68" role="img"><path d="M10 12v44h80" stroke="#fff" stroke-opacity="0.35" stroke-width="1" fill="none"/><polyline points="10.0,56.0 10.8,54.7 11.6,53.4 12.4,52.2 13.2,50.9 14.0,49.7 14.8,48.5 15.6,47.4 16.4,46.3 17.2,45.2 18.0,44.1 18.8,43.0 19.6,42.0 20.4,41.0 21.2,40.0 22.0,39.0 22.8,38.1 23.6,37.2 24.4,36.3 25.2,35.4 26.0,34.5 26.8,33.7 27.6,32.9 28.4,32.1 29.2,31.3 30.0,30.6 30.8,29.8 31.6,29.1 32.4,28.4 33.2,27.7 34.0,27.1 34.8,26.5 35.6,25.8 36.4,25.2 37.2,24.6 38.0,24.1 38.8,23.5 39.6,23.0 40.4,22.5 41.2,22.0 42.0,21.5 42.8,21.0 43.6,20.6 44.4,20.1 45.2,19.7 46.0,19.3 46.8,18.9 47.6,18.6 48.4,18.2 49.2,17.8 50.0,17.5 50.8,17.2 51.6,16.9 52.4,16.6 53.2,16.3 54.0,16.0 54.8,15.7 55.6,15.5 56.4,15.3 57.2,15.0 58.0,14.8 58.8,14.6 59.6,14.4 60.4,14.2 61.2,14.1 62.0,13.9 62.8,13.7 63.6,13.6 64.4,13.4 65.2,13.3 66.0,13.2 66.8,13.1 67.6,13.0 68.4,12.9 69.2,12.8 70.0,12.7 70.8,12.6 71.6,12.5 72.4,12.5 73.2,12.4 74.0,12.4 74.8,12.3 75.6,12.3 76.4,12.2 77.2,12.2 78.0,12.1 78.8,12.1 79.6,12.1 80.4,12.1 81.2,12.1 82.0,12.0 82.8,12.0 83.6,12.0 84.4,12.0 85.2,12.0 86.0,12.0 86.8,12.0 87.6,12.0 88.4,12.0 89.2,12.0 90.0,12.0" stroke="#f6b56e" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><h3>Logarithmic</h3><p>Rises fast, then eases in.</p></div>
+    </div>
+    <p class="caption">Each curve shows the level of a fade in, from silence on the left to full on the right. A fade out is the mirror image.</p>
+  </div>
+  <div class="note"><b>Faster</b><p>With the Smart Tool, drag from the top corner of a clip to draw a fade by hand. Edit › Fades › Delete removes the fades in the selection.</p></div>
+  <div class="folio">16</div>
+</section>
+
+<!-- 17 · MIDI Editor -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The MIDI Editor</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Fix and write notes. Select a MIDI clip and choose Window › MIDI Editor, or click the MIDI Editor tab at the bottom of the Edit window.</p></div>
+  <div class="card grow">
+    <figure class="shot plain">
+      <img src="images/midi-editor.png" alt="The MIDI Editor showing the Keys part as a piano roll">
+      <span class="pin c1" style="left:15.7%;top:3.5%">A</span><span class="pin c2" style="left:29%;top:3.5%">B</span><span class="pin c3" style="left:50%;top:3.5%">C</span><span class="pin c4" style="left:69.6%;top:3.5%">D</span><span class="pin c1" style="left:82.3%;top:3.5%">E</span><span class="pin c2" style="left:2.3%;top:50%">F</span><span class="pin c3" style="left:42%;top:50%">G</span><span class="pin c4" style="left:42%;top:90.7%">H</span><span class="pin c1" style="left:89.5%;top:62%">I</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Clip and selection</b>The clip you are editing and how many notes are selected.</div></li>
+      <li><span class="pin c2">F</span><div><b>Piano keys</b>Each row is one pitch. Click a key to hear it.</div></li>
+      <li><span class="pin c2">B</span><div><b>Note tools</b>Select all, Split at the playhead, and Join.</div></li>
+      <li><span class="pin c3">G</span><div><b>Notes</b>Each bar is a note. Higher is higher in pitch, longer lasts longer. Drag to move one.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom and height</b>Fit shows the whole clip. ¼× to 4× zoom in time. Height makes the rows taller.</div></li>
+      <li><span class="pin c4">H</span><div><b>Velocity</b>How hard each note is played. A taller bar is a louder note.</div></li>
+      <li><span class="pin c4">D</span><div><b>Linked</b>Keeps the editor lined up with the Edit window's timeline.</div></li>
+      <li><span class="pin c1">I</span><div><b>Cleanup</b>Tidies a played part. Compare Cleaned with Original, then Commit.</div></li>
+      <li><span class="pin c1">E</span><div><b>Ghosts</b>Shows the notes of other MIDI clips faintly, so you can write against them.</div></li>
+    </ul>
+  </div>
+  <div class="card">
+    <table class="kinds wide">
+      <tr><td>Play the selection</td><td><kbd>Space</kbd> with the pointer over the notes</td></tr>
+      <tr><td>Move without snapping</td><td>Hold <kbd>Alt</kbd> while you drag</td></tr>
+      <tr><td>Cancel a drag</td><td><kbd>Esc</kbd></td></tr>
+      <tr><td>Fit the clip</td><td><kbd>F</kbd> with the pointer over the notes</td></tr>
+      <tr><td>Quantize, Transpose</td><td><kbd>Alt</kbd> <kbd>0</kbd>, <kbd>Alt</kbd> <kbd>T</kbd> (also in the Event menu)</td></tr>
+    </table>
+  </div>
+  <div class="folio">17</div>
+</section>
+
+<!-- 18 · Markers and moving around -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Markers &amp; Moving Around</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Label the parts of your song once, then jump between them. A few keys cover the rest: zooming, stepping from clip to clip, and nudging.</p></div>
+  <div class="card">
+    <figure class="shot plain">
+      <img src="images/markers-ruler.png" alt="The rulers of the Edit window with Intro, Verse and Chorus markers">
+    </figure>
+    <p class="caption" style="margin-bottom:0.16in">Markers show as flags on the Markers ruler, the bottom row here.</p>
+    <div class="duo" style="grid-template-columns:3.4in 1fr">
+      <figure class="shot plain">
+        <img src="images/memory-locations.png" alt="The Memory Locations panel listing Intro, Verse, Chorus and Outro">
+        <span class="pin c1" style="left:47%;top:29%">A</span><span class="pin c2" style="left:-1%;top:60%">B</span><span class="pin c3" style="left:41%;top:60%">C</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>+ Marker and + Selection</b>Marker stores the cursor's place. Selection stores the selected range. <kbd>Enter</kbd> also adds a marker.</div></li>
+      <li><span class="pin c2">B</span><div><b>Number</b>Type <kbd>.</kbd> then the number then <kbd>.</kbd> to jump to that location.</div></li>
+      <li><span class="pin c3">C</span><div><b>Name and location</b>What you called it and where it sits in the song.</div></li>
+      </ul>
+    </div>
+    <p class="caption">Window › Memory Locations, or the Memory Locations tab at the bottom of the Edit window</p>
+  </div>
+  <div class="keys-grid">
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c1">Zoom</h2>
+        <table>
+          <tr><td>Zoom out or in</td><td><kbd>R</kbd> <kbd>T</kbd></td></tr>
+          <tr><td>Fit the whole session</td><td><kbd>Alt</kbd> <kbd>A</kbd></td></tr>
+          <tr><td>Zoom to the selection</td><td><kbd>Alt</kbd> <kbd>F</kbd></td></tr>
+          <tr><td>Zoom toggle</td><td><kbd>E</kbd></td></tr>
+          <tr><td>Taller waveforms</td><td><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>]</kbd></td></tr>
+          <tr><td>Recall a zoom preset</td><td>Click 1 to 5</td></tr>
+          <tr><td>Store a zoom preset</td><td><kbd>Cmd</kbd>-click 1 to 5</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c2">Move and nudge</h2>
+        <table>
+          <tr><td>Start or end of the session</td><td><kbd>Home</kbd> <kbd>End</kbd></td></tr>
+          <tr><td>Next clip edge</td><td><kbd>Tab</kbd></td></tr>
+          <tr><td>Previous clip edge</td><td><kbd>Alt</kbd> <kbd>Tab</kbd></td></tr>
+          <tr><td>Extend the selection as you go</td><td>Add <kbd>Shift</kbd></td></tr>
+          <tr><td>Nudge later or earlier</td><td><kbd>+</kbd> <kbd>−</kbd></td></tr>
+          <tr><td>Bigger or smaller grid</td><td><kbd>Shift</kbd> <kbd>=</kbd> <kbd>−</kbd></td></tr>
+          <tr><td>Bigger or smaller nudge</td><td><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>=</kbd> <kbd>−</kbd></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Tab to Transient</b><p>Turn on Options › Tab to Transient and <kbd>Tab</kbd> stops at each hit inside a clip, not only at its edges. It is the quick way to find a drum hit to cut on.</p></div>
+  <div class="folio">18</div>
 </section>
 
 </body>

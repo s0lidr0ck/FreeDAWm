@@ -1,0 +1,5 @@
+{"steps": 4}
+{"method":"engine.execute","params":{"command":"edit.select","params":{"tracks":["Keys"],"start":"bars_beats:5|1|000","end":"bars_beats:9|1|000"}}}
+{"method":"ui.menu.invoke","params":{"path":"Window > MIDI Editor"}}
+{"steps": 8}
+{"shot": "docs/guide/images/midi-editor.png"}

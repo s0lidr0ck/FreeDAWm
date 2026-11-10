@@ -15,10 +15,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 # script: (images it writes, window size, extra ui_shot flags, crops)
 # A crop is (output image, source image, box in points); a source with no crop is kept whole.
 SHOTS = {
-    "windows": (["edit-window", "mix-window"], "1440x900", [], []),
+    "windows": (["edit-window", "mix-window"], "1440x900", [], [("markers-ruler", "edit-window", (180, 114, 1188, 199))]),
     "engine": (["playback-engine"], "1440x900", [], [("playback-engine", "playback-engine", (16, 16, 476, 376))]),
     "io": (["io-setup"], "1440x900", [], [("io-setup", "io-setup", (16, 16, 577, 546))]),
     "new-tracks": (["new-tracks"], "1440x900", [], [("new-tracks", "new-tracks", (438, 317, 1002, 423))]),
+    "midi": (["midi-editor"], "1000x640", [], [("midi-editor", "midi-editor", (8, 331, 992, 589))]),
+    "markers": (["memory-locations"], "1440x900", [], [("memory-locations", "memory-locations", (160, 120, 641, 288))]),
     "armed": (
         ["armed-track"],
         "1720x900",

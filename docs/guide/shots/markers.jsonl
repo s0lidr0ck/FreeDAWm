@@ -1,0 +1,4 @@
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"path":"Window > Memory Locations"}}
+{"steps": 8}
+{"shot": "docs/guide/images/memory-locations.png"}

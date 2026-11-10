@@ -796,3 +796,85 @@ kbd {
 .way p + p {
   margin-top: 0.05in;
 }
+
+/* ---- Before and after: one clip edit per tile ---- */
+
+.ops {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.16in;
+  flex: 1;
+  min-height: 0;
+}
+
+.op {
+  background: var(--paper);
+  border-radius: 12px;
+  padding: 0.16in 0.2in;
+  display: flex;
+  flex-direction: column;
+  gap: 0.07in;
+}
+
+.op header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.op h3 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 16pt;
+  line-height: 1.1;
+}
+
+.op svg {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  background: var(--ink-2);
+}
+
+.op p {
+  font-size: 9pt;
+  line-height: 1.36;
+}
+
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.22in;
+}
+
+.five {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.14in;
+  text-align: center;
+}
+
+.trio svg,
+.five svg {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  background: var(--ink-2);
+}
+
+.trio h3,
+.five h3 {
+  margin: 0.07in 0 0.02in;
+  font-size: 9.6pt;
+}
+
+.trio p,
+.five p {
+  font-size: 8.6pt;
+  line-height: 1.34;
+}
+
+.kinds.wide td:first-child {
+  width: 2.1in;
+}
