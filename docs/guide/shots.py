@@ -21,6 +21,14 @@ SHOTS = {
     "new-tracks": (["new-tracks"], "1440x900", [], [("new-tracks", "new-tracks", (438, 317, 1002, 423))]),
     "midi": (["midi-editor"], "1000x640", [], [("midi-editor", "midi-editor", (8, 331, 992, 589))]),
     "markers": (["memory-locations"], "1440x900", [], [("memory-locations", "memory-locations", (160, 120, 641, 288))]),
+    "mix-menus": (
+        ["add-effect", "send-menu"],
+        "1440x900",
+        [],
+        [("add-effect", "add-effect", (180, 101, 634, 360)), ("send-menu", "send-menu", (180, 364, 634, 536))],
+    ),
+    "automation": (["automation-lane"], "1440x900", [], [("automation-lane", "automation-lane", (180, 200, 760, 290))]),
+    "bounce": (["bounce-mix"], "1440x900", [], [("bounce-mix", "bounce-mix", (524, 238, 917, 502))]),
     "armed": (
         ["armed-track"],
         "1720x900",

@@ -1,0 +1,4 @@
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"path":"File > Bounce Mix..."}}
+{"steps": 8}
+{"shot": "docs/guide/images/bounce-mix.png"}

@@ -1,0 +1,8 @@
+{"steps": 4}
+{"method":"engine.execute","params":{"command":"track.view","params":{"tracks":["Kick"],"view":"volume"}}}
+{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:5|1|000","value":-12}}}
+{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:7|1|000","value":-3}}}
+{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:12|1|000","value":-3}}}
+{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:13|1|000","value":2}}}
+{"steps": 6}
+{"shot": "docs/guide/images/automation-lane.png"}

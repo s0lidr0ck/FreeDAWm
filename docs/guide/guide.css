@@ -878,3 +878,99 @@ kbd {
 .kinds.wide td:first-child {
   width: 2.1in;
 }
+
+/* ---- Signal flow ---- */
+
+.flow {
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  background: var(--ink-2);
+}
+
+.flow text {
+  font-family: "Inter", sans-serif;
+}
+
+/* ---- What to reach for ---- */
+
+.jobs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.2pt;
+}
+
+.jobs th {
+  padding: 0 0.12in 0.07in 0;
+  text-align: left;
+  font-size: 8pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.jobs td {
+  padding: 0.085in 0.12in 0.085in 0;
+  border-top: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.jobs td:first-child {
+  width: 1.25in;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 13pt;
+  line-height: 1.1;
+}
+
+.jobs td:last-child {
+  width: 2.35in;
+  padding-right: 0;
+  font-weight: 600;
+}
+
+/* ---- Glossary ---- */
+
+.gloss {
+  columns: 2;
+  column-gap: 0.36in;
+  margin: 0;
+}
+
+.gloss div {
+  break-inside: avoid;
+  margin-bottom: 0.105in;
+  font-size: 9pt;
+  line-height: 1.36;
+}
+
+.gloss dt {
+  font-weight: 700;
+  font-size: 9.6pt;
+}
+
+.gloss dd {
+  margin: 0;
+}
+
+.jobs.airy td {
+  padding-top: 0.15in;
+  padding-bottom: 0.15in;
+}
+
+.toc .cols {
+  gap: 0.44in;
+}
+
+.toc .cols h3:first-child {
+  margin-top: 0.1in;
+}
+
+.toc .cols li {
+  font-size: 10.5pt;
+  line-height: 1.7;
+}
+
+.toc .cols h3 {
+  font-size: 12.5pt;
+}

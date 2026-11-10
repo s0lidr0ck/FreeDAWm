@@ -52,6 +52,8 @@
 <section class="page">
   <div class="card grow prose toc">
     <h1>Contents</h1>
+    <div class="cols">
+      <div>
     <h3>Section 1: Getting Around</h3>
     <ol>
       <li>The Edit Window <span>5</span></li>
@@ -73,12 +75,27 @@
       <li>The MIDI Editor <span>17</span></li>
       <li>Markers &amp; Moving Around <span>18</span></li>
     </ol>
-    <h3 class="later">Still to come</h3>
-    <ol class="later">
-      <li>Section 4: Mixing <span>–</span></li>
-      <li>Section 5: Finishing &amp; Export <span>–</span></li>
-      <li>Glossary <span>–</span></li>
+      </div>
+      <div>
+    <h3>Section 4: Mixing</h3>
+    <ol>
+      <li>Signal Flow <span>20</span></li>
+      <li>Add an Effect <span>21</span></li>
+      <li>What to Reach For <span>22</span></li>
+      <li>Sends &amp; Shared Reverb <span>23</span></li>
+      <li>Automation <span>24</span></li>
     </ol>
+    <h3>Section 5: Finishing</h3>
+    <ol>
+      <li>Bounce the Mix <span>26</span></li>
+      <li>Other Ways Out <span>27</span></li>
+    </ol>
+    <h3>Glossary</h3>
+    <ol>
+      <li>Words used in this guide <span>28</span></li>
+    </ol>
+      </div>
+    </div>
   </div>
   <div class="folio">3</div>
 </section>
@@ -732,6 +749,354 @@
   </div>
   <div class="note"><b>Tab to Transient</b><p>Turn on Options › Tab to Transient and <kbd>Tab</kbd> stops at each hit inside a clip, not only at its edges. It is the quick way to find a drum hit to cut on.</p></div>
   <div class="folio">18</div>
+</section>
+
+<!-- 19 · Section opener -->
+<section class="page cover">
+  <div>
+    <div class="kicker">Section 4</div>
+    <div class="title" style="margin-top:0.2in">Mixing</div>
+  </div>
+  <p class="lede">Balance the tracks, shape each sound with effects, share one reverb between many tracks, and make the mix move with automation.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+  <div class="folio">19</div>
+</section>
+
+<!-- 20 · Signal flow -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Signal Flow</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Know the path sound takes through the mixer. Once you can trace it, you can work out why a change did or did not do what you expected.</p></div>
+  <div class="card">
+    <svg class="flow" viewBox="0 0 640 372" role="img" aria-label="How sound travels through a channel strip, a send and the master">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1 9 5 1 9" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+  <text x="150" y="24" text-anchor="middle" font-size="9" font-weight="700" letter-spacing="1.5" fill="#f6b56e">A TRACK</text>
+  <text x="490" y="24" text-anchor="middle" font-size="9" font-weight="700" letter-spacing="1.5" fill="#f6b56e">AN AUX TRACK</text>
+  <rect x="60" y="36" width="180" height="40" rx="7" fill="#23264a"/><text x="150.0" y="54.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Input</text><text x="150.0" y="68.0" text-anchor="middle" font-size="9" fill="#b9bcdc">a clip, or your microphone</text>
+  <path d="M150 76v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="60" y="96" width="180" height="92" rx="7" fill="#23264a"/>
+  <text x="150" y="113" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Effects</text>
+  <rect x="74" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="150" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">EQ 7-Band</text>
+  <rect x="74" y="142" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="150" y="154.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">Comp</text>
+  <rect x="74" y="163" width="152" height="17" rx="4" fill="none" stroke="#b9bcdc" stroke-dasharray="3 3"/><text x="150" y="175.5" text-anchor="middle" font-size="10" fill="#b9bcdc">+</text>
+  <path d="M150 188v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="60" y="208" width="180" height="36" rx="7" fill="#23264a"/><text x="150.0" y="230.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Fader and mute</text>
+  <path d="M150 244v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="60" y="264" width="180" height="36" rx="7" fill="#23264a"/><text x="150.0" y="286.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Pan</text>
+  <path d="M150 300v24" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M240 226h76" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="320" y="208" width="100" height="36" rx="7" fill="#d9358a"/><text x="370.0" y="230.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Send a</text>
+  <path d="M370 208v-30h-0.1 M370 178V56h26" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="400" y="36" width="180" height="40" rx="7" fill="#23264a"/><text x="490.0" y="54.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Bus: Verb</text><text x="490.0" y="68.0" text-anchor="middle" font-size="9" fill="#b9bcdc">the aux's input</text>
+  <path d="M490 76v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="400" y="96" width="180" height="50" rx="7" fill="#23264a"/>
+  <text x="490" y="113" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Effects</text>
+  <rect x="414" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="490" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">Plate Reverb</text>
+  <path d="M490 146v178" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+  <rect x="456" y="218" width="68" height="26" rx="6" fill="#23264a"/><text x="490" y="235" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">Fader</text>
+  <rect x="60" y="328" width="520" height="36" rx="7" fill="#f28a2e"/><text x="320.0" y="350.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Master fader, then Out 1–2: your speakers</text>
+  <circle cx="48" cy="56" r="10" fill="#2f86f6" stroke="#fff" stroke-width="1.6"/><text x="48" y="59.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">1</text><circle cx="48" cy="142" r="10" fill="#d9358a" stroke="#fff" stroke-width="1.6"/><text x="48" y="145.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">2</text><circle cx="48" cy="226" r="10" fill="#f28a2e" stroke="#fff" stroke-width="1.6"/><text x="48" y="229.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">3</text><circle cx="48" cy="282" r="10" fill="#6a4bd6" stroke="#fff" stroke-width="1.6"/><text x="48" y="285.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">4</text><circle cx="370" cy="160" r="10" fill="#2f86f6" stroke="#fff" stroke-width="1.6"/><text x="370" y="163.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">5</text><circle cx="592" cy="121" r="10" fill="#d9358a" stroke="#fff" stroke-width="1.6"/><text x="592" y="124.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">6</text><circle cx="48" cy="346" r="10" fill="#f28a2e" stroke="#fff" stroke-width="1.6"/><text x="48" y="349.6" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">7</text>
+</svg>
+  </div>
+  <div class="card grow">
+    <ul class="legend" style="margin:0">
+      <li><span class="pin c1">1</span><div><b>Input</b>What the track plays: its clips, or the live input while you record.</div></li>
+      <li><span class="pin c1">5</span><div><b>Send</b>A copy of the track, taken after the fader, on its way to a bus.</div></li>
+      <li><span class="pin c2">2</span><div><b>Effects</b>Processed in order from the top. Swap two and the sound changes.</div></li>
+      <li><span class="pin c2">6</span><div><b>Aux track</b>Listens to the bus and adds its own effects, here one reverb for every track that sends to it.</div></li>
+      <li><span class="pin c3">3</span><div><b>Fader and mute</b>Sets the track's level after the effects have done their work.</div></li>
+      <li><span class="pin c3">7</span><div><b>Master</b>Every track and aux ends up here. Its fader sets the level of the whole mix.</div></li>
+      <li><span class="pin c4">4</span><div><b>Pan</b>Places the track between the left and right speakers.</div></li>
+    </ul>
+  </div>
+  <div class="note"><b>Try this</b><p>A compressor sits before the fader, so turning the fader down does not change how hard it works. To drive it harder or softer, change the level before it: the clip's gain or the effect's own input.</p></div>
+  <div class="folio">20</div>
+</section>
+
+<!-- 21 · Add an effect -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Add an Effect</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Put an effect on a track and adjust it. In the Mix window each effect is a tile at the top of the strip, and an empty slot is a dashed box with a plus.</p></div>
+  <div class="card">
+    <div class="duo" style="grid-template-columns:3.5in 1fr">
+      <figure class="shot plain">
+        <img src="images/add-effect.png" alt="A channel strip with two effects and the add-effect menu open on the next strip">
+        <span class="pin c1" style="left:42%;top:4.5%">A</span><span class="pin c2" style="left:99%;top:14.5%">B</span><span class="pin c3" style="left:99%;top:23.5%">C</span><span class="pin c4" style="left:99%;top:35.8%">D</span><span class="pin c1" style="left:62%;top:55%">E</span><span class="pin c2" style="left:2%;top:5.5%">F</span><span class="pin c3" style="left:30%;top:5.5%">G</span><span class="pin c4" style="left:16%;top:80%">H</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Empty slot</b>Click the plus to open the list of effects.</div></li>
+      <li><span class="pin c2">B</span><div><b>Search</b>Type part of a name, such as comp or verb.</div></li>
+      <li><span class="pin c3">C</span><div><b>FireStation</b>The built-in studio effects: compressor, EQ, tape, reverb and more.</div></li>
+      <li><span class="pin c4">D</span><div><b>Utilities</b>The simpler built-in tools.</div></li>
+      <li><span class="pin c1">E</span><div><b>Scan plugins</b>Finds the plugins already installed on your computer and adds them to this list.</div></li>
+      <li><span class="pin c2">F</span><div><b>On light</b>Green means the effect is working.</div></li>
+      <li><span class="pin c3">G</span><div><b>Open</b>The arrow opens the effect's full editor in its own window.</div></li>
+      <li><span class="pin c4">H</span><div><b>Quick knobs</b>The controls you reach for most, on the strip itself.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card grow">
+    <h2>Three habits</h2>
+    <ul class="steps" style="grid-template-columns:1fr 1fr 1fr">
+      <li><span class="pin c1">1</span><div><b>Listen in the mix</b>Adjust an effect with the whole song playing, not with the track soloed. What matters is how it sits with the rest.</div></li>
+      <li><span class="pin c2">2</span><div><b>Match the level</b>Louder nearly always sounds better. Compare with the effect off at the same loudness before you decide.</div></li>
+      <li><span class="pin c3">3</span><div><b>Mind the order</b>Effects run top to bottom. An EQ before a compressor changes what the compressor reacts to.</div></li>
+    </ul>
+  </div>
+  <div class="note"><b>Running slow?</b><p>The snowflake on a strip freezes the track. FreeDAWm plays a rendered copy and the effects stop using the computer. Click it again to unfreeze and carry on editing.</p></div>
+  <div class="folio">21</div>
+</section>
+
+<!-- 22 · Effects at a glance -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>What to Reach For</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Match the problem you hear to the kind of effect that fixes it. Every effect named here comes with FreeDAWm.</p></div>
+  <div class="card grow">
+    <table class="jobs">
+      <tr><th>The job</th><th>What you hear, and what the effect does</th><th>Reach for</th></tr>
+      <tr><td>Tone</td><td>Muddy, harsh, thin or dull. An EQ turns ranges of the sound up or down, from the low rumble to the airy top.</td><td>EQ 7-Band, EQ 1-Band, CleanQ, Filter</td></tr>
+      <tr><td>Level</td><td>Some notes jump out and others get lost. A compressor turns the loud moments down so the part sits steady.</td><td>Compressor/Limiter, Comp, Channel Strip</td></tr>
+      <tr><td>Noise</td><td>Hiss or spill between phrases. A gate closes when the track goes quiet.</td><td>Expander/Gate</td></tr>
+      <tr><td>Sibilance</td><td>Sharp S and T sounds on a voice. A de-esser turns down only those moments.</td><td>De-Esser</td></tr>
+      <tr><td>Punch</td><td>Drums feel soft, or too spiky. A transient shaper changes the hit without changing the tail.</td><td>Transient</td></tr>
+      <tr><td>Space</td><td>The part sounds dry and stuck to the speaker. Reverb puts it in a room. Delay adds echoes.</td><td>Plate Reverb, Room Reverb, Reverb, ChamberMade, Delay, Mod Delay</td></tr>
+      <tr><td>Movement</td><td>A static sound that needs width or shimmer. These effects make it shift slowly over time.</td><td>Chorus, Flanger, Phaser, Mod</td></tr>
+      <tr><td>Colour</td><td>Too clean. Saturation adds warmth and grit, from a touch of tape to full distortion.</td><td>Saturator, Sat, Tape, Dist, Amp, Lo-Fi</td></tr>
+      <tr><td>Pitch</td><td>A part that needs to be higher or lower, or a voice that needs tuning.</td><td>Pitch Shifter, Pitch, and AI › Tune Vocal</td></tr>
+      <tr><td>Loudness</td><td>The finished mix is too quiet. A maximizer raises the level and stops the peaks from clipping.</td><td>Maximizer, LevelUp</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Instruments</b><p>FreeDAWm also has instruments to play from MIDI: a synth, a drum synth, the Lift sampler and the Juke drum machine. Pick one when you make an Instrument Track.</p></div>
+  <div class="folio">22</div>
+</section>
+
+<!-- 23 · Sends -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Sends &amp; Shared Reverb</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Put several tracks in the same room. One reverb on an aux track, fed by a send from each track, sounds more natural than a separate reverb on every track and is lighter on the computer.</p></div>
+  <div class="card">
+    <div class="duo" style="grid-template-columns:3.5in 1fr">
+      <figure class="shot plain">
+        <img src="images/send-menu.png" alt="The send menu open on the Kick strip, beside a Snare strip that already sends to Verb">
+        <span class="pin c1" style="left:3%;top:10%">A</span><span class="pin c2" style="left:38%;top:38%">B</span><span class="pin c3" style="left:14%;top:52%">C</span><span class="pin c4" style="left:22%;top:70%">D</span><span class="pin c1" style="left:48%;top:-1%">E</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Send slots</b>Each strip has slots a to e. Click an empty one to open this menu.</div></li>
+      <li><span class="pin c2">B</span><div><b>Search</b>Type to find a bus when you have many.</div></li>
+      <li><span class="pin c3">C</span><div><b>A bus</b>Choose where the copy goes. Verb is the demo song's reverb bus.</div></li>
+      <li><span class="pin c4">D</span><div><b>New bus</b>Makes a new path if the one you want does not exist yet.</div></li>
+      <li><span class="pin c1">E</span><div><b>Send level</b>How much of this track goes to the bus. The Snare sends at −10 dB.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card grow">
+    <h2>Build one from nothing</h2>
+    <ul class="steps">
+      <li><span class="pin c1">1</span><div><b>Make an aux track</b>Track › New, and choose Aux Input for the track type. Name it after its job, such as Verb.</div></li>
+      <li><span class="pin c2">2</span><div><b>Give it a bus</b>In the aux's I/O section, set its input to a bus. Make a new one if you need to.</div></li>
+      <li><span class="pin c3">3</span><div><b>Add the reverb</b>Click the plus at the top of the aux strip and choose a reverb. Set it fully wet, since the dry sound comes from the tracks themselves.</div></li>
+      <li><span class="pin c4">4</span><div><b>Send to it</b>On each track, click a send slot and choose the same bus. Raise the send level until you can hear the room.</div></li>
+    </ul>
+  </div>
+  <div class="note"><b>Good to know</b><p>A send follows the track's fader. Turn a track down and less of it reaches the reverb, so the balance between dry and wet stays the same.</p></div>
+  <div class="folio">23</div>
+</section>
+
+<!-- 24 · Automation -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Automation</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Make the mix change over time: a vocal that comes up in the chorus, a pad that fades in. Automation is a line you draw on the track, and FreeDAWm moves the control along it.</p></div>
+  <div class="card">
+    <figure class="shot plain">
+      <img src="images/automation-lane.png" alt="The Kick track showing its volume line with four breakpoints">
+      <span class="pin c1" style="left:1%;top:53%">A</span><span class="pin c2" style="left:15.2%;top:100%">B</span><span class="pin c3" style="left:81%;top:3%">C</span><span class="pin c4" style="left:40%;top:62%">D</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Track view</b>Change waveform to volume, pan or mute to see that control's line over the clips.</div></li>
+      <li><span class="pin c3">C</span><div><b>Breakpoints</b>The line bends at each point. Drag a point to move it.</div></li>
+      <li><span class="pin c2">B</span><div><b>Automation mode</b>Decides whether the track follows the line, ignores it or records your moves.</div></li>
+      <li><span class="pin c4">D</span><div><b>The line</b>Higher is louder. Here the kick comes in quiet and rises over two bars.</div></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2>Two ways to write it</h2>
+    <div class="cols" style="font-size:9.3pt">
+      <p><b>Draw it.</b> Show the volume view, then double-click the line with the Grabber or the Smart Tool to add a point. Use the Pencil to draw a shape freehand.</p>
+      <p><b>Perform it.</b> Set the mode to touch, press play and move the fader. FreeDAWm records the move and returns to the old line when you let go.</p>
+    </div>
+  </div>
+  <div class="card grow">
+    <table class="kinds">
+      <tr><td>off</td><td>Ignores the line. The fader stays wherever you put it.</td></tr>
+      <tr><td>read</td><td>Follows the line. This is the mode tracks start in.</td></tr>
+      <tr><td>touch</td><td>Records while you hold a control, then goes back to the line.</td></tr>
+      <tr><td>latch</td><td>Records from the moment you touch a control, and holds your last value until you stop.</td></tr>
+      <tr><td>write</td><td>Records over everything while the song plays. Switch back to read when you finish.</td></tr>
+      <tr><td>trim</td><td>Raises or lowers the whole existing line without redrawing its shape.</td></tr>
+    </table>
+  </div>
+  <div class="folio">24</div>
+</section>
+
+<!-- 25 · Section opener -->
+<section class="page cover">
+  <div>
+    <div class="kicker">Section 5</div>
+    <div class="title" style="margin-top:0.2in">Finishing</div>
+  </div>
+  <p class="lede">Turn the session into a file people can play, send the separate parts to someone else, and take your work to another program.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+  <div class="folio">25</div>
+</section>
+
+<!-- 26 · Bounce -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Bounce the Mix</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Make one audio file of the whole mix, the file you share or upload. Choose File › Bounce Mix, or press <kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>B</kbd>.</p></div>
+  <div class="card">
+    <div class="duo" style="grid-template-columns:3.3in 1fr">
+      <figure class="shot plain">
+        <img src="images/bounce-mix.png" alt="The Bounce Mix dialog">
+        <span class="pin c1" style="left:101%;top:17%">A</span><span class="pin c2" style="left:101%;top:27.5%">B</span><span class="pin c3" style="left:101%;top:58.5%">C</span><span class="pin c4" style="left:62%;top:78.5%">D</span><span class="pin c1" style="left:38%;top:94%">E</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>File</b>Where the file is saved and what it is called.</div></li>
+      <li><span class="pin c2">B</span><div><b>Format and bit depth</b>The kind of file and its quality. See the table below.</div></li>
+      <li><span class="pin c3">C</span><div><b>Range</b>The loop, the stretch between two markers, or the whole session.</div></li>
+      <li><span class="pin c4">D</span><div><b>Normalize</b>Raises the finished file so its loudest moment sits just under the limit.</div></li>
+      <li><span class="pin c1">E</span><div><b>Bounce</b>Writes the file.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Which format?</h2>
+    <table class="kinds">
+      <tr><td>WAV or AIFF</td><td>Full quality, large files. Use these for mastering, for distribution services, and to keep as your own copy.</td></tr>
+      <tr><td>FLAC</td><td>Full quality at about half the size. Good for archiving and sending.</td></tr>
+      <tr><td>MP3 or Opus</td><td>Small files that lose a little quality. Use these for email, messages and quick listens.</td></tr>
+    </table>
+  </div>
+  <div class="card grow">
+    <h2>Which bit depth?</h2>
+    <table class="kinds">
+      <tr><td>16-bit</td><td>The CD standard. Fine for a finished song.</td></tr>
+      <tr><td>24-bit</td><td>The usual choice, and what to send to a mastering engineer.</td></tr>
+      <tr><td>32-bit float</td><td>Cannot clip. Use it for a mix you will keep working on elsewhere.</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Before you bounce</b><p>Listen to the whole song once and watch the master meter. If it reaches the red, pull the master fader down and bounce again.</p></div>
+  <div class="folio">26</div>
+</section>
+
+<!-- 27 · Other exports -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Other Ways Out</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Get more than one stereo file out of a session: the separate parts for a collaborator, the notes for another program, or the whole project.</p></div>
+  <div class="card grow">
+    <table class="jobs airy">
+      <tr><th>You want</th><th>What you get</th><th>Where</th></tr>
+      <tr><td>Stems</td><td>One audio file per track, all the same length, so someone else can remix or master from the parts.</td><td>File › Export › Stems</td></tr>
+      <tr><td>Clips</td><td>The selected clips as separate audio files, for samples or sound effects.</td><td>File › Export › Clips</td></tr>
+      <tr><td>The notes</td><td>A MIDI file of your MIDI and instrument parts, to open in any other music program.</td><td>File › Export › MIDI</td></tr>
+      <tr><td>The project</td><td>A DAWproject file, an open format that other workstations can read, with tracks and clips in place.</td><td>File › Export › DAWproject</td></tr>
+      <tr><td>Some tracks</td><td>A new session holding only the tracks you selected.</td><td>File › Export › Selected Tracks as New Session</td></tr>
+      <tr><td>The words</td><td>The lyrics as plain text, or as an LRC file with timings for players that show lyrics.</td><td>File › Export › Lyrics</td></tr>
+      <tr><td>One track</td><td>A track rendered to audio with its effects, back in the session.</td><td>Track › Bounce or Track › Commit</td></tr>
+      <tr><td>A backup</td><td>A full copy of the session in another place.</td><td>File › Save Session Copy In</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Coming in</b><p>The same menu works the other way. File › Import brings in audio, MIDI, video, DAWproject files and the tracks of another session.</p></div>
+  <div class="folio">27</div>
+</section>
+
+<!-- 28 · Glossary -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Glossary</h1>
+  </header>
+  <div class="card grow">
+    <dl class="gloss">
+      <div><dt>Aux track</dt><dd>A track with no clips of its own. It takes sound from a bus, usually to hold an effect that several tracks share.</dd></div>
+      <div><dt>Automation</dt><dd>A line on a track that moves a control, such as volume, as the song plays.</dd></div>
+      <div><dt>Bounce</dt><dd>To write the mix, or one track, out as an audio file.</dd></div>
+      <div><dt>Buffer size</dt><dd>How much sound the computer handles in one go. Small means less delay, large means steadier playback.</dd></div>
+      <div><dt>Bus</dt><dd>A path inside FreeDAWm that carries sound from one or more tracks to another place.</dd></div>
+      <div><dt>Clip</dt><dd>One piece of audio or MIDI on the timeline. Editing a clip does not change the recording behind it.</dd></div>
+      <div><dt>Comp</dt><dd>One good take assembled from the best parts of several.</dd></div>
+      <div><dt>Compressor</dt><dd>An effect that turns down the loud moments so a part sits at a steadier level.</dd></div>
+      <div><dt>Count-off</dt><dd>Bars of click played before recording starts, to give you the tempo.</dd></div>
+      <div><dt>Crossfade</dt><dd>One clip fading out while the next fades in, to hide the join.</dd></div>
+      <div><dt>DAW</dt><dd>Digital audio workstation: a program for recording, editing and mixing music.</dd></div>
+      <div><dt>dB</dt><dd>Decibel, the unit of level. A fader at 0 dB leaves the level unchanged.</dd></div>
+      <div><dt>EQ</dt><dd>Equaliser. It turns ranges of a sound up or down, from bass to treble.</dd></div>
+      <div><dt>Fade</dt><dd>A ramp in level at the start or end of a clip.</dd></div>
+      <div><dt>Fader</dt><dd>The slider that sets a track's level in the mix.</dd></div>
+      <div><dt>Freeze</dt><dd>To swap a track's effects for a rendered copy, so they stop using the computer.</dd></div>
+      <div><dt>Grid</dt><dd>The steps that clips and selections snap to in Grid mode, such as a sixteenth note.</dd></div>
+      <div><dt>Input monitoring</dt><dd>Hearing a track's live input through FreeDAWm while you play.</dd></div>
+      <div><dt>Insert</dt><dd>An effect placed directly on a track.</dd></div>
+      <div><dt>Latency</dt><dd>The delay between playing a note and hearing it.</dd></div>
+      <div><dt>Marker</dt><dd>A named point on the timeline, such as Verse or Chorus.</dd></div>
+      <div><dt>Master</dt><dd>The last fader in the mixer. Everything passes through it.</dd></div>
+    </dl>
+  </div>
+  <div class="folio">28</div>
+</section>
+
+<!-- 29 · Glossary -->
+<section class="page">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Glossary</h1>
+  </header>
+  <div class="card grow">
+    <dl class="gloss">
+      <div><dt>MIDI</dt><dd>Notes and performance data, not sound. An instrument turns it into sound.</dd></div>
+      <div><dt>Mono and stereo</dt><dd>Mono is one channel. Stereo is two, left and right.</dd></div>
+      <div><dt>Nudge</dt><dd>To move a clip or selection by a small fixed step.</dd></div>
+      <div><dt>Pan</dt><dd>A track's position between the left and right speakers.</dd></div>
+      <div><dt>Playlist</dt><dd>One version of a track's clips. A track can hold several, such as one per take.</dd></div>
+      <div><dt>Plugin</dt><dd>An effect or instrument, built in or installed separately.</dd></div>
+      <div><dt>Pre-roll</dt><dd>Playback that starts a little before the point you want, to lead you in.</dd></div>
+      <div><dt>Punch in</dt><dd>To record over one part of a take and leave the rest.</dd></div>
+      <div><dt>Quantize</dt><dd>To pull notes or clips onto the grid.</dd></div>
+      <div><dt>Record enable</dt><dd>To arm a track so that pressing Record captures to it.</dd></div>
+      <div><dt>Reverb</dt><dd>An effect that adds the sound of a room or hall.</dd></div>
+      <div><dt>Sample rate</dt><dd>How many times a second the sound is measured. 48 000 Hz is common.</dd></div>
+      <div><dt>Send</dt><dd>A copy of a track's sound routed to a bus, with its own level.</dd></div>
+      <div><dt>Session</dt><dd>A FreeDAWm project: its tracks, clips, mix and settings.</dd></div>
+      <div><dt>Solo</dt><dd>To hear one track by silencing the others.</dd></div>
+      <div><dt>Stem</dt><dd>One part of a mix exported as its own file.</dd></div>
+      <div><dt>Take</dt><dd>One recorded attempt at a part.</dd></div>
+      <div><dt>Tempo</dt><dd>The speed of the song, in beats per minute.</dd></div>
+      <div><dt>Track</dt><dd>One lane in the session, with its own clips and its own strip in the mixer.</dd></div>
+      <div><dt>Transient</dt><dd>The sharp start of a sound, such as a drum hit.</dd></div>
+      <div><dt>Transport</dt><dd>The play, stop and record controls.</dd></div>
+      <div><dt>Velocity</dt><dd>How hard a MIDI note is played.</dd></div>
+    </dl>
+  </div>
+  <div class="folio">29</div>
 </section>
 
 </body>
