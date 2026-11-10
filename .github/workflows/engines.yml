@@ -46,7 +46,7 @@ jobs:
         # Every engine on every platform (a list dimension, not `include`, which would only add
         # keys to the existing combinations).
         target:
-          - { os: ubuntu-22.04, platform: linux-x86_64 }
+          - { os: ubuntu-24.04, platform: linux-x86_64 }
           - { os: windows-latest, platform: windows-x86_64 }
           - { os: macos-15, platform: macos-aarch64 }
     steps:
