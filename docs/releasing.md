@@ -76,18 +76,29 @@ kept ready for a Flathub submission; the release's `.flatpak` bundles come from
 ### Audio libraries
 
 FreeDAWm plays and records through [cpal](https://github.com/RustAudio/cpal): CoreAudio on
-macOS, WASAPI on Windows, ALSA on Linux and FreeBSD (PulseAudio and PipeWire through their ALSA
-plugins), and WebAudio in the browser.
+macOS, WASAPI on Windows, PipeWire on Linux (the default when it runs; its "All sources" input
+records any source, picked in I/O Setup, see `crates/playback/src/pw.rs`), ALSA on Linux and
+FreeBSD (PulseAudio through its ALSA plugin), JACK on Linux as another audio system (PipeWire through pipewire-jack; FreeDAWm lists
+each sound card and connects its ports itself, see `crates/playback/src/jack.rs`), and WebAudio
+in the browser.
 
-- **Linux** builds need the ALSA headers (`libasound2-dev` and `pkg-config` on Ubuntu). The binary
-  links `libasound.so.2`, so the `.deb` depends on `libasound2 | libasound2t64` and the `.rpm` on
-  `alsa-lib`; the AppImage and tarball expect it on the host (every desktop distro has it).
+- **Linux** builds need the ALSA, PipeWire and JACK headers (`libasound2-dev`,
+  `libpipewire-0.3-dev`, `libjack-jackd2-dev` and `pkg-config` on Ubuntu). The binary links
+  `libasound.so.2` and `libpipewire-0.3.so.0`, so the `.deb` depends on `libasound2 |
+  libasound2t64` and `libpipewire-0.3-0t64 | libpipewire-0.3-0`, the `.rpm` on `alsa-lib` and
+  `pipewire-libs`; the AppImage and tarball expect both on the host (every current desktop distro
+  has them; a system without libpipewire, PulseAudio-only and older, cannot start them). libjack is not linked: it is loaded at run time when
+  present, and JACK is listed in Playback Engine only while a JACK server (or PipeWire's JACK
+  layer) answers. The packages suggest `pipewire-jack`. On distributions where libjack.so.0 is
+  JACK2's rather than PipeWire's (Debian and Ubuntu without `pipewire-jack`'s ld config), start
+  FreeDAWm with `pw-jack freedawm` to reach PipeWire through JACK.
 - **FreeBSD** builds need `alsa-lib` (`pkg install alsa-lib`); at runtime `alsa-plugins-oss`
   routes ALSA to the OSS `sound(4)` devices. Without a device the player falls back to its
   silent clock, so the transport still runs.
 - **Flatpak**: alsa-lib and its PulseAudio plugin come with the freedesktop runtime; the
-  manifests grant `--socket=pulseaudio` (PipeWire's pulse server answers on it). No raw ALSA
-  devices and no JACK: FreeDAWm doesn't use either.
+  manifests grant `--socket=pulseaudio` (PipeWire's pulse server answers on it). JACK is the
+  runtime's own libjack, PipeWire's, reached through `--filesystem=xdg-run/pipewire-0`. No raw
+  ALSA devices.
 - **Web**: browsers start audio only after a user gesture, so the first click in the page may be
   needed before sound plays. The web build has no recording.
 

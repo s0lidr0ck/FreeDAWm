@@ -20,9 +20,20 @@ serde.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpal.workspace = true
 # Hardware MIDI input ports (WinMM on Windows, CoreMIDI, ALSA): see `midi_in`.
-midir = "0.10"
+midir = "0.11"
 # The ASIO driver's own latency figures (only with the `asio` feature).
 soundcraft-asio-latency = { workspace = true, optional = true, features = ["asio"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# JACK as a second audio system on Linux (PipeWire answers JACK clients through pipewire-jack):
+# cpal's streams, and `jack` itself to list the devices and connect the streams' ports to the
+# chosen one (see `jack`). libjack is loaded at run time, so a machine without it still runs.
+cpal = { workspace = true, features = ["jack", "pipewire"] }
+jack = "0.13"
+# PipeWire itself, to list every source (devices, virtual devices, app streams) and link the
+# chosen ones to the input stream (see `pw`). The same version cpal's PipeWire host uses.
+pipewire = "0.10"
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The installed ASIO drivers' names (HKLM\SOFTWARE\ASIO), listed without loading them.

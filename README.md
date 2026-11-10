@@ -294,7 +294,8 @@ You need:
 
 - Rust 1.95 or later
 - CMake and libclang, for Transcribe Lyrics (it builds whisper.cpp)
-- on Linux, the ALSA headers (`libasound2-dev` or `alsa-lib-devel`)
+- on Linux, the ALSA, PipeWire and JACK headers (`libasound2-dev libpipewire-0.3-dev
+  libjack-jackd2-dev` or `alsa-lib-devel pipewire-devel pipewire-jack-audio-connection-kit-devel`)
 
 ```sh
 git clone https://github.com/s0lidr0ck/FreeDAWm

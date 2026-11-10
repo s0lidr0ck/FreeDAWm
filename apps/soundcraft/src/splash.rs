@@ -17,7 +17,8 @@
 //!
 //! The window is the app's own root window dressed as the splash (winit allows one event loop per
 //! process, and eframe keeps a window hidden until its first paint): when the film and the loading
-//! are both done, `main` gives it back its decorations, size and position.
+//! are both done, `main` gives it back its decorations, size and position (`main_window_commands`,
+//! whose order Wayland depends on).
 //!
 //! Never shown for automation (`wanted`): `--headless`, `--control` (and `FREEDAWM_CONTROL_PORT`),
 //! runs without preferences (`FREEDAWM_NO_PREFS`: agents' test runs, `ui_shot`), `CI`, or

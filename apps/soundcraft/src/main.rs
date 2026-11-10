@@ -77,6 +77,8 @@ const LOAD_JOIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 const SPLASH_STALL_RESTART: std::time::Duration = std::time::Duration::from_millis(150);
 /// Passes after the splash in which the main window's new size is awaited.
 const FIT_PASS_BUDGET: u32 = 10;
+/// The main window's smallest size, in points.
+const MAIN_MIN_SIZE: egui::Vec2 = egui::vec2(960.0, 600.0);
 
 struct App {
     app: Option<SoundApp>,
@@ -220,21 +222,41 @@ impl App {
     fn end_splash(&mut self, ctx: &egui::Context) {
         self.splash = None;
         let (size, maximized) = self.window;
-        let size = egui::Vec2::from(size);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(960.0, 600.0)));
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-        if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size).filter(|m| m.x > 1.0 && m.y > 1.0) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(((monitor - size) * 0.5).max(egui::Vec2::ZERO).to_pos2()));
-        }
-        if maximized {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        let monitor = ctx.input(|i| i.viewport().monitor_size);
+        for cmd in main_window_commands(egui::Vec2::from(size), maximized, monitor) {
+            ctx.send_viewport_cmd(cmd);
         }
         self.fit_pending = true;
         self.fit_passes = 0;
         ctx.request_repaint();
     }
+}
+
+/// The viewport commands that turn the splash's window (borderless, fixed at the film's size)
+/// into the main window: `size` and `maximized` are the saved ones, `monitor` the screen's size
+/// when known (the window is centred on it).
+///
+/// The order matters on Wayland. winit pins a non-resizable window by setting its minimum and
+/// maximum size to its current size, and making it resizable again restores those same pinned
+/// values, so the splash's maximum (960×540) would still stand when the main window's minimum
+/// (960×600) is set: a minimum taller than the maximum is an `xdg_toplevel` protocol error that
+/// kills the connection, and the app hung on the splash. The maximum is cleared first.
+fn main_window_commands(size: egui::Vec2, maximized: bool, monitor: Option<egui::Vec2>) -> Vec<egui::ViewportCommand> {
+    use egui::ViewportCommand;
+    let mut cmds = vec![
+        ViewportCommand::Decorations(true),
+        ViewportCommand::Resizable(true),
+        ViewportCommand::MaxInnerSize(egui::Vec2::INFINITY),
+        ViewportCommand::MinInnerSize(MAIN_MIN_SIZE),
+        ViewportCommand::InnerSize(size),
+    ];
+    if let Some(monitor) = monitor.filter(|m| m.x > 1.0 && m.y > 1.0) {
+        cmds.push(ViewportCommand::OuterPosition(((monitor - size) * 0.5).max(egui::Vec2::ZERO).to_pos2()));
+    }
+    if maximized {
+        cmds.push(ViewportCommand::Maximized(true));
+    }
+    cmds
 }
 
 /// After the splash, whether the wait for the main window's size is over (`Some`), and then
@@ -863,7 +885,7 @@ fn main_viewport((size, maximized): ([f32; 2], bool)) -> egui::ViewportBuilder {
         .with_title("FreeDAWm")
         .with_inner_size(size)
         .with_maximized(maximized)
-        .with_min_inner_size([960.0, 600.0])
+        .with_min_inner_size(MAIN_MIN_SIZE)
         .with_app_id("io.github.s0lidr0ck.FreeDAWm")
 }
 
@@ -995,7 +1017,7 @@ fn sane_window_size([w, h]: [f32; 2]) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::{FIT_PASS_BUDGET, Launch, after_splash, audio_before_engine, loaders, set_title};
+    use super::{FIT_PASS_BUDGET, Launch, after_splash, audio_before_engine, loaders, main_window_commands, set_title};
     use egui::vec2;
 
     #[test]
@@ -1086,6 +1108,26 @@ mod tests {
         assert_eq!(after_splash(Some(vec2(960.0, 540.0)), monitor, FIT_PASS_BUDGET - 1, false), None);
         assert_eq!(after_splash(Some(vec2(960.0, 540.0)), monitor, FIT_PASS_BUDGET, false), Some(false));
         assert_eq!(after_splash(None, None, FIT_PASS_BUDGET, false), Some(false));
+    }
+
+    #[test]
+    fn the_main_window_clears_the_splash_maximum_before_raising_the_minimum() {
+        use egui::ViewportCommand;
+        // The splash's window is pinned at 960×540 (min = max); Wayland rejects a minimum taller
+        // than the maximum, so the maximum goes before the main window's 960×600 minimum.
+        let cmds = main_window_commands(vec2(1600.0, 1000.0), false, Some(vec2(2560.0, 1440.0)));
+        let position = |want: &dyn Fn(&ViewportCommand) -> bool| cmds.iter().position(want).unwrap_or_else(|| panic!("missing in {cmds:?}"));
+        let resizable = position(&|c| *c == ViewportCommand::Resizable(true));
+        let max = position(&|c| *c == ViewportCommand::MaxInnerSize(egui::Vec2::INFINITY));
+        let min = position(&|c| *c == ViewportCommand::MinInnerSize(super::MAIN_MIN_SIZE));
+        let size = position(&|c| *c == ViewportCommand::InnerSize(vec2(1600.0, 1000.0)));
+        assert!(resizable < max && max < min && min < size, "{cmds:?}");
+        // Centred on the screen; no Maximized unless saved so.
+        assert!(cmds.contains(&ViewportCommand::OuterPosition(egui::pos2(480.0, 220.0))), "{cmds:?}");
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::Maximized(_))), "{cmds:?}");
+        let cmds = main_window_commands(vec2(1600.0, 1000.0), true, None);
+        assert!(cmds.contains(&ViewportCommand::Maximized(true)), "{cmds:?}");
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::OuterPosition(_))), "{cmds:?}");
     }
 
     #[test]

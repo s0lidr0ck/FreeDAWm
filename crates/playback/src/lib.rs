@@ -1,5 +1,5 @@
-//! Realtime playback through the system audio device (cpal: CoreAudio, WASAPI, ALSA/Pulse/
-//! PipeWire via ALSA, JACK, WebAudio).
+//! Realtime playback through the system audio device (cpal: CoreAudio, WASAPI, PipeWire with its
+//! "All sources" input (see `pw`), ALSA, JACK, WebAudio).
 //!
 //! The UI thread owns a [`Player`]; the audio callback owns the [`MixEngine`] and a snapshot of
 //! the session (`Arc<Session>`) that the UI swaps whenever the document changes. Commands go to
@@ -30,9 +30,11 @@
 
 pub mod devices;
 pub mod feed;
+pub mod jack;
 pub mod measure;
 pub mod midi_in;
 mod outmap;
+pub mod pw;
 pub mod record;
 pub mod stream;
 
@@ -1895,6 +1897,9 @@ pub struct Player {
     pub device_rate: u32,
     /// Output channels the device was opened with (0 for the silent clock).
     pub device_channels: u16,
+    /// The output device's channel names, in channel order, when it gives them (JACK's ports);
+    /// empty otherwise.
+    pub output_channel_names: Vec<String>,
     /// The device buffer in frames when one was chosen (`None`: the device default).
     pub device_buffer: Option<u32>,
     /// The largest mix block, and the block size plugins are prepared for
@@ -1960,7 +1965,7 @@ impl Player {
         let side_rate = session.sample_rate.as_f64() as f32;
         let new_side = |max_block: usize, garbage: Receiver<Garbage>| Mutex::new(Side::new(side_rate, max_block, garbage));
         match open_device(want, cfg) {
-            Ok((host, device, config, format, name)) => {
+            Ok((host, device, config, format, name, route)) => {
                 // Duplex: input and output on one device and one clock. With ASIO it is the very
                 // `cpal::Device` value the output uses: cpal's ASIO streams share the driver's one
                 // buffer set, and asio-sys calls the callbacks in the order the streams were
@@ -1974,15 +1979,16 @@ impl Player {
                     .then(|| cfg.input.as_deref().and_then(|n| devices::named_device(&host, n, false)))
                     .flatten();
                 let duplex_device = if asio { Some(&device) } else { named_input.as_ref() };
+                let input_route = named_input.as_ref().and_then(|d| jack_input_route(&host, d, cfg.input.as_deref()));
                 // The chosen buffer size first; if the device refuses it, its default.
-                let mut attempts = vec![config.clone()];
+                let mut attempts = vec![config];
                 if config.buffer_size != cpal::BufferSize::Default {
                     attempts.push(cpal::StreamConfig { buffer_size: cpal::BufferSize::Default, ..config });
                 }
                 let opened = first_started(
                     attempts,
-                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::BuildStreamError> {
-                        let rate = config.sample_rate.0;
+                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::Error> {
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let max_block = max_block_of(config);
                         let (tx, rx) = channel();
@@ -1990,7 +1996,7 @@ impl Player {
                         let mut state = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&session), f64::from(rate), max_block, gtx)
                             .with_device_channels(channels);
                         // The input stream first, then the output (see above).
-                        let input = duplex_device.and_then(|d| match duplex_input(d, config, want, max_block, asio) {
+                        let input = duplex_device.and_then(|d| match duplex_input(d, config, want, max_block, asio, input_route.as_ref()) {
                             Ok(i) => Some(i),
                             Err(e) => {
                                 log::warn!("cannot open “{name}” for input with the output: {e}; the output opens alone");
@@ -2019,9 +2025,15 @@ impl Player {
                 match opened {
                     Some((config, Opened { stream, tx, grx, fault, input, input_started })) => {
                         let duplex = input.filter(|_| input_started.get());
+                        if let Some(r) = &route {
+                            r.connect();
+                        }
+                        if let Some(r) = input_route.as_ref().filter(|_| duplex.is_some()) {
+                            r.connect();
+                        }
                         // The streams run, so the driver's buffers exist: its latency is valid now.
                         let driver_latency = if asio { asio_driver_latency() } else { None };
-                        let rate = config.sample_rate.0;
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let buffer = match config.buffer_size {
                             cpal::BufferSize::Fixed(n) => Some(n),
@@ -2045,6 +2057,7 @@ impl Player {
                             system: host.id().name().to_string(),
                             input_name: if asio { Some(name.clone()) } else { devices::input_device_name(&host, cfg.input.as_deref()) },
                             device_name: name,
+                            output_channel_names: route.as_ref().map(jack::Route::channel_names).unwrap_or_default(),
                             device_rate: rate,
                             device_channels: config.channels,
                             device_buffer: buffer,
@@ -2120,6 +2133,7 @@ impl Player {
             driver_latency: None,
             system: "None".into(),
             device_name: "No audio device (silent)".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate: rate,
             device_channels: 0,
@@ -2158,6 +2172,7 @@ impl Player {
             driver_latency: None,
             system: "Offline".into(),
             device_name: "Offline".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate,
             device_channels: u16::try_from(device_channels).unwrap_or(u16::MAX),
@@ -2189,6 +2204,7 @@ impl Player {
             driver_latency: None,
             system: "None".into(),
             device_name: "No audio device".into(),
+            output_channel_names: Vec::new(),
             input_name: None,
             device_rate: session.sample_rate.hz(),
             device_channels: 0,
@@ -3024,14 +3040,25 @@ fn duplex_input(
     session_rate: u32,
     max_block: usize,
     asio: bool,
+    route: Option<&jack::Route>,
 ) -> Result<record::InputStream, String> {
     let buffer = match output.buffer_size {
         cpal::BufferSize::Fixed(n) => Some(n),
         cpal::BufferSize::Default => None,
     };
-    record::build_input_stream(device, Some(output.sample_rate.0), buffer, session_rate, |ch, rate| {
+    let shape = route.map(|r| (r.group.name.clone(), r.channels()));
+    record::build_input_stream(device, Some(output.sample_rate), buffer, session_rate, shape, |ch, rate| {
         duplex_feed(asio, ch, rate, session_rate, max_block)
     })
+}
+
+/// On JACK, the route for an input stream on `device` (cpal's one input) to the device named
+/// `want` (else the first); `None` elsewhere.
+pub(crate) fn jack_input_route(host: &cpal::Host, _device: &cpal::Device, want: Option<&str>) -> Option<jack::Route> {
+    if !jack::is_jack(host.id().name()) {
+        return None;
+    }
+    jack::Route::prepare(&jack::cpal_client(false), want, false)
 }
 
 /// Build and start the attempts in order; the first that builds and starts wins. A build error or
@@ -3061,7 +3088,7 @@ fn build_output<T>(
     channels: usize,
     fault: &Arc<Fault>,
     shared: &Arc<Shared>,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
@@ -3071,39 +3098,50 @@ where
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
     #[cfg(not(target_arch = "wasm32"))]
-    let (rate, mut timing) = (f64::from(config.sample_rate.0), Timing::new(config.buffer_size));
-    device.build_output_stream(
-        config,
-        move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
-            mark_audio_thread();
-            #[cfg(not(target_arch = "wasm32"))]
-            let started = std::time::Instant::now();
-            for out in data.chunks_mut(chunk) {
-                let Some(s) = scratch.get_mut(..out.len()) else { return };
-                guarded_block(&failed, &guard, s, |d| state.fill(d, channels));
-                for (o, x) in out.iter_mut().zip(s.iter()) {
-                    *o = T::from_sample(*x);
+    let (rate, mut timing) = (f64::from(config.sample_rate), Timing::new(config.buffer_size));
+    guarded_build(move || {
+        device.build_output_stream(
+            *config,
+            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                mark_audio_thread();
+                #[cfg(not(target_arch = "wasm32"))]
+                let started = std::time::Instant::now();
+                for out in data.chunks_mut(chunk) {
+                    let Some(s) = scratch.get_mut(..out.len()) else { return };
+                    guarded_block(&failed, &guard, s, |d| state.fill(d, channels));
+                    for (o, x) in out.iter_mut().zip(s.iter()) {
+                        *o = T::from_sample(*x);
+                    }
                 }
-            }
-            // The reported output latency: from this callback until its audio plays.
-            let at = info.timestamp();
-            if let Some(d) = at.playback.duration_since(&at.callback) {
-                guard.out_latency_ns.store(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            timing.callback(&guard, at.playback, started.elapsed(), data.len() / frame, rate);
-        },
-        // cpal may call this on the audio thread (on ALSA in a loop while the device stays
-        // broken): marked, so the logger hands the record off instead of writing it.
-        move |e: cpal::StreamError| {
-            mark_audio_thread();
-            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
-                gone.gone.store(true, Ordering::Relaxed);
-            }
-            log::warn!("audio stream error: {e}");
-        },
-        None,
-    )
+                // The reported output latency: from this callback until its audio plays.
+                let at = info.timestamp();
+                if let Some(d) = at.playback.checked_duration_since(at.callback) {
+                    guard.out_latency_ns.store(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                timing.callback(&guard, at.playback, started.elapsed(), data.len() / frame, rate);
+            },
+            // cpal may call this on the audio thread (on ALSA in a loop while the device stays
+            // broken): marked, so the logger hands the record off instead of writing it.
+            move |e: cpal::Error| {
+                mark_audio_thread();
+                if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
+                    gone.gone.store(true, Ordering::Relaxed);
+                }
+                log::warn!("audio stream error: {e}");
+            },
+            None,
+        )
+    })
+}
+
+/// Builds a stream, a panic inside the backend reported as a build error (cpal's JACK host
+/// unwraps the client's activation): the caller falls back as for any device that will not open.
+pub(crate) fn guarded_build(build: impl FnOnce() -> Result<cpal::Stream, cpal::Error>) -> Result<cpal::Stream, cpal::Error> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(build)).unwrap_or_else(|p| {
+        let description = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+        Err(cpal::Error::with_message(cpal::ErrorKind::BackendError, format!("the audio backend failed: {description}")))
+    })
 }
 
 /// Callback sizes remembered to judge the device's real period.
@@ -3153,7 +3191,7 @@ impl Timing {
         self.next = (self.next + 1) % RECENT;
         let period = self.period();
         let origin = *self.origin.get_or_insert(at);
-        let now = at.duration_since(&origin);
+        let now = at.checked_duration_since(origin);
         let gapped = matches!((self.expected, now), (Some(expected), Some(now)) if gap(expected, now, period, rate));
         if late(elapsed, period, rate) || gapped {
             shared.underruns.fetch_add(1, Ordering::Relaxed);
@@ -3172,12 +3210,18 @@ impl Timing {
 /// the hardware outputs land on their own channels), and the
 /// chosen buffer size when the device allows it.
 #[allow(clippy::type_complexity)]
-fn open_device(want_rate: u32, cfg: &AudioConfig) -> Result<(cpal::Host, cpal::Device, cpal::StreamConfig, cpal::SampleFormat, String), String> {
+fn open_device(
+    want_rate: u32,
+    cfg: &AudioConfig,
+) -> Result<(cpal::Host, cpal::Device, cpal::StreamConfig, cpal::SampleFormat, String, Option<jack::Route>), String> {
     use cpal::traits::DeviceTrait;
     let host = devices::host(cfg);
     let device = devices::device(&host, cfg.output.as_deref(), true).ok_or_else(|| "no output device".to_string())?;
-    #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Audio device".into());
+    let name = devices::device_name(&host, &device, true).unwrap_or_else(|| "Audio device".into());
+    // On JACK the stream is cpal's one output, connected to the chosen device once it runs; it
+    // goes by that device's name.
+    let route = jack::is_jack(host.id().name()).then(|| jack::Route::prepare(&jack::cpal_client(true), cfg.output.as_deref(), true)).flatten();
+    let name = route.as_ref().map_or(name, |r| r.group.name.clone());
     // Prefer a config at the chosen (else session) rate; else the device default (we resample).
     let rates: Vec<u32> = cfg.sample_rate.into_iter().chain(Some(want_rate)).collect();
     let mut chosen: Option<(cpal::StreamConfig, cpal::SupportedBufferSize, cpal::SampleFormat)> = None;
@@ -3191,13 +3235,13 @@ fn open_device(want_rate: u32, cfg: &AudioConfig) -> Result<(cpal::Host, cpal::D
         for rate in rates {
             for c in &configs {
                 if devices::format_rank(c.sample_format()).is_some()
-                    && c.min_sample_rate().0 <= rate
-                    && c.max_sample_rate().0 >= rate
+                    && c.min_sample_rate() <= rate
+                    && c.max_sample_rate() >= rate
                     && c.channels() >= 2
                     && usize::from(c.channels()) <= MAX_DEVICE_CHANNELS
                     && chosen.as_ref().is_none_or(|x| better(c, x))
                 {
-                    chosen = Some((c.with_sample_rate(cpal::SampleRate(rate)).config(), *c.buffer_size(), c.sample_format()));
+                    chosen = Some((c.with_sample_rate(rate).config(), *c.buffer_size(), c.sample_format()));
                 }
             }
             if chosen.is_some() {
@@ -3205,7 +3249,7 @@ fn open_device(want_rate: u32, cfg: &AudioConfig) -> Result<(cpal::Host, cpal::D
             }
         }
     }
-    let (config, format) = match chosen {
+    let (mut config, format) = match chosen {
         Some((mut c, buffers, format)) => {
             c.buffer_size = devices::buffer_size(cfg.buffer_size, &buffers);
             (c, format)
@@ -3222,7 +3266,10 @@ fn open_device(want_rate: u32, cfg: &AudioConfig) -> Result<(cpal::Host, cpal::D
             (c, format)
         }
     };
-    Ok((host, device, config, format, name))
+    if let Some(r) = &route {
+        config.channels = r.channels();
+    }
+    Ok((host, device, config, format, name, route))
 }
 
 #[cfg(test)]
@@ -3236,12 +3283,94 @@ mod tests {
     }
 
     impl cpal::traits::StreamTrait for Fake {
-        fn play(&self) -> Result<(), cpal::PlayStreamError> {
-            if self.starts { Ok(()) } else { Err(cpal::PlayStreamError::DeviceNotAvailable) }
+        fn play(&self) -> Result<(), cpal::Error> {
+            if self.starts { Ok(()) } else { Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)) }
         }
-        fn pause(&self) -> Result<(), cpal::PauseStreamError> {
+        fn pause(&self) -> Result<(), cpal::Error> {
             Ok(())
         }
+        fn buffer_size(&self) -> Result<cpal::FrameCount, cpal::Error> {
+            Ok(256)
+        }
+        fn now(&self) -> cpal::StreamInstant {
+            cpal::StreamInstant::new(0, 0)
+        }
+    }
+
+    /// Needs a JACK server (`jackd --no-realtime -d dummy -C 2 -P 2`); skipped without one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn jack_streams_open_one_channel_per_port_and_connect_to_the_device() {
+        let Some(server) = jack::probe() else {
+            println!("SKIPPED: no JACK server");
+            return;
+        };
+        let (Some(source), Some(sink)) = (server.sources.first().cloned(), server.sinks.first().cloned()) else {
+            println!("SKIPPED: the JACK server has no physical ports");
+            return;
+        };
+        // Listed with one device per JACK client, at the server's rate.
+        let systems = devices::audio_systems();
+        let listed = systems.iter().find(|s| jack::is_jack(&s.name)).expect("JACK is listed while a server runs");
+        assert_eq!(listed.inputs.first().map(|d| (d.name.as_str(), usize::from(d.max_channels))), Some((source.name.as_str(), source.ports.len())));
+        assert_eq!(listed.outputs.first().map(|d| d.sample_rates.clone()), Some(vec![server.rate]));
+        let cfg =
+            AudioConfig { system: Some("JACK".into()), output: Some(sink.name.clone()), input: Some(source.name.clone()), ..Default::default() };
+        // Each of `ours` is connected to exactly its partner in `theirs`.
+        let check = |prefix: &str, theirs: &[String]| {
+            let (c, _) = ::jack::Client::new("FreeDAWm test", ::jack::ClientOptions::NO_START_SERVER).unwrap();
+            let ours = jack::in_channel_order(c.ports(Some(prefix), None, ::jack::PortFlags::empty()));
+            assert_eq!(ours.len(), theirs.len(), "{ours:?}");
+            for (o, t) in ours.iter().zip(theirs) {
+                assert_eq!(c.port_by_name(o).unwrap().get_connections(), vec![t.clone()], "{o}");
+            }
+        };
+        // The output: the sink's name, one channel per port, connected.
+        let player = Player::with_config(Arc::new(Session::new("JACK", soundcraft_time::SampleRate::new(server.rate).unwrap_or_default())), &cfg);
+        assert_eq!(player.system, "JACK");
+        assert_eq!(player.device_name, sink.name);
+        assert_eq!(usize::from(player.device_channels), sink.ports.len());
+        check(&format!("^{}", jack::cpal_client(true)), &sink.ports);
+        // The input, on its own stream: the source's name, one channel per port, connected.
+        let recorder = player.open_input(&cfg).expect("the JACK input opens");
+        assert_eq!(recorder.device_name, source.name);
+        assert_eq!(recorder.channels, source.ports.len());
+        check(&format!("^{}", jack::cpal_client(false)), &source.ports);
+        drop(recorder);
+        drop(player);
+    }
+
+    /// Needs a PipeWire server (and a session manager) with at least two source channels;
+    /// skipped without.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn all_sources_records_each_chosen_source_on_its_own_channel() {
+        let sources = pw::sources();
+        if sources.len() < 2 {
+            println!("SKIPPED: no PipeWire server with two sources");
+            return;
+        }
+        // The second source on channel 1, the first on channel 2: the order is the list's.
+        let keys = vec![sources[1].key.clone(), sources[0].key.clone()];
+        let cfg = AudioConfig { system: Some("PipeWire".into()), input_sources: keys.clone(), ..Default::default() };
+        assert!(cfg.all_sources());
+        let listed = devices::audio_systems();
+        let pipewire = listed.iter().find(|s| pw::is_pipewire(&s.name)).expect("PipeWire is listed");
+        assert_eq!(pipewire.inputs.first().map(|d| (d.name.as_str(), d.is_default)), Some((pw::ALL_SOURCES, true)));
+        let player = Player::with_config(Arc::new(Session::new("PW", soundcraft_time::SampleRate::new(48_000).unwrap_or_default())), &cfg);
+        assert_eq!(player.input_name.as_deref(), Some(pw::ALL_SOURCES));
+        let recorder = player.open_input(&cfg).expect("the All sources input opens");
+        assert_eq!(recorder.device_name, pw::ALL_SOURCES);
+        assert_eq!(recorder.channels, 2);
+        assert_eq!(recorder.channel_names, [sources[1].label.clone(), sources[0].label.clone()]);
+        let linked = pw::graph().expect("PipeWire runs").our_sources(std::process::id());
+        assert_eq!(linked, [vec![keys[0].clone()], vec![keys[1].clone()]], "each channel hears its own source, only it");
+        // Linked, the stream runs: its callbacks keep coming.
+        let first = recorder.beats();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(recorder.beats() > first, "the input stream runs once linked");
+        drop(recorder);
+        drop(player);
     }
 
     #[test]

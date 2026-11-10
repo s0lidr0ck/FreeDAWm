@@ -14,7 +14,8 @@
 #
 # Audio: cpal talks to ALSA. alsa-lib (headers in the Sdk, the library in the Platform) and its
 # PulseAudio plugin ship with the freedesktop runtime, which routes ALSA through the PulseAudio
-# socket (PipeWire's pulse server on modern desktops), so no extra module is needed.
+# socket (PipeWire's pulse server on modern desktops), so no extra module is needed. JACK, the
+# second audio system, is PipeWire's libjack and jack.pc from the same runtime and Sdk.
 id: io.github.s0lidr0ck.FreeDAWm
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -33,9 +34,11 @@ finish-args:
   # Playback and recording. cpal talks to ALSA; the runtime's alsa-lib routes ALSA through its
   # PulseAudio plugin to this socket, which PipeWire's pulse server provides on modern desktops
   # (and PulseAudio itself on older ones). Deliberately not granted: --device=all (raw /dev/snd
-  # for direct ALSA hardware access, which would bypass the sound server) and JACK, which
-  # FreeDAWm doesn't use (cpal's jack feature is off; there is no live MIDI I/O either).
+  # for direct ALSA hardware access, which would bypass the sound server).
   - --socket=pulseaudio
+  # PipeWire, the default audio system (and its "All sources" input), and JACK, whose libjack in
+  # the runtime is PipeWire's: both talk to the PipeWire socket.
+  - --filesystem=xdg-run/pipewire-0
   # Open/Save dialogs use the file-chooser portal (rfd) and drag-and-drop the document portal,
   # so broad filesystem access isn't needed. Music is granted for sessions and their
   # "Audio Files" folders opened by path from the command line.

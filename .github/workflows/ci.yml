@@ -39,13 +39,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: System packages
-        # ALSA (cpal, MIDI), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
+        # ALSA (cpal, MIDI), PipeWire (cpal's PipeWire host, All sources), the JACK headers (cpal's JACK host; libjack itself loads at run time), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
         # the X11/Wayland headers the window layer links against, and Mesa's software Vulkan
         # (lavapipe) for the UI snapshot tests, which render with wgpu.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake clang libclang-dev libasound2-dev libssl-dev \
+            pkg-config cmake clang libclang-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev libssl-dev \
             libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
             mesa-vulkan-drivers libvulkan1
 

@@ -7,7 +7,9 @@ merged.
 ## Build and run
 
 - Rust stable (1.95 or later for the desktop and web apps; the core crates build from 1.90).
-- Linux: `pkg-config`, the ALSA headers (`libasound2-dev` / `alsa-lib-devel`), OpenSSL headers,
+- Linux: `pkg-config`, the ALSA, PipeWire and JACK headers (`libasound2-dev libpipewire-0.3-dev
+  libjack-jackd2-dev` / `alsa-lib-devel pipewire-devel pipewire-jack-audio-connection-kit-devel`),
+  OpenSSL headers,
   and the X11/Wayland development packages your distribution's egui/winit guide lists.
 - Transcribe Lyrics builds whisper.cpp from source: CMake on `PATH` (or `CMAKE` pointing at it)
   and libclang for bindgen (`LIBCLANG_PATH` if it is not found). The first build takes about a

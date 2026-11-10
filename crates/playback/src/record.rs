@@ -124,6 +124,9 @@ pub struct Recorder {
     #[cfg(not(target_os = "freebsd"))]
     _stream: Option<cpal::Stream>,
     pub device_name: String,
+    /// The device's channel names, in channel order, when it gives them (JACK's ports); empty
+    /// otherwise.
+    pub channel_names: Vec<String>,
     /// The input device's rate.
     pub device_rate: u32,
     /// The rate takes are written at: the session's (they are captured from the mix's input).
@@ -144,7 +147,7 @@ fn build_input<T>(
     config: &cpal::StreamConfig,
     capture: &Arc<Capture>,
     feed: &Arc<InputFeed>,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
@@ -156,35 +159,37 @@ where
     let frame = usize::from(config.channels).max(1);
     let mut scratch = vec![0.0f32; 8192 * frame];
     let chunk = scratch.len();
-    device.build_input_stream(
-        config,
-        move |data: &[T], info: &cpal::InputCallbackInfo| {
-            crate::mark_audio_thread();
-            // The reported input latency: from capture until this callback.
-            let at = info.timestamp();
-            if let Some(d) = at.callback.duration_since(&at.capture) {
-                feed.set_input_latency(d);
-            }
-            sh.guarded(|| {
-                for part in data.chunks(chunk) {
-                    let Some(s) = scratch.get_mut(..part.len()) else { return };
-                    for (o, x) in s.iter_mut().zip(part) {
-                        *o = f32::from_sample(*x);
-                    }
-                    feed.push(s);
+    crate::guarded_build(move || {
+        device.build_input_stream(
+            *config,
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                crate::mark_audio_thread();
+                // The reported input latency: from capture until this callback.
+                let at = info.timestamp();
+                if let Some(d) = at.callback.checked_duration_since(at.capture) {
+                    feed.set_input_latency(d);
                 }
-            });
-        },
-        move |e| {
-            // Possibly the audio thread (see `crate::mark_audio_thread`).
-            crate::mark_audio_thread();
-            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
-                let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
-            }
-            log::warn!("input stream error: {e}");
-        },
-        None,
-    )
+                sh.guarded(|| {
+                    for part in data.chunks(chunk) {
+                        let Some(s) = scratch.get_mut(..part.len()) else { return };
+                        for (o, x) in s.iter_mut().zip(part) {
+                            *o = f32::from_sample(*x);
+                        }
+                        feed.push(s);
+                    }
+                });
+            },
+            move |e| {
+                // Possibly the audio thread (see `crate::mark_audio_thread`).
+                crate::mark_audio_thread();
+                if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
+                    let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
+                }
+                log::warn!("input stream error: {e}");
+            },
+            None,
+        )
+    })
 }
 
 /// An input stream, built but not started, and what it feeds.
@@ -199,7 +204,8 @@ pub(crate) struct InputStream {
 }
 
 /// Build an input stream on `device` at `rate` when the device offers it (else its default), with
-/// `buffer` frames when it allows (else its default). It feeds `make_feed(channels, device
+/// `buffer` frames when it allows (else its default). `shape` gives the stream another name and
+/// channel count (JACK's and PipeWire's inputs, connected to their sources once they run). It feeds `make_feed(channels, device
 /// rate)`, and its capture holds frames at `session_rate`. Integer devices (ASIO drivers usually
 /// are) are converted to f32.
 #[cfg(not(target_os = "freebsd"))]
@@ -208,20 +214,20 @@ pub(crate) fn build_input_stream(
     rate: Option<u32>,
     buffer: Option<u32>,
     session_rate: u32,
+    shape: Option<(String, u16)>,
     make_feed: impl Fn(usize, u32) -> Arc<InputFeed>,
 ) -> Result<InputStream, String> {
     use cpal::traits::DeviceTrait;
-    #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Input".into());
+    let name = shape.as_ref().map(|s| s.0.clone()).unwrap_or_else(|| device.description().map_or_else(|_| "Input".into(), |d| d.name().to_string()));
     // At the chosen rate when the device offers it, so input and output run together: the
     // best format first, then the most channels.
     let at_rate = rate.and_then(|r| {
         device
             .supported_input_configs()
             .ok()?
-            .filter(|c| crate::devices::format_rank(c.sample_format()).is_some() && c.min_sample_rate().0 <= r && c.max_sample_rate().0 >= r)
+            .filter(|c| crate::devices::format_rank(c.sample_format()).is_some() && c.min_sample_rate() <= r && c.max_sample_rate() >= r)
             .min_by_key(|c| (crate::devices::format_rank(c.sample_format()), std::cmp::Reverse(c.channels())))
-            .map(|c| c.with_sample_rate(cpal::SampleRate(r)))
+            .map(|c| c.with_sample_rate(r))
     });
     let cfg = match at_rate {
         Some(c) => c,
@@ -233,8 +239,11 @@ pub(crate) fn build_input_stream(
     }
     let mut config = cfg.config();
     config.buffer_size = crate::devices::buffer_size(buffer, cfg.buffer_size());
+    if let Some((_, channels)) = shape {
+        config.channels = channels.clamp(1, 64);
+    }
     let channels = usize::from(config.channels).max(1);
-    let feed = make_feed(channels, config.sample_rate.0);
+    let feed = make_feed(channels, config.sample_rate);
     let capture = Capture::for_rate(session_rate, channels);
     let build = |config: &cpal::StreamConfig| match format {
         cpal::SampleFormat::I32 => build_input::<i32>(device, config, &capture, &feed),
@@ -251,7 +260,7 @@ pub(crate) fn build_input_stream(
         }
         Err(e) => return Err(e.to_string()),
     };
-    Ok(InputStream { stream, feed, capture, name, rate: config.sample_rate.0, channels })
+    Ok(InputStream { stream, feed, capture, name, rate: config.sample_rate, channels })
 }
 
 #[cfg(target_os = "freebsd")]
@@ -260,6 +269,7 @@ pub(crate) fn build_input_stream(
     _rate: Option<u32>,
     _buffer: Option<u32>,
     _session_rate: u32,
+    _shape: Option<(String, u16)>,
     _make_feed: impl Fn(usize, u32) -> Arc<InputFeed>,
 ) -> Result<InputStream, String> {
     Err("recording is not supported on this platform yet".into())
@@ -273,6 +283,7 @@ impl Recorder {
             #[cfg(not(target_os = "freebsd"))]
             _stream: None,
             device_name,
+            channel_names: Vec::new(),
             device_rate,
             sample_rate: session_rate.max(1),
             channels: channels.max(1),
@@ -288,15 +299,51 @@ impl Recorder {
     #[cfg(not(target_os = "freebsd"))]
     pub fn open_with(audio: &crate::AudioConfig, player: &crate::Player) -> Result<Recorder, String> {
         use cpal::traits::StreamTrait;
+        if audio.all_sources() {
+            return Recorder::open_all_sources(audio, player);
+        }
         let host = crate::devices::host(audio);
         let device = crate::devices::device(&host, audio.input.as_deref(), false).ok_or("no audio input device")?;
         let (session_rate, max_block) = (player.session_rate(), player.max_block);
-        let input = build_input_stream(&device, audio.sample_rate, audio.buffer_size, session_rate, |ch, rate| {
+        let route = crate::jack_input_route(&host, &device, audio.input.as_deref());
+        let shape = route.as_ref().map(|r| (r.group.name.clone(), r.channels()));
+        let input = build_input_stream(&device, audio.sample_rate, audio.buffer_size, session_rate, shape, |ch, rate| {
             InputFeed::drift(ch, rate, session_rate, max_block)
         })?;
         input.stream.play().map_err(|e| e.to_string())?;
+        if let Some(r) = &route {
+            r.connect();
+        }
         player.attach_input(Arc::clone(&input.feed), Arc::clone(&input.capture));
         let mut r = Recorder::attached(input.capture, input.name, input.rate, session_rate, input.channels);
+        r.channel_names = route.as_ref().map(crate::jack::Route::channel_names).unwrap_or_default();
+        r._stream = Some(input.stream);
+        Ok(r)
+    }
+
+    /// PipeWire's "All sources" (see `pw`): one stream, one channel per chosen source, linked to
+    /// them once it runs.
+    #[cfg(not(target_os = "freebsd"))]
+    fn open_all_sources(audio: &crate::AudioConfig, player: &crate::Player) -> Result<Recorder, String> {
+        use cpal::traits::StreamTrait;
+        let keys: Vec<String> = crate::pw::effective_sources(&audio.input_sources).into_iter().take(64).collect();
+        if keys.is_empty() {
+            return Err("PipeWire has no source to record from".into());
+        }
+        let (_host, device) = crate::devices::all_sources_input().ok_or("PipeWire is not running")?;
+        let (session_rate, max_block) = (player.session_rate(), player.max_block);
+        let shape = Some((crate::pw::ALL_SOURCES.to_string(), u16::try_from(keys.len()).unwrap_or(64)));
+        let input = build_input_stream(&device, audio.sample_rate, None, session_rate, shape, |ch, rate| {
+            InputFeed::drift(ch, rate, session_rate, max_block)
+        })?;
+        input.stream.play().map_err(|e| e.to_string())?;
+        match crate::pw::connect(&keys) {
+            Ok(n) => log::info!("PipeWire: {n} of {} source(s) linked to the input", keys.len()),
+            Err(e) => log::warn!("PipeWire: the input is not linked: {e}"),
+        }
+        player.attach_input(Arc::clone(&input.feed), Arc::clone(&input.capture));
+        let mut r = Recorder::attached(input.capture, input.name, input.rate, session_rate, input.channels);
+        r.channel_names = crate::pw::labels(&keys, &crate::pw::sources());
         r._stream = Some(input.stream);
         Ok(r)
     }
@@ -374,6 +421,12 @@ impl Recorder {
     }
 
     /// Input the current take has lost to a slow disk so far, in milliseconds.
+    /// Input callbacks so far.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn beats(&self) -> u64 {
+        self.capture.beats.load(Ordering::Relaxed)
+    }
+
     pub fn lost_ms(&self) -> u64 {
         let frames = self.capture.dropped.load(Ordering::Relaxed) / self.channels.max(1);
         (frames as u64).saturating_mul(1000) / u64::from(self.sample_rate.max(1))
