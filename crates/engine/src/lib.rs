@@ -243,6 +243,11 @@ pub struct Engine {
     /// Files/…`, beside its takes): the app's autosave folder. `None`: such audio stays in memory
     /// until the first save ([`spill`]).
     pub unsaved_audio_root: Option<std::path::PathBuf>,
+    /// The drum hits `mix.kit_pad_analyze` found, waiting for `mix.kit_pad_pick` (Juke's hit
+    /// picker shows and plays them). Not part of the document.
+    pub take_hits: Option<crate::cmd::juke::TakeHits>,
+    /// Numbers each analysis (`TakeHits::id`).
+    pub take_hits_seq: u64,
 }
 
 impl Default for Engine {
@@ -281,6 +286,8 @@ impl Engine {
             loads: 0,
             last_selection: None,
             scout_capture: None,
+            take_hits: None,
+            take_hits_seq: 0,
             scout_pending: Vec::new(),
             scout_floor: 0,
             band_lib: None,

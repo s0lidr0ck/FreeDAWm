@@ -96,6 +96,69 @@ pub fn specs() -> Vec<CommandSpec> {
             sample_clear
         ),
         cmd!(
+            "mix.kit_pad_import",
+            "Import Pad Takes",
+            [],
+            None,
+            "{track?, pad: 1-16, paths: [audio files], family?: kick|snare|clap|hat|tom|cymbal|percussion} -> {track, pad, name, family, hits, layers, robins, dropped, trim}: the pad's samples become the hits in the takes (a file holds one hit or a run of them): each trimmed to its attack and ring, sorted by strength into velocity layers (softest first) of up to four round-robins, and the pad's trim set to level it with the kit",
+            has_selection,
+            pad_import
+        ),
+        cmd!(
+            noundo "mix.kit_pad_analyze",
+            "Analyze Pad Takes",
+            [],
+            None,
+            "{track: the Juke track, pad: 1-16, paths?: [audio files] | selection?: true (with from?, start?, end?), family?} -> {take, pad, name, family, note, hits: [{hit, db, peak_db, ms, note, off_pitch, band: 1-4 (1 the softest), pick: 1-4 | null, env: [0..1 ×48]}]}: finds and measures the hits for the hit picker without changing the kit; mix.kit_pad_pick then builds the pad from those chosen",
+            has_selection,
+            pad_analyze
+        ),
+        cmd!(
+            "mix.kit_pad_pick",
+            "Pick Pad Hits",
+            [],
+            None,
+            "{take, picks: [{hit, layer: 1-4}]} -> as mix.kit_pad_import: the pad becomes the hits picked from the last mix.kit_pad_analyze, up to four a layer (round-robins in the order given), trimmed and levelled",
+            has_selection,
+            pad_pick
+        ),
+        cmd!(
+            "mix.kit_pad_copy",
+            "Copy Pad",
+            [],
+            None,
+            "{track?, from: 1-16, to?: 1-16, note?: 0-127} -> {track, pad, name, note}: pad `to` (or the pad on `note`) becomes a copy of pad `from` (its samples, every setting, its name and family) on its own note",
+            has_selection,
+            pad_copy
+        ),
+        cmd!(
+            "mix.kit_note_variant",
+            "Note Variant",
+            [],
+            None,
+            "{track?, note: 0-127, pad: 1-16, like?: 1-16 (a variant to copy the settings of)} -> {track, variant, note, pad}: pad `pad` also plays on `note`, with that note's own tune, fine, level, pan, sends, decay and cutoff (offsets from the pad's, set with mix.instrument_param `var{n}_…`; all zero, or variant `like`'s); its samples stay the pad's. The note's variant is reused, else a free one of sixteen",
+            has_selection,
+            note_variant
+        ),
+        cmd!(
+            "mix.kit_note_variant_clear",
+            "Clear Note Variant",
+            [],
+            None,
+            "{track?, note: 0-127} -> {cleared}: the note no longer plays a variant",
+            has_selection,
+            note_variant_clear
+        ),
+        cmd!(
+            "mix.kit_import",
+            "Import Kit",
+            [],
+            None,
+            "{track?, folder? | paths?: [audio files], name?} -> {kit, pads: [{pad, name, hits, layers}], skipped: [name]}: drum takes to pads by their names (kick, snare, rim, clap, hat, pedal hat, open hat, toms, crash, ride, tambourine, cowbell, shaker, clave; a sub-folder's name counts too), each pad imported as by mix.kit_pad_import; files of no known drum take the free pads. A folder names the kit",
+            has_selection,
+            kit_import
+        ),
+        cmd!(
             "mix.kit_pad",
             "Edit Pad",
             [],
@@ -324,6 +387,764 @@ fn sample_clear(e: &mut Engine, p: &Value) -> Result<Value> {
         ins.samples.remove(k);
     }
     Ok(json!({"cleared": present}))
+}
+
+/// Most hits read from one import (they are sorted and the best sixteen a pad holds kept).
+const MAX_IMPORT_HITS: usize = 256;
+
+fn pad_import(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_pad_import";
+    let t = juke_track(e, id, p)?;
+    let pad = pad_param(p, id)?;
+    let paths = string_list(p, "paths");
+    if paths.is_empty() {
+        return Err(bad(id, "`paths` required: the audio files to import"));
+    }
+    let family = match p.get("family").and_then(Value::as_str) {
+        Some(f) => Some(family_named(f).ok_or_else(|| bad(id, format!("no drum family `{f}`")))?),
+        None => None,
+    };
+    let takes = read_takes(&paths)?;
+    import_pad(e, t, pad, &takes, family)
+}
+
+/// The strings in `p[key]` (an array of strings).
+fn string_list(p: &Value, key: &str) -> Vec<String> {
+    p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
+fn pad_copy(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_pad_copy";
+    let t = juke_track(e, id, p)?;
+    let pad_of = |key: &str| -> Result<usize> {
+        p.get(key)
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .filter(|n| (1..=PADS).contains(n))
+            .map(|n| n - 1)
+            .ok_or_else(|| bad(id, format!("`{key}` required: a pad 1-16")))
+    };
+    let from = pad_of("from")?;
+    let to = match (p.get("to"), p.get("note").and_then(Value::as_u64)) {
+        (Some(_), _) => pad_of("to")?,
+        (None, Some(note)) if note <= 127 => {
+            let note = note as u8;
+            let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap_or_else(juke_insert);
+            let on_note = (0..PADS).find(|&pd| pad_note_of(&ins, pd) == note);
+            on_note.ok_or_else(|| bad(id, "no pad is on that note: mix.kit_note_variant plays a pad there with its own settings"))?
+        }
+        _ => return Err(bad(id, "`to` (a pad 1-16) or `note` (0-127) required")),
+    };
+    if from == to {
+        return Err(bad(id, "copy a pad onto another pad"));
+    }
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let (src, dst) = (format!("p{}_", from + 1), format!("p{}_", to + 1));
+    // Every setting but the note: the copy plays on its own key.
+    let params: Vec<(String, f32)> =
+        ins.params.iter().filter_map(|(k, v)| k.strip_prefix(&src).filter(|rest| *rest != "note").map(|rest| (format!("{dst}{rest}"), *v))).collect();
+    ins.params.extend(params);
+    let (src_s, dst_s) = (format!("p{}.", from + 1), format!("p{}.", to + 1));
+    ins.samples.retain(|k, _| !k.starts_with(&dst_s));
+    let samples: Vec<(String, soundcraft_model::SourceId)> =
+        ins.samples.iter().filter_map(|(k, v)| k.strip_prefix(&src_s).map(|rest| (format!("{dst_s}{rest}"), *v))).collect();
+    ins.samples.extend(samples);
+    let layout = ins.kit.get_or_insert_with(default_layout);
+    while layout.pads.len() < PADS {
+        let i = layout.pads.len();
+        let (n, f) = DEFAULT_PADS.get(i).copied().unwrap_or(("Pad", DrumFamily::Percussion));
+        layout.pads.push(KitPad { name: n.into(), family: f });
+    }
+    let entry = layout.pads.get(from).cloned().unwrap_or(KitPad { name: "Pad".into(), family: DrumFamily::Percussion });
+    let name: String = format!("{} 2", entry.name).chars().take(32).collect();
+    if let Some(d) = layout.pads.get_mut(to) {
+        *d = KitPad { name: name.clone(), family: entry.family };
+    }
+    let note = juke_mut(e, t).map_or(0, |i| pad_note_of(i, to));
+    Ok(json!({"track": t, "pad": to + 1, "name": name, "note": note}))
+}
+
+/// The offsets a note variant has besides its note and pad.
+pub const VARIANT_OFFSETS: [&str; 8] = ["tune", "fine", "level", "pan", "send_a", "send_b", "decay", "cutoff"];
+
+/// The variant (from 0) on `note` of a Juke, if any.
+pub fn variant_on(ins: &Insert, note: u8) -> Option<usize> {
+    (0..soundcraft_dsp::plugins::juke::VARIANTS).find(|v| param_of(ins, &format!("var{}_note", v + 1)).round() as i32 == i32::from(note))
+}
+
+/// The pad (from 0) variant `v` plays.
+pub fn variant_pad(ins: &Insert, v: usize) -> usize {
+    (param_of(ins, &format!("var{}_pad", v + 1)).round().max(0.0) as usize).min(PADS - 1)
+}
+
+fn param_of(ins: &Insert, key: &str) -> f32 {
+    ins.params.get(key).copied().unwrap_or_else(|| JUKE_INFO.param(key).map_or(0.0, |p| p.default))
+}
+
+fn note_variant(e: &mut Engine, p: &Value) -> Result<Value> {
+    use soundcraft_dsp::plugins::juke::VARIANTS;
+    let id = "mix.kit_note_variant";
+    let t = juke_track(e, id, p)?;
+    let note = p.get("note").and_then(Value::as_u64).filter(|n| *n <= 127).ok_or_else(|| bad(id, "`note` required: 0-127"))? as u8;
+    let pad = pad_param(p, id)?;
+    let like = match p.get("like") {
+        Some(v) => {
+            Some(v.as_u64().map(|n| n as usize).filter(|n| (1..=VARIANTS).contains(n)).ok_or_else(|| bad(id, "`like` is a variant 1-16"))? - 1)
+        }
+        None => None,
+    };
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    if (0..PADS).any(|pd| pad_note_of(ins, pd) == note) {
+        return Err(bad(id, "a pad is on that note: move it, or copy over it with mix.kit_pad_copy"));
+    }
+    let slot = variant_on(ins, note)
+        .or_else(|| (0..VARIANTS).find(|v| param_of(ins, &format!("var{}_note", v + 1)) < 0.0))
+        .ok_or_else(|| bad(id, "all sixteen note variants are in use: clear one first"))?;
+    let offsets: Vec<(String, f32)> = VARIANT_OFFSETS
+        .iter()
+        .map(|k| {
+            let key = format!("var{}_{k}", slot + 1);
+            let v = like.map_or_else(|| JUKE_INFO.param(&key).map_or(0.0, |p| p.default), |l| param_of(ins, &format!("var{}_{k}", l + 1)));
+            (key, v)
+        })
+        .collect();
+    ins.params.extend(offsets);
+    ins.params.insert(format!("var{}_note", slot + 1), f32::from(note));
+    ins.params.insert(format!("var{}_pad", slot + 1), pad as f32);
+    Ok(json!({"track": t, "variant": slot + 1, "note": note, "pad": pad + 1}))
+}
+
+fn note_variant_clear(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_note_variant_clear";
+    let t = juke_track(e, id, p)?;
+    let note = p.get("note").and_then(Value::as_u64).filter(|n| *n <= 127).ok_or_else(|| bad(id, "`note` required: 0-127"))? as u8;
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let Some(v) = variant_on(ins, note) else { return Ok(json!({"cleared": 0})) };
+    ins.params.insert(format!("var{}_note", v + 1), -1.0);
+    Ok(json!({"cleared": 1, "variant": v + 1}))
+}
+
+/// Pad `pad`'s note.
+fn pad_note_of(ins: &Insert, pad: usize) -> u8 {
+    let key = format!("p{}_note", pad + 1);
+    let default = JUKE_INFO.param(&key).map_or(36.0, |p| p.default);
+    ins.params.get(&key).copied().unwrap_or(default).round().clamp(0.0, 127.0) as u8
+}
+
+fn pad_analyze(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_pad_analyze";
+    let family = family_param(id, p)?;
+    let (t, pad, label, bufs, format) = if p.get("selection").and_then(Value::as_bool).unwrap_or(false) {
+        let (t, pad, label, buf) = selection_audio(e, id, p)?;
+        (t, pad, label, vec![buf], soundcraft_audio_io::FileFormat::Wav)
+    } else {
+        let t = juke_track(e, id, p)?;
+        let pad = pad_param(p, id)?;
+        let paths = string_list(p, "paths");
+        if paths.is_empty() {
+            return Err(bad(id, "`paths` or `selection` required"));
+        }
+        let (bufs, format) = decode_takes(e, &read_takes(&paths)?)?;
+        let label = Path::new(paths.first().map_or("Pad", String::as_str)).file_name().and_then(|n| n.to_str()).unwrap_or("Pad").to_string();
+        (t, pad, label, bufs, format)
+    };
+    let mut take = analyze_takes(e, id, t, pad, &label, &bufs, format, family)?;
+    e.take_hits_seq += 1;
+    take.id = e.take_hits_seq;
+    let hits: Vec<Value> = (0..take.hits.len())
+        .map(|i| {
+            let h = &take.hits[i];
+            let len = h.channels.iter().map(Vec::len).min().unwrap_or(0);
+            let pitch = take.pitch.get(i).copied().flatten();
+            json!({
+                "hit": i,
+                "db": (h.punch_db * 10.0).round() / 10.0,
+                "peak_db": (20.0 * h.peak.max(1e-6).log10() * 10.0).round() / 10.0,
+                "ms": (len as f64 * 1000.0 / f64::from(take.rate.max(1))).round(),
+                "note": pitch.map(|m| soundcraft_midi::note_name(m.round().clamp(0.0, 127.0) as u8)),
+                "off_pitch": take.off_pitch(i),
+                "band": take.band.get(i).copied().unwrap_or(0) + 1,
+                "pick": take.picked.get(i).copied().flatten().map(|r| r + 1),
+                "env": envelope(&h.channels, 48),
+            })
+        })
+        .collect();
+    let v = json!({
+        "take": take.id, "track": t, "pad": pad + 1, "name": pad_name(&take.label), "family": take.family.id(),
+        "note": take.note.map(|m| soundcraft_midi::note_name(m.round().clamp(0.0, 127.0) as u8)), "hits": hits,
+    });
+    e.take_hits = Some(take);
+    Ok(v)
+}
+
+/// `n` points of `channels`' outline (the peak of each stretch, 0..1 of its loudest).
+fn envelope(channels: &[Vec<f32>], n: usize) -> Vec<f32> {
+    let len = channels.iter().map(Vec::len).min().unwrap_or(0);
+    let mut out: Vec<f32> = (0..n)
+        .map(|k| {
+            let (a, b) = (k * len / n, ((k + 1) * len / n).max(k * len / n + 1).min(len));
+            channels.iter().flat_map(|c| c.get(a..b).unwrap_or(&[]).iter()).fold(0.0f32, |m, v| m.max(v.abs()))
+        })
+        .collect();
+    let top = out.iter().copied().fold(0.0f32, f32::max).max(1e-9);
+    for v in &mut out {
+        *v = (*v / top * 100.0).round() / 100.0;
+    }
+    out
+}
+
+fn pad_pick(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_pad_pick";
+    let want = p.get("take").and_then(Value::as_u64).ok_or_else(|| bad(id, "`take` required: the id mix.kit_pad_analyze gave"))?;
+    let take = e.take_hits.clone().filter(|t| t.id == want).ok_or_else(|| bad(id, "that analysis is gone: analyze the takes again"))?;
+    let picks = p.get("picks").and_then(Value::as_array).ok_or_else(|| bad(id, "`picks` required"))?;
+    let mut chosen = Vec::new();
+    let mut robins = [0usize; LAYERS];
+    for pick in picks {
+        let hit = pick
+            .get("hit")
+            .and_then(Value::as_u64)
+            .map(|h| h as usize)
+            .filter(|h| *h < take.hits.len())
+            .ok_or_else(|| bad(id, "each pick needs a `hit` of the analysis"))?;
+        let layer = pick
+            .get("layer")
+            .and_then(Value::as_u64)
+            .map(|l| l as usize)
+            .filter(|l| (1..=LAYERS).contains(l))
+            .ok_or_else(|| bad(id, "each pick needs a `layer` 1-4"))?
+            - 1;
+        if chosen.iter().any(|c: &(usize, usize, usize)| c.0 == hit) {
+            return Err(bad(id, format!("hit {hit} is picked twice")));
+        }
+        let robin = robins.get(layer).copied().unwrap_or(ROBINS);
+        if robin >= ROBINS {
+            return Err(bad(id, format!("layer {} holds four hits at most", layer + 1)));
+        }
+        if let Some(r) = robins.get_mut(layer) {
+            *r += 1;
+        }
+        chosen.push((hit, layer, robin));
+    }
+    juke_track(e, id, &json!({"track": take.track.0}))?;
+    build_pad(e, id, &take, &chosen)
+}
+
+fn family_param(id: &str, p: &Value) -> Result<Option<DrumFamily>> {
+    match p.get("family").and_then(Value::as_str) {
+        Some(f) => Ok(Some(family_named(f).ok_or_else(|| bad(id, format!("no drum family `{f}`")))?)),
+        None => Ok(None),
+    }
+}
+
+/// The selected range of an audio track rendered as it plays, for pad `pad` of the Juke track:
+/// (track, pad, the clip's name under the selection, the audio).
+fn selection_audio(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, usize, String, soundcraft_audio_io::AudioBuffer)> {
+    let t = match track_param(e, id, p, "track")? {
+        Some(t) => t,
+        None => e
+            .target_tracks()
+            .into_iter()
+            .find(|x| juke_track(e, id, &json!({"track": x.0})).is_ok())
+            .ok_or_else(|| bad(id, "`track` required: the Juke track"))?,
+    };
+    juke_track(e, id, &json!({"track": t.0}))?;
+    let pad = pad_param(p, id)?;
+    let s = e.session();
+    let audio_kind = |k: TrackKind| k.has_playlist() && !k.is_midi();
+    let from = match track_param(e, id, p, "from")? {
+        Some(f) => f,
+        None => e
+            .target_tracks()
+            .into_iter()
+            .find(|x| s.track(*x).is_some_and(|tr| audio_kind(tr.kind)))
+            .ok_or_else(|| bad(id, "select a range on an audio track, or pass `from`"))?,
+    };
+    let tr = s.track(from).ok_or_else(|| bad(id, "no source track"))?;
+    if !audio_kind(tr.kind) {
+        return Err(bad(id, format!("`{}` has no audio clips to sample", tr.name)));
+    }
+    let r = range_param(e, id, p)?;
+    let start = r.start.max(0);
+    let len = r.end.saturating_sub(start);
+    if len <= 0 {
+        return Err(bad(id, "the selection is empty: select a range of drum hits"));
+    }
+    let max = MAX_PAD_SAMPLE_VALUES * 10 / tr.channels().max(1);
+    crate::io::refuse_longer(s, id, &tr.name, "import", len, max.min(crate::io::render_limit(tr.channels())))?;
+    let range = soundcraft_time::Range::new(start, start + len);
+    let audio = soundcraft_mix::render_clips(s, from, range);
+    if audio.iter().all(|ch| ch.iter().all(|x| *x == 0.0)) {
+        return Err(bad(id, format!("the selection on `{}` is silent", tr.name)));
+    }
+    // Named for the clip under the selection (its name usually says which drum), else the track.
+    let name =
+        tr.clips().iter().find(|c| c.range().start < range.end && c.range().end > range.start).map_or_else(|| tr.name.clone(), |c| c.name.clone());
+    let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
+    Ok((t, pad, name, buf))
+}
+
+/// Reads each file: (its name, its bytes).
+fn read_takes(paths: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
+    paths
+        .iter()
+        .map(|path| {
+            let name = Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Take").to_string();
+            Ok((name, crate::io::read_file(path)?))
+        })
+        .collect()
+}
+
+fn family_named(f: &str) -> Option<DrumFamily> {
+    DrumFamily::from_id(&f.to_ascii_lowercase())
+}
+
+/// Imports drum takes (file name, bytes) into pad `pad` (from 0) of track `t`'s Juke: the hits
+/// found in them, sorted into velocity layers and round-robins, replace the pad's samples; the
+/// pad takes the takes' name and family (`family`, else guessed from the name, else kept) and the
+/// trim that levels it. Decodes everything before touching the session, so a bad file changes
+/// nothing.
+pub fn import_pad(e: &mut Engine, t: TrackId, pad: usize, takes: &[(String, Vec<u8>)], family: Option<DrumFamily>) -> Result<Value> {
+    let (bufs, format) = decode_takes(e, takes)?;
+    let first = takes.first().map_or("Pad", |(n, _)| n.as_str()).to_string();
+    import_pad_audio(e, "mix.kit_pad_import", t, pad, &first, &bufs, format, family)
+}
+
+/// Decodes takes (file name, bytes) at the session's rate, and the format the first was in.
+fn decode_takes(e: &Engine, takes: &[(String, Vec<u8>)]) -> Result<(Vec<soundcraft_audio_io::AudioBuffer>, soundcraft_audio_io::FileFormat)> {
+    let rate = e.session().sample_rate.hz();
+    let mut bufs = Vec::new();
+    let mut format = None;
+    for (name, bytes) in takes {
+        let ext = Path::new(name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
+        let (info, buf) = soundcraft_audio_io::decode(bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+        let buf = crate::io::at_rate(buf, rate, MAX_PAD_SAMPLE_VALUES * 10)
+            .ok_or_else(|| EngineError::Io(format!("{name}: too long to import (ten minutes of 192 kHz stereo at most)")))?;
+        format.get_or_insert(info.format);
+        bufs.push(buf);
+    }
+    Ok((bufs, format.unwrap_or(soundcraft_audio_io::FileFormat::Wav)))
+}
+
+/// The hits found in drum takes, kept between `mix.kit_pad_analyze` and `mix.kit_pad_pick`
+/// (`Engine::take_hits`): the picker shows them, plays them, and builds the pad from those picked.
+#[derive(Debug, Clone)]
+pub struct TakeHits {
+    /// Which analysis this is: a pick names it, so it never builds from another's hits.
+    pub id: u64,
+    pub track: TrackId,
+    pub pad: usize,
+    /// What named the takes (a file, a clip): the pad's name and family come from it.
+    pub label: String,
+    pub family: DrumFamily,
+    pub format: soundcraft_audio_io::FileFormat,
+    /// At the session's rate.
+    pub rate: u32,
+    pub hits: Vec<soundcraft_dsp::drum_import::Hit>,
+    /// Each hit's note (fractional MIDI), when it rings at one.
+    pub pitch: Vec<Option<f32>>,
+    /// The note a pitched drum's hits share; hits clearly at another note are off it.
+    pub note: Option<f32>,
+    /// Each hit's suggested layer (0 the softest), and the suggested robin when it is among the
+    /// sixteen the automatic import would keep.
+    pub band: Vec<usize>,
+    pub picked: Vec<Option<usize>>,
+}
+
+impl TakeHits {
+    /// Whether hit `i` rings clearly at another note than the drum's.
+    pub fn off_pitch(&self, i: usize) -> bool {
+        match (self.note, self.pitch.get(i).copied().flatten()) {
+            (Some(n), Some(m)) => (m - n).abs() > 0.6,
+            _ => false,
+        }
+    }
+}
+
+/// Finds and measures the hits in `bufs` (at the session's rate) for pad `pad` of track `t`, and
+/// suggests where they go: every hit gets a band (velocity layer, four from soft to hard, spread
+/// across the strengths it was played at), and up to sixteen in tune get a place (as the
+/// automatic import keeps them).
+#[allow(clippy::too_many_arguments)]
+fn analyze_takes(
+    e: &mut Engine,
+    id: &str,
+    t: TrackId,
+    pad: usize,
+    label: &str,
+    bufs: &[soundcraft_audio_io::AudioBuffer],
+    format: soundcraft_audio_io::FileFormat,
+    family: Option<DrumFamily>,
+) -> Result<TakeHits> {
+    use soundcraft_dsp::drum_import;
+    if pad >= PADS {
+        return Err(bad(id, "no such pad"));
+    }
+    if juke_mut(e, t).is_none() {
+        return Err(bad(id, "the track's instrument is not Juke"));
+    }
+    let rate = e.session().sample_rate.hz();
+    let mut hits = Vec::new();
+    for buf in bufs {
+        hits.extend(drum_import::split(&buf.channels, rate as f32));
+        if hits.len() >= MAX_IMPORT_HITS {
+            hits.truncate(MAX_IMPORT_HITS);
+            break;
+        }
+    }
+    if hits.is_empty() {
+        return Err(bad(id, "no drum hits found in the audio"));
+    }
+    // A pitched drum (a kick or an 808, toms) keeps to its most common note: an 808 line's other
+    // notes would play as wrong notes among the round-robins.
+    let pitch: Vec<Option<f32>> = hits
+        .iter()
+        .map(|h| {
+            let n = h.channels.len().max(1) as f32;
+            let len = h.channels.iter().map(Vec::len).min().unwrap_or(0).min(rate as usize * 2);
+            let mono: Vec<f32> = (0..len).map(|i| h.channels.iter().map(|c| c.get(i).copied().unwrap_or(0.0)).sum::<f32>() / n).collect();
+            drum_import::hit_pitch(&mono, rate as f32)
+        })
+        .collect();
+    let note = drum_import::common_note(&pitch);
+    let family = family
+        .or_else(|| guess_drum(label).1)
+        .unwrap_or_else(|| pad_layout(e.session().track(t).and_then(|tr| tr.instrument.as_ref()).unwrap_or(&juke_insert()), pad).family);
+    let mut take = TakeHits {
+        id: 0,
+        track: t,
+        pad,
+        label: label.to_string(),
+        family,
+        format,
+        rate,
+        band: vec![0; hits.len()],
+        picked: vec![None; hits.len()],
+        hits,
+        pitch,
+        note,
+    };
+    // Bands: the hits in tune, by strength, split as the automatic import would split them,
+    // widened to the four layers (one strength fills the hardest); one off pitch joins the band
+    // of the hits nearest its strength.
+    let tuned: Vec<usize> = (0..take.hits.len()).filter(|i| !take.off_pitch(*i)).collect();
+    let punch: Vec<f32> = tuned.iter().filter_map(|i| take.hits.get(*i)).map(|h| h.punch_db).collect();
+    let plan = drum_import::plan(&punch);
+    let widen = |layer: usize| if plan.layers <= 1 { LAYERS - 1 } else { (layer * (LAYERS - 1) + (plan.layers - 1) / 2) / (plan.layers - 1) };
+    let mut order: Vec<usize> = tuned.clone();
+    order.sort_by(|a, b| take.hits[*a].punch_db.total_cmp(&take.hits[*b].punch_db));
+    let n = order.len();
+    let layers = plan.layers.max(1);
+    for (rank, h) in order.iter().enumerate() {
+        if let Some(b) = take.band.get_mut(*h) {
+            *b = widen((rank * layers / n.max(1)).min(layers - 1));
+        }
+    }
+    for &(k, layer, robin) in &plan.slots {
+        if let Some(h) = tuned.get(k)
+            && let Some(p) = take.picked.get_mut(*h)
+        {
+            *p = Some(robin);
+            if let Some(b) = take.band.get_mut(*h) {
+                *b = widen(layer);
+            }
+        }
+    }
+    for i in 0..take.hits.len() {
+        if take.off_pitch(i) {
+            let db = take.hits[i].punch_db;
+            let near = order.iter().min_by(|a, b| (take.hits[**a].punch_db - db).abs().total_cmp(&(take.hits[**b].punch_db - db).abs()));
+            let band = near.and_then(|h| take.band.get(*h)).copied().unwrap_or(0);
+            if let Some(b) = take.band.get_mut(i) {
+                *b = band;
+            }
+        }
+    }
+    Ok(take)
+}
+
+/// Makes pad `pad` of track `t` the hits `chosen` of `take`: (hit, layer, robin), each from 0.
+/// The pad's samples are replaced; it takes the take's name and family, Sample as its source and
+/// the trim that levels its loudest layer.
+fn build_pad(e: &mut Engine, id: &str, take: &TakeHits, chosen: &[(usize, usize, usize)]) -> Result<Value> {
+    use soundcraft_dsp::drum_import;
+    let (t, pad) = (take.track, take.pad);
+    if chosen.is_empty() {
+        return Err(bad(id, "no hits picked"));
+    }
+    let name = pad_name(&take.label);
+    let family = take.family;
+    let top = chosen.iter().map(|c| c.1).max().unwrap_or(0);
+    let loud: Vec<&drum_import::Hit> = chosen.iter().filter(|c| c.1 == top).filter_map(|c| take.hits.get(c.0)).collect();
+    let loud_db = loud.iter().map(|h| h.punch_db).sum::<f32>() / loud.len().max(1) as f32;
+    let peak = chosen.iter().filter_map(|c| take.hits.get(c.0)).fold(0.0f32, |m, h| m.max(h.peak));
+    let trim = drum_import::trim(matches!(family, DrumFamily::Hat | DrumFamily::Cymbal), loud_db, peak);
+    let mut robins = [0usize; LAYERS];
+    let mut sources = Vec::new();
+    {
+        let rate = take.rate;
+        let s = e.session_mut();
+        for &(h, layer, robin) in chosen {
+            let Some(hit) = take.hits.get(h) else { return Err(bad(id, format!("no hit {h}"))) };
+            let buf = soundcraft_audio_io::AudioBuffer { sample_rate: rate, channels: hit.channels.clone() };
+            let src = crate::io::add_source(s, &format!("{name} {} {}.wav", layer + 1, robin + 1), buf, None, take.format);
+            sources.push((sample_key(pad, layer, robin), src));
+            if let Some(n) = robins.get_mut(layer) {
+                *n += 1;
+            }
+        }
+    }
+    let ins = juke_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not Juke"))?;
+    let prefix = format!("p{}.", pad + 1);
+    ins.samples.retain(|k, _| !k.starts_with(&prefix));
+    ins.samples.extend(sources);
+    ins.params.insert(format!("p{}_source", pad + 1), 0.0);
+    ins.params.insert(format!("p{}_trim", pad + 1), trim);
+    let layout = ins.kit.get_or_insert_with(default_layout);
+    while layout.pads.len() < PADS {
+        let i = layout.pads.len();
+        let (n, f) = DEFAULT_PADS.get(i).copied().unwrap_or(("Pad", DrumFamily::Percussion));
+        layout.pads.push(KitPad { name: n.into(), family: f });
+    }
+    if let Some(entry) = layout.pads.get_mut(pad) {
+        entry.name = name.clone();
+        entry.family = family;
+    }
+    let layers = robins.iter().filter(|n| **n > 0).count();
+    Ok(json!({
+        "track": t, "pad": pad + 1, "name": name, "family": family.id(),
+        "hits": take.hits.len(), "layers": layers, "robins": robins.iter().filter(|n| **n > 0).collect::<Vec<_>>(),
+        "trim": trim,
+    }))
+}
+
+/// [`import_pad`] from audio already at the session's rate: the automatic import (the hits the
+/// analysis places, as it places them).
+#[allow(clippy::too_many_arguments)]
+fn import_pad_audio(
+    e: &mut Engine,
+    id: &str,
+    t: TrackId,
+    pad: usize,
+    first: &str,
+    bufs: &[soundcraft_audio_io::AudioBuffer],
+    format: soundcraft_audio_io::FileFormat,
+    family: Option<DrumFamily>,
+) -> Result<Value> {
+    let take = analyze_takes(e, id, t, pad, first, bufs, format, family)?;
+    let chosen = auto_picks(&take);
+    let mut v = build_pad(e, id, &take, &chosen)?;
+    let off = (0..take.hits.len()).filter(|i| take.off_pitch(*i)).count();
+    v["off_pitch"] = json!(off);
+    v["dropped"] = json!(take.hits.len() - off - chosen.len());
+    Ok(v)
+}
+
+/// The analysis's own picks, as (hit, layer, robin), the layers renumbered from 0 in order (a
+/// take played at one strength is one layer).
+fn auto_picks(take: &TakeHits) -> Vec<(usize, usize, usize)> {
+    let mut bands: Vec<usize> =
+        (0..take.hits.len()).filter(|i| take.picked.get(*i).is_some_and(Option::is_some)).filter_map(|i| take.band.get(i).copied()).collect();
+    bands.sort_unstable();
+    bands.dedup();
+    (0..take.hits.len())
+        .filter_map(|i| {
+            let robin = take.picked.get(i).copied().flatten()?;
+            let layer = bands.iter().position(|b| Some(*b) == take.band.get(i).copied())?;
+            Some((i, layer, robin))
+        })
+        .collect()
+}
+
+/// A pad name from a take's file name: its stem without take numbers, velocity marks and
+/// separators ("Snare_03_hard.wav" is "Snare").
+fn pad_name(file: &str) -> String {
+    let stem = Path::new(file).file_stem().and_then(|x| x.to_str()).unwrap_or(file);
+    let marks = ["hard", "soft", "medium", "med", "ghost", "loud", "quiet", "vel", "rr", "take", "hit", "layer"];
+    let words: Vec<&str> = stem
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .filter(|w| !w.chars().all(|c| c.is_ascii_digit()))
+        .filter(|w| !marks.iter().any(|m| w.trim_end_matches(|c: char| c.is_ascii_digit()).eq_ignore_ascii_case(m)))
+        .collect();
+    let name = if words.is_empty() { stem.to_string() } else { words.join(" ") };
+    let name: String = name.trim_end_matches(|c: char| c.is_ascii_digit()).trim().chars().take(32).collect();
+    if name.is_empty() { "Pad".into() } else { name }
+}
+
+/// The default layout's pad a drum take's name points to, and its family: "Kick 03.wav" is
+/// pad 1 (kick); a tom without high, mid or low is a tom with no pad of its own.
+pub fn guess_drum(name: &str) -> (Option<usize>, Option<DrumFamily>) {
+    use DrumFamily::*;
+    let lower = name.to_lowercase();
+    let words: Vec<String> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim_end_matches(|c: char| c.is_ascii_digit()).to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    let joined: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+    let hatty = has(&["hat", "hh", "hihat", "hats"]) || joined.contains("hihat");
+    if (hatty && has(&["open", "opn"])) || has(&["oh", "ohh", "ohat"]) {
+        return (Some(6), Some(Hat));
+    }
+    if (hatty && has(&["pedal", "foot", "ped"])) || has(&["ph", "phh"]) {
+        return (Some(5), Some(Hat));
+    }
+    if hatty || has(&["ch", "chh", "chat"]) {
+        return (Some(4), Some(Hat));
+    }
+    if has(&["kick", "kik", "bd", "kck", "kicks"]) || joined.contains("bassdrum") {
+        return (Some(0), Some(Kick));
+    }
+    if has(&["rim", "rimshot", "sidestick", "xstick", "stick", "rs"]) {
+        return (Some(1), Some(Percussion));
+    }
+    if has(&["snare", "sn", "sd", "snr", "snares"]) {
+        return (Some(2), Some(Snare));
+    }
+    if has(&["clap", "cp", "claps", "clp"]) {
+        return (Some(3), Some(Clap));
+    }
+    let tom = has(&["tom", "toms", "floor", "ft", "lt", "mt", "ht"]) || joined.contains("tom");
+    if tom {
+        let num =
+            lower.split("tom").nth(1).and_then(|r| r.trim_start_matches(|c: char| !c.is_alphanumeric()).chars().next()).and_then(|c| c.to_digit(10));
+        if has(&["floor", "ft", "lt", "low", "lo"]) || num == Some(3) || num == Some(4) {
+            return (Some(7), Some(Tom));
+        }
+        if has(&["mid", "mt", "middle"]) || num == Some(2) {
+            return (Some(8), Some(Tom));
+        }
+        if has(&["high", "hi", "ht", "rack"]) || num == Some(1) {
+            return (Some(9), Some(Tom));
+        }
+        return (None, Some(Tom));
+    }
+    if has(&["crash", "cr", "splash", "china", "crsh"]) {
+        return (Some(10), Some(Cymbal));
+    }
+    if has(&["ride", "rd", "bell"]) {
+        return (Some(11), Some(Cymbal));
+    }
+    if has(&["tamb", "tambourine", "tambo"]) {
+        return (Some(12), Some(Percussion));
+    }
+    if has(&["cowbell", "cow", "cb"]) {
+        return (Some(13), Some(Percussion));
+    }
+    if has(&["shaker", "shk", "shake", "maraca", "maracas"]) {
+        return (Some(14), Some(Percussion));
+    }
+    if has(&["clave", "claves", "block", "woodblock"]) {
+        return (Some(15), Some(Percussion));
+    }
+    (None, None)
+}
+
+/// Whether `name` is an audio file Juke imports.
+fn audio_file(name: &str) -> bool {
+    let ext = Path::new(name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    ["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "opus", "m4a", "caf"].contains(&ext.as_str())
+}
+
+fn kit_import(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.kit_import";
+    let t = juke_track(e, id, p)?;
+    // (file path, what names it: its sub-folder and its name).
+    let mut files: Vec<(String, String)> = Vec::new();
+    let folder = p.get("folder").and_then(Value::as_str);
+    if let Some(dir) = folder {
+        let mut entries = crate::io::list_dir(dir);
+        entries.sort();
+        for entry in entries {
+            let fname = entry.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+            if audio_file(&fname) {
+                files.push((entry.to_string_lossy().into_owned(), fname));
+            } else if entry.extension().is_none() {
+                // One level of sub-folders: "Kick/01.wav" is a kick.
+                let mut inner = crate::io::list_dir(&entry);
+                inner.sort();
+                for f in inner {
+                    let n = f.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+                    if audio_file(&n) {
+                        files.push((f.to_string_lossy().into_owned(), format!("{fname} {n}")));
+                    }
+                }
+            }
+        }
+    }
+    for path in string_list(p, "paths") {
+        let n = Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        if audio_file(&n) {
+            files.push((path, n));
+        }
+    }
+    if files.is_empty() {
+        return Err(bad(id, "no audio files to import"));
+    }
+    // Group by pad: known drums to their pads, the rest by name.
+    let mut fixed: Vec<(usize, Vec<(String, String)>)> = Vec::new();
+    let mut loose: Vec<(String, Option<DrumFamily>, Vec<(String, String)>)> = Vec::new();
+    for (path, label) in files {
+        match guess_drum(&label) {
+            (Some(pad), _) => match fixed.iter_mut().find(|g| g.0 == pad) {
+                Some(g) => g.1.push((path, label)),
+                None => fixed.push((pad, vec![(path, label)])),
+            },
+            (None, fam) => {
+                let key = pad_name(&label).to_lowercase();
+                match loose.iter_mut().find(|g| g.0 == key) {
+                    Some(g) => g.2.push((path, label)),
+                    None => loose.push((key, fam, vec![(path, label)])),
+                }
+            }
+        }
+    }
+    let mut taken: Vec<usize> = fixed.iter().map(|g| g.0).collect();
+    let mut groups: Vec<(usize, Option<DrumFamily>, Vec<(String, String)>)> = fixed.into_iter().map(|(pad, f)| (pad, None, f)).collect();
+    let mut skipped: Vec<String> = Vec::new();
+    for (key, fam, f) in loose {
+        // A tom takes a free tom pad first; anything else the first free pad.
+        let prefer: Vec<usize> = if fam == Some(DrumFamily::Tom) { vec![9, 8, 7] } else { Vec::new() };
+        match prefer.into_iter().chain(0..PADS).find(|i| !taken.contains(i)) {
+            Some(pad) => {
+                taken.push(pad);
+                groups.push((pad, fam, f));
+            }
+            None => skipped.push(key),
+        }
+    }
+    groups.sort_by_key(|g| g.0);
+    let mut pads = Vec::new();
+    for (pad, fam, f) in groups {
+        let paths: Vec<String> = f.iter().map(|(p, _)| p.clone()).collect();
+        let label = f.first().map(|(_, l)| l.clone()).unwrap_or_default();
+        let mut takes = read_takes(&paths)?;
+        // The pad is named for what named the files (a sub-folder's name, else the file's).
+        if let Some(first) = takes.first_mut() {
+            first.0 = label;
+        }
+        match import_pad(e, t, pad, &takes, fam) {
+            Ok(v) => pads.push(json!({"pad": pad + 1, "name": v["name"], "hits": v["hits"], "layers": v["layers"]})),
+            Err(err) => skipped.push(format!("{}: {err}", pad_name(&takes.first().map(|x| x.0.clone()).unwrap_or_default()))),
+        }
+    }
+    if pads.is_empty() {
+        return Err(bad(id, format!("nothing imported: {}", skipped.join("; "))));
+    }
+    let kit = p
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| folder.and_then(|d| Path::new(d).file_name()).and_then(|n| n.to_str()).map(str::to_string));
+    if let Some(name) = &kit
+        && let Some(ins) = juke_mut(e, t)
+    {
+        ins.kit.get_or_insert_with(default_layout).name = name.chars().take(48).collect();
+    }
+    Ok(json!({"kit": kit, "pads": pads, "skipped": skipped}))
 }
 
 fn pad_edit(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1026,6 +1847,277 @@ mod tests {
         let bytes =
             soundcraft_audio_io::encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, ..Default::default() }).unwrap();
         std::fs::write(path, bytes).unwrap();
+    }
+
+    /// A generated take (no recorded audio): 200 ms of silence, then hits of the given
+    /// amplitudes (decaying 150 Hz with a click), each 400 ms with 200 ms of silence after.
+    fn take_wav(path: &Path, rate: u32, amps: &[f32]) {
+        let sr = rate as f32;
+        let mut x = vec![0.0f32; rate as usize / 5];
+        for &a in amps {
+            x.extend((0..(sr * 0.4) as usize).map(|i| {
+                let t = i as f32 / sr;
+                a * (-t / 0.06).exp() * (t * 150.0 * std::f32::consts::TAU).sin()
+            }));
+            x.extend(vec![0.0; rate as usize / 5]);
+        }
+        let buf = AudioBuffer { sample_rate: rate, channels: vec![x.clone(), x] };
+        let bytes =
+            soundcraft_audio_io::encode(&buf, &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, ..Default::default() }).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn a_run_of_hits_becomes_a_pads_layers_and_round_robins_and_undoes() {
+        let d = dir("pad-import");
+        let wav = d.join("Snare_take 03.wav");
+        // Sixteen hits, soft to hard and back, in one take.
+        let amps: Vec<f32> = (0..16).map(|i| 0.03 * 1.25f32.powi((i * 5) % 16)).collect();
+        take_wav(&wav, 44_100, &amps);
+        let (mut e, t) = beat();
+        let v = e.execute("mix.kit_pad_import", &json!({"track": t.0, "pad": 5, "paths": [wav.to_string_lossy()]})).unwrap();
+        assert_eq!(v["hits"], 16, "{v}");
+        assert_eq!(v["layers"], 4);
+        assert_eq!(v["robins"], json!([4, 4, 4, 4]));
+        assert_eq!(v["name"], "Snare");
+        assert_eq!(v["family"], "snare");
+        let ins = juke(&e, t);
+        assert_eq!(ins.samples.keys().filter(|k| k.starts_with("p5.")).count(), 16);
+        assert_eq!(ins.params.get("p5_source"), Some(&0.0));
+        let trim = v["trim"].as_f64().unwrap() as f32;
+        assert_eq!(ins.params.get("p5_trim"), Some(&trim));
+        assert_eq!(pad_layout(&ins, 4).name, "Snare");
+        // Each sample starts at its attack (no leading silence) and is at the session's rate.
+        let src = ins.samples.get("p5.v4.r1").copied().unwrap();
+        let audio = e.session().pool.get(src).unwrap().clone();
+        let first = audio.channel(0).unwrap().iter().position(|v| v.abs() > 0.01).unwrap();
+        assert!(first < 100, "attack at frame {first}");
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!juke(&e, t).samples.keys().any(|k| k.starts_with("p5.")), "undo takes the import back");
+        // A file with no hits refuses and changes nothing.
+        let quiet = d.join("quiet.wav");
+        take_wav(&quiet, 44_100, &[]);
+        assert!(e.execute("mix.kit_pad_import", &json!({"track": t.0, "pad": 5, "paths": [quiet.to_string_lossy()]})).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_selection_on_an_audio_track_is_analyzed_for_a_pad() {
+        let d = dir("pad-selection");
+        let wav = d.join("Floor Tom.wav");
+        take_wav(&wav, 48_000, &[0.1, 0.3, 0.9, 0.2, 0.6, 0.15]);
+        let (mut e, t) = beat();
+        e.execute("file.import_audio", &json!({"path": wav.to_string_lossy()})).unwrap();
+        let audio = e.session().tracks.iter().find(|tr| tr.kind == TrackKind::Audio).map(|tr| tr.id).unwrap();
+        let analyze = |e: &mut Engine, end: i64| {
+            e.execute("mix.kit_pad_analyze", &json!({"track": t.0, "pad": 8, "selection": true, "from": audio.0, "start": 0, "end": end}))
+        };
+        // All six hits selected, named for the clip under the selection.
+        let v = analyze(&mut e, 48_000 * 4).unwrap();
+        assert_eq!(v["hits"].as_array().unwrap().len(), 6, "{v}");
+        assert_eq!(v["name"], "Floor Tom");
+        assert_eq!(v["family"], "tom");
+        let picks: Vec<Value> =
+            v["hits"].as_array().unwrap().iter().filter(|h| !h["pick"].is_null()).map(|h| json!({"hit": h["hit"], "layer": h["band"]})).collect();
+        e.execute("mix.kit_pad_pick", &json!({"take": v["take"], "picks": picks})).unwrap();
+        assert_eq!(juke(&e, t).samples.keys().filter(|k| k.starts_with("p8.")).count(), 6);
+        // Just the first two hits (200 ms of silence, then 600 ms a hit).
+        assert_eq!(analyze(&mut e, 48_000 * 13 / 10).unwrap()["hits"].as_array().unwrap().len(), 2);
+        // An empty or silent selection refuses.
+        assert!(analyze(&mut e, 0).is_err());
+        assert!(
+            e.execute(
+                "mix.kit_pad_analyze",
+                &json!({"track": t.0, "pad": 8, "selection": true, "from": audio.0, "start": 48_000 * 60, "end": 48_000 * 61})
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn analyzed_hits_are_banded_and_the_picked_ones_build_the_pad() {
+        let d = dir("pad-analyze");
+        let wav = d.join("Snare.wav");
+        // Twenty hits from soft to hard.
+        let amps: Vec<f32> = (0..20).map(|i| 0.02 * 1.22f32.powi(i)).collect();
+        take_wav(&wav, 48_000, &amps);
+        let (mut e, t) = beat();
+        let before = juke(&e, t);
+        let v = e.execute("mix.kit_pad_analyze", &json!({"track": t.0, "pad": 3, "paths": [wav.to_string_lossy()]})).unwrap();
+        assert_eq!(juke(&e, t), before, "analysing changes nothing");
+        let hits = v["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 20);
+        // Bands rise with loudness, all four used; sixteen are pre-picked, four a band.
+        let mut by_db: Vec<&Value> = hits.iter().collect();
+        by_db.sort_by(|a, b| a["db"].as_f64().unwrap().total_cmp(&b["db"].as_f64().unwrap()));
+        let bands: Vec<u64> = by_db.iter().map(|h| h["band"].as_u64().unwrap()).collect();
+        assert!(bands.windows(2).all(|w| w[0] <= w[1]), "{bands:?}");
+        assert_eq!((bands[0], bands[19]), (1, 4));
+        assert_eq!(hits.iter().filter(|h| !h["pick"].is_null()).count(), 16);
+        assert_eq!(hits[0]["env"].as_array().unwrap().len(), 48);
+        let take = v["take"].as_u64().unwrap();
+        // Pick the two softest as Ghost and the loudest as Hard.
+        let id = |k: usize| by_db[k]["hit"].as_u64().unwrap();
+        let picks = json!([{"hit": id(0), "layer": 1}, {"hit": id(1), "layer": 1}, {"hit": id(19), "layer": 4}]);
+        let r = e.execute("mix.kit_pad_pick", &json!({"take": take, "picks": picks})).unwrap();
+        assert_eq!(r["layers"], 2, "{r}");
+        let keys: Vec<String> = juke(&e, t).samples.keys().filter(|k| k.starts_with("p3.")).cloned().collect();
+        let mut keys = keys;
+        keys.sort();
+        assert_eq!(keys, ["p3.v1.r1", "p3.v1.r2", "p3.v4.r1"]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(juke(&e, t), before, "one undo step");
+        // Five in a layer, a hit twice, a stale take: refused.
+        let five: Vec<Value> = (0..5).map(|k| json!({"hit": id(k), "layer": 2})).collect();
+        assert!(e.execute("mix.kit_pad_pick", &json!({"take": take, "picks": five})).is_err());
+        assert!(e.execute("mix.kit_pad_pick", &json!({"take": take, "picks": [{"hit": 0, "layer": 1}, {"hit": 0, "layer": 2}]})).is_err());
+        assert!(e.execute("mix.kit_pad_pick", &json!({"take": take + 1, "picks": [{"hit": 0, "layer": 1}]})).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_pad_copied_to_another_plays_the_same_sound_on_its_own_note() {
+        let d = dir("pad-copy");
+        let wav = d.join("Kick.wav");
+        take_wav(&wav, 48_000, &[0.3, 0.8]);
+        let (mut e, t) = beat();
+        e.execute("mix.kit_pad_import", &json!({"track": t.0, "pad": 1, "paths": [wav.to_string_lossy()]})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p1_tune", "value": -3.0})).unwrap();
+        let note9 = juke(&e, t).params.get("p9_note").copied();
+        let v = e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "to": 9})).unwrap();
+        assert_eq!(v["name"], "Kick 2");
+        let ins = juke(&e, t);
+        assert_eq!(ins.params.get("p9_tune"), Some(&-3.0));
+        assert_eq!(ins.params.get("p9_note").copied(), note9, "the copy keeps its own note");
+        assert_ne!(ins.params.get("p9_note"), ins.params.get("p1_note"));
+        let mut a: Vec<_> = ins.samples.iter().filter(|(k, _)| k.starts_with("p1.")).map(|(k, v)| (k.replacen("p1.", "", 1), *v)).collect();
+        let mut b: Vec<_> = ins.samples.iter().filter(|(k, _)| k.starts_with("p9.")).map(|(k, v)| (k.replacen("p9.", "", 1), *v)).collect();
+        a.sort();
+        b.sort();
+        assert!(!a.is_empty() && a == b, "the same samples, not copies of the audio");
+        assert_eq!(pad_layout(&ins, 8).family, pad_layout(&ins, 0).family);
+        // Its own tune from here on.
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "p9_tune", "value": 5.0})).unwrap();
+        assert_eq!(juke(&e, t).params.get("p1_tune"), Some(&-3.0));
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!juke(&e, t).samples.keys().any(|k| k.starts_with("p9.")), "undo takes the copy back");
+        assert!(e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 2, "to": 2})).is_err());
+        // Onto an empty note: refused (that is a note variant's job).
+        let used: Vec<u8> = (0..PADS).map(|pd| pad_note_of(&juke(&e, t), pd)).collect();
+        let empty = (24u8..96).find(|n| !used.contains(n)).unwrap();
+        assert!(e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "note": empty})).is_err());
+        // Onto a pad's note: that pad.
+        let v = e.execute("mix.kit_pad_copy", &json!({"track": t.0, "from": 1, "note": used[2]})).unwrap();
+        assert_eq!(v["pad"], 3);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_note_variant_plays_a_pad_on_another_note_with_its_own_settings() {
+        let (mut e, t) = beat();
+        let kick = pad_note_of(&juke(&e, t), 0);
+        let used: Vec<u8> = (0..PADS).map(|pd| pad_note_of(&juke(&e, t), pd)).collect();
+        let free: Vec<u8> = (24u8..96).filter(|n| !used.contains(n)).take(2).collect();
+        let (note, other) = (free[0], free[1]);
+        let v = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": note, "pad": 1})).unwrap();
+        assert_eq!((v["variant"].as_u64(), v["pad"].as_u64()), (Some(1), Some(1)));
+        let ins = juke(&e, t);
+        assert_eq!(variant_on(&ins, note), Some(0));
+        assert_eq!(variant_pad(&ins, 0), 0);
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "var1_tune", "value": 7.0})).unwrap();
+        // A second variant like the first, then the same note again reuses its slot.
+        let v2 = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": other, "pad": 1, "like": 1})).unwrap();
+        assert_eq!(v2["variant"], 2);
+        assert_eq!(juke(&e, t).params.get("var2_tune"), Some(&7.0));
+        let again = e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": note, "pad": 3})).unwrap();
+        assert_eq!(again["variant"], 1);
+        assert_eq!(juke(&e, t).params.get("var1_tune"), Some(&0.0), "made anew: offsets back to zero");
+        // Not on a pad's own note; cleared, the note is free.
+        assert!(e.execute("mix.kit_note_variant", &json!({"track": t.0, "note": kick, "pad": 2})).is_err());
+        assert_eq!(e.execute("mix.kit_note_variant_clear", &json!({"track": t.0, "note": note})).unwrap()["cleared"], 1);
+        assert_eq!(variant_on(&juke(&e, t), note), None);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(variant_on(&juke(&e, t), note), Some(0), "undo brings it back");
+    }
+
+    #[test]
+    fn takes_played_alike_are_round_robins_of_one_layer() {
+        let d = dir("pad-alike");
+        let paths: Vec<String> = (0..3)
+            .map(|i| {
+                let p = d.join(format!("kick {i}.wav"));
+                take_wav(&p, 48_000, &[0.5 + 0.02 * i as f32]);
+                p.to_string_lossy().into_owned()
+            })
+            .collect();
+        let (mut e, t) = beat();
+        let v = e.execute("mix.kit_pad_import", &json!({"track": t.0, "pad": 1, "paths": paths})).unwrap();
+        assert_eq!((v["hits"].as_u64(), v["layers"].as_u64()), (Some(3), Some(1)), "{v}");
+        assert_eq!(v["robins"], json!([3]));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_folder_of_takes_maps_to_pads_by_name() {
+        let d = dir("kit-import").join("Garage Kit");
+        std::fs::create_dir_all(d.join("Toms")).unwrap();
+        for name in ["BD_01.wav", "snare-hard.wav", "HH closed.wav", "Open Hat.wav", "Crash 1.wav", "weird thing.wav", "notes.txt"] {
+            if name.ends_with(".wav") {
+                take_wav(&d.join(name), 48_000, &[0.4, 0.8]);
+            } else {
+                std::fs::write(d.join(name), "x").unwrap();
+            }
+        }
+        take_wav(&d.join("Toms").join("floor.wav"), 48_000, &[0.6]);
+        take_wav(&d.join("Toms").join("rack.wav"), 48_000, &[0.6]);
+        let (mut e, t) = beat();
+        let v = e.execute("mix.kit_import", &json!({"track": t.0, "folder": d.to_string_lossy()})).unwrap();
+        let pads: Vec<(u64, String)> =
+            v["pads"].as_array().unwrap().iter().map(|p| (p["pad"].as_u64().unwrap(), p["name"].as_str().unwrap().to_string())).collect();
+        assert_eq!(v["kit"], "Garage Kit");
+        let pad_of = |n: &str| pads.iter().find(|p| p.1.eq_ignore_ascii_case(n)).map(|p| p.0);
+        assert_eq!(pad_of("BD"), Some(1), "{pads:?}");
+        assert_eq!(pad_of("snare"), Some(3));
+        assert_eq!(pad_of("HH closed"), Some(5));
+        assert_eq!(pad_of("Open Hat"), Some(7));
+        assert_eq!(pad_of("Crash"), Some(11));
+        assert_eq!(pad_of("Toms floor"), Some(8));
+        assert_eq!(pad_of("Toms rack"), Some(10));
+        // The unknown one takes the first free pad (pad 2).
+        assert_eq!(pad_of("weird thing"), Some(2));
+        let ins = juke(&e, t);
+        assert_eq!(ins.kit.as_ref().unwrap().name, "Garage Kit");
+        assert_eq!(pad_layout(&ins, 10).family, DrumFamily::Cymbal);
+        let _ = std::fs::remove_dir_all(d.parent().unwrap());
+    }
+
+    #[test]
+    fn drum_names_point_to_their_pads() {
+        for (name, pad) in [
+            ("Kick In 02.wav", Some(0)),
+            ("BassDrum.wav", Some(0)),
+            ("sidestick.wav", Some(1)),
+            ("SD_ghost.wav", Some(2)),
+            ("clap.aif", Some(3)),
+            ("hihat_closed.wav", Some(4)),
+            ("HH pedal.wav", Some(5)),
+            ("OH 01.wav", Some(6)),
+            ("Tom 3.wav", Some(7)),
+            ("Tom2.wav", Some(8)),
+            ("Hi Tom.wav", Some(9)),
+            ("Ride Bell.wav", Some(11)),
+            ("tambourine.wav", Some(12)),
+            ("shaker.wav", Some(14)),
+            ("tom.wav", None),
+            ("guitar.wav", None),
+        ] {
+            assert_eq!(guess_drum(name).0, pad, "{name}");
+        }
+        assert_eq!(pad_name("Snare_03_hard.wav"), "Snare");
+        assert_eq!(pad_name("Kick In 02.wav"), "Kick In");
+        assert_eq!(pad_name("01.wav"), "Pad");
     }
 
     fn beat() -> (Engine, TrackId) {
