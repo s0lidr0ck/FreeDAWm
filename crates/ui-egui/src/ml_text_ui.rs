@@ -50,7 +50,7 @@ pub struct LyricsDialog {
 pub struct SongDialog {
     /// YuE2 (true) or ACE-Step 1.5.
     pub yue2: bool,
-    /// The servers' addresses (empty: each one's default port on this computer).
+    /// A server the person runs instead of the engine FreeDAWm installs (empty: the installed one).
     pub yue2_server: String,
     pub ace_server: String,
     pub style: String,
@@ -88,6 +88,16 @@ impl Default for SongDialog {
 }
 
 impl SongDialog {
+    /// The engine's model id (Setup › ML Models).
+    pub fn engine_id(&self) -> &'static str {
+        if self.yue2 { "yue2" } else { "acestep" }
+    }
+
+    /// Whether the song goes to the engine FreeDAWm installs (no server address given).
+    pub fn bundled(&self) -> bool {
+        (if self.yue2 { &self.yue2_server } else { &self.ace_server }).trim().is_empty()
+    }
+
     /// Whether Run can start: something to sing, and a whole-number seed (or none).
     pub fn ready(&self) -> bool {
         let something = !self.style.trim().is_empty() || !self.lyrics.trim().is_empty() || (self.yue2 && !self.score.trim().is_empty());
@@ -96,7 +106,10 @@ impl SongDialog {
 }
 
 pub fn song_params(o: &mut serde_json::Map<String, Value>, d: &SongDialog) {
-    o.remove("device");
+    // The device is the installed engine's; a server of the person's own chooses its own.
+    if !d.bundled() {
+        o.remove("device");
+    }
     o.insert("engine".into(), json!(if d.yue2 { "yue2" } else { "acestep" }));
     let server = if d.yue2 { &d.yue2_server } else { &d.ace_server };
     if !server.trim().is_empty() {
@@ -134,19 +147,24 @@ pub fn song_options(ui: &mut egui::Ui, d: &mut SongDialog, cursor: &str) {
         ui.radio_value(&mut d.yue2, true, "YuE2").on_hover_text("Writes an editable score, then sings it. Best quality; slower.");
         ui.radio_value(&mut d.yue2, false, "ACE-Step 1.5").on_hover_text("Fast; plans tempo, key and lyrics itself.");
     });
-    ui.horizontal(|ui| {
-        ui.label("Server");
-        let (field, hint) = if d.yue2 {
-            (&mut d.yue2_server, "http://127.0.0.1:8087 (yue-server)")
-        } else {
-            (&mut d.ace_server, "http://127.0.0.1:8080 (ace-server)")
-        };
-        ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(260.0));
-    })
-    .response
-    .on_hover_text(
-        "The model runs in its own server on this computer (yue2.cpp or acestep.cpp, started with its models); FreeDAWm sends it the song to make.",
-    );
+    egui::CollapsingHeader::new("Use a server I run (advanced)").id_salt("song_server").default_open(!d.bundled()).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Server");
+            let (field, hint) = if d.yue2 {
+                (&mut d.yue2_server, "e.g. http://192.168.1.20:8087 (yue-server)")
+            } else {
+                (&mut d.ace_server, "e.g. http://192.168.1.20:8080 (ace-server)")
+            };
+            ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(240.0));
+        });
+        ui.label(
+            egui::RichText::new(
+                "Empty: the engine FreeDAWm installs (Setup › ML Models) runs on this computer. An address sends the song to a yue2.cpp or acestep.cpp server you run, on a bigger GPU for example.",
+            )
+            .small()
+            .color(tk.text_dim),
+        );
+    });
     ui.label(if d.yue2 { "Style tags" } else { "Caption" });
     ui.add(
         egui::TextEdit::multiline(&mut d.style)

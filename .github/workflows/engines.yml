@@ -1,0 +1,139 @@
+# Song engines: builds the YuE2 and ACE-Step servers (yue2.cpp, acestep.cpp; MIT) at the commits
+# pinned in tools/engines/engines.json for every platform FreeDAWm ships on, packs each into an
+# engine zip (tools/engines/package.py), and writes engines.json (tools/engines/manifest.py), the
+# manifest the app reads beside models.json. Setup › ML Models then downloads an engine as one
+# item: this zip for the person's platform plus the engine's GGUF models from Hugging Face.
+#
+# Windows and Linux: Vulkan (NVIDIA, AMD and Intel GPUs, no CUDA install) with every CPU variant,
+# as runtime-loaded ggml backends (GGML_BACKEND_DL), so a machine without Vulkan falls back to the
+# CPU; the libraries are found beside the program ($ORIGIN). macOS (Apple silicon): one static
+# program with Metal.
+#
+#   pull request touching    build and pack everything as a check; nothing is published
+#   tools/engines or this file
+#   Actions › Song engines   build, pack, and with "publish" ticked upload the zips and engines.json
+#   › Run                    to the models-v1 release (the owner's go-ahead is running it)
+name: Song engines
+
+on:
+  pull_request:
+    paths: [".github/workflows/engines.yml", "tools/engines/**"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the engine zips and engines.json to the models-v1 release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engines-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VULKAN_VERSION: "1.4.313.2"
+
+jobs:
+  build:
+    name: ${{ matrix.engine }} ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [yue2, acestep]
+        include:
+          - { os: ubuntu-22.04, platform: linux-x86_64 }
+          - { os: windows-latest, platform: windows-x86_64 }
+          - { os: macos-15, platform: macos-aarch64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upstream source at the pinned commit
+        shell: bash
+        run: |
+          read -r repo commit < <(python3 -c "import json; e=[e for e in json.load(open('tools/engines/engines.json'))['engines'] if e['id']=='${{ matrix.engine }}'][0]; print(e['repo'], e['commit'])")
+          git init upstream && cd upstream
+          git remote add origin "$repo"
+          git fetch --depth 1 origin "$commit"
+          git checkout --quiet FETCH_HEAD
+          git submodule update --init --depth 1 --recursive
+          echo "commit $(git rev-parse HEAD)" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libvulkan-dev glslc spirv-headers
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -sSfL -o "$env:RUNNER_TEMP\vulkan.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\vulkan.exe" --root "C:\VulkanSDK\$env:VULKAN_VERSION" --accept-licenses --default-answer --confirm-command install
+          "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "C:\VulkanSDK\$env:VULKAN_VERSION\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build (Windows, Linux)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          cmake -S upstream -B upstream/build -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON -DGGML_NATIVE=OFF \
+            -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON
+          cmake --build upstream/build --config Release -j 4
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # One self-contained program (no dylibs to find), Metal built in.
+          cmake -S upstream -B upstream/build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_METAL_EMBED_LIBRARY=ON
+          cmake --build upstream/build --config Release -j 4
+
+      - name: Pack
+        shell: bash
+        run: python3 tools/engines/package.py ${{ matrix.engine }} ${{ matrix.platform }} upstream/build upstream dist
+
+      - name: The server starts (it must print its usage, not fail on a missing library)
+        shell: bash
+        run: |
+          mkdir smoke && cd smoke && python3 -c "import zipfile; zipfile.ZipFile('../dist/${{ matrix.engine }}-${{ matrix.platform }}.zip').extractall('.')"
+          chmod +x bin/* || true
+          exe=$(python3 -c "import json; print(json.load(open('card.json'))['file'])")
+          set +e; "./$exe" --help >help.txt 2>&1; code=$?; set -e
+          head -5 help.txt
+          grep -qi "usage" help.txt || { echo "::error::$exe did not run (exit $code)"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.engine }}-${{ matrix.platform }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  manifest:
+    name: engines.json
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: engine-*
+          merge-multiple: true
+      - name: Write engines.json
+        run: python3 tools/engines/manifest.py dist dist/engines.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engines-manifest
+          path: dist/engines.json
+      - name: Upload to the models release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload models-v1 --repo "$GITHUB_REPOSITORY" --clobber dist/*.zip dist/engines.json

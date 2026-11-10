@@ -32,11 +32,12 @@
 //!                 [--continue IN.mid [--instrument 0..127|drums]] [--device auto|gpu|cpu] [--models DIR]
 //!                                                 text to MIDI (MIDI-LLM): a format-1 .mid, one track per
 //!                                                 General MIDI instrument, at a constant --bpm
-//! freedawm-cli ml song OUT.wav --style TEXT [--engine yue2|acestep] [--server URL] [--lyrics FILE] [--instrumental]
+//! freedawm-cli ml song OUT.wav --style TEXT [--engine yue2|acestep] [--server URL] [--device auto|gpu|cpu] [--models DIR] [--lyrics FILE] [--instrumental]
 //!                 [--seconds 60] [--seed N] [--score FILE.abc] [--plan full|melody|off] [--bpm N] [--key "A minor"]
 //!                 [--no-planner] [--midi OUT.mid]
-//!                                                 a whole song from a running yue-server / ace-server;
-//!                                                 --midi writes YuE2's score as MIDI
+//!                                                 a whole song from the installed song engine (Setup ›
+//!                                                 ML Models; --server: one you run); --midi writes
+//!                                                 YuE2's score as MIDI
 //! freedawm-cli ml models [--models DIR]         the model folder and which models are installed
 //! freedawm-cli ml bench IN.wav [--seconds 30]   HTDemucs speed on the GPU (DirectML) and the CPU
 //! ```
@@ -460,8 +461,11 @@ fn ml_text_midi(args: &[String], device: soundcraft_ml::Device, dir: &std::path:
 fn ml_song(args: &[String]) -> ExitCode {
     use soundcraft_model::Session;
     let Some(out) = args.get(1).filter(|a| !a.starts_with("--")) else { return fail("ml song OUT.wav --style TEXT …") };
-    let mut p = json!({"start": 0, "style": arg_value(args, "--style").unwrap_or_default()});
-    for (flag, key) in [("--engine", "engine"), ("--server", "server"), ("--plan", "plan"), ("--key", "key"), ("--seed", "seed")] {
+    let mut p = json!({"start": 0, "style": arg_value(args, "--style").unwrap_or_default(),
+        "models_dir": arg_value(args, "--models").unwrap_or_else(|| soundcraft_ml::models::models_dir().to_string_lossy().into_owned())});
+    for (flag, key) in
+        [("--engine", "engine"), ("--server", "server"), ("--plan", "plan"), ("--key", "key"), ("--seed", "seed"), ("--device", "device")]
+    {
         if let Some(v) = arg_value(args, flag) {
             p[key] = json!(v);
         }

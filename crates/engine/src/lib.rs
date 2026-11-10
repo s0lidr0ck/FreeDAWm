@@ -54,10 +54,13 @@ pub use cmd::{COMMAND_ALIASES, CommandInfo, CommandSpec, canonical_id, command_s
 pub use soundcraft_model as model;
 
 /// Shuts the third-party plugin hosts down, running the module exit of every plugin binary they
-/// loaded. Call it at the end of `main`, once every plugin instance (mixer, player) is gone: a
+/// loaded, and stops the song engines' servers. Call it at the end of `main`, once every plugin instance (mixer, player) is gone: a
 /// plugin that has been used can crash when its module exit only runs from an exit handler.
 pub fn shutdown_plugin_hosts() {
     soundcraft_vst3_host::shutdown();
+    // The song engines' servers FreeDAWm started (Generate Song) stop with it.
+    #[cfg(not(target_arch = "wasm32"))]
+    soundcraft_ml::engine_server::shutdown_all();
 }
 
 /// Where the CLAP and VST3 hosts keep their plugin scan caches (`<config>/PluginScan`: `clap.json`,

@@ -105,7 +105,8 @@ pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], li
         Some(l) => Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: l.models.clone() },
         None => Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: Vec::new() },
     };
-    for km in KNOWN_MODELS.iter().filter(|m| !m.builtin && (only.is_empty() || only.iter().any(|o| o == m.id))) {
+    // Song engines are published by the engines workflow (engines.json), not here.
+    for km in KNOWN_MODELS.iter().filter(|m| !m.builtin && !catalog::is_engine(m.id) && (only.is_empty() || only.iter().any(|o| o == m.id))) {
         let dir = models.join(km.id);
         let card_path = dir.join("card.json");
         let manual = |note: String| ManifestModel {

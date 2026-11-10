@@ -39,6 +39,7 @@ pub mod clean;
 pub mod denoise;
 pub mod download;
 pub mod drumsep;
+pub mod engine_server;
 pub mod game;
 pub mod htdemucs;
 pub mod job;

@@ -524,7 +524,8 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         "ml.chords" => vec!["btc_chords"],
         "ml.lyrics" => vec!["whisper_lyrics"],
         "ml.text_midi" => vec!["midi_llm"],
-        // The song servers hold their own models.
+        // The installed engine, unless the song goes to a server the person runs.
+        "ml.song" if d.song.bundled() => vec![d.song.engine_id()],
         "ml.song" => Vec::new(),
         _ if d.clean_mode == soundcraft_engine::ml::CleanMode::Vocal || d.dereverb => vec!["srs_small"],
         _ => Vec::new(),
@@ -650,8 +651,8 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
             }
         }
         // whisper.cpp runs on the CPU here (no Vulkan SDK or CUDA toolkit to build its GPU backends).
-        // The song servers choose their own device.
-        if !matches!(d.command, "ml.lyrics" | "ml.song") {
+        // A song server of the person's own chooses its own device.
+        if d.command != "ml.lyrics" && !(d.command == "ml.song" && !d.song.bundled()) {
             ui.horizontal(|ui| {
                 ui.label("Run on");
                 egui::ComboBox::from_id_salt("ml_device").selected_text(device.label()).show_ui(ui, |ui| {
@@ -1237,8 +1238,16 @@ mod tests {
         assert!(!sd.song.ready());
         sd.song.style = "pop".into();
         assert!(sd.song.ready());
+        // The installed engine, on the chosen device; a server of one's own takes no device.
+        assert!(sd.song.bundled());
+        assert_eq!(sd.song.engine_id(), "yue2");
         let p = params(&sd, Device::Cpu);
+        assert_eq!(p["device"], "cpu");
+        assert!(p.get("server").is_none());
         assert!(ml::prepare(&app.engine, "ml.song", &p).is_ok(), "{p}");
+        sd.song.yue2_server = "http://10.0.0.5:8087".into();
+        let p = params(&sd, Device::Cpu);
+        assert!(p.get("device").is_none() && p["server"] == "http://10.0.0.5:8087", "{p}");
         // The settings stay for the next time it opens.
         app.ml.dialog = Some(d);
         assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());

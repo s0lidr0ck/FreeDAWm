@@ -1,7 +1,8 @@
 //! Generate Song: whole songs (vocals and accompaniment, 48 kHz stereo) from YuE2 or ACE-Step 1.5,
 //! through their native C++/GGML servers, `yue-server` (yue2.cpp) and `ace-server`
-//! (acestep.cpp), both MIT, run on this computer. FreeDAWm doesn't bundle the servers or their
-//! models: the person starts one (or both) and the job talks to it over HTTP on localhost.
+//! (acestep.cpp), both MIT. FreeDAWm downloads each as a song engine (Setup › ML Models: the
+//! server built for this platform and its GGUF models) and runs it itself
+//! ([`crate::engine_server`]); a `server` address uses a server the person runs instead.
 //!
 //! Both servers speak the same job protocol: `POST` a JSON request → `{"id"}`; `GET
 //! /job?id=N` → `{"status": running|done|failed|cancelled}`; `GET /job?id=N&result=1` → the
@@ -124,7 +125,8 @@ pub const MAX_SECONDS: f32 = 600.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SongOptions {
     pub engine: SongEngine,
-    /// The server, `http://host:port` (empty: the engine's default).
+    /// A server the person runs, `http://host:port`; empty: the engine FreeDAWm installs and runs
+    /// ([`crate::engine_server`]).
     pub server: InlineText<MAX_SERVER>,
     /// Style: YuE2's style tags, ACE-Step's caption.
     pub style: InlineText<MAX_STYLE>,
@@ -287,7 +289,7 @@ fn unreachable(engine: SongEngine, url: &str, why: &str) -> MlError {
         SongEngine::AceStep => "ace-server (acestep.cpp)",
     };
     MlError::NotInstalled(format!(
-        "no {} server at {url} ({why}): start {bin} with its models, or set the server address (see the control protocol docs, Generate Song)",
+        "no {} server at {url} ({why}): start {bin} there, or leave the server address empty to use the engine FreeDAWm installs (Setup › ML Models)",
         engine.label()
     ))
 }
@@ -438,10 +440,33 @@ fn first_track(ctype: &str, body: Vec<u8>) -> Result<(Vec<u8>, Option<serde_json
     Ok((audio, json))
 }
 
-/// Generate a song: talks to the engine's server, waits for it (cancellable), returns the audio.
-pub fn generate(opts: &SongOptions, ctx: &Ctx) -> Result<Song> {
+/// Generate a song: with no `server` address, through the engine FreeDAWm runs itself
+/// ([`crate::engine_server`], installed in `models_dir` from Setup › ML Models, on `device`);
+/// else through the server at that address. Waits for it (cancellable) and returns the audio.
+pub fn generate(opts: &SongOptions, models_dir: &std::path::Path, device: crate::Device, ctx: &Ctx) -> Result<Song> {
     let opts = opts.validated()?;
-    let client = Client { engine: opts.engine, url: opts.server_url(), agent: agent() };
+    let _lease;
+    let url = if opts.server.is_empty() {
+        let model = crate::models::load(models_dir, opts.engine.id()).map_err(|e| match e {
+            MlError::NotInstalled(_) => MlError::NotInstalled(format!(
+                "the {} song engine is not installed: download it in Setup › ML Models (or give the address of a server you run)",
+                opts.engine.label()
+            )),
+            other => other,
+        })?;
+        let lease = crate::engine_server::acquire(&model, device, ctx.cancel_flag(), &|w| ctx.say(w))?;
+        let url = lease.url.clone();
+        _lease = Some(lease);
+        url
+    } else {
+        _lease = None;
+        opts.server_url()
+    };
+    run(&opts, url, ctx)
+}
+
+fn run(opts: &SongOptions, url: String, ctx: &Ctx) -> Result<Song> {
+    let client = Client { engine: opts.engine, url, agent: agent() };
     ctx.say(&format!("Connecting to {}", client.url));
     // Health first: a clear message when nothing is listening.
     let _ = Client::json(client.call(client.agent.get(&format!("{}/health", client.url)), None)?)?;
@@ -551,7 +576,12 @@ mod tests {
         // A port nothing listens on (bound, then closed).
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let o = SongOptions { server: InlineText::new(&format!("127.0.0.1:{port}")), ..SongOptions::new(SongEngine::AceStep, "pop") };
-        let e = generate(&o, &Ctx::default()).unwrap_err();
+        let e = generate(&o, std::path::Path::new("/nowhere"), crate::Device::Auto, &Ctx::default()).unwrap_err();
         assert!(matches!(e, MlError::NotInstalled(ref m) if m.contains("ace-server")), "{e:?}");
+        // No address and no engine installed: download it.
+        let o = SongOptions::new(SongEngine::Yue2, "pop");
+        let empty = std::env::temp_dir().join(format!("freedawm-no-engines-{}", std::process::id()));
+        let e = generate(&o, &empty, crate::Device::Auto, &Ctx::default()).unwrap_err();
+        assert!(matches!(e, MlError::NotInstalled(ref m) if m.contains("Setup › ML Models")), "{e:?}");
     }
 }

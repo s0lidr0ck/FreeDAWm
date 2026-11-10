@@ -676,9 +676,10 @@ fn run_inner(job: &Job, ctx: &Ctx) -> Result<JobOutput> {
         return Ok(JobOutput { notes, generated: Some(g.parts), ..JobOutput::default() });
     }
     if let JobKind::Song(opts) = job.kind {
-        let song = crate::songgen::generate(&opts, ctx)?;
+        let song = crate::songgen::generate(&opts, &job.models_dir, job.device, ctx)?;
         ctx.check()?;
-        let notes = vec![format!("{} at {}", opts.engine.label(), opts.server_url())];
+        let at = if opts.server.is_empty() { "on this computer".to_string() } else { format!("at {}", opts.server_url()) };
+        let notes = vec![format!("{} {at}", opts.engine.label())];
         return Ok(JobOutput { notes, song: Some(song), ..JobOutput::default() });
     }
     let job = checked(job)?;
