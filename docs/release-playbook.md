@@ -155,5 +155,10 @@ The converted (ONNX) models are assets of one GitHub release on the public repo,
 4. Check: `curl -sL https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/models.json | head`;
    then Setup › ML Models lists the sizes and Download buttons.
 
-To update a model: install the new export, run step 1 again (its `version` rises with the card's
-`exported_utc`, so installed copies show **Update**), then step 3 for that zip and the manifest.
+To add or update a model: install the export, then pack just that model
+(`cargo xtask ml-publish … <id>`). Given ids, `ml-publish` downloads the release's current
+`models.json` with `gh` (or reads `--merge FILE`) and writes it back with only those entries
+replaced or added, so the manifest and notice it uploads keep every other model (`--no-merge`
+writes only the given models: never upload that manifest). An updated model's `version` rises
+with the card's `exported_utc`, so installed copies show **Update**. Then step 3 for that zip and
+the manifest, as the command it prints.
