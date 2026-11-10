@@ -37,13 +37,15 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.engine }} ${{ matrix.platform }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.engine }} ${{ matrix.target.platform }}
+    runs-on: ${{ matrix.target.os }}
     strategy:
       fail-fast: false
       matrix:
         engine: [yue2, acestep]
-        include:
+        # Every engine on every platform (a list dimension, not `include`, which would only add
+        # keys to the existing combinations).
+        target:
           - { os: ubuntu-22.04, platform: linux-x86_64 }
           - { os: windows-latest, platform: windows-x86_64 }
           - { os: macos-15, platform: macos-aarch64 }
@@ -95,12 +97,12 @@ jobs:
 
       - name: Pack
         shell: bash
-        run: python3 tools/engines/package.py ${{ matrix.engine }} ${{ matrix.platform }} upstream/build upstream dist
+        run: python3 tools/engines/package.py ${{ matrix.engine }} ${{ matrix.target.platform }} upstream/build upstream dist
 
       - name: The server starts (it must print its usage, not fail on a missing library)
         shell: bash
         run: |
-          mkdir smoke && cd smoke && python3 -c "import zipfile; zipfile.ZipFile('../dist/${{ matrix.engine }}-${{ matrix.platform }}.zip').extractall('.')"
+          mkdir smoke && cd smoke && python3 -c "import zipfile; zipfile.ZipFile('../dist/${{ matrix.engine }}-${{ matrix.target.platform }}.zip').extractall('.')"
           chmod +x bin/* || true
           exe=$(python3 -c "import json; print(json.load(open('card.json'))['file'])")
           set +e; "./$exe" --help >help.txt 2>&1; code=$?; set -e
@@ -109,7 +111,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: engine-${{ matrix.engine }}-${{ matrix.platform }}
+          name: engine-${{ matrix.engine }}-${{ matrix.target.platform }}
           path: dist/*.zip
           if-no-files-found: error
 
