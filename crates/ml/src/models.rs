@@ -404,6 +404,10 @@ mod tests {
             ),
             ("MIT (code and weights), Copyright (c) 2025 smulelabs. Full text: LICENSE in the HF repo.", "MIT"),
             ("Submitted to the authors. Ask first", "Submitted to the authors"),
+            (
+                "Llama 3.2 Community License Agreement (weights; the inference code is under the same agreement). Built with Llama.",
+                "Llama 3.2 Community License",
+            ),
         ];
         for (note, want) in cases {
             assert_eq!(licence_status(note).as_deref(), Some(want), "{note}");

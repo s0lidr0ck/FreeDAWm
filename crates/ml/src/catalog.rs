@@ -40,7 +40,8 @@ pub fn licence_status(text: &str) -> Option<String> {
     {
         return Some(LICENCE_NOT_STATED.to_string());
     }
-    const KNOWN: [(&str, &str); 6] = [
+    const KNOWN: [(&str, &str); 7] = [
+        ("llama 3.2 community license", "Llama 3.2 Community License"),
         ("cc by-nc-sa 4.0", "CC BY-NC-SA 4.0 — non-commercial, personal use"),
         ("cc by-nc 4.0", "CC BY-NC 4.0 — non-commercial, personal use"),
         ("mit or apache-2.0", "MIT OR Apache-2.0"),
