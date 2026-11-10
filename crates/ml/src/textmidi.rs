@@ -68,6 +68,74 @@ pub struct TextMidiOptions {
     pub seed: u64,
     /// The most MIDI tokens to write (3 per note).
     pub max_tokens: u32,
+    /// Notes the piece starts with (the model continues them); not part of the result.
+    pub prime: Prime,
+}
+
+/// The most notes a piece can start with ([`Prime`]).
+pub const MAX_PRIME_NOTES: usize = 170;
+
+/// Notes for the model to continue, as MIDI tokens (time, duration, note per note, onsets in
+/// order), held inline so job options stay `Copy`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Prime {
+    len: u16,
+    tokens: [u32; 3 * MAX_PRIME_NOTES],
+}
+
+impl Default for Prime {
+    fn default() -> Self {
+        Prime { len: 0, tokens: [0; 3 * MAX_PRIME_NOTES] }
+    }
+}
+
+impl std::fmt::Debug for Prime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Prime({} notes)", self.notes())
+    }
+}
+
+impl Prime {
+    /// Notes `(start s, end s, instrument 0–127 or DRUMS, pitch)` from the start of the piece,
+    /// as tokens: sorted by onset (then pitch), onsets past 100 s dropped, durations cut at
+    /// 10 s, at most [`MAX_PRIME_NOTES`] (the first ones). Non-finite times and out-of-range
+    /// instruments or pitches are skipped.
+    pub fn from_notes(notes: &[(f64, f64, u8, u8)]) -> Prime {
+        let mut v: Vec<(u32, u32, u32)> = notes
+            .iter()
+            .filter(|(a, b, i, p)| a.is_finite() && b.is_finite() && *i <= DRUMS && *p < 128)
+            .filter_map(|&(a, b, i, p)| {
+                let t = (a.max(0.0) * TIME_RESOLUTION).round();
+                if t >= f64::from(MAX_TIME) {
+                    return None;
+                }
+                let d = ((b - a).max(0.0) * TIME_RESOLUTION).round().clamp(0.0, f64::from(MAX_DUR - 1));
+                Some((t as u32, d as u32, u32::from(i) * 128 + u32::from(p)))
+            })
+            .collect();
+        v.sort_by_key(|&(t, _, n)| (t, n % 128, n));
+        let mut prime = Prime::default();
+        for (k, (t, d, n)) in v.into_iter().take(MAX_PRIME_NOTES).enumerate() {
+            if let Some(slot) = prime.tokens.get_mut(3 * k..3 * k + 3) {
+                slot.copy_from_slice(&[t, DUR_OFFSET + d, NOTE_OFFSET + n]);
+                prime.len = u16::try_from(3 * k + 3).unwrap_or(0);
+            }
+        }
+        prime
+    }
+
+    /// The MIDI tokens.
+    pub fn tokens(&self) -> &[u32] {
+        self.tokens.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+
+    pub fn notes(&self) -> usize {
+        usize::from(self.len) / 3
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 impl TextMidiOptions {
@@ -79,6 +147,7 @@ impl TextMidiOptions {
             top_p: DEFAULT_TOP_P,
             seed: 0,
             max_tokens: DEFAULT_MAX_TOKENS,
+            prime: Prime::default(),
         }
     }
 
@@ -381,7 +450,9 @@ impl MidiLlm {
     pub fn generate(&mut self, opts: &TextMidiOptions, ctx: &Ctx) -> Result<Generated> {
         let opts = opts.validated()?;
         self.reset();
-        let prompt = self.prompt_ids(opts.prompt.as_str())?;
+        let mut prompt = self.prompt_ids(opts.prompt.as_str())?;
+        // Notes to continue go after the MIDI start, as if the model had written them.
+        prompt.extend(opts.prime.tokens().iter().map(|&t| i64::from(LLAMA_VOCAB + t)));
         let tokens = generate_with(&prompt, &opts, ctx, |ids| self.step(ids))?;
         self.reset();
         let parts = decode(&tokens, f64::from(opts.seconds));
@@ -504,6 +575,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(toks.len(), 3);
+    }
+
+    #[test]
+    fn prime_notes_become_sorted_whole_tokens() {
+        let p = Prime::from_notes(&[
+            (1.0, 1.5, 0, 64),
+            (0.0, 0.25, 0, 60),
+            (0.0, 20.0, DRUMS, 36),
+            (f64::NAN, 1.0, 0, 1),
+            (150.0, 151.0, 0, 60),
+            (0.5, 0.5, 200, 60),
+        ]);
+        assert_eq!(p.notes(), 3);
+        assert_eq!(
+            p.tokens(),
+            &[0, DUR_OFFSET + 999, NOTE_OFFSET + 128 * 128 + 36, 0, DUR_OFFSET + 25, NOTE_OFFSET + 60, 100, DUR_OFFSET + 50, NOTE_OFFSET + 64]
+        );
+        // They decode back to the notes (durations cut at 10 s).
+        let parts = decode(p.tokens(), 100.0);
+        assert_eq!(parts.iter().map(|x| (x.instrument, x.midi.notes.len())).collect::<Vec<_>>(), vec![(0, 2), (DRUMS, 1)]);
+        let many: Vec<(f64, f64, u8, u8)> = (0..500).map(|i| (f64::from(i) * 0.1, f64::from(i) * 0.1 + 0.1, 0, 60)).collect();
+        assert_eq!(Prime::from_notes(&many).notes(), MAX_PRIME_NOTES);
+        assert!(Prime::default().is_empty() && Prime::default().tokens().is_empty());
     }
 
     #[test]

@@ -286,8 +286,24 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
     let rate = s.sample_rate.hz();
     let mut parts = Vec::new();
     if let JobKind::TextMidi(o) = &mut kind {
-        // No source: the notes go on new tracks at `start` (default the edit cursor).
-        let start = crate::cmd::position_param(e, cmd, p, "start")?.unwrap_or(s.edit.selection.start).max(0);
+        // `continue_from`: the piece starts with that MIDI clip's notes, at its start.
+        let from = match p.get("continue_from") {
+            None | Some(Value::Null) => None,
+            Some(v) => {
+                let id = v.as_u64().ok_or_else(|| bad(cmd, "`continue_from` must be a MIDI clip id"))?;
+                let Some((t, c)) = s.find_clip(ClipId(id)) else { return Err(bad(cmd, format!("no clip with id {id}"))) };
+                let ClipContent::Midi { sequence } = &c.content else { return Err(bad(cmd, format!("`{}` is not a MIDI clip", c.name))) };
+                let program = prime_program(cmd, p, sequence, s.track(t).map(|t| t.name.as_str()))?;
+                o.prime = prime_from(s, c.start, sequence, program);
+                if o.prime.is_empty() {
+                    return Err(bad(cmd, format!("`{}` has no notes in its first 100 s to continue", c.name)));
+                }
+                Some(c.start)
+            }
+        };
+        // No source: the notes go on new tracks at `start` (default the edit cursor, or the clip
+        // continued).
+        let start = crate::cmd::position_param(e, cmd, p, "start")?.or(from).unwrap_or(s.edit.selection.start).max(0);
         let len = s.sample_rate.samples(f64::from(o.seconds)).max(1);
         if o.seed == 0 {
             o.seed = random_seed();
@@ -681,6 +697,48 @@ fn seq_channel(s: &soundcraft_model::Session, clip: ClipId) -> Option<u8> {
         ClipContent::Midi { sequence } => sequence.notes.first().map(|n| n.channel + 1),
         _ => None,
     })
+}
+
+/// The instrument a continued clip's notes are given: `instrument` (0–127 or "drums"), else
+/// drums when every note is on channel 10, else the clip's first program change, else the
+/// track's name (a drum track), else 0 (piano).
+fn prime_program(cmd: &str, p: &Value, seq: &soundcraft_midi::Sequence, track_name: Option<&str>) -> Result<u8> {
+    match p.get("instrument") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(v)) if v.eq_ignore_ascii_case("drums") => return Ok(textmidi::DRUMS),
+        Some(v) => {
+            return v
+                .as_u64()
+                .and_then(|n| u8::try_from(n).ok())
+                .filter(|n| *n < 128)
+                .ok_or_else(|| bad(cmd, "`instrument` must be a General MIDI program 0..127 or \"drums\""));
+        }
+    }
+    if !seq.notes.is_empty() && seq.notes.iter().all(|n| n.channel == 9) {
+        return Ok(textmidi::DRUMS);
+    }
+    if let Some(c) = seq.ctrls.iter().find(|c| c.kind == soundcraft_midi::CtrlKind::Program) {
+        return Ok(u8::try_from(c.value.clamp(0, 127)).unwrap_or(0));
+    }
+    let drummy = track_name.is_some_and(|n| {
+        let n = n.to_ascii_lowercase();
+        ["drum", "kit", "perc", "beat"].iter().any(|w| n.contains(w))
+    });
+    Ok(if drummy { textmidi::DRUMS } else { 0 })
+}
+
+/// A MIDI clip's notes (from its start, on the tempo map) as the notes a piece starts with.
+fn prime_from(s: &soundcraft_model::Session, start: Samples, seq: &soundcraft_midi::Sequence, program: u8) -> textmidi::Prime {
+    let sr = s.sample_rate;
+    let base = s.tempo.samples_to_ticks(start, sr);
+    let secs = |tick: i64| (s.tempo.tick_to_samples(base.saturating_add(tick), sr).saturating_sub(start)) as f64 / sr.as_f64();
+    let notes: Vec<(f64, f64, u8, u8)> = seq
+        .notes
+        .iter()
+        .filter(|n| n.start >= 0)
+        .map(|n| (secs(n.start), secs(n.start.saturating_add(n.length.max(0))), program, n.pitch.min(127)))
+        .collect();
+    textmidi::Prime::from_notes(&notes)
 }
 
 /// A seed from the clock (Generate MIDI from Text without `seed`); never 0.

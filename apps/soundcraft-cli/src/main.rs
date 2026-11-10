@@ -29,7 +29,7 @@
 //!                 [--skip-silence] [--models DIR]
 //!                                                 sung lyrics (Whisper large-v3, CPU) with line and word times
 //! freedawm-cli ml text-midi OUT.mid --prompt TEXT [--seconds 30] [--seed N] [--temperature 1] [--bpm 120]
-//!                 [--device auto|gpu|cpu] [--models DIR]
+//!                 [--continue IN.mid [--instrument 0..127|drums]] [--device auto|gpu|cpu] [--models DIR]
 //!                                                 text to MIDI (MIDI-LLM): a format-1 .mid, one track per
 //!                                                 General MIDI instrument, at a constant --bpm
 //! freedawm-cli ml models [--models DIR]         the model folder and which models are installed
@@ -394,6 +394,26 @@ fn ml_text_midi(args: &[String], device: soundcraft_ml::Device, dir: &std::path:
     }
     let mut e = Engine::new(s);
     let mut p = json!({"prompt": prompt, "start": 0, "device": device.id(), "models_dir": dir.to_string_lossy()});
+    // --continue: the piece starts with that file's notes (its first track with notes).
+    let mut primed: Vec<u64> = Vec::new();
+    if let Some(path) = arg_value(args, "--continue") {
+        let r = match e.execute("file.import_midi", &json!({"path": path, "at": 0, "tempo_map": false})) {
+            Ok(r) => r,
+            Err(err) => return fail(err),
+        };
+        primed = r["tracks"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+        let s = e.session();
+        let clip = primed
+            .iter()
+            .filter_map(|t| s.track(soundcraft_model::TrackId(*t)))
+            .flat_map(|t| t.clips())
+            .find(|c| matches!(&c.content, soundcraft_model::ClipContent::Midi { sequence } if !sequence.notes.is_empty()));
+        let Some(clip) = clip else { return fail(format!("{path}: no notes to continue")) };
+        p["continue_from"] = json!(clip.id.0);
+        if let Some(i) = arg_value(args, "--instrument") {
+            p["instrument"] = i.parse::<u64>().map_or_else(|_| json!(i), |n| json!(n));
+        }
+    }
     for (flag, key) in [("--seconds", "seconds"), ("--temperature", "temperature")] {
         if let Some(v) = arg_value(args, flag) {
             match v.parse::<f64>() {
@@ -412,7 +432,7 @@ fn ml_text_midi(args: &[String], device: soundcraft_ml::Device, dir: &std::path:
         Err(err) => return fail(err),
     };
     let made: Vec<&Value> = r["made"].as_array().map(|m| m.iter().collect()).unwrap_or_default();
-    let tracks: Vec<u64> = made.iter().filter_map(|m| m["track"].as_u64()).collect();
+    let tracks: Vec<u64> = primed.iter().copied().chain(made.iter().filter_map(|m| m["track"].as_u64())).collect();
     if let Err(err) = e.execute("file.export_midi", &json!({"path": out, "tracks": tracks})) {
         return fail(err);
     }

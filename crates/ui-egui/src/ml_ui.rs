@@ -235,6 +235,16 @@ fn selection_target(app: &SoundApp) -> Option<(Value, String)> {
     Some((json!({"track": t.id.0}), t.name.clone()))
 }
 
+/// The first selected clip when it is a MIDI clip with notes: (id, name).
+fn selected_midi_clip(app: &SoundApp) -> Option<(u64, String)> {
+    let s = app.engine.session();
+    let c = s.edit.selected_clips.first().and_then(|c| s.find_clip(*c)).map(|(_, c)| c)?;
+    match &c.content {
+        soundcraft_model::ClipContent::Midi { sequence } if !sequence.notes.is_empty() => Some((c.id.0, c.name.clone())),
+        _ => None,
+    }
+}
+
 /// Where Generate MIDI from Text puts its tracks: "the edit cursor (bar 5)".
 fn cursor_name(app: &SoundApp) -> String {
     let s = app.engine.session();
@@ -293,7 +303,14 @@ pub fn open(app: &mut SoundApp, command: &str, target: Option<(Value, String)>) 
         midi,
         chords: crate::ml_text_ui::ChordDialog::new(full_mix, grid),
         lyrics: crate::ml_text_ui::LyricsDialog::default(),
-        text_midi: app.ml.dialog.as_ref().map(|d| d.text_midi.clone()).unwrap_or_default(),
+        text_midi: {
+            let mut t = app.ml.dialog.as_ref().map(|d| d.text_midi.clone()).unwrap_or_default();
+            // The selected MIDI clip, to continue (on by default when there is one).
+            let clip = selected_midi_clip(app);
+            t.continue_clip = clip.is_some();
+            t.clip = clip;
+            t
+        },
     });
     Ok(json!({"dialog": command}))
 }
@@ -1181,6 +1198,24 @@ mod tests {
         assert_eq!(p["seed"], 12);
         let job = ml::prepare(&app.engine, "ml.text_midi", &p).unwrap();
         assert!(matches!(job.kind, ml::JobKind::TextMidi(o) if o.seed == 12 && (o.seconds - 30.0).abs() < 1e-6));
+        // A selected MIDI clip is offered for continuing, and on by default.
+        let clip = app
+            .engine
+            .session()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips())
+            .find(|c| matches!(&c.content, soundcraft_model::ClipContent::Midi { sequence } if !sequence.notes.is_empty()))
+            .map(|c| c.id);
+        let c = clip.expect("the demo session has a MIDI clip");
+        {
+            app.engine.session_mut().edit.selected_clips = vec![c];
+            assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());
+            let d = app.ml.dialog.clone().unwrap();
+            assert!(d.text_midi.continue_clip);
+            assert_eq!(params(&d, Device::Cpu)["continue_from"], c.0);
+            app.engine.session_mut().edit.selected_clips.clear();
+        }
         // The settings stay for the next time it opens.
         app.ml.dialog = Some(d);
         assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());

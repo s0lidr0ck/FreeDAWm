@@ -127,6 +127,56 @@ fn without_a_seed_one_is_chosen_and_reported() {
     assert_eq!(o.seed, 123);
 }
 
+/// The session plus a MIDI clip "Riff" on an instrument track "Keys": C4 E4 G4, a beat each, at 4 s.
+fn with_riff(program: Option<i32>, channel: u8) -> (Engine, u64) {
+    let mut e = session();
+    let s = e.session_mut();
+    let t = s.add_track(TrackKind::Instrument, soundcraft_model::ChannelFormat::Stereo, Some("Keys"));
+    let mut seq = soundcraft_midi::Sequence::default();
+    for (i, pitch) in [60u8, 64, 67].into_iter().enumerate() {
+        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 90, release_velocity: 64, channel, start: i as i64 * 960, length: 960 });
+    }
+    if let Some(p) = program {
+        seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel, kind: CtrlKind::Program, value: p });
+    }
+    let cid = s.new_clip_id();
+    soundcraft_engine::edit::place_clip(s, t, soundcraft_model::Clip::midi(cid, "Riff", 192_000, 3 * 24_000, seq));
+    (e, cid.0)
+}
+
+#[test]
+fn a_midi_clip_can_start_the_piece() {
+    let (e, clip) = with_riff(Some(24), 0);
+    let job = ml::prepare(&e, "ml.text_midi", &json!({"prompt": "folk", "continue_from": clip, "seed": 1})).unwrap();
+    let soundcraft_ml::JobKind::TextMidi(o) = job.kind else { panic!() };
+    // Its three notes, half a second apart at 120 bpm, on its program (nylon guitar).
+    assert_eq!(o.prime.notes(), 3);
+    let parts = textmidi::decode(o.prime.tokens(), 100.0);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].instrument, 24);
+    let starts: Vec<f64> = parts[0].midi.notes.iter().map(|n| n.start).collect();
+    assert_eq!(starts, [0.0, 0.5, 1.0]);
+    // The new tracks start where the clip does.
+    let soundcraft_engine::ml::Target::Generate { start, .. } = &job.parts[0].target else { panic!() };
+    assert_eq!(*start, 192_000);
+    // Drums: by channel 10, or asked for; a bad instrument or clip is refused.
+    let (e, clip) = with_riff(None, 9);
+    let job = ml::prepare(&e, "ml.text_midi", &json!({"prompt": "rock", "continue_from": clip})).unwrap();
+    let soundcraft_ml::JobKind::TextMidi(o) = job.kind else { panic!() };
+    assert_eq!(textmidi::decode(o.prime.tokens(), 100.0)[0].instrument, textmidi::DRUMS);
+    let (e, clip) = with_riff(None, 0);
+    let job = ml::prepare(&e, "ml.text_midi", &json!({"prompt": "rock", "continue_from": clip, "instrument": 33})).unwrap();
+    let soundcraft_ml::JobKind::TextMidi(o) = job.kind else { panic!() };
+    assert_eq!(textmidi::decode(o.prime.tokens(), 100.0)[0].instrument, 33);
+    for p in [
+        json!({"prompt": "x", "continue_from": clip, "instrument": 200}),
+        json!({"prompt": "x", "continue_from": 9999}),
+        json!({"prompt": "x", "continue_from": "a"}),
+    ] {
+        assert!(ml::prepare(&e, "ml.text_midi", &p).is_err(), "{p}");
+    }
+}
+
 #[test]
 fn a_real_piece_with_midi_llm() {
     if soundcraft_ml::models::load(&ml::models_dir(), textmidi::ID).is_err() {
@@ -140,4 +190,17 @@ fn a_real_piece_with_midi_llm() {
     assert_eq!(e.undo_label(), Some("Generate MIDI from Text"));
     assert_eq!(names(&e).len(), 1 + made.len());
     println!("{}", serde_json::to_string(&made).unwrap());
+    // Continuing a riff: the new tracks start at the clip, and the riff itself is not copied.
+    let (mut e, clip) = with_riff(Some(0), 0);
+    let v = e
+        .execute(
+            "ml.text_midi",
+            &json!({"prompt": "A gentle piano piece in C major", "continue_from": clip, "seconds": 6, "max_tokens": 60, "seed": 3, "device": "cpu"}),
+        )
+        .unwrap();
+    for m in v["made"].as_array().unwrap() {
+        let c = e.session().find_clip(soundcraft_model::ClipId(m["clip"].as_u64().unwrap())).unwrap().1.clone();
+        assert_eq!(c.start, 192_000);
+    }
+    println!("continued: {}", serde_json::to_string(&v["made"]).unwrap());
 }

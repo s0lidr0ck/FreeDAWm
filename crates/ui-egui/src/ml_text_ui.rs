@@ -56,11 +56,15 @@ pub struct TextMidiDialog {
     pub temperature: f32,
     /// A seed to repeat a piece; empty = a new one each run.
     pub seed: String,
+    /// The MIDI clip selected when the dialog opened (id, name), to continue.
+    pub clip: Option<(u64, String)>,
+    /// Start the piece with that clip's notes.
+    pub continue_clip: bool,
 }
 
 impl Default for TextMidiDialog {
     fn default() -> Self {
-        TextMidiDialog { prompt: String::new(), seconds: 30.0, temperature: 1.0, seed: String::new() }
+        TextMidiDialog { prompt: String::new(), seconds: 30.0, temperature: 1.0, seed: String::new(), clip: None, continue_clip: false }
     }
 }
 
@@ -77,6 +81,11 @@ pub fn text_midi_params(o: &mut serde_json::Map<String, Value>, t: &TextMidiDial
     o.insert("temperature".into(), json!(t.temperature));
     if let Ok(seed) = t.seed.trim().parse::<u64>() {
         o.insert("seed".into(), json!(seed));
+    }
+    if t.continue_clip
+        && let Some((id, _)) = &t.clip
+    {
+        o.insert("continue_from".into(), json!(id));
     }
 }
 
@@ -108,9 +117,15 @@ pub fn text_midi_options(ui: &mut egui::Ui, t: &mut TextMidiDialog, cursor: &str
     if !t.seed.trim().is_empty() && t.seed.trim().parse::<u64>().is_err() {
         ui.colored_label(tk.rec, "The seed is a whole number.");
     }
+    if let Some((_, name)) = &t.clip {
+        ui.checkbox(&mut t.continue_clip, format!("Continue from the clip “{name}”")).on_hover_text(
+            "The piece starts with the clip's notes (up to 170) and the model carries on from them; the new tracks start where the clip does",
+        );
+    }
     ui.label(
         egui::RichText::new(format!(
-            "One new instrument track per General MIDI instrument, at {cursor}. MIDI-LLM writes up to 682 notes; on the CPU that takes one to two minutes."
+            "One new instrument track per General MIDI instrument, at {}. MIDI-LLM writes up to 682 notes; on the CPU that takes one to two minutes.",
+            if t.continue_clip && t.clip.is_some() { "the clip's start" } else { cursor }
         ))
         .small()
         .color(tk.text_dim),
