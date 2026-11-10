@@ -218,6 +218,9 @@ one undo step.
   can isolate the instrument first, and you can audition the result before converting.
 - **Detect Chords** onto the Chords ruler. **Transcribe Lyrics** (Whisper large-v3) puts timed
   lines and words on the track.
+- **Generate MIDI from Text** (MIDI-LLM). Describe the music ("upbeat jazz with saxophones,
+  B-flat major") and get one instrument track per General MIDI instrument at the edit cursor,
+  ready for your own instruments. A seed repeats a piece.
 - **Clean Vocal** and **Tune Vocal** (see [Vocals](#vocals)).
 - **Scout: mix feedback.** Select channels, press **Scout** and play. Scout measures each channel
   before and after its processing: spectrum, loudness, dynamics, stereo width, transients. It

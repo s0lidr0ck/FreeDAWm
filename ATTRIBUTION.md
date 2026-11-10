@@ -106,6 +106,7 @@ are listed, downloaded or chosen (from the model card's `license` field in
 stated by the author — personal use".
 
 - `vocals_melroformer`: Mel-Band RoFormer vocals, Kimberley Jensen, huggingface.co/KimberleyJSN/melbandroformer: MIT.
+- `midi_llm`: MIDI-LLM (Shih-Lun Wu, Dave Carlton, Ryan Mikayawa, Yoon Kim, Chris Donahue, Cheng-Zhi Anna Huang; ISMIR 2026), huggingface.co/slseanwu/MIDI-LLM_Llama-3.2-1B, built on Meta's Llama 3.2 1B: Llama 3.2 Community License Agreement ("Built with Llama"). Its MIDI tokens are the Anticipatory Music Transformer's arrival-time encoding (github.com/jthickstun/anticipation, Apache-2.0), which `crates/ml/src/textmidi.rs` decodes.
 - `bs_roformer_sw`: BS-RoFormer SW 6-stem (`BS-Rofo-SW-Fixed.ckpt`), huggingface.co/enerjazzer/BS-ROFO-SW-Fixed: licence unknown, personal use.
 - `karaoke_melroformer`: Mel-Band RoFormer karaoke, aufr33 + viperx (UVR model repo): no licence stated, private use.
 - Model code they run on (lucidrains BS-/Mel-RoFormer, ZFTurbo Music-Source-Separation-Training): MIT.

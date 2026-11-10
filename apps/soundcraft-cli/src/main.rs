@@ -28,6 +28,10 @@
 //! freedawm-cli ml lyrics IN.wav OUT.lrc|OUT.txt|OUT.json [--language en|auto] [--prompt TEXT] [--quality fast|best]
 //!                 [--skip-silence] [--models DIR]
 //!                                                 sung lyrics (Whisper large-v3, CPU) with line and word times
+//! freedawm-cli ml text-midi OUT.mid --prompt TEXT [--seconds 30] [--seed N] [--temperature 1] [--bpm 120]
+//!                 [--device auto|gpu|cpu] [--models DIR]
+//!                                                 text to MIDI (MIDI-LLM): a format-1 .mid, one track per
+//!                                                 General MIDI instrument, at a constant --bpm
 //! freedawm-cli ml models [--models DIR]         the model folder and which models are installed
 //! freedawm-cli ml bench IN.wav [--seconds 30]   HTDemucs speed on the GPU (DirectML) and the CPU
 //! ```
@@ -160,7 +164,9 @@ fn main() -> ExitCode {
 /// `ml …`: local ML on audio files (see the usage block).
 fn ml(args: &[String]) -> ExitCode {
     use soundcraft_ml::{Cancel, Ctx, Device, JobKind};
-    let Some(sub) = args.first().map(String::as_str) else { return fail("ml separate|karaoke|drums|clean|models|bench …") };
+    let Some(sub) = args.first().map(String::as_str) else {
+        return fail("ml separate|karaoke|drums|clean|midi|chords|lyrics|text-midi|models|bench …");
+    };
     let dir = arg_value(args, "--models").map_or_else(soundcraft_ml::models::models_dir, std::path::PathBuf::from);
     if sub == "models" {
         outln!("model folder: {}  (override: {})", dir.display(), soundcraft_ml::models::MODELS_DIR_ENV);
@@ -182,6 +188,9 @@ fn ml(args: &[String]) -> ExitCode {
         Some(Some(d)) => d,
         Some(None) => return fail("--device must be auto, gpu or cpu"),
     };
+    if sub == "text-midi" {
+        return ml_text_midi(args, device, &dir);
+    }
     let Some(input) = args.get(1) else { return fail(format!("ml {sub} IN.wav …")) };
     let bytes = match std::fs::read(input) {
         Ok(b) => b,
@@ -366,6 +375,56 @@ fn ml_midi(args: &[String], buf: soundcraft_audio_io::AudioBuffer, out: &str, de
     let notes: u64 = r["made"].as_array().map_or(0, |m| m.iter().filter_map(|x| x["notes"].as_u64()).sum());
     let how: Vec<&str> = r["notes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     outln!("wrote {out}: {notes} notes at {bpm} bpm in {:.2} s ({})", t0.elapsed().as_secs_f64(), how.join("; "));
+    ExitCode::SUCCESS
+}
+
+/// `ml text-midi`: MIDI-LLM on `--prompt`; every instrument track into one format-1 .mid.
+fn ml_text_midi(args: &[String], device: soundcraft_ml::Device, dir: &std::path::Path) -> ExitCode {
+    use soundcraft_model::Session;
+    let Some(out) = args.get(1).filter(|a| !a.starts_with("--")) else { return fail("ml text-midi OUT.mid --prompt TEXT …") };
+    let Some(prompt) = arg_value(args, "--prompt") else { return fail("ml text-midi needs --prompt TEXT (what to compose)") };
+    let bpm: f64 = match arg_value(args, "--bpm").map(|s| s.parse::<f64>()) {
+        None => 120.0,
+        Some(Ok(b)) if b.is_finite() && (20.0..=999.0).contains(&b) => b,
+        Some(_) => return fail("--bpm must be a number from 20 to 999"),
+    };
+    let mut s = Session { sample_rate: soundcraft_time::SampleRate::HZ_48000, ..Session::default() };
+    if let Err(e) = s.tempo.set_tempo(0, bpm) {
+        return fail(e);
+    }
+    let mut e = Engine::new(s);
+    let mut p = json!({"prompt": prompt, "start": 0, "device": device.id(), "models_dir": dir.to_string_lossy()});
+    for (flag, key) in [("--seconds", "seconds"), ("--temperature", "temperature")] {
+        if let Some(v) = arg_value(args, flag) {
+            match v.parse::<f64>() {
+                Ok(x) => p[key] = json!(x),
+                Err(_) => return fail(format!("{flag} must be a number")),
+            }
+        }
+    }
+    if let Some(v) = arg_value(args, "--seed") {
+        p["seed"] = json!(v);
+    }
+    eprintln!("  composing (MIDI-LLM; up to a few minutes on the CPU)");
+    let t0 = std::time::Instant::now();
+    let r = match e.execute("ml.text_midi", &p) {
+        Ok(r) => r,
+        Err(err) => return fail(err),
+    };
+    let made: Vec<&Value> = r["made"].as_array().map(|m| m.iter().collect()).unwrap_or_default();
+    let tracks: Vec<u64> = made.iter().filter_map(|m| m["track"].as_u64()).collect();
+    if let Err(err) = e.execute("file.export_midi", &json!({"path": out, "tracks": tracks})) {
+        return fail(err);
+    }
+    let notes: u64 = made.iter().filter_map(|m| m["notes"].as_u64()).sum();
+    let names: Vec<&str> = made.iter().filter_map(|m| m["name"].as_str()).collect();
+    outln!(
+        "wrote {out}: {notes} notes on {} tracks ({}) at {bpm} bpm in {:.1} s, seed {}",
+        tracks.len(),
+        names.join(", "),
+        t0.elapsed().as_secs_f64(),
+        r["seed"].as_str().unwrap_or("?")
+    );
     ExitCode::SUCCESS
 }
 

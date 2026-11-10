@@ -185,6 +185,9 @@ pub enum JobKind {
     Chords(crate::chords::ChordOptions),
     /// Transcribe Lyrics ([`crate::lyrics`], Whisper large-v3): the result is [`JobOutput::lyrics`].
     Lyrics(crate::lyrics::LyricsOptions),
+    /// Generate MIDI from Text ([`crate::textmidi`], MIDI-LLM): no audio in, the result is
+    /// [`JobOutput::generated`] (one part per instrument).
+    TextMidi(crate::textmidi::TextMidiOptions),
 }
 
 impl JobKind {
@@ -198,6 +201,7 @@ impl JobKind {
             JobKind::Midi(_) => "midi",
             JobKind::Chords(_) => "chords",
             JobKind::Lyrics(_) => "lyrics",
+            JobKind::TextMidi(_) => "text_midi",
         }
     }
 
@@ -210,6 +214,7 @@ impl JobKind {
             JobKind::Midi(_) => "Convert to MIDI",
             JobKind::Chords(_) => "Detect Chords",
             JobKind::Lyrics(_) => "Transcribe Lyrics",
+            JobKind::TextMidi(_) => "Generate MIDI from Text",
         }
     }
 
@@ -238,6 +243,7 @@ impl JobKind {
             JobKind::Midi(o) => vec![o.model.model_id()],
             JobKind::Chords(_) => vec![crate::chords::ID],
             JobKind::Lyrics(_) => vec![crate::lyrics::ID],
+            JobKind::TextMidi(_) => vec![crate::textmidi::ID],
         }
     }
 }
@@ -274,6 +280,8 @@ pub struct JobOutput {
     pub chords: Option<Vec<crate::chords::ChordSegment>>,
     /// Transcribe Lyrics: words and lines (seconds from the start of the job's audio).
     pub lyrics: Option<crate::lyrics::Lyrics>,
+    /// Generate MIDI from Text: one part per General MIDI instrument (seconds from the start).
+    pub generated: Option<Vec<crate::textmidi::Part>>,
 }
 
 /// A stem name as a track-name word: "vocals" → "Vocals", "hihat" → "Hi-Hat".
@@ -538,6 +546,7 @@ fn copies(kind: JobKind, quality: Quality) -> usize {
         JobKind::Clean(_) => 10,
         JobKind::Midi(o) if o.isolate.stem().is_some() => 14 + extra,
         JobKind::Midi(_) | JobKind::Chords(_) | JobKind::Lyrics(_) => 2,
+        JobKind::TextMidi(_) => 0,
     }
 }
 
@@ -648,6 +657,15 @@ fn checked(job: &Job) -> Result<Job> {
 
 fn run_inner(job: &Job, ctx: &Ctx) -> Result<JobOutput> {
     ctx.say("Checking the model files");
+    // No audio in: the prompt is the input.
+    if let JobKind::TextMidi(opts) = job.kind {
+        let model = load(job, crate::textmidi::ID)?;
+        let (g, device) = crate::textmidi::generate(&model, &opts, job.device, ctx)?;
+        ctx.check()?;
+        let n: usize = g.parts.iter().map(|p| p.midi.notes.len()).sum();
+        let notes = vec![device, format!("{n} notes on {} instruments", g.parts.len())];
+        return Ok(JobOutput { notes, generated: Some(g.parts), ..JobOutput::default() });
+    }
     let job = checked(job)?;
     let len = crate::frames(&job.audio);
     let width = job.audio.len().clamp(1, 2);
@@ -806,6 +824,8 @@ fn run_inner(job: &Job, ctx: &Ctx) -> Result<JobOutput> {
             notes.retain(|n| !n.is_empty());
             return Ok(JobOutput { notes, lyrics: Some(lyrics), ..JobOutput::default() });
         }
+        // Handled before the audio checks.
+        JobKind::TextMidi(_) => return Err(MlError::BadInput("Generate MIDI from Text takes no audio".into())),
     };
     ctx.check()?;
     ctx.report(1.0);

@@ -503,6 +503,9 @@ AI > Convert to MIDI… [desktop]
 AI > Detect Chords… [desktop]
 AI > Transcribe Lyrics… [desktop]
 AI > MIDI Cleanup…
+AI > --- [desktop]
+AI > ## Generate [desktop]
+AI > Generate MIDI from Text… [desktop]
 
 Options > ## Recording & playback
 Options > Click

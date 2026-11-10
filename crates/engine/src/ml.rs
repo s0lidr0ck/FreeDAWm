@@ -33,9 +33,9 @@ pub use soundcraft_ml::models::{
 pub use soundcraft_ml::pipeline::isolation_sources;
 pub use soundcraft_ml::{
     Analysed, Analysis, Cancel, ChordOptions, ChordSegment, CleanMode, CleanOptions, Ctx, Device, Isolate, JobKind, JobOutput, Lyrics,
-    LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription,
+    LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription, textmidi::TextMidiOptions,
 };
-pub use soundcraft_ml::{adtof, basicpitch, catalog, download, kits};
+pub use soundcraft_ml::{adtof, basicpitch, catalog, download, kits, textmidi};
 
 /// Clean Vocal's default de-noise amount (attenuation limit), dB.
 pub const DEFAULT_AMOUNT_DB: f32 = soundcraft_ml::denoise::DEFAULT_ATTEN_DB;
@@ -53,6 +53,9 @@ pub enum Target {
     /// Convert to MIDI: the notes of the clip `clip` (`name`) on `track` become a MIDI clip at
     /// `start`, `len` long, on the new instrument track under `track`.
     Midi { track: TrackId, clip: ClipId, start: Samples, len: Samples, name: String },
+    /// Generate MIDI from Text: one new instrument track per instrument, clips at `start`, `len`
+    /// long; `name` is the prompt, shortened.
+    Generate { start: Samples, len: Samples, name: String },
 }
 
 /// One source of a job: its audio (session rate) and where the result goes.
@@ -97,6 +100,7 @@ pub fn command_for(kind: &JobKind) -> &'static str {
         JobKind::Midi(_) => "ml.midi",
         JobKind::Chords(_) => "ml.chords",
         JobKind::Lyrics(_) => "ml.lyrics",
+        JobKind::TextMidi(_) => "ml.text_midi",
     }
 }
 
@@ -201,6 +205,7 @@ pub fn kind_from(cmd: &str, p: &Value) -> Result<JobKind> {
         "ml.midi" => JobKind::Midi(midi_options(cmd, p)?),
         "ml.chords" => JobKind::Chords(ChordOptions { bass: bool_or(p, "bass", false) }),
         "ml.lyrics" => JobKind::Lyrics(lyrics_options(cmd, p)?),
+        "ml.text_midi" => JobKind::TextMidi(text_midi_options(cmd, p)?),
         other => return Err(bad(other, "not an ML command")),
     })
 }
@@ -265,6 +270,7 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
         "ml.midi" => "ml.midi",
         "ml.chords" => "ml.chords",
         "ml.lyrics" => "ml.lyrics",
+        "ml.text_midi" => "ml.text_midi",
         other => return Err(bad(other, "not an ML command")),
     };
     let mut kind = kind_from(cmd, p)?;
@@ -279,6 +285,28 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
     let s = e.session();
     let rate = s.sample_rate.hz();
     let mut parts = Vec::new();
+    if let JobKind::TextMidi(o) = &mut kind {
+        // No source: the notes go on new tracks at `start` (default the edit cursor).
+        let start = crate::cmd::position_param(e, cmd, p, "start")?.unwrap_or(s.edit.selection.start).max(0);
+        let len = s.sample_rate.samples(f64::from(o.seconds)).max(1);
+        if o.seed == 0 {
+            o.seed = random_seed();
+        }
+        let name: String = o.prompt.as_str().chars().take(40).collect();
+        let target = Target::Generate { start, len, name };
+        return Ok(MlJob {
+            command,
+            kind,
+            parts: vec![Part { target, audio: Vec::new() }],
+            rate,
+            device,
+            models_dir,
+            quality,
+            keep: Vec::new(),
+            mute_original: false,
+            lane,
+        });
+    }
     let clips = source_clips(e, p);
     if let JobKind::Midi(o) = &mut kind {
         // Convert to MIDI: each clip (or every audio clip of the track), as it plays.
@@ -396,7 +424,7 @@ impl MlJob {
     pub fn title(&self) -> String {
         let name = match self.parts.as_slice() {
             [p] => match &p.target {
-                Target::Track { name, .. } | Target::Clip { name, .. } | Target::Midi { name, .. } => name.clone(),
+                Target::Track { name, .. } | Target::Clip { name, .. } | Target::Midi { name, .. } | Target::Generate { name, .. } => name.clone(),
             },
             more => format!("{} clips", more.len()),
         };
@@ -603,9 +631,126 @@ pub(crate) fn apply_inner(e: &mut Engine, job: &MlJob, result: MlResult) -> Resu
                 crate::edit::place_clip(s, nt, Clip::midi(cid, format!("{name} MIDI"), *start, *len, seq));
                 made.push(json!({"track": nt, "name": s.track(nt).map(|t| t.name.clone()), "clip": cid, "notes": n_notes, "pedals": t.pedals.len()}));
             }
+            Target::Generate { start, len, .. } => {
+                let JobKind::TextMidi(opts) = job.kind else { return Err(bad(cmd, "not a Generate MIDI job")) };
+                let parts = out.generated.unwrap_or_default();
+                if parts.is_empty() {
+                    return Err(bad(cmd, "the model wrote no notes; try again, another seed or a longer piece"));
+                }
+                let s = e.session_mut();
+                // Each instrument on its own channel (1–9, 11–16 in turn; drums on 10), so an
+                // exported .mid plays right on a General MIDI player.
+                let mut melodic = 0u8;
+                for part in &parts {
+                    let (nt, program) = new_generated_track(s, part);
+                    let mut seq = midi_sequence(s, *start, *len, &part.midi);
+                    if let Some(program) = program {
+                        let channel = GM_CHANNELS[usize::from(melodic) % GM_CHANNELS.len()];
+                        melodic = melodic.wrapping_add(1);
+                        for n in &mut seq.notes {
+                            n.channel = channel;
+                        }
+                        seq.ctrls.push(soundcraft_midi::CtrlEvent {
+                            tick: 0,
+                            channel,
+                            kind: soundcraft_midi::CtrlKind::Program,
+                            value: i32::from(program),
+                        });
+                        seq.sort();
+                    }
+                    let n_notes = seq.notes.len();
+                    let cid = s.new_clip_id();
+                    let clip_name = s.track(nt).map_or_else(String::new, |t| t.name.clone());
+                    crate::edit::place_clip(s, nt, Clip::midi(cid, clip_name.clone(), *start, *len, seq));
+                    let channel = seq_channel(s, cid);
+                    made.push(json!({"track": nt, "name": clip_name, "clip": cid, "program": program, "drums": part.is_drums(), "channel": channel, "notes": n_notes}));
+                }
+                return Ok(json!({"command": cmd, "made": made, "notes": notes, "seed": opts.seed.to_string(), "prompt": opts.prompt.as_str()}));
+            }
         }
     }
     Ok(json!({"command": cmd, "made": made, "notes": notes}))
+}
+
+/// The channels (0-based) Generate MIDI from Text gives its instruments in turn: all but the drums' 9.
+const GM_CHANNELS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
+
+/// The MIDI channel (1–16) of a generated clip's first note.
+fn seq_channel(s: &soundcraft_model::Session, clip: ClipId) -> Option<u8> {
+    s.find_clip(clip).and_then(|(_, c)| match &c.content {
+        ClipContent::Midi { sequence } => sequence.notes.first().map(|n| n.channel + 1),
+        _ => None,
+    })
+}
+
+/// A seed from the clock (Generate MIDI from Text without `seed`); never 0.
+fn random_seed() -> u64 {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos());
+    let mut r = soundcraft_ml::textmidi::Rng::new(u64::try_from(nanos & u128::from(u64::MAX)).unwrap_or(1));
+    r.next_u64().max(1)
+}
+
+/// Generate MIDI from Text's options from command params: `prompt` (required), `seconds`,
+/// `temperature`, `top_p`, `seed` (an integer, or its decimal text; 0 or none = random),
+/// `max_tokens`.
+pub fn text_midi_options(cmd: &str, p: &Value) -> Result<TextMidiOptions> {
+    let prompt = match p.get("prompt") {
+        Some(Value::String(s)) => s.clone(),
+        None | Some(Value::Null) => return Err(bad(cmd, "`prompt` is required: describe the music to compose")),
+        Some(_) => return Err(bad(cmd, "`prompt` must be text")),
+    };
+    let mut o = TextMidiOptions::new(&prompt);
+    let num = |key: &str, d: f32| -> Result<f32> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(d),
+            Some(v) => v.as_f64().map(|x| x as f32).ok_or_else(|| bad(cmd, format!("`{key}` must be a number"))),
+        }
+    };
+    o.seconds = num("seconds", o.seconds)?;
+    o.temperature = num("temperature", o.temperature)?;
+    o.top_p = num("top_p", o.top_p)?;
+    o.seed = match p.get("seed") {
+        None | Some(Value::Null) => 0,
+        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| bad(cmd, "`seed` must be a whole number from 0"))?,
+        Some(Value::String(s)) => s.trim().parse().map_err(|_| bad(cmd, "`seed` must be a whole number from 0"))?,
+        Some(_) => return Err(bad(cmd, "`seed` must be a whole number from 0")),
+    };
+    o.max_tokens = match p.get("max_tokens") {
+        None | Some(Value::Null) => o.max_tokens,
+        Some(v) => v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(cmd, "`max_tokens` must be a whole number"))?,
+    };
+    o.validated().map_err(|e| ml_err(cmd, e))
+}
+
+/// The voice of a General MIDI program on the built-in instruments: pianos (0–7) as keys.
+fn gm_voice(program: u8) -> Option<(&'static str, &'static [(&'static str, f32)])> {
+    (program < 8).then_some(("Keys", &KEYS_VOICE[..]))
+}
+
+/// A new instrument track for a generated part, at the end of the session (before any Master),
+/// named after its General MIDI instrument ("Drums" for the drums): the Drum Synth for the drums,
+/// else the Subtractive Synth (pianos voiced as keys). The part's program (`None` for the drums).
+pub fn new_generated_track(s: &mut soundcraft_model::Session, part: &soundcraft_ml::textmidi::Part) -> (TrackId, Option<u8>) {
+    let program = (!part.is_drums()).then_some(part.instrument.min(127));
+    let name = program.map_or_else(|| "Drums".to_string(), |p| soundcraft_midi::gm_program_name(p).to_string());
+    let nt = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some(&name));
+    let plugin = if program.is_none() { "drum_synth" } else { "subtractive_synth" };
+    let mut ins = soundcraft_model::Insert::new(plugin);
+    if let Some(info) = soundcraft_dsp::plugin_info(plugin) {
+        for pi in info.params {
+            ins.params.insert(pi.id.to_string(), pi.default);
+        }
+    }
+    if let Some((preset, voice)) = program.and_then(gm_voice) {
+        for (k, v) in voice {
+            ins.params.insert((*k).to_string(), *v);
+        }
+        ins.preset = preset.into();
+    }
+    if let Some(t) = s.track_mut(nt) {
+        t.instrument = Some(ins);
+    }
+    (nt, program)
 }
 
 /// The subtractive synth voiced as soft keys (the built-in instruments have no piano): triangle

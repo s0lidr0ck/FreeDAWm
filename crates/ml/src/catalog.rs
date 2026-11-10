@@ -149,6 +149,13 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         builtin: false,
         license: "MIT",
     },
+    KnownModel {
+        id: "midi_llm",
+        name: "MIDI-LLM (Llama 3.2 1B, 8-bit)",
+        job: "Generate MIDI from Text: multitrack General MIDI from a description",
+        builtin: false,
+        license: "Llama 3.2 Community License",
+    },
 ];
 
 /// Whether a licence status means personal use only (no licence stated, or non-commercial).

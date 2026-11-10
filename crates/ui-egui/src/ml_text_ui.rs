@@ -45,6 +45,78 @@ pub struct LyricsDialog {
     pub skip_silence: bool,
 }
 
+/// Generate MIDI from Text's settings in the dialog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextMidiDialog {
+    /// What to compose.
+    pub prompt: String,
+    /// Length, seconds (1–100).
+    pub seconds: f32,
+    /// Randomness (the sampling temperature, 0.1–2).
+    pub temperature: f32,
+    /// A seed to repeat a piece; empty = a new one each run.
+    pub seed: String,
+}
+
+impl Default for TextMidiDialog {
+    fn default() -> Self {
+        TextMidiDialog { prompt: String::new(), seconds: 30.0, temperature: 1.0, seed: String::new() }
+    }
+}
+
+impl TextMidiDialog {
+    /// Whether Run can start: a prompt, and a seed that is a whole number (or none).
+    pub fn ready(&self) -> bool {
+        !self.prompt.trim().is_empty() && (self.seed.trim().is_empty() || self.seed.trim().parse::<u64>().is_ok())
+    }
+}
+
+pub fn text_midi_params(o: &mut serde_json::Map<String, Value>, t: &TextMidiDialog) {
+    o.insert("prompt".into(), json!(t.prompt.trim()));
+    o.insert("seconds".into(), json!(t.seconds));
+    o.insert("temperature".into(), json!(t.temperature));
+    if let Ok(seed) = t.seed.trim().parse::<u64>() {
+        o.insert("seed".into(), json!(seed));
+    }
+}
+
+pub fn text_midi_options(ui: &mut egui::Ui, t: &mut TextMidiDialog, cursor: &str) {
+    let tk = Tokens::current();
+    ui.label("Describe the music: style, instruments, key, meter, tempo, mood.");
+    ui.add(
+        egui::TextEdit::multiline(&mut t.prompt)
+            .hint_text("e.g. Upbeat jazz with saxophones, piano, bass and drums, in B-flat major, 4/4")
+            .desired_rows(3)
+            .desired_width(320.0),
+    );
+    ui.horizontal(|ui| {
+        ui.label("Length");
+        ui.add(egui::Slider::new(&mut t.seconds, 5.0..=100.0).step_by(1.0).suffix(" s"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Randomness");
+        ui.add(egui::Slider::new(&mut t.temperature, 0.5..=1.5).step_by(0.05));
+    })
+    .response
+    .on_hover_text("1 is the model's own; lower stays safer, higher wanders more");
+    ui.horizontal(|ui| {
+        ui.label("Seed");
+        ui.add(egui::TextEdit::singleline(&mut t.seed).hint_text("new each run").desired_width(120.0));
+    })
+    .response
+    .on_hover_text("The same seed, prompt and settings give the same notes. Each run reports its seed in the status line.");
+    if !t.seed.trim().is_empty() && t.seed.trim().parse::<u64>().is_err() {
+        ui.colored_label(tk.rec, "The seed is a whole number.");
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "One new instrument track per General MIDI instrument, at {cursor}. MIDI-LLM writes up to 682 notes; on the CPU that takes one to two minutes."
+        ))
+        .small()
+        .color(tk.text_dim),
+    );
+}
+
 const KEYS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /// Whether the dialog's source (`{"track": id}` / `{"clip": id}`) looks like a full mix.
@@ -161,6 +233,13 @@ pub fn lyrics_options(ui: &mut egui::Ui, l: &mut LyricsDialog, seconds: f64) {
 
 /// What the status line says about a finished Detect Chords or Transcribe Lyrics job.
 pub fn summary(title: &str, v: &Value, secs: f64) -> Option<String> {
+    // Generate MIDI from Text: the instruments and the seed that repeats the piece.
+    if let Some(seed) = v.get("seed").and_then(Value::as_str) {
+        let made = v.get("made")?.as_array()?;
+        let names: Vec<&str> = made.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
+        let notes: u64 = made.iter().filter_map(|m| m.get("notes").and_then(Value::as_u64)).sum();
+        return Some(format!("{title}: {notes} notes on {} tracks ({}) in {secs:.1} s, seed {seed}", names.len(), names.join(", ")));
+    }
     let made = v.get("made")?.as_array()?.first()?;
     if let Some(ch) = made.get("chords").and_then(Value::as_array) {
         let names: Vec<&str> = ch.iter().filter_map(|c| c.get("name").and_then(Value::as_str)).collect();
@@ -178,6 +257,15 @@ pub fn summary(title: &str, v: &Value, secs: f64) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{Services, SoundApp};
+
+    #[test]
+    fn generate_midi_from_text_reports_its_tracks_and_seed() {
+        let v = json!({"seed": "77", "made": [{"name": "Acoustic Grand Piano", "notes": 40}, {"name": "Drums", "notes": 12}]});
+        assert_eq!(
+            summary("Generate MIDI from Text", &v, 61.04).unwrap(),
+            "Generate MIDI from Text: 52 notes on 2 tracks (Acoustic Grand Piano, Drums) in 61.0 s, seed 77"
+        );
+    }
 
     #[test]
     fn menus_and_palette_open_the_dialogs_with_valid_params() {

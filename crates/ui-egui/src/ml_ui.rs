@@ -43,6 +43,8 @@ pub struct JobDialog {
     pub chords: crate::ml_text_ui::ChordDialog,
     /// Transcribe Lyrics' options (`ml_text_ui`).
     pub lyrics: crate::ml_text_ui::LyricsDialog,
+    /// Generate MIDI from Text's options (`ml_text_ui`).
+    pub text_midi: crate::ml_text_ui::TextMidiDialog,
 }
 
 /// Convert to MIDI's settings in the dialog.
@@ -198,7 +200,7 @@ pub struct MlUi {
 }
 
 /// The UI-layer commands: menu items that open a job's dialog, and the Models window.
-pub const MENU_ITEMS: [(&str, &str, &str); 8] = [
+pub const MENU_ITEMS: [(&str, &str, &str); 9] = [
     ("ui.ml.separate", "Separate Stems…", "ml.separate"),
     ("ui.ml.karaoke", "Make Karaoke…", "ml.karaoke"),
     ("ui.ml.drums", "Split Drums…", "ml.drums"),
@@ -206,6 +208,7 @@ pub const MENU_ITEMS: [(&str, &str, &str); 8] = [
     ("ui.ml.midi", "Convert to MIDI…", "ml.midi"),
     ("ui.ml.chords", "Detect Chords…", "ml.chords"),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "ml.lyrics"),
+    ("ui.ml.text_midi", "Generate MIDI from Text…", "ml.text_midi"),
     ("window.ml_models", "ML Models…", ""),
 ];
 
@@ -217,6 +220,7 @@ fn title_of(command: &str) -> &'static str {
         "ml.midi" => "Convert to MIDI",
         "ml.chords" => "Detect Chords",
         "ml.lyrics" => "Transcribe Lyrics",
+        "ml.text_midi" => "Generate MIDI from Text",
         _ => "Clean Vocal",
     }
 }
@@ -229,6 +233,14 @@ fn selection_target(app: &SoundApp) -> Option<(Value, String)> {
     }
     let t = app.engine.target_tracks().into_iter().next().and_then(|t| s.track(t))?;
     Some((json!({"track": t.id.0}), t.name.clone()))
+}
+
+/// Where Generate MIDI from Text puts its tracks: "the edit cursor (bar 5)".
+fn cursor_name(app: &SoundApp) -> String {
+    let s = app.engine.session();
+    let at = s.edit.selection.start.max(0);
+    let bar = s.tempo.bar_beat_at(at, s.sample_rate).bar;
+    format!("the edit cursor (bar {bar})")
 }
 
 /// Opens `command`'s dialog for `target` (`{"track": id}` / `{"clip": id}`), or for the selection.
@@ -244,8 +256,11 @@ pub fn open(app: &mut SoundApp, command: &str, target: Option<(Value, String)>) 
         "ml.midi" | "ui.ml.midi" => "ml.midi",
         "ml.chords" | "ui.ml.chords" => "ml.chords",
         "ml.lyrics" | "ui.ml.lyrics" => "ml.lyrics",
+        "ml.text_midi" | "ui.ml.text_midi" => "ml.text_midi",
         other => return Err(format!("unknown ML job `{other}`")),
     };
+    // Generate MIDI from Text has no source: its tracks go at the edit cursor.
+    let target = if command == "ml.text_midi" { Some((json!({}), cursor_name(app))) } else { target };
     let Some((target, target_name)) = target.or_else(|| selection_target(app)) else {
         return Err("select an audio track or clip first".into());
     };
@@ -278,6 +293,7 @@ pub fn open(app: &mut SoundApp, command: &str, target: Option<(Value, String)>) 
         midi,
         chords: crate::ml_text_ui::ChordDialog::new(full_mix, grid),
         lyrics: crate::ml_text_ui::LyricsDialog::default(),
+        text_midi: app.ml.dialog.as_ref().map(|d| d.text_midi.clone()).unwrap_or_default(),
     });
     Ok(json!({"dialog": command}))
 }
@@ -320,6 +336,7 @@ pub fn params(d: &JobDialog, device: Device) -> Value {
             }
             "ml.chords" => crate::ml_text_ui::chord_params(o, &d.chords),
             "ml.lyrics" => crate::ml_text_ui::lyrics_params(o, &d.lyrics),
+            "ml.text_midi" => crate::ml_text_ui::text_midi_params(o, &d.text_midi),
             _ => {
                 o.insert("mode".into(), json!(d.clean_mode.id()));
                 o.insert("mix".into(), json!(d.clean_mix));
@@ -482,6 +499,7 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         "ml.midi" => vec![d.midi.model.model_id()],
         "ml.chords" => vec!["btc_chords"],
         "ml.lyrics" => vec!["whisper_lyrics"],
+        "ml.text_midi" => vec!["midi_llm"],
         _ if d.clean_mode == soundcraft_engine::ml::CleanMode::Vocal || d.dereverb => vec!["srs_small"],
         _ => Vec::new(),
     };
@@ -505,7 +523,9 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         needs.into_iter().filter(|id| models.iter().any(|m| m.model.id == *id && !matches!(m.status, ModelStatus::Installed(_)))).collect();
     egui::Window::new(egui::RichText::new(title).font(bold(13.0))).collapsible(false).resizable(false).default_width(340.0).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
-        ui.label(format!("Source: {}", d.target_name));
+        if d.command != "ml.text_midi" {
+            ui.label(format!("Source: {}", d.target_name));
+        }
         match d.command {
             "ml.separate" => {
                 ui.horizontal(|ui| {
@@ -571,6 +591,7 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
             }
             "ml.chords" => crate::ml_text_ui::chord_options(ui, &mut d.chords, &band_key),
             "ml.lyrics" => crate::ml_text_ui::lyrics_options(ui, &mut d.lyrics, d.seconds),
+            "ml.text_midi" => crate::ml_text_ui::text_midi_options(ui, &mut d.text_midi, &d.target_name),
             _ => {
                 use soundcraft_engine::ml::CleanMode;
                 ui.label("Keeps the original: the clip plays a mix of it and the cleaned audio (Amount, Original/Cleaned on the clip).");
@@ -625,7 +646,9 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         }
         ui.separator();
         ui.horizontal(|ui| {
-            let can = missing.is_empty() && (d.command != "ml.separate" || d.stems.iter().take(d.sep_model.stems().len()).any(|s| *s));
+            let can = missing.is_empty()
+                && (d.command != "ml.separate" || d.stems.iter().take(d.sep_model.stems().len()).any(|s| *s))
+                && (d.command != "ml.text_midi" || d.text_midi.ready());
             if d.command == "ml.midi" {
                 let analysing = app.ml.analysing.is_some();
                 let analysed = app.ml.audition.is_some();
@@ -1131,6 +1154,37 @@ mod tests {
         let job = ml::prepare(&app.engine, "ml.separate", &json!({"clip": clip})).unwrap();
         assert_eq!(job.quality, Quality::Fast);
         assert!(ml::prepare(&app.engine, "ml.separate", &json!({"clip": clip, "quality": "ultra"})).is_err());
+    }
+
+    #[test]
+    fn generate_midi_from_text_opens_without_a_selection() {
+        let (mut app, _) = app();
+        app.engine.session_mut().edit.selected_clips.clear();
+        app.engine.session_mut().edit.selected_tracks.clear();
+        assert!(crate::menus::item_state(&app, "AI > Generate MIDI from Text…", Some("ui.ml.text_midi")).0);
+        crate::menus::invoke_menu(&mut app, "ml.text_midi", "");
+        let Some(mut d) = app.ml.dialog.clone() else { panic!("no dialog") };
+        assert_eq!(d.command, "ml.text_midi");
+        assert_eq!(d.target, json!({}));
+        assert!(d.target_name.starts_with("the edit cursor (bar "), "{}", d.target_name);
+        // Run waits for a prompt and a whole-number seed.
+        assert!(!d.text_midi.ready());
+        d.text_midi.prompt = "  slow piano ballad ".into();
+        assert!(d.text_midi.ready());
+        let p = params(&d, Device::Cpu);
+        assert_eq!(p["prompt"], "slow piano ballad");
+        assert!(p.get("seed").is_none(), "a new seed each run");
+        d.text_midi.seed = "12x".into();
+        assert!(!d.text_midi.ready());
+        d.text_midi.seed = "12".into();
+        let p = params(&d, Device::Cpu);
+        assert_eq!(p["seed"], 12);
+        let job = ml::prepare(&app.engine, "ml.text_midi", &p).unwrap();
+        assert!(matches!(job.kind, ml::JobKind::TextMidi(o) if o.seed == 12 && (o.seconds - 30.0).abs() < 1e-6));
+        // The settings stay for the next time it opens.
+        app.ml.dialog = Some(d);
+        assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());
+        assert_eq!(app.ml.dialog.as_ref().unwrap().text_midi.prompt, "  slow piano ballad ");
     }
 
     #[test]

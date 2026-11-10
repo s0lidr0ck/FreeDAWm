@@ -43,6 +43,7 @@ pub mod htdemucs;
 pub mod job;
 pub mod karaoke;
 pub mod kits;
+pub mod llama_bpe;
 pub mod lyrics;
 pub mod midi;
 pub mod models;
@@ -52,6 +53,7 @@ pub mod roformer;
 pub mod runtime;
 pub mod srs;
 pub mod stft;
+pub mod textmidi;
 pub mod vocals;
 
 pub use chords::{ChordOptions, ChordSegment};

@@ -212,6 +212,15 @@ impl InstalledModel {
     pub fn onnx(&self) -> PathBuf {
         self.dir.join(&self.card.file)
     }
+
+    /// Another file in the model's folder (`name` relative to it, never outside).
+    pub fn file(&self, name: &str) -> Result<PathBuf> {
+        let p = Path::new(name);
+        if name.is_empty() || p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(MlError::Model(self.card.id.clone(), format!("`{name}` is not a file in the model folder")));
+        }
+        Ok(self.dir.join(p))
+    }
 }
 
 /// Files already checked in this run of the app: (path, size, modified).

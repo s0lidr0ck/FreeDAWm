@@ -5,7 +5,8 @@
 Order (priority): htdemucs, drumsep_mdx23c, srs_small, karaoke_melroformer, vocals_melroformer,
 bs_roformer_sw, then the audio-to-MIDI
 models basicpitch, piano_kong, adtof_drums, game_vocal, then btc_chords (chords) and whisper_lyrics
-(Whisper large-v3 via whisper.cpp; downloads the whisper.cpp b5454 Windows binaries) (Basic Pitch's TF parity needs the extra venv
+(Whisper large-v3 via whisper.cpp; downloads the whisper.cpp b5454 Windows binaries), then
+midi_llm (MIDI-LLM, text to MIDI) (Basic Pitch's TF parity needs the extra venv
 <DAW>/ml-venv-tf with tensorflow-cpu; it is skipped with a note when that venv is missing). A model whose
 installed card.json sha256 matches its .onnx (and has golden/) is skipped. Each model runs in its
 own subprocess (the per-model folders reuse module names). Steps per model: download weights,
@@ -41,6 +42,8 @@ MODELS = [
     # chords and lyrics
     ("btc_chords", "btc"),
     ("whisper_lyrics", "lyrics"),
+    # text to MIDI
+    ("midi_llm", "midillm"),
 ]
 
 

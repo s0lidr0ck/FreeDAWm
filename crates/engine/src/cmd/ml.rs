@@ -70,6 +70,15 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| crate::ml::run_command(e, "ml.lyrics", p)
         ),
         cmd!(
+            "ml.text_midi",
+            "Generate MIDI from Text",
+            ["Track"],
+            None,
+            "{prompt: text (what to compose: style, instruments, key, meter, tempo, mood — e.g. \"upbeat jazz with saxophones and drums, B-flat major, 4/4\"), seconds?: 1..100 (default 30; the piece stops at the first note after), start?: position (default the edit cursor), seed?: integer (default random; the same seed, prompt and settings give the same notes), temperature?: 0.1..2 (default 1), top_p?: 0.05..1 (default 0.98), max_tokens?: 3..4095 (default 2046 = 682 notes), device?, models_dir?} — MIDI-LLM (Llama 3.2 1B): one new instrument track per General MIDI instrument in the piece, named after it (drums: Drum Synth on channel 10; the rest: Subtractive Synth, a program change on each clip keeps the General MIDI instrument for MIDI export and GM plugins), one MIDI clip each at `start`, notes on the session's tempo map; one undo step. Result: made (track, name, clip, program, notes), seed",
+            always,
+            |e, p| crate::ml::run_command(e, "ml.text_midi", p)
+        ),
+        cmd!(
             query "ml.models",
             "ML Models",
             [],
