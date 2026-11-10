@@ -55,7 +55,7 @@ jobs:
       - name: Upstream source at the pinned commit
         shell: bash
         run: |
-          read -r repo commit < <(python3 -c "import json; e=[e for e in json.load(open('tools/engines/engines.json'))['engines'] if e['id']=='${{ matrix.engine }}'][0]; print(e['repo'], e['commit'])")
+          read -r repo commit < <(python3 -c "import json; e=[e for e in json.load(open('tools/engines/engines.json'))['engines'] if e['id']=='${{ matrix.engine }}'][0]; print(e['repo'], e['commit'])" | tr -d '\r')
           git init upstream && cd upstream
           git remote add origin "$repo"
           git fetch --depth 1 origin "$commit"
@@ -104,7 +104,7 @@ jobs:
         run: |
           mkdir smoke && cd smoke && python3 -c "import zipfile; zipfile.ZipFile('../dist/${{ matrix.engine }}-${{ matrix.target.platform }}.zip').extractall('.')"
           chmod +x bin/* || true
-          exe=$(python3 -c "import json; print(json.load(open('card.json'))['file'])")
+          exe=$(python3 -c "import json; print(json.load(open('card.json'))['file'])" | tr -d '\r')
           set +e; "./$exe" --help >help.txt 2>&1; code=$?; set -e
           head -5 help.txt
           grep -qi "usage" help.txt || { echo "::error::$exe did not run (exit $code)"; exit 1; }
