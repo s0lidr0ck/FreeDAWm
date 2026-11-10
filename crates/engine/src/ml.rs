@@ -33,9 +33,10 @@ pub use soundcraft_ml::models::{
 pub use soundcraft_ml::pipeline::isolation_sources;
 pub use soundcraft_ml::{
     Analysed, Analysis, Cancel, ChordOptions, ChordSegment, CleanMode, CleanOptions, Ctx, Device, Isolate, JobKind, JobOutput, Lyrics,
-    LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription, textmidi::TextMidiOptions,
+    LyricsLanguage, LyricsOptions, MidiModel, MidiOptions, MlError, Prompt, Quality, SepModel, StemSource, Transcription, songgen::SongOptions,
+    textmidi::TextMidiOptions,
 };
-pub use soundcraft_ml::{adtof, basicpitch, catalog, download, kits, textmidi};
+pub use soundcraft_ml::{abc, adtof, basicpitch, catalog, download, kits, songgen, textmidi};
 
 /// Clean Vocal's default de-noise amount (attenuation limit), dB.
 pub const DEFAULT_AMOUNT_DB: f32 = soundcraft_ml::denoise::DEFAULT_ATTEN_DB;
@@ -56,6 +57,9 @@ pub enum Target {
     /// Generate MIDI from Text: one new instrument track per instrument, clips at `start`, `len`
     /// long; `name` is the prompt, shortened.
     Generate { start: Samples, len: Samples, name: String },
+    /// Generate Song: a new audio track at `start` (and the score as MIDI tracks); `name` is the
+    /// style, shortened.
+    Song { start: Samples, name: String },
 }
 
 /// One source of a job: its audio (session rate) and where the result goes.
@@ -101,6 +105,7 @@ pub fn command_for(kind: &JobKind) -> &'static str {
         JobKind::Chords(_) => "ml.chords",
         JobKind::Lyrics(_) => "ml.lyrics",
         JobKind::TextMidi(_) => "ml.text_midi",
+        JobKind::Song(_) => "ml.song",
     }
 }
 
@@ -206,6 +211,7 @@ pub fn kind_from(cmd: &str, p: &Value) -> Result<JobKind> {
         "ml.chords" => JobKind::Chords(ChordOptions { bass: bool_or(p, "bass", false) }),
         "ml.lyrics" => JobKind::Lyrics(lyrics_options(cmd, p)?),
         "ml.text_midi" => JobKind::TextMidi(text_midi_options(cmd, p)?),
+        "ml.song" => JobKind::Song(song_options(cmd, p)?),
         other => return Err(bad(other, "not an ML command")),
     })
 }
@@ -271,6 +277,7 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
         "ml.chords" => "ml.chords",
         "ml.lyrics" => "ml.lyrics",
         "ml.text_midi" => "ml.text_midi",
+        "ml.song" => "ml.song",
         other => return Err(bad(other, "not an ML command")),
     };
     let mut kind = kind_from(cmd, p)?;
@@ -285,6 +292,24 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
     let s = e.session();
     let rate = s.sample_rate.hz();
     let mut parts = Vec::new();
+    if let JobKind::Song(o) = &kind {
+        let start = crate::cmd::position_param(e, cmd, p, "start")?.unwrap_or(s.edit.selection.start).max(0);
+        let style = if o.style.is_empty() { o.engine.label() } else { o.style.as_str() };
+        let name: String = style.chars().take(40).collect();
+        let target = Target::Song { start, name };
+        return Ok(MlJob {
+            command,
+            kind,
+            parts: vec![Part { target, audio: Vec::new() }],
+            rate,
+            device,
+            models_dir,
+            quality,
+            keep: Vec::new(),
+            mute_original: false,
+            lane,
+        });
+    }
     if let JobKind::TextMidi(o) = &mut kind {
         // `continue_from`: the piece starts with that MIDI clip's notes, at its start.
         let from = match p.get("continue_from") {
@@ -440,7 +465,11 @@ impl MlJob {
     pub fn title(&self) -> String {
         let name = match self.parts.as_slice() {
             [p] => match &p.target {
-                Target::Track { name, .. } | Target::Clip { name, .. } | Target::Midi { name, .. } | Target::Generate { name, .. } => name.clone(),
+                Target::Track { name, .. }
+                | Target::Clip { name, .. }
+                | Target::Midi { name, .. }
+                | Target::Generate { name, .. }
+                | Target::Song { name, .. } => name.clone(),
             },
             more => format!("{} clips", more.len()),
         };
@@ -647,6 +676,11 @@ pub(crate) fn apply_inner(e: &mut Engine, job: &MlJob, result: MlResult) -> Resu
                 crate::edit::place_clip(s, nt, Clip::midi(cid, format!("{name} MIDI"), *start, *len, seq));
                 made.push(json!({"track": nt, "name": s.track(nt).map(|t| t.name.clone()), "clip": cid, "notes": n_notes, "pedals": t.pedals.len()}));
             }
+            Target::Song { start, name } => {
+                let JobKind::Song(opts) = job.kind else { return Err(bad(cmd, "not a Generate Song job")) };
+                let song = out.song.ok_or_else(|| bad(cmd, "the song server sent no song"))?;
+                return apply_song(e, cmd, &opts, song, *start, name, notes);
+            }
             Target::Generate { start, len, .. } => {
                 let JobKind::TextMidi(opts) = job.kind else { return Err(bad(cmd, "not a Generate MIDI job")) };
                 let parts = out.generated.unwrap_or_default();
@@ -739,6 +773,151 @@ fn prime_from(s: &soundcraft_model::Session, start: Samples, seq: &soundcraft_mi
         .map(|n| (secs(n.start), secs(n.start.saturating_add(n.length.max(0))), program, n.pitch.min(127)))
         .collect();
     textmidi::Prime::from_notes(&notes)
+}
+
+/// Generate Song's options from command params: `engine` (yue2 | acestep), `server`, `style`,
+/// `lyrics`, `instrumental`, `score` (YuE2, ABC), `plan` (YuE2: full | melody | off), `seconds`,
+/// `seed`, `bpm`, `key`, `planner` (ACE-Step).
+pub fn song_options(cmd: &str, p: &Value) -> Result<SongOptions> {
+    use soundcraft_ml::songgen::{InlineText, MAX_LYRICS, MAX_SCORE, MAX_STYLE, ScorePlan, SongEngine};
+    let engine = match str_param(p, "engine") {
+        Some(v) => SongEngine::parse(v).ok_or_else(|| bad(cmd, format!("unknown engine `{v}` (yue2, acestep)")))?,
+        None => SongEngine::Yue2,
+    };
+    let text = |key: &str, max: usize| -> Result<String> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(String::new()),
+            Some(Value::String(s)) if s.len() <= max => Ok(s.clone()),
+            Some(Value::String(_)) => Err(bad(cmd, format!("`{key}` is longer than {max} bytes"))),
+            Some(_) => Err(bad(cmd, format!("`{key}` must be text"))),
+        }
+    };
+    let mut o = SongOptions::new(engine, &text("style", MAX_STYLE)?);
+    o.server = InlineText::new(&text("server", 200)?);
+    o.lyrics = InlineText::<MAX_LYRICS>::new(&text("lyrics", MAX_LYRICS)?);
+    o.score = InlineText::<MAX_SCORE>::new(&text("score", MAX_SCORE)?);
+    o.key = InlineText::new(&text("key", 32)?);
+    o.instrumental = bool_or(p, "instrumental", false);
+    o.planner = bool_or(p, "planner", true);
+    if let Some(v) = str_param(p, "plan") {
+        o.plan = ScorePlan::parse(v).ok_or_else(|| bad(cmd, format!("unknown plan `{v}` (full, melody, off)")))?;
+    }
+    if engine == SongEngine::AceStep && !o.score.is_empty() {
+        return Err(bad(cmd, "a score is YuE2's: ACE-Step takes a style and lyrics"));
+    }
+    if let Some(v) = p.get("seconds").filter(|v| !v.is_null()) {
+        o.seconds = v.as_f64().map(|x| x as f32).ok_or_else(|| bad(cmd, "`seconds` must be a number"))?;
+    }
+    if let Some(v) = p.get("bpm").filter(|v| !v.is_null()) {
+        o.bpm = v.as_u64().and_then(|n| u16::try_from(n).ok()).ok_or_else(|| bad(cmd, "`bpm` must be a whole number"))?;
+    }
+    o.seed = match p.get("seed") {
+        None | Some(Value::Null) => 0,
+        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| bad(cmd, "`seed` must be a whole number from 0"))?,
+        Some(Value::String(s)) => s.trim().parse().map_err(|_| bad(cmd, "`seed` must be a whole number from 0"))?,
+        Some(_) => return Err(bad(cmd, "`seed` must be a whole number from 0")),
+    };
+    o.validated().map_err(|e| ml_err(cmd, e))
+}
+
+/// The song onto new tracks at `start`: the audio, and YuE2's score as MIDI (one instrument track
+/// per voice and one for the chord symbols, on the session's tempo map from the score's own
+/// tempo, so the notes sit under the singing as the score has them).
+fn apply_song(
+    e: &mut Engine,
+    cmd: &str,
+    opts: &SongOptions,
+    song: soundcraft_ml::songgen::Song,
+    start: Samples,
+    name: &str,
+    notes: Vec<String>,
+) -> Result<Value> {
+    let (_, buf) =
+        soundcraft_audio_io::decode(&song.audio, Some("wav")).map_err(|err| bad(cmd, format!("the song server's audio does not decode: {err}")))?;
+    let channels = buf.channels.len().clamp(1, 2);
+    let s = e.session_mut();
+    let label = opts.engine.label();
+    let file = format!("{label} - {name}");
+    let source = crate::io::add_source(s, &file, buf, None, FileFormat::Wav);
+    let frames = s.pool.get(source).map_or(0, |a| a.frames());
+    let len = Samples::try_from(frames).unwrap_or(0).max(1);
+    let nt = s.add_track(TrackKind::Audio, ChannelFormat::for_channels(channels), Some(&format!("{label} Song")));
+    let cid = s.new_clip_id();
+    if let Some(pl) = s.track_mut(nt).and_then(|t| t.playlist_mut()) {
+        pl.clips.push(Clip::audio(cid, file.clone(), source, 0, start, len));
+    }
+    let mut made = vec![
+        json!({"track": nt, "name": s.track(nt).map(|t| t.name.clone()), "clip": cid, "source": source, "seconds": len as f64 / s.sample_rate.as_f64()}),
+    ];
+    // YuE2's score: voices and chords as MIDI.
+    let mut score_info = Value::Null;
+    if let Some(abc) = &song.score {
+        let score = soundcraft_ml::abc::parse(abc);
+        for (voice, vnotes) in &score.parts {
+            let t = Transcription { notes: vnotes.clone(), ..Transcription::default() };
+            let track_name = format!("{label} Score {voice}");
+            let tid = new_score_track(s, &track_name, None);
+            let seq = midi_sequence(s, start, len, &t);
+            let n = seq.notes.len();
+            let c = s.new_clip_id();
+            crate::edit::place_clip(s, tid, Clip::midi(c, track_name.clone(), start, len, seq));
+            made.push(json!({"track": tid, "name": s.track(tid).map(|t| t.name.clone()), "clip": c, "notes": n, "voice": voice}));
+        }
+        let chord_notes: Vec<soundcraft_ml::NoteEvent> = score
+            .chords
+            .iter()
+            .flat_map(|c| {
+                soundcraft_ml::abc::chord_pitches(&c.name).unwrap_or_default().into_iter().map(move |pitch| soundcraft_ml::NoteEvent {
+                    start: c.start,
+                    end: c.end,
+                    pitch,
+                    velocity: 70,
+                    bends: Vec::new(),
+                })
+            })
+            .collect();
+        if !chord_notes.is_empty() {
+            let t = Transcription { notes: chord_notes, ..Transcription::default() };
+            let track_name = format!("{label} Score Chords");
+            let tid = new_score_track(s, &track_name, Some(&KEYS_VOICE[..]));
+            let seq = midi_sequence(s, start, len, &t);
+            let n = seq.notes.len();
+            let c = s.new_clip_id();
+            crate::edit::place_clip(s, tid, Clip::midi(c, track_name.clone(), start, len, seq));
+            made.push(json!({"track": tid, "name": s.track(tid).map(|t| t.name.clone()), "clip": c, "notes": n, "chords": score.chords.len()}));
+        }
+        score_info = json!({"abc": abc, "bpm": score.bpm, "meter": [score.meter.0, score.meter.1]});
+    }
+    let seed = song.request.get("seed").or_else(|| song.request.get("lm_seed")).cloned().unwrap_or(Value::Null);
+    let meta = json!({
+        "bpm": song.request.get("bpm").cloned().unwrap_or(Value::Null),
+        "key": song.request.get("keyscale").cloned().unwrap_or(Value::Null),
+        "lyrics": song.request.get("lyrics").cloned().unwrap_or(Value::Null),
+    });
+    Ok(
+        json!({"command": cmd, "engine": opts.engine.id(), "made": made, "notes": notes, "seed": seed, "score": score_info, "song": meta, "request": song.request}),
+    )
+}
+
+/// A new instrument track (Subtractive Synth, optionally voiced) at the end of the session.
+fn new_score_track(s: &mut soundcraft_model::Session, name: &str, voice: Option<&[(&str, f32)]>) -> TrackId {
+    let nt = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some(name));
+    let mut ins = soundcraft_model::Insert::new("subtractive_synth");
+    if let Some(info) = soundcraft_dsp::plugin_info("subtractive_synth") {
+        for pi in info.params {
+            ins.params.insert(pi.id.to_string(), pi.default);
+        }
+    }
+    if let Some(v) = voice {
+        for (k, x) in v {
+            ins.params.insert((*k).to_string(), *x);
+        }
+        ins.preset = "Keys".into();
+    }
+    if let Some(t) = s.track_mut(nt) {
+        t.instrument = Some(ins);
+    }
+    nt
 }
 
 /// A seed from the clock (Generate MIDI from Text without `seed`); never 0.

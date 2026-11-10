@@ -143,6 +143,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.chords", "Detect Chords…", "AI > Detect Chords…", None),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "AI > Transcribe Lyrics…", None),
     ("ui.ml.text_midi", "Generate MIDI from Text…", "AI > Generate MIDI from Text…", None),
+    ("ui.ml.song", "Generate Song…", "AI > Generate Song…", None),
     ("ui.midi_cleanup", "MIDI Cleanup…", "AI > MIDI Cleanup…", None),
     ("ui.midi_editor", "MIDI Editor State", "", None),
     ("window.ml_models", "ML Models", "Setup > ML Models…", None),
@@ -682,7 +683,7 @@ fn disabled_reason(app: &SoundApp, id: Option<&str>) -> Option<String> {
         "ui.mix.slim_editors" => Some("Needs Plugin Editors as in the VST".into()),
         i if i.starts_with("ui.mix.width.") => Some("Select channels in the Mix window".into()),
         "track.rename" => Some("Select a track".into()),
-        "ui.ml.text_midi" => Some("Wait for the running ML job".into()),
+        "ui.ml.text_midi" | "ui.ml.song" => Some("Wait for the running ML job".into()),
         i if i.starts_with("ui.ml.") => Some("Select an audio clip or track".into()),
         i if i.starts_with("clip.clean_") => Some("Select a clip cleaned by Clean Vocal".into()),
         _ => soundcraft_engine::find_command(id).and_then(|c| (c.enabled)(&app.engine).err()),
@@ -734,7 +735,7 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
         }
         // The ML jobs need an audio track or clip to run on.
         // Generate MIDI from Text needs no source.
-        Some("ui.ml.text_midi") => ml_idle(app),
+        Some("ui.ml.text_midi" | "ui.ml.song") => ml_idle(app),
         Some(i) if i.starts_with("ui.ml.") => !app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(),
         // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
         Some("ui.mix.slim_editors") => app.ui.wide_editors,

@@ -23,6 +23,7 @@
 //! Audio is planar `f32`: `audio[channel][frame]`. Nothing here panics on hostile input; panics
 //! inside third-party inference code are caught at the [`pipeline`] boundary.
 
+pub mod abc;
 pub mod adtof;
 
 /// `FREEDAWM_<suffix>` when set, else the older `SOUNDCRAFT_<suffix>` (the app's rename).
@@ -51,6 +52,7 @@ pub mod pianokong;
 pub mod pipeline;
 pub mod roformer;
 pub mod runtime;
+pub mod songgen;
 pub mod srs;
 pub mod stft;
 pub mod textmidi;

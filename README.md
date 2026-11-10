@@ -221,6 +221,10 @@ one undo step.
 - **Generate MIDI from Text** (MIDI-LLM). Describe the music ("upbeat jazz with saxophones,
   B-flat major") and get one instrument track per General MIDI instrument at the edit cursor,
   ready for your own instruments. A seed repeats a piece.
+- **Generate Song** with YuE2 or ACE-Step 1.5: a whole song with vocals onto an audio track, and with
+  YuE2 the score it sang as MIDI tracks (melody, accompaniment, chords). The models run in their own
+  local servers ([yue2.cpp](https://github.com/ServeurpersoCom/yue2.cpp),
+  [acestep.cpp](https://github.com/ServeurpersoCom/acestep.cpp)); FreeDAWm talks to them.
 - **Clean Vocal** and **Tune Vocal** (see [Vocals](#vocals)).
 - **Scout: mix feedback.** Select channels, press **Scout** and play. Scout measures each channel
   before and after its processing: spectrum, loudness, dynamics, stereo width, transients. It

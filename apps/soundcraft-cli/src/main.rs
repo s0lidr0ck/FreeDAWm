@@ -32,6 +32,11 @@
 //!                 [--continue IN.mid [--instrument 0..127|drums]] [--device auto|gpu|cpu] [--models DIR]
 //!                                                 text to MIDI (MIDI-LLM): a format-1 .mid, one track per
 //!                                                 General MIDI instrument, at a constant --bpm
+//! freedawm-cli ml song OUT.wav --style TEXT [--engine yue2|acestep] [--server URL] [--lyrics FILE] [--instrumental]
+//!                 [--seconds 60] [--seed N] [--score FILE.abc] [--plan full|melody|off] [--bpm N] [--key "A minor"]
+//!                 [--no-planner] [--midi OUT.mid]
+//!                                                 a whole song from a running yue-server / ace-server;
+//!                                                 --midi writes YuE2's score as MIDI
 //! freedawm-cli ml models [--models DIR]         the model folder and which models are installed
 //! freedawm-cli ml bench IN.wav [--seconds 30]   HTDemucs speed on the GPU (DirectML) and the CPU
 //! ```
@@ -190,6 +195,9 @@ fn ml(args: &[String]) -> ExitCode {
     };
     if sub == "text-midi" {
         return ml_text_midi(args, device, &dir);
+    }
+    if sub == "song" {
+        return ml_song(args);
     }
     let Some(input) = args.get(1) else { return fail(format!("ml {sub} IN.wav …")) };
     let bytes = match std::fs::read(input) {
@@ -445,6 +453,80 @@ fn ml_text_midi(args: &[String], device: soundcraft_ml::Device, dir: &std::path:
         t0.elapsed().as_secs_f64(),
         r["seed"].as_str().unwrap_or("?")
     );
+    ExitCode::SUCCESS
+}
+
+/// `ml song`: Generate Song through a running song server; the audio as WAV, the score as MIDI.
+fn ml_song(args: &[String]) -> ExitCode {
+    use soundcraft_model::Session;
+    let Some(out) = args.get(1).filter(|a| !a.starts_with("--")) else { return fail("ml song OUT.wav --style TEXT …") };
+    let mut p = json!({"start": 0, "style": arg_value(args, "--style").unwrap_or_default()});
+    for (flag, key) in [("--engine", "engine"), ("--server", "server"), ("--plan", "plan"), ("--key", "key"), ("--seed", "seed")] {
+        if let Some(v) = arg_value(args, flag) {
+            p[key] = json!(v);
+        }
+    }
+    for (flag, key) in [("--lyrics", "lyrics"), ("--score", "score")] {
+        if let Some(path) = arg_value(args, flag) {
+            match std::fs::read_to_string(&path) {
+                Ok(t) => p[key] = json!(t),
+                Err(e) => return fail(format!("{path}: {e}")),
+            }
+        }
+    }
+    for (flag, key) in [("--seconds", "seconds"), ("--bpm", "bpm")] {
+        if let Some(v) = arg_value(args, flag) {
+            match v.parse::<f64>() {
+                Ok(x) if key == "bpm" => p[key] = json!(x as u64),
+                Ok(x) => p[key] = json!(x),
+                Err(_) => return fail(format!("{flag} must be a number")),
+            }
+        }
+    }
+    p["instrumental"] = json!(args.iter().any(|a| a == "--instrumental"));
+    p["planner"] = json!(!args.iter().any(|a| a == "--no-planner"));
+    let mut s = Session { sample_rate: soundcraft_time::SampleRate::HZ_48000, ..Session::default() };
+    let _ = s.tempo.set_tempo(0, 120.0);
+    let mut e = Engine::new(s);
+    eprintln!("  generating (the song server does the work; minutes)");
+    let t0 = std::time::Instant::now();
+    let r = match e.execute("ml.song", &p) {
+        Ok(r) => r,
+        Err(err) => return fail(err),
+    };
+    let made: Vec<&Value> = r["made"].as_array().map(|m| m.iter().collect()).unwrap_or_default();
+    let Some(song) = made.first().and_then(|m| m["track"].as_u64()) else { return fail("no song") };
+    let _ = song;
+    // The song's audio, as the session holds it (48 kHz), as 24-bit WAV.
+    let src = made.first().and_then(|m| m["source"].as_u64()).unwrap_or(0);
+    let s = e.session();
+    let Some(audio) = s.pool.get(soundcraft_model::SourceId(src)) else { return fail("the song's audio is missing") };
+    let buf = audio.buffer().into_owned();
+    let enc = soundcraft_audio_io::EncodeOptions {
+        format: soundcraft_audio_io::FileFormat::Wav,
+        bit_depth: soundcraft_audio_io::BitDepth::Int24,
+        ..soundcraft_audio_io::EncodeOptions::default()
+    };
+    if let Err(err) =
+        soundcraft_audio_io::encode(&buf, &enc).map_err(|e| e.to_string()).and_then(|b| std::fs::write(out, b).map_err(|e| e.to_string()))
+    {
+        return fail(format!("{out}: {err}"));
+    }
+    let midi: Vec<u64> = made.iter().skip(1).filter_map(|m| m["track"].as_u64()).collect();
+    if let Some(mid) = arg_value(args, "--midi") {
+        if midi.is_empty() {
+            eprintln!("  no score to write (YuE2 with a score plan writes one)");
+        } else if let Err(err) = e.execute("file.export_midi", &json!({"path": mid, "tracks": midi})) {
+            return fail(err);
+        }
+    }
+    if let Some(abc) = r["score"]["abc"].as_str() {
+        let path = std::path::Path::new(out).with_extension("abc");
+        let _ = std::fs::write(&path, abc);
+        eprintln!("  score: {}", path.display());
+    }
+    let len = made.first().and_then(|m| m["seconds"].as_f64()).unwrap_or(0.0);
+    outln!("wrote {out}: {len:.1} s song in {:.0} s, seed {}", t0.elapsed().as_secs_f64(), r["seed"]);
     ExitCode::SUCCESS
 }
 

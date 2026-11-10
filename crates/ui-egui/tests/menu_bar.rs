@@ -19,7 +19,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Clip", 23),
     ("Event", 15),
     ("Process", 14),
-    ("AI", 12),
+    ("AI", 13),
     ("Options", 15),
     ("Setup", 9),
     ("Window", 33),
@@ -197,7 +197,8 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Detect Chords…",
             "Transcribe Lyrics…",
             "MIDI Cleanup…",
-            "Generate MIDI from Text…"
+            "Generate MIDI from Text…",
+            "Generate Song…"
         ]
     );
     let extra = menus::ui_aliases();
