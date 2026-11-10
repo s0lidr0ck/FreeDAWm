@@ -23,6 +23,7 @@
 //! Audio is planar `f32`: `audio[channel][frame]`. Nothing here panics on hostile input; panics
 //! inside third-party inference code are caught at the [`pipeline`] boundary.
 
+pub mod abc;
 pub mod adtof;
 
 /// `FREEDAWM_<suffix>` when set, else the older `SOUNDCRAFT_<suffix>` (the app's rename).
@@ -38,11 +39,13 @@ pub mod clean;
 pub mod denoise;
 pub mod download;
 pub mod drumsep;
+pub mod engine_server;
 pub mod game;
 pub mod htdemucs;
 pub mod job;
 pub mod karaoke;
 pub mod kits;
+pub mod llama_bpe;
 pub mod lyrics;
 pub mod midi;
 pub mod models;
@@ -50,8 +53,10 @@ pub mod pianokong;
 pub mod pipeline;
 pub mod roformer;
 pub mod runtime;
+pub mod songgen;
 pub mod srs;
 pub mod stft;
+pub mod textmidi;
 pub mod vocals;
 
 pub use chords::{ChordOptions, ChordSegment};

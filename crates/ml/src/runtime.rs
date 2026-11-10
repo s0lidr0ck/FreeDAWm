@@ -339,6 +339,28 @@ impl OnnxModel {
         Ok(res)
     }
 
+    /// Run with ready-made ONNX Runtime values by name and keep every output as a value, for
+    /// graphs whose outputs go straight back in (a decoder's key/value cache) without copying.
+    /// On the device the session is on (no CPU retry).
+    pub fn run_values(
+        &mut self,
+        inputs: Vec<(String, ort::session::SessionInputValue<'static>)>,
+    ) -> Result<std::collections::HashMap<String, ort::value::DynValue>> {
+        if self.cancel.as_ref().is_some_and(crate::Cancel::is_cancelled) {
+            return Err(MlError::Cancelled);
+        }
+        let id = self.id.clone();
+        let names = self.output_names();
+        let mut outputs = self.session.run(inputs).map_err(|e| rt(&id, "run", e))?;
+        let mut res = std::collections::HashMap::with_capacity(names.len());
+        for name in names {
+            if let Some(v) = outputs.remove(name.as_str()) {
+                res.insert(name, v);
+            }
+        }
+        Ok(res)
+    }
+
     fn run_once(&mut self, inputs: Vec<Tensor>) -> Result<Vec<Tensor>> {
         let id = self.id.clone();
         let names = self.input_names();

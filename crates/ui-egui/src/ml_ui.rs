@@ -43,6 +43,10 @@ pub struct JobDialog {
     pub chords: crate::ml_text_ui::ChordDialog,
     /// Transcribe Lyrics' options (`ml_text_ui`).
     pub lyrics: crate::ml_text_ui::LyricsDialog,
+    /// Generate MIDI from Text's options (`ml_text_ui`).
+    pub text_midi: crate::ml_text_ui::TextMidiDialog,
+    /// Generate Song's options (`ml_text_ui`).
+    pub song: crate::ml_text_ui::SongDialog,
 }
 
 /// Convert to MIDI's settings in the dialog.
@@ -198,7 +202,7 @@ pub struct MlUi {
 }
 
 /// The UI-layer commands: menu items that open a job's dialog, and the Models window.
-pub const MENU_ITEMS: [(&str, &str, &str); 8] = [
+pub const MENU_ITEMS: [(&str, &str, &str); 10] = [
     ("ui.ml.separate", "Separate Stems…", "ml.separate"),
     ("ui.ml.karaoke", "Make Karaoke…", "ml.karaoke"),
     ("ui.ml.drums", "Split Drums…", "ml.drums"),
@@ -206,6 +210,8 @@ pub const MENU_ITEMS: [(&str, &str, &str); 8] = [
     ("ui.ml.midi", "Convert to MIDI…", "ml.midi"),
     ("ui.ml.chords", "Detect Chords…", "ml.chords"),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "ml.lyrics"),
+    ("ui.ml.text_midi", "Generate MIDI from Text…", "ml.text_midi"),
+    ("ui.ml.song", "Generate Song…", "ml.song"),
     ("window.ml_models", "ML Models…", ""),
 ];
 
@@ -217,6 +223,8 @@ fn title_of(command: &str) -> &'static str {
         "ml.midi" => "Convert to MIDI",
         "ml.chords" => "Detect Chords",
         "ml.lyrics" => "Transcribe Lyrics",
+        "ml.text_midi" => "Generate MIDI from Text",
+        "ml.song" => "Generate Song",
         _ => "Clean Vocal",
     }
 }
@@ -229,6 +237,24 @@ fn selection_target(app: &SoundApp) -> Option<(Value, String)> {
     }
     let t = app.engine.target_tracks().into_iter().next().and_then(|t| s.track(t))?;
     Some((json!({"track": t.id.0}), t.name.clone()))
+}
+
+/// The first selected clip when it is a MIDI clip with notes: (id, name).
+fn selected_midi_clip(app: &SoundApp) -> Option<(u64, String)> {
+    let s = app.engine.session();
+    let c = s.edit.selected_clips.first().and_then(|c| s.find_clip(*c)).map(|(_, c)| c)?;
+    match &c.content {
+        soundcraft_model::ClipContent::Midi { sequence } if !sequence.notes.is_empty() => Some((c.id.0, c.name.clone())),
+        _ => None,
+    }
+}
+
+/// Where Generate MIDI from Text puts its tracks: "the edit cursor (bar 5)".
+fn cursor_name(app: &SoundApp) -> String {
+    let s = app.engine.session();
+    let at = s.edit.selection.start.max(0);
+    let bar = s.tempo.bar_beat_at(at, s.sample_rate).bar;
+    format!("the edit cursor (bar {bar})")
 }
 
 /// Opens `command`'s dialog for `target` (`{"track": id}` / `{"clip": id}`), or for the selection.
@@ -244,8 +270,12 @@ pub fn open(app: &mut SoundApp, command: &str, target: Option<(Value, String)>) 
         "ml.midi" | "ui.ml.midi" => "ml.midi",
         "ml.chords" | "ui.ml.chords" => "ml.chords",
         "ml.lyrics" | "ui.ml.lyrics" => "ml.lyrics",
+        "ml.text_midi" | "ui.ml.text_midi" => "ml.text_midi",
+        "ml.song" | "ui.ml.song" => "ml.song",
         other => return Err(format!("unknown ML job `{other}`")),
     };
+    // Generate MIDI from Text has no source: its tracks go at the edit cursor.
+    let target = if matches!(command, "ml.text_midi" | "ml.song") { Some((json!({}), cursor_name(app))) } else { target };
     let Some((target, target_name)) = target.or_else(|| selection_target(app)) else {
         return Err("select an audio track or clip first".into());
     };
@@ -278,6 +308,15 @@ pub fn open(app: &mut SoundApp, command: &str, target: Option<(Value, String)>) 
         midi,
         chords: crate::ml_text_ui::ChordDialog::new(full_mix, grid),
         lyrics: crate::ml_text_ui::LyricsDialog::default(),
+        song: app.ml.dialog.as_ref().map(|d| d.song.clone()).unwrap_or_default(),
+        text_midi: {
+            let mut t = app.ml.dialog.as_ref().map(|d| d.text_midi.clone()).unwrap_or_default();
+            // The selected MIDI clip, to continue (on by default when there is one).
+            let clip = selected_midi_clip(app);
+            t.continue_clip = clip.is_some();
+            t.clip = clip;
+            t
+        },
     });
     Ok(json!({"dialog": command}))
 }
@@ -320,6 +359,8 @@ pub fn params(d: &JobDialog, device: Device) -> Value {
             }
             "ml.chords" => crate::ml_text_ui::chord_params(o, &d.chords),
             "ml.lyrics" => crate::ml_text_ui::lyrics_params(o, &d.lyrics),
+            "ml.text_midi" => crate::ml_text_ui::text_midi_params(o, &d.text_midi),
+            "ml.song" => crate::ml_text_ui::song_params(o, &d.song),
             _ => {
                 o.insert("mode".into(), json!(d.clean_mode.id()));
                 o.insert("mix".into(), json!(d.clean_mix));
@@ -482,6 +523,10 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         "ml.midi" => vec![d.midi.model.model_id()],
         "ml.chords" => vec!["btc_chords"],
         "ml.lyrics" => vec!["whisper_lyrics"],
+        "ml.text_midi" => vec!["midi_llm"],
+        // The installed engine, unless the song goes to a server the person runs.
+        "ml.song" if d.song.bundled() => vec![d.song.engine_id()],
+        "ml.song" => Vec::new(),
         _ if d.clean_mode == soundcraft_engine::ml::CleanMode::Vocal || d.dereverb => vec!["srs_small"],
         _ => Vec::new(),
     };
@@ -505,7 +550,9 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         needs.into_iter().filter(|id| models.iter().any(|m| m.model.id == *id && !matches!(m.status, ModelStatus::Installed(_)))).collect();
     egui::Window::new(egui::RichText::new(title).font(bold(13.0))).collapsible(false).resizable(false).default_width(340.0).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
-        ui.label(format!("Source: {}", d.target_name));
+        if !matches!(d.command, "ml.text_midi" | "ml.song") {
+            ui.label(format!("Source: {}", d.target_name));
+        }
         match d.command {
             "ml.separate" => {
                 ui.horizontal(|ui| {
@@ -571,6 +618,8 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
             }
             "ml.chords" => crate::ml_text_ui::chord_options(ui, &mut d.chords, &band_key),
             "ml.lyrics" => crate::ml_text_ui::lyrics_options(ui, &mut d.lyrics, d.seconds),
+            "ml.text_midi" => crate::ml_text_ui::text_midi_options(ui, &mut d.text_midi, &d.target_name),
+            "ml.song" => crate::ml_text_ui::song_options(ui, &mut d.song, &d.target_name),
             _ => {
                 use soundcraft_engine::ml::CleanMode;
                 ui.label("Keeps the original: the clip plays a mix of it and the cleaned audio (Amount, Original/Cleaned on the clip).");
@@ -602,7 +651,8 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
             }
         }
         // whisper.cpp runs on the CPU here (no Vulkan SDK or CUDA toolkit to build its GPU backends).
-        if d.command != "ml.lyrics" {
+        // A song server of the person's own chooses its own device.
+        if d.command != "ml.lyrics" && !(d.command == "ml.song" && !d.song.bundled()) {
             ui.horizontal(|ui| {
                 ui.label("Run on");
                 egui::ComboBox::from_id_salt("ml_device").selected_text(device.label()).show_ui(ui, |ui| {
@@ -625,7 +675,10 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
         }
         ui.separator();
         ui.horizontal(|ui| {
-            let can = missing.is_empty() && (d.command != "ml.separate" || d.stems.iter().take(d.sep_model.stems().len()).any(|s| *s));
+            let can = missing.is_empty()
+                && (d.command != "ml.separate" || d.stems.iter().take(d.sep_model.stems().len()).any(|s| *s))
+                && (d.command != "ml.text_midi" || d.text_midi.ready())
+                && (d.command != "ml.song" || d.song.ready());
             if d.command == "ml.midi" {
                 let analysing = app.ml.analysing.is_some();
                 let analysed = app.ml.audition.is_some();
@@ -1131,6 +1184,74 @@ mod tests {
         let job = ml::prepare(&app.engine, "ml.separate", &json!({"clip": clip})).unwrap();
         assert_eq!(job.quality, Quality::Fast);
         assert!(ml::prepare(&app.engine, "ml.separate", &json!({"clip": clip, "quality": "ultra"})).is_err());
+    }
+
+    #[test]
+    fn generate_midi_from_text_opens_without_a_selection() {
+        let (mut app, _) = app();
+        app.engine.session_mut().edit.selected_clips.clear();
+        app.engine.session_mut().edit.selected_tracks.clear();
+        assert!(crate::menus::item_state(&app, "AI > Generate MIDI from Text…", Some("ui.ml.text_midi")).0);
+        crate::menus::invoke_menu(&mut app, "ml.text_midi", "");
+        let Some(mut d) = app.ml.dialog.clone() else { panic!("no dialog") };
+        assert_eq!(d.command, "ml.text_midi");
+        assert_eq!(d.target, json!({}));
+        assert!(d.target_name.starts_with("the edit cursor (bar "), "{}", d.target_name);
+        // Run waits for a prompt and a whole-number seed.
+        assert!(!d.text_midi.ready());
+        d.text_midi.prompt = "  slow piano ballad ".into();
+        assert!(d.text_midi.ready());
+        let p = params(&d, Device::Cpu);
+        assert_eq!(p["prompt"], "slow piano ballad");
+        assert!(p.get("seed").is_none(), "a new seed each run");
+        d.text_midi.seed = "12x".into();
+        assert!(!d.text_midi.ready());
+        d.text_midi.seed = "12".into();
+        let p = params(&d, Device::Cpu);
+        assert_eq!(p["seed"], 12);
+        let job = ml::prepare(&app.engine, "ml.text_midi", &p).unwrap();
+        assert!(matches!(job.kind, ml::JobKind::TextMidi(o) if o.seed == 12 && (o.seconds - 30.0).abs() < 1e-6));
+        // A selected MIDI clip is offered for continuing, and on by default.
+        let clip = app
+            .engine
+            .session()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips())
+            .find(|c| matches!(&c.content, soundcraft_model::ClipContent::Midi { sequence } if !sequence.notes.is_empty()))
+            .map(|c| c.id);
+        let c = clip.expect("the demo session has a MIDI clip");
+        {
+            app.engine.session_mut().edit.selected_clips = vec![c];
+            assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());
+            let d = app.ml.dialog.clone().unwrap();
+            assert!(d.text_midi.continue_clip);
+            assert_eq!(params(&d, Device::Cpu)["continue_from"], c.0);
+            app.engine.session_mut().edit.selected_clips.clear();
+        }
+        // Generate Song opens without a selection too, needs no installed model, and can Run once
+        // there is something to sing.
+        app.ml.dialog = None;
+        assert!(open(&mut app, "ui.ml.song", None).is_ok());
+        let mut sd = app.ml.dialog.clone().unwrap();
+        assert_eq!(sd.command, "ml.song");
+        assert!(!sd.song.ready());
+        sd.song.style = "pop".into();
+        assert!(sd.song.ready());
+        // The installed engine, on the chosen device; a server of one's own takes no device.
+        assert!(sd.song.bundled());
+        assert_eq!(sd.song.engine_id(), "yue2");
+        let p = params(&sd, Device::Cpu);
+        assert_eq!(p["device"], "cpu");
+        assert!(p.get("server").is_none());
+        assert!(ml::prepare(&app.engine, "ml.song", &p).is_ok(), "{p}");
+        sd.song.yue2_server = "http://10.0.0.5:8087".into();
+        let p = params(&sd, Device::Cpu);
+        assert!(p.get("device").is_none() && p["server"] == "http://10.0.0.5:8087", "{p}");
+        // The settings stay for the next time it opens.
+        app.ml.dialog = Some(d);
+        assert!(open(&mut app, "ui.ml.text_midi", None).is_ok());
+        assert_eq!(app.ml.dialog.as_ref().unwrap().text_midi.prompt, "  slow piano ballad ");
     }
 
     #[test]

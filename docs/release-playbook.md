@@ -1,7 +1,8 @@
 # Release playbook
 
-> **Last updated:** 2026-11-04 · **Change:** minor (the ML models release `models-v1`; previously
-> minor: the free release workflow, the export's sync mode)
+> **Last updated:** 2026-11-10 · **Change:** minor (song engines in `models-v1`: `engines.json`, the Song
+> engines workflow; previously minor: the ML models release `models-v1`, the free release workflow,
+> the export's sync mode)
 
 The release playbook shared by the crafting apps lives in craftrules
 (`release/playbook.md`); FreeDAWm-specific packaging details are in [releasing.md](releasing.md).
@@ -155,5 +156,35 @@ The converted (ONNX) models are assets of one GitHub release on the public repo,
 4. Check: `curl -sL https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/models.json | head`;
    then Setup › ML Models lists the sizes and Download buttons.
 
-To update a model: install the new export, run step 1 again (its `version` rises with the card's
-`exported_utc`, so installed copies show **Update**), then step 3 for that zip and the manifest.
+To add or update a model: install the export, then pack just that model
+(`cargo xtask ml-publish … <id>`). Given ids, `ml-publish` downloads the release's current
+`models.json` with `gh` (or reads `--merge FILE`) and writes it back with only those entries
+replaced or added, so the manifest and notice it uploads keep every other model (`--no-merge`
+writes only the given models: never upload that manifest). An updated model's `version` rises
+with the card's `exported_utc`, so installed copies show **Update**. Then step 3 for that zip and
+the manifest, as the command it prints.
+
+### Song engines (`engines.json`)
+
+Generate Song's engines (YuE2, ACE-Step 1.5) ship in the same release, from their own workflow, so
+nobody builds or starts a server by hand. Each engine is one Setup › ML Models item: a zip of the
+upstream server (yue2.cpp's `yue-server`, acestep.cpp's `ace-server`, MIT) built for the person's
+platform, plus its GGUF models, which the app fetches from Hugging Face at the revisions pinned in
+`tools/engines/engines.json` (each checked against its size and sha256). FreeDAWm starts the server
+itself on a free local port when a song needs it and stops it when idle or on quit
+(`crates/ml/src/engine_server.rs`). `ml-publish` leaves the engines out: they are in
+`engines.json`, which the app reads beside `models.json`.
+
+1. To change an engine (upstream commit, models, arguments), edit `tools/engines/engines.json` and
+   raise its `version` (installed copies then show **Update**).
+2. Actions › **Song engines** › Run workflow, with **publish** ticked (the owner's go-ahead). It
+   builds both servers for `linux-x86_64` (Vulkan with every CPU variant as loadable backends,
+   libraries found beside the program), `windows-x86_64` (the same, Vulkan SDK from LunarG) and
+   `macos-aarch64` (one static program with Metal), checks each one starts, packs them
+   (`tools/engines/package.py`: `bin/`, `card.json`, `LICENSE-server`), writes `engines.json`
+   (`tools/engines/manifest.py`) and uploads the zips and `engines.json` to `models-v1`.
+   Without **publish** (and on pull requests touching `tools/engines/`) it only builds and packs.
+3. Check: `curl -sL https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/engines.json | head`;
+   Setup › ML Models lists "YuE2 song engine" and "ACE-Step 1.5 song engine" with Download (about
+   4.4 GB each, nearly all of it the models). Try a song on Windows and macOS before announcing it:
+   the CI checks that each program starts, not that it sings on real GPUs.

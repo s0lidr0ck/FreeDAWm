@@ -40,7 +40,8 @@ pub fn licence_status(text: &str) -> Option<String> {
     {
         return Some(LICENCE_NOT_STATED.to_string());
     }
-    const KNOWN: [(&str, &str); 6] = [
+    const KNOWN: [(&str, &str); 7] = [
+        ("llama 3.2 community license", "Llama 3.2 Community License"),
         ("cc by-nc-sa 4.0", "CC BY-NC-SA 4.0 — non-commercial, personal use"),
         ("cc by-nc 4.0", "CC BY-NC 4.0 — non-commercial, personal use"),
         ("mit or apache-2.0", "MIT OR Apache-2.0"),
@@ -149,7 +150,53 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         builtin: false,
         license: "MIT",
     },
+    KnownModel {
+        id: "midi_llm",
+        name: "MIDI-LLM (Llama 3.2 1B, 8-bit)",
+        job: "Generate MIDI from Text: multitrack General MIDI from a description",
+        builtin: false,
+        license: "Llama 3.2 Community License",
+    },
+    // Song engines: a server program (yue2.cpp, acestep.cpp, built for each platform by the
+    // engines workflow) plus its GGUF models fetched from Hugging Face; FreeDAWm runs the server.
+    KnownModel {
+        id: "yue2",
+        name: "YuE2 song engine (yue2.cpp, Q8_0)",
+        job: "Generate Song: whole songs with an editable score",
+        builtin: false,
+        license: "CC BY-NC 4.0 — non-commercial, personal use",
+    },
+    KnownModel {
+        id: "acestep",
+        name: "ACE-Step 1.5 song engine (acestep.cpp, Q8_0)",
+        job: "Generate Song: fast whole songs",
+        builtin: false,
+        license: "MIT",
+    },
 ];
+
+/// The song engines' ids: published by the engines workflow in `engines.json`, not by
+/// `cargo xtask ml-publish`.
+pub const ENGINE_IDS: [&str; 2] = ["yue2", "acestep"];
+
+pub fn is_engine(id: &str) -> bool {
+    ENGINE_IDS.contains(&id)
+}
+
+/// This computer's platform as the engines release names it: `windows-x86_64`, `linux-x86_64`,
+/// `macos-aarch64`…
+pub fn current_platform() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        std::env::consts::OS
+    };
+    format!("{os}-{}", std::env::consts::ARCH)
+}
 
 /// Whether a licence status means personal use only (no licence stated, or non-commercial).
 pub fn is_personal_use(status: &str) -> bool {
@@ -162,6 +209,9 @@ pub const MODELS_REPO: &str = "s0lidr0ck/FreeDAWm";
 pub const MODELS_TAG: &str = "models-v1";
 /// Where the app reads the downloads manifest (`FREEDAWM_MODELS_URL` overrides it).
 pub const MANIFEST_URL: &str = "https://github.com/s0lidr0ck/FreeDAWm/releases/download/models-v1/models.json";
+/// The song engines' manifest, beside `models.json` in the same release (written by the engines
+/// workflow, so the models and the engines publish on their own).
+pub const ENGINES_MANIFEST: &str = "engines.json";
 /// The largest file a GitHub release asset may be (2 GiB).
 pub const ASSET_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 /// The manifest format this build reads and `cargo xtask ml-publish` writes.
@@ -217,12 +267,75 @@ pub struct ManifestModel {
     pub manual: bool,
     #[serde(default)]
     pub manual_note: String,
+    /// A program built per platform (song engines): `windows-x86_64` → its zip. The entry's own
+    /// `url`, `size` and `sha256` are then empty; [`ManifestModel::for_platform`] fills them in.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub platforms: std::collections::BTreeMap<String, PlatformZip>,
+    /// Files fetched from where their authors publish them (Hugging Face) into the folder after
+    /// the zip is unpacked, each checked against its size and sha256 (song engines' models, too
+    /// large for the release).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fetch: Vec<FetchFile>,
+}
+
+/// One platform's zip of a per-platform entry.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PlatformZip {
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// A file fetched into a model folder: `file` (relative path in the folder) from `url`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FetchFile {
+    pub file: String,
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A plain relative path (no `..`, no root, no drive), `/`-separated.
+fn plain_relative(p: &str) -> bool {
+    !p.is_empty() && !p.starts_with('/') && !p.contains('\\') && !p.contains(':') && p.split('/').all(|c| !c.is_empty() && c != "." && c != "..")
 }
 
 impl ManifestModel {
     /// Whether the app can download it.
     pub fn downloadable(&self) -> bool {
         !self.manual && !self.url.is_empty() && self.size > 0 && self.sha256.len() == 64
+    }
+
+    /// Everything a download brings: the zip and the fetched files.
+    pub fn total_size(&self) -> u64 {
+        self.fetch.iter().fold(self.size, |a, f| a.saturating_add(f.size))
+    }
+
+    /// The entry for `platform`: a per-platform entry takes that platform's zip, or becomes
+    /// manual ("not built for this computer") when there is none. Other entries stay as they are.
+    pub fn for_platform(&self, platform: &str) -> ManifestModel {
+        let mut m = self.clone();
+        if self.platforms.is_empty() {
+            return m;
+        }
+        match self.platforms.get(platform) {
+            Some(z) => {
+                m.url = z.url.clone();
+                m.size = z.size;
+                m.sha256 = z.sha256.clone();
+            }
+            None => {
+                m.manual = true;
+                m.url.clear();
+                m.manual_note =
+                    format!("not built for this computer ({platform}); built for: {}", self.platforms.keys().cloned().collect::<Vec<_>>().join(", "));
+            }
+        }
+        m
     }
 }
 
@@ -241,11 +354,41 @@ impl Manifest {
             if e.id.is_empty() || !e.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
                 return Err(format!("models.json: bad model id `{}`", e.id));
             }
-            if !e.manual && (e.sha256.len() != 64 || !e.sha256.chars().all(|c| c.is_ascii_hexdigit()) || e.size == 0 || e.url.is_empty()) {
+            if !e.platforms.is_empty() {
+                for (p, z) in &e.platforms {
+                    if !hex64(&z.sha256) || z.size == 0 || z.url.is_empty() {
+                        return Err(format!("models.json: `{}` for {p} has no url, size or sha256", e.id));
+                    }
+                }
+            } else if !e.manual && (!hex64(&e.sha256) || e.size == 0 || e.url.is_empty()) {
                 return Err(format!("models.json: `{}` has no url, size or sha256", e.id));
+            }
+            for f in &e.fetch {
+                // https, or this computer (a local mirror, the tests).
+                let url_ok = f.url.starts_with("https://") || f.url.starts_with("http://127.0.0.1:") || f.url.starts_with("http://localhost:");
+                if !plain_relative(&f.file) || !url_ok || f.size == 0 || !hex64(&f.sha256) {
+                    return Err(format!("models.json: `{}` fetches `{}` without a plain path, https url, size or sha256", e.id, f.file));
+                }
             }
         }
         Ok(m)
+    }
+
+    /// `other`'s entries added (an entry already here keeps this one's).
+    pub fn merge(&mut self, other: Manifest) {
+        for e in other.models {
+            match self.models.iter_mut().find(|m| m.id == e.id) {
+                // A manual placeholder gives way to a real entry.
+                Some(m) if m.manual && !e.manual => *m = e,
+                Some(_) => {}
+                None => self.models.push(e),
+            }
+        }
+    }
+
+    /// Every entry for `platform` ([`ManifestModel::for_platform`]).
+    pub fn for_platform(&self, platform: &str) -> Manifest {
+        Manifest { models: self.models.iter().map(|m| m.for_platform(platform)).collect(), ..self.clone() }
     }
 
     /// The entry for model `id`.

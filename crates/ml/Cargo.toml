@@ -17,6 +17,8 @@ rustfft.workspace = true
 
 # ONNX Runtime and DeepFilterNet run on the desktop only (the web app has no ML).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The Llama 3 split pattern (look-ahead) for MIDI-LLM's prompt tokenizer (`llama_bpe`).
+fancy-regex = "0.14"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-22"] }
 # libDF's DSP (STFT with the Vorbis window, ERB bands, feature normalisation, synthesis) for
 # DeepFilterNet 3; its three ONNX graphs run on ONNX Runtime (libDF's tract path fails to optimise

@@ -1,0 +1,43 @@
+{
+  "_doc": "The song engines FreeDAWm installs (Setup > ML Models) and runs itself: each upstream server pinned to a commit and built per platform by .github/workflows/engines.yml (package.py, manifest.py), plus its GGUF models fetched from Hugging Face at a pinned revision. Bump `version` with any change.",
+  "engines": [
+    {
+      "id": "yue2",
+      "name": "YuE2 song engine (yue2.cpp, Q8_0)",
+      "version": "2026-11-10",
+      "repo": "https://github.com/ServeurpersoCom/yue2.cpp",
+      "commit": "5a9500fd2979ab99fc82895877aadf8583acbabb",
+      "server": "yue-server",
+      "server_args": ["--model", "{dir}/models/YuE2-3B-Q8_0.gguf", "--vae", "{dir}/models/YuE2-Vae-F32.gguf", "--host", "127.0.0.1", "--port", "{port}"],
+      "device_arg": "--device",
+      "cpu_device": "CPU",
+      "license": "Server: MIT (yue2.cpp). Model weights: CC BY-NC 4.0 with an additional creator permission (m-a-p YuE2): personal users, content creators and musicians may monetise their songs; companies need a commercial licence from the authors.",
+      "personal_use_only": true,
+      "source": "https://github.com/multimodal-art-projection/YuE ; GGUF: https://huggingface.co/Serveurperso/YuE2-GGUF ; server: https://github.com/ServeurpersoCom/yue2.cpp",
+      "models": [
+        {"file": "models/YuE2-3B-Q8_0.gguf", "url": "https://huggingface.co/Serveurperso/YuE2-GGUF/resolve/e630f2b8f6aedf8254c3186438633c1b5eeaf80a/YuE2-3B-Q8_0.gguf", "size": 3810232064, "sha256": "41121ce97786d7795a325bcf123ca196956c03bb252c9e75384cfc1f2fc19e6b"},
+        {"file": "models/YuE2-Vae-F32.gguf", "url": "https://huggingface.co/Serveurperso/YuE2-GGUF/resolve/e630f2b8f6aedf8254c3186438633c1b5eeaf80a/YuE2-Vae-F32.gguf", "size": 530497344, "sha256": "93e49dfb1970e89ad64cacb17cf13b5d05f6bb30ef7ed3adae3050bcb728638a"}
+      ]
+    },
+    {
+      "id": "acestep",
+      "name": "ACE-Step 1.5 song engine (acestep.cpp, Q8_0)",
+      "version": "2026-11-10",
+      "repo": "https://github.com/ServeurpersoCom/acestep.cpp",
+      "commit": "07abf07da3a9c1c45bd85aabed401644f8eb7c72",
+      "server": "ace-server",
+      "server_args": ["--models", "{dir}/models", "--host", "127.0.0.1", "--port", "{port}"],
+      "device_arg": "--device",
+      "cpu_device": "CPU",
+      "license": "MIT (acestep.cpp server; ACE-Step 1.5 code and weights).",
+      "personal_use_only": false,
+      "source": "https://github.com/ace-step/ACE-Step-1.5 ; GGUF: https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF ; server: https://github.com/ServeurpersoCom/acestep.cpp",
+      "models": [
+        {"file": "models/Qwen3-Embedding-0.6B-Q8_0.gguf", "url": "https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF/resolve/666ac70204440867d8c01ba4b119cc79c95b370a/Qwen3-Embedding-0.6B-Q8_0.gguf", "size": 784144960, "sha256": "972f23255e46adfe744a0eb9a0039f3c63988f65753b0968d776e8b27168c321"},
+        {"file": "models/acestep-5Hz-lm-0.6B-Q8_0.gguf", "url": "https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF/resolve/666ac70204440867d8c01ba4b119cc79c95b370a/acestep-5Hz-lm-0.6B-Q8_0.gguf", "size": 709846656, "sha256": "bdaf9e292d4470f31c19cafeaca1b74936a114667e3a85e5d33b65247e9908ec"},
+        {"file": "models/acestep-v15-turbo-Q8_0.gguf", "url": "https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF/resolve/666ac70204440867d8c01ba4b119cc79c95b370a/acestep-v15-turbo-Q8_0.gguf", "size": 2549528000, "sha256": "288f708a61cfc241013a98a62f98ba331f83fe34d0d3559acdd9b0f6a2f7cd6b"},
+        {"file": "models/vae-BF16.gguf", "url": "https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF/resolve/666ac70204440867d8c01ba4b119cc79c95b370a/vae-BF16.gguf", "size": 337420928, "sha256": "0599862ac5d15cd308e1d2e368373aea6c02e25ebd1737ad4a4562a0901b0ef8"}
+      ]
+    }
+  ]
+}

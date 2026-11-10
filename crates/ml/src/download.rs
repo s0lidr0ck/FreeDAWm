@@ -51,11 +51,22 @@ fn get(url: &str) -> Result<ureq::Response> {
     }
 }
 
-/// Fetches and reads the manifest.
+/// Fetches and reads the manifest, with the song engines' (`engines.json` beside it, when the
+/// release has one) merged in, every entry resolved for this computer's platform.
 pub fn fetch_manifest(url: &str) -> Result<Manifest> {
-    let mut text = String::new();
-    get(url)?.into_reader().take(MAX_MANIFEST_BYTES + 1).read_to_string(&mut text).map_err(|e| MlError::Io(format!("{url}: {e}")))?;
-    Manifest::parse(&text).map_err(MlError::Io)
+    let read = |u: &str| -> Result<Manifest> {
+        let mut text = String::new();
+        get(u)?.into_reader().take(MAX_MANIFEST_BYTES + 1).read_to_string(&mut text).map_err(|e| MlError::Io(format!("{u}: {e}")))?;
+        Manifest::parse(&text).map_err(MlError::Io)
+    };
+    let mut m = read(url)?;
+    let engines = resolve_url(url, crate::catalog::ENGINES_MANIFEST);
+    match read(&engines) {
+        Ok(e) => m.merge(e),
+        // No engines published yet (or unreachable): the models alone.
+        Err(e) => log::info!("{engines}: {e}"),
+    }
+    Ok(m.for_platform(&crate::catalog::current_platform()))
 }
 
 /// Bytes received of bytes expected, shared between the worker and the UI.
@@ -111,9 +122,22 @@ pub fn download(dir: &Path, m: &ManifestModel, manifest_url: &str, cancel: &Canc
     std::fs::create_dir_all(&downloads).map_err(|e| io(&downloads, e))?;
     recover(dir, &m.id);
     let part = downloads.join(format!("{}.zip.part", m.id));
-    let r = fetch_zip(&resolve_url(manifest_url, &m.url), m, &part, cancel, progress).and_then(|()| {
-        progress.phase.store(1, Ordering::Relaxed);
-        install_zip(dir, &m.id, &part)
+    progress.set(0, m.total_size());
+    let r = fetch_to(&resolve_url(manifest_url, &m.url), &m.id, m.size, &m.sha256, &part, cancel, progress, 0).and_then(|()| {
+        install_zip_with(dir, &m.id, &part, |folder| {
+            // The files fetched from their authors' pages (song engines' models).
+            let mut base = m.size;
+            for f in &m.fetch {
+                let dest = folder.join(&f.file);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+                }
+                fetch_to(&f.url, &m.id, f.size, &f.sha256, &dest, cancel, progress, base)?;
+                base = base.saturating_add(f.size);
+            }
+            progress.phase.store(1, Ordering::Relaxed);
+            Ok(())
+        })
     });
     let _ = std::fs::remove_file(&part);
     let _ = std::fs::remove_dir(&downloads);
@@ -122,9 +146,16 @@ pub fn download(dir: &Path, m: &ManifestModel, manifest_url: &str, cancel: &Canc
 
 /// Streams `url` into `part`, checking its size and sha256 against `m`.
 pub(crate) fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Cancel, progress: &DownloadProgress) -> Result<()> {
-    use sha2::Digest;
     progress.set(0, m.size);
-    let mut reader = get(url)?.into_reader().take(m.size.saturating_add(1));
+    fetch_to(url, &m.id, m.size, &m.sha256, part, cancel, progress, 0)
+}
+
+/// Streams `url` into `part` (for model `id`), checking it is `size` bytes with `sha256`; progress
+/// counts from `base`.
+#[allow(clippy::too_many_arguments)]
+fn fetch_to(url: &str, id: &str, size: u64, sha256: &str, part: &Path, cancel: &Cancel, progress: &DownloadProgress, base: u64) -> Result<()> {
+    use sha2::Digest;
+    let mut reader = get(url)?.into_reader().take(size.saturating_add(1));
     let mut out = std::fs::File::create(part).map_err(|e| io(part, e))?;
     let mut h = sha2::Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
@@ -133,7 +164,7 @@ pub(crate) fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Canc
         if cancel.is_cancelled() {
             return Err(MlError::Cancelled);
         }
-        let n = reader.read(&mut buf).map_err(|e| MlError::Io(format!("downloading {}: {e}", m.id)))?;
+        let n = reader.read(&mut buf).map_err(|e| MlError::Io(format!("downloading {id}: {e}")))?;
         if n == 0 {
             break;
         }
@@ -141,16 +172,17 @@ pub(crate) fn fetch_zip(url: &str, m: &ManifestModel, part: &Path, cancel: &Canc
         h.update(chunk);
         out.write_all(chunk).map_err(|e| io(part, e))?;
         done = done.saturating_add(n as u64);
-        progress.done.store(done, Ordering::Relaxed);
+        progress.done.store(base.saturating_add(done), Ordering::Relaxed);
     }
     out.flush().map_err(|e| io(part, e))?;
     drop(out);
-    if done != m.size {
-        return Err(MlError::Io(format!("{}: the download stopped at {done} of {} bytes; try again", m.id, m.size)));
+    if done != size {
+        return Err(MlError::Io(format!("{id}: the download stopped at {done} of {size} bytes; try again")));
     }
     let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if !got.eq_ignore_ascii_case(&m.sha256) {
-        return Err(MlError::Model(m.id.clone(), format!("the download does not match the release (sha256 {got}, expected {}); deleted", m.sha256)));
+    if !got.eq_ignore_ascii_case(sha256) {
+        let _ = std::fs::remove_file(part);
+        return Err(MlError::Model(id.into(), format!("the download does not match the release (sha256 {got}, expected {sha256}); deleted")));
     }
     Ok(())
 }
@@ -173,10 +205,15 @@ pub(crate) fn recover(dir: &Path, id: &str) {
 /// as model `id`, checked against its card, and swaps it in. A broken zip or a file that does
 /// not match the card leaves `dir/<id>` as it was.
 pub fn install_zip(dir: &Path, id: &str, zip_path: &Path) -> Result<()> {
+    install_zip_with(dir, id, zip_path, |_| Ok(()))
+}
+
+/// [`install_zip`], with `more` adding files to the unpacked folder before it is checked.
+fn install_zip_with(dir: &Path, id: &str, zip_path: &Path, more: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     known(id)?;
     recover(dir, id);
     let staging = dir.join(format!(".{id}.staging"));
-    let r = unpack(zip_path, &staging.join(id)).and_then(|()| {
+    let r = unpack(zip_path, &staging.join(id)).and_then(|()| more(&staging.join(id))).and_then(|()| {
         let card = crate::models::load(&staging, id)?;
         if card.card.id != id {
             return Err(MlError::Model(id.into(), format!("the zip holds model `{}`", card.card.id)));

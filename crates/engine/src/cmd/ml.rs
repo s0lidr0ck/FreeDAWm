@@ -70,6 +70,24 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| crate::ml::run_command(e, "ml.lyrics", p)
         ),
         cmd!(
+            "ml.text_midi",
+            "Generate MIDI from Text",
+            ["Track"],
+            None,
+            "{prompt: text (what to compose: style, instruments, key, meter, tempo, mood — e.g. \"upbeat jazz with saxophones and drums, B-flat major, 4/4\"), seconds?: 1..100 (default 30; the piece stops at the first note after), start?: position (default the edit cursor), continue_from?: MIDI clip id (the piece starts with that clip's first 170 notes, from the clip's start, and the model carries on; they are not copied, only what it adds is written; start defaults to the clip's start), instrument?: 0..127 | \"drums\" (what the continued notes are played on: default drums when they are all on channel 10, else the clip's first program change, else drums for a track named drum/kit/perc/beat, else 0 piano), seed?: integer (default random; the same seed, prompt and settings give the same notes), temperature?: 0.1..2 (default 1), top_p?: 0.05..1 (default 0.98), max_tokens?: 3..4095 (default 2046 = 682 notes), device?, models_dir?} — MIDI-LLM (Llama 3.2 1B): one new instrument track per General MIDI instrument in the piece, named after it (drums: Drum Synth on channel 10; the rest: Subtractive Synth, a program change on each clip keeps the General MIDI instrument for MIDI export and GM plugins), one MIDI clip each at `start`, notes on the session's tempo map; one undo step. Result: made (track, name, clip, program, notes), seed",
+            always,
+            |e, p| crate::ml::run_command(e, "ml.text_midi", p)
+        ),
+        cmd!(
+            "ml.song",
+            "Generate Song",
+            ["Track"],
+            None,
+            "{engine?: yue2 (default) | acestep, server?: http address of a yue2.cpp / acestep.cpp server you run (default: the engine installed in Setup › ML Models, which FreeDAWm starts on a local port and stops when idle), device?: auto | gpu | cpu (the installed engine's), style: text (YuE2's style tags, ACE-Step's caption), lyrics?: text with [Verse]/[Chorus] tags, instrumental?: bool, score?: ABC (YuE2: sing this score instead of writing one), plan?: full | melody | off (YuE2's score planning, default full), seconds?: 10..600 (default 60; the model may end sooner), seed?: integer, bpm?: 30..300 (ACE-Step; default the planner's), key?: \"C major\" (ACE-Step), planner?: bool (ACE-Step's 5 Hz planner first, default true), start?: position (default the edit cursor)} — a whole song (vocals and accompaniment, 48 kHz stereo) from YuE2 (yue2.cpp's yue-server) or ACE-Step 1.5 (acestep.cpp's ace-server); a missing engine is refused with where to download it. The song lands on a new audio track `<engine> Song` at `start`; with YuE2 the score it wrote (returned as `score.abc`) also lands as MIDI: one instrument track per voice (`YuE2 Score Vocal`, `YuE2 Score Ins`) and `YuE2 Score Chords`, timed from the score's tempo onto the session's tempo map. One undo step. Result: made, seed, score {abc, bpm, meter}, song {bpm, key, lyrics} (ACE-Step's planner fills these), request (what reproduces the song)",
+            always,
+            |e, p| crate::ml::run_command(e, "ml.song", p)
+        ),
+        cmd!(
             query "ml.models",
             "ML Models",
             [],

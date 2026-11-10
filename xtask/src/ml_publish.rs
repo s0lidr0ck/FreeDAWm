@@ -15,6 +15,10 @@
 //!
 //! Uploading is a manual `gh release` step (`docs/release-playbook.md`).
 //!
+//! Given model ids, `models.json` and the notice are the release's current manifest with those
+//! models' entries replaced or added (downloaded with `gh`, or `--merge FILE`), so uploading them
+//! keeps the other models; `--no-merge` writes only the given models.
+//!
 //! - `--models`: the installed models (default: as `ml-models`).
 //! - `--out`: default `target/models-publish`.
 //! - `--base-url`: where the zips will be served (default the `models-v1` release's download URL).
@@ -82,12 +86,27 @@ fn text<'a>(card: &'a serde_json::Value, keys: &[&str]) -> &'a str {
     keys.iter().find_map(|k| card.get(*k).and_then(serde_json::Value::as_str)).unwrap_or("").trim()
 }
 
+/// Puts `entry` in place of the manifest's entry with the same id, or at the end.
+fn put(manifest: &mut Manifest, entry: ManifestModel) {
+    match manifest.models.iter_mut().find(|e| e.id == entry.id) {
+        Some(slot) => *slot = entry,
+        None => manifest.models.push(entry),
+    }
+}
+
 /// Packs the models of `models` into `out`; `limit` is the largest asset (GitHub's 2 GiB).
-pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], limit: u64) -> Result<Manifest, String> {
+/// With `live` (the release's current `models.json`), the written manifest and notice are `live`
+/// with the packed models' entries replaced or added, so uploading them keeps every other model;
+/// a requested model that is not installed keeps its `live` entry.
+pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], limit: u64, live: Option<&Manifest>) -> Result<Manifest, String> {
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let base = if base.ends_with('/') { base.to_string() } else { format!("{base}/") };
-    let mut manifest = Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: Vec::new() };
-    for km in KNOWN_MODELS.iter().filter(|m| !m.builtin && (only.is_empty() || only.iter().any(|o| o == m.id))) {
+    let mut manifest = match live {
+        Some(l) => Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: l.models.clone() },
+        None => Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: Vec::new() },
+    };
+    // Song engines are published by the engines workflow (engines.json), not here.
+    for km in KNOWN_MODELS.iter().filter(|m| !m.builtin && !catalog::is_engine(m.id) && (only.is_empty() || only.iter().any(|o| o == m.id))) {
         let dir = models.join(km.id);
         let card_path = dir.join("card.json");
         let manual = |note: String| ManifestModel {
@@ -100,10 +119,15 @@ pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], li
             ..Default::default()
         };
         if !card_path.is_file() {
+            if live.is_some_and(|l| l.models.iter().any(|e| e.id == km.id)) {
+                println!("ml-publish: {} not installed in {}: its release entry is kept", km.id, models.display());
+                continue;
+            }
             println!("ml-publish: {} not installed in {}: listed as install manually", km.id, models.display());
-            manifest
-                .models
-                .push(manual("Not in the models release: install it with `cargo xtask ml-models` (needs the source and a Python venv).".into()));
+            put(
+                &mut manifest,
+                manual("Not in the models release: install it with `cargo xtask ml-models` (needs the source and a Python venv).".into()),
+            );
             continue;
         }
         let card: serde_json::Value =
@@ -138,7 +162,7 @@ pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], li
                 total as f64 / 1e9,
                 km.id
             );
-            manifest.models.push(entry);
+            put(&mut manifest, entry);
             continue;
         }
         for (f, want) in crate::ml_models::card_files(&card_path)? {
@@ -153,7 +177,7 @@ pub(crate) fn publish(models: &Path, out: &Path, base: &str, only: &[String], li
         entry.size = std::fs::metadata(&zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?.len();
         entry.sha256 = crate::ml_models::sha256(&zip_path)?;
         entry.url = format!("{base}{}.zip", km.id);
-        manifest.models.push(entry);
+        put(&mut manifest, entry);
     }
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(out.join("models.json"), json + "\n").map_err(|e| format!("models.json: {e}"))?;
@@ -197,18 +221,56 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     for a in args {
         if skip {
             skip = false;
-        } else if matches!(a.as_str(), "--models" | "--out" | "--base-url") {
+        } else if matches!(a.as_str(), "--models" | "--out" | "--base-url" | "--merge") {
             skip = true;
-        } else {
+        } else if a != "--no-merge" {
             only.push(a.clone());
         }
     }
-    let m = publish(&models, &out, &base, &only, ASSET_LIMIT)?;
-    println!("ml-publish: {} models ({} to upload) in {}", m.models.len(), m.models.iter().filter(|e| !e.manual).count(), out.display());
+    // Packing some models: merge into the release's manifest, or uploading ours would drop the rest.
+    let live_path = match flag(args, "--merge") {
+        Some(p) => Some(PathBuf::from(p)),
+        None if !only.is_empty() && !args.iter().any(|a| a == "--no-merge") => Some(download_live(&out)?),
+        None => None,
+    };
+    let live = match &live_path {
+        Some(p) => Some(Manifest::parse(&std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?)?),
+        None => None,
+    };
+    let m = publish(&models, &out, &base, &only, ASSET_LIMIT, live.as_ref())?;
+    if let Some(p) = &live_path {
+        println!("ml-publish: merged into the release's manifest ({})", p.display());
+    }
+    let zips: Vec<String> = m
+        .models
+        .iter()
+        .filter(|e| !e.manual && (only.is_empty() || only.contains(&e.id)) && out.join(format!("{}.zip", e.id)).is_file())
+        .map(|e| format!("{}.zip", e.id))
+        .collect();
+    println!("ml-publish: {} models in models.json, {} zip(s) to upload, in {}", m.models.len(), zips.len(), out.display());
     println!(
-        "Upload (owner's go-ahead first; see docs/release-playbook.md): gh release upload {MODELS_TAG} --repo {MODELS_REPO} --clobber <the zips> models.json MODELS-NOTICE.md"
+        "Upload (owner's go-ahead first; see docs/release-playbook.md), from {}: gh release upload {MODELS_TAG} --repo {MODELS_REPO} --clobber {} models.json MODELS-NOTICE.md",
+        out.display(),
+        zips.join(" ")
     );
     Ok(())
+}
+
+/// The release's current `models.json`, downloaded with `gh` into `out/live-models.json`.
+fn download_live(out: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let path = out.join("live-models.json");
+    let st = std::process::Command::new("gh")
+        .args(["release", "download", MODELS_TAG, "--repo", MODELS_REPO, "--pattern", "models.json", "--clobber", "--output"])
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("gh: {e} (pass --merge <the release's models.json>, or --no-merge to write a manifest of only these models)"))?;
+    if !st.success() {
+        return Err(format!(
+            "gh release download {MODELS_TAG} failed ({st}): pass --merge <the release's models.json>, or --no-merge to write a manifest of only these models"
+        ));
+    }
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -233,7 +295,7 @@ mod tests {
         fake_model(&models, "htdemucs", b"weights", "Code: MIT. Weights: released with the MIT repo.");
         fake_model(&models, "drumsep_mdx23c", b"drum weights", "Training code: MIT. Weights: no licence stated by the authors.");
         fake_model(&models, "srs_small", &[1u8; 2000], "MIT");
-        let m = publish(&models, &out, "https://example.invalid/r", &[], 1000).unwrap();
+        let m = publish(&models, &out, "https://example.invalid/r", &[], 1000, None).unwrap();
         let read = Manifest::parse(&std::fs::read_to_string(out.join("models.json")).unwrap()).unwrap();
         assert_eq!(read, m);
         let ht = m.get("htdemucs").unwrap();
@@ -257,7 +319,41 @@ mod tests {
         assert!(notice.contains("MDX23C DrumSep") && notice.contains("personal use only"));
         // A file that no longer matches its card is refused.
         std::fs::write(models.join("htdemucs").join("m.onnx"), b"changed").unwrap();
-        assert!(publish(&models, &out, "https://x/", &["htdemucs".into()], 1000).unwrap_err().contains("sha256"));
+        assert!(publish(&models, &out, "https://x/", &["htdemucs".into()], 1000, None).unwrap_err().contains("sha256"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn publishing_some_models_merges_into_the_release_manifest() {
+        let root = std::env::temp_dir().join(format!("xtask-ml-publish-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (models, out) = (root.join("models"), root.join("out"));
+        let old = |id: &str, sha: char| ManifestModel {
+            id: id.into(),
+            name: id.into(),
+            version: "2026-10-01T00:00:00Z".into(),
+            url: format!("https://x/{id}.zip"),
+            size: 10,
+            sha256: sha.to_string().repeat(64),
+            license: "MIT".into(),
+            ..Default::default()
+        };
+        let live = Manifest { format: MANIFEST_FORMAT, release: MODELS_TAG.into(), models: vec![old("htdemucs", 'a'), old("srs_small", 'b')] };
+        fake_model(&models, "srs_small", b"new srs", "MIT");
+        fake_model(&models, "basicpitch", b"pitch", "Apache-2.0");
+        let only: Vec<String> = ["srs_small", "basicpitch", "btc_chords"].map(String::from).into();
+        let m = publish(&models, &out, "https://x/", &only, 1 << 20, Some(&live)).unwrap();
+        let ids: Vec<&str> = m.models.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["htdemucs", "srs_small", "basicpitch", "btc_chords"], "kept in place, replaced in place, then added");
+        assert_eq!(m.models[0], live.models[0], "a model not packed is left as the release has it");
+        assert_ne!(m.models[1], live.models[1]);
+        assert_eq!(m.models[1].version, "2026-10-22T05:00:18Z");
+        assert!(m.models[3].manual, "not installed and not in the release: install manually");
+        let notice = std::fs::read_to_string(out.join("MODELS-NOTICE.md")).unwrap();
+        assert!(notice.contains("(`htdemucs`)") && notice.contains("(`basicpitch`)"));
+        // Requested but not installed while the release has it: the release's entry is kept.
+        let m = publish(&models, &out, "https://x/", &["htdemucs".into()], 1 << 20, Some(&live)).unwrap();
+        assert_eq!(m.models, live.models);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
