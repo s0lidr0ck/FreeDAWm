@@ -967,10 +967,141 @@ kbd {
 }
 
 .toc .cols li {
-  font-size: 10.5pt;
-  line-height: 1.7;
+  font-size: 10pt;
+  line-height: 1.56;
+}
+
+.toc .cols h3 {
+  margin-top: 0.2in;
 }
 
 .toc .cols h3 {
   font-size: 12.5pt;
+}
+
+/* ---- Dense tables: the FireStation list, the AI menu ---- */
+
+.jobs.tight td {
+  padding-top: 0.038in;
+  padding-bottom: 0.038in;
+  font-size: 8.5pt;
+  line-height: 1.32;
+}
+
+.jobs.tight td:first-child {
+  width: 1.12in;
+  font-size: 11pt;
+}
+
+.jobs.tight td:last-child {
+  width: 1.95in;
+}
+
+.shot.plain p.caption {
+  text-align: left;
+}
+
+.jobs.ai td:first-child {
+  width: 1.75in;
+}
+
+.jobs.ai td:last-child {
+  width: 1.7in;
+}
+
+/* ---- Menu map ---- */
+
+.menus {
+  columns: 2;
+  column-gap: 0.16in;
+  flex: none;
+}
+
+.menus.one {
+  columns: 1;
+}
+
+.menu {
+  break-inside: avoid;
+  margin-bottom: 0.16in;
+  background: var(--paper);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.menu > h2 {
+  margin: 0;
+  padding: 0.07in 0.2in;
+  background: var(--brand);
+  color: #fff;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 15pt;
+}
+
+.menu > p {
+  padding: 0.1in 0.2in 0;
+  font-size: 9.2pt;
+  color: var(--muted);
+}
+
+.menu .groups {
+  padding: 0.12in 0.2in 0.16in;
+}
+
+.menus.one .groups {
+  columns: 2;
+  column-gap: 0.3in;
+}
+
+.menu .group {
+  break-inside: avoid;
+  margin-bottom: 0.12in;
+}
+
+.menu h3 {
+  margin: 0 0 0.03in;
+  font-size: 7.8pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--violet);
+}
+
+.menu ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 9.4pt;
+  line-height: 1.42;
+}
+
+.menu li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.menu li.sub {
+  display: block;
+}
+
+.menu li span {
+  color: var(--muted);
+}
+
+.menu li i {
+  font-style: normal;
+  color: var(--muted);
+}
+
+.menu li b {
+  flex: none;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.menu li kbd {
+  font-size: 7.6pt;
+  border-bottom-width: 1px;
 }

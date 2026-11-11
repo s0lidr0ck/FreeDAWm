@@ -1,0 +1,5 @@
+{"method":"engine.execute","params":{"command":"track.new","params":{"kind":"instrument","format":"stereo","name":"Sampler","instrument":"sampler"}}}
+{"steps": 8}
+{"method":"engine.execute","params":{"command":"ui.mix.instrument_window","params":{"track":"Sampler"}}}
+{"steps": 10}
+{"shot": "docs/guide/images/lift.png"}

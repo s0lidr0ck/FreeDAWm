@@ -1,0 +1,7 @@
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Kick","slot":0,"plugin":"fs_cleanq"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Kick","slot":1,"plugin":"fs_comp"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Bass","slot":0,"plugin":"fs_comp"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Bass","slot":1,"plugin":"fs_sat"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Pad","slot":0,"plugin":"fs_mod"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Verb","slot":0,"plugin":"fs_reverb"}}}
+{"method":"engine.execute","params":{"command":"mix.insert","params":{"track":"Master 1","slot":0,"plugin":"fs_twine"}}}

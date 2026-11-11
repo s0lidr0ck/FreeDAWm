@@ -1,0 +1,5 @@
+{"method":"engine.execute","params":{"command":"window.mix","params":{}}}
+{"steps": 8}
+{"method":"engine.execute","params":{"command":"ui.mix.drawer","params":{"track":"Kick","module":"fs_comp"}}}
+{"steps": 10}
+{"shot": "docs/guide/images/effect-drawer.png"}

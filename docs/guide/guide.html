@@ -8,8 +8,8 @@
 </head>
 <body>
 
-<!-- 1 · Cover -->
-<section class="page cover">
+<!-- Cover -->
+<section class="page cover" id="cover">
   <div>
     <div class="title">Find Your<br>Way Around</div>
     <div class="sub">The FreeDAWm Guide</div>
@@ -19,8 +19,8 @@
   <div class="word">Free<span class="daw">DAW</span>m</div>
 </section>
 
-<!-- 2 · Welcome -->
-<section class="page">
+<!-- Welcome -->
+<section class="page" id="welcome">
   <div class="card grow prose">
     <h1>Welcome to FreeDAWm</h1>
     <p class="quote">A free, open-source studio for recording, editing and mixing music, on the computer you already have.</p>
@@ -45,74 +45,28 @@
     </div>
     <p>The pictures show <b>Midnight Groove</b>, the demo song that comes with FreeDAWm, so your screen can match the page while you follow along.</p>
   </div>
-  <div class="folio">2</div>
 </section>
 
-<!-- 3 · Contents -->
-<section class="page">
+<!-- Contents -->
+<section class="page" id="contents">
   <div class="card grow prose toc">
     <h1>Contents</h1>
-    <div class="cols">
-      <div>
-    <h3>Section 1: Getting Around</h3>
-    <ol>
-      <li>The Edit Window <span>5</span></li>
-      <li>The Mix Window <span>6</span></li>
-      <li>Edit Modes &amp; Tools <span>7</span></li>
-      <li>Keyboard Shortcuts <span>8</span></li>
-    </ol>
-    <h3>Section 2: Recording</h3>
-    <ol>
-      <li>Set Up Your Sound <span>10</span></li>
-      <li>Inputs &amp; New Tracks <span>11</span></li>
-      <li>Record a Take <span>12</span></li>
-      <li>Punch, Loop &amp; Comp <span>13</span></li>
-    </ol>
-    <h3>Section 3: Editing</h3>
-    <ol>
-      <li>Cut, Move &amp; Tidy <span>15</span></li>
-      <li>Fades &amp; Crossfades <span>16</span></li>
-      <li>The MIDI Editor <span>17</span></li>
-      <li>Markers &amp; Moving Around <span>18</span></li>
-    </ol>
-      </div>
-      <div>
-    <h3>Section 4: Mixing</h3>
-    <ol>
-      <li>Signal Flow <span>20</span></li>
-      <li>Add an Effect <span>21</span></li>
-      <li>What to Reach For <span>22</span></li>
-      <li>Sends &amp; Shared Reverb <span>23</span></li>
-      <li>Automation <span>24</span></li>
-    </ol>
-    <h3>Section 5: Finishing</h3>
-    <ol>
-      <li>Bounce the Mix <span>26</span></li>
-      <li>Other Ways Out <span>27</span></li>
-    </ol>
-    <h3>Glossary</h3>
-    <ol>
-      <li>Words used in this guide <span>28</span></li>
-    </ol>
-      </div>
-    </div>
+    <div class="cols" id="toc"></div>
   </div>
-  <div class="folio">3</div>
 </section>
 
-<!-- 4 · Section opener -->
-<section class="page cover">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 1: Getting Around">
   <div>
     <div class="kicker">Section 1</div>
-    <div class="title" style="margin-top:0.2in">Getting<br>Around</div>
+    <div class="title" style="margin-top:0.2in">Getting Around</div>
   </div>
   <p class="lede">The two windows you will spend your time in, the four ways clips can move, and the keys worth learning first.</p>
   <div class="word">Free<span class="daw">DAW</span>m</div>
-  <div class="folio">4</div>
 </section>
 
-<!-- 5 · The Edit window -->
-<section class="page">
+<!-- The Edit window -->
+<section class="page" id="edit-window">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>The Edit Window</h1>
@@ -137,9 +91,9 @@
     <ul class="legend">
       <li><span class="pin c1">A</span><div><b>Menu bar</b>Every command lives here. If you forget a key, look in the menus.</div></li>
       <li><span class="pin c3">G</span><div><b>Tracks and Groups</b>Every track in the song. Click the dot beside a name to show or hide that track.</div></li>
-      <li><span class="pin c2">B</span><div><b>Edit modes</b>Shuffle, Slip, Spot and Grid decide how clips move when you drag them. See page 7.</div></li>
+      <li><span class="pin c2">B</span><div><b>Edit modes</b>Shuffle, Slip, Spot and Grid decide how clips move when you drag them. See page <span data-page="modes"></span>.</div></li>
       <li><span class="pin c4">H</span><div><b>Rulers</b>Time in bars and in minutes, then tempo, meter and markers.</div></li>
-      <li><span class="pin c3">C</span><div><b>Zoom and tools</b>Zoom buttons and five zoom presets, then the editing tools. See page 7.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom and tools</b>Zoom buttons and five zoom presets, then the editing tools. See page <span data-page="modes"></span>.</div></li>
       <li><span class="pin c1">I</span><div><b>Track controls</b>Record, input monitor (I), solo (S) and mute (M), then the track's view and automation mode.</div></li>
       <li><span class="pin c4">D</span><div><b>Counter</b>Where the cursor is, and the start, end and length of your selection.</div></li>
       <li><span class="pin c2">J</span><div><b>Timeline</b>Your clips. Audio is drawn as waveforms and MIDI as notes. Time runs left to right.</div></li>
@@ -149,11 +103,10 @@
       <li><span class="pin c4">L</span><div><b>Panel tabs</b>Click a tab to open the Vocal Editor, MIDI Editor, Undo History and more.</div></li>
     </ul>
   </div>
-  <div class="folio">5</div>
 </section>
 
-<!-- 6 · The Mix window -->
-<section class="page">
+<!-- The Mix window -->
+<section class="page" id="mix-window">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>The Mix Window</h1>
@@ -164,21 +117,21 @@
       <img src="images/mix-window.png" alt="The Mix window showing nine channel strips">
       <div class="zone c1" style="left:1%;top:4%;width:54.6%;height:3.6%"><span class="pin c1" style="left:100%;top:50%">A</span></div>
       <div class="zone c2" style="left:12.4%;top:8.2%;width:23.6%;height:2.4%"><span class="pin c2" style="left:100%;top:50%">B</span></div>
-      <div class="zone c3" style="left:12.6%;top:11.4%;width:10.2%;height:28.6%"><span class="pin c3" style="left:50%;top:50%">C</span></div>
-      <div class="zone c4" style="left:23.1%;top:40.3%;width:10.2%;height:11.5%"><span class="pin c4" style="left:50%;top:60%">D</span></div>
-      <div class="zone c1" style="left:33.6%;top:52.4%;width:10.2%;height:7.5%"><span class="pin c1" style="left:50%;top:50%">E</span></div>
-      <div class="zone c2" style="left:44.1%;top:61.4%;width:10.2%;height:8.4%"><span class="pin c2" style="left:22%;top:50%">F</span></div>
-      <div class="zone c3" style="left:54.6%;top:70%;width:10.2%;height:4.9%"><span class="pin c3" style="left:50%;top:0">G</span></div>
-      <div class="zone c4" style="left:65.1%;top:76.3%;width:10.2%;height:15.6%"><span class="pin c4" style="left:50%;top:50%">H</span></div>
+      <div class="zone c3" style="left:12.6%;top:11.4%;width:10.2%;height:29.6%"><span class="pin c3" style="left:50%;top:50%">C</span></div>
+      <div class="zone c4" style="left:23.1%;top:42.2%;width:10.2%;height:11.5%"><span class="pin c4" style="left:50%;top:60%">D</span></div>
+      <div class="zone c1" style="left:33.6%;top:54.1%;width:10.2%;height:7.5%"><span class="pin c1" style="left:50%;top:50%">E</span></div>
+      <div class="zone c2" style="left:44.1%;top:63.2%;width:10.2%;height:8.4%"><span class="pin c2" style="left:22%;top:50%">F</span></div>
+      <div class="zone c3" style="left:54.6%;top:71.8%;width:10.2%;height:4.9%"><span class="pin c3" style="left:50%;top:0">G</span></div>
+      <div class="zone c4" style="left:65.1%;top:78.2%;width:10.2%;height:13.8%"><span class="pin c4" style="left:50%;top:50%">H</span></div>
       <div class="zone c1" style="left:75.6%;top:92.2%;width:10.2%;height:6.2%"><span class="pin c1" style="left:50%;top:0">I</span></div>
-      <div class="zone c2" style="left:86.1%;top:53.6%;width:10.2%;height:2.3%"><span class="pin c2" style="left:50%;top:0">J</span></div>
+      <div class="zone c2" style="left:86.1%;top:55.4%;width:10.2%;height:2.3%"><span class="pin c2" style="left:50%;top:0">J</span></div>
     </figure>
     <ul class="legend">
       <li><span class="pin c1">A</span><div><b>Transport and counter</b>The same play, stop and record controls as the Edit window.</div></li>
       <li><span class="pin c2">F</span><div><b>Group and pan</b>The knob places the sound left or right. Stereo tracks get one knob per side.</div></li>
       <li><span class="pin c2">B</span><div><b>Channel width</b>Slim strips fit more on screen. Wide strips show each effect's knobs.</div></li>
       <li><span class="pin c3">G</span><div><b>Strip buttons</b>Input monitor, record and freeze, then solo (S) and mute (M).</div></li>
-      <li><span class="pin c3">C</span><div><b>Effects</b>EQ, compressors and the rest, processed from top to bottom. Click + to add one.</div></li>
+      <li><span class="pin c3">C</span><div><b>Effects</b>FireStation modules such as CleanQ and Comp, processed from top to bottom. Click + to add one.</div></li>
       <li><span class="pin c4">H</span><div><b>Fader and meter</b>The fader sets the track's level. The meter beside it shows how loud it is.</div></li>
       <li><span class="pin c4">D</span><div><b>Sends</b>Slots a to e each send a copy of the track somewhere else, often to a shared reverb.</div></li>
       <li><span class="pin c1">I</span><div><b>Level and name</b>The fader's value in dB, the track type, and the track name.</div></li>
@@ -187,11 +140,10 @@
     </ul>
   </div>
   <div class="note"><b>Good to know</b><p>The list on the left is the same Tracks and Groups list as in the Edit window. The coloured bar under each name matches that track's clips on the timeline.</p></div>
-  <div class="folio">6</div>
 </section>
 
-<!-- 7 · Edit modes and tools -->
-<section class="page">
+<!-- Edit modes and tools -->
+<section class="page" id="modes">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Edit Modes &amp; Tools</h1>
@@ -273,11 +225,10 @@
     </div>
   </div>
   <div class="note"><b>Smart Tool</b><p>Press <kbd>F6</kbd> and <kbd>F7</kbd> together for three tools in one. Near a clip's edge it trims, in the upper half of a clip it selects, and in the lower half it grabs.</p></div>
-  <div class="folio">7</div>
 </section>
 
-<!-- 8 · Keyboard shortcuts -->
-<section class="page">
+<!-- Keyboard shortcuts -->
+<section class="page" id="shortcuts">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Keyboard Shortcuts</h1>
@@ -355,22 +306,20 @@
     </div>
   </div>
   <div class="note"><b>Make them yours</b><p>Change any shortcut in Setup › Keyboard Shortcuts. A few keys are fixed, including Space, Enter, Tab and the F keys.</p></div>
-  <div class="folio">8</div>
 </section>
 
-<!-- 9 · Section opener -->
-<section class="page cover">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 2: Recording">
   <div>
     <div class="kicker">Section 2</div>
     <div class="title" style="margin-top:0.2in">Recording</div>
   </div>
   <p class="lede">Get sound into FreeDAWm: choose your audio device, make a track, record a take, and fix the part that went wrong without redoing the rest.</p>
   <div class="word">Free<span class="daw">DAW</span>m</div>
-  <div class="folio">9</div>
 </section>
 
-<!-- 10 · Playback Engine -->
-<section class="page">
+<!-- Playback Engine -->
+<section class="page" id="sound">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Set Up Your Sound</h1>
@@ -404,11 +353,10 @@
     </div>
   </div>
   <div class="note"><b>Good to know</b><p>On the picture the input reads "opened on first record or monitor". FreeDAWm only opens your microphone when you arm a track or turn on monitoring.</p></div>
-  <div class="folio">10</div>
 </section>
 
-<!-- 11 · Inputs and tracks -->
-<section class="page">
+<!-- Inputs and tracks -->
+<section class="page" id="inputs">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Inputs &amp; New Tracks</h1>
@@ -453,11 +401,10 @@
       <tr><td>Master Fader</td><td>Controls the level of an output, usually the whole mix.</td></tr>
     </table>
   </div>
-  <div class="folio">11</div>
 </section>
 
-<!-- 12 · Record a take -->
-<section class="page">
+<!-- Record a take -->
+<section class="page" id="record">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Record a Take</h1>
@@ -499,11 +446,10 @@
     </table>
   </div>
   <div class="note"><b>Not happy?</b><p>Press <kbd>Cmd</kbd> <kbd>Z</kbd> to undo the take, then record again. FreeDAWm autosaves as you work and can recover a session after a crash.</p></div>
-  <div class="folio">12</div>
 </section>
 
-<!-- 13 · Punch, loop and comp -->
-<section class="page">
+<!-- Punch, loop and comp -->
+<section class="page" id="punch">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Punch, Loop &amp; Comp</h1>
@@ -561,22 +507,20 @@
       <div><h3>Comp the best parts</h3><p>Click the small arrow before the track name to show its take layers. Drag across the part of a take you like and it is copied up into the track, with a short crossfade at each join.</p></div>
     </div>
   </div>
-  <div class="folio">13</div>
 </section>
 
-<!-- 14 · Section opener -->
-<section class="page cover">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 3: Editing">
   <div>
     <div class="kicker">Section 3</div>
     <div class="title" style="margin-top:0.2in">Editing</div>
   </div>
-  <p class="lede">Shape what you recorded: cut and move clips, smooth the joins with fades, fix notes in the MIDI Editor, and find your way round a long song.</p>
+  <p class="lede">Shape what you recorded: cut and move clips, smooth the joins with fades, and find your way round a long song.</p>
   <div class="word">Free<span class="daw">DAW</span>m</div>
-  <div class="folio">14</div>
 </section>
 
-<!-- 15 · Clip edits -->
-<section class="page">
+<!-- Clip edits -->
+<section class="page" id="clips">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Cut, Move &amp; Tidy</h1>
@@ -615,11 +559,10 @@
     </div>
   </div>
   <div class="note"><b>Good to know</b><p>These edits change clips, not your recordings. To get trimmed sound back, drag the clip's edge out again with the Trim tool. <kbd>Cmd</kbd> <kbd>Z</kbd> undoes any of them.</p></div>
-  <div class="folio">15</div>
 </section>
 
-<!-- 16 · Fades -->
-<section class="page">
+<!-- Fades -->
+<section class="page" id="fades">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Fades &amp; Crossfades</h1>
@@ -653,47 +596,10 @@
     <p class="caption">Each curve shows the level of a fade in, from silence on the left to full on the right. A fade out is the mirror image.</p>
   </div>
   <div class="note"><b>Faster</b><p>With the Smart Tool, drag from the top corner of a clip to draw a fade by hand. Edit › Fades › Delete removes the fades in the selection.</p></div>
-  <div class="folio">16</div>
 </section>
 
-<!-- 17 · MIDI Editor -->
-<section class="page">
-  <header class="strip">
-    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
-    <h1>The MIDI Editor</h1>
-  </header>
-  <div class="note"><b>The Goal</b><p>Fix and write notes. Select a MIDI clip and choose Window › MIDI Editor, or click the MIDI Editor tab at the bottom of the Edit window.</p></div>
-  <div class="card grow">
-    <figure class="shot plain">
-      <img src="images/midi-editor.png" alt="The MIDI Editor showing the Keys part as a piano roll">
-      <span class="pin c1" style="left:15.7%;top:3.5%">A</span><span class="pin c2" style="left:29%;top:3.5%">B</span><span class="pin c3" style="left:50%;top:3.5%">C</span><span class="pin c4" style="left:69.6%;top:3.5%">D</span><span class="pin c1" style="left:82.3%;top:3.5%">E</span><span class="pin c2" style="left:2.3%;top:50%">F</span><span class="pin c3" style="left:42%;top:50%">G</span><span class="pin c4" style="left:42%;top:90.7%">H</span><span class="pin c1" style="left:89.5%;top:62%">I</span>
-    </figure>
-    <ul class="legend" style="margin-top:0.2in">
-      <li><span class="pin c1">A</span><div><b>Clip and selection</b>The clip you are editing and how many notes are selected.</div></li>
-      <li><span class="pin c2">F</span><div><b>Piano keys</b>Each row is one pitch. Click a key to hear it.</div></li>
-      <li><span class="pin c2">B</span><div><b>Note tools</b>Select all, Split at the playhead, and Join.</div></li>
-      <li><span class="pin c3">G</span><div><b>Notes</b>Each bar is a note. Higher is higher in pitch, longer lasts longer. Drag to move one.</div></li>
-      <li><span class="pin c3">C</span><div><b>Zoom and height</b>Fit shows the whole clip. ¼× to 4× zoom in time. Height makes the rows taller.</div></li>
-      <li><span class="pin c4">H</span><div><b>Velocity</b>How hard each note is played. A taller bar is a louder note.</div></li>
-      <li><span class="pin c4">D</span><div><b>Linked</b>Keeps the editor lined up with the Edit window's timeline.</div></li>
-      <li><span class="pin c1">I</span><div><b>Cleanup</b>Tidies a played part. Compare Cleaned with Original, then Commit.</div></li>
-      <li><span class="pin c1">E</span><div><b>Ghosts</b>Shows the notes of other MIDI clips faintly, so you can write against them.</div></li>
-    </ul>
-  </div>
-  <div class="card">
-    <table class="kinds wide">
-      <tr><td>Play the selection</td><td><kbd>Space</kbd> with the pointer over the notes</td></tr>
-      <tr><td>Move without snapping</td><td>Hold <kbd>Alt</kbd> while you drag</td></tr>
-      <tr><td>Cancel a drag</td><td><kbd>Esc</kbd></td></tr>
-      <tr><td>Fit the clip</td><td><kbd>F</kbd> with the pointer over the notes</td></tr>
-      <tr><td>Quantize, Transpose</td><td><kbd>Alt</kbd> <kbd>0</kbd>, <kbd>Alt</kbd> <kbd>T</kbd> (also in the Event menu)</td></tr>
-    </table>
-  </div>
-  <div class="folio">17</div>
-</section>
-
-<!-- 18 · Markers and moving around -->
-<section class="page">
+<!-- Markers and moving around -->
+<section class="page" id="markers">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Markers &amp; Moving Around</h1>
@@ -748,22 +654,340 @@
     </div>
   </div>
   <div class="note"><b>Tab to Transient</b><p>Turn on Options › Tab to Transient and <kbd>Tab</kbd> stops at each hit inside a clip, not only at its edges. It is the quick way to find a drum hit to cut on.</p></div>
-  <div class="folio">18</div>
 </section>
 
-<!-- 19 · Section opener -->
-<section class="page cover">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 4: MIDI &amp; Instruments">
   <div>
     <div class="kicker">Section 4</div>
-    <div class="title" style="margin-top:0.2in">Mixing</div>
+    <div class="title" style="margin-top:0.2in">MIDI &amp; Instruments</div>
   </div>
-  <p class="lede">Balance the tracks, shape each sound with effects, share one reverb between many tracks, and make the mix move with automation.</p>
+  <p class="lede">Write with notes: the piano roll, the Juke drum machine and its patterns, and the Lift sampler.</p>
   <div class="word">Free<span class="daw">DAW</span>m</div>
-  <div class="folio">19</div>
 </section>
 
-<!-- 20 · Signal flow -->
-<section class="page">
+<!-- MIDI Editor -->
+<section class="page" id="midi-editor">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The MIDI Editor</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Find your way round the piano roll. Select a MIDI clip and choose Window › MIDI Editor, or click the MIDI Editor tab at the bottom of the Edit window. The next page covers editing.</p></div>
+  <div class="card grow">
+    <figure class="shot plain">
+      <img src="images/midi-editor.png" alt="The MIDI Editor showing the Keys part as a piano roll">
+      <span class="pin c1" style="left:15.7%;top:3.5%">A</span><span class="pin c2" style="left:29%;top:3.5%">B</span><span class="pin c3" style="left:50%;top:3.5%">C</span><span class="pin c4" style="left:69.6%;top:3.5%">D</span><span class="pin c1" style="left:82.3%;top:3.5%">E</span><span class="pin c2" style="left:2.3%;top:50%">F</span><span class="pin c3" style="left:42%;top:50%">G</span><span class="pin c4" style="left:42%;top:90.7%">H</span><span class="pin c1" style="left:89.5%;top:62%">I</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Clip and selection</b>The clip you are editing and how many notes are selected.</div></li>
+      <li><span class="pin c2">F</span><div><b>Piano keys</b>Each row is one pitch. Click a key to hear it.</div></li>
+      <li><span class="pin c2">B</span><div><b>Note tools</b>Select all, Split at the playhead, and Join.</div></li>
+      <li><span class="pin c3">G</span><div><b>Notes</b>Each bar is a note. Higher is higher in pitch, longer lasts longer. Drag to move one.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom and height</b>Fit shows the whole clip. ¼× to 4× zoom in time. Height makes the rows taller.</div></li>
+      <li><span class="pin c4">H</span><div><b>Velocity</b>How hard each note is played. A taller bar is a louder note.</div></li>
+      <li><span class="pin c4">D</span><div><b>Linked</b>Keeps the editor lined up with the Edit window's timeline.</div></li>
+      <li><span class="pin c1">I</span><div><b>Cleanup</b>Tidies a played part. Compare Cleaned with Original, then Commit.</div></li>
+      <li><span class="pin c1">E</span><div><b>Ghosts</b>Shows the notes of other MIDI clips faintly, so you can write against them.</div></li>
+    </ul>
+  </div>
+  <div class="card">
+    <table class="kinds wide">
+      <tr><td>Play the selection</td><td><kbd>Space</kbd> with the pointer over the notes</td></tr>
+      <tr><td>Move without snapping</td><td>Hold <kbd>Alt</kbd> while you drag</td></tr>
+      <tr><td>Cancel a drag</td><td><kbd>Esc</kbd></td></tr>
+      <tr><td>Fit the clip</td><td><kbd>F</kbd> with the pointer over the notes</td></tr>
+      <tr><td>Quantize, Transpose</td><td><kbd>Alt</kbd> <kbd>0</kbd>, <kbd>Alt</kbd> <kbd>T</kbd> (also in the Event menu)</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- Editing Notes -->
+<section class="page" id="midi-notes">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Editing Notes</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Change what was played: move, stretch, split and tidy notes, then shape how hard they hit.</p></div>
+  <div class="card">
+    <figure class="shot plain">
+      <img src="images/midi-notes.png" alt="The MIDI Editor with three notes selected and the note bar showing their values">
+      <span class="pin c1" style="left:17%;top:11%">A</span><span class="pin c2" style="left:29%;top:11%">B</span><span class="pin c3" style="left:66%;top:11%">C</span><span class="pin c4" style="left:79.5%;top:11%">D</span><span class="pin c1" style="left:91%;top:11%">E</span><span class="pin c2" style="left:4.5%;top:50%">F</span><span class="pin c3" style="left:50%;top:85%">G</span><span class="pin c4" style="left:23%;top:97%">H</span><span class="pin c1" style="left:96%;top:55%">I</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Selection</b>How many notes are selected, then Select all, Split at the playhead and Join.</div></li>
+      <li><span class="pin c2">F</span><div><b>Selected notes</b>Selected notes are highlighted. Drag one to move them all.</div></li>
+      <li><span class="pin c2">B</span><div><b>Quantize and Grid</b>Quantize pulls the selected notes onto the grid. Grid sets the editor's own step, or follows the Edit window.</div></li>
+      <li><span class="pin c3">G</span><div><b>Velocity</b>One bar per note. Drag a bar's top to change how hard the note plays.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom</b>Fit, then ¼× to 4× of the Edit window's zoom. Height makes the rows taller.</div></li>
+      <li><span class="pin c4">H</span><div><b>Note bar</b>Pitch, start, length, velocity and channel of the selection. Double-click a value to type.</div></li>
+      <li><span class="pin c4">D</span><div><b>Linked</b>Keeps the editor's time lined up with the Edit window.</div></li>
+      <li><span class="pin c1">I</span><div><b>Cleanup</b>Fixes a played or transcribed part. See below.</div></li>
+      <li><span class="pin c1">E</span><div><b>Panels</b>More, Ghosts, Cleanup, and Window to float the editor on its own.</div></li>
+    </ul>
+  </div>
+  <div class="keys-grid">
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c1">With the mouse</h2>
+    <table>
+      <tr><td>Select a note</td><td>Click it</td></tr>
+      <tr><td>Add to the selection</td><td><kbd>Shift</kbd>-click</td></tr>
+      <tr><td>Move in time or pitch</td><td>Drag a note</td></tr>
+      <tr><td>Change length</td><td>Drag a note's edge</td></tr>
+    </table>
+      </div>
+    </div>
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c2">From the Event menu</h2>
+    <table>
+      <tr><td>Quantize</td><td><kbd>Alt</kbd> <kbd>0</kbd></td></tr>
+      <tr><td>Transpose</td><td><kbd>Alt</kbd> <kbd>T</kbd></td></tr>
+      <tr><td>Change Duration</td><td><kbd>Alt</kbd> <kbd>P</kbd></td></tr>
+      <tr><td>Snap Notes to Scale</td><td><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>K</kbd></td></tr>
+    </table>
+      </div>
+    </div>
+  </div>
+  <div class="card grow">
+    <table class="kinds wide">
+      <tr><td>Controller lanes</td><td>The Lanes menu adds lanes under velocity for mod wheel, sustain, pitch bend and more. Click to add a point.</td></tr>
+      <tr><td>Cleanup</td><td>For piano parts made by Convert to MIDI. It fixes wrong notes and notes held over a chord change, as a preview until you Commit.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- Juke: The Kit -->
+<section class="page" id="juke-kit">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Juke: The Kit</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Build a beat. Choose Track › New Beat and FreeDAWm makes an instrument track playing Juke, its drum machine, with a first pattern on the timeline. This page is the Kit tab, where you choose and shape the sounds.</p></div>
+  <div class="card grow">
+    <figure class="shot plain" style="width:84%;margin:0 auto">
+      <img src="images/juke-kit.png" alt="Juke showing the Boom Bap kit with nine pads, two effect buses and the output">
+      <span class="pin c1" style="left:7%;top:17%">A</span><span class="pin c2" style="left:17.5%;top:17%">B</span><span class="pin c3" style="left:1%;top:26%">C</span><span class="pin c4" style="left:1%;top:36%">D</span><span class="pin c1" style="left:19%;top:26%">E</span><span class="pin c2" style="left:4%;top:41.3%">F</span><span class="pin c3" style="left:35%;top:12.3%">G</span><span class="pin c4" style="left:80%;top:12.3%">H</span><span class="pin c1" style="left:79%;top:17.5%">I</span><span class="pin c2" style="left:99%;top:21.5%">J</span><span class="pin c3" style="left:30%;top:94%">K</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Pad</b>Its name, the key that plays it, and whether it is a sample or a synth voice.</div></li>
+      <li><span class="pin c3">G</span><div><b>Kits, Presets, Grooves</b>Load a whole kit, a preset for it, or a ready-made beat.</div></li>
+      <li><span class="pin c2">B</span><div><b>Pad menu</b>The pencil opens the pad editor. Plus adds a sound. The arrow has copy and clear.</div></li>
+      <li><span class="pin c4">H</span><div><b>Randomize and Humanize</b>Randomize rolls new sounds. Humanize adds small changes in level and timing.</div></li>
+      <li><span class="pin c3">C</span><div><b>Tune and Pan</b>Pitch in semitones, and left-right position.</div></li>
+      <li><span class="pin c1">I</span><div><b>Bus A and Bus B</b>Two shared effect chains with four FireStation slots each.</div></li>
+      <li><span class="pin c4">D</span><div><b>Sends</b>How much of this pad goes to Bus A and Bus B.</div></li>
+      <li><span class="pin c2">J</span><div><b>Output</b>Four more slots on the whole kit. Here Sat adds a little glue.</div></li>
+      <li><span class="pin c1">E</span><div><b>Level</b>The pad's fader and meter.</div></li>
+      <li><span class="pin c3">K</span><div><b>Keys</b>Every pad's key. Click one to play it.</div></li>
+      <li><span class="pin c2">F</span><div><b>Play, Choke, S, M</b>Audition the pad, solo or mute it. Pads in one choke group cut each other off, as a closed hat cuts an open one.</div></li>
+    </ul>
+  </div>
+</section>
+
+<!-- Juke: Patterns -->
+<section class="page" id="juke-steps">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Juke: Patterns</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Program the beat on a grid. Each column is a step in the bar and each row is a pad. A lit step plays that pad at that moment.</p></div>
+  <div class="card">
+    <figure class="shot plain" style="width:60%;margin:0 auto">
+      <img src="images/juke-steps.png" alt="Juke on its Steps tab with a kick, snare and closed hat pattern">
+      <span class="pin c1" style="left:9%;top:12%">A</span><span class="pin c2" style="left:56%;top:12%">B</span><span class="pin c3" style="left:12.5%;top:17%">C</span><span class="pin c4" style="left:9%;top:24.7%">D</span><span class="pin c1" style="left:25%;top:24.7%">E</span><span class="pin c2" style="left:50%;top:24%">F</span><span class="pin c3" style="left:86.5%;top:24%">G</span><span class="pin c4" style="left:11%;top:34%">H</span><span class="pin c1" style="left:55%;top:34%">I</span><span class="pin c2" style="left:50%;top:96.5%">J</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Kit</b>The kit in use. The arrows step to the next or previous one.</div></li>
+      <li><span class="pin c2">F</span><div><b>Feel</b>Shuffle delays every second step. Accent sets how much louder an accented step is. Fill every plays a fill each few bars.</div></li>
+      <li><span class="pin c2">B</span><div><b>Tabs</b>Kit for the sounds, Pad for one sound in detail, Steps for the pattern.</div></li>
+      <li><span class="pin c3">G</span><div><b>Re-roll and Convert</b>Re-roll draws new random variations. Convert to MIDI turns the pattern into ordinary notes.</div></li>
+      <li><span class="pin c3">C</span><div><b>Patterns</b>Each pattern is a clip on the track. + Pattern adds another, Duplicate copies this one.</div></li>
+      <li><span class="pin c4">H</span><div><b>Lanes</b>One row per pad, with its own length and mute. Lanes of different lengths drift against each other.</div></li>
+      <li><span class="pin c4">D</span><div><b>Steps per bar</b>8, 12, 16, 24 or 32. Use 12 or 24 for a triplet feel.</div></li>
+      <li><span class="pin c1">I</span><div><b>Steps</b>Click to turn a step on or off. Drag across to paint. Drag up or down for velocity.</div></li>
+      <li><span class="pin c1">E</span><div><b>New steps</b>How hard a step you add will hit: Full, 75, 50 or 25.</div></li>
+      <li><span class="pin c2">J</span><div><b>Keys</b>Play the pads while the pattern runs.</div></li>
+    </ul>
+  </div>
+  <div class="card grow">
+    <table class="kinds wide">
+      <tr><td>Step details</td><td>Right-click a step for its chance of playing, a roll of up to four hits, a flam, a nudge early or late, and a rule such as every other bar.</td></tr>
+      <tr><td>Keys 1 to 4</td><td>Set the velocity of new steps: Full, 75, 50, 25.</td></tr>
+      <tr><td>Same every time</td><td>Random choices are fixed per bar, so a pattern plays and bounces the same way each time until you Re-roll.</td></tr>
+      <tr><td>On the timeline</td><td>A pattern clip trims, copies and loops like any clip. Editing its notes in the MIDI Editor turns it into a plain MIDI clip.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- Lift: The Sampler -->
+<section class="page" id="lift">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Lift: The Sampler</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Turn any sound into an instrument. Lift plays one sample across the keyboard. Make an Instrument Track, choose Lift as its instrument, and double-click the instrument slot to open this window.</p></div>
+  <div class="card grow">
+    <figure class="shot plain" style="width:76%;margin:0 auto">
+      <img src="images/lift.png" alt="The Lift sampler window">
+      <span class="pin c1" style="left:44%;top:12%">A</span><span class="pin c2" style="left:79%;top:12%">B</span><span class="pin c3" style="left:33%;top:31.6%">C</span><span class="pin c4" style="left:15%;top:43%">D</span><span class="pin c1" style="left:38%;top:58%">E</span><span class="pin c2" style="left:38%;top:85%">F</span><span class="pin c3" style="left:71%;top:24.5%">G</span><span class="pin c4" style="left:82%;top:40%">H</span><span class="pin c1" style="left:78.5%;top:60%">I</span><span class="pin c2" style="left:84.5%;top:74.5%">J</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Sample</b>The sample in use. Drop an audio file anywhere on the window to load it.</div></li>
+      <li><span class="pin c2">F</span><div><b>Filter</b>Low-pass, high-pass or band-pass, with its own envelope.</div></li>
+      <li><span class="pin c2">B</span><div><b>Load and From Selection</b>Pick a file, or select a range on an audio track and turn it into the sample.</div></li>
+      <li><span class="pin c3">G</span><div><b>Pitch</b>Tune, the root note the sample plays back unchanged on, fine tuning and glide.</div></li>
+      <li><span class="pin c3">C</span><div><b>Waveform</b>Drag the markers to set where the sample starts, ends and loops.</div></li>
+      <li><span class="pin c4">H</span><div><b>LFO</b>A slow wave that can move pitch, filter or volume. Sync locks it to the tempo.</div></li>
+      <li><span class="pin c4">D</span><div><b>Trim, Normalize, Reverse</b>Tidy the sample. Slice cuts it into pieces to play from separate keys.</div></li>
+      <li><span class="pin c1">I</span><div><b>Output</b>Pan, and the range of velocities the sample answers to.</div></li>
+      <li><span class="pin c1">E</span><div><b>Amp envelope</b>How each note rises and dies away: Attack, Decay, Sustain, Release.</div></li>
+      <li><span class="pin c2">J</span><div><b>Playback</b>Gate plays while the key is held. One-shot plays to the end. Loop, voices and warp to tempo.</div></li>
+    </ul>
+  </div>
+</section>
+
+<!-- Section opener -->
+<section class="page cover" data-section="Section 5: Vocals">
+  <div>
+    <div class="kicker">Section 5</div>
+    <div class="title" style="margin-top:0.2in">Vocals</div>
+  </div>
+  <p class="lede">Tune a voice note by note, and line up a stack of backing vocals against the lead.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+</section>
+
+<!-- Tune a Vocal -->
+<section class="page" id="tune-vocal">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Tune a Vocal</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Fix the notes that are off without flattening the performance. Select a vocal clip and choose AI › Tune Vocal, or open Window › Vocal Editor. No download is needed, and FreeDAWm analyses vocal tracks in the background.</p></div>
+  <div class="card grow">
+    <figure class="shot plain" style="width:92%;margin:0 auto">
+      <img src="images/vocal-editor.png" alt="The Vocal Editor showing a sung line as coloured note bars with the Tuning panel on the right">
+      <span class="pin c1" style="left:41%;top:6%">A</span><span class="pin c2" style="left:56%;top:6%">B</span><span class="pin c3" style="left:81%;top:6%">C</span><span class="pin c4" style="left:30%;top:11.5%">D</span><span class="pin c1" style="left:18.5%;top:20%">E</span><span class="pin c2" style="left:47%;top:27%">F</span><span class="pin c3" style="left:2.5%;top:50%">G</span><span class="pin c4" style="left:20%;top:97%">H</span><span class="pin c1" style="left:88%;top:15%">I</span><span class="pin c2" style="left:88%;top:33%">J</span><span class="pin c3" style="left:98%;top:73.5%">K</span><span class="pin c4" style="left:97%;top:90.5%">L</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Note tools</b>Studio, Select all, Split and Join.</div></li>
+      <li><span class="pin c3">G</span><div><b>Piano keys</b>Rows the song's key does not use are hatched.</div></li>
+      <li><span class="pin c2">B</span><div><b>Preview</b>Plays a note once, on its own, whenever you click or change it.</div></li>
+      <li><span class="pin c4">H</span><div><b>Level lane</b>How loud each note is against the track's typical level.</div></li>
+      <li><span class="pin c3">C</span><div><b>Zoom</b>¼× to 4× of the Edit window's zoom. Rows makes the notes taller.</div></li>
+      <li><span class="pin c1">I</span><div><b>Tuned / Original</b>Switch to hear the voice before and after.</div></li>
+      <li><span class="pin c4">D</span><div><b>Chords and key</b>What the song is doing above the notes. Set them on the timeline, not here.</div></li>
+      <li><span class="pin c2">J</span><div><b>Sliders</b>Centre, Drift, Vibrato, Raise quiet and Lower loud. See the next page.</div></li>
+      <li><span class="pin c1">E</span><div><b>Notes</b>Each bar is a sung note, as thick as it is loud. Teal is on pitch, amber is drifting, red is 48 cents out or more.</div></li>
+      <li><span class="pin c3">K</span><div><b>Macro</b>A preset for all the sliders. Apply it to the selection or the whole track.</div></li>
+      <li><span class="pin c2">F</span><div><b>Pitch curve</b>The wavy line is the voice. White where your edit moved it, dashed where it was.</div></li>
+      <li><span class="pin c4">L</span><div><b>Commit</b>Makes the tuning permanent. Until then it can be changed or removed.</div></li>
+    </ul>
+  </div>
+</section>
+
+<!-- Tuning Moves -->
+<section class="page" id="tuning-moves">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Tuning Moves</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Start broad and finish by hand: apply a gentle macro to the whole track, then fix the few notes that still stand out.</p></div>
+  <div class="card">
+    <h2>The sliders</h2>
+    <table class="kinds wide">
+      <tr><td>Centre</td><td>Pulls each note's middle toward the right pitch and keeps the singer's vibrato.</td></tr>
+      <tr><td>Drift</td><td>Takes out slow wandering within a note.</td></tr>
+      <tr><td>Vibrato</td><td>Less or more of the natural wobble.</td></tr>
+      <tr><td>Raise quiet, Lower loud</td><td>Evens out the level, toward the track's typical level.</td></tr>
+      <tr><td>Snap to key</td><td>Moves notes onto the nearest note of the song's key. Needs a key set on the timeline.</td></tr>
+    </table>
+  </div>
+  <div class="keys-grid">
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c1">By hand</h2>
+    <table>
+      <tr><td>Move a note's pitch</td><td>Drag it up or down</td></tr>
+      <tr><td>Move without snapping</td><td>Hold <kbd>Alt</kbd></td></tr>
+      <tr><td>Up or down a semitone</td><td><kbd>Alt</kbd> <kbd>↑</kbd> <kbd>Alt</kbd> <kbd>↓</kbd></td></tr>
+      <tr><td>Split a note</td><td><kbd>S</kbd> at the pointer</td></tr>
+      <tr><td>Join two notes</td><td><kbd>J</kbd></td></tr>
+      <tr><td>Cancel a drag</td><td><kbd>Esc</kbd></td></tr>
+    </table>
+      </div>
+    </div>
+    <div class="keys-col">
+      <div class="keyset">
+        <h2 class="c2">Select and listen</h2>
+    <table>
+      <tr><td>Select all notes</td><td><kbd>Cmd</kbd> <kbd>A</kbd></td></tr>
+      <tr><td>Only the notes in view</td><td><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>A</kbd></td></tr>
+      <tr><td>Add to the selection</td><td><kbd>Shift</kbd>-click</td></tr>
+      <tr><td>Play the selection</td><td><kbd>Space</kbd></td></tr>
+      <tr><td>Play from the playhead</td><td><kbd>Shift</kbd> <kbd>Space</kbd></td></tr>
+      <tr><td>Clear the selection</td><td><kbd>Esc</kbd></td></tr>
+    </table>
+      </div>
+    </div>
+  </div>
+  <div class="card grow">
+    <table class="kinds wide">
+      <tr><td>Note bar</td><td>Under the selected note: cents, semitones, drift, vibrato and level. Drag a value sideways or double-click to type.</td></tr>
+      <tr><td>Scoops</td><td>Where the voice slides into a note there is a handle: Keep, Smooth or Shorten the slide.</td></tr>
+      <tr><td>Vocal tracks</td><td>Tracks named like Vox or BGV are marked as vocal and analysed for you. Track › Vocal Track sets it by hand.</td></tr>
+      <tr><td>In the mixer</td><td>Each vocal strip has a pitch box with the current note, plus Centre note and Flatten drift buttons.</td></tr>
+      <tr><td>Limits</td><td>Tuning changes pitch and level, not timing. A stretched clip plays untuned. Commit before you Consolidate.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- The Vocal Studio -->
+<section class="page" id="vocal-studio">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The Vocal Studio</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>See every vocal part on one piano roll, so backing vocals can be tuned against the lead and against each other. Open it with Window › Vocal Studio, or the Studio button in the Vocal Editor.</p></div>
+  <div class="card">
+    <figure class="shot plain" style="width:80%;margin:0 auto">
+      <img src="images/vocal-studio.png" alt="The Vocal Studio with a lead and two backing vocals on one roll">
+      <span class="pin c1" style="left:9.5%;top:13%">A</span><span class="pin c2" style="left:44%;top:13%">B</span><span class="pin c3" style="left:59%;top:13%">C</span><span class="pin c4" style="left:68%;top:13%">D</span><span class="pin c1" style="left:26%;top:29.5%">E</span><span class="pin c2" style="left:45%;top:31%">F</span><span class="pin c3" style="left:41.5%;top:45%">G</span><span class="pin c4" style="left:30%;top:62%">H</span><span class="pin c1" style="left:45.5%;top:62%">I</span><span class="pin c2" style="left:96%;top:13%">J</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>All vocals and Edit</b>Show or hide the other parts, and choose the part you are editing.</div></li>
+      <li><span class="pin c2">F</span><div><b>Reference notes</b>The other parts, faint, each in its own colour. Double-click one to edit its track.</div></li>
+      <li><span class="pin c2">B</span><div><b>Against</b>The part the others are checked against, usually the lead. Tolerance sets how far apart counts as a clash.</div></li>
+      <li><span class="pin c3">G</span><div><b>Editing notes</b>The part you are working on, in full colour, with every Vocal Editor tool.</div></li>
+      <li><span class="pin c3">C</span><div><b>Tune all</b>Tunes every shown part in one go.</div></li>
+      <li><span class="pin c4">H</span><div><b>Clash</b>A hatched note sounds wrong against the lead here.</div></li>
+      <li><span class="pin c4">D</span><div><b>Make harmony</b>Writes a new part from the lead: a third up, in key, following the chords.</div></li>
+      <li><span class="pin c1">I</span><div><b>Stack</b>Two parts on the same note. Click the badge to pick one, or to match one to the other.</div></li>
+      <li><span class="pin c1">E</span><div><b>Tracks</b>Each part with its status, an eye to hide it, and solo and mute. Click a name to edit that part.</div></li>
+      <li><span class="pin c2">J</span><div><b>Editor view</b>Back to the single-track Vocal Editor.</div></li>
+    </ul>
+  </div>
+  <div class="card grow">
+    <table class="kinds wide">
+      <tr><td>Edit All</td><td>Choose All under Edit to work on every shown part at once. A note never changes track.</td></tr>
+      <tr><td>Fit to lead</td><td>Lines a backing part up with the lead's pitch where they sing the same note.</td></tr>
+      <tr><td>Harmony preview</td><td>Make harmony draws the planned notes as dashed outlines before you create the part.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- Section opener -->
+<section class="page cover" data-section="Section 6: Mixing">
+  <div>
+    <div class="kicker">Section 6</div>
+    <div class="title" style="margin-top:0.2in">Mixing</div>
+  </div>
+  <p class="lede">Balance the tracks, shape each sound with the FireStation effects, share one reverb between many tracks, and make the mix move with automation.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+</section>
+
+<!-- Signal flow -->
+<section class="page" id="flow">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Signal Flow</h1>
@@ -778,7 +1002,7 @@
   <path d="M150 76v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
   <rect x="60" y="96" width="180" height="92" rx="7" fill="#23264a"/>
   <text x="150" y="113" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Effects</text>
-  <rect x="74" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="150" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">EQ 7-Band</text>
+  <rect x="74" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="150" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">CleanQ</text>
   <rect x="74" y="142" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="150" y="154.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">Comp</text>
   <rect x="74" y="163" width="152" height="17" rx="4" fill="none" stroke="#b9bcdc" stroke-dasharray="3 3"/><text x="150" y="175.5" text-anchor="middle" font-size="10" fill="#b9bcdc">+</text>
   <path d="M150 188v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
@@ -793,7 +1017,7 @@
   <path d="M490 76v16" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
   <rect x="400" y="96" width="180" height="50" rx="7" fill="#23264a"/>
   <text x="490" y="113" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Effects</text>
-  <rect x="414" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="490" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">Plate Reverb</text>
+  <rect x="414" y="121" width="152" height="17" rx="4" fill="#6a4bd6"/><text x="490" y="133.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">Reverb</text>
   <path d="M490 146v178" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
   <rect x="456" y="218" width="68" height="26" rx="6" fill="#23264a"/><text x="490" y="235" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">Fader</text>
   <rect x="60" y="328" width="520" height="36" rx="7" fill="#f28a2e"/><text x="320.0" y="350.0" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Master fader, then Out 1–2: your speakers</text>
@@ -812,31 +1036,30 @@
     </ul>
   </div>
   <div class="note"><b>Try this</b><p>A compressor sits before the fader, so turning the fader down does not change how hard it works. To drive it harder or softer, change the level before it: the clip's gain or the effect's own input.</p></div>
-  <div class="folio">20</div>
 </section>
 
-<!-- 21 · Add an effect -->
-<section class="page">
+<!-- Add an Effect -->
+<section class="page" id="add-effect">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Add an Effect</h1>
   </header>
-  <div class="note"><b>The Goal</b><p>Put an effect on a track and adjust it. In the Mix window each effect is a tile at the top of the strip, and an empty slot is a dashed box with a plus.</p></div>
+  <div class="note"><b>The Goal</b><p>Put an effect on a track. In the Mix window each effect is a tile at the top of the strip, and an empty slot is a dashed box with a plus. A strip holds up to 32, in any order.</p></div>
   <div class="card">
-    <div class="duo" style="grid-template-columns:3.5in 1fr">
+    <div class="duo" style="grid-template-columns:3.3in 1fr">
       <figure class="shot plain">
-        <img src="images/add-effect.png" alt="A channel strip with two effects and the add-effect menu open on the next strip">
-        <span class="pin c1" style="left:42%;top:4.5%">A</span><span class="pin c2" style="left:99%;top:14.5%">B</span><span class="pin c3" style="left:99%;top:23.5%">C</span><span class="pin c4" style="left:99%;top:35.8%">D</span><span class="pin c1" style="left:62%;top:55%">E</span><span class="pin c2" style="left:2%;top:5.5%">F</span><span class="pin c3" style="left:30%;top:5.5%">G</span><span class="pin c4" style="left:16%;top:80%">H</span>
+        <img src="images/add-effect.png" alt="A channel strip with CleanQ and Comp, and the effect menu open on the next strip showing the FireStation list">
+        <span class="pin c1" style="left:40%;top:2.6%">A</span><span class="pin c2" style="left:80%;top:8.4%">B</span><span class="pin c3" style="left:99%;top:50%">C</span><span class="pin c4" style="left:62%;top:20.4%">D</span><span class="pin c1" style="left:62%;top:31.4%">E</span><span class="pin c2" style="left:1.5%;top:3%">F</span><span class="pin c3" style="left:22.3%;top:3%">G</span><span class="pin c4" style="left:15%;top:23%">H</span>
       </figure>
       <ul class="legend">
       <li><span class="pin c1">A</span><div><b>Empty slot</b>Click the plus to open the list of effects.</div></li>
       <li><span class="pin c2">B</span><div><b>Search</b>Type part of a name, such as comp or verb.</div></li>
-      <li><span class="pin c3">C</span><div><b>FireStation</b>The built-in studio effects: compressor, EQ, tape, reverb and more.</div></li>
-      <li><span class="pin c4">D</span><div><b>Utilities</b>The simpler built-in tools.</div></li>
-      <li><span class="pin c1">E</span><div><b>Scan plugins</b>Finds the plugins already installed on your computer and adds them to this list.</div></li>
-      <li><span class="pin c2">F</span><div><b>On light</b>Green means the effect is working.</div></li>
-      <li><span class="pin c3">G</span><div><b>Open</b>The arrow opens the effect's full editor in its own window.</div></li>
-      <li><span class="pin c4">H</span><div><b>Quick knobs</b>The controls you reach for most, on the strip itself.</div></li>
+      <li><span class="pin c3">C</span><div><b>FireStation</b>The eighteen studio effects built into FreeDAWm. Page <span data-page="firestation"></span> says what each one is for.</div></li>
+      <li><span class="pin c4">D</span><div><b>Utilities</b>Small tools: Gain, Trim, Invert, DC Offset Removal, Time Shift and Signal Generator.</div></li>
+      <li><span class="pin c1">E</span><div><b>Scan plugins</b>Finds the CLAP, VST3 and Audio Units plugins installed on your computer and adds them to this list.</div></li>
+      <li><span class="pin c2">F</span><div><b>On light</b>Green means the module is working. Click it to bypass.</div></li>
+      <li><span class="pin c3">G</span><div><b>Open</b>The arrow opens the module's full editor in its own window.</div></li>
+      <li><span class="pin c4">H</span><div><b>Quick knobs</b>The controls you reach for most, with a live graph above them.</div></li>
       </ul>
     </div>
   </div>
@@ -845,41 +1068,109 @@
     <ul class="steps" style="grid-template-columns:1fr 1fr 1fr">
       <li><span class="pin c1">1</span><div><b>Listen in the mix</b>Adjust an effect with the whole song playing, not with the track soloed. What matters is how it sits with the rest.</div></li>
       <li><span class="pin c2">2</span><div><b>Match the level</b>Louder nearly always sounds better. Compare with the effect off at the same loudness before you decide.</div></li>
-      <li><span class="pin c3">3</span><div><b>Mind the order</b>Effects run top to bottom. An EQ before a compressor changes what the compressor reacts to.</div></li>
+      <li><span class="pin c3">3</span><div><b>Mind the order</b>Modules run top to bottom. Drag a tile to move it, and its automation moves with it.</div></li>
     </ul>
   </div>
   <div class="note"><b>Running slow?</b><p>The snowflake on a strip freezes the track. FreeDAWm plays a rendered copy and the effects stop using the computer. Click it again to unfreeze and carry on editing.</p></div>
-  <div class="folio">21</div>
 </section>
 
-<!-- 22 · Effects at a glance -->
-<section class="page">
+<!-- Inside an Effect -->
+<section class="page" id="inside-effect">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
-    <h1>What to Reach For</h1>
+    <h1>Inside an Effect</h1>
   </header>
-  <div class="note"><b>The Goal</b><p>Match the problem you hear to the kind of effect that fixes it. Every effect named here comes with FreeDAWm.</p></div>
+  <div class="note"><b>The Goal</b><p>Every FireStation module opens the same way and shares the same top bar. Learn it once on Comp, shown here, and the other seventeen will feel familiar.</p></div>
   <div class="card grow">
-    <table class="jobs">
-      <tr><th>The job</th><th>What you hear, and what the effect does</th><th>Reach for</th></tr>
-      <tr><td>Tone</td><td>Muddy, harsh, thin or dull. An EQ turns ranges of the sound up or down, from the low rumble to the airy top.</td><td>EQ 7-Band, EQ 1-Band, CleanQ, Filter</td></tr>
-      <tr><td>Level</td><td>Some notes jump out and others get lost. A compressor turns the loud moments down so the part sits steady.</td><td>Compressor/Limiter, Comp, Channel Strip</td></tr>
-      <tr><td>Noise</td><td>Hiss or spill between phrases. A gate closes when the track goes quiet.</td><td>Expander/Gate</td></tr>
-      <tr><td>Sibilance</td><td>Sharp S and T sounds on a voice. A de-esser turns down only those moments.</td><td>De-Esser</td></tr>
-      <tr><td>Punch</td><td>Drums feel soft, or too spiky. A transient shaper changes the hit without changing the tail.</td><td>Transient</td></tr>
-      <tr><td>Space</td><td>The part sounds dry and stuck to the speaker. Reverb puts it in a room. Delay adds echoes.</td><td>Plate Reverb, Room Reverb, Reverb, ChamberMade, Delay, Mod Delay</td></tr>
-      <tr><td>Movement</td><td>A static sound that needs width or shimmer. These effects make it shift slowly over time.</td><td>Chorus, Flanger, Phaser, Mod</td></tr>
-      <tr><td>Colour</td><td>Too clean. Saturation adds warmth and grit, from a touch of tape to full distortion.</td><td>Saturator, Sat, Tape, Dist, Amp, Lo-Fi</td></tr>
-      <tr><td>Pitch</td><td>A part that needs to be higher or lower, or a voice that needs tuning.</td><td>Pitch Shifter, Pitch, and AI › Tune Vocal</td></tr>
-      <tr><td>Loudness</td><td>The finished mix is too quiet. A maximizer raises the level and stops the peaks from clipping.</td><td>Maximizer, LevelUp</td></tr>
+    <figure class="shot plain" style="width:71%;margin:0 auto">
+      <img src="images/effect-drawer.png" alt="The Comp editor open beside the Kick strip">
+      <span class="pin c1" style="left:6%;top:25%">A</span><span class="pin c2" style="left:50%;top:3.5%">B</span><span class="pin c3" style="left:90%;top:3.5%">C</span><span class="pin c4" style="left:50%;top:11.5%">D</span><span class="pin c1" style="left:30%;top:50%">E</span><span class="pin c2" style="left:62%;top:50%">F</span><span class="pin c3" style="left:85%;top:45%">G</span><span class="pin c4" style="left:55%;top:78%">H</span><span class="pin c1" style="left:78%;top:92%">I</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>The tile</b>Click a tile and its editor opens in place, beside the strip. Click again to fold it away.</div></li>
+      <li><span class="pin c2">F</span><div><b>Curve</b>Input level along the bottom, output level up the side. The bend is the threshold.</div></li>
+      <li><span class="pin c2">B</span><div><b>Presets</b>Step through the factory presets with the arrows, or click the name for the full list.</div></li>
+      <li><span class="pin c3">G</span><div><b>Lanes</b>Run up to three styles side by side, by frequency band or one after another, with a dry fader.</div></li>
+      <li><span class="pin c3">C</span><div><b>Compare</b>Undo, two settings to switch between (1 and 2), and Bypass.</div></li>
+      <li><span class="pin c4">H</span><div><b>Main controls</b>Threshold, Ratio, Attack, Release and Makeup. Drag a knob, or double-click its value to type.</div></li>
+      <li><span class="pin c4">D</span><div><b>Styles</b>Comp has ten compressor styles. The line underneath says what the chosen one is like.</div></li>
+      <li><span class="pin c1">I</span><div><b>Auto gain</b>Keeps the loudness the same as you adjust, so you judge the sound and not the level.</div></li>
+      <li><span class="pin c1">E</span><div><b>Meter</b>How much the compressor is turning the sound down right now.</div></li>
+    </ul>
+  </div>
+  <div class="card">
+    <table class="kinds wide">
+      <tr><td>Slim or full editors</td><td>View › Mix Window Views › Slim Plugin Editors swaps each editor for a narrow version with the same controls.</td></tr>
+      <tr><td>Slim or wide strips</td><td>The Channel width bar above the strips: Slim, Wide or Auto, for the selected channels or all of them.</td></tr>
+      <tr><td>A window of its own</td><td>The arrow on a tile opens the full editor as a floating window you can leave open.</td></tr>
+      <tr><td>Sidechain</td><td>A module can listen to another track, such as a compressor on the bass that ducks when the kick hits.</td></tr>
     </table>
   </div>
-  <div class="note"><b>Instruments</b><p>FreeDAWm also has instruments to play from MIDI: a synth, a drum synth, the Lift sampler and the Juke drum machine. Pick one when you make an Instrument Track.</p></div>
-  <div class="folio">22</div>
 </section>
 
-<!-- 23 · Sends -->
-<section class="page">
+<!-- The FireStation Effects -->
+<section class="page" id="firestation">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The FireStation Effects</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Match the problem you hear to the module that fixes it. These eighteen come with FreeDAWm and are the only effects in the menu until you scan your own plugins.</p></div>
+  <div class="card grow">
+    <table class="jobs tight">
+      <tr><th>Module</th><th>What it is</th><th>Reach for it when</th></tr>
+      <tr><td>CleanQ</td><td>Dynamic EQ with up to 24 bands, and a ceiling you can draw or let it learn.</td><td>Tone: muddy, harsh, boomy or dull.</td></tr>
+      <tr><td>Vint</td><td>Vintage EQ and colour boxes, seven circuits.</td><td>Broad, musical tone shaping.</td></tr>
+      <tr><td>Filter</td><td>Envelope and auto filters, moved by hand, by the sound, by an LFO or in steps.</td><td>Sweeps and wah.</td></tr>
+      <tr><td>Comp</td><td>Compressor with ten styles in three lanes: parallel, multiband or serial.</td><td>Uneven level. Glue on a bus.</td></tr>
+      <tr><td>Transient</td><td>Shapes the attack and sustain of any sound.</td><td>Drums that are too soft or too spiky.</td></tr>
+      <tr><td>Shale</td><td>Drum gate with lookahead and bleed removal. Can trigger a MIDI note per hit.</td><td>Spill between drum mics.</td></tr>
+      <tr><td>Swale</td><td>Automatic volume swells.</td><td>Fading notes in, like a bowed string.</td></tr>
+      <tr><td>Sat</td><td>Tube, transformer and tape-style saturation.</td><td>Sounds that are too clean.</td></tr>
+      <tr><td>Tape</td><td>Tape machine: saturation, compression, wow and flutter, head bump.</td><td>Warmth and gentle glue.</td></tr>
+      <tr><td>Dist</td><td>Twelve drive, overdrive and fuzz pedal circuits.</td><td>Grit, from a little to a lot.</td></tr>
+      <tr><td>Amp</td><td>Seven tube amps with built-in or impulse-response cabinets.</td><td>Guitars and bass recorded direct.</td></tr>
+      <tr><td>Mod</td><td>Fourteen circuits: choruses, flangers, phasers, tremolos, vibratos.</td><td>Width and movement.</td></tr>
+      <tr><td>Pitch</td><td>Octaver, harmonizer and whammy effects.</td><td>Extra octaves and harmonies.</td></tr>
+      <tr><td>Delay</td><td>Six voicings from digital to tape, synced to the tempo, with freeze and reverse.</td><td>Echoes.</td></tr>
+      <tr><td>Reverb</td><td>Room, hall, plate, spring, cloud and shimmer.</td><td>Putting a sound in a space.</td></tr>
+      <tr><td>ChamberMade</td><td>A reverb chamber you build: room, materials, speaker and mic placement.</td><td>A space of your own design.</td></tr>
+      <tr><td>Twine</td><td>Mastering clipper and true-peak limiter.</td><td>Loudness on the master.</td></tr>
+      <tr><td>LevelUp</td><td>Loudness-matched A/B, reference tracks, delivery metering and dither.</td><td>Checking the finished mix.</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Good to know</b><p>Where a mode models a piece of hardware, the editor says so. To tune a voice, use AI › Tune Vocal, not Pitch. See page <span data-page="tune-vocal"></span>.</p></div>
+</section>
+
+<!-- The Plugin Browser -->
+<section class="page" id="plugin-browser">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The Plugin Browser</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Browse everything you can put on a track, by picture. Open it with Window › Plugin Browser, <kbd>Alt</kbd> <kbd>B</kbd>, or the Plugin Browser tab at the bottom right of the Edit window.</p></div>
+  <div class="card grow">
+    <div class="duo" style="grid-template-columns:2.5in 1fr">
+      <figure class="shot plain">
+        <img src="images/browser-effects.png" alt="The Plugin Browser on its Effects tab showing FireStation cards">
+        <span class="pin c1" style="left:40%;top:6.5%">A</span><span class="pin c2" style="left:88%;top:6.5%">B</span><span class="pin c3" style="left:60%;top:10.5%">C</span><span class="pin c4" style="left:50%;top:14.5%">D</span><span class="pin c1" style="left:25%;top:20.5%">E</span><span class="pin c2" style="left:88%;top:24%">F</span><span class="pin c3" style="left:25%;top:33%">G</span><span class="pin c4" style="left:25%;top:41.5%">H</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Type</b>Instruments, Effects or Presets.</div></li>
+      <li><span class="pin c2">B</span><div><b>View</b>Switch between cards and a compact list.</div></li>
+      <li><span class="pin c3">C</span><div><b>Search</b>Looks in names, vendors and categories.</div></li>
+      <li><span class="pin c4">D</span><div><b>Filters</b>Favourites, Recent, then categories such as EQ, Dynamics and Reverb.</div></li>
+      <li><span class="pin c1">E</span><div><b>Vendor</b>Show one maker's plugins.</div></li>
+      <li><span class="pin c2">F</span><div><b>Scan plugins</b>Adds the CLAP, VST3 and Audio Units plugins on your computer.</div></li>
+      <li><span class="pin c3">G</span><div><b>Card</b>A picture of the plugin's own window. Drag it onto a track or an effect slot.</div></li>
+      <li><span class="pin c4">H</span><div><b>Name and maker</b>Click the star on a card to keep it under Favourites.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="note"><b>Drag and drop</b><p>Drag a card onto a strip's empty slot to add it there, onto an existing tile to replace it, or onto a track in the Edit window. A preset for a hosted plugin loads in place.</p></div>
+</section>
+
+<!-- Sends -->
+<section class="page" id="sends">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Sends &amp; Shared Reverb</h1>
@@ -905,16 +1196,15 @@
     <ul class="steps">
       <li><span class="pin c1">1</span><div><b>Make an aux track</b>Track › New, and choose Aux Input for the track type. Name it after its job, such as Verb.</div></li>
       <li><span class="pin c2">2</span><div><b>Give it a bus</b>In the aux's I/O section, set its input to a bus. Make a new one if you need to.</div></li>
-      <li><span class="pin c3">3</span><div><b>Add the reverb</b>Click the plus at the top of the aux strip and choose a reverb. Set it fully wet, since the dry sound comes from the tracks themselves.</div></li>
+      <li><span class="pin c3">3</span><div><b>Add the reverb</b>Click the plus at the top of the aux strip and choose Reverb or ChamberMade. Set it fully wet, since the dry sound comes from the tracks themselves.</div></li>
       <li><span class="pin c4">4</span><div><b>Send to it</b>On each track, click a send slot and choose the same bus. Raise the send level until you can hear the room.</div></li>
     </ul>
   </div>
   <div class="note"><b>Good to know</b><p>A send follows the track's fader. Turn a track down and less of it reaches the reverb, so the balance between dry and wet stays the same.</p></div>
-  <div class="folio">23</div>
 </section>
 
-<!-- 24 · Automation -->
-<section class="page">
+<!-- Automation -->
+<section class="page" id="automation">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Automation</h1>
@@ -949,22 +1239,116 @@
       <tr><td>trim</td><td>Raises or lowers the whole existing line without redrawing its shape.</td></tr>
     </table>
   </div>
-  <div class="folio">24</div>
 </section>
 
-<!-- 25 · Section opener -->
-<section class="page cover">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 7: AI Tools">
   <div>
-    <div class="kicker">Section 5</div>
+    <div class="kicker">Section 7</div>
+    <div class="title" style="margin-top:0.2in">AI Tools</div>
+  </div>
+  <p class="lede">Separate a mix into its parts, turn audio into notes, chords and lyrics, and generate new material, all on your own computer.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+</section>
+
+<!-- The AI Menu -->
+<section class="page" id="ai-menu">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>The AI Menu</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Know what each AI tool does and where its result lands. They all run on your own computer. Nothing is uploaded, and each result is one step you can undo.</p></div>
+  <div class="card grow">
+    <table class="jobs ai">
+      <tr><th>Tool</th><th>What it does</th><th>Where it lands</th></tr>
+      <tr><td>Separate Stems</td><td>Splits a mix into drums, bass, vocals and other, or six stems with guitar and piano.</td><td>New audio tracks</td></tr>
+      <tr><td>Make Karaoke</td><td>Separates the lead vocal from the backing.</td><td>Two new tracks</td></tr>
+      <tr><td>Split Drums</td><td>Splits a drum recording into kick, snare, toms, hi-hat, ride and crash.</td><td>New audio tracks</td></tr>
+      <tr><td>Clean Vocal</td><td>Removes noise and room reverb from a voice, with an Amount control.</td><td>The same clip, switchable</td></tr>
+      <tr><td>Tune Vocal</td><td>Note-based pitch and level correction. See page <span data-page="tune-vocal"></span>.</td><td>The same clip, switchable</td></tr>
+      <tr><td>Convert to MIDI</td><td>Turns audio into notes. Models for general use, piano, drums and vocals.</td><td>A new instrument track</td></tr>
+      <tr><td>Detect Chords</td><td>Works out the chords of a recording.</td><td>The Chords ruler</td></tr>
+      <tr><td>Transcribe Lyrics</td><td>Writes down the sung words with their timings.</td><td>The Lyrics ruler</td></tr>
+      <tr><td>MIDI Cleanup</td><td>Tidies a transcribed piano part. See page <span data-page="midi-notes"></span>.</td><td>The same clip</td></tr>
+      <tr><td>Generate MIDI from Text</td><td>Describe the music and get a part per instrument.</td><td>New instrument tracks</td></tr>
+      <tr><td>Generate Song</td><td>Makes a whole song with vocals from style tags and lyrics.</td><td>A new audio track</td></tr>
+    </table>
+  </div>
+  <div class="note"><b>First</b><p>Select an audio clip or track first. Most of the menu is greyed out until you do. Generate MIDI from Text and Generate Song need no selection.</p></div>
+</section>
+
+<!-- Run an AI Tool -->
+<section class="page" id="ai-run">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Run an AI Tool</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>Every AI tool opens a small dialog like this one. Separate Stems is shown, and the others follow the same order: source, choices, where it runs, then Run.</p></div>
+  <div class="card">
+    <div class="duo" style="grid-template-columns:3.5in 1fr">
+      <figure class="shot plain">
+        <img src="images/ai-separate.png" alt="The Separate Stems dialog">
+        <span class="pin c1" style="left:22%;top:13%">A</span><span class="pin c2" style="left:99%;top:22%">B</span><span class="pin c3" style="left:42%;top:39%">C</span><span class="pin c4" style="left:58%;top:48%">D</span><span class="pin c1" style="left:22%;top:57%">E</span><span class="pin c2" style="left:44%;top:66%">F</span><span class="pin c3" style="left:26%;top:86%">G</span><span class="pin c4" style="left:4%;top:97%">H</span>
+      </figure>
+      <ul class="legend">
+      <li><span class="pin c1">A</span><div><b>Source</b>The track or clip you selected.</div></li>
+      <li><span class="pin c2">B</span><div><b>Model</b>Best of each takes each stem from the model that does it best. The others are faster or split differently.</div></li>
+      <li><span class="pin c3">C</span><div><b>Stems</b>Tick the parts you want as new tracks.</div></li>
+      <li><span class="pin c4">D</span><div><b>Quality</b>High takes about twice as long.</div></li>
+      <li><span class="pin c1">E</span><div><b>Mute original</b>Silences the source so you hear only the stems.</div></li>
+      <li><span class="pin c2">F</span><div><b>Run on</b>The graphics card when there is one, else the processor.</div></li>
+      <li><span class="pin c3">G</span><div><b>Download</b>Shown when the model is not installed yet. Click it once.</div></li>
+      <li><span class="pin c4">H</span><div><b>Run</b>Starts the job. A progress window lets you cancel.</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card grow">
+    <h2>Two more</h2>
+    <div class="cols">
+      <figure class="shot plain" style="margin:0;text-align:center"><img style="width:50%" src="images/ai-midi.png" alt="The Convert to MIDI dialog"><p class="caption" style="line-height:1.35"><b>Convert to MIDI.</b> Pick a model for the instrument. Isolate first separates that instrument before reading its notes. Analyse lets you audition the result before you commit.</p></figure>
+      <figure class="shot plain" style="margin:0;text-align:center"><img style="width:43%" src="images/ai-song.png" alt="The Generate Song dialog"><p class="caption" style="line-height:1.35"><b>Generate Song.</b> Describe the style, add lyrics under [Verse] and [Chorus] headings, and set a length. The same seed makes the same song again.</p></figure>
+    </div>
+  </div>
+</section>
+
+<!-- Set Up the AI Models -->
+<section class="page" id="ml-models">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Set Up the AI Models</h1>
+  </header>
+  <div class="note"><b>The Goal</b><p>The AI tools need model files that are not shipped with FreeDAWm. Download the ones you want once, in Setup › ML Models. Clean Vocal's noise removal and Tune Vocal work without any download.</p></div>
+  <div class="card grow">
+    <figure class="shot plain">
+      <img src="images/ml-models.png" alt="The ML Models window listing each model with its job, status and licence">
+      <span class="pin c1" style="left:98%;top:7.5%">A</span><span class="pin c2" style="left:8%;top:13.5%">B</span><span class="pin c3" style="left:31%;top:13.5%">C</span><span class="pin c4" style="left:48%;top:13.5%">D</span><span class="pin c1" style="left:62%;top:13.5%">E</span><span class="pin c2" style="left:97%;top:22%">F</span><span class="pin c3" style="left:20%;top:91%">G</span><span class="pin c4" style="left:30%;top:94.5%">H</span>
+    </figure>
+    <ul class="legend" style="margin-top:0.2in">
+      <li><span class="pin c1">A</span><div><b>Download all</b>Fetches every model you do not have yet.</div></li>
+      <li><span class="pin c1">E</span><div><b>Licence</b>Red means personal, non-commercial use only, or no licence stated by its author.</div></li>
+      <li><span class="pin c2">B</span><div><b>Model</b>One row per model.</div></li>
+      <li><span class="pin c2">F</span><div><b>Download</b>Fetch one model. Remove deletes it again.</div></li>
+      <li><span class="pin c3">C</span><div><b>Job</b>The AI menu item that uses it.</div></li>
+      <li><span class="pin c3">G</span><div><b>Run models on</b>The graphics card when available, or the processor.</div></li>
+      <li><span class="pin c4">D</span><div><b>Status</b>Installed, not installed, or downloading with a progress bar.</div></li>
+      <li><span class="pin c4">H</span><div><b>Model folder</b>Where the files are kept. Open folder shows it.</div></li>
+    </ul>
+  </div>
+  <div class="note"><b>Check first</b><p>Read the Licence column before you use a result in music you sell. Some models are for personal use only, and FreeDAWm asks you to confirm before downloading those.</p></div>
+</section>
+
+<!-- Section opener -->
+<section class="page cover" data-section="Section 8: Finishing">
+  <div>
+    <div class="kicker">Section 8</div>
     <div class="title" style="margin-top:0.2in">Finishing</div>
   </div>
   <p class="lede">Turn the session into a file people can play, send the separate parts to someone else, and take your work to another program.</p>
   <div class="word">Free<span class="daw">DAW</span>m</div>
-  <div class="folio">25</div>
 </section>
 
-<!-- 26 · Bounce -->
-<section class="page">
+<!-- Bounce -->
+<section class="page" id="bounce">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Bounce the Mix</h1>
@@ -1002,11 +1386,10 @@
     </table>
   </div>
   <div class="note"><b>Before you bounce</b><p>Listen to the whole song once and watch the master meter. If it reaches the red, pull the master fader down and bounce again.</p></div>
-  <div class="folio">26</div>
 </section>
 
-<!-- 27 · Other exports -->
-<section class="page">
+<!-- Other exports -->
+<section class="page" id="exports">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Other Ways Out</h1>
@@ -1026,11 +1409,375 @@
     </table>
   </div>
   <div class="note"><b>Coming in</b><p>The same menu works the other way. File › Import brings in audio, MIDI, video, DAWproject files and the tracks of another session.</p></div>
-  <div class="folio">27</div>
 </section>
 
-<!-- 28 · Glossary -->
-<section class="page">
+<!-- Section opener -->
+<section class="page cover" data-section="Section 9: Menu Map">
+  <div>
+    <div class="kicker">Section 9</div>
+    <div class="title" style="margin-top:0.2in">Menu Map</div>
+  </div>
+  <p class="lede">Every menu in the menu bar, group by group, so you can find a command by where it lives.</p>
+  <div class="word">Free<span class="daw">DAW</span>m</div>
+</section>
+
+<!-- menus:start -->
+<!-- Menu map: FreeDAWm, File, Setup -->
+<section class="page" id="menu-freedawm">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>FreeDAWm, File &amp; Setup</h1>
+  </header>
+  <div class="menus">
+    <div class="menu">
+      <h2>FreeDAWm</h2>
+      <p>About the app, facts about the session, and Quit.</p>
+      <div class="groups">
+        <div class="group">
+          <ul><li>About FreeDAWm</li><li>Session Info</li><li>Session Audio Health</li><li>Quit</li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="menu">
+      <h2>File</h2>
+      <p>Sessions: make, open, save, and bring things in or send them out.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Session</h3>
+          <ul><li>New...<b><kbd>Cmd</kbd> <kbd>N</kbd></b></li><li>New from Template...</li><li class="sub">Open <i>›</i> <span>Session..., Open Recent</span></li><li>Close Session<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>W</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Save</h3>
+          <ul><li>Save Session<b><kbd>Cmd</kbd> <kbd>S</kbd></b></li><li>Save Session As...<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>S</kbd></b></li><li>Save Session Copy In...</li><li>Save As Template...</li><li>Revert Session to Saved...</li></ul>
+        </div>
+        <div class="group">
+          <h3>Bring in &amp; send out</h3>
+          <ul><li>Bounce Mix...<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>B</kbd></b></li><li class="sub">Import <i>›</i> <span>Session Data..., Audio..., MIDI..., Video..., Clip Groups..., DAWproject..., Reference..., FireStation User Presets</span></li><li class="sub">Export <i>›</i> <span>MIDI..., Sibelius..., Lyrics (LRC)..., Lyrics as Text..., Session Info as Text..., Selected Tracks as New Session..., DAWproject..., Stems..., Clips..., Clip Groups...</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Score</h3>
+          <ul><li>Score Setup...</li><li>Print Score...<b><kbd>Cmd</kbd> <kbd>P</kbd></b></li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="menu">
+      <h2>Setup</h2>
+      <p>Your audio device, inputs, shortcuts, preferences and AI models.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Audio</h3>
+          <ul><li>Playback Engine...</li><li>I/O...</li></ul>
+        </div>
+        <div class="group">
+          <h3>Recording &amp; MIDI</h3>
+          <ul><li>Click/Countoff... (coming soon)</li><li>MIDI Input Devices...</li><li>Network...</li></ul>
+        </div>
+        <div class="group">
+          <h3>Session &amp; keys</h3>
+          <ul><li>Session<b><kbd>Cmd</kbd> <kbd>2</kbd></b></li><li>Keyboard Shortcuts...</li><li>Preferences...</li></ul>
+        </div>
+        <div class="group">
+          <h3>AI</h3>
+          <ul><li>ML Models…</li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: Edit -->
+<section class="page" id="menu-edit">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Edit Menu</h1>
+  </header>
+  <div class="menus one">
+    <div class="menu">
+      <h2>Edit</h2>
+      <p>Everything you do to the selection: clipboard, cuts, fades, trims and automation.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Undo</h3>
+          <ul><li>Undo</li><li>Redo</li><li>Restore Last Selection<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>Z</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Clipboard</h3>
+          <ul><li>Cut<b><kbd>Cmd</kbd> <kbd>X</kbd></b></li><li>Copy<b><kbd>Cmd</kbd> <kbd>C</kbd></b></li><li>Paste<b><kbd>Cmd</kbd> <kbd>V</kbd></b></li><li>Clear<b><kbd>Cmd</kbd> <kbd>B</kbd></b></li><li>Duplicate<b><kbd>Cmd</kbd> <kbd>D</kbd></b></li><li>Repeat...<b><kbd>Alt</kbd> <kbd>R</kbd></b></li><li class="sub">Special › Cut Special <i>›</i> <span>Clip Gain, Clip Effects, All Automation, Pan Automation, Plugin Automation</span></li><li class="sub">Special › Copy Special <i>›</i> <span>Clip Gain, Clip Effects, All Automation, Pan Automation, Plugin Automation, Audio as MIDI</span></li><li class="sub">Special › Paste Special <i>›</i> <span>Merge MIDI, Merge Markers, Repeat to Fill Selection, To Current Automation Type</span></li><li class="sub">Special › Clear Special <i>›</i> <span>Clip Gain, Clip Effects, All Automation, Pan Automation, Plugin Automation</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Select</h3>
+          <ul><li>Select All<b><kbd>Cmd</kbd> <kbd>A</kbd></b></li><li>Select Loop Range<b><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>L</kbd></b></li><li>Clear Loop</li><li class="sub">Selection <i>›</i> <span>Change Timeline to Match Edit, Change Edit to Match Timeline, Play Edit, Play Timeline, Move Edit Left, Move Edit Right, Halve Edit, Double Edit, Duplicate and Extend Edit, Extend Edit Up, Extend Edit Down, and 8 more</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Clip editing</h3>
+          <ul><li class="sub">Separate <i>›</i> <span>At Selection, On Grid, At Transients</span></li><li>Heal Separation<b><kbd>Cmd</kbd> <kbd>H</kbd></b></li><li>Consolidate<b><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd></b></li><li>Split into Files</li><li>Mute<b><kbd>Cmd</kbd> <kbd>M</kbd></b></li><li>Strip Silence<b><kbd>Cmd</kbd> <kbd>U</kbd></b></li><li>Shift...<b><kbd>Alt</kbd> <kbd>H</kbd></b></li><li class="sub">Fades <i>›</i> <span>Create..., Delete, Fade to Start, Fade to End</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Trim</h3>
+          <ul><li class="sub">Trim <i>›</i> <span>To Selection, Start to Insertion, End to Insertion, To Fill Selection, To File Boundaries</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Playlists</h3>
+          <ul><li class="sub">Copy Selection to... <i>›</i> <span>Target Playlist, New Playlist, Duplicate of Main Playlist</span></li><li class="sub">Move Selection to... <i>›</i> <span>Target Playlist, New Playlist, Duplicate of Main Playlist</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Automation</h3>
+          <ul><li class="sub">Automation <i>›</i> <span>Write to Current, Write to All Enabled, Trim to All Enabled, Glide to All Enabled, Glide Pan Only, Thin, Thin All, Convert Volume Automation to Clip Gain, Convert Clip Gain to Volume Automation, Coalesce Volume Automation to Clip Gain, Coalesce Clip Gain to Volume Automation, Copy to Send</span></li><li class="sub">More <i>›</i> <span>Space Clips, Insert Silence, Snap to Next, Snap to Previous, TCE Edit to Timeline Selection</span></li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: View, Clip -->
+<section class="page" id="menu-view">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>View &amp; Clip</h1>
+  </header>
+  <div class="menus">
+    <div class="menu">
+      <h2>View</h2>
+      <p>What the windows show: rulers, counters, clip details and mixer sections.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Timeline</h3>
+          <ul><li class="sub">Rulers <i>›</i> <span>Bars|Beats, Min:Secs, Timecode, Timecode 2, Feet+Frames, Samples, Tempo, Tempo Editor, Meter, Key Signature, Sections, and 11 more</span></li><li class="sub">Main Counter <i>›</i> <span>Bars|Beats, Min:Secs, Timecode, Feet+Frames, Samples</span></li><li>Track Number</li></ul>
+        </div>
+        <div class="group">
+          <h3>Edit window</h3>
+          <ul><li class="sub">Edit Window Views <i>›</i> <span>Comments, Instruments, Inserts A-E, Inserts F-J, Sends A-E, Sends F-J, I/O, All, Minimal</span></li><li class="sub">Clip <i>›</i> <span>Name, Sync Point, Rating, Clip Gain Line, Clip Gain Info, Clip Effects Status, Transparency, Overlap Shadows, Current Time, Original Time Stamp, User Time Stamp, No Time</span></li><li class="sub">Waveforms <i>›</i> <span>Peak, Power, Rectified, Outlines, Overlapped Crossfades</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Mix window</h3>
+          <ul><li class="sub">Mix Window Views <i>›</i> <span>Mic Preamps, Instruments, Inserts A-E, Inserts F-J, Sends A-E, Sends F-J, I/O, Object, Pitch, Track Color, Comments, and 4 more</span></li><li>Narrow Mix<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>M</kbd></b></li><li class="sub">Channel Width <i>›</i> <span>Slim, Wide, Auto, All Slim, All Wide, All Auto</span></li><li class="sub">Expanded Sends <i>›</i> <span>None, All, Send A, Send B, Send C, Send D, Send E, Send F, Send G, Send H, Send I, Send J</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Transport</h3>
+          <ul><li class="sub">Transport <i>›</i> <span>Counters, MIDI Controls, Output Meters, Expanded</span></li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="menu">
+      <h2>Clip</h2>
+      <p>Act on the selected clips: group, lock, loop, gain and timing.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Create</h3>
+          <ul><li>New MIDI Clip</li><li>New Pattern</li><li>Convert Pattern to MIDI</li><li>Capture<b><kbd>Cmd</kbd> <kbd>R</kbd></b></li><li>Rename...<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>R</kbd></b></li><li>Loop<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>L</kbd></b></li><li>Unloop</li></ul>
+        </div>
+        <div class="group">
+          <h3>Order &amp; groups</h3>
+          <ul><li>Send to Back<b><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>B</kbd></b></li><li>Bring to Front<b><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>F</kbd></b></li><li>Group<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>G</kbd></b></li><li>Ungroup<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>U</kbd></b></li><li>Ungroup All</li><li>Regroup<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>R</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Lock &amp; rate</h3>
+          <ul><li>Edit Lock/Unlock<b><kbd>Cmd</kbd> <kbd>L</kbd></b></li><li>Time Lock/Unlock<b><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>L</kbd></b></li><li class="sub">Rating <i>›</i> <span>none, 1, 2, 3, 4, 5</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Gain &amp; effects</h3>
+          <ul><li class="sub">Clip Gain <i>›</i> <span>Bypass, Render</span></li><li class="sub">Clip Effects <i>›</i> <span>Bypass, Render</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Timing &amp; pitch</h3>
+          <ul><li>Quantize to Grid<b><kbd>Cmd</kbd> <kbd>0</kbd></b></li><li>Conform to Tempo</li><li>Identify Sync Point</li><li>Elastic Properties<b><kbd>Alt</kbd> <kbd>5</kbd></b></li><li class="sub">Remove <i>›</i> <span>Sync Point, Warp, Pitch Shift</span></li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: Track -->
+<section class="page" id="menu-track">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Track Menu</h1>
+  </header>
+  <div class="menus one">
+    <div class="menu">
+      <h2>Track</h2>
+      <p>Make, organise, freeze and route tracks.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Create</h3>
+          <ul><li>New...<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>N</kbd></b></li><li>Duplicate<b><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>D</kbd></b></li><li>Create Click Track</li><li>New Beat</li></ul>
+        </div>
+        <div class="group">
+          <h3>Organise</h3>
+          <ul><li>Rename...</li><li>Color...</li><li>Group...<b><kbd>Cmd</kbd> <kbd>G</kbd></b></li><li>Move to New Folder<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>N</kbd></b></li><li>Convert Aux to Routing Folder</li><li>Hide</li><li>Vocal Track</li><li>Make Inactive</li><li>Delete</li></ul>
+        </div>
+        <div class="group">
+          <h3>Channels</h3>
+          <ul><li class="sub">Change Track Width <i>›</i> <span>Mono, Stereo, LCR, Quad, 5.1, 7.1</span></li><li class="sub">Change Track Width › More <i>›</i> <span>LCRS, 5.0, 6.0, 6.1, 7.0, 7.0 SDDS, 7.1 SDDS, 5.0.2, 5.1.2, 7.0.2, 7.1.2, and 17 more</span></li><li>Split into Mono</li><li>Instrument</li></ul>
+        </div>
+        <div class="group">
+          <h3>Freeze &amp; render</h3>
+          <ul><li>Freeze</li><li>Commit<b><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>C</kbd></b></li><li>Bounce<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>B</kbd></b></li><li>Extract MIDI to New Track</li></ul>
+        </div>
+        <div class="group">
+          <h3>Inserts &amp; sends</h3>
+          <ul><li class="sub">Bypass Inserts <i>›</i> <span>All, Inserts A-E, Inserts F-J, EQ, Dynamics, Reverb, Delay, Modulation</span></li><li class="sub">Mute Sends <i>›</i> <span>All, Sends A-E, Sends F-J</span></li><li>Save Track Preset...</li><li>Load Track Preset...</li></ul>
+        </div>
+        <div class="group">
+          <h3>Playlists</h3>
+          <ul><li>New Playlist</li><li>Designate as Target Playlist<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>Right</kbd></b></li><li>Show Target Playlist<b><kbd>Shift</kbd> <kbd>Right</kbd></b></li><li>Toggle Recent Playlist<b><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>Left</kbd></b></li><li class="sub">More <i>›</i> <span>Write MIDI Real-Time Properties, Set Record Tracks to Input Only, Clear All Clip Indicators, Coalesce VCA Controller Automation, Coalesce Trim Automation, Clear Trim Automation</span></li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: Event, Options -->
+<section class="page" id="menu-event">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Event &amp; Options</h1>
+  </header>
+  <div class="menus">
+    <div class="menu">
+      <h2>Event</h2>
+      <p>Time, tempo and MIDI operations.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Time &amp; tempo</h3>
+          <ul><li class="sub">Time Operations <i>›</i> <span>Time Operations Window, Change Meter... (coming soon), Insert Time, Cut Time</span></li><li>Tempo Operations Window</li><li>Add Key Change... (coming soon)</li></ul>
+        </div>
+        <div class="group">
+          <h3>MIDI editing</h3>
+          <ul><li>MIDI Operations Window</li><li>Quantize...<b><kbd>Alt</kbd> <kbd>0</kbd></b></li><li>Transpose...<b><kbd>Alt</kbd> <kbd>T</kbd></b></li><li>Change Duration<b><kbd>Alt</kbd> <kbd>P</kbd></b></li><li>Remove Duplicate Notes</li><li>Snap Notes to Scale</li><li class="sub">More MIDI <i>›</i> <span>Change Velocity..., Select/Split Notes, Input Quantize, Step Input, Restore Performance, Flatten Performance, MIDI Track Offsets, MIDI Real-Time Properties</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Analyse</h3>
+          <ul><li>Detect Tempo...</li><li>Beat Detective</li><li>Identify Beat<b><kbd>Cmd</kbd> <kbd>I</kbd></b></li><li>Extract Chords from Selection</li></ul>
+        </div>
+        <div class="group">
+          <h3>Panic</h3>
+          <ul><li>All MIDI Notes Off<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>.</kbd></b></li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="menu">
+      <h2>Options</h2>
+      <p>Switches for how recording, playback and editing behave.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Recording &amp; playback</h3>
+          <ul><li>Click</li><li>Loop Playback<b><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>L</kbd></b></li><li>Loop Record<b><kbd>Alt</kbd> <kbd>L</kbd></b></li><li>Pre/Post-Roll...<b><kbd>Cmd</kbd> <kbd>K</kbd></b></li><li>Low Latency Monitoring</li><li>Video Track Online</li></ul>
+        </div>
+        <div class="group">
+          <h3>Following &amp; linking</h3>
+          <ul><li>Link Timeline and Edit Selection<b><kbd>Shift</kbd> <kbd>/</kbd></b></li><li>Insertion Follows Playback</li><li>Automation Follows Edit</li><li>Tab to Transient<b><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>Tab</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Scrolling &amp; solo</h3>
+          <ul><li class="sub">Edit Window Scrolling <i>›</i> <span>No Scrolling, After Playback, Page, Continuous, Center Playhead</span></li><li class="sub">Solo Mode <i>›</i> <span>SIP (Solo In Place), X-OR (Cancels Previous Solo)</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Timing &amp; keys</h3>
+          <ul><li>Delay Compensation</li><li>Edit/Tool Mode Keyboard Lock</li><li class="sub">More <i>›</i> <span>Prepare DPE Tracks</span></li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: Process, AI -->
+<section class="page" id="menu-process">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Process &amp; AI</h1>
+  </header>
+  <div class="menus">
+    <div class="menu">
+      <h2>Process</h2>
+      <p>Offline processing: the effect is written into the selected audio.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Tone</h3>
+          <ul><li class="sub">EQ <i>›</i> <span>Channel Strip, EQ 1-Band, EQ 7-Band</span></li><li class="sub">Dynamics <i>›</i> <span>FET Compressor, De-Esser, Expander / Gate, Maximizer</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Time &amp; pitch</h3>
+          <ul><li class="sub">Pitch Shift <i>›</i> <span>Pitch Shift, Time Shift, Speed Ramp</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Space &amp; colour</h3>
+          <ul><li>Room Reverb</li><li>Mod Delay</li><li>Ring Mod</li><li>Guitar Amp</li><li>Bit Crusher</li><li>Rectifier</li></ul>
+        </div>
+        <div class="group">
+          <h3>Utilities</h3>
+          <ul><li>Normalize</li><li>Gain</li><li>Reverse</li><li>Invert</li><li class="sub">More <i>›</i> <span>DC Offset Removal, Duplicate, Signal Generator</span></li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="menu">
+      <h2>AI</h2>
+      <p>Tools that run on your computer. See Section 7.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Separate</h3>
+          <ul><li>Separate Stems…</li><li>Make Karaoke…</li><li>Split Drums…</li></ul>
+        </div>
+        <div class="group">
+          <h3>Clean</h3>
+          <ul><li>Clean Vocal…</li><li class="sub">Clean Vocal <i>›</i> <span>Original / Cleaned, Amount..., Commit, Remove Cleaned Version</span></li><li>Tune Vocal…</li><li class="sub">Tune Vocal <i>›</i> <span>Analyse Now, Tuned / Original, Notes Classic / Musical, Fit to Lead, Make Harmony…, Commit, Remove Tuning</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Transcribe</h3>
+          <ul><li>Convert to MIDI…</li><li>Detect Chords…</li><li>Transcribe Lyrics…</li><li>MIDI Cleanup…</li></ul>
+        </div>
+        <div class="group">
+          <h3>Generate</h3>
+          <ul><li>Generate MIDI from Text…</li><li>Generate Song…</li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Menu map: Window -->
+<section class="page" id="menu-window">
+  <header class="strip">
+    <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
+    <h1>Window Menu</h1>
+  </header>
+  <div class="menus one">
+    <div class="menu">
+      <h2>Window</h2>
+      <p>Open the windows, editors and panels, and arrange them.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Main windows</h3>
+          <ul><li>Mix<b><kbd>Cmd</kbd> <kbd>=</kbd></b></li><li>Edit<b><kbd>Cmd</kbd> <kbd>=</kbd></b></li><li>Mix in Separate Window</li><li>Vocal Editor in Separate Window</li><li>Teleprompter in Separate Window</li><li>MIDI Editor in Separate Window</li><li class="sub">Sync <i>›</i> <span>Sync Selection, Scroll to Selected Track, Follow Folder Collapse, Sync Track Visibility</span></li></ul>
+        </div>
+        <div class="group">
+          <h3>Editors</h3>
+          <ul><li>MIDI Editor</li><li>Vocal Editor</li><li>Vocal Studio</li><li>Score Editor<b><kbd>Cmd</kbd> <kbd>Ctrl</kbd> <kbd>=</kbd></b></li><li>MIDI Event List<b><kbd>Alt</kbd> <kbd>=</kbd></b></li><li>Musical Typing<b><kbd>Shift</kbd> <kbd>K</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Transport &amp; session</h3>
+          <ul><li>Transport<b><kbd>Cmd</kbd> <kbd>1</kbd></b></li><li>Big Counter<b><kbd>Cmd</kbd> <kbd>3</kbd></b></li><li>Memory Locations<b><kbd>Cmd</kbd> <kbd>5</kbd></b></li><li>Notes</li><li>Lyrics</li><li>Teleprompter</li><li>Automation<b><kbd>Cmd</kbd> <kbd>4</kbd></b></li></ul>
+        </div>
+        <div class="group">
+          <h3>Panels &amp; browsers</h3>
+          <ul><li>Clip List</li><li>Track List</li><li>Clip Effects</li><li>Plugin Browser<b><kbd>Alt</kbd> <kbd>B</kbd></b></li><li>Workspace Browser<b><kbd>Alt</kbd> <kbd>I</kbd></b></li><li>Undo History</li></ul>
+        </div>
+        <div class="group">
+          <h3>Band &amp; capture</h3>
+          <ul><li>Studio</li><li>Scout</li></ul>
+        </div>
+        <div class="group">
+          <h3>Layout</h3>
+          <ul><li class="sub">Configurations <i>›</i> <span>Window Configuration List, New Configuration, Update Active Configuration, Auto-Update Active Configuration</span></li><li>Tile</li><li>Reset Panel Layout</li><li>Close Floating Windows<b><kbd>Cmd</kbd> <kbd>W</kbd></b></li><li class="sub">More <i>›</i> <span>Video, Video Universe, Universe, Search, Renderer, Metadata Inspector, Color Palette, UI Customization, Task Manager, Disk Usage, System Usage, Close All Workspaces</span></li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- menus:end -->
+
+<!-- Glossary -->
+<section class="page" id="glossary" data-section="Glossary">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Glossary</h1>
@@ -1061,11 +1808,10 @@
       <div><dt>Master</dt><dd>The last fader in the mixer. Everything passes through it.</dd></div>
     </dl>
   </div>
-  <div class="folio">28</div>
 </section>
 
-<!-- 29 · Glossary -->
-<section class="page">
+<!-- Glossary -->
+<section class="page" id="glossary-2">
   <header class="strip">
     <div class="mark"><img src="../../assets/app-icon/freedawm-1024.png" alt=""><span>Free<span class="daw">DAW</span>m</span></div>
     <h1>Glossary</h1>
@@ -1096,8 +1842,44 @@
       <div><dt>Velocity</dt><dd>How hard a MIDI note is played.</dd></div>
     </dl>
   </div>
-  <div class="folio">29</div>
 </section>
+
+<script>
+// Page numbers, cross references and the contents list are filled in from the pages themselves.
+(() => {
+  const pages = [...document.querySelectorAll(".page")];
+  const toc = document.getElementById("toc");
+  const entries = [];
+  pages.forEach((page, i) => {
+    const n = i + 1;
+    page.dataset.n = n;
+    if (i > 0) page.insertAdjacentHTML("beforeend", `<div class="folio">${n}</div>`);
+    const title = page.querySelector(".strip h1");
+    if (page.dataset.section) entries.push({ head: page.dataset.section });
+    if (title && !entries.some((e) => e.title === title.textContent)) entries.push({ title: title.textContent, n });
+  });
+  document.querySelectorAll("[data-page]").forEach((el) => {
+    el.textContent = document.getElementById(el.dataset.page)?.dataset.n ?? "?";
+  });
+  const half = Math.ceil(entries.length / 2);
+  let cut = entries.findIndex((e, i) => i >= half - 3 && e.head);
+  if (cut < 0) cut = half;
+  for (const part of [entries.slice(0, cut), entries.slice(cut)]) {
+    const col = document.createElement("div");
+    let list = null;
+    for (const e of part) {
+      if (e.head) {
+        col.insertAdjacentHTML("beforeend", `<h3>${e.head}</h3>`);
+        list = col.appendChild(document.createElement("ol"));
+      } else if (list) {
+        const li = list.appendChild(document.createElement("li"));
+        li.append(e.title, Object.assign(document.createElement("span"), { textContent: e.n }));
+      }
+    }
+    toc.append(col);
+  }
+})();
+</script>
 
 </body>
 </html>

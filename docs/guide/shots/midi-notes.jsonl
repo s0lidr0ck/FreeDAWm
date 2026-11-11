@@ -1,0 +1,7 @@
+{"method":"engine.execute","params":{"command":"window.midi_editor","params":{"value":true}}}
+{"method":"engine.execute","params":{"command":"edit.select","params":{"tracks":["Keys"]}}}
+{"vocal_dock": 470}
+{"steps": 8}
+{"method":"engine.execute","params":{"command":"ui.midi_editor","params":{"select":[0,1,2],"grid":"1/16","ghosts":true,"zoom":2}}}
+{"steps": 8}
+{"shot": "docs/guide/images/midi-notes.png"}

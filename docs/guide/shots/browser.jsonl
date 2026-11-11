@@ -1,0 +1,9 @@
+{"steps": 4}
+{"method":"engine.execute","params":{"command":"window.plugin_browser","params":{}}}
+{"steps": 10}
+{"shot": "docs/guide/images/browser-instruments.png"}
+{"click": [1007, 154]}
+{"steps": 10}
+{"hover": [700, 700]}
+{"steps": 4}
+{"shot": "docs/guide/images/browser-effects.png"}

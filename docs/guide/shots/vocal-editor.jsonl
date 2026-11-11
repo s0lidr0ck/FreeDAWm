@@ -1,0 +1,5 @@
+{"vocal_demo": {"track": "Lead Vox", "view": [0.9, 8.6], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.78, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"vocal_dock": 760}
+{"steps": 10}
+{"vocal_view": [0.9, 8.6]}
+{"shot": "docs/guide/images/vocal-editor.png"}

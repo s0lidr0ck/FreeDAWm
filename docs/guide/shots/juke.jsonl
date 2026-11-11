@@ -1,0 +1,14 @@
+{"method":"engine.execute","params":{"command":"track.new_beat","params":{"style":"Boom Bap"}}}
+{"steps": 8}
+{"method":"engine.execute","params":{"command":"ui.mix.instrument_window","params":{"track":"Beat"}}}
+{"steps": 10}
+{"click": [783, 202]}
+{"steps": 10}
+{"hover": [700, 140]}
+{"steps": 4}
+{"shot": "docs/guide/images/juke-kit.png"}
+{"click": [908, 202]}
+{"steps": 10}
+{"hover": [700, 600]}
+{"steps": 4}
+{"shot": "docs/guide/images/juke-steps.png"}

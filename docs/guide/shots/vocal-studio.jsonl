@@ -1,0 +1,9 @@
+{"studio_demo": {"tracks": [{"name": "Lead Vox", "notes": [[64, 0.6], [66, 0.6], [68, 0.6], [69, 0.6], [73, 0.6], [71, 0.6], [66, 0.6], [68, 0.6], [71, 0.6], [68, 0.6], [66, 0.6], [64, 0.6]]}, {"name": "BV 1", "notes": [[59, 0.6, -6], [61, 0.6, 4], [64, 0.6], [64, 0.6], [72, 0.6], [66, 0.6], [63, 0.6], [63, 0.6], [66, 0.6], [64, 0.6], [59, 0.6], [56, 0.6]]}, {"name": "BV 2", "notes": [[59, 1.94, 14], [57, 1.94, 16], [59, 1.94, 15], [56, 1.94, 13]]}], "key": "E", "chords": [[0, 2, "E"], [2, 4, "A"], [4, 6, "B"], [6, 8.2, "E"]], "view": [0, 8.2], "edit": "BV 1"}}
+{"vocal_dock": 760}
+{"steps": 10}
+{"vocal_view": [0, 8.2]}
+{"method":"engine.execute","params":{"command":"ui.vocal_panel","params":{"value":false}}}
+{"method":"engine.execute","params":{"command":"ui.vocal_studio","params":{"value":true}}}
+{"steps": 4}
+{"studio_roll": [0, 8.2]}
+{"shot": "docs/guide/images/vocal-studio.png"}

@@ -1,0 +1,17 @@
+{"steps": 4}
+{"method":"engine.execute","params":{"command":"edit.select","params":{"tracks":["Bass"],"start":"bars_beats:5|1|000","end":"bars_beats:9|1|000"}}}
+{"method":"ui.menu.invoke","params":{"id":"ui.ml.separate"}}
+{"steps": 8}
+{"shot": "docs/guide/images/ai-separate.png"}
+{"method":"ui.key","params":{"key":"Escape"}}
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"id":"ui.ml.midi"}}
+{"steps": 8}
+{"shot": "docs/guide/images/ai-midi.png"}
+{"method":"ui.key","params":{"key":"Escape"}}
+{"steps": 4}
+{"method":"ui.menu.invoke","params":{"id":"ui.ml.song"}}
+{"steps": 8}
+{"shot": "docs/guide/images/ai-song.png"}
+{"method":"ui.key","params":{"key":"Escape"}}
+{"steps": 4}

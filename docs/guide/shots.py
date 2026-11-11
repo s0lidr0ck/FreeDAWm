@@ -14,20 +14,47 @@ from PIL import Image
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 # script: (images it writes, window size, extra ui_shot flags, crops)
 # A crop is (output image, source image, box in points); a source with no crop is kept whole.
+# "--firestation" is ours, not ui_shot's: the demo song still loads the hidden stock effects, so
+# the script is run after shots/_firestation.jsonl, which swaps them for FireStation modules.
+FS = "--firestation"
 SHOTS = {
-    "windows": (["edit-window", "mix-window"], "1440x900", [], [("markers-ruler", "edit-window", (180, 114, 1188, 199))]),
+    "windows": (["edit-window", "mix-window"], "1440x900", [FS], [("markers-ruler", "edit-window", (180, 114, 1188, 199))]),
     "engine": (["playback-engine"], "1440x900", [], [("playback-engine", "playback-engine", (16, 16, 476, 376))]),
     "io": (["io-setup"], "1440x900", [], [("io-setup", "io-setup", (16, 16, 577, 546))]),
     "new-tracks": (["new-tracks"], "1440x900", [], [("new-tracks", "new-tracks", (438, 317, 1002, 423))]),
     "midi": (["midi-editor"], "1000x640", [], [("midi-editor", "midi-editor", (8, 331, 992, 589))]),
+    "midi-notes": (["midi-notes"], "1440x900", [], [("midi-notes", "midi-notes", (8, 501, 1432, 848))]),
     "markers": (["memory-locations"], "1440x900", [], [("memory-locations", "memory-locations", (160, 120, 641, 288))]),
     "mix-menus": (
         ["add-effect", "send-menu"],
         "1440x900",
-        [],
-        [("add-effect", "add-effect", (180, 101, 634, 360)), ("send-menu", "send-menu", (180, 364, 634, 536))],
+        [FS],
+        [("add-effect", "add-effect", (180, 101, 745, 556)), ("send-menu", "send-menu", (180, 378, 634, 550))],
     ),
+    "effect": (["effect-drawer"], "1440x900", [FS], [("effect-drawer", "effect-drawer", (176, 101, 1290, 720))]),
     "automation": (["automation-lane"], "1440x900", [], [("automation-lane", "automation-lane", (180, 200, 760, 290))]),
+    "juke": (
+        ["juke-kit", "juke-steps"],
+        "1280x860",
+        ["--blank"],
+        [("juke-kit", "juke-kit", (289, 117, 1280, 817)), ("juke-steps", "juke-steps", (289, 117, 1280, 817))],
+    ),
+    "lift": (["lift"], "1280x860", ["--blank"], [("lift", "lift", (180, 0, 1280, 860))]),
+    "browser": (
+        ["browser-instruments", "browser-effects"],
+        "1440x900",
+        [],
+        [("browser-instruments", "browser-instruments", (878, 108, 1200, 540)), ("browser-effects", "browser-effects", (878, 108, 1200, 842))],
+    ),
+    "vocal-editor": (["vocal-editor"], "1500x1100", ["--blank"], [("vocal-editor", "vocal-editor", (175, 355, 1250, 1030))]),
+    "vocal-studio": (["vocal-studio"], "1500x1000", ["--blank"], [("vocal-studio", "vocal-studio", (177, 352, 1260, 931))]),
+    "ai": (
+        ["ai-separate", "ai-midi", "ai-song"],
+        "1440x900",
+        [],
+        [("ai-separate", "ai-separate", (8, 22, 590, 322)), ("ai-midi", "ai-midi", (11, 10, 357, 480)), ("ai-song", "ai-song", (11, 10, 357, 577))],
+    ),
+    "models": (["ml-models"], "1300x820", [], [("ml-models", "ml-models", (9, 15, 1103, 727))]),
     "bounce": (["bounce-mix"], "1440x900", [], [("bounce-mix", "bounce-mix", (524, 238, 917, 502))]),
     "armed": (
         ["armed-track"],
@@ -44,8 +71,13 @@ def main() -> int:
     for name in names:
         images, size, flags, crops = SHOTS[name]
         last = ROOT / "target" / "guide-shot-last.png"
+        script = ROOT / "docs/guide/shots" / f"{name}.jsonl"
+        if FS in flags:
+            merged = ROOT / "target" / "guide-shot-script.jsonl"
+            merged.write_text((script.parent / "_firestation.jsonl").read_text() + script.read_text())
+            script = merged
         subprocess.run(
-            [ROOT / "target/debug/examples/ui_shot", last, f"docs/guide/shots/{name}.jsonl", "--size", size, "--system-theme", "dark", *flags],
+            [ROOT / "target/debug/examples/ui_shot", last, script, "--size", size, "--system-theme", "dark", *(f for f in flags if f != FS)],
             cwd=ROOT,
             check=True,
             stdout=subprocess.DEVNULL,

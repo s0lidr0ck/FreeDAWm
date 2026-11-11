@@ -3,9 +3,13 @@
 A user guide made of cheat sheets: one idea per page, a picture with lettered callouts first and
 words second. It is one HTML file styled for US Letter pages and exported to PDF.
 
-- `guide.html`: every page, in order (each `<section class="page">` is one sheet).
+- `guide.html`: every page, in order (each `<section class="page">` is one sheet). Page numbers,
+  "see page N" references (`<span data-page="id">`) and the contents list are filled in by the
+  script at the end of the file, so pages can be added or moved without renumbering.
 - `guide.css`: the page furniture (title strip, cards, "The Goal" notes, callout pins, key caps).
-- `images/`: screenshots rendered from the app. `fonts/`: Fraunces (titles) and Inter (text).
+- `images/`: screenshots rendered from the app by `shots.py`. `fonts/`: Fraunces and Inter.
+- `menus.py`: writes the Menu Map pages from `crates/ui-egui/src/menubar.txt` and the command
+  registry's shortcuts. Run it after the menu bar changes.
 - `FreeDAWm-Guide.pdf`: the last export.
 
 ## Build
@@ -28,6 +32,8 @@ python3 docs/guide/shots.py armed io   # only these
 ```
 
 Each shot is a `ui_shot` script in `shots/`; `shots.py` lists its window size, flags and crops.
+The demo song still loads the hidden stock effects, so the mixer shots first run
+`shots/_firestation.jsonl`, which swaps them for FireStation modules.
 
 The callouts are positioned in percentages of the picture (`.zone` boxes in `guide.html`), so after
 a layout change in the app, check that each box still sits on its part of the window.
