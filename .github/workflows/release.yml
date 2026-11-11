@@ -43,7 +43,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         name: Read and check the version
         run: |
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System packages
         run: |
           sudo apt-get update
@@ -84,7 +84,7 @@ jobs:
           key: release
       - name: Build and package
         run: packaging/linux/package.sh --formats "appimage deb rpm tar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-x86_64
           path: dist/release/*
@@ -97,7 +97,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust toolchain
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin
@@ -109,7 +109,7 @@ jobs:
         # No MACOS_SIGN_IDENTITY: package.sh signs ad-hoc, so the DMG opens after the one-time
         # Gatekeeper approval described in docs/releasing.md.
         run: packaging/macos/package.sh --arch aarch64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-arm64
           path: dist/release/*
@@ -121,7 +121,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust toolchain
         shell: bash
         run: |
@@ -149,7 +149,7 @@ jobs:
         # No signing secrets: sign.ps1 warns and leaves the files unsigned.
         shell: pwsh
         run: packaging/windows/package.ps1 -Arch x64 -Asio
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: dist/release/*
@@ -166,8 +166,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           # Not `assets/`: that is a folder of the checkout.
           path: release-assets

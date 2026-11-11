@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: System packages
         # ALSA (cpal, MIDI), PipeWire (cpal's PipeWire host, All sources), the JACK headers (cpal's JACK host; libjack itself loads at run time), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
@@ -80,7 +80,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Rust toolchain
         shell: bash
