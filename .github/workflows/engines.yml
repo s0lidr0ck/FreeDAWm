@@ -50,7 +50,7 @@ jobs:
           - { os: windows-latest, platform: windows-x86_64 }
           - { os: macos-15, platform: macos-aarch64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Upstream source at the pinned commit
         shell: bash
@@ -109,7 +109,7 @@ jobs:
           head -5 help.txt
           grep -qi "usage" help.txt || { echo "::error::$exe did not run (exit $code)"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: engine-${{ matrix.engine }}-${{ matrix.target.platform }}
           path: dist/*.zip
@@ -122,15 +122,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: engine-*
           merge-multiple: true
       - name: Write engines.json
         run: python3 tools/engines/manifest.py dist dist/engines.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: engines-manifest
           path: dist/engines.json
