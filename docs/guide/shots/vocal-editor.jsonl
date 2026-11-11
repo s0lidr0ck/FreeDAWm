@@ -1,5 +1,10 @@
-{"vocal_demo": {"track": "Lead Vox", "view": [0.9, 8.6], "select": [5.6, 7.8], "centre": 40, "drift": 30, "playhead": 6.78, "key": "E", "chords": [[0, 2.1, "E"], [2.1, 4.4, "A"], [4.4, 5.6, "D"], [5.6, 7.3, "E"], [7.3, 9.05, "D"]]}}
+{"method": "engine.execute", "params": {"command": "vocal.analyse", "params": {"track": "14_LeadVox1"}}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_editor", "params": {"track": "14_LeadVox1", "at": 0}}}
 {"vocal_dock": 760}
 {"steps": 10}
-{"vocal_view": [0.9, 8.6]}
+{"vocal_view": [0.0, 7.2]}
+{"method": "engine.execute", "params": {"command": "vocal.macro", "params": {"track": "14_LeadVox1", "preset": "First pass (gentle)"}}}
+{"method": "engine.execute", "params": {"command": "ui.vocal_panel", "params": {"value": true}}}
+{"method": "engine.execute", "params": {"command": "vocal.edit", "params": {"track": "14_LeadVox1", "centre": 60, "drift": 40, "from": 0, "to": 597964}}}
+{"steps": 40}
 {"shot": "docs/guide/images/vocal-editor.png"}

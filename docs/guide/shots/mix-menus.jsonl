@@ -1,13 +1,12 @@
-{"steps": 4}
-{"method":"engine.execute","params":{"command":"window.mix","params":{}}}
-{"steps": 8}
-{"click": [406, 113]}
+{"method": "engine.execute", "params": {"command": "window.mix", "params": {}}}
+{"steps": 10}
+{"click": [708, 241]}
 {"steps": 6}
-{"hover": [380, 162]}
+{"hover": [690, 298]}
 {"steps": 10}
 {"shot": "docs/guide/images/add-effect.png"}
 {"method":"ui.key","params":{"key":"Escape"}}
 {"steps": 4}
-{"click": [252, 402]}
-{"steps": 8}
+{"click": [644, 402]}
+{"steps": 10}
 {"shot": "docs/guide/images/send-menu.png"}

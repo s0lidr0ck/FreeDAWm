@@ -32,6 +32,10 @@ python3 docs/guide/shots.py armed io   # only these
 ```
 
 Each shot is a `ui_shot` script in `shots/`; `shots.py` lists its window size, flags and crops.
+Most session shots use a sample project that is not in the repository (its audio is not ours to
+redistribute). Point `FREEDAWM_GUIDE_PROJECT` at a folder holding `Sample.fdawm` and its
+`Audio Files/`; `shots/_sample.jsonl` opens it and builds the FireStation mix, the key, the markers
+and the MIDI part on top. Shots that do not need it still render without it.
 The demo song still loads the hidden stock effects, so the mixer shots first run
 `shots/_firestation.jsonl`, which swaps them for FireStation modules.
 

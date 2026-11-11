@@ -1,8 +1,7 @@
-{"steps": 4}
-{"method":"engine.execute","params":{"command":"track.view","params":{"tracks":["Kick"],"view":"volume"}}}
-{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:5|1|000","value":-12}}}
-{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:7|1|000","value":-3}}}
-{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:12|1|000","value":-3}}}
-{"method":"engine.execute","params":{"command":"automation.set_point","params":{"track":"Kick","param":"volume","at":"bars_beats:13|1|000","value":2}}}
-{"steps": 6}
+{"method": "engine.execute", "params": {"command": "track.view", "params": {"tracks": ["02_Snare"], "view": "volume"}}}
+{"method": "engine.execute", "params": {"command": "automation.set_point", "params": {"track": "02_Snare", "param": "volume", "at": "bars_beats:1|1|000", "value": -12}}}
+{"method": "engine.execute", "params": {"command": "automation.set_point", "params": {"track": "02_Snare", "param": "volume", "at": "bars_beats:3|1|000", "value": -4}}}
+{"method": "engine.execute", "params": {"command": "automation.set_point", "params": {"track": "02_Snare", "param": "volume", "at": "bars_beats:7|1|000", "value": -4}}}
+{"method": "engine.execute", "params": {"command": "automation.set_point", "params": {"track": "02_Snare", "param": "volume", "at": "bars_beats:8|1|000", "value": 1}}}
+{"steps": 10}
 {"shot": "docs/guide/images/automation-lane.png"}

@@ -22,7 +22,7 @@ const overflowing = await page.evaluate(() =>
     .map((p, i) => ({
       n: i + 1,
       // The page itself, or a card squeezed below its content.
-      over: Math.max(p.scrollHeight - p.clientHeight, ...[...p.querySelectorAll(".card")].map((c) => c.scrollHeight - c.clientHeight)),
+      over: Math.max(p.scrollHeight - p.clientHeight, ...[...p.querySelectorAll(".card, .keys-grid")].map((c) => c.scrollHeight - c.clientHeight)),
     }))
     .filter((p) => p.over > 1),
 );

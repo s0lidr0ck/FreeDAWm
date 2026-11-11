@@ -1,5 +1,10 @@
-{"steps": 4}
-{"method":"engine.execute","params":{"command":"edit.select","params":{"tracks":["Keys"],"start":"bars_beats:5|1|000","end":"bars_beats:9|1|000"}}}
-{"method":"ui.menu.invoke","params":{"path":"Window > MIDI Editor"}}
-{"steps": 8}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Synth Lead"]}}}
+{"method": "engine.execute", "params": {"command": "window.midi_editor", "params": {"value": true}}}
+{"vocal_dock": 470}
+{"steps": 10}
+{"method": "engine.execute", "params": {"command": "ui.midi_editor", "params": {"fit": true, "grid": "1/16"}}}
+{"steps": 10}
 {"shot": "docs/guide/images/midi-editor.png"}
+{"method": "engine.execute", "params": {"command": "ui.midi_editor", "params": {"select": [4, 5, 6], "ghosts": true, "zoom": 2}}}
+{"steps": 10}
+{"shot": "docs/guide/images/midi-notes.png"}
