@@ -47,6 +47,7 @@ pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ml;
 pub(crate) use mix::restore_plugin_param_ids;
+mod chain;
 pub(crate) mod module;
 pub(crate) mod module_asset;
 pub(crate) mod module_ceiling;
@@ -177,6 +178,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(midi_cleanup::specs());
         v.extend(view_more::specs());
         v.extend(track_more::specs());
+        v.extend(chain::specs());
         v.extend(clip_more::specs());
         v.extend(clip_list::specs());
         v.extend(event_more::specs());

@@ -165,9 +165,11 @@ fn main() {
     let player = audio.then(|| soundcraft_playback::Player::new(engine.session_arc()));
     let services = if args.iter().any(|a| a == "--fake-claude") { fake_claude() } else { Services::default() };
     let mut app = SoundApp::new(engine, player, services).with_control(rx);
-    // `--user-dir DIR`: the track presets and templates folders under DIR (as the app's settings).
+    // `--user-dir DIR`: the Library (presets, chains, track presets, templates) under DIR, as the
+    // app's settings folder holds it.
     if let Some(dir) = args.iter().position(|a| a == "--user-dir").and_then(|i| args.get(i + 1)) {
-        app.dialogs.dirs = soundcraft_ui_egui::user_files::UserDirs::under(std::path::Path::new(dir));
+        app.library_default = Some(std::path::PathBuf::from(dir));
+        app.apply_library_dir();
     }
     // `--fake-midi "Port A,Port B"`: MIDI input ports that exist only for the render (the fake
     // backend), so Setup › MIDI Input Devices and the track input menus list them.

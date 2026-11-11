@@ -611,6 +611,7 @@ fn services() -> Services {
                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
                 "file.import_dawproject" => d.add_filter("DAWproject", &["dawproject"]),
                 "scout.profile_import" => d.add_filter("Sound Profile", &["json"]),
+                "track.load_preset" | "track.load_chain" => d.add_filter("Preset", &["json"]),
                 _ => d.add_filter(
                     "Audio",
                     &[
@@ -975,13 +976,12 @@ fn loaders(launch: Launch) -> (Prepare, Audio, Finish) {
         // Audio a never-saved session makes goes beside its takes in the autosave folder.
         app.engine.unsaved_audio_root = app.autosave_dir.clone();
         app.leftovers = app.autosave_dir.as_deref().map(soundcraft_engine::autosave::leftovers).unwrap_or_default();
-        app.preset_dir = prefs_path().and_then(|p| p.parent().map(|d| d.join("Presets")));
-        // Track presets and templates sit next to the plugin presets.
-        if let Some(dir) = prefs_path().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) {
-            app.dialogs.dirs = soundcraft_ui_egui::user_files::UserDirs::under(&dir);
-        }
         app.extra.ui_scale = prefs.ui_scale;
         app.ui = prefs;
+        // The Library (plugin presets, chains, track presets, Juke presets, templates): the
+        // settings folder, unless the preferences name another.
+        app.library_default = prefs_path().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+        app.apply_library_dir();
         // The MIDI input ports (Setup › MIDI Input Devices), with the audio.
         app.use_system_midi = !no_audio;
         if !errors.is_empty() {

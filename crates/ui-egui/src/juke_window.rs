@@ -211,7 +211,8 @@ struct KitsView {
     /// The installed kits' ids, and their folder.
     ids: Vec<String>,
     kits_dir: std::path::PathBuf,
-    presets_dir: std::path::PathBuf,
+    /// The folders the presets saved from Juke are in (read when the menu opens).
+    presets_dirs: Vec<std::path::PathBuf>,
     /// The release's kits not installed yet, once listed; or why the list is not there.
     available: Result<Vec<soundcraft_engine::ml::kits::KitEntry>, String>,
     /// The download running: (kit id, received, expected bytes).
@@ -240,7 +241,7 @@ fn kits_view(app: &mut SoundApp) -> KitsView {
         installed: installed.into_iter().map(|(_, name, path)| (name, path)).collect(),
         ids,
         kits_dir: app.juke_kits.dir(),
-        presets_dir: app.juke_kits.presets_dir(),
+        presets_dirs: app.juke_kits.presets_dirs(),
         available,
         active,
         note: app.juke_kits.note.clone(),
@@ -1160,7 +1161,7 @@ fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, o
     {
         ui.separator();
         ui.menu_button("My Presets", |ui| {
-            let mine = crate::juke_kits_ui::read_presets(&recorded.presets_dir);
+            let mine = crate::juke_kits_ui::read_presets_in(&recorded.presets_dirs);
             if mine.is_empty() {
                 ui.label(egui::RichText::new("None yet: Save preset adds the kit here").weak());
             }

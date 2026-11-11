@@ -1,4 +1,4 @@
-//! The docked plugin browser panel: Instruments / Effects / Presets tabs, a search field, filter
+//! The docked plugin browser panel: Instruments / Effects / Presets / Library tabs, a search field, filter
 //! chips and a virtualised grid of cards, with a note listing the plugins the scans could not use.
 
 use super::card::{self, CardAction, CardResponse};
@@ -122,7 +122,7 @@ fn tab(ui: &mut Ui, label: &str, on: bool, width: f32) -> bool {
 }
 
 /// A filter chip (an accessible toggle button).
-fn chip(ui: &mut Ui, label: &str, on: bool) -> bool {
+pub(super) fn chip(ui: &mut Ui, label: &str, on: bool) -> bool {
     let t = Tokens::current();
     let galley = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text);
     let (r, resp) = ui.allocate_exact_size(galley.size() + vec2(14.0, 6.0), Sense::click());
@@ -181,8 +181,15 @@ pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
     // Tabs, card size and the panel menu.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let w = ((ui.available_width() - 64.0) / 3.0).clamp(54.0, 96.0);
-        for (tb, label) in [(BrowserTab::Instruments, "Instruments"), (BrowserTab::Effects, "Effects"), (BrowserTab::Presets, "Presets")] {
+        // Four tabs share the width, the longest label taking a larger part of it.
+        let unit = ((ui.available_width() - 70.0) / 4.3).clamp(44.0, 88.0);
+        for (tb, label, part) in [
+            (BrowserTab::Instruments, "Instruments", 1.3),
+            (BrowserTab::Effects, "Effects", 1.0),
+            (BrowserTab::Presets, "Presets", 1.0),
+            (BrowserTab::Library, "Library", 1.0),
+        ] {
+            let w = unit * part;
             if tab(ui, label, app.ui.browser.tab == tb, w) {
                 app.ui.browser.tab = tb;
             }
@@ -224,6 +231,7 @@ pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
     // The Presets tab searches its own list.
     let (text, hint) = match app.ui.browser.tab {
         BrowserTab::Presets => (&mut app.ui.browser.preset_text, "Search presets"),
+        BrowserTab::Library => (&mut app.ui.browser.library_text, "Search the Library"),
         _ => (&mut app.ui.browser.text, "Search name, vendor or category"),
     };
     ui.add(egui::TextEdit::singleline(text).id(search_id).hint_text(hint).desired_width(f32::INFINITY));
@@ -232,6 +240,8 @@ pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
     let tab_now = app.ui.browser.tab;
     if tab_now == BrowserTab::Presets {
         super::presets::tab(app, ui, &catalog);
+    } else if tab_now == BrowserTab::Library {
+        super::library::tab(app, ui, &catalog);
     } else {
         let kind = kind_of(tab_now);
         chips(app, ui, &catalog, kind);

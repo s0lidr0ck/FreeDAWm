@@ -60,14 +60,18 @@ pub enum Dialog {
     },
     /// File › New… and File › New from Template…: a name, a rate and what to start from.
     NewSession(NewSession),
-    /// Save Track Preset…: a name for the preset, saved in the user's track presets folder.
+    /// Save Track Preset… and Save Plug-in Chain… (`chain`): a name for the preset, saved in the
+    /// Library's track presets or chains folder.
     SaveTrackPreset {
         track: TrackId,
         name: String,
+        chain: bool,
     },
-    /// Load Track Preset…: the user's track presets (newest first) or any preset file.
+    /// Load Track Preset… and Load Plug-in Chain… (`chain`): the Library's presets (newest first)
+    /// or any preset file.
     LoadTrackPreset {
         tracks: Vec<u64>,
+        chain: bool,
         path: String,
         /// The presets folder as it was when the dialog opened (read once, not every frame).
         presets: Vec<crate::user_files::UserFile>,
@@ -232,14 +236,18 @@ impl NewSession {
 impl Dialog {
     /// Load Track Preset… for `tracks`, listing the presets folder as it is now.
     pub fn load_track_preset(dirs: &crate::user_files::UserDirs, tracks: Vec<u64>) -> Dialog {
-        Dialog::LoadTrackPreset { tracks, path: String::new(), presets: crate::user_files::track_presets(dirs) }
+        Dialog::LoadTrackPreset { tracks, chain: false, path: String::new(), presets: crate::user_files::track_presets(dirs) }
+    }
+
+    pub fn load_chain(dirs: &crate::user_files::UserDirs, tracks: Vec<u64>) -> Dialog {
+        Dialog::LoadTrackPreset { tracks, chain: true, path: String::new(), presets: crate::user_files::chains(dirs) }
     }
 }
 
 #[derive(Default)]
 pub struct Dialogs {
     pub open: Option<Dialog>,
-    /// The user's track presets and templates folders (set by the desktop app).
+    /// The Library's folders (set by the desktop app).
     pub dirs: crate::user_files::UserDirs,
     /// Runs once the session has been saved from `SaveChanges`.
     after_save: Option<(String, Value)>,
@@ -353,7 +361,18 @@ impl Dialogs {
             }
             "track.save_preset" if self.dirs.track_presets.is_some() => {
                 let Some(t) = e.target_tracks().first().and_then(|id| e.session().track(*id)) else { return false };
-                Dialog::SaveTrackPreset { track: t.id, name: t.name.clone() }
+                Dialog::SaveTrackPreset { track: t.id, name: t.name.clone(), chain: false }
+            }
+            "track.save_chain" if self.dirs.chains.is_some() => {
+                let Some(t) = e.target_tracks().first().and_then(|id| e.session().track(*id)) else { return false };
+                Dialog::SaveTrackPreset { track: t.id, name: format!("{} chain", t.name), chain: true }
+            }
+            "track.load_chain" => {
+                let tracks: Vec<u64> = e.target_tracks().iter().map(|t| t.0).collect();
+                if tracks.is_empty() {
+                    return false;
+                }
+                Dialog::load_chain(&self.dirs, tracks)
             }
             "track.load_preset" => {
                 let tracks: Vec<u64> = e.target_tracks().iter().map(|t| t.0).collect();
@@ -628,8 +647,10 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     let title = match &d {
         Dialog::NewTracks { .. } => "New Tracks",
         Dialog::NewSession(_) => "New Session",
-        Dialog::SaveTrackPreset { .. } => "Save Track Preset",
-        Dialog::LoadTrackPreset { .. } => "Load Track Preset",
+        Dialog::SaveTrackPreset { chain: false, .. } => "Save Track Preset",
+        Dialog::LoadTrackPreset { chain: false, .. } => "Load Track Preset",
+        Dialog::SaveTrackPreset { chain: true, .. } => "Save Plug-in Chain",
+        Dialog::LoadTrackPreset { chain: true, .. } => "Load Plug-in Chain",
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
@@ -706,10 +727,10 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some(("session.new".into(), params));
                     }
                 }
-                Dialog::SaveTrackPreset { track, name } => {
-                    ui.label("Preset name");
+                Dialog::SaveTrackPreset { track, name, chain } => {
+                    ui.label(if *chain { "Chain name" } else { "Preset name" });
                     name_field(ui, name);
-                    let dir = app.dialogs.dirs.track_presets.clone();
+                    let dir = if *chain { app.dialogs.dirs.chains.clone() } else { app.dialogs.dirs.track_presets.clone() };
                     let file = dir.map(|d| d.join(format!("{}.{}", crate::user_files::file_name(name), crate::user_files::TRACK_PRESET_EXT)));
                     let replaces = file.as_ref().is_some_and(|f| f.exists());
                     if replaces {
@@ -721,12 +742,15 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         if let Some(parent) = f.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
-                        action = Some(("track.save_preset".into(), json!({"path": f.to_string_lossy(), "track": track.0})));
+                        let cmd = if *chain { "track.save_chain" } else { "track.save_preset" };
+                        action = Some((cmd.into(), json!({"path": f.to_string_lossy(), "track": track.0})));
                     }
                 }
-                Dialog::LoadTrackPreset { tracks, path, presets } => {
+                Dialog::LoadTrackPreset { tracks, chain, path, presets } => {
+                    let cmd = if *chain { "track.load_chain" } else { "track.load_preset" };
                     if presets.is_empty() {
-                        ui.label(egui::RichText::new("No saved track presets yet.").color(Tokens::current().text_dim));
+                        let none = if *chain { "No saved plug-in chains yet." } else { "No saved track presets yet." };
+                        ui.label(egui::RichText::new(none).color(Tokens::current().text_dim));
                     } else {
                         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                             for p in presets.iter() {
@@ -739,16 +763,17 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     }
                     ui.horizontal(|ui| {
                         ui.label("File");
-                        ui.add(egui::TextEdit::singleline(path).desired_width(360.0).hint_text("a track preset (.json) anywhere"));
+                        let hint = if *chain { "a plug-in chain (.json) anywhere" } else { "a track preset (.json) anywhere" };
+                        ui.add(egui::TextEdit::singleline(path).desired_width(360.0).hint_text(hint));
                         if let Some(pick) = &app.services.pick_open
                             && ui.button("Browse…").clicked()
-                            && let Some(p) = pick("track.load_preset", &[])
+                            && let Some(p) = pick(cmd, &[])
                         {
                             *path = p;
                         }
                     });
                     if buttons_enabled(ui, "Load", enter, !path.trim().is_empty()) {
-                        action = Some(("track.load_preset".into(), json!({"path": path, "tracks": tracks})));
+                        action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
                 Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range } => {

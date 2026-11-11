@@ -1871,7 +1871,7 @@ pub(crate) fn track_preset_items(app: &mut SoundApp, ui: &mut Ui, id: TrackId, s
     if ui.button("Save Track Preset…").clicked() {
         if app.dialogs.dirs.track_presets.is_some() {
             let name = app.engine.session().track(id).map(|t| t.name.clone()).unwrap_or_default();
-            app.dialogs.open = Some(crate::dialogs::Dialog::SaveTrackPreset { track: id, name });
+            app.dialogs.open = Some(crate::dialogs::Dialog::SaveTrackPreset { track: id, name, chain: false });
         } else {
             // No presets folder (the web build): a path, for the clicked track.
             let _ = app.run("edit.select", json!({"tracks": [id.0]}));

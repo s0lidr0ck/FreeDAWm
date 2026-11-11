@@ -1428,7 +1428,11 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
                             return Some(Err(error));
                         }
                         crate::docking::cancel_replaced_state(app, &ns);
+                        let library_moved = ns.library_dir != app.ui.library_dir;
                         app.ui = ns;
+                        if library_moved {
+                            app.apply_library_dir();
+                        }
                         json!({"ui": app.ui})
                     }
                     Err(e) => return Some(Err(format!("bad ui state: {e}"))),

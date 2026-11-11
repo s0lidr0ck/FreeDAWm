@@ -51,7 +51,8 @@ computer's settings, libraries shared by every project, and crash-recovery copie
 | Guitar PC (follower) audio takes | — | the take's WAV in its project's `Audio Files/` (as any take); its FLAC transfer file in `<project>/Remote Takes/` until it landed |
 | Lyrics, transcriptions, Scout captures and answers, MIDI, tuning edits, markers, plugin states | in the session file | same |
 | Scout sound profiles | config dir `profiles/` | same: a library shared by every project, not session data |
-| ML models, plugin scan cache, plugin pictures, presets, Band library, shortcuts, `ui.json`, `network.json`, recent files | config dir | same: this computer's, not session data |
+| ML models, plugin scan cache, plugin pictures, Band library, shortcuts, `ui.json`, `network.json`, recent files | config dir | same: this computer's, not session data |
+| The Library: plugin presets, plug-in chains, track presets, Juke presets, templates | config dir, or the folder chosen in the browser's Library tab (`library_dir`) | same: shared by every project. A preset that plays audio carries it in `<name>_samples/`, so the folder can be copied or synced to another computer |
 
 ## Audio played from disk
 

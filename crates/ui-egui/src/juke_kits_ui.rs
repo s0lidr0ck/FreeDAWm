@@ -37,6 +37,9 @@ pub struct KitDownloads {
     /// Another kits folder and list URL (tests); None: the app's.
     pub dir: Option<PathBuf>,
     pub url: Option<String>,
+    /// The Library's Juke presets folder, where presets are saved; None: `juke_presets` beside
+    /// the kits folder, where they were saved before the Library.
+    pub presets: Option<PathBuf>,
 }
 
 impl KitDownloads {
@@ -48,16 +51,39 @@ impl KitDownloads {
         self.url.clone().unwrap_or_else(kits::kits_manifest_url)
     }
 
-    /// Where presets saved from Juke go: `juke_presets` beside the kits folder.
-    pub fn presets_dir(&self) -> PathBuf {
+    /// Where presets were saved before the Library: `juke_presets` beside the kits folder.
+    fn old_presets_dir(&self) -> PathBuf {
         let d = self.dir();
         d.parent().map_or_else(|| d.join("juke_presets"), |p| p.join("juke_presets"))
     }
 
+    /// Where presets saved from Juke go: the Library's folder.
+    pub fn presets_dir(&self) -> PathBuf {
+        self.presets.clone().unwrap_or_else(|| self.old_presets_dir())
+    }
+
+    /// The folders presets saved from Juke are listed from: the Library's, and the one from
+    /// before the Library.
+    pub fn presets_dirs(&self) -> Vec<PathBuf> {
+        let mut v = vec![self.presets_dir()];
+        let old = self.old_presets_dir();
+        if !v.contains(&old) {
+            v.push(old);
+        }
+        v
+    }
+
     /// The presets saved from Juke: (name, file), by name.
     pub fn user_presets(&self) -> Vec<(String, PathBuf)> {
-        read_presets(&self.presets_dir())
+        read_presets_in(&self.presets_dirs())
     }
+}
+
+/// The presets in every one of `dirs`: (name, file), by name.
+pub fn read_presets_in(dirs: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = dirs.iter().flat_map(|d| read_presets(d)).collect();
+    v.sort_by_key(|a| a.0.to_lowercase());
+    v
 }
 
 /// The presets in `dir`: (name, file), by name.
