@@ -1502,6 +1502,10 @@ impl SoundApp {
             // The count-off comes before `from` (after it, the pre-roll plays as usual), at the
             // tempo and meter there; the take starts at `from` once it is over.
             let c = self.record_countoff(from, countoff);
+            // Armed tracks play their clips through the pre- and post-roll.
+            if let Some(p) = &self.player {
+                p.set_punch(self.punch);
+            }
             self.start_play_counted(from, end, None, c);
             self.plan_recording(takes, None);
         }

@@ -463,7 +463,7 @@ mod tests {
             quality: "maj".into(),
             bass_pc: 0,
         };
-        let out = soundcraft_ml::JobOutput { stems: Vec::new(), notes: Vec::new(), midi: None, chords: Some(vec![c]), lyrics: None };
+        let out = soundcraft_ml::JobOutput { chords: Some(vec![c]), ..soundcraft_ml::JobOutput::default() };
         crate::ml::apply(&mut e, &job, crate::ml::MlResult { parts: vec![out] }).unwrap();
         assert!(!e.session().band.chords.is_empty());
         assert_eq!(preview(&e, id).out.report.removed, 1, "the preview follows the detected chords");

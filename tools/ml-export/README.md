@@ -18,6 +18,7 @@ the scripts produce `<models>/<id>/{<id>.onnx, card.json, golden/}`.
 | `game_vocal` | GAME small (openvpi) | audio → MIDI, vocal | 5 graphs (encoder, segmenter loop, estimator, converters) | in the graph |
 | `btc_chords` | BTC large vocabulary (Park et al.) | audio → chords (170 classes) | 10 s audio `[1,220500]` + n_frames → logits `[1,108,170]` | CQT in the graph |
 | `whisper_lyrics` | Whisper large-v3 (ggml, **not ONNX**) | sung vocal → words + times | whisper.cpp / whisper-rs | in whisper.cpp |
+| `midi_llm` | MIDI-LLM (Llama 3.2 1B + AMT MIDI tokens) | text → multitrack MIDI | `input_ids`, `attention_mask`, 16 × key/value cache → MIDI logits `[1,n,55030]` + cache | no audio |
 
 Audio-to-MIDI `reference_infer.py` files include the full note decoding and return note lists
 (`start`, `end` in seconds, `pitch`, `velocity`, plus pitch bends / pedals / fractional pitch where
@@ -61,6 +62,8 @@ Basic Pitch's parity against the original TF SavedModel needs a third venv
 `resampy`, `librosa`, `mir_eval`, `pretty_midi`); without it that check is skipped.
 The MIDI scripts also need `piano_transcription_inference`, `mido`, `pretty_midi`, `audioread`,
 `torchlibrosa`, and for GAME `lightning loguru click pydantic torchmetrics colorednoise onnxslim h5py`.
+
+MIDI-LLM (`midillm/`) needs `onnxruntime-genai==0.8.3` (its model builder makes the fp32 graph), `transformers`, `tokenizers` and `safetensors`; `export.py` then writes 8-bit `MatMulNBits` weights one tensor at a time (peak about 11 GB of RAM, 10 GB of disk). 4-bit was tried and rejected (top-1 agreement with PyTorch 73 %, 8-bit 97 %). The builder reads `config.rope_theta`, which transformers 5 no longer sets; `export.py` puts it back, or every position after the first is wrong.
 
 Lyrics needs `openai-whisper` in ml-venv (cross-check only) and runs the whisper.cpp CLI
 (downloaded by `lyrics/run.py`); its CUDA build is used when an NVIDIA GPU is present.

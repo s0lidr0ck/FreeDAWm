@@ -17,3 +17,8 @@ ml-collections==1.1.0
 beartype==0.23.1
 rotary-embedding-torch==0.9.1
 librosa==1.0.0
+# MIDI-LLM (midillm/): the onnxruntime-genai model builder and the Hugging Face loader.
+onnxruntime-genai==0.8.3
+transformers==5.22.2
+tokenizers
+safetensors

@@ -45,6 +45,280 @@ pub struct LyricsDialog {
     pub skip_silence: bool,
 }
 
+/// Generate Song's settings in the dialog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SongDialog {
+    /// YuE2 (true) or ACE-Step 1.5.
+    pub yue2: bool,
+    /// A server the person runs instead of the engine FreeDAWm installs (empty: the installed one).
+    pub yue2_server: String,
+    pub ace_server: String,
+    pub style: String,
+    pub lyrics: String,
+    pub instrumental: bool,
+    pub seconds: f32,
+    pub seed: String,
+    /// YuE2: score planning (full, melody, off) and an optional score to sing.
+    pub plan: &'static str,
+    pub score: String,
+    /// ACE-Step: tempo (0 = the planner's), key, the planner on.
+    pub bpm: u16,
+    pub key: String,
+    pub planner: bool,
+}
+
+impl Default for SongDialog {
+    fn default() -> Self {
+        SongDialog {
+            yue2: true,
+            yue2_server: String::new(),
+            ace_server: String::new(),
+            style: String::new(),
+            lyrics: String::new(),
+            instrumental: false,
+            seconds: 60.0,
+            seed: String::new(),
+            plan: "full",
+            score: String::new(),
+            bpm: 0,
+            key: String::new(),
+            planner: true,
+        }
+    }
+}
+
+impl SongDialog {
+    /// The engine's model id (Setup › ML Models).
+    pub fn engine_id(&self) -> &'static str {
+        if self.yue2 { "yue2" } else { "acestep" }
+    }
+
+    /// Whether the song goes to the engine FreeDAWm installs (no server address given).
+    pub fn bundled(&self) -> bool {
+        (if self.yue2 { &self.yue2_server } else { &self.ace_server }).trim().is_empty()
+    }
+
+    /// Whether Run can start: something to sing, and a whole-number seed (or none).
+    pub fn ready(&self) -> bool {
+        let something = !self.style.trim().is_empty() || !self.lyrics.trim().is_empty() || (self.yue2 && !self.score.trim().is_empty());
+        something && (self.seed.trim().is_empty() || self.seed.trim().parse::<u64>().is_ok())
+    }
+}
+
+pub fn song_params(o: &mut serde_json::Map<String, Value>, d: &SongDialog) {
+    // The device is the installed engine's; a server of the person's own chooses its own.
+    if !d.bundled() {
+        o.remove("device");
+    }
+    o.insert("engine".into(), json!(if d.yue2 { "yue2" } else { "acestep" }));
+    let server = if d.yue2 { &d.yue2_server } else { &d.ace_server };
+    if !server.trim().is_empty() {
+        o.insert("server".into(), json!(server.trim()));
+    }
+    o.insert("style".into(), json!(d.style.trim()));
+    if !d.lyrics.trim().is_empty() {
+        o.insert("lyrics".into(), json!(d.lyrics.trim()));
+    }
+    o.insert("instrumental".into(), json!(d.instrumental));
+    o.insert("seconds".into(), json!(d.seconds));
+    if let Ok(seed) = d.seed.trim().parse::<u64>() {
+        o.insert("seed".into(), json!(seed));
+    }
+    if d.yue2 {
+        o.insert("plan".into(), json!(d.plan));
+        if !d.score.trim().is_empty() {
+            o.insert("score".into(), json!(d.score.trim()));
+        }
+    } else {
+        o.insert("planner".into(), json!(d.planner));
+        if d.bpm > 0 {
+            o.insert("bpm".into(), json!(d.bpm));
+        }
+        if !d.key.trim().is_empty() {
+            o.insert("key".into(), json!(d.key.trim()));
+        }
+    }
+}
+
+pub fn song_options(ui: &mut egui::Ui, d: &mut SongDialog, cursor: &str) {
+    let tk = Tokens::current();
+    ui.horizontal(|ui| {
+        ui.label("Model");
+        ui.radio_value(&mut d.yue2, true, "YuE2").on_hover_text("Writes an editable score, then sings it. Best quality; slower.");
+        ui.radio_value(&mut d.yue2, false, "ACE-Step 1.5").on_hover_text("Fast; plans tempo, key and lyrics itself.");
+    });
+    egui::CollapsingHeader::new("Use a server I run (advanced)").id_salt("song_server").default_open(!d.bundled()).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Server");
+            let (field, hint) = if d.yue2 {
+                (&mut d.yue2_server, "e.g. http://192.168.1.20:8087 (yue-server)")
+            } else {
+                (&mut d.ace_server, "e.g. http://192.168.1.20:8080 (ace-server)")
+            };
+            ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(240.0));
+        });
+        ui.label(
+            egui::RichText::new(
+                "Empty: the engine FreeDAWm installs (Setup › ML Models) runs on this computer. An address sends the song to a yue2.cpp or acestep.cpp server you run, on a bigger GPU for example.",
+            )
+            .small()
+            .color(tk.text_dim),
+        );
+    });
+    ui.label(if d.yue2 { "Style tags" } else { "Caption" });
+    ui.add(
+        egui::TextEdit::multiline(&mut d.style)
+            .hint_text("e.g. English, warm piano pop, expressive female voice, acoustic piano, light drums, 88 BPM")
+            .desired_rows(2)
+            .desired_width(340.0),
+    );
+    ui.checkbox(&mut d.instrumental, "Instrumental (no vocals)");
+    if !d.instrumental {
+        ui.label("Lyrics");
+        ui.add(
+            egui::TextEdit::multiline(&mut d.lyrics)
+                .hint_text(if d.yue2 { "[Verse]\n…\n\n[Chorus]\n…" } else { "[Verse]\n… (empty: ACE-Step writes them)" })
+                .desired_rows(6)
+                .desired_width(340.0),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Length");
+        ui.add(egui::Slider::new(&mut d.seconds, 10.0..=600.0).step_by(5.0).suffix(" s"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Seed");
+        ui.add(egui::TextEdit::singleline(&mut d.seed).hint_text("new each run").desired_width(120.0));
+    });
+    if !d.seed.trim().is_empty() && d.seed.trim().parse::<u64>().is_err() {
+        ui.colored_label(tk.rec, "The seed is a whole number.");
+    }
+    if d.yue2 {
+        ui.horizontal(|ui| {
+            ui.label("Score");
+            ui.radio_value(&mut d.plan, "full", "Melody and chords");
+            ui.radio_value(&mut d.plan, "melody", "Melody");
+            ui.radio_value(&mut d.plan, "off", "None");
+        })
+        .response
+        .on_hover_text("YuE2 writes this plan first; it comes back as MIDI tracks under the song.");
+        ui.collapsing("Sing my own score (ABC)", |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut d.score)
+                    .hint_text("X:1\nM:4/4\nL:1/16\nQ:1/4=88\nV: Vocal\nK:C\n…")
+                    .code_editor()
+                    .desired_rows(5)
+                    .desired_width(340.0),
+            );
+        });
+    } else {
+        ui.horizontal(|ui| {
+            ui.label("Tempo");
+            ui.add(egui::DragValue::new(&mut d.bpm).range(0..=300).suffix(" bpm"));
+            ui.label(egui::RichText::new("0 = the planner's").small().color(tk.text_dim));
+            ui.label("Key");
+            ui.add(egui::TextEdit::singleline(&mut d.key).hint_text("A minor").desired_width(80.0));
+        });
+        ui.checkbox(&mut d.planner, "Plan with the 5 Hz language model first")
+            .on_hover_text("Off renders straight from the caption and lyrics (less VRAM, less structure).");
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "The song lands on a new audio track at {cursor}{}.",
+            if d.yue2 && d.plan != "off" { ", with its score as MIDI tracks" } else { "" }
+        ))
+        .small()
+        .color(tk.text_dim),
+    );
+}
+
+/// Generate MIDI from Text's settings in the dialog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextMidiDialog {
+    /// What to compose.
+    pub prompt: String,
+    /// Length, seconds (1–100).
+    pub seconds: f32,
+    /// Randomness (the sampling temperature, 0.1–2).
+    pub temperature: f32,
+    /// A seed to repeat a piece; empty = a new one each run.
+    pub seed: String,
+    /// The MIDI clip selected when the dialog opened (id, name), to continue.
+    pub clip: Option<(u64, String)>,
+    /// Start the piece with that clip's notes.
+    pub continue_clip: bool,
+}
+
+impl Default for TextMidiDialog {
+    fn default() -> Self {
+        TextMidiDialog { prompt: String::new(), seconds: 30.0, temperature: 1.0, seed: String::new(), clip: None, continue_clip: false }
+    }
+}
+
+impl TextMidiDialog {
+    /// Whether Run can start: a prompt, and a seed that is a whole number (or none).
+    pub fn ready(&self) -> bool {
+        !self.prompt.trim().is_empty() && (self.seed.trim().is_empty() || self.seed.trim().parse::<u64>().is_ok())
+    }
+}
+
+pub fn text_midi_params(o: &mut serde_json::Map<String, Value>, t: &TextMidiDialog) {
+    o.insert("prompt".into(), json!(t.prompt.trim()));
+    o.insert("seconds".into(), json!(t.seconds));
+    o.insert("temperature".into(), json!(t.temperature));
+    if let Ok(seed) = t.seed.trim().parse::<u64>() {
+        o.insert("seed".into(), json!(seed));
+    }
+    if t.continue_clip
+        && let Some((id, _)) = &t.clip
+    {
+        o.insert("continue_from".into(), json!(id));
+    }
+}
+
+pub fn text_midi_options(ui: &mut egui::Ui, t: &mut TextMidiDialog, cursor: &str) {
+    let tk = Tokens::current();
+    ui.label("Describe the music: style, instruments, key, meter, tempo, mood.");
+    ui.add(
+        egui::TextEdit::multiline(&mut t.prompt)
+            .hint_text("e.g. Upbeat jazz with saxophones, piano, bass and drums, in B-flat major, 4/4")
+            .desired_rows(3)
+            .desired_width(320.0),
+    );
+    ui.horizontal(|ui| {
+        ui.label("Length");
+        ui.add(egui::Slider::new(&mut t.seconds, 5.0..=100.0).step_by(1.0).suffix(" s"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Randomness");
+        ui.add(egui::Slider::new(&mut t.temperature, 0.5..=1.5).step_by(0.05));
+    })
+    .response
+    .on_hover_text("1 is the model's own; lower stays safer, higher wanders more");
+    ui.horizontal(|ui| {
+        ui.label("Seed");
+        ui.add(egui::TextEdit::singleline(&mut t.seed).hint_text("new each run").desired_width(120.0));
+    })
+    .response
+    .on_hover_text("The same seed, prompt and settings give the same notes. Each run reports its seed in the status line.");
+    if !t.seed.trim().is_empty() && t.seed.trim().parse::<u64>().is_err() {
+        ui.colored_label(tk.rec, "The seed is a whole number.");
+    }
+    if let Some((_, name)) = &t.clip {
+        ui.checkbox(&mut t.continue_clip, format!("Continue from the clip “{name}”")).on_hover_text(
+            "The piece starts with the clip's notes (up to 170) and the model carries on from them; the new tracks start where the clip does",
+        );
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "One new instrument track per General MIDI instrument, at {}. MIDI-LLM writes up to 682 notes; on the CPU that takes one to two minutes.",
+            if t.continue_clip && t.clip.is_some() { "the clip's start" } else { cursor }
+        ))
+        .small()
+        .color(tk.text_dim),
+    );
+}
+
 const KEYS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /// Whether the dialog's source (`{"track": id}` / `{"clip": id}`) looks like a full mix.
@@ -161,6 +435,31 @@ pub fn lyrics_options(ui: &mut egui::Ui, l: &mut LyricsDialog, seconds: f64) {
 
 /// What the status line says about a finished Detect Chords or Transcribe Lyrics job.
 pub fn summary(title: &str, v: &Value, secs: f64) -> Option<String> {
+    // Generate Song: the song's length, the score tracks, the seed.
+    if v.get("command").and_then(Value::as_str) == Some("ml.song") {
+        let made = v.get("made")?.as_array()?;
+        let len = made.first().and_then(|m| m.get("seconds")).and_then(Value::as_f64).unwrap_or(0.0);
+        let midi = made.len().saturating_sub(1);
+        let score = if midi > 0 { format!(", its score on {midi} MIDI tracks") } else { String::new() };
+        let seed = match v.get("seed") {
+            Some(Value::Number(n)) => format!(", seed {n}"),
+            _ => String::new(),
+        };
+        let meta = v.get("song").map(|m| {
+            let bpm = m.get("bpm").and_then(Value::as_u64).filter(|b| *b > 0).map(|b| format!(" {b} bpm"));
+            let key = m.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()).map(|k| format!(" {k}"));
+            format!("{}{}", bpm.unwrap_or_default(), key.unwrap_or_default())
+        });
+        let meta = meta.filter(|m| !m.is_empty()).map(|m| format!(" ({})", m.trim())).unwrap_or_default();
+        return Some(format!("{title}: {}:{:02} song{meta}{score} in {secs:.0} s{seed}", (len / 60.0) as u64, (len % 60.0) as u64));
+    }
+    // Generate MIDI from Text: the instruments and the seed that repeats the piece.
+    if let Some(seed) = v.get("seed").and_then(Value::as_str) {
+        let made = v.get("made")?.as_array()?;
+        let names: Vec<&str> = made.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
+        let notes: u64 = made.iter().filter_map(|m| m.get("notes").and_then(Value::as_u64)).sum();
+        return Some(format!("{title}: {notes} notes on {} tracks ({}) in {secs:.1} s, seed {seed}", names.len(), names.join(", ")));
+    }
     let made = v.get("made")?.as_array()?.first()?;
     if let Some(ch) = made.get("chords").and_then(Value::as_array) {
         let names: Vec<&str> = ch.iter().filter_map(|c| c.get("name").and_then(Value::as_str)).collect();
@@ -178,6 +477,39 @@ pub fn summary(title: &str, v: &Value, secs: f64) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{Services, SoundApp};
+
+    #[test]
+    fn generate_song_reports_its_length_score_and_seed() {
+        let v = json!({"command": "ml.song", "seed": 11, "made": [{"seconds": 151.2}, {}, {}, {}], "song": {"bpm": null}});
+        assert_eq!(summary("Generate Song", &v, 312.4).unwrap(), "Generate Song: 2:31 song, its score on 3 MIDI tracks in 312 s, seed 11");
+        let v = json!({"command": "ml.song", "made": [{"seconds": 30.0}], "song": {"bpm": 96, "key": "A minor"}});
+        assert_eq!(summary("Generate Song", &v, 40.0).unwrap(), "Generate Song: 0:30 song (96 bpm A minor) in 40 s");
+        // The dialog's params.
+        let mut d = SongDialog { style: "pop".into(), lyrics: "[Verse]\nla".into(), seed: "5".into(), ..SongDialog::default() };
+        assert!(d.ready());
+        let mut o = serde_json::Map::new();
+        song_params(&mut o, &d);
+        assert_eq!((o["engine"].as_str(), o["plan"].as_str(), o["seed"].as_u64()), (Some("yue2"), Some("full"), Some(5)));
+        assert!(soundcraft_engine::ml::song_options("ml.song", &Value::Object(o)).is_ok());
+        d.yue2 = false;
+        d.bpm = 90;
+        let mut o = serde_json::Map::new();
+        song_params(&mut o, &d);
+        assert_eq!((o["engine"].as_str(), o["bpm"].as_u64(), o.get("plan")), (Some("acestep"), Some(90), None));
+        assert!(soundcraft_engine::ml::song_options("ml.song", &Value::Object(o)).is_ok());
+        d.seed = "x".into();
+        assert!(!d.ready());
+        assert!(!SongDialog::default().ready());
+    }
+
+    #[test]
+    fn generate_midi_from_text_reports_its_tracks_and_seed() {
+        let v = json!({"seed": "77", "made": [{"name": "Acoustic Grand Piano", "notes": 40}, {"name": "Drums", "notes": 12}]});
+        assert_eq!(
+            summary("Generate MIDI from Text", &v, 61.04).unwrap(),
+            "Generate MIDI from Text: 52 notes on 2 tracks (Acoustic Grand Piano, Drums) in 61.0 s, seed 77"
+        );
+    }
 
     #[test]
     fn menus_and_palette_open_the_dialogs_with_valid_params() {

@@ -212,6 +212,15 @@ impl InstalledModel {
     pub fn onnx(&self) -> PathBuf {
         self.dir.join(&self.card.file)
     }
+
+    /// Another file in the model's folder (`name` relative to it, never outside).
+    pub fn file(&self, name: &str) -> Result<PathBuf> {
+        let p = Path::new(name);
+        if name.is_empty() || p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(MlError::Model(self.card.id.clone(), format!("`{name}` is not a file in the model folder")));
+        }
+        Ok(self.dir.join(p))
+    }
 }
 
 /// Files already checked in this run of the app: (path, size, modified).
@@ -220,18 +229,48 @@ fn verified() -> &'static Mutex<HashSet<(PathBuf, u64, Option<std::time::SystemT
     V.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// The checks a model folder remembers (`.checked.json`): file → (size, modified as nanoseconds
+/// since 1970, sha256) of the last time it matched its card. A file unchanged since (same size and
+/// modification time) is not read again on a later run: the song engines' models are gigabytes.
+const CHECKED: &str = ".checked.json";
+
+fn stamp(meta: &std::fs::Metadata) -> Option<(u64, u128)> {
+    let m = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some((meta.len(), m))
+}
+
+fn read_checked(mdir: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(mdir.join(CHECKED)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn remembered(checked: &serde_json::Map<String, serde_json::Value>, rel: &str, meta: &std::fs::Metadata, want: &str) -> bool {
+    let (Some((size, modified)), Some(e)) = (stamp(meta), checked.get(rel)) else { return false };
+    e.get("size").and_then(serde_json::Value::as_u64) == Some(size)
+        && e.get("modified").and_then(serde_json::Value::as_str) == Some(modified.to_string().as_str())
+        && e.get("sha256").and_then(serde_json::Value::as_str).is_some_and(|s| s.eq_ignore_ascii_case(want))
+}
+
 /// Load model `id` from `dir`: read its card and check its files' sha256 (once per run per file
-/// version).
+/// version, and not again on later runs for a file unchanged since it last matched: [`CHECKED`]).
 pub fn load(dir: &Path, id: &str) -> Result<InstalledModel> {
     let card = read_card(dir, id)?;
     let mdir = dir.join(id);
-    let files: Vec<(PathBuf, &str)> = std::iter::once((mdir.join(&card.file), card.sha256.as_str()))
-        .chain(card.extra_files.iter().map(|f| (mdir.join(&f.file), f.sha256.as_str())))
+    let files: Vec<(String, &str)> = std::iter::once((card.file.clone(), card.sha256.as_str()))
+        .chain(card.extra_files.iter().map(|f| (f.file.clone(), f.sha256.as_str())))
         .collect();
-    for (path, want) in files {
+    let mut checked = read_checked(&mdir);
+    let mut learned = false;
+    for (rel, want) in files {
+        let path = mdir.join(&rel);
         let meta = std::fs::metadata(&path).map_err(|e| MlError::Model(id.into(), format!("{}: {e}", path.display())))?;
         let key = (path.clone(), meta.len(), meta.modified().ok());
         if verified().lock().map(|v| v.contains(&key)).unwrap_or(false) {
+            continue;
+        }
+        if !want.is_empty() && remembered(&checked, &rel, &meta, want) {
+            if let Ok(mut v) = verified().lock() {
+                v.insert(key);
+            }
             continue;
         }
         if want.is_empty() {
@@ -244,10 +283,18 @@ pub fn load(dir: &Path, id: &str) -> Result<InstalledModel> {
                     format!("{} does not match its card (sha256 {got}, expected {want}): reinstall it", path.display()),
                 ));
             }
+            if let Some((size, modified)) = stamp(&meta) {
+                checked.insert(rel.clone(), serde_json::json!({"size": size, "modified": modified.to_string(), "sha256": want}));
+                learned = true;
+            }
         }
         if let Ok(mut v) = verified().lock() {
             v.insert(key);
         }
+    }
+    if learned {
+        // Best effort: a read-only model folder is checked again next run.
+        let _ = std::fs::write(mdir.join(CHECKED), serde_json::to_string(&checked).unwrap_or_default());
     }
     Ok(InstalledModel { card, dir: mdir })
 }
@@ -317,6 +364,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_checked_file_is_remembered_across_runs_until_it_changes() {
+        fn sha256_bytes(b: &[u8]) -> String {
+            use sha2::Digest;
+            sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+        }
+        let write_model = |root: &Path, bytes: &[u8]| {
+            let m = root.join("srs_small");
+            std::fs::create_dir_all(&m).unwrap();
+            std::fs::write(m.join("w.bin"), bytes).unwrap();
+            let card = serde_json::json!({"id": "srs_small", "file": "w.bin", "sha256": sha256_bytes(b"right weights")});
+            std::fs::write(m.join("card.json"), card.to_string()).unwrap();
+        };
+        let a = tmp("checked-a");
+        write_model(&a, b"right weights");
+        assert!(load(&a, "srs_small").is_ok());
+        let checked = read_checked(&a.join("srs_small"));
+        assert!(checked.contains_key("w.bin"), "{checked:?}");
+        // "Another run" (a folder this process has not seen): same size and time, not read again.
+        let b = tmp("checked-b");
+        write_model(&b, b"wrong weights");
+        let when = std::fs::metadata(a.join("srs_small/w.bin")).unwrap().modified().unwrap();
+        std::fs::File::options().write(true).open(b.join("srs_small/w.bin")).unwrap().set_modified(when).unwrap();
+        std::fs::copy(a.join("srs_small").join(CHECKED), b.join("srs_small").join(CHECKED)).unwrap();
+        assert!(load(&b, "srs_small").is_ok(), "remembered: size and time unchanged");
+        // Changed (a new time): read again, and refused.
+        std::fs::File::options().write(true).open(b.join("srs_small/w.bin")).unwrap().set_modified(when + std::time::Duration::from_secs(5)).unwrap();
+        assert!(load(&b, "srs_small").is_err());
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]
@@ -395,6 +474,10 @@ mod tests {
             ),
             ("MIT (code and weights), Copyright (c) 2025 smulelabs. Full text: LICENSE in the HF repo.", "MIT"),
             ("Submitted to the authors. Ask first", "Submitted to the authors"),
+            (
+                "Llama 3.2 Community License Agreement (weights; the inference code is under the same agreement). Built with Llama.",
+                "Llama 3.2 Community License",
+            ),
         ];
         for (note, want) in cases {
             assert_eq!(licence_status(note).as_deref(), Some(want), "{note}");

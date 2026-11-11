@@ -269,3 +269,85 @@ fn env_child() {
     let m = download::fetch_manifest(&url).unwrap();
     download::download(&dir, m.get("srs_small").unwrap(), &url, &Cancel::new(), &DownloadProgress::new()).unwrap();
 }
+
+/// A fake song engine (`acestep`): a per-platform program zip (card + bin/server) in engines.json
+/// beside models.json, plus a model file fetched into `models/` after the zip.
+#[test]
+fn a_song_engine_installs_from_engines_json_with_its_fetched_models() {
+    use soundcraft_ml::catalog::{FetchFile, PlatformZip, current_platform};
+    let routes: Routes = Arc::default();
+    let base = serve(routes.clone());
+    let server = b"#!/bin/sh\necho fake server\n".to_vec();
+    let model = vec![7u8; 4096];
+    let card = serde_json::json!({"id": "acestep", "name": "Fake engine", "file": "bin/ace-server", "sha256": sha(&server),
+        "extra_files": [{"file": "models/m.gguf", "sha256": sha(&model)}], "task": "song_server",
+        "server_args": ["--port", "{port}"], "license": "MIT", "version": "2026-11-10"});
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    w.start_file("card.json", o).unwrap();
+    w.write_all(card.to_string().as_bytes()).unwrap();
+    w.start_file("bin/ace-server", o).unwrap();
+    w.write_all(&server).unwrap();
+    let zip = w.finish().unwrap().into_inner();
+    let mut platforms = std::collections::BTreeMap::new();
+    platforms.insert(current_platform(), PlatformZip { url: "acestep-here.zip".into(), size: zip.len() as u64, sha256: sha(&zip) });
+    platforms.insert("plan9-mips".into(), PlatformZip { url: "acestep-plan9.zip".into(), size: 1, sha256: "1".repeat(64) });
+    let engine = ManifestModel {
+        id: "acestep".into(),
+        name: "Fake engine".into(),
+        version: "2026-11-10".into(),
+        license: "MIT".into(),
+        platforms,
+        fetch: vec![FetchFile { file: "models/m.gguf".into(), url: format!("{base}/m.gguf"), size: model.len() as u64, sha256: sha(&model) }],
+        ..Default::default()
+    };
+    // models.json lists the engine as manual (as before engines were published); engines.json wins.
+    let placeholder = ManifestModel { id: "acestep".into(), manual: true, manual_note: "later".into(), ..Default::default() };
+    routes.lock().unwrap().insert("/models.json".into(), (manifest_json(&[placeholder]), None));
+    routes.lock().unwrap().insert("/engines.json".into(), (manifest_json(std::slice::from_ref(&engine)), None));
+    routes.lock().unwrap().insert("/acestep-here.zip".into(), (zip.clone(), None));
+    routes.lock().unwrap().insert("/m.gguf".into(), (model.clone(), None));
+    let url = format!("{base}/models.json");
+    let m = download::fetch_manifest(&url).unwrap();
+    let e = m.get("acestep").unwrap();
+    assert!(e.downloadable(), "{e:?}");
+    assert_eq!((e.url.as_str(), e.size), ("acestep-here.zip", zip.len() as u64));
+    assert_eq!(e.total_size(), (zip.len() + model.len()) as u64);
+    // Another platform has no build: not downloadable, and it says so.
+    let other = engine.for_platform("windows-riscv128");
+    assert!(!other.downloadable() && other.manual_note.contains("not built for this computer"));
+
+    let dir = tmp("engine");
+    let p = DownloadProgress::new();
+    download::download(&dir, e, &url, &Cancel::new(), &p).unwrap();
+    assert_eq!(p.get(), (e.total_size(), e.total_size()));
+    let installed = models::load(&dir, "acestep").unwrap();
+    assert_eq!(std::fs::read(installed.dir.join("models/m.gguf")).unwrap(), model);
+    no_leftovers(&dir);
+
+    // A fetched file that doesn't match: nothing installed, nothing left over.
+    download::remove(&dir, "acestep").unwrap();
+    routes.lock().unwrap().insert("/m.gguf".into(), (vec![8u8; 4096], None));
+    let err = download::download(&dir, e, &url, &Cancel::new(), &DownloadProgress::new()).unwrap_err();
+    assert!(matches!(err, MlError::Model(..)), "{err:?}");
+    assert!(models::load(&dir, "acestep").is_err());
+    no_leftovers(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn engine_entries_are_checked() {
+    let ok = r#"{"format":1,"models":[{"id":"yue2","platforms":{"linux-x86_64":{"url":"y.zip","size":5,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+        "fetch":[{"file":"models/x.gguf","url":"https://huggingface.co/x","size":9,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}]}"#;
+    assert!(Manifest::parse(ok).is_ok());
+    for (from, to) in [
+        ("models/x.gguf", "../x.gguf"),
+        ("models/x.gguf", "/etc/x"),
+        ("https://huggingface.co/x", "http://evil.example/x"),
+        ("\"size\":9", "\"size\":0"),
+        ("\"size\":5", "\"size\":0"),
+    ] {
+        let bad = ok.replace(from, to);
+        assert!(Manifest::parse(&bad).is_err(), "{to}");
+    }
+}

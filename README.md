@@ -221,6 +221,14 @@ one undo step.
   can isolate the instrument first, and you can audition the result before converting.
 - **Detect Chords** onto the Chords ruler. **Transcribe Lyrics** (Whisper large-v3) puts timed
   lines and words on the track.
+- **Generate MIDI from Text** (MIDI-LLM). Describe the music ("upbeat jazz with saxophones,
+  B-flat major") and get one instrument track per General MIDI instrument at the edit cursor,
+  ready for your own instruments. A seed repeats a piece.
+- **Generate Song** with YuE2 or ACE-Step 1.5: a whole song with vocals onto an audio track, and with
+  YuE2 the score it sang as MIDI tracks (melody, accompaniment, chords). Download an engine in
+  Setup › ML Models (about 4.4 GB) and FreeDAWm runs it itself, on the GPU when there is one
+  ([yue2.cpp](https://github.com/ServeurpersoCom/yue2.cpp),
+  [acestep.cpp](https://github.com/ServeurpersoCom/acestep.cpp) inside).
 - **Clean Vocal** and **Tune Vocal** (see [Vocals](#vocals)).
 - **Scout: mix feedback.** Select channels, press **Scout** and play. Scout measures each channel
   before and after its processing: spectrum, loudness, dynamics, stereo width, transients. It

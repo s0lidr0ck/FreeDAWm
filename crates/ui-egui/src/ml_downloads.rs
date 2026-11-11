@@ -175,7 +175,7 @@ fn start_next(app: &mut SoundApp) {
         let Some(entry) = manifest(app).and_then(|m| m.get(&id)).cloned() else { continue };
         let (dir, url) = (models_dir(app), manifest_url(app));
         let (cancel, progress) = (Cancel::new(), DownloadProgress::new());
-        progress.set(0, entry.size);
+        progress.set(0, entry.total_size());
         let (c, p) = (cancel.clone(), progress.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new().name(format!("ml-download-{id}")).spawn(move || {
@@ -288,7 +288,7 @@ pub fn all_missing(app: &SoundApp, models: &[ml::ModelEntry]) -> Vec<String> {
 }
 
 fn total_size(app: &SoundApp, ids: &[String]) -> u64 {
-    ids.iter().filter_map(|id| manifest(app).and_then(|m| m.get(id))).map(|e| e.size).sum()
+    ids.iter().filter_map(|id| manifest(app).and_then(|m| m.get(id))).map(ManifestModel::total_size).sum()
 }
 
 /// Whether model `id` (installed) has a newer version in the release.
@@ -394,7 +394,7 @@ pub fn action_cell(app: &SoundApp, ui: &mut egui::Ui, entry: &ml::ModelEntry) ->
         }
         _ => match release {
             Some(e) if e.downloadable() => {
-                if ui.button(format!("Download {}", size_text(e.size))).clicked() {
+                if ui.button(format!("Download {}", size_text(e.total_size()))).clicked() {
                     act = Some(RowAction::Download(id.to_string()));
                 }
             }
@@ -468,7 +468,7 @@ pub fn confirm_window(app: &mut SoundApp, ctx: &egui::Context) {
             let status = if e.license.is_empty() { ml::known_licence(id).to_string() } else { e.license.clone() };
             let why =
                 if status.contains("non-commercial") { "The author allows non-commercial use only." } else { "The author hasn't stated a licence." };
-            ui.label(egui::RichText::new(format!("{name} ({})", size_text(e.size))).strong());
+            ui.label(egui::RichText::new(format!("{name} ({})", size_text(e.total_size()))).strong());
             ui.colored_label(t.rec, format!("{why} Use it for personal projects only."));
             if !e.source.is_empty() {
                 ui.label(egui::RichText::new(format!("Source: {}", e.source)).small().color(t.text_dim));
@@ -578,7 +578,7 @@ fn available(app: &mut SoundApp, error: Option<String>) -> Value {
             };
             let active = app.ml.downloads.active.as_ref().filter(|a| a.id == e.model.id);
             json!({"id": e.model.id, "name": e.model.name, "status": status, "installed_version": installed,
-                   "available": r.is_some_and(ManifestModel::downloadable), "version": r.map(|r| r.version.clone()), "size": r.map(|r| r.size),
+                   "available": r.is_some_and(ManifestModel::downloadable), "version": r.map(|r| r.version.clone()), "size": r.map(ManifestModel::total_size),
                    "license": r.map_or_else(|| e.licence(), |r| r.license.clone()), "personal_use_only": personal(app, e.model.id),
                    "source": r.map(|r| r.source.clone()), "manual": r.is_some_and(|r| r.manual), "manual_note": r.map(|r| r.manual_note.clone()),
                    "update": update_available(app, e), "downloading": active.is_some(),
