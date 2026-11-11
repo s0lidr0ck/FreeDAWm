@@ -1,4 +1,4 @@
-{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["Synth Lead"]}}}
+{"method": "engine.execute", "params": {"command": "edit.select", "params": {"tracks": ["07_Bass MIDI"]}}}
 {"method": "engine.execute", "params": {"command": "window.midi_editor", "params": {"value": true}}}
 {"vocal_dock": 470}
 {"steps": 10}

@@ -23,7 +23,7 @@ FS = "--firestation"
 # given a FireStation mix by shots/_sample.jsonl.
 SAMPLE = "--sample"
 SHOTS = {
-    "windows": (["edit-window", "mix-window"], "1440x900", [SAMPLE], [("markers-ruler", "edit-window", (180, 114, 1188, 243))]),
+    "windows": (["edit-window", "mix-window"], "1440x900", [SAMPLE], [("markers-ruler", "edit-window", (180, 114, 1188, 260))]),
     "engine": (["playback-engine"], "1440x900", [], [("playback-engine", "playback-engine", (16, 16, 476, 376))]),
     "io": (["io-setup"], "1440x900", [], [("io-setup", "io-setup", (16, 16, 577, 546))]),
     "new-tracks": (["new-tracks"], "1440x900", [], [("new-tracks", "new-tracks", (438, 317, 1002, 423))]),
@@ -38,10 +38,10 @@ SHOTS = {
         ["add-effect", "send-menu"],
         "1440x900",
         [SAMPLE],
-        [("add-effect", "add-effect", (481, 101, 1049, 691)), ("send-menu", "send-menu", (481, 374, 1080, 591))],
+        [("add-effect", "add-effect", (632, 101, 1202, 562)), ("send-menu", "send-menu", (632, 374, 1102, 735))],
     ),
     "effect": (["effect-drawer"], "1440x900", [SAMPLE], [("effect-drawer", "effect-drawer", (176, 101, 1290, 720))]),
-    "automation": (["automation-lane"], "1440x900", [SAMPLE], [("automation-lane", "automation-lane", (180, 423, 760, 510))]),
+    "automation": (["automation-lane"], "1440x900", [SAMPLE], [("automation-lane", "automation-lane", (180, 439, 1010, 571))]),
     "juke": (
         ["juke-kit", "juke-steps"],
         "1280x860",

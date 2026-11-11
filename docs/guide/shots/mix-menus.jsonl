@@ -1,12 +1,12 @@
 {"method": "engine.execute", "params": {"command": "window.mix", "params": {}}}
 {"steps": 10}
-{"click": [708, 241]}
+{"click": [859, 113]}
 {"steps": 6}
-{"hover": [690, 298]}
+{"hover": [830, 161]}
 {"steps": 10}
 {"shot": "docs/guide/images/add-effect.png"}
 {"method":"ui.key","params":{"key":"Escape"}}
 {"steps": 4}
-{"click": [644, 402]}
+{"click": [796, 402]}
 {"steps": 10}
 {"shot": "docs/guide/images/send-menu.png"}

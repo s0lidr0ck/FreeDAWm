@@ -82,9 +82,9 @@
       <div class="zone c1" style="left:65.1%;top:4%;width:12%;height:6.6%"><span class="pin c1" style="left:50%;top:100%">E</span></div>
       <div class="zone c2" style="left:77.5%;top:4%;width:14.9%;height:7.1%"><span class="pin c2" style="left:50%;top:100%">F</span></div>
       <div class="zone c3" style="left:0.6%;top:12.3%;width:11.1%;height:81.5%"><span class="pin c3" style="left:50%;top:50%">G</span></div>
-      <div class="zone c4" style="left:12.4%;top:12.6%;width:70.2%;height:14.4%"><span class="pin c4" style="left:100%;top:50%">H</span></div>
-      <div class="zone c1" style="left:12.4%;top:27.2%;width:9.5%;height:65.7%"><span class="pin c1" style="left:50%;top:50%">I</span></div>
-      <div class="zone c2" style="left:22.1%;top:27.2%;width:60.5%;height:65.7%"><span class="pin c2" style="left:50%;top:50%">J</span></div>
+      <div class="zone c4" style="left:12.4%;top:12.6%;width:70.2%;height:15.4%"><span class="pin c4" style="left:100%;top:50%">H</span></div>
+      <div class="zone c1" style="left:12.4%;top:28.5%;width:9.5%;height:64.4%"><span class="pin c1" style="left:50%;top:50%">I</span></div>
+      <div class="zone c2" style="left:22.1%;top:28.5%;width:60.5%;height:64.4%"><span class="pin c2" style="left:50%;top:50%">J</span></div>
       <div class="zone c3" style="left:83.5%;top:12.3%;width:16%;height:81.5%"><span class="pin c3" style="left:50%;top:50%">K</span></div>
       <div class="zone c4" style="left:0.6%;top:94.3%;width:98.9%;height:2.5%"><span class="pin c4" style="left:50%;top:50%">L</span></div>
     </figure>
@@ -92,7 +92,7 @@
       <li><span class="pin c1">A</span><div><b>Menu bar</b>Every command lives here. If you forget a key, look in the menus.</div></li>
       <li><span class="pin c3">G</span><div><b>Tracks and Groups</b>Every track in the song. Click the dot beside a name to show or hide that track.</div></li>
       <li><span class="pin c2">B</span><div><b>Edit modes</b>Shuffle, Slip, Spot and Grid decide how clips move when you drag them. See page <span data-page="modes"></span>.</div></li>
-      <li><span class="pin c4">H</span><div><b>Rulers</b>Time in bars and in minutes, then tempo, meter, chords and markers.</div></li>
+      <li><span class="pin c4">H</span><div><b>Rulers</b>Time in bars and in minutes, then tempo, meter, markers, key and chords.</div></li>
       <li><span class="pin c3">C</span><div><b>Zoom and tools</b>Zoom buttons and five zoom presets, then the editing tools. See page <span data-page="modes"></span>.</div></li>
       <li><span class="pin c1">I</span><div><b>Track controls</b>Record, input monitor (I), solo (S) and mute (M), then the track's view and automation mode.</div></li>
       <li><span class="pin c4">D</span><div><b>Counter</b>Where the cursor is, and the start, end and length of your selection.</div></li>
@@ -117,7 +117,7 @@
       <img src="images/mix-window.png" alt="The Mix window showing nine channel strips">
       <div class="zone c1" style="left:1%;top:4%;width:54.6%;height:3.6%"><span class="pin c1" style="left:100%;top:50%">A</span></div>
       <div class="zone c2" style="left:12.4%;top:8.2%;width:23.6%;height:2.4%"><span class="pin c2" style="left:100%;top:50%">B</span></div>
-      <div class="zone c3" style="left:12.6%;top:11.4%;width:10.2%;height:29.6%"><span class="pin c3" style="left:50%;top:50%">C</span></div>
+      <div class="zone c3" style="left:44.1%;top:11.4%;width:10.2%;height:30.4%"><span class="pin c3" style="left:50%;top:50%">C</span></div>
       <div class="zone c4" style="left:23.1%;top:42.2%;width:10.2%;height:11.5%"><span class="pin c4" style="left:50%;top:60%">D</span></div>
       <div class="zone c1" style="left:33.6%;top:54.1%;width:10.2%;height:7.5%"><span class="pin c1" style="left:50%;top:50%">E</span></div>
       <div class="zone c2" style="left:44.1%;top:63.2%;width:10.2%;height:8.4%"><span class="pin c2" style="left:22%;top:50%">F</span></div>
@@ -131,7 +131,7 @@
       <li><span class="pin c2">F</span><div><b>Group and pan</b>The knob places the sound left or right. Stereo tracks get one knob per side.</div></li>
       <li><span class="pin c2">B</span><div><b>Channel width</b>Slim strips fit more on screen. Wide strips show each effect's knobs.</div></li>
       <li><span class="pin c3">G</span><div><b>Strip buttons</b>Input monitor, record and freeze, then solo (S) and mute (M).</div></li>
-      <li><span class="pin c3">C</span><div><b>Effects</b>FireStation modules such as Comp and Tape, processed from top to bottom. Click + to add one.</div></li>
+      <li><span class="pin c3">C</span><div><b>Effects</b>FireStation modules such as Shale and Transient, processed from top to bottom. Click + to add one.</div></li>
       <li><span class="pin c4">H</span><div><b>Fader and meter</b>The fader sets the track's level. The meter beside it shows how loud it is.</div></li>
       <li><span class="pin c4">D</span><div><b>Sends</b>Slots a to e each send a copy of the track somewhere else, often to a shared reverb.</div></li>
       <li><span class="pin c1">I</span><div><b>Level and name</b>The fader's value in dB, the track type, and the track name.</div></li>
@@ -609,7 +609,7 @@
     <figure class="shot plain">
       <img src="images/markers-ruler.png" alt="The rulers of the Edit window with Intro, Verse and Chorus markers">
     </figure>
-    <p class="caption" style="margin-bottom:0.16in">Markers show as flags on the Markers ruler, the bottom row here.</p>
+    <p class="caption" style="margin-bottom:0.16in">Markers show as flags on the Markers ruler, above the key and the chords.</p>
     <div class="duo" style="grid-template-columns:3.4in 1fr">
       <figure class="shot plain">
         <img src="images/memory-locations.png" alt="The Memory Locations panel listing Intro, Verse, Chorus and Outro">
@@ -711,7 +711,7 @@
   <div class="card">
     <figure class="shot plain">
       <img src="images/midi-notes.png" alt="The MIDI Editor with three notes selected and the note bar showing their values">
-      <span class="pin c1" style="left:14.6%;top:3.2%">A</span><span class="pin c2" style="left:33.8%;top:3.2%">B</span><span class="pin c3" style="left:63.7%;top:3.2%">C</span><span class="pin c4" style="left:79%;top:3.2%">D</span><span class="pin c1" style="left:90.5%;top:3.2%">E</span><span class="pin c2" style="left:11.8%;top:58%">F</span><span class="pin c3" style="left:29.8%;top:82.4%">G</span><span class="pin c4" style="left:19.6%;top:96%">H</span><span class="pin c1" style="left:92.3%;top:48.5%">I</span>
+      <span class="pin c1" style="left:14.6%;top:3.2%">A</span><span class="pin c2" style="left:33.8%;top:3.2%">B</span><span class="pin c3" style="left:63.7%;top:3.2%">C</span><span class="pin c4" style="left:79%;top:3.2%">D</span><span class="pin c1" style="left:90.5%;top:3.2%">E</span><span class="pin c2" style="left:20%;top:24%">F</span><span class="pin c3" style="left:33%;top:85%">G</span><span class="pin c4" style="left:19.6%;top:96%">H</span><span class="pin c1" style="left:92.3%;top:48.5%">I</span>
     </figure>
     <ul class="legend" style="margin-top:0.2in">
       <li><span class="pin c1">A</span><div><b>Selection</b>How many notes are selected, then Select all, Split at the playhead and Join.</div></li>
@@ -1045,8 +1045,8 @@
   <div class="card">
     <div class="duo" style="grid-template-columns:3.3in 1fr">
       <figure class="shot plain">
-        <img src="images/add-effect.png" alt="A channel strip with Shale and Comp, and the effect menu open on the next strip showing the FireStation list">
-        <span class="pin c1" style="left:40%;top:23.8%">A</span><span class="pin c2" style="left:77.7%;top:28%">B</span><span class="pin c3" style="left:98%;top:62%">C</span><span class="pin c4" style="left:55%;top:37.4%">D</span><span class="pin c1" style="left:43.4%;top:45.9%">E</span><span class="pin c2" style="left:2%;top:2.4%">F</span><span class="pin c3" style="left:22.5%;top:2.4%">G</span><span class="pin c4" style="left:12.3%;top:16.5%">H</span>
+        <img src="images/add-effect.png" alt="The Snare strip with Shale and Transient, and the effect menu open on the next strip showing the FireStation list">
+        <span class="pin c1" style="left:39.8%;top:2.7%">A</span><span class="pin c2" style="left:77.3%;top:8.1%">B</span><span class="pin c3" style="left:96%;top:51.6%">C</span><span class="pin c4" style="left:54.5%;top:20.2%">D</span><span class="pin c1" style="left:43.2%;top:31%">E</span><span class="pin c2" style="left:2.3%;top:3.1%">F</span><span class="pin c3" style="left:22.3%;top:3.1%">G</span><span class="pin c4" style="left:12.2%;top:21%">H</span>
       </figure>
       <ul class="legend">
       <li><span class="pin c1">A</span><div><b>Empty slot</b>Click the plus to open the list of effects.</div></li>
@@ -1174,17 +1174,16 @@
   </header>
   <div class="note"><b>The Goal</b><p>Put several tracks in the same room. One reverb on an aux track, fed by a send from each track, sounds more natural than a separate reverb on every track and is lighter on the computer.</p></div>
   <div class="card">
-    <div class="duo" style="grid-template-columns:3.5in 1fr">
+    <div class="duo" style="grid-template-columns:2.6in 1fr">
       <figure class="shot plain">
         <img src="images/send-menu.png" alt="The send menu open on the Kick strip, beside a Snare strip that already sends to Verb">
-        <span class="pin c1" style="left:29%;top:13%">A</span><span class="pin c2" style="left:74%;top:32.7%">B</span><span class="pin c3" style="left:30%;top:74%">C</span><span class="pin c4" style="left:40%;top:89%">D</span><span class="pin c1" style="left:14%;top:3%">E</span>
+        <span class="pin c1" style="left:30%;top:5%">A</span><span class="pin c2" style="left:94.6%;top:19.6%">B</span><span class="pin c3" style="left:46%;top:50.6%">C</span><span class="pin c4" style="left:51%;top:96%">D</span>
       </figure>
       <ul class="legend">
       <li><span class="pin c1">A</span><div><b>Send slots</b>Each strip has slots a to e. Click an empty one to open this menu.</div></li>
       <li><span class="pin c2">B</span><div><b>Search</b>Type to find a bus when you have many.</div></li>
-      <li><span class="pin c3">C</span><div><b>A bus</b>Choose where the copy goes. Verb is this song's reverb bus.</div></li>
+      <li><span class="pin c3">C</span><div><b>A bus</b>Choose where the copy goes. Plate is this song's reverb bus, which the lead vocal sends to.</div></li>
       <li><span class="pin c4">D</span><div><b>New bus</b>Makes a new path if the one you want does not exist yet.</div></li>
-      <li><span class="pin c1">E</span><div><b>Send level</b>How much of this track goes to the bus. The Snare sends at −12 dB.</div></li>
       </ul>
     </div>
   </div>
@@ -1209,14 +1208,14 @@
   <div class="note"><b>The Goal</b><p>Make the mix change over time: a vocal that comes up in the chorus, a pad that fades in. Automation is a line you draw on the track, and FreeDAWm moves the control along it.</p></div>
   <div class="card">
     <figure class="shot plain">
-      <img src="images/automation-lane.png" alt="The Snare track showing its volume line with breakpoints">
-      <span class="pin c1" style="left:2.5%;top:54%">A</span><span class="pin c2" style="left:22.5%;top:78%">B</span><span class="pin c3" style="left:42.3%;top:8%">C</span><span class="pin c4" style="left:62%;top:42%">D</span>
+      <img src="images/automation-lane.png" alt="The bass MIDI track showing its volume line with breakpoints">
+      <span class="pin c1" style="left:1%;top:36.6%">A</span><span class="pin c2" style="left:15.2%;top:50%">B</span><span class="pin c3" style="left:45.4%;top:9%">C</span><span class="pin c4" style="left:61.6%;top:30%">D</span>
     </figure>
     <ul class="legend" style="margin-top:0.2in">
       <li><span class="pin c1">A</span><div><b>Track view</b>Change waveform to volume, pan or mute to see that control's line over the clips.</div></li>
       <li><span class="pin c3">C</span><div><b>Breakpoints</b>The line bends at each point. Drag a point to move it.</div></li>
       <li><span class="pin c2">B</span><div><b>Automation mode</b>Decides whether the track follows the line, ignores it or records your moves.</div></li>
-      <li><span class="pin c4">D</span><div><b>The line</b>Higher is louder. Here the snare rises over two bars, then lifts again.</div></li>
+      <li><span class="pin c4">D</span><div><b>The line</b>Higher is louder. Here the bass drops out for two bars, then comes back.</div></li>
     </ul>
   </div>
   <div class="card">

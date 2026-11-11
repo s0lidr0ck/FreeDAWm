@@ -1,4 +1,3 @@
-{"method": "engine.execute", "params": {"command": "markers.add", "params": {"name": "Outro", "at": "bars_beats:9|1|000"}}}
 {"method": "ui.menu.invoke", "params": {"path": "Window > Memory Locations"}}
 {"steps": 10}
 {"shot": "docs/guide/images/memory-locations.png"}
