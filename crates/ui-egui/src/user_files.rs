@@ -1,9 +1,17 @@
-//! The user's own files the app lists: track presets and session templates.
+//! The user's own files the app lists: the Library.
 //!
-//! Both live in the settings directory, next to the user plugin presets (`Presets/`):
-//! `Track Presets/<name>.json` (written by `track.save_preset`) and `Templates/<name>.scraft`
-//! (written by `session.save_template`). The desktop app sets [`UserDirs`]; the web build has
-//! none, and the menus then offer only Browse….
+//! One folder (the settings directory unless Setup moves it, `UiState::library_dir`) holds what
+//! the user saves to use again in other sessions:
+//!
+//! - `Presets/<plugin>/<name>.json`: plugin presets (the preset menus write them);
+//! - `Chains/<name>.json`: plug-in chains (`track.save_chain`);
+//! - `Track Presets/<name>.json`: whole channel strips (`track.save_preset`);
+//! - `Juke Presets/<name>.json`: Juke kits with their sounds (`mix.kit_preset_save`);
+//! - `Templates/<name>.fdawm`: session templates (`session.save_template`).
+//!
+//! A preset that plays audio keeps it in `<name>_samples/` beside its file, so the folder can be
+//! copied or synced whole. The desktop app sets [`UserDirs`]; the web build has none, and the
+//! menus then offer only Browse….
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -11,17 +19,30 @@ use std::time::SystemTime;
 /// Track preset files' extension.
 pub const TRACK_PRESET_EXT: &str = "json";
 
-/// Where the user's track presets and templates are kept (none in the browser).
+/// Where the Library's folders are (none in the browser).
 #[derive(Debug, Clone, Default)]
 pub struct UserDirs {
+    /// The Library folder itself.
+    pub root: Option<PathBuf>,
     pub track_presets: Option<PathBuf>,
     pub templates: Option<PathBuf>,
+    pub chains: Option<PathBuf>,
+    /// Plugin presets, a folder per plugin.
+    pub presets: Option<PathBuf>,
+    pub juke_presets: Option<PathBuf>,
 }
 
 impl UserDirs {
-    /// Both folders under one settings directory.
-    pub fn under(config: &Path) -> UserDirs {
-        UserDirs { track_presets: Some(config.join("Track Presets")), templates: Some(config.join("Templates")) }
+    /// The Library's folders under `root`.
+    pub fn under(root: &Path) -> UserDirs {
+        UserDirs {
+            root: Some(root.to_path_buf()),
+            track_presets: Some(root.join("Track Presets")),
+            templates: Some(root.join("Templates")),
+            chains: Some(root.join("Chains")),
+            presets: Some(root.join("Presets")),
+            juke_presets: Some(root.join("Juke Presets")),
+        }
     }
 }
 
@@ -68,6 +89,11 @@ pub fn list_any(dir: Option<&Path>, exts: &[&str]) -> Vec<UserFile> {
 /// The track presets, newest first.
 pub fn track_presets(dirs: &UserDirs) -> Vec<UserFile> {
     list(dirs.track_presets.as_deref(), TRACK_PRESET_EXT)
+}
+
+/// The plug-in chains, newest first.
+pub fn chains(dirs: &UserDirs) -> Vec<UserFile> {
+    list(dirs.chains.as_deref(), TRACK_PRESET_EXT)
 }
 
 /// The saved templates (`.fdawm`, and `.scraft` ones saved before the rename), newest first.

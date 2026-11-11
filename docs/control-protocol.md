@@ -664,7 +664,7 @@ The Scout window and its packaging are UI commands (in `UI_COMMANDS`, invoked th
 `window.plugin_browser` (Window > Plugin Browser, Alt+B; a UI command in `UI_COMMANDS`, invoked
 through `engine.execute` like the other `window.*` commands) takes `{value?: bool}` and returns
 `{value}`: it shows or hides the docked plugin browser, or toggles it without `value`. The panel
-has Instruments, Effects and Presets tabs; a search field; a Favourites chip and category chips;
+has Instruments, Effects, Presets and Library tabs (the Library: see Track presets below); a search field; a Favourites chip and category chips;
 and a grid of plugin cards with a picture of the plugin's own window. Drag a card onto a track (or
 a track's insert slot) to add it, or double-click it to place it on the selected track. The
 Presets tab lists the selected plug-in's presets only: its built-in presets, user presets, VST3
@@ -1190,18 +1190,45 @@ and the comp ends on the last. Other tracks record as before (a new playlist per
 
 ## Track presets, deleting markers and chords, templates
 
+**The Library.** What the user saves to use in other sessions lives in one folder, the Library:
+the settings folder, or the folder `library_dir` in the UI state names (`ui.set {"library_dir":
+"/path"}`, or Folder… in the browser's Library tab; empty: the settings folder). Moving it copies
+nothing: what was saved before stays where it was. Under it:
+
+| Folder | Holds | Written by |
+|---|---|---|
+| `Presets/<plugin>/<name>.json` | plugin presets | a plugin's preset menu |
+| `Chains/<name>.json` | plug-in chains | `track.save_chain` |
+| `Track Presets/<name>.json` | whole channel strips | `track.save_preset` |
+| `Juke Presets/<name>.json` | Juke kits with their sounds | `mix.kit_preset_save` (Save preset in Juke) |
+| `Templates/<name>.fdawm` | session templates | `session.save_template` |
+
+A chain or track preset whose modules play audio (the Sampler's sample, Juke's pad samples) keeps
+that audio as WAVs in `<name>_samples/` beside its file and lists them under `samples`, so it
+loads in any session and the folder can be copied or synced whole. Loading reads them in as new
+sources of the session (saved to its `Audio Files/` like any other); a sample whose file is gone
+is left out and counted in `missing_samples`. The browser's Library tab (Window › Plugin Browser)
+lists all of it with a search and a chip per kind: double-click a chain, track preset, plugin
+preset or Juke preset to use it on the selected track, a template to open the New dialog on it.
+Juke presets saved before the Library (in `juke_presets/` beside the kits folder) are still listed.
+
 **Track presets.** A track preset is a JSON file (`"format": "soundcraft-track-preset"`) holding a
 track's type, width, color, mixer (fader, pan, inserts, sends), instrument, elastic mode and
-comments. The desktop app keeps the user's presets in `<settings dir>/Track Presets/<name>.json`,
-next to the plugin presets (`<settings dir>/Presets`). Save Track Preset… (Track menu, a track's
-context menu in the Edit window, a channel's in the Mix window) asks for a name and writes there;
-Load Track Preset… lists them newest first, with Browse… for a preset file anywhere. Without a
-settings folder (the web build) Save asks for a path.
+comments, the busses its sends feed (`busses`) and the audio its modules play (`samples`). Save
+Track Preset… (Track menu, a track's context menu in the Edit window, a channel's in the Mix
+window) asks for a name and writes into the Library; Load Track Preset… lists them newest first,
+with Browse… for a preset file anywhere. Without a Library (the web build) Save asks for a path.
+
+**Plug-in chains.** A chain is a JSON file (`"format": "freedawm-plugin-chain"`) holding a track's
+inserts in order, each with its parameters and a hosted plug-in's state, and the audio they play.
+Track › Save Plug-in Chain… and Load Plug-in Chain… work as the track preset items do.
 
 | Command | Params | Result |
 |---|---|---|
-| `track.save_preset` ("Save Track Preset...") | `{path, track?}` (default: the first selected track) | `{path, track}`. Writes the preset file (replacing one already at `path`). Not undoable. |
-| `track.load_preset` ("Load Track Preset") | `{path, tracks?}` (default: the selected tracks) | `{tracks}`. Applies the preset's mixer (and, to instrument tracks, its instrument) to each track. Each track keeps its own input, output, VCA, record arm and, when the widths differ, its pan. A file that is not a track preset is refused and nothing changes. One undo step. |
+| `track.save_preset` ("Save Track Preset...") | `{path, track?}` (default: the first selected track) | `{path, track}`. Writes the preset file (replacing one already at `path`) and its `<name>_samples/`. Not undoable. |
+| `track.load_preset` ("Load Track Preset") | `{path, tracks?}` (default: the selected tracks) | `{tracks, missing_samples}`. Applies the preset's mixer (and, to instrument tracks, its instrument) to each track. Each track keeps its own input, output, VCA, record arm and, when the widths differ, its pan. A send goes to the bus of the same name here, made when there is none (a preset saved before busses were listed keeps its bus ids). A file that is not a track preset is refused and nothing changes. One undo step. |
+| `track.save_chain` ("Save Plug-in Chain...") | `{path, track?}` (default: the first selected track) | `{path, track, modules}`. Writes the chain file and its `<name>_samples/`. A track without inserts is refused. Not undoable. |
+| `track.load_chain` ("Load Plug-in Chain") | `{path, tracks?, append?: false}` (default: the selected tracks) | `{tracks, modules, missing_samples}`. The chain replaces each track's inserts, or with `append` goes after them (as many as fit). Nothing else of the strip changes. Key inputs and link groups are not carried (they name things in the session the chain came from). A file that is not a chain, an empty chain, or one whose sample paths leave its folder is refused and nothing changes. One undo step. |
 
 **Deleting markers and chords.** In the Edit window a click on a marker (its flag or name) or on
 a chord picks it (outlined), and Delete or Backspace removes it. Right-click a chord: Edit Chord…,

@@ -187,6 +187,9 @@ The rest of the mixer:
   visibility), with Mix in its own window on a second screen.
 - **Plugin browser.** Instruments, effects and presets as cards showing each plugin's own window.
   Drag one onto a track or slot. Presets for hosted plugins load in place.
+- **Library.** Plug-in chains, track presets, plugin presets, Juke presets and session templates
+  you save are kept in one folder and listed in the browser's Library tab, for any session.
+  Presets carry their samples, so the folder can live in a synced folder and follow you.
 - **The mixing basics:** busses, aux inputs, VCAs, folders, pre/post sends, automatic delay
   compensation, and surround up to 9.1.6. CLAP, VST3 and Audio Units plugins are hosted, with their
   own editors and their state saved in the session.

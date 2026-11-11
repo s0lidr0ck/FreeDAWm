@@ -356,6 +356,8 @@ Track > Mute Sends > Sends A-E
 Track > Mute Sends > Sends F-J
 Track > Save Track Preset...
 Track > Load Track Preset... = @track.load_preset
+Track > Save Plug-in Chain...
+Track > Load Plug-in Chain... = @track.load_chain
 Track > ---
 Track > ## Playlists
 Track > New Playlist = @track.playlist_new

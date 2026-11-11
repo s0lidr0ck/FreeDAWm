@@ -397,6 +397,9 @@ pub struct UiState {
     pub show_plugin_browser: bool,
     /// The plugin browser's filters, favourites and recents.
     pub browser: browser::BrowserState,
+    /// The Library folder (plugin presets, chains, track presets, Juke presets, templates) when
+    /// the user moved it, say into a folder a sync service keeps; empty: the settings folder.
+    pub library_dir: String,
 }
 
 /// The plugin a successful command put on a track, if it was an insert (for the browser's recents).
@@ -555,6 +558,7 @@ impl Default for UiState {
             ml_device: "auto".into(),
             show_plugin_browser: false,
             browser: browser::BrowserState::default(),
+            library_dir: String::new(),
         }
     }
 }
@@ -825,6 +829,9 @@ pub struct SoundApp {
     panic_rev: u64,
     /// Folder for user plugin presets (native apps set it).
     pub preset_dir: Option<std::path::PathBuf>,
+    /// The Library folder when the preferences name none: the settings folder (native apps set
+    /// it, then call [`SoundApp::apply_library_dir`]).
+    pub library_default: Option<std::path::PathBuf>,
     last_autosave: Option<std::time::Instant>,
     /// PipeWire's sources and the "All sources" channels in effect (`None` off "All sources"),
     /// looked up at most every two seconds: I/O Setup asks every frame.
@@ -945,6 +952,8 @@ pub struct SoundApp {
     pub(crate) browser_chips: Option<browser::panel::ChipCache>,
     /// The Presets tab's list for the selected plugin.
     pub(crate) browser_presets: Option<browser::presets::PresetCache>,
+    /// The Library tab's list as last read from its folder.
+    pub(crate) browser_library: Option<browser::library::LibraryCache>,
     /// The module last opened (drawer, plugin window or the plugin's own editor), which the
     /// Presets tab follows, and the open module it last saw (see `browser::presets::follow_focus`).
     pub(crate) module_focus: Option<(TrackId, SlotKey)>,
@@ -1007,6 +1016,7 @@ impl SoundApp {
             leftovers: Vec::new(),
             panic_rev: 0,
             preset_dir: None,
+            library_default: None,
             last_autosave: None,
             #[cfg(not(target_arch = "wasm32"))]
             all_sources: None,
@@ -1077,6 +1087,7 @@ impl SoundApp {
             browser_rect: None,
             browser_chips: None,
             browser_presets: None,
+            browser_library: None,
             module_focus: None,
             browser_focus_seen: None,
             browser_debug: Default::default(),

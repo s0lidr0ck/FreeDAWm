@@ -115,7 +115,7 @@ fn the_mix_channel_menu_saves_and_loads_presets() {
     h.run_steps(4);
     click(&mut h, "Save Track Preset…");
     match &h.state().dialogs.open {
-        Some(Dialog::SaveTrackPreset { name, track }) => {
+        Some(Dialog::SaveTrackPreset { name, track, .. }) => {
             assert_eq!(name, "Hats");
             assert_eq!(Some(*track), h.state().engine.session().track_by_name("Hats").map(|t| t.id));
         }

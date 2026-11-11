@@ -381,7 +381,8 @@ pad with full effect chains by `tools/kits/juke_presets.py`, each with a `demo` 
 styles, rendered, measured and levelled to one loudness; the tape, saturation and Vint circuits at
 drives calibrated to be heard) in seven categories (Acoustic on the recorded
 kits, Rock, Pop & Folk, Church, Hip-Hop, Electronic, Drum Machines) and **My Presets**; **Save
-preset** saves the kit under its name. A preset whose recorded kit is missing is marked "(download)"
+preset** saves the kit under its name in the Library's `Juke Presets/` (with its own samples
+beside it), where the browser's Library tab lists it too. A preset whose recorded kit is missing is marked "(download)"
 and says which kit to get.
 
 Hours are agent-hours by the calibration in [`target-app-parity.md`](target-app-parity.md). The

@@ -249,6 +249,20 @@ fn save_preset(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = tracks_required(e, "track.save_preset", p)?;
     let first = *t.first().ok_or_else(|| bad("track.save_preset", "no track"))?;
     let tr = e.session().track(first).ok_or_else(|| bad("track.save_preset", "no track"))?;
+    // What makes the preset usable in another project: the audio its modules play, written beside
+    // it, and the busses its sends feed, by name.
+    let modules: Vec<&Insert> = tr.instrument.iter().chain(tr.mixer.inserts.iter()).collect();
+    let samples = super::chain::write_samples(e, &path, &modules)?;
+    let busses: Vec<&soundcraft_model::Bus> = tr
+        .mixer
+        .sends
+        .iter()
+        .flatten()
+        .filter_map(|s| match s.target {
+            Route::Bus(b) => e.session().bus(b),
+            _ => None,
+        })
+        .collect();
     let preset = json!({
         "format": PRESET_FORMAT,
         "version": 1,
@@ -260,6 +274,8 @@ fn save_preset(e: &mut Engine, p: &Value) -> Result<Value> {
         "instrument": tr.instrument,
         "elastic": tr.elastic,
         "comments": tr.comments,
+        "samples": samples,
+        "busses": busses,
     });
     let text = serde_json::to_string_pretty(&preset).map_err(|err| EngineError::Io(err.to_string()))?;
     crate::io::write_file(&path, text.as_bytes())?;
@@ -278,8 +294,28 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut mixer: soundcraft_model::Mixer =
         serde_json::from_value(v.get("mixer").cloned().unwrap_or(Value::Null)).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     mixer.sanitize();
-    let instrument: Option<Insert> = v.get("instrument").cloned().and_then(|x| serde_json::from_value(x).ok());
+    let mut instrument: Option<Insert> = v.get("instrument").cloned().and_then(|x| serde_json::from_value(x).ok());
+    let samples = super::chain::Samples::of(&path, &v)?;
+    let missing = samples.attach(e, &mut instrument.iter_mut().chain(mixer.inserts.iter_mut()).collect::<Vec<_>>());
+    // A send's bus is the one of that name here (made when there is none); a preset saved before
+    // busses were listed keeps the ids it has.
+    let busses: Option<Vec<soundcraft_model::Bus>> = v.get("busses").cloned().and_then(|x| serde_json::from_value(x).ok());
     let s = e.session_mut();
+    if let Some(busses) = busses {
+        for send in &mut mixer.sends {
+            let Some(Route::Bus(b)) = send.as_ref().map(|x| x.target.clone()) else { continue };
+            match busses.iter().find(|x| x.id == b) {
+                Some(named) => {
+                    let name: String = named.name.chars().take(64).collect();
+                    let here = s.add_bus(&name, named.format);
+                    if let Some(x) = send.as_mut() {
+                        x.target = Route::Bus(here);
+                    }
+                }
+                None => *send = None,
+            }
+        }
+    }
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
             // Routing is session-specific: keep the track's own input/output, VCA and arm state.
@@ -297,7 +333,7 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
             }
         }
     }
-    Ok(json!({"tracks": tracks}))
+    Ok(json!({"tracks": tracks, "missing_samples": missing}))
 }
 
 fn bypass_where(e: &mut Engine, p: &Value, pick: fn(usize, Option<Category>) -> bool) -> Result<Value> {

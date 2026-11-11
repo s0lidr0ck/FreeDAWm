@@ -4,6 +4,7 @@
 pub mod card;
 pub mod catalog;
 pub mod drop;
+pub mod library;
 pub mod panel;
 pub mod presets;
 pub mod scan_job;
@@ -15,22 +16,25 @@ use std::collections::BTreeMap;
 /// Most recently inserted plugins kept.
 pub const RECENT_MAX: usize = 30;
 
-/// The browser's three tabs.
+/// The browser's tabs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BrowserTab {
     #[default]
     Instruments,
     Effects,
     Presets,
+    /// What the user saved to use again: chains, track presets, plugin presets, templates.
+    Library,
 }
 
 impl BrowserTab {
-    /// The tab's place in the strip (and in [`BrowserState::scroll`]).
+    /// The tab's place in the strip (and in [`BrowserState::scroll`], for the tabs with a grid).
     pub fn index(self) -> usize {
         match self {
             BrowserTab::Instruments => 0,
             BrowserTab::Effects => 1,
             BrowserTab::Presets => 2,
+            BrowserTab::Library => 3,
         }
     }
 }
@@ -43,6 +47,9 @@ pub struct BrowserState {
     pub text: String,
     /// The Presets tab's search.
     pub preset_text: String,
+    /// The Library tab's search, and the one kind it shows (`None`: all).
+    pub library_text: String,
+    pub library_kind: Option<library::LibraryKind>,
     pub favourites_only: bool,
     pub recent_only: bool,
     pub category: Option<BrowserCategory>,
