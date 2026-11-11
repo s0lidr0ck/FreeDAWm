@@ -109,6 +109,8 @@ enum Cmd {
     /// Where recording blocks are captured; the old one goes back as garbage.
     Capture(Arc<record::Capture>),
     Recording(bool),
+    /// The range a recording punches into ([`Player::set_punch`]).
+    Punch(Option<Range>),
     /// The MIDI input hub (`midi_in`): its rings are drained once per mix block.
     Midi(Arc<midi_in::MidiHub>),
     Play {
@@ -431,6 +433,8 @@ struct AudioState {
     /// Input was heard at the last fill.
     heard: bool,
     recording: bool,
+    /// The range the recording punches into ([`Player::set_punch`]).
+    punch: Option<Range>,
     /// Hardware MIDI input ([`Player::set_midi`]).
     midi: Option<Arc<midi_in::MidiHub>>,
     /// Loop recording: the pass under way (each wrap of the loop starts the next).
@@ -555,6 +559,7 @@ impl AudioState {
             let_go: false,
             heard: false,
             recording: false,
+            punch: None,
             midi: None,
             midi_pass: 0,
             midi_now: 0,
@@ -593,8 +598,10 @@ impl AudioState {
                 }
                 Cmd::Recording(r) => {
                     self.recording = r;
+                    self.punch = None;
                     self.midi_pass = 0;
                 }
+                Cmd::Punch(p) => self.punch = p,
                 // The app keeps its own handle: the one replaced is never the last.
                 Cmd::Midi(h) => self.midi = Some(h),
                 Cmd::Session(s, instances) => {
@@ -958,6 +965,7 @@ impl AudioState {
         }
         self.mix.monitor_only = !self.playing;
         self.mix.recording = self.recording;
+        self.mix.punch = self.punch;
         self.mix.countoff = self.countoff.map(|c| (c, self.countoff_at));
         // Hardware MIDI input: what came in since the last block, at its offsets in this one; a
         // recording keeps each event at the timeline position it arrived at, from its raw age:
@@ -2550,6 +2558,13 @@ impl Player {
     pub fn set_recording(&self, on: bool) {
         self.shared.recording.store(on, Ordering::Relaxed);
         let _ = self.tx.send(Cmd::Recording(on));
+    }
+
+    /// The range the recording under way punches into (after [`Player::set_recording`], which
+    /// clears it, and before Play): record-armed tracks on auto input play their clips through
+    /// the pre- and post-roll and hear their input inside it. The whole pass is still captured.
+    pub fn set_punch(&self, punch: Option<Range>) {
+        let _ = self.tx.send(Cmd::Punch(punch));
     }
 
     /// The latencies the devices and the input feed report now, in frames at the session rate

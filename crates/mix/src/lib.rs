@@ -686,6 +686,10 @@ pub struct MixEngine {
     pub monitor_only: bool,
     /// Recording: record-armed tracks hear their input (auto input).
     pub recording: bool,
+    /// Recording into this range (a punch with pre/post-roll): record-armed tracks on auto input
+    /// hear their input in the blocks that touch it and play their clips before and after.
+    /// `None`: they hear their input for the whole recording.
+    pub punch: Option<Range>,
     /// Mix the metronome (Options > Click) into the output. Playback turns this on; offline renders
     /// (bounces, stems, exports) leave it off so the click is never printed into a file.
     pub metronome: bool,
@@ -912,6 +916,7 @@ impl MixEngine {
             live_midi: LiveMidi::new(),
             monitor_only: false,
             recording: false,
+            punch: None,
             metronome: false,
             countoff: None,
             external: false,
@@ -1597,6 +1602,13 @@ impl MixEngine {
         }
     }
 
+    /// Whether record-armed tracks on auto input hear their input in the block of `frames` at
+    /// `pos`: recording, and (with a punch range) the block touches it.
+    fn auto_input(&self, pos: Samples, frames: usize) -> bool {
+        let block = Range { start: pos, end: pos.saturating_add(i64::try_from(frames).unwrap_or(i64::MAX)) };
+        self.recording && self.punch.is_none_or(|p| p.overlaps(&block))
+    }
+
     /// Render `frames` (≤ max_block) samples starting at `pos` into `out` (≥ 2 channels).
     pub fn render(&mut self, s: &Session, pos: Samples, frames: usize, out: &mut [Vec<f32>]) {
         let frames = frames.min(self.max_block);
@@ -1705,6 +1717,7 @@ impl MixEngine {
             input: &self.input,
             monitor_only: self.monitor_only,
             recording: self.recording,
+            auto_input: self.auto_input(pos, frames),
             pdc,
             xf,
             scout: scout_win,
@@ -1858,6 +1871,7 @@ impl MixEngine {
                 input: &self.input,
                 monitor_only: self.monitor_only,
                 recording: self.recording,
+                auto_input: self.auto_input(pos, frames),
                 pdc,
                 xf,
                 scout: scout_win,
@@ -2374,6 +2388,8 @@ struct LiveInput<'a> {
     input: &'a [Vec<f32>],
     monitor_only: bool,
     recording: bool,
+    /// Recording, and inside the punch range if there is one: auto-input tracks hear their input.
+    auto_input: bool,
     /// Delay compensation is on (sidechain keys are aligned), and the crossfade length.
     pdc: bool,
     xf: usize,
@@ -2511,7 +2527,7 @@ fn process_strip(
                 play_frozen(s, fz, pos, frames, &mut strip.buf);
             }
         }
-        TrackKind::Audio if !live.input.is_empty() && t.mixer.hears_input(live.monitor_only, live.recording) => {
+        TrackKind::Audio if !live.input.is_empty() && t.mixer.hears_input(live.monitor_only, live.auto_input) => {
             // Input monitoring: the track hears its hardware input instead of its clips. A named
             // input (or a legacy "In N" / "In N-M") gives its device channels; with no hardware
             // input, track channel k hears device channel k, as before.
@@ -7180,6 +7196,31 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    #[test]
+    fn a_punch_plays_the_clips_in_the_pre_and_post_roll() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.track_mut(t).unwrap().mixer.record_arm = true;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.input = vec![vec![0.25; 512]];
+        eng.recording = true;
+        eng.punch = Some(Range::new(1024, 2048));
+        let mut out = vec![vec![0.0; 512]; 2];
+        let pan = std::f32::consts::FRAC_1_SQRT_2;
+        for (pos, want, what) in [(0, 0.5, "pre-roll: the clip"), (1024, 0.25, "punched in: the input"), (2048, 0.5, "post-roll: the clip")] {
+            eng.render(&s, pos, 512, &mut out);
+            assert!((out[0][100] - want * pan).abs() < 1e-3, "{what}: {}", out[0][100]);
+        }
+        // No punch range: the input for the whole recording, as before.
+        eng.punch = None;
+        eng.render(&s, 0, 512, &mut out);
+        assert!((out[0][100] - 0.25 * pan).abs() < 1e-3, "{}", out[0][100]);
+        // Input monitoring On hears the input outside the range too.
+        eng.punch = Some(Range::new(1024, 2048));
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::On;
+        eng.render(&s, 0, 512, &mut out);
+        assert!((out[0][100] - 0.25 * pan).abs() < 1e-3, "{}", out[0][100]);
     }
 
     #[test]
