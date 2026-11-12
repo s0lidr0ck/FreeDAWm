@@ -9,7 +9,8 @@
 //!   2 Proportional   API 550A(-1): three bands in 2 / 4 / 6 / 9 / 12 dB steps, as a circuit
 //!   3 British        SSL 4000 E channel EQ, the brown (82E02) or black (82E242) card, as circuits
 //!   4 Enhancer       exciter / maximizer / vitalizer family; the Maximizer is the BBE 882,
-//!                    as a circuit (`vint_maximizer`: FreeDAWm's own, not in the C++)
+//!                    as a circuit (`vint_maximizer`: FreeDAWm's own, not in the C++); the Vitalizer is
+//!                    SPL's, after its patent and manuals (`vint_vitalizer`: ours too)
 //!   5 Air            the Dolby A encode trick: a four-band, level-dependent brightener
 //!   6 Sampler        12-bit sampler converters and their filters
 //! ```
@@ -54,6 +55,7 @@ use super::vint_neve as vintneve;
 use super::vint_neve_pre::{self as vintpre, FastPre};
 use super::vint_pultec_amp::{InputTransformer, Interstage};
 use super::vint_stages::{self as vints, clamp_t};
+use super::vint_vitalizer as vintvit;
 
 // ---------------------------------------------------------------- circuits
 pub const C_PASSIVE: i32 = 0;
@@ -139,7 +141,15 @@ pub const P_SMP_DRIVE: usize = 61;
 pub const P_SMP_FILTER: usize = 62;
 // Console, added later: the 1073's sensitivity switch (the dial's clockwise order)
 pub const P_CON_PRE: usize = 63;
-pub const NUM_PARAMS: usize = 64;
+// The Vitalizer's own controls (FreeDAWm's, not in the C++; its Process is the Enhancer's Amount,
+// its Mid-Hi Tune the Enhancer's Tune).
+pub const P_VIT_DRIVE: usize = 64;
+pub const P_VIT_BASS: usize = 65;
+pub const P_VIT_COMP: usize = 66;
+pub const P_VIT_LC: usize = 67;
+pub const P_VIT_INTENSITY: usize = 68;
+pub const P_VIT_WIDTH: usize = 69;
+pub const NUM_PARAMS: usize = 70;
 
 pub type Values = [f32; NUM_PARAMS];
 
@@ -265,6 +275,7 @@ pub const DEFAULTS: Values = [
     0.0, 1.0, 0.5, // Air: off, top two bands, Dolby level -16 dBFS
     0.0, 0.7, 0.5, 0.5, 0.0, // Sampler: 12-bit 26k, 12 bits, 0 dB, filter off
     4.0, // Console gain: line 0
+    0.5, 0.5, 0.0, 0.5, 0.0, 0.0, // Vitalizer: drive 0 dB, bass sound centred, no compression, LC 6.3 kHz, off, no width
 ];
 
 pub fn default_of(i: usize) -> f32 {
@@ -595,11 +606,15 @@ struct Channel {
     enh_hp1: Section,
     enh_hp2: Section,
     enh_low: Section,
-    enh_scoop: Section,
     /// the Maximizer: the 882's filter (OA1 to OA4), its summing amp (OA5), its detector's level
     max_filter: Solver,
     max_sum: Solver,
     max_env: f64,
+    /// the Vitalizer: its bass stage, its universal filter, its LC stage, the bass compressor's level
+    vit_bass: Solver,
+    vit_filter: Solver,
+    vit_lc: Solver,
+    vit_env: f64,
 
     // Air: the four Dolby A bands, and their level detectors
     air_b1: Section,
@@ -620,7 +635,13 @@ struct Channel {
 impl Channel {
     #[cfg(test)]
     fn solvers(&self) -> impl Iterator<Item = &Solver> {
-        std::iter::once(&self.passive).chain(self.sec.iter()).chain(self.sec_pre.iter()).chain([&self.max_filter, &self.max_sum])
+        std::iter::once(&self.passive).chain(self.sec.iter()).chain(self.sec_pre.iter()).chain([
+            &self.max_filter,
+            &self.max_sum,
+            &self.vit_bass,
+            &self.vit_filter,
+            &self.vit_lc,
+        ])
     }
 
     fn new() -> Channel {
@@ -629,6 +650,7 @@ impl Channel {
             [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default()],
+            [Solver::default(), Solver::default(), Solver::default()],
         )
     }
 
@@ -639,11 +661,19 @@ impl Channel {
         let sec = self.sec.each_mut().map(Solver::take_reset);
         let sec_pre = self.sec_pre.each_mut().map(Solver::take_reset);
         let max = [self.max_filter.take_reset(), self.max_sum.take_reset()];
-        *self = Channel::with_solvers(passive, sec, sec_pre, max);
+        let vit = [self.vit_bass.take_reset(), self.vit_filter.take_reset(), self.vit_lc.take_reset()];
+        *self = Channel::with_solvers(passive, sec, sec_pre, max, vit);
     }
 
-    fn with_solvers(passive: Solver, sec: [Solver; K_MAX_CIRCUIT_SECTIONS], sec_pre: [Solver; K_MAX_CIRCUIT_SECTIONS], max: [Solver; 2]) -> Channel {
+    fn with_solvers(
+        passive: Solver,
+        sec: [Solver; K_MAX_CIRCUIT_SECTIONS],
+        sec_pre: [Solver; K_MAX_CIRCUIT_SECTIONS],
+        max: [Solver; 2],
+        vit: [Solver; 3],
+    ) -> Channel {
         let [max_filter, max_sum] = max;
+        let [vit_bass, vit_filter, vit_lc] = vit;
         Channel {
             os: [vinthb::Stage::default(); 3],
             os_wet: [vinthb::Stage::default(); 3],
@@ -661,10 +691,13 @@ impl Channel {
             enh_hp1: Section::default(),
             enh_hp2: Section::default(),
             enh_low: Section::default(),
-            enh_scoop: Section::default(),
             max_filter,
             max_sum,
             max_env: 0.0,
+            vit_bass,
+            vit_filter,
+            vit_lc,
+            vit_env: 0.0,
             air_b1: Section::default(),
             air_b2a: Section::default(),
             air_b2b: Section::default(),
@@ -703,6 +736,8 @@ struct Ctx<'a> {
     max_att: f64,
     max_rel: f64,
     max_vca_open: bool,
+    vit_att: f64,
+    vit_rel: f64,
     air_att: f64,
     air_rel: &'a [f64; 4],
     inter_at_rest: &'a Interstage,
@@ -727,6 +762,9 @@ pub struct VintEngineDsp {
     /// the Maximizer's circuit: solved, and the capacitor scale it was solved for
     max_solved: bool,
     max_scale: f64,
+    /// the Vitalizer's circuits: solved, and what for (Mid-Hi Tune, Tight, the LC frequency)
+    vit_solved: bool,
+    vit_for: (f32, bool, f32),
     sec_count: usize,
     sec_circuit: i32,
     circuit: i32,
@@ -763,6 +801,8 @@ pub struct VintEngineDsp {
     max_att: f64,
     max_rel: f64,
     max_vca_open: bool,
+    vit_att: f64,
+    vit_rel: f64,
     air_att: f64,
     air_rel: [f64; 4],
 
@@ -820,6 +860,8 @@ impl VintEngineDsp {
             passive_solved: false,
             max_solved: false,
             max_scale: 1.0,
+            vit_solved: false,
+            vit_for: (0.0, false, 0.0),
             sec_count: 0,
             sec_circuit: -1,
             circuit: C_PASSIVE,
@@ -852,6 +894,8 @@ impl VintEngineDsp {
             max_att: 0.01,
             max_rel: 0.001,
             max_vca_open: false,
+            vit_att: 0.01,
+            vit_rel: 0.001,
             air_att: 0.01,
             air_rel: [0.0; 4],
             in_peak: 0.0,
@@ -992,14 +1036,24 @@ impl VintEngineDsp {
                 max_att: self.max_att,
                 max_rel: self.max_rel,
                 max_vca_open: self.max_vca_open,
+                vit_att: self.vit_att,
+                vit_rel: self.vit_rel,
                 air_att: self.air_att,
                 air_rel: &self.air_rel,
                 inter_at_rest: &self.inter_at_rest,
                 input_at_rest: &self.input_at_rest,
             };
 
+            let mut wet = [0.0f32; 2];
             for c in 0..nc {
-                let y = process_oversampled(&mut self.ch[c], &ctx, inp[c], drive_gain, makeup);
+                wet[c] = process_oversampled(&mut self.ch[c], &ctx, inp[c], drive_gain, makeup);
+            }
+            // The Vitalizer's stereo expander works across the pair.
+            if nc == 2 && self.circuit == C_ENHANCER && ((self.smoothed[P_ENH_TYPE] + 0.5) as i32) == 2 {
+                (wet[0], wet[1]) = vintvit::expand(wet[0], wet[1], self.smoothed[P_VIT_WIDTH]);
+            }
+            for c in 0..nc {
+                let y = wet[c];
                 let out = y * self.out_sm as f32;
                 let o = if self.byp_sm >= 1.0 { inp[c] } else { out + self.byp_sm as f32 * (inp[c] - out) };
                 channels[c][n] = o;
@@ -1021,13 +1075,12 @@ impl VintEngineDsp {
 
     /// Filters and constants for the flavour circuits, from the (gliding) values.
     fn design_flavour(&mut self) {
-        use vintf::{bell, bilinear, high_pass2, low_pass1, low_pass2};
+        use vintf::{bilinear, high_pass2, low_pass1, low_pass2};
         let os_fs = self.os_fs;
         let sm = self.smoothed;
         let tune = f64::from(sweep(sm[P_ENH_TUNE], 700.0, 7000.0));
         let hp = bilinear(&high_pass2(0.7071), tune, os_fs);
         let lp120 = bilinear(&low_pass1(), 120.0, os_fs);
-        let scoop = bilinear(&bell(10.0f64.powf(-6.0 * f64::from(sm[P_ENH_AMOUNT]) / 20.0), 0.5), 1000.0, os_fs);
 
         let b1 = bilinear(&low_pass2(0.7071), 80.0, os_fs);
         let b2a = bilinear(&high_pass2(0.7071), 80.0, os_fs);
@@ -1045,7 +1098,6 @@ impl VintEngineDsp {
             c.enh_hp1.c = hp;
             c.enh_hp2.c = hp;
             c.enh_low.c = lp120;
-            c.enh_scoop.c = scoop;
             c.air_b1.c = b1;
             c.air_b2a.c = b2a;
             c.air_b2b.c = b2b;
@@ -1057,6 +1109,7 @@ impl VintEngineDsp {
             }
         }
         (self.max_att, self.max_rel) = vintmax::detector_steps(os_fs);
+        (self.vit_att, self.vit_rel) = vintvit::comp_steps(os_fs);
         self.air_att = 1.0 - (-1.0 / (0.002 * os_fs)).exp();
         const REL_MS: [f64; 4] = [150.0, 80.0, 60.0, 60.0];
         for i in 0..4 {
@@ -1115,6 +1168,32 @@ impl VintEngineDsp {
                 }
                 self.max_solved = true;
                 self.max_scale = scale;
+            }
+            // The Vitalizer's circuits: each solved again only when its own control moves.
+            let now = (self.smoothed[P_ENH_TUNE], vintvit::bass_sound(self.smoothed[P_VIT_BASS]).1, self.smoothed[P_VIT_LC]);
+            if let Some(scratch) = self.scratch.as_deref_mut() {
+                let was = self.vit_for;
+                let all = !self.vit_solved;
+                if all || now.0 != was.0 {
+                    let net = vintvit::filter_netlist(f64::from(vintvit::tune_hz(now.0)));
+                    for c in &mut self.ch {
+                        c.vit_filter.set(&net, self.os_fs, scratch);
+                    }
+                }
+                if all || now.1 != was.1 {
+                    let net = vintvit::bass_netlist(now.1);
+                    for c in &mut self.ch {
+                        c.vit_bass.set_running(&net, self.os_fs, scratch);
+                    }
+                }
+                if all || now.2 != was.2 {
+                    let net = vintvit::lc_netlist(f64::from(vintvit::lc_hz(now.2)));
+                    for c in &mut self.ch {
+                        c.vit_lc.set_running(&net, self.os_fs, scratch);
+                    }
+                }
+                self.vit_solved = true;
+                self.vit_for = now;
             }
         }
         // The netlist circuits: each section solved again only when one of its parts changed, and
@@ -1249,10 +1328,15 @@ impl VintEngineDsp {
             c.max_filter.reset();
             c.max_sum.reset();
             c.max_env = 0.0;
+            c.vit_bass.reset();
+            c.vit_filter.reset();
+            c.vit_lc.reset();
+            c.vit_env = 0.0;
         }
         self.sec_solved = false;
         self.passive_solved = false;
         self.max_solved = false;
+        self.vit_solved = false;
         self.configure_stage();
         self.smoothed = self.values;
         self.active_sections = 0;
@@ -1460,9 +1544,8 @@ fn enhance(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
     let amount = f64::from(sm[P_ENH_AMOUNT]);
     let low = f64::from(sm[P_ENH_LOW]);
 
-    // The Exciter's and the Vitalizer's filters run all the time, whichever box is selected.
+    // The Exciter's filters run all the time, whichever box is selected.
     let band = c.enh_hp1.run(x);
-    let scooped = c.enh_scoop.run(x);
 
     if ty == 1 {
         // The BBE 882, as a circuit (`vint_maximizer`). Amount is its PROCESS pot, Low its
@@ -1483,30 +1566,42 @@ fn enhance(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
         return y;
     }
 
-    let low_add = low_shelf_add(c, x, low, ty == 2);
+    if ty == 2 {
+        // SPL's Vitalizer (`vint_vitalizer`): the original, plus Process of the bass stage and the
+        // universal filter, plus Intensity of the LC stage. Amount is its Process, Tune its
+        // Mid-Hi Tune; the stereo expander is across the two channels, in `process`.
+        c.enh_low.run(x);
+        c.enh_hp2.run(0.0);
+        let driven = x * 10.0f64.powf(f64::from(vintvit::drive_db(sm[P_VIT_DRIVE])) / 20.0);
+        let (bass_amount, tight) = vintvit::bass_sound(sm[P_VIT_BASS]);
+        let mut bass = c.vit_bass.run(driven) * bass_amount * if tight { vintvit::K_TIGHT_GAIN } else { vintvit::K_SOFT_GAIN };
+        c.vit_env += (if bass.abs() > c.vit_env { fl.vit_att } else { fl.vit_rel }) * (bass.abs() - c.vit_env);
+        bass *= vintvit::comp_gain(c.vit_env, f64::from(sm[P_VIT_COMP]));
+        c.vit_filter.open_circuit(driven);
+        let mid_hi = vintvit::mid_hi(c.vit_filter.node_open(vintvit::N_HP), c.vit_filter.node_open(vintvit::N_MID));
+        c.vit_filter.commit(0.0);
+        let lc = vintvit::coil(c.vit_lc.run(driven)) * vintvit::K_LC_GAIN * f64::from(sm[P_VIT_INTENSITY]);
+        return x + amount * (bass + mid_hi) + lc;
+    }
+
+    let low_add = low_shelf_add(c, x, low);
 
     if amount <= 0.0 && low <= 0.0 {
         c.enh_hp2.run(0.0);
         return x; // off is the input itself
     }
 
-    if ty == 0 {
-        let top = c.enh_hp2.run(enh_sat(band * 4.0, 0.25));
-        return x + amount * 0.35 * top + low_add;
-    }
-    let top = c.enh_hp2.run((band * 3.0).tanh());
-    scooped + amount * 0.25 * top + low_add
+    let top = c.enh_hp2.run(enh_sat(band * 4.0, 0.25));
+    x + amount * 0.35 * top + low_add
 }
 
-fn low_shelf_add(c: &mut Channel, x: f64, low: f64, saturate: bool) -> f64 {
+fn low_shelf_add(c: &mut Channel, x: f64, low: f64) -> f64 {
     // The low contour is added as a band, x + (g - 1) * lowpass(x). Up to +8 dB, below ~120 Hz.
     let l = c.enh_low.run(x);
     if low <= 0.0 {
         return 0.0;
     }
-    let g = 10.0f64.powf(8.0 * low / 20.0) - 1.0;
-    let add = g * l;
-    if saturate { (add * 2.0).tanh() * 0.5 } else { add }
+    (10.0f64.powf(8.0 * low / 20.0) - 1.0) * l
 }
 
 // ---------------------------------------------------------------- 5: Air (the Dolby A encode trick)

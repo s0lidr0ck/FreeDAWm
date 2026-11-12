@@ -19,7 +19,7 @@ use crate::editor_kit::family::{self, Family, FamilyState};
 use crate::editor_kit::look::{CAPTION_SIZE, LABEL_SIZE, paint_background, paint_panel, paint_title};
 use crate::editor_kit::{Host, VstEditor, VstPalette, argb, end_gesture, param, set_params_merged};
 use crate::theme::{bold, regular};
-use config::{Face, FaceStyle, Glyph, Kind, Placed, ToggleStyle, circuit, circuits, format_knob, step_text};
+use config::{Face, FaceStyle, Glyph, Kind, Placed, ToggleStyle, circuit, circuits, columns_for, format_knob, format_knob_for, step_text};
 use draw::{Fill, Jc, fill_ellipse, fill_round_rect, line, quad, round_rect, stroke_closed, text_up};
 use egui::{Align2, Id, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 use soundcraft_dsp::plugins::fs::vint::vint_engine_dsp::{self as d, NUM_PARAMS};
@@ -284,7 +284,14 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     text_left(&p, quality_label, "Quality", regular(LABEL_SIZE), pal.text_body);
     // The Enhancer's Maximizer has a unit of its own (the 882's front), not the columns.
     let maxi = maximizer::shown(host);
-    let (blurb, credit) = if maxi { (maximizer::BLURB, maximizer::CREDIT) } else { (def.blurb, def.credit) };
+    let enh_type = (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2);
+    let (blurb, credit) = if maxi {
+        (maximizer::BLURB, maximizer::CREDIT)
+    } else if cached_circuit == d::C_ENHANCER && enh_type == 2 {
+        (config::VITALIZER_BLURB, config::VITALIZER_CREDIT)
+    } else {
+        (def.blurb, def.credit)
+    };
     text_left(&p, circuit_blurb, blurb, regular(CAPTION_SIZE), pal.text_faint);
     crate::hardware_credit::hover(ui, circuit_blurb, "vint_circuit", blurb, credit);
     paint_panel(&p, panel, 10.0);
@@ -410,7 +417,8 @@ fn take_top(c: &mut Rect, h: f32) -> Rect {
 /// The flavour circuits' columns (`place`), and their titles.
 fn columns(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, panel: Rect, circuit_i: i32) {
     let pal = &PALETTE;
-    let cols = &circuit(circuit_i).columns;
+    let enh_type = (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2);
+    let cols = columns_for(circuit_i, enh_type);
     let inner = panel.shrink(10.0);
     let n = cols.len().max(1) as f32;
     let col_w = 150f32.min((inner.width() / n).trunc());
@@ -428,7 +436,7 @@ fn columns(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, p
                 Kind::Knob | Kind::Step => {
                     let cell = take_top(&mut c, K_CELL_H);
                     let r = keep_centre(cell, (col_w - 6.0).min(100.0), K_CELL_H);
-                    let text = format_knob(ctl.param, pv(host, ctl.param));
+                    let text = format_knob_for(ctl.param, pv(host, ctl.param), enh_type);
                     let default = host.info.param(id).map_or(0.5, |p| p.to_normalized(p.default));
                     let o = DialOpts { label: ctl.label, value_text: &text, default, small: true, ..DialOpts::default() };
                     // The variable-rate knob only means something on the Variable machine.

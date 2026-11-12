@@ -58,7 +58,8 @@ fn strong(s: &mut Vint, circuit: usize) {
 #[test]
 fn table_matches_the_cpp_order_and_defaults() {
     let ids: Vec<&str> = VINT_PARAMS.iter().map(|p| p.id).collect();
-    assert_eq!(ids.len(), 64, "Parameters.h has 64 entries (conPre was appended last)");
+    assert_eq!(ids.len(), 70, "Parameters.h has 64 entries (conPre was appended last); the Vitalizer's six are ours");
+    assert_eq!(&ids[64..], ["vitDrive", "vitBass", "vitComp", "vitLcFreq", "vitIntensity", "vitWidth"]);
     assert_eq!(&ids[..7], ["circuit", "stage", "drive", "mix", "output", "quality", "bypass"]);
     assert_eq!(ids[dsp::P_PAS_MID_HIGH_PEAK], "pasMidHighPeak");
     assert_eq!(ids[dsp::P_CON_HIGH_GAIN], "conHighGain");
@@ -78,7 +79,7 @@ fn table_matches_the_cpp_order_and_defaults() {
             id if id.starts_with("con") => "Console",
             id if id.starts_with("pro") => "Proportional",
             id if id.starts_with("bri") => "British",
-            id if id.starts_with("enh") => "Enhancer",
+            id if id.starts_with("enh") || id.starts_with("vit") => "Enhancer",
             id if id.starts_with("air") => "Air",
             _ => "Sampler",
         };
@@ -506,4 +507,77 @@ fn the_maximizer_closes_its_highs_on_faint_signals() {
     let (programme, faint) = (gain_at(0.1), gain_at(1.0e-5));
     assert!((programme - 13.5).abs() < 0.5, "{programme}");
     assert!(faint.abs() < 1.5, "{faint}");
+}
+
+/// The Enhancer on its Vitalizer, stage off, everything else at its default.
+fn vitalizer_values() -> Vec<f32> {
+    let mut v: Vec<f32> = VINT_PARAMS.iter().map(|p| p.default).collect();
+    v[dsp::P_CIRCUIT] = 4.0;
+    v[dsp::P_STAGE] = 0.0;
+    v[dsp::P_ENH_TYPE] = 2.0;
+    v
+}
+
+#[test]
+fn the_vitalizer_follows_its_controls() {
+    // Through the whole engine: `vint_vitalizer`'s own figures.
+    let freqs = [45.0, 800.0, 6300.0, 20_000.0];
+    let mut out = [0.0f32; 4];
+    let mut v = vitalizer_values();
+    // Everything at its default is the input: Process and Intensity are at minimum.
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out.iter().all(|d| d.abs() < 0.05), "{out:?}");
+    // Process: the mids down, the top up (Mid-Hi Tune at its centre, 4.9 kHz).
+    v[dsp::P_ENH_AMOUNT] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0].abs() < 0.7 && out[1] < -3.0 && out[3] > 7.5, "{out:?}");
+    // Bass Sound, Soft: the bottom up with it.
+    v[dsp::P_VIT_BASS] = 0.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0] > 8.0 && out[0] < 10.5, "{out:?}");
+    // Drive is the level into the filter network: 6 dB less of it, less of everything it adds.
+    let soft = out[0];
+    v[dsp::P_VIT_DRIVE] = 0.35;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0] < soft - 2.5 && out[0] > 3.0, "{out:?}");
+    // The LC stage has its own level: Intensity, with Process at minimum.
+    let mut v = vitalizer_values();
+    v[dsp::P_VIT_INTENSITY] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[2] - 10.1).abs() < 0.6 && out[0].abs() < 0.2, "{out:?}");
+}
+
+#[test]
+fn the_vitalizers_compressor_holds_the_bass_and_its_expander_widens() {
+    let run_with = |comp: f32, width: f32, right_amp: f32| {
+        let mut s = prepared();
+        for (id, val) in [
+            ("circuit", 4.0),
+            ("stage", 0.0),
+            ("enhType", 2.0),
+            ("enhAmount", 1.0),
+            ("enhTune", 0.0),
+            ("vitBass", 0.0),
+            ("vitComp", comp),
+            ("vitWidth", width),
+        ] {
+            assert!(s.set_param(id, val), "{id}");
+        }
+        let tone = |amp: f32| -> Vec<f32> { (0..96_000).map(|i| amp * (std::f32::consts::TAU * 45.0 * i as f32 / 48_000.0).sin()).collect() };
+        let mut io = vec![tone(0.25), tone(right_amp)];
+        run(&mut s, &mut io, 512);
+        assert!(all_finite(&io));
+        let peak = |c: &[f32]| c[72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        (peak(&io[0]), peak(&io[1]))
+    };
+    // Bass Comp: the loud 45 Hz the Soft bass adds is held back, and only that.
+    let (open, _) = run_with(0.0, 0.0, 0.25);
+    let (held, _) = run_with(1.0, 0.0, 0.25);
+    assert!(open > 0.25 * 2.7 && held < open * 0.75 && held > 0.25, "{open} {held}");
+    // Stereo Expander: nothing on a mono signal, the difference raised on a wide one.
+    let (l0, r0) = run_with(0.0, 1.0, 0.25);
+    assert!((l0 - open).abs() < 1e-4 && (r0 - open).abs() < 1e-4, "{l0} {r0}");
+    let (wide_l, wide_r) = run_with(0.0, 1.0, -0.25);
+    let (plain_l, _) = run_with(0.0, 0.0, -0.25);
+    assert!(wide_l > plain_l * 1.2 && (wide_l - wide_r).abs() < 1e-3, "{wide_l} {wide_r} {plain_l}");
 }

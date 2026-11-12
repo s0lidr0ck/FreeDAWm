@@ -3,7 +3,7 @@
   "name": "Vitalizer Smile",
   "group": "Mix & Master",
   "tags": "Enhancer",
-  "desc": "The expensive smile: mids scooped, harmonics on top, a saturated low end.",
+  "desc": "The expensive smile: mids lowered, the top lifted from 5 kHz, a soft low end and a little LC sheen.",
   "values": {
     "circuit": "Enhancer",
     "stage": 1.0,
@@ -64,6 +64,12 @@
     "smpRate": 0.7,
     "smpBits": 0.5,
     "smpDrive": 0.5,
-    "smpFilter": 0.0
+    "smpFilter": 0.0,
+    "vitDrive": 0.5,
+    "vitBass": 0.2,
+    "vitComp": 0.3,
+    "vitLcFreq": 0.6,
+    "vitIntensity": 0.25,
+    "vitWidth": 0.0
   }
 }

@@ -122,3 +122,21 @@ fn the_maximizer_wears_the_882s_front() {
     assert_eq!(raw(&h, t, m, "enhType"), 2.0);
     assert!(!text_shown(&h, "SONIC MAXIMIZER"));
 }
+
+#[test]
+fn the_vitalizer_shows_all_its_controls() {
+    let (mut h, t, m) = open("fs_vint", vec2(1800.0, 1000.0), "dark");
+    h.state_mut().run("mix.module_params", json!({"track": t.0, "module": m.0, "params": {"circuit": 4, "enhType": 2}})).unwrap();
+    h.run_steps(3);
+    for word in ["Drive", "Mid-Hi Tune", "Process", "Bass Sound", "Bass Comp", "LC-EQ", "Intensity", "Stereo Exp."] {
+        assert!(text_shown(&h, word), "{word}");
+    }
+    // Its readouts are its own: Mid-Hi Tune at its centre, Bass Sound off, the LC stage's frequency.
+    for text in ["4.92 kHz", "Off", "6.32 kHz"] {
+        assert!(text_shown(&h, text), "{text}");
+    }
+    // The Exciter keeps the Enhancer's three dials.
+    h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "enhType", "value": 0})).unwrap();
+    h.run_steps(3);
+    assert!(text_shown(&h, "Amount") && !text_shown(&h, "Bass Comp"));
+}

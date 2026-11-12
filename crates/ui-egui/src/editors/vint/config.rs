@@ -276,6 +276,43 @@ pub(crate) fn circuit(i: i32) -> &'static CircuitDef {
     &circuits()[i.clamp(0, 7) as usize]
 }
 
+/// The columns of circuit `c` with the Enhancer on type `enh_type`: the Vitalizer has its own
+/// (all eight of the hardware's controls), every other its circuit's.
+pub(crate) fn columns_for(c: i32, enh_type: i32) -> &'static [Column] {
+    static VITALIZER: OnceLock<Vec<Column>> = OnceLock::new();
+    if c == d::C_ENHANCER && enh_type == 2 {
+        return VITALIZER.get_or_init(|| {
+            let c = |param, label, kind| Control { param, label, kind };
+            vec![
+                Column { title: "Type", controls: vec![c(d::P_ENH_TYPE, "", Kind::Seg)] },
+                Column {
+                    title: "Process",
+                    controls: vec![
+                        c(d::P_VIT_DRIVE, "Drive", Kind::Knob),
+                        c(d::P_ENH_TUNE, "Mid-Hi Tune", Kind::Knob),
+                        c(d::P_ENH_AMOUNT, "Process", Kind::Knob),
+                    ],
+                },
+                Column { title: "Bass", controls: vec![c(d::P_VIT_BASS, "Bass Sound", Kind::Knob), c(d::P_VIT_COMP, "Bass Comp", Kind::Knob)] },
+                Column {
+                    title: "LC-EQ",
+                    controls: vec![
+                        c(d::P_VIT_LC, "LC-EQ", Kind::Knob),
+                        c(d::P_VIT_INTENSITY, "Intensity", Kind::Knob),
+                        c(d::P_VIT_WIDTH, "Stereo Exp.", Kind::Knob),
+                    ],
+                },
+            ]
+        });
+    }
+    &circuit(c).columns
+}
+
+/// The Vitalizer's description and credit, shown in place of the Enhancer's on that type.
+pub(crate) const VITALIZER_BLURB: &str =
+    "SPL's Vitalizer, after its patent and manuals: mids lowered and the top lifted from Mid-Hi Tune, Soft or Tight bass, an LC stage.";
+pub(crate) const VITALIZER_CREDIT: &str = "Modelled after the SPL Vitalizer's patented filter structure (US 7,352,872) and its manuals; part values are our own. No affiliation; SPL and Vitalizer are trademarks of their owner.";
+
 /// `circuitOrder`: the Passive's two units side by side.
 pub(crate) const CIRCUIT_ORDER: [i32; 8] =
     [d::C_PASSIVE, d::C_PASSIVE_MID, d::C_CONSOLE, d::C_PROPORTIONAL, d::C_BRITISH, d::C_ENHANCER, d::C_AIR, d::C_SAMPLER];
@@ -697,6 +734,17 @@ fn hz(f: f32) -> String {
     }
 }
 
+/// [`format_knob`] with the Enhancer on type `enh_type`: its Tune is another control on the
+/// Maximizer (the upper crossover) and on the Vitalizer (Mid-Hi Tune).
+pub(crate) fn format_knob_for(param: usize, v: f32, enh_type: i32) -> String {
+    use soundcraft_dsp::plugins::fs::vint::{vint_maximizer, vint_vitalizer};
+    match (param, enh_type) {
+        (d::P_ENH_TUNE, 1) => hz((3208.0 / vint_maximizer::cap_scale(v)) as f32),
+        (d::P_ENH_TUNE, 2) => hz(vint_vitalizer::tune_hz(v)),
+        _ => format_knob(param, v),
+    }
+}
+
 /// `formatKnob`: a continuous control's readout in its real unit.
 pub(crate) fn format_knob(param: usize, v: f32) -> String {
     match param {
@@ -732,6 +780,12 @@ pub(crate) fn format_knob(param: usize, v: f32) -> String {
             }
         }
         d::P_ENH_TUNE => hz(d::sweep(v, 700.0, 7000.0)),
+        d::P_VIT_DRIVE => signed_db(soundcraft_dsp::plugins::fs::vint::vint_vitalizer::drive_db(v)),
+        d::P_VIT_BASS => {
+            let (amount, tight) = soundcraft_dsp::plugins::fs::vint::vint_vitalizer::bass_sound(v);
+            if amount <= 0.0 { "Off".into() } else { format!("{} {} %", if tight { "Tight" } else { "Soft" }, (amount * 100.0).round() as i32) }
+        }
+        d::P_VIT_LC => hz(soundcraft_dsp::plugins::fs::vint::vint_vitalizer::lc_hz(v)),
         d::P_AIR_REF => format!("{:.0} dBFS", d::knob_to_air_ref_db(v)),
         d::P_SMP_RATE => hz(d::knob_to_smp_rate_hz(v)),
         d::P_SMP_BITS => format!("{} bit", d::knob_to_smp_bits(v).round() as i32),
@@ -791,6 +845,18 @@ mod tests {
         assert_eq!(step_text(d::P_PRO_LOW_GAIN, "+2"), "+2 dB");
         assert_eq!(format_knob(d::P_PAS_LOW_BOOST, 0.5), "5.0");
         assert_eq!(format_knob(d::P_SMP_RATE, 1.0), "48.0 kHz");
+        // The Vitalizer: its own columns and readouts.
+        assert_eq!(columns_for(d::C_ENHANCER, 0).len(), 2);
+        let vit = columns_for(d::C_ENHANCER, 2);
+        assert_eq!(vit.iter().map(|c| c.controls.len()).sum::<usize>(), 9, "the type and the eight knobs");
+        assert_eq!(columns_for(d::C_AIR, 2).len(), 1);
+        assert_eq!(format_knob(d::P_VIT_DRIVE, 0.5), "0.0 dB");
+        assert_eq!(format_knob(d::P_VIT_BASS, 0.5), "Off");
+        assert_eq!(format_knob(d::P_VIT_BASS, 0.0), "Soft 100 %");
+        assert_eq!(format_knob(d::P_VIT_LC, 1.0), "20.0 kHz");
+        assert_eq!(format_knob_for(d::P_ENH_TUNE, 1.0, 2), "1.10 kHz");
+        assert_eq!(format_knob_for(d::P_ENH_TUNE, 0.5, 1), "3.21 kHz");
+        assert_eq!(format_knob_for(d::P_ENH_TUNE, 0.5, 0), format_knob(d::P_ENH_TUNE, 0.5));
         // Each face's printed scale runs 0..1 along the travel.
         for c in all {
             for p in &c.face.controls {

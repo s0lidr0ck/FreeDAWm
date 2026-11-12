@@ -425,7 +425,8 @@ fn run_h(r: &Run) -> f32 {
 /// here (its title, then its controls left to right). `r`: the top. Returns the bottom.
 fn rows(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, r: Rect, c: i32) -> f32 {
     let pal = &PALETTE;
-    let cols = &circuit(c).columns;
+    let enh_type = (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2);
+    let cols = super::columns_for(c, enh_type);
     let all: Vec<(&Column, Vec<Run>)> = cols.iter().map(|col| (col, runs(col))).collect();
     let inner_h: f32 = all.iter().map(|(_, rs)| TITLE_H + rs.iter().map(run_h).sum::<f32>() + 6.0).sum();
     let panel = Rect::from_min_size(r.min, vec2(r.width(), inner_h + 16.0));
@@ -448,7 +449,7 @@ fn rows(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, r: R
                     for (k, ctl) in ks.iter().enumerate() {
                         let cell = Rect::from_min_size(pos2(x0 + cw * k as f32, y), vec2(cw, ROW_KNOB_H));
                         let id = super::id_of(ctl.param);
-                        let text = super::format_knob(ctl.param, pv(host, ctl.param));
+                        let text = super::format_knob_for(ctl.param, pv(host, ctl.param), enh_type);
                         let o = DialOpts {
                             label: ctl.label,
                             value_text: &text,

@@ -5,6 +5,8 @@
 //!
 //! One part is not the C++'s: the Enhancer's Maximizer is the BBE 882's circuit
 //! (`vint_maximizer`, FreeDAWm's own), where the C++ has three filter bands and two delays.
+//! Nor is the Vitalizer: it follows SPL's patent and manuals (`vint_vitalizer`) and has six
+//! parameters of its own, appended after the C++'s 64.
 //!
 //! One Rust file per C++ header: `vint_engine_dsp` (VintEngineDSP.h), `vint_filters`,
 //! `vint_halfband`, `vint_mna`, `vint_neve`, `vint_neve_pre`, `vint_api`, `vint_british`,
@@ -52,6 +54,7 @@ pub mod vint_neve;
 pub mod vint_neve_pre;
 pub mod vint_pultec_amp;
 pub mod vint_stages;
+pub mod vint_vitalizer;
 
 mod presets;
 
@@ -124,6 +127,17 @@ fn enh_tune_text(v: f32) -> String {
 /// The low contour: up to +8 dB.
 fn enh_low_text(v: f32) -> String {
     db_text(8.0 * v)
+}
+fn vit_drive_text(v: f32) -> String {
+    db_text(vint_vitalizer::drive_db(v))
+}
+/// Bass Sound: nothing at the centre, Soft to the left, Tight to the right.
+fn vit_bass_text(v: f32) -> String {
+    let (amount, tight) = vint_vitalizer::bass_sound(v);
+    if amount <= 0.0 { "Off".into() } else { format!("{} {:.0}%", if tight { "Tight" } else { "Soft" }, amount * 100.0) }
+}
+fn vit_lc_text(v: f32) -> String {
+    hz_text(vint_vitalizer::lc_hz(v))
 }
 fn air_ref_text(v: f32) -> String {
     format!("{:.1} dBFS", dsp::knob_to_air_ref_db(v))
@@ -217,6 +231,13 @@ pub static VINT_PARAMS: [ParamInfo; NUM_PARAMS] = [
             "Mic -40", "Mic -45", "Mic -50", "Off", "Mic -55", "Mic -60", "Mic -65", "Mic -70", "Mic -75", "Mic -80",
         ],
     ),
+    // The Vitalizer's own controls: not in the C++ (`vint_vitalizer`).
+    knob01("vitDrive", "Vitalizer Drive", 0.5, "Enhancer", vit_drive_text),
+    knob01("vitBass", "Vitalizer Bass Sound", 0.5, "Enhancer", vit_bass_text),
+    knob01("vitComp", "Vitalizer Bass Comp", 0.0, "Enhancer", pct_text),
+    knob01("vitLcFreq", "Vitalizer LC-EQ", 0.5, "Enhancer", vit_lc_text),
+    knob01("vitIntensity", "Vitalizer Intensity", 0.0, "Enhancer", pct_text),
+    knob01("vitWidth", "Vitalizer Stereo Expander", 0.0, "Enhancer", pct_text),
 ];
 
 pub static VINT_INFO: PluginInfo = PluginInfo {

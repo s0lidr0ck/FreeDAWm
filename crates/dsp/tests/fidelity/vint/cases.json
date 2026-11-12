@@ -33,7 +33,6 @@
   {"name": "console_line_10_hot", "input": "song.wav", "sr": 48000, "block": 512, "values": {"circuit": 1, "conPre": 6, "conLowGain": 1.0, "conLowFreq": 1}},
   {"name": "console_off_position", "input": "piano.wav", "sr": 48000, "block": 512, "values": {"circuit": 1, "conPre": 7}},
   {"name": "console_stage_off", "input": "rhodes.wav", "sr": 48000, "block": 512, "values": {"circuit": 1, "stage": 0, "conLowGain": 0.9, "conLowFreq": 3, "conMidGain": 0.8, "conMidFreq": 3, "conHighGain": 0.25, "conHpf": 2, "conPre": 1}},
-  {"name": "enhancer_vitalizer", "input": "guitar.wav", "sr": 48000, "block": 512, "values": {"circuit": 4, "enhType": 2, "enhAmount": 0.7, "enhLow": 0.5}},
   {"name": "air_top", "input": "piano.wav", "sr": 48000, "block": 512, "values": {"circuit": 5, "airBands": 2, "airAmount": 0.8}},
   {"name": "sampler_26k", "input": "synthetic.wav", "sr": 48000, "block": 512, "values": {"circuit": 6, "smpMachine": 0, "smpDrive": 0.7}},
   {"name": "sampler_40k", "input": "song.wav", "sr": 48000, "block": 512, "values": {"circuit": 6, "smpMachine": 1, "smpBits": 0.3}},
