@@ -121,10 +121,10 @@ pub const TARGET_POINTS: usize = 8;
 pub const TARGET_HZ: [f32; TARGET_POINTS] = [40.0, 80.0, 160.0, 400.0, 1_000.0, 4_000.0, 10_000.0, 16_000.0];
 
 impl Default for Tuning {
-    /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`): 1.05 dB RMS from the
+    /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`): 0.85 dB RMS from the
     /// reference over every moment and third octave of nine passes. Tame and Recover at 100 %
     /// and 200 %, both at 50 %, and Tame 100 % with Bias at each end are each within 1 dB;
-    /// Brighten is the loosest (1.3 dB at its top, 2.2 dB at its bottom). Boost was in no pass
+    /// Brighten is the loosest (1.2 dB at its top, 1.3 dB at its bottom). Boost was in no pass
     /// and is as first written; Bias and Brighten were only passed with Tame alone.
     fn default() -> Self {
         Tuning {
@@ -139,33 +139,33 @@ impl Default for Tuning {
             tame_ratio: 0.16,
             recover_ratio: 0.053,
             knee_db: 1.5,
-            max_cut_db: 5.0,
-            max_boost_db: 7.6,
+            max_cut_db: 5.25,
+            max_boost_db: 9.1,
             bias_db: 18.2,
             floor_db: -46.0,
             floor_fade_db: 12.0,
             abs_floor_db: -84.0,
             smooth_passes: 2,
-            level_comp: 0.64,
-            brighten_db: 6.2,
+            level_comp: 0.665,
+            brighten_db: 6.35,
             boost_db: 4.0,
-            knob_power: 0.66,
-            brighten_down_db: 17.1,
-            brighten_hz: 1_364.0,
-            brighten_width_oct: 2.16,
-            top_hz: 13_500.0,
+            knob_power: 0.63,
+            brighten_down_db: 18.8,
+            brighten_hz: 1_429.0,
+            brighten_width_oct: 2.5,
+            top_hz: 13_170.0,
             peak_threshold_db: 16.6,
             peak_ratio: 0.68,
             // The fit asks for more than this; 12 dB is as far as an automatic cut should go.
             peak_max_db: 12.0,
             broad_width_erb: 0.71,
-            tame_broad: 0.33,
-            recover_broad: 0.25,
-            tame_level: 0.3,
-            recover_level: 3.2,
-            level_ref_db: -11.7,
-            tame_target: [-6.95, -11.3, -4.3, -0.3, 0.25, -1.3, -6.05, -10.95],
-            recover_target: [6.1, 11.95, 4.75, -1.2, -2.0, -0.25, 0.35, 8.6],
+            tame_broad: 0.35,
+            recover_broad: 0.24,
+            tame_level: 0.6,
+            recover_level: 2.8,
+            level_ref_db: -11.5,
+            tame_target: [-5.7, -10.55, -4.05, -0.05, 1.75, -1.3, -5.05, -14.95],
+            recover_target: [5.85, 12.45, 4.5, -0.2, -2.0, -0.25, -0.65, 15.85],
         }
     }
 }
