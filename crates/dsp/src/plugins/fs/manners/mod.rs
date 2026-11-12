@@ -41,8 +41,8 @@ const P_DELTA: usize = 7;
 const P_BYPASS: usize = 8;
 
 pub static MANNERS_PARAMS: [ParamInfo; NUM_PARAMS] = [
-    knob("tame", "Tame", 0.0, 100.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
-    knob("recover", "Recover", 0.0, 100.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
+    knob("tame", "Tame", 0.0, 200.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
+    knob("recover", "Recover", 0.0, 200.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
     knob("bias", "Bias", -100.0, 100.0, 0.0, Unit::Percent, Taper::Linear, "Balance"),
     knob("brighten", "Brighten", -100.0, 100.0, 0.0, Unit::Percent, Taper::Linear, "Tone"),
     knob("boost", "Boost", -100.0, 100.0, 0.0, Unit::Percent, Taper::Linear, "Tone"),

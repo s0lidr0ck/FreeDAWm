@@ -40,7 +40,7 @@ fn manners_dials_go_through_commands_one_undo_step_each() {
     drag(&mut h, f.min + TAME, f.min + TAME - vec2(0.0, 25.0), Modifiers::NONE);
     let after = param(&h, t, m, "tame");
     assert!((after - (before + 0.2)).abs() < 0.01, "25 px up is +0.2: {before} -> {after}");
-    assert!(text_shown(&h, "45 %"));
+    assert!(text_shown(&h, "65 %"), "25 % and a fifth of the 200 % travel");
     undo(&mut h);
     assert!((param(&h, t, m, "tame") - before).abs() < 1e-6, "one undo step");
 
@@ -106,7 +106,7 @@ fn manners_editor_survives_hostile_params_and_follows_undo() {
     assert_eq!(f.size(), vec2(860.0, 518.0));
     drag(&mut h, f.min + TAME, f.min + TAME + vec2(0.0, 20.0), Modifiers::NONE);
     let v = raw(&h, t, m, "tame");
-    assert!(v.is_finite() && (0.0..=100.0).contains(&v), "{v}");
+    assert!(v.is_finite() && (0.0..=200.0).contains(&v), "{v}");
 
     let (mut h, t, m) = open("fs_manners", vec2(1800.0, 1000.0), "dark");
     h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "recover", "value": 80.0})).unwrap();

@@ -62,7 +62,8 @@ pub struct Tuning {
     /// The most Tame cuts and Recover lifts, at 100 %.
     pub max_cut_db: f32,
     pub max_boost_db: f32,
-    /// How far Bias at its ends moves the balance point, dB.
+    /// Bias towards Recover raises what it takes for Tame to act by this much at its end, dB, and
+    /// towards Tame the same for Recover; the side it leans to is left as it was.
     pub bias_db: f32,
     /// Recover leaves a band alone once it is this far under the loudest band, fading in over
     /// [`Tuning::floor_fade_db`] above that.
@@ -74,10 +75,20 @@ pub struct Tuning {
     pub smooth_passes: u8,
     /// How much of the gain curve's change in level is given back (0: none, 1: all).
     pub level_comp: f32,
-    /// Brighten at its ends: dB at the top of the spectrum (the opposite at the bottom).
+    /// Brighten above zero: dB between the bottom and the top of the spectrum at its end (the
+    /// level given back centres it).
     pub brighten_db: f32,
     /// Boost at its ends: dB of bass (with half as much taken out of the low mids).
     pub boost_db: f32,
+    /// The knobs' law: what Tame and Recover do goes as the knob (1 at 100 %) to this power, so
+    /// under 1 the top of the travel adds less than the bottom did.
+    pub knob_power: f32,
+    /// Brighten below zero: dB taken off the top at its end (it darkens further than it
+    /// brightens).
+    pub brighten_down_db: f32,
+    /// Where Brighten's tilt turns, Hz, and how many octaves the turn takes.
+    pub brighten_hz: f32,
+    pub brighten_width_oct: f32,
     /// A band this far over its neighbourhood is a peak on its own (a held tone, a whistle,
     /// feedback): Tame cuts it further, [`Tuning::peak_ratio`] dB per dB beyond this, up to
     /// [`Tuning::peak_max_db`] more, and narrowly (not smoothed over its neighbours).
@@ -108,11 +119,11 @@ pub const TARGET_POINTS: usize = 8;
 pub const TARGET_HZ: [f32; TARGET_POINTS] = [40.0, 80.0, 160.0, 400.0, 1_000.0, 4_000.0, 10_000.0, 16_000.0];
 
 impl Default for Tuning {
-    /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`) at Tame 100 %,
-    /// Recover 100 % and both at 50 %: 0.55 dB RMS from the reference over every moment and
-    /// third octave. Bias, Brighten and Boost were not in those passes and are as first written.
-    /// A lone pure tone is cut about 1 dB less than the reference cuts it at Tame 100 % (and 2 dB
-    /// less at 50 %).
+    /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`): 1.05 dB RMS from the
+    /// reference over every moment and third octave of nine passes. Tame and Recover at 100 %
+    /// and 200 %, both at 50 %, and Tame 100 % with Bias at each end are each within 1 dB;
+    /// Brighten is the loosest (1.3 dB at its top, 2.2 dB at its bottom). Boost was in no pass
+    /// and is as first written; Bias and Brighten were only passed with Tame alone.
     fn default() -> Self {
         Tuning {
             bands_per_erb: 1.43,
@@ -126,23 +137,27 @@ impl Default for Tuning {
             tame_ratio: 0.16,
             recover_ratio: 0.053,
             knee_db: 1.5,
-            max_cut_db: 6.5,
-            max_boost_db: 8.4,
-            bias_db: 4.0,
+            max_cut_db: 5.0,
+            max_boost_db: 7.6,
+            bias_db: 18.2,
             floor_db: -46.0,
             floor_fade_db: 12.0,
             abs_floor_db: -84.0,
             smooth_passes: 2,
-            level_comp: 0.625,
-            brighten_db: 4.5,
+            level_comp: 0.64,
+            brighten_db: 6.2,
             boost_db: 4.0,
+            knob_power: 0.66,
+            brighten_down_db: 17.1,
+            brighten_hz: 1_364.0,
+            brighten_width_oct: 2.16,
             peak_threshold_db: 16.6,
             peak_ratio: 0.68,
             // The fit asks for more than this; 12 dB is as far as an automatic cut should go.
             peak_max_db: 12.0,
             broad_width_erb: 0.71,
-            tame_broad: 0.35,
-            recover_broad: 0.26,
+            tame_broad: 0.33,
+            recover_broad: 0.25,
             tame_level: 0.3,
             recover_level: 3.2,
             level_ref_db: -11.7,
@@ -172,14 +187,18 @@ impl Tuning {
             knee_db: f(self.knee_db, 0.0, 12.0, d.knee_db),
             max_cut_db: f(self.max_cut_db, 0.0, 24.0, d.max_cut_db),
             max_boost_db: f(self.max_boost_db, 0.0, 18.0, d.max_boost_db),
-            bias_db: f(self.bias_db, 0.0, 12.0, d.bias_db),
+            bias_db: f(self.bias_db, 0.0, 40.0, d.bias_db),
             floor_db: f(self.floor_db, -120.0, -20.0, d.floor_db),
             floor_fade_db: f(self.floor_fade_db, 1.0, 40.0, d.floor_fade_db),
             abs_floor_db: f(self.abs_floor_db, -140.0, -40.0, d.abs_floor_db),
             smooth_passes: self.smooth_passes.min(8),
             level_comp: f(self.level_comp, 0.0, 1.0, d.level_comp),
-            brighten_db: f(self.brighten_db, 0.0, 12.0, d.brighten_db),
+            brighten_db: f(self.brighten_db, 0.0, 30.0, d.brighten_db),
             boost_db: f(self.boost_db, 0.0, 12.0, d.boost_db),
+            knob_power: f(self.knob_power, 0.2, 2.0, d.knob_power),
+            brighten_down_db: f(self.brighten_down_db, 0.0, 30.0, d.brighten_down_db),
+            brighten_hz: f(self.brighten_hz, 100.0, 10_000.0, d.brighten_hz),
+            brighten_width_oct: f(self.brighten_width_oct, 0.25, 6.0, d.brighten_width_oct),
             peak_threshold_db: f(self.peak_threshold_db, 0.0, 60.0, d.peak_threshold_db),
             peak_ratio: f(self.peak_ratio, 0.0, 2.0, d.peak_ratio),
             peak_max_db: f(self.peak_max_db, 0.0, 24.0, d.peak_max_db),
@@ -198,9 +217,9 @@ impl Tuning {
 /// What the knobs say, in the engine's units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
-    /// 0..1.
+    /// 0..2: 1 is the knob at 100 %, 2 at its top, 200 %.
     pub tame: f32,
-    /// 0..1.
+    /// 0..2, as Tame.
     pub recover: f32,
     /// -1..1: below zero favours Tame, above it Recover.
     pub bias: f32,
@@ -493,8 +512,8 @@ impl MannersDsp {
         let d = Settings::default();
         let f = |v: f32, lo: f32, hi: f32, def: f32| if v.is_finite() { v.clamp(lo, hi) } else { def };
         let new = Settings {
-            tame: f(s.tame, 0.0, 1.0, d.tame),
-            recover: f(s.recover, 0.0, 1.0, d.recover),
+            tame: f(s.tame, 0.0, 2.0, d.tame),
+            recover: f(s.recover, 0.0, 2.0, d.recover),
             bias: f(s.bias, -1.0, 1.0, d.bias),
             brighten: f(s.brighten, -1.0, 1.0, d.brighten),
             boost: f(s.boost, -1.0, 1.0, d.boost),
@@ -664,22 +683,20 @@ impl MannersDsp {
         // The ends fade over a third of an octave; wide open, the range is everything.
         let open_lo = lo <= 20.5;
         let open_hi = hi >= 19_900.0;
-        let first = self.centre_erb.first().copied().unwrap_or(0.0);
-        let last = self.centre_erb.get(self.bands.saturating_sub(1)).copied().unwrap_or(first);
-        let mid = 0.5 * (first + last);
-        let half = (0.5 * (last - first)).max(1e-3);
         for i in 0..MAX_BANDS {
             let hz = self.centre_hz.get(i).copied().unwrap_or(0.0).max(1.0);
-            let erb = self.centre_erb.get(i).copied().unwrap_or(0.0);
             let fade = |oct: f32| (0.5 + 1.5 * oct).clamp(0.0, 1.0);
             let r_lo = if open_lo { 1.0 } else { fade((hz / lo).log2()) };
             let r_hi = if open_hi { 1.0 } else { fade((hi / hz).log2()) };
             if let Some(r) = self.range.get_mut(i) {
                 *r = if i < self.bands { r_lo * r_hi } else { 0.0 };
             }
-            // Brighten: a straight tilt on the ERB scale. Boost: a bass shelf (full under 60 Hz,
-            // gone by 240 Hz) against a dip of half its size around 450 Hz, two octaves wide.
-            let bright = s.brighten * t.brighten_db * ((erb - mid) / half).clamp(-1.0, 1.0);
+            // Brighten: a tilt that turns over `brighten_width_oct` octaves around `brighten_hz`,
+            // half its size either side.
+            let turn = 0.5 * (2.0 * (hz / t.brighten_hz).log2() / t.brighten_width_oct).tanh();
+            let bright = if s.brighten >= 0.0 { s.brighten * t.brighten_db * turn } else { s.brighten * t.brighten_down_db * turn };
+            // Boost: a bass shelf (full under 60 Hz, gone by 240 Hz) against a dip of half its size
+            // around 450 Hz, two octaves wide.
             let shelf = (1.0 - (hz / 60.0).log2() / 2.0).clamp(0.0, 1.0);
             let shelf = shelf * shelf * (3.0 - 2.0 * shelf);
             let oct = (hz / 450.0).log2();
@@ -902,20 +919,24 @@ impl MannersDsp {
         let quiet = ((t.level_ref_db - pow_db(total)) / 20.0).clamp(-1.0, 2.0);
         let lean_tame = (1.0 + t.tame_level * quiet).max(0.0);
         let lean_recover = (1.0 + t.recover_level * quiet).max(0.0);
+        // The knobs' law.
+        let (tame, recover) = (s.tame.max(0.0).powf(t.knob_power), s.recover.max(0.0).powf(t.knob_power));
         for i in 0..bands {
             let guard = self.tmp.get(i).copied().unwrap_or(0.0);
             let mut peak = 0.0f32;
             let want = match median {
                 Some(m) => {
-                    let shift = s.bias * t.bias_db;
-                    let x = self.dom.get(i).copied().unwrap_or(0.0) - m - shift;
-                    let b = self.broad.get(i).copied().unwrap_or(0.0) - broad_median - shift;
-                    let over = (b - self.tame_at.get(i).copied().unwrap_or(0.0) * lean_tame).max(0.0);
-                    let under = (self.recover_at.get(i).copied().unwrap_or(0.0) * lean_recover - b).max(0.0);
-                    let cut = soft_cap(s.tame * (t.tame_ratio * knee(x, t.knee_db) + t.tame_broad * over), s.tame * t.max_cut_db);
+                    // Bias raises the bar for the side it leans away from.
+                    let (bar_tame, bar_recover) = (s.bias.max(0.0) * t.bias_db, (-s.bias).max(0.0) * t.bias_db);
+                    let x = self.dom.get(i).copied().unwrap_or(0.0) - m;
+                    let b = self.broad.get(i).copied().unwrap_or(0.0) - broad_median;
+                    let over = (b - self.tame_at.get(i).copied().unwrap_or(0.0) * lean_tame - bar_tame).max(0.0);
+                    let under = (self.recover_at.get(i).copied().unwrap_or(0.0) * lean_recover - b - bar_recover).max(0.0);
+                    let cut = soft_cap(tame * (t.tame_ratio * knee(x - bar_tame, t.knee_db) + t.tame_broad * over), tame * t.max_cut_db);
                     let lift =
-                        soft_cap(s.recover * (t.recover_ratio * knee(-x, t.knee_db) + t.recover_broad * under), s.recover * t.max_boost_db) * guard;
-                    peak = soft_cap(s.tame * t.peak_ratio * (x - t.peak_threshold_db).max(0.0), s.tame * t.peak_max_db);
+                        soft_cap(recover * (t.recover_ratio * knee(-x - bar_recover, t.knee_db) + t.recover_broad * under), recover * t.max_boost_db)
+                            * guard;
+                    peak = soft_cap(tame * t.peak_ratio * (x - bar_tame - t.peak_threshold_db).max(0.0), tame * t.peak_max_db);
                     lift - cut
                 }
                 None => 0.0,

@@ -81,11 +81,15 @@ const FIELDS: &[Field] = &[
     ("gain_attack_ms", |t| &mut t.gain_attack_ms, 10.0, 400.0),
     ("gain_release_ms", |t| &mut t.gain_release_ms, 10.0, 1500.0),
     ("level_comp", |t| &mut t.level_comp, 0.0, 1.0),
-    ("bias_db", |t| &mut t.bias_db, 0.5, 12.0),
-    ("brighten_db", |t| &mut t.brighten_db, 0.5, 12.0),
+    ("bias_db", |t| &mut t.bias_db, 0.5, 40.0),
+    ("brighten_db", |t| &mut t.brighten_db, 0.5, 30.0),
     ("boost_db", |t| &mut t.boost_db, 0.5, 12.0),
     ("floor_db", |t| &mut t.floor_db, -100.0, -30.0),
     ("bands_per_erb", |t| &mut t.bands_per_erb, 1.0, 3.0),
+    ("knob_power", |t| &mut t.knob_power, 0.25, 1.5),
+    ("brighten_down_db", |t| &mut t.brighten_down_db, 1.0, 30.0),
+    ("brighten_hz", |t| &mut t.brighten_hz, 200.0, 8000.0),
+    ("brighten_width_oct", |t| &mut t.brighten_width_oct, 0.3, 6.0),
     ("peak_threshold_db", |t| &mut t.peak_threshold_db, 2.0, 40.0),
     ("peak_ratio", |t| &mut t.peak_ratio, 0.02, 2.0),
     ("peak_max_db", |t| &mut t.peak_max_db, 1.0, 24.0),
@@ -617,7 +621,14 @@ fn compare_cmd(args: &[String], fit: bool) -> Res<()> {
         pairs.push(Pair { name: path.to_string(), set, gain: gain_of(&dry_power, &band_power(&aligned, sr)) });
     }
     let ours = |p: &Pair, t: Tuning| gain_of(&dry_power, &band_power(&render(&dry, p.set, t), sr));
-    let cost = |t: Tuning| (pairs.iter().map(|p| error(&p.gain, &ours(p, t)).powi(2)).sum::<f64>() / pairs.len() as f64).sqrt();
+    // One thread per pass: a fit renders every pass for every step.
+    let cost = |t: Tuning| {
+        let sum: f64 = std::thread::scope(|sc| {
+            let jobs: Vec<_> = pairs.iter().map(|p| sc.spawn(|| error(&p.gain, &ours(p, t)).powi(2))).collect();
+            jobs.into_iter().map(|j| j.join().unwrap_or(f64::INFINITY)).sum()
+        });
+        (sum / pairs.len() as f64).sqrt()
+    };
 
     if fit {
         tuning = fit_tuning(tuning, &cost);

@@ -296,10 +296,12 @@ fn brighten_and_boost_tilt_the_curve() {
     };
     let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("brighten", 100.0)]);
     let _ = run(&mut t, &x, 512);
-    assert!(gain_at(&t, 12_000.0) > gain_at(&t, 1_000.0) + 1.5 && gain_at(&t, 1_000.0) > gain_at(&t, 80.0) + 1.5);
+    // The tilt turns around 1.5 kHz: most of it lies between the low mids and the top.
+    assert!(gain_at(&t, 12_000.0) > gain_at(&t, 300.0) + 5.0 && gain_at(&t, 1_000.0) > gain_at(&t, 80.0) + 0.5);
     let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("brighten", -100.0)]);
     let _ = run(&mut t, &x, 512);
-    assert!(gain_at(&t, 12_000.0) < gain_at(&t, 80.0) - 3.0);
+    let down = gain_at(&t, 80.0) - gain_at(&t, 12_000.0);
+    assert!(down > 12.0, "it darkens further than it brightens: {down:.1} dB");
     let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("boost", 100.0)]);
     let _ = run(&mut t, &x, 512);
     assert!(gain_at(&t, 50.0) > gain_at(&t, 450.0) + 4.0, "{} {}", gain_at(&t, 50.0), gain_at(&t, 450.0));
