@@ -295,7 +295,7 @@ fn mono_and_stereo_get_the_same_curve_and_the_sides_stay_apart() {
     for (id, v) in set {
         mono.set_param(id, v);
     }
-    let y1 = run(&mut mono, &[x.clone()], 512);
+    let y1 = run(&mut mono, std::slice::from_ref(&x), 512);
     let err = (0..len).map(|i| (y1[0][i] - y2[0][i]).abs()).fold(0.0f32, f32::max);
     assert!(err < 1e-4, "{err}");
     // One side silent: it stays silent (the gain is real and the same on both).

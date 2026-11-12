@@ -624,10 +624,11 @@ impl TarnDsp {
             if let Some(b) = self.buf.get_mut(k) {
                 *b *= g;
             }
-            if k > 0 && k < half {
-                if let Some(b) = self.buf.get_mut(n - k) {
-                    *b *= g;
-                }
+            if k > 0
+                && k < half
+                && let Some(b) = self.buf.get_mut(n - k)
+            {
+                *b *= g;
             }
         }
         ifft.process_with_scratch(&mut self.buf, &mut self.scratch);
@@ -640,10 +641,10 @@ impl TarnDsp {
             if let Some(o) = self.ola.first_mut().and_then(|o| o.get_mut(idx)) {
                 *o += v.re * w;
             }
-            if nc > 1 {
-                if let Some(o) = self.ola.get_mut(1).and_then(|o| o.get_mut(idx)) {
-                    *o += v.im * w;
-                }
+            if nc > 1
+                && let Some(o) = self.ola.get_mut(1).and_then(|o| o.get_mut(idx))
+            {
+                *o += v.im * w;
             }
         }
     }
@@ -715,11 +716,12 @@ impl TarnDsp {
             if let Some(v) = self.tmp.get_mut(i) {
                 *v = guard;
             }
-            if guard > 0.0 && self.range.get(i).copied().unwrap_or(0.0) > 0.5 {
-                if let Some(v) = self.sorted.get_mut(active) {
-                    *v = d;
-                    active += 1;
-                }
+            if guard > 0.0
+                && self.range.get(i).copied().unwrap_or(0.0) > 0.5
+                && let Some(v) = self.sorted.get_mut(active)
+            {
+                *v = d;
+                active += 1;
             }
         }
         // The median over the bands that count: shape, not level.
