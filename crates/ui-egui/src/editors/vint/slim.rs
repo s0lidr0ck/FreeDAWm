@@ -239,6 +239,7 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
         st.init = true;
         st.fam.presets.category = "All".into();
         st.needle = (-22.0, ui.input(|i| i.time));
+        st.lamps = -90.0;
     }
     // `ui.mix.drawer {tab: "Models"}` (scripts): open the circuit menu
     if family::take_drawer_tab(app, host, &mut st.fam).as_deref() == Some("Models") {
@@ -272,8 +273,19 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
 
     // ---- 2. the circuit: one menu, each entry with its description
     let order = super::config::CIRCUIT_ORDER;
-    let entries: Vec<MenuEntry> =
-        order.iter().map(|&c| MenuEntry { name: circuit(c).name, tag: tag(c), blurb: circuit(c).blurb, credit: circuit(c).credit }).collect();
+    let entries: Vec<MenuEntry> = order
+        .iter()
+        .map(|&c| {
+            // the Enhancer is whichever of its three boxes is in use
+            let enhancer = (c == d::C_ENHANCER).then(|| (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2));
+            let (tag, blurb, credit) = match enhancer {
+                Some(1) => ("882", super::maximizer::BLURB, super::maximizer::CREDIT),
+                Some(2) => ("Vitalizer", super::config::VITALIZER_BLURB, super::config::VITALIZER_CREDIT),
+                _ => (tag(c), circuit(c).blurb, circuit(c).credit),
+            };
+            MenuEntry { name: circuit(c).name, tag, blurb, credit }
+        })
+        .collect();
     let selected = order.iter().position(|&c| c == cur).unwrap_or(0);
     let look = MenuLook { max_height: 640.0, ..MenuLook::CENTRED };
     let open_now = std::mem::take(&mut st.circuits_open);
@@ -289,7 +301,15 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
     let foot_h = 16.0 + 26.0 + 6.0 + FOOT_KNOB + 30.0 + 6.0 + 24.0;
 
     // ---- 3. the faceplate, turned on its side
-    if def.face.empty() {
+    if super::maximizer::shown(host) {
+        // the Enhancer's two units with fronts of their own, turned as the EQs' are
+        let level = super::maximizer_level(st, ui, host);
+        y = super::maximizer::slim(app, ui, host, &mut st.fam, pos2(x0, y), w, level);
+    } else if super::vitalizer::shown(host) {
+        let lit = super::vitalizer::lamps(crate::editor_kit::readouts(host));
+        y = super::vitalizer::slim(app, ui, host, &mut st.fam, pos2(x0, y), w, lit);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    } else if def.face.empty() {
         y = rows(app, ui, host, &mut st.fam, row(y, 0.0), cur);
     } else {
         let face = turned(def, cur);

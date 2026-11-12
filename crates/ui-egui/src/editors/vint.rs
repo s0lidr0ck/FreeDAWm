@@ -229,6 +229,20 @@ fn apply_knob(app: &mut SoundApp, host: &Host, st: &mut FamilyState, param_i: us
     }
 }
 
+/// The Maximizer's level lamps on the 30 Hz timer, as the VU: the loudest block's output RMS
+/// since the last tick. Returns the level they show, in dBu.
+fn maximizer_level(st: &mut Editor, ui: &Ui, host: &Host) -> f32 {
+    let now = ui.input(|i| i.time);
+    let dt = now - st.needle.1;
+    if !(0.0..1.0 / 30.0).contains(&dt) {
+        let rms = crate::editor_kit::live(host).map_or(0.0, |l| l.take(soundcraft_dsp::plugins::fs::vint::LIVE_OUT_LEVEL));
+        maximizer::level_step(&mut st.lamps, rms, dt.clamp(0.0, 1.0) as f32);
+        st.needle.1 = now;
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    st.lamps
+}
+
 fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {
     if !st.init {
         st.init = true;
@@ -303,20 +317,12 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
         paint_face(ui, &p, host, panel, &def.face, scale, origin);
     }
     if maxi {
-        // The lamps on the 30 Hz timer, as the VU: the loudest block's output RMS since the last tick.
-        let now = ui.input(|i| i.time);
-        let dt = now - st.needle.1;
-        if !(0.0..1.0 / 30.0).contains(&dt) {
-            let rms = crate::editor_kit::live(host).map_or(0.0, |l| l.take(soundcraft_dsp::plugins::fs::vint::LIVE_OUT_LEVEL));
-            maximizer::level_step(&mut st.lamps, rms, dt.clamp(0.0, 1.0) as f32);
-            st.needle.1 = now;
-        }
-        maximizer::paint(&p, host, panel, scale, origin, st.lamps);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        let level = maximizer_level(st, ui, host);
+        maximizer::paint(&p, host, &maximizer::Lay::wide(panel, scale, origin), level);
     }
     let vita = vitalizer::shown(host);
     if vita {
-        vitalizer::paint(&p, host, panel, scale, origin, vitalizer::lamps(crate::editor_kit::readouts(host)));
+        vitalizer::paint(&p, host, &vitalizer::Lay::wide(panel, scale, origin), vitalizer::lamps(crate::editor_kit::readouts(host)));
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     text_left(&p, stage_note, def.stage, regular(CAPTION_SIZE), pal.text_faint);
@@ -337,9 +343,13 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
 
     // ---- the panel's controls
     if maxi {
-        maximizer::controls(app, ui, host, &mut st.fam, panel, scale, origin);
+        let (label, seg) = maximizer::wide_type_rects(panel);
+        maximizer::type_selector(app, ui, host, &mut st.fam, label, seg, 1);
+        maximizer::controls(app, ui, host, &mut st.fam, &maximizer::Lay::wide(panel, scale, origin));
     } else if vita {
-        vitalizer::controls(app, ui, host, &mut st.fam, panel, scale, origin);
+        let (label, seg) = maximizer::wide_type_rects(panel);
+        maximizer::type_selector(app, ui, host, &mut st.fam, label, seg, 2);
+        vitalizer::controls(app, ui, host, &mut st.fam, &vitalizer::Lay::wide(panel, scale, origin));
     } else if def.face.empty() {
         columns(app, ui, host, &mut st.fam, panel, cached_circuit);
     } else {
