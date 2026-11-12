@@ -9,7 +9,12 @@
 //! - The dials: Depth with Soft/Hard, then Sharpness, Selectivity, Attack and Release, the stereo
 //!   group (L/R or M/S, Link, Balance) and the output group (Mix, Trim).
 //!
-//! Every change goes through `mix.module_params`; a drag is one undo step.
+//! Every change goes through `mix.module_params`; a drag is one undo step. The slim layout
+//! ([`slim`]) stacks the same sections at the classic drawer's width.
+
+mod slim;
+
+pub use slim::{slim_band_pos, slim_plot_rect};
 
 use crate::SoundApp;
 use crate::editor_kit::controls::{DialOpts, PillLook, PillStyle, SelectionStyle, pill_ex, pill_height, tip};
@@ -124,21 +129,30 @@ pub(crate) struct Editor {
     /// The cut curves as drawn (they fall back smoothly between frames).
     cut_a: Vec<f32>,
     cut_b: Vec<f32>,
+    /// Drawn in the slim layout (`UiState::slim_editors`), and its height as last laid out.
+    slim: bool,
+    slim_h: f32,
+    /// The slim layout's More section is open.
+    slim_more: bool,
 }
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
-    run_with::<Editor>(app, ui, track, module, meters, |_, _| {});
+    run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);
 }
 
 impl VstEditor for Editor {
     const PLUGIN: &'static str = "rez";
 
     fn size(&self, _ins: &soundcraft_model::Insert) -> Vec2 {
-        SIZE
+        if self.slim { crate::editor_kit::slim::size(self.slim_h) } else { SIZE }
     }
 
     fn ui(&mut self, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {
-        editor_ui(self, app, ui, host);
+        if self.slim {
+            slim::editor_ui(self, app, ui, host);
+        } else {
+            editor_ui(self, app, ui, host);
+        }
     }
 }
 
@@ -180,34 +194,43 @@ fn group_label(p: &egui::Painter, panel: Rect, text: &str) {
 
 // ---------------------------------------------------------------------------- the header
 
-fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, header: Rect) {
+/// The header's pills in their rectangles: the editor's Undo, A and B, and Delta.
+fn header_pills(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, [undo, a, b, delta]: [Rect; 4]) {
     let pal = &PALETTE;
-    paint_title(ui.painter(), header, "Rez", "Resonance", pal);
-    let h = pill_height(PillStyle::Small);
     let plain = PillLook { tracked: false, ..PillLook::default() };
+    let look = PillLook { dimmed: !st.fam.can_undo(), ..plain };
+    if pill_ex(ui, undo, "rez-undo", pal, "Undo", false, PillStyle::Small, look).clicked() {
+        family::do_undo(app, host, &mut st.fam);
+    }
+    if pill_ex(ui, a, "rez-a", pal, "A", !st.fam.on_b(), PillStyle::Small, plain).clicked() {
+        family::select_ab(app, host, &mut st.fam, &FAMILY, false);
+    }
+    if pill_ex(ui, b, "rez-b", pal, "B", st.fam.on_b(), PillStyle::Small, plain).clicked() {
+        family::select_ab(app, host, &mut st.fam, &FAMILY, true);
+    }
+    let delta_on = param(host, "delta") > 0.5;
+    let look = PillLook { active_colour: Some(pal.warn), ..plain };
+    let resp = pill_ex(ui, delta, "rez-delta", pal, "Delta", delta_on, PillStyle::Small, look);
+    if resp.clicked() {
+        family::pill_set(app, host, &mut st.fam, &FAMILY, "delta", if delta_on { 0.0 } else { 1.0 });
+    }
+    resp.on_hover_text("Hear only what Rez is removing");
+}
+
+fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, header: Rect) {
+    paint_title(ui.painter(), header, "Rez", "Resonance", &PALETTE);
+    let h = pill_height(PillStyle::Small);
     let mut right = header.right();
     let mut place = |w: f32, gap: f32| {
         let r = Rect::from_min_size(pos2(right - w, header.center().y - h * 0.5), vec2(w, h));
         right -= w + gap;
         r
     };
-    let delta_on = param(host, "delta") > 0.5;
-    let look = PillLook { active_colour: Some(pal.warn), ..plain };
-    let delta = pill_ex(ui, place(58.0, 10.0), "rez-delta", pal, "Delta", delta_on, PillStyle::Small, look);
-    if delta.clicked() {
-        family::pill_set(app, host, &mut st.fam, &FAMILY, "delta", if delta_on { 0.0 } else { 1.0 });
-    }
-    delta.on_hover_text("Hear only what Rez is removing");
-    if pill_ex(ui, place(28.0, 3.0), "rez-b", pal, "B", st.fam.on_b(), PillStyle::Small, plain).clicked() {
-        family::select_ab(app, host, &mut st.fam, &FAMILY, true);
-    }
-    if pill_ex(ui, place(28.0, 8.0), "rez-a", pal, "A", !st.fam.on_b(), PillStyle::Small, plain).clicked() {
-        family::select_ab(app, host, &mut st.fam, &FAMILY, false);
-    }
-    let look = PillLook { dimmed: !st.fam.can_undo(), ..plain };
-    if pill_ex(ui, place(48.0, 0.0), "rez-undo", pal, "Undo", false, PillStyle::Small, look).clicked() {
-        family::do_undo(app, host, &mut st.fam);
-    }
+    let delta = place(58.0, 10.0);
+    let b = place(28.0, 3.0);
+    let a = place(28.0, 8.0);
+    let undo = place(48.0, 0.0);
+    header_pills(st, app, ui, host, [undo, a, b, delta]);
 }
 
 // ---------------------------------------------------------------------------- the graph
@@ -372,24 +395,25 @@ pub fn band_pos(frame: Rect, freq: f32, gain: f32) -> Pos2 {
     pos2(freq_to_x(plot, freq), sens_y(plot, gain))
 }
 
-fn graph_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host) {
+/// The graph in `panel`, plotting in `plot`, with the line about the band in hand in `readout`.
+/// `compact` (the slim layout): fewer grid labels, no key, the line wrapped onto two rows.
+fn graph_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, (panel, plot, readout): (Rect, Rect, Rect), compact: bool) {
     let pal = &PALETTE;
-    let panel = graph_panel(host.rect);
     paint_panel(ui.painter(), panel, 10.0);
-    let plot = plot_rect(host.rect);
     let p = ui.painter().with_clip_rect(panel.intersect(ui.clip_rect()));
     let sr = host.sr as f32;
 
     // ---- the frequency grid and its labels
-    for (hz, label) in
-        [(50.0, "50"), (100.0, "100"), (200.0, "200"), (500.0, "500"), (1000.0, "1k"), (2000.0, "2k"), (5000.0, "5k"), (10_000.0, "10k")]
-    {
+    let grid = [(50.0, "50"), (100.0, "100"), (200.0, "200"), (500.0, "500"), (1000.0, "1k"), (2000.0, "2k"), (5000.0, "5k"), (10_000.0, "10k")];
+    for (hz, label) in grid {
         let x = freq_to_x(plot, hz);
         p.vline(x, plot.y_range(), Stroke::new(1.0, al(Color32::WHITE, 0.05)));
-        p.text(pos2(x, plot.bottom() + 11.0), Align2::CENTER_CENTER, label, regular(TINY_SIZE), pal.text_faint);
+        if !compact || matches!(label, "100" | "1k" | "10k") {
+            p.text(pos2(x, plot.bottom() + if compact { 9.0 } else { 11.0 }), Align2::CENTER_CENTER, label, regular(TINY_SIZE), pal.text_faint);
+        }
     }
     // The cut's scale, on the right.
-    for db in [6.0f32, 12.0, 18.0, 24.0] {
+    for db in if compact { [12.0f32, 24.0].as_slice() } else { [6.0f32, 12.0, 18.0, 24.0].as_slice() }.iter().copied() {
         let y = cut_y(plot, db);
         p.hline(plot.right() - 6.0..=plot.right(), y, Stroke::new(1.0, al(Color32::WHITE, 0.16)));
         p.text(pos2(plot.right() - 9.0, y), Align2::RIGHT_CENTER, format!("-{db:.0}"), regular(TINY_SIZE), pal.text_faint);
@@ -468,15 +492,17 @@ fn graph_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host) {
     if split {
         key(&mut x, pal.accent, side_names.0);
         key(&mut x, SIDE_B, side_names.1);
-    } else {
+    } else if !compact {
         key(&mut x, pal.accent, "Reduction");
     }
-    key(&mut x, al(pal.text_bright, 0.85), "Sensitivity");
+    if !compact {
+        key(&mut x, al(pal.text_bright, 0.85), "Sensitivity");
+    }
     let text = if deepest >= 0.05 { format!("-{deepest:.1} dB") } else { "0.0 dB".to_string() };
-    p.text(pos2(plot.right() - 44.0, y), Align2::RIGHT_CENTER, text, bold(LABEL_SIZE), if deepest >= 0.05 { pal.accent } else { pal.text_faint });
+    let at = pos2(plot.right() - if compact { 26.0 } else { 44.0 }, y);
+    p.text(at, Align2::RIGHT_CENTER, text, bold(LABEL_SIZE), if deepest >= 0.05 { pal.accent } else { pal.text_faint });
 
     // ---- the line under the graph: the band (or handle) in hand
-    let line = pos2(panel.left() + 12.0, panel.bottom() + 4.0 + READOUT_H * 0.5);
     let text = if hot_low {
         format!("Low  \u{00B7}  {}", hz_text(low))
     } else if hot_high {
@@ -485,10 +511,16 @@ fn graph_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host) {
         let (i, b) = b;
         let state = if b.on { "" } else { "  \u{00B7}  off" };
         format!("Band {}  \u{00B7}  {}  \u{00B7}  {} sensitivity  \u{00B7}  Q {:.2}{state}", i + 1, hz_text(b.freq), signed_db(b.gain), b.q)
+    } else if compact {
+        "Drag a band: Rez works harder or backs off there. The edge handles set the range.".to_string()
     } else {
         "Drag a band to tell Rez where to work harder or back off. The handles at the edges set the range.".to_string()
     };
-    text_left(p, line, &text, CAPTION_SIZE, pal.text_faint);
+    if compact {
+        crate::editor_kit::slim::wrapped(ui, readout, &text, CAPTION_SIZE, pal.text_faint, 2);
+    } else {
+        text_left(p, readout.left_center(), &text, CAPTION_SIZE, pal.text_faint);
+    }
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 }
 
@@ -546,9 +578,10 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     let b = full.shrink2(vec2(PAD_X, PAD_Y));
     let header = Rect::from_min_size(b.min, vec2(b.width(), HEADER_H));
     let graph = graph_panel(full);
-    let controls = Rect::from_min_size(pos2(b.left(), graph.bottom() + 4.0 + READOUT_H + GAP), vec2(b.width(), CONTROLS_H));
+    let readout = Rect::from_min_size(pos2(graph.left() + 12.0, graph.bottom() + 4.0), vec2(graph.width() - 24.0, READOUT_H));
+    let controls = Rect::from_min_size(pos2(b.left(), readout.bottom() + GAP), vec2(b.width(), CONTROLS_H));
     header_ui(st, app, ui, host, header);
-    graph_ui(st, app, ui, host);
+    graph_ui(st, app, ui, host, (graph, plot_rect(full), readout), false);
     controls_ui(st, app, ui, host, controls);
 }
 

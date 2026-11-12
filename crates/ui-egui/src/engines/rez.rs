@@ -6,6 +6,7 @@ use crate::module_graphs::GraphKind;
 pub const UI: EngineUi = EngineUi {
     key_knobs: &["depth", "sharpness", "selectivity", "mix"],
     hero: Some("depth"),
+    tile_labels: &[("sharpness", "Sharp"), ("selectivity", "Select")],
     wide_editor: Some(crate::editors::rez::draw),
     ..EngineUi::new("rez", crate::editors::rez::ACCENT, GraphKind::Level)
 };
