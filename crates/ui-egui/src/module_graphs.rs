@@ -479,6 +479,17 @@ impl Streams {
                 self.manners.extend(
                     (0..bands).map(|i| (a.live.get(LIVE_HZ + i), a.live.get(LIVE_GAIN + i))).filter(|(hz, g)| hz.is_finite() && g.is_finite()),
                 );
+                // The spectra behind the curve in its editor, at the analyzer's pace.
+                let due = match self.spec_at {
+                    Some(t) => !now.is_finite() || now < t || now - t >= SPEC_INTERVAL - 1e-3,
+                    None => true,
+                };
+                if due {
+                    self.spec_at = Some(now);
+                    let (scratch, fresh, an) = (&mut self.scratch, &mut self.fresh, &mut self.analyzer);
+                    feed_spectrum(&mut self.pre, &mut self.seen.0, &a.pre, scratch, fresh, an);
+                    feed_spectrum(&mut self.post, &mut self.seen.1, &a.post, scratch, fresh, an);
+                }
             }
             _ => {}
         }
@@ -709,7 +720,7 @@ pub(crate) fn cq_dot(rect: Rect, values: &[f32], b: &CqBand, sr: f32) -> Pos2 {
 }
 
 /// A spectrum as a filled outline over `rect`: the loudest bin under each point, tilted.
-fn spectrum(p: &egui::Painter, rect: Rect, spec: &[f32], sr: f32, fill: Color32, line: Option<Stroke>) {
+pub(crate) fn spectrum(p: &egui::Painter, rect: Rect, spec: &[f32], sr: f32, fill: Color32, line: Option<Stroke>) {
     if spec.len() < 4 {
         return;
     }

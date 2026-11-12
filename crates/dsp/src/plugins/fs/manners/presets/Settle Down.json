@@ -1,0 +1,17 @@
+{
+  "engine": "Manners",
+  "name": "Settle Down",
+  "group": "Mastering",
+  "tags": "Mostly Tame",
+  "desc": "Calms a crowded, pushy mix without lifting much.",
+  "values": {
+    "tame": 50,
+    "recover": 10,
+    "bias": -20,
+    "brighten": 0,
+    "boost": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "delta": false
+  }
+}

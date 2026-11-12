@@ -13,10 +13,12 @@
 //! - No tail beyond the latency: the gain has no memory of the audio.
 
 pub mod manners_dsp;
+mod presets;
 #[cfg(test)]
 mod tests;
 
 pub use manners_dsp::{MAX_BANDS, MannersDsp, Settings, Tuning};
+pub use presets::PRESETS;
 
 use crate::analysis::Analysis;
 use crate::params::Params;
@@ -69,7 +71,7 @@ pub static MANNERS_INFO: PluginInfo = PluginInfo {
 pub const ENGINE: super::EngineReg = super::EngineReg {
     info: &MANNERS_INFO,
     make: || Box::new(Manners::new()),
-    presets: &[],
+    presets: PRESETS,
     order: 45,
     fidelity: None,
     prepare_state: None,
