@@ -102,37 +102,41 @@ pub const TARGET_POINTS: usize = 8;
 pub const TARGET_HZ: [f32; TARGET_POINTS] = [40.0, 80.0, 160.0, 400.0, 1_000.0, 4_000.0, 10_000.0, 16_000.0];
 
 impl Default for Tuning {
+    /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`) at Tame 100 %,
+    /// Recover 100 % and both at 50 %: 0.6 dB RMS from the reference over every moment and
+    /// third octave. Bias, Brighten, Boost and the floor were not in those passes and are as first
+    /// written.
     fn default() -> Self {
         Tuning {
-            bands_per_erb: 2.0,
-            self_width_erb: 1.0,
-            slope_up_db: 10.0,
+            bands_per_erb: 1.5,
+            self_width_erb: 0.5,
+            slope_up_db: 39.5,
             slope_down_db: 24.0,
-            level_attack_ms: 10.0,
-            level_release_ms: 80.0,
-            gain_attack_ms: 25.0,
-            gain_release_ms: 160.0,
-            tame_ratio: 0.6,
-            recover_ratio: 0.5,
+            level_attack_ms: 22.0,
+            level_release_ms: 54.0,
+            gain_attack_ms: 11.0,
+            gain_release_ms: 13.5,
+            tame_ratio: 0.05,
+            recover_ratio: 0.1,
             knee_db: 1.5,
-            max_cut_db: 12.0,
-            max_boost_db: 9.0,
+            max_cut_db: 6.2,
+            max_boost_db: 7.3,
             bias_db: 4.0,
             floor_db: -60.0,
             floor_fade_db: 12.0,
             abs_floor_db: -84.0,
             smooth_passes: 2,
-            level_comp: 1.0,
+            level_comp: 0.65,
             brighten_db: 4.5,
             boost_db: 4.0,
-            broad_width_erb: 3.0,
-            tame_broad: 0.3,
-            recover_broad: 0.38,
-            tame_level: 0.6,
-            recover_level: 1.9,
-            level_ref_db: -17.0,
-            tame_target: [-5.7, -9.3, -6.3, -1.3, 0.0, -1.3, -7.3, -8.7],
-            recover_target: [7.1, 8.2, 5.5, 0.8, 0.0, 0.0, 2.1, 7.1],
+            broad_width_erb: 1.0,
+            tame_broad: 0.35,
+            recover_broad: 0.31,
+            tame_level: 0.3,
+            recover_level: 2.9,
+            level_ref_db: -13.0,
+            tame_target: [-7.95, -11.3, -4.3, -0.3, 0.0, -1.3, -6.05, -11.45],
+            recover_target: [7.1, 11.45, 5.25, -1.7, -2.0, -0.25, 0.1, 9.1],
         }
     }
 }

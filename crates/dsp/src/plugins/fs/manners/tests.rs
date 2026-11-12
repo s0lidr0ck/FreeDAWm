@@ -176,10 +176,10 @@ fn recover_lifts_a_covered_region_and_not_the_noise_floor() {
     let tail = 48_000..len;
     let dip = band_db(&y[0][tail.clone()], 1_800.0, 2_400.0) - band_db(&x[tail.clone()], 1_800.0, 2_400.0);
     let loud = band_db(&y[0][tail.clone()], 500.0, 1_000.0) - band_db(&x[tail], 500.0, 1_000.0);
-    assert!(dip > loud + 2.0, "the covered band rose {dip:.1} dB against {loud:.1} dB for its neighbours");
+    assert!(dip > loud + 1.0, "the covered band rose {dip:.1} dB against {loud:.1} dB for its neighbours");
     let mut r = [f32::NAN; 8];
     t.readouts(&mut r);
-    assert!(r[1] > 1.5 && r[0].abs() < 0.5, "{r:?}");
+    assert!(r[1] > 1.0 && r[0].abs() < 0.5, "{r:?}");
 
     // Nothing above 6 kHz at all (digital silence there): nothing to recover, so no lift.
     // (Read while the noise still runs: the end of a file is a click, which has highs.)
@@ -213,14 +213,26 @@ fn an_even_spectrum_is_left_nearly_alone_and_keeps_its_level() {
 }
 
 #[test]
-fn the_level_is_given_back_when_a_lot_is_tamed() {
+fn most_of_the_level_is_given_back_when_a_lot_is_tamed() {
+    // The reference gives back about two thirds of what a cut takes (`Tuning::level_comp`).
     let len = 4 * 48_000;
     let x = add(&pink(len, 12), &narrow(len, 1_000.0, 13), 8.0);
-    let mut t = manners(&[("tame", 100.0), ("recover", 0.0)]);
-    let y = run(&mut t, &stereo(x.clone()), 512);
     let rms = |v: &[f32]| (v.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
-    let d = 20.0 * (rms(&y[0][48_000..]) / rms(&x[48_000..])).log10();
-    assert!(d.abs() < 1.0, "the level moved {d:.2} dB");
+    let change = |tuning: Tuning| {
+        let mut dsp = MannersDsp::with_tuning(tuning);
+        dsp.prepare(48_000.0, 2);
+        dsp.set(Settings { tame: 1.0, ..Settings::default() });
+        let mut io = stereo(x.clone());
+        dsp.process(&mut io, len);
+        (20.0 * (rms(&io[0][96_000..]) / rms(&x[96_000 - N..len - N])).log10(), dsp.level_comp_db())
+    };
+    let (with, comp) = change(Tuning::default());
+    let (without, none) = change(Tuning { level_comp: 0.0, ..Tuning::default() });
+    assert!(comp > 0.5 && none == 0.0, "{comp} {none}");
+    assert!(without < -1.5, "taming this much takes level: {without:.2} dB");
+    assert!(with.abs() < without.abs() * 0.6, "{with:.2} dB with the level given back, {without:.2} dB without");
+    let (all, _) = change(Tuning { level_comp: 1.0, ..Tuning::default() });
+    assert!(all.abs() < 0.6, "all of it given back: {all:.2} dB");
 }
 
 #[test]
