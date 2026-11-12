@@ -70,6 +70,16 @@ fn look(id: &str) -> Look {
         "expander_gate" => params(&[("threshold", -30.0), ("range", 40.0)]),
         "de_esser" => params(&[("freq", 7500.0), ("threshold", -42.0), ("range", 14.0)]),
         "maximizer" => params(&[("threshold", -9.0), ("ceiling", -1.0)]),
+        "rez" => params(&[
+            ("depth", 85.0),
+            ("selectivity", 30.0),
+            ("low", 90.0),
+            ("b1_gain", -14.0),
+            ("b2_gain", 5.0),
+            ("b3_freq", 3200.0),
+            ("b3_gain", 9.0),
+            ("b3_q", 1.6),
+        ]),
         "channel_strip" => params(&[
             ("comp_on", 1.0),
             ("comp_threshold", -30.0),

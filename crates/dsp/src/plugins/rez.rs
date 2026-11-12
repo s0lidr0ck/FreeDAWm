@@ -7,25 +7,33 @@
 //! Per frame (an STFT: 2048 points up to 50 kHz, a new frame every N/8 samples, root-Hann windows
 //! on the way in and out):
 //!
-//! 1. The power spectrum, summed over the channels (or taken from the sidechain key), followed in
-//!    time with Attack.
+//! 1. The power spectrum of each side (left and right, or mid and side), or of the sidechain key,
+//!    with Link deciding how much of the other side's power each side also listens to, followed
+//!    in time with Attack.
 //! 2. FINE: that power averaged over a narrow band around each bin (Sharpness sets the width), in
 //!    dB.
 //! 3. ENVELOPE: FINE averaged, in dB, over a wide band (Selectivity sets the width). This is what
 //!    the sound roughly looks like without its resonances.
 //! 4. EXCESS = FINE - ENVELOPE. Where it is above the threshold (Selectivity), the part above is
-//!    a cut request, scaled by Depth, weighted by the Low/High range and limited to [`MAX_CUT_DB`].
+//!    a cut request, scaled by Depth and by the SENSITIVITY at that frequency (the Low/High range
+//!    and four bands that raise or lower how hard Rez works there), limited to [`MAX_CUT_DB`].
 //! 5. Each bin's cut rises at once and falls back with Release.
 //! 6. The bins are scaled and the frame is resynthesised by overlap-add.
 //!
-//! Every channel gets the same cut, so the stereo image does not move.
+//! With Link at 100 % both sides get the same cut, so the stereo image does not move. More than
+//! two channels are always linked.
 //!
 //! Latency: one frame (N samples), always reported. Delta plays what is being removed. Every
 //! buffer is allocated in `prepare`; `process` and `set_param` never allocate.
+//!
+//! For its editor Rez publishes the cut in force as [`LIVE_POINTS`] values per side on a log
+//! frequency axis ([`Analysis::live`]: [`LIVE_CUT_A`], [`LIVE_CUT_B`]), and feeds the analysis
+//! rings with the (delayed) input on `pre` and the output on `post`.
 
+use crate::analysis::Analysis;
 use crate::params::{Params, choice, lin, log, toggle};
-use crate::util::{frames_in, sane_channels, sane_sr};
-use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit};
+use crate::util::{frames_in, sane_channels, sane_sr, time_coef};
+use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
@@ -49,6 +57,28 @@ const THRESHOLD_DB: (f32, f32) = (1.0, 7.0);
 const MIN_HALF_BINS: f32 = 1.5;
 /// Power below this is silence (-200 dB): keeps the logarithm finite.
 const POWER_FLOOR: f32 = 1.0e-20;
+/// The most a sensitivity above 0 dB multiplies the cut by (+12 dB).
+const MAX_WEIGHT: f32 = 4.0;
+/// How quickly Mix and Trim glide to a new value, in ms.
+const GLIDE_MS: f32 = 20.0;
+
+/// The sensitivity bands.
+pub const BANDS: usize = 4;
+/// The points of the live cut curve per side, log-spaced from [`LIVE_MIN_HZ`] to [`LIVE_MAX_HZ`].
+pub const LIVE_POINTS: usize = 96;
+pub const LIVE_MIN_HZ: f32 = 20.0;
+pub const LIVE_MAX_HZ: f32 = 20_000.0;
+/// [`Analysis::live`]: the first side's cut in dB (left, mid, or everything when linked), then
+/// the second side's (right or side; the same values as the first when there is one detector).
+pub const LIVE_CUT_A: usize = 0;
+pub const LIVE_CUT_B: usize = LIVE_POINTS;
+/// How many live values Rez publishes.
+pub const LIVE_LEN: usize = 2 * LIVE_POINTS;
+
+/// The frequency of live point `i`, in Hz.
+pub fn live_hz(i: usize) -> f32 {
+    LIVE_MIN_HZ * (LIVE_MAX_HZ / LIVE_MIN_HZ).powf(i as f32 / (LIVE_POINTS - 1) as f32)
+}
 
 const P_DEPTH: usize = 0;
 const P_SHARPNESS: usize = 1;
@@ -60,8 +90,24 @@ const P_HIGH: usize = 6;
 const P_MODE: usize = 7;
 const P_MIX: usize = 8;
 const P_DELTA: usize = 9;
+const P_TRIM: usize = 10;
+const P_STEREO: usize = 11;
+const P_LINK: usize = 12;
+const P_BALANCE: usize = 13;
+/// The first band's first parameter; each band has [`BAND_PARAMS`]: on, freq, gain, q.
+const P_BANDS: usize = 14;
+const BAND_PARAMS: usize = 4;
 
-static REZ_PARAMS: [ParamInfo; 10] = [
+/// The Stereo choices.
+pub const STEREO_NAMES: [&str; 2] = ["L/R", "M/S"];
+/// The Mode choices.
+pub const MODE_NAMES: [&str; 2] = ["Soft", "Hard"];
+
+/// A band's sensitivity range in dB, and its Q range.
+pub const BAND_GAIN_DB: (f32, f32) = (-24.0, 12.0);
+pub const BAND_Q: (f32, f32) = (0.3, 8.0);
+
+static REZ_PARAMS: [ParamInfo; P_BANDS + BANDS * BAND_PARAMS] = [
     lin("depth", "Depth", 0.0, 100.0, 50.0, Unit::Percent),
     lin("sharpness", "Sharpness", 0.0, 100.0, 50.0, Unit::Percent),
     lin("selectivity", "Selectivity", 0.0, 100.0, 50.0, Unit::Percent),
@@ -69,9 +115,37 @@ static REZ_PARAMS: [ParamInfo; 10] = [
     log("release", "Release", 5.0, 1000.0, 80.0, Unit::Ms),
     log("low", "Low", 20.0, 2000.0, 60.0, Unit::Hz),
     log("high", "High", 1000.0, 20000.0, 20000.0, Unit::Hz),
-    choice("mode", "Mode", &["Soft", "Hard"], 0),
+    choice("mode", "Mode", &MODE_NAMES, 0),
     lin("mix", "Mix", 0.0, 100.0, 100.0, Unit::Percent),
     toggle("delta", "Delta", false),
+    lin("trim", "Trim", -12.0, 12.0, 0.0, Unit::Db),
+    choice("stereo", "Stereo", &STEREO_NAMES, 0),
+    lin("link", "Link", 0.0, 100.0, 100.0, Unit::Percent),
+    lin("balance", "Balance", -100.0, 100.0, 0.0, Unit::Percent),
+    toggle("b1_on", "Band 1", true),
+    log("b1_freq", "Band 1 Freq", 20.0, 20000.0, 150.0, Unit::Hz),
+    lin("b1_gain", "Band 1 Sensitivity", BAND_GAIN_DB.0, BAND_GAIN_DB.1, 0.0, Unit::Db),
+    log("b1_q", "Band 1 Q", BAND_Q.0, BAND_Q.1, 1.0, Unit::None),
+    toggle("b2_on", "Band 2", true),
+    log("b2_freq", "Band 2 Freq", 20.0, 20000.0, 600.0, Unit::Hz),
+    lin("b2_gain", "Band 2 Sensitivity", BAND_GAIN_DB.0, BAND_GAIN_DB.1, 0.0, Unit::Db),
+    log("b2_q", "Band 2 Q", BAND_Q.0, BAND_Q.1, 1.0, Unit::None),
+    toggle("b3_on", "Band 3", true),
+    log("b3_freq", "Band 3 Freq", 20.0, 20000.0, 2500.0, Unit::Hz),
+    lin("b3_gain", "Band 3 Sensitivity", BAND_GAIN_DB.0, BAND_GAIN_DB.1, 0.0, Unit::Db),
+    log("b3_q", "Band 3 Q", BAND_Q.0, BAND_Q.1, 1.0, Unit::None),
+    toggle("b4_on", "Band 4", true),
+    log("b4_freq", "Band 4 Freq", 20.0, 20000.0, 8000.0, Unit::Hz),
+    lin("b4_gain", "Band 4 Sensitivity", BAND_GAIN_DB.0, BAND_GAIN_DB.1, 0.0, Unit::Db),
+    log("b4_q", "Band 4 Q", BAND_Q.0, BAND_Q.1, 1.0, Unit::None),
+];
+
+/// The parameter ids of band `i` (0-based): on, freq, gain, q.
+pub const BAND_IDS: [[&str; BAND_PARAMS]; BANDS] = [
+    ["b1_on", "b1_freq", "b1_gain", "b1_q"],
+    ["b2_on", "b2_freq", "b2_gain", "b2_q"],
+    ["b3_on", "b3_freq", "b3_gain", "b3_q"],
+    ["b4_on", "b4_freq", "b4_gain", "b4_q"],
 ];
 
 pub static REZ_INFO: PluginInfo = PluginInfo {
@@ -87,6 +161,62 @@ pub static REZ_INFO: PluginInfo = PluginInfo {
     references: 0,
     midi_out: false,
 };
+
+/// One sensitivity band: a bell on the sensitivity curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Band {
+    pub on: bool,
+    pub freq: f32,
+    /// dB of sensitivity: above 0 Rez works harder there, below 0 less, at the bottom not at all.
+    pub gain: f32,
+    pub q: f32,
+}
+
+impl Band {
+    /// The band's bell at `hz`, in dB (0 when off or flat).
+    pub fn db_at(&self, hz: f32) -> f32 {
+        if !self.on || self.gain.abs() < 1.0e-3 || self.freq <= 0.0 || hz <= 0.0 {
+            return 0.0;
+        }
+        // An analogue peaking filter's magnitude.
+        let a = 10.0f32.powf(self.gain / 40.0);
+        let q = self.q.max(0.05);
+        let x = hz / self.freq;
+        let d = 1.0 - x * x;
+        let (num, den) = (d * d + (x * a / q).powi(2), d * d + (x / (a * q)).powi(2));
+        if den > 0.0 && num > 0.0 { 10.0 * (num / den).log10() } else { 0.0 }
+    }
+}
+
+/// How much of the cut the Low/High range lets through at `hz` (0..1): all of it between Low and
+/// High, fading out over half an octave outside.
+pub fn range_weight(low: f32, high: f32, hz: f32) -> f32 {
+    let fade = |octaves_outside: f32| {
+        let t = (1.0 - octaves_outside * 2.0).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let high = high.max(low);
+    if hz <= 0.0 || low <= 0.0 {
+        0.0
+    } else if hz < low {
+        fade((low / hz).log2())
+    } else if hz > high {
+        fade((hz / high).log2())
+    } else {
+        1.0
+    }
+}
+
+/// The sensitivity bands at `hz`, summed, in dB.
+pub fn bands_db(bands: &[Band; BANDS], hz: f32) -> f32 {
+    bands.iter().map(|b| b.db_at(hz)).sum()
+}
+
+/// What the cut at `hz` is multiplied by: the range times the bands (0..=[`MAX_WEIGHT`]).
+fn weight_at(low: f32, high: f32, bands: &[Band; BANDS], hz: f32) -> f32 {
+    let w = range_weight(low, high, hz) * db_to_gain(bands_db(bands, hz));
+    if w.is_finite() { w.clamp(0.0, MAX_WEIGHT) } else { 0.0 }
+}
 
 /// The frame length for a sample rate: 2048 up to 50 kHz, doubling with the rate.
 pub fn frame_size_for(sr: f32) -> usize {
@@ -113,7 +243,7 @@ fn cut_for(over: f32, slope: f32, knee: f32) -> f32 {
     }
 }
 
-/// `a + (b - a) * t` on a log scale (both positive).
+/// `a` to `b` on a log scale (both positive).
 #[inline]
 fn log_lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (b / a).powf(t)
@@ -142,6 +272,42 @@ fn band_mean(cum: &[f64], lo: f32, hi: f32) -> f32 {
     ((cum_at(cum, b) - cum_at(cum, a)) / width) as f32
 }
 
+/// One side's detector: what it hears and the cut it has decided on, per bin.
+struct Detector {
+    power: Vec<f32>,
+    /// `power` followed with Attack.
+    detect: Vec<f32>,
+    /// The cut in force, in dB (>= 0).
+    cut: Vec<f32>,
+    gain: Vec<f32>,
+}
+
+impl Detector {
+    fn new(bins: usize) -> Self {
+        Detector { power: vec![0.0; bins], detect: vec![0.0; bins], cut: vec![0.0; bins], gain: vec![1.0; bins] }
+    }
+
+    fn reset(&mut self) {
+        self.power.fill(0.0);
+        self.detect.fill(0.0);
+        self.cut.fill(0.0);
+        self.gain.fill(1.0);
+    }
+}
+
+/// The per-bin tables the parameters come to, and the detectors' shared work space.
+struct Tables {
+    /// The FINE and ENVELOPE bands' edges (in bins) and the sensitivity weight.
+    fine_lo: Vec<f32>,
+    fine_hi: Vec<f32>,
+    env_lo: Vec<f32>,
+    env_hi: Vec<f32>,
+    weight: Vec<f32>,
+    cum: Vec<f64>,
+    fine_db: Vec<f32>,
+    env_db: Vec<f32>,
+}
+
 /// What `prepare` builds for one sample rate and channel count.
 struct Engine {
     n: usize,
@@ -151,10 +317,9 @@ struct Engine {
     forward: Arc<dyn Fft<f32>>,
     inverse: Arc<dyn Fft<f32>>,
     scratch: Vec<Complex<f32>>,
-    /// One spectrum per channel.
+    /// One spectrum per channel, and the key's likewise.
     spec: Vec<Vec<Complex<f32>>>,
-    /// The key's spectrum (one channel at a time).
-    key_spec: Vec<Complex<f32>>,
+    key_spec: Vec<Vec<Complex<f32>>>,
     /// The root-Hann window, and the same scaled for the way out (the inverse transform's `n` and
     /// the overlap's sum folded in).
     window: Vec<f32>,
@@ -169,22 +334,11 @@ struct Engine {
     since: usize,
     /// Whether the key ring holds a key (the last block had one).
     keyed: bool,
-    // Per bin:
-    power: Vec<f32>,
-    /// `power` followed with Attack.
-    detect: Vec<f32>,
-    cum: Vec<f64>,
-    fine_db: Vec<f32>,
-    env_db: Vec<f32>,
-    /// The cut in force, in dB (>= 0).
-    cut: Vec<f32>,
-    gain: Vec<f32>,
-    /// The FINE and ENVELOPE bands' edges (in bins) and the Low/High weight.
-    fine_lo: Vec<f32>,
-    fine_hi: Vec<f32>,
-    env_lo: Vec<f32>,
-    env_hi: Vec<f32>,
-    weight: Vec<f32>,
+    /// Two with two channels (left and right, or mid and side), else one for all.
+    detectors: Vec<Detector>,
+    tables: Tables,
+    /// The bins each live point covers (first, last).
+    live_bins: Vec<(usize, usize)>,
 }
 
 impl Engine {
@@ -201,6 +355,16 @@ impl Engine {
         // window * window is a Hann, which sums to OVERLAP / 2 over the overlapping frames.
         let scale = 1.0 / (n as f32 * OVERLAP as f32 * 0.5);
         let window_out = window.iter().map(|w| w * scale).collect();
+        let step = (LIVE_MAX_HZ / LIVE_MIN_HZ).powf(0.5 / (LIVE_POINTS - 1) as f32);
+        let bin_of = |hz: f32| hz * n as f32 / sr;
+        let live_bins = (0..LIVE_POINTS)
+            .map(|i| {
+                let hz = live_hz(i);
+                let lo = (bin_of(hz / step).round().max(1.0) as usize).min(bins - 1);
+                let hi = (bin_of(hz * step).round().max(1.0) as usize).min(bins - 1);
+                (lo, hi.max(lo))
+            })
+            .collect();
         Engine {
             n,
             hop,
@@ -209,7 +373,7 @@ impl Engine {
             inverse,
             scratch: vec![zero; scratch_len],
             spec: vec![vec![zero; n]; channels],
-            key_spec: vec![zero; n],
+            key_spec: vec![vec![zero; n]; channels],
             window,
             window_out,
             input: vec![vec![0.0; n]; channels],
@@ -218,18 +382,18 @@ impl Engine {
             pos: 0,
             since: 0,
             keyed: false,
-            power: vec![0.0; bins],
-            detect: vec![0.0; bins],
-            cum: vec![0.0; bins + 1],
-            fine_db: vec![0.0; bins],
-            env_db: vec![0.0; bins],
-            cut: vec![0.0; bins],
-            gain: vec![1.0; bins],
-            fine_lo: vec![0.0; bins],
-            fine_hi: vec![0.0; bins],
-            env_lo: vec![0.0; bins],
-            env_hi: vec![0.0; bins],
-            weight: vec![0.0; bins],
+            detectors: (0..if channels == 2 { 2 } else { 1 }).map(|_| Detector::new(bins)).collect(),
+            tables: Tables {
+                fine_lo: vec![0.0; bins],
+                fine_hi: vec![0.0; bins],
+                env_lo: vec![0.0; bins],
+                env_hi: vec![0.0; bins],
+                weight: vec![0.0; bins],
+                cum: vec![0.0; bins + 1],
+                fine_db: vec![0.0; bins],
+                env_db: vec![0.0; bins],
+            },
+            live_bins,
         }
     }
 
@@ -240,9 +404,9 @@ impl Engine {
         self.pos = 0;
         self.since = 0;
         self.keyed = false;
-        self.detect.fill(0.0);
-        self.cut.fill(0.0);
-        self.gain.fill(1.0);
+        for d in &mut self.detectors {
+            d.reset();
+        }
     }
 }
 
@@ -257,7 +421,80 @@ struct Settings {
     attack: f32,
     release: f32,
     mix: f32,
+    /// Trim as a gain.
+    trim: f32,
     delta: bool,
+    mid_side: bool,
+    /// How much of the other side's power each side also listens to (0..1).
+    link: f32,
+    /// How much of the cut each side gets (Balance).
+    amount: [f32; 2],
+}
+
+/// The spectra of left and right turned into mid and side, in place.
+fn to_mid_side(spec: &mut [Vec<Complex<f32>>]) {
+    if let [l, r] = spec {
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let (m, s) = ((*a + *b) * 0.5, (*a - *b) * 0.5);
+            *a = m;
+            *b = s;
+        }
+    }
+}
+
+/// The inverse of [`to_mid_side`].
+fn to_left_right(spec: &mut [Vec<Complex<f32>>]) {
+    if let [m, s] = spec {
+        for (a, b) in m.iter_mut().zip(s.iter_mut()) {
+            let (l, r) = (*a + *b, *a - *b);
+            *a = l;
+            *b = r;
+        }
+    }
+}
+
+/// Steps 1 to 5 for one detector, from its `power`: its `cut` and `gain`. Returns the deepest cut.
+fn detect(d: &mut Detector, t: &mut Tables, s: &Settings, amount: f32) -> f32 {
+    // 1. The detector follows the power with Attack.
+    let mut sum = 0.0f64;
+    if let Some(first) = t.cum.first_mut() {
+        *first = 0.0;
+    }
+    for ((det, p), c) in d.detect.iter_mut().zip(&d.power).zip(t.cum.iter_mut().skip(1)) {
+        let v = *p + (*det - *p) * s.attack;
+        *det = if v.is_finite() && v > POWER_FLOOR { v } else { 0.0 };
+        sum += f64::from(*det);
+        *c = sum;
+    }
+    // 2. FINE, in dB.
+    for ((f, lo), hi) in t.fine_db.iter_mut().zip(&t.fine_lo).zip(&t.fine_hi) {
+        *f = 10.0 * (band_mean(&t.cum, *lo, *hi).max(0.0) + POWER_FLOOR).log10();
+    }
+    // 3. ENVELOPE: FINE averaged in dB.
+    let mut sum = 0.0f64;
+    for (f, c) in t.fine_db.iter().zip(t.cum.iter_mut().skip(1)) {
+        sum += f64::from(*f);
+        *c = sum;
+    }
+    for ((v, lo), hi) in t.env_db.iter_mut().zip(&t.env_lo).zip(&t.env_hi) {
+        *v = band_mean(&t.cum, *lo, *hi);
+    }
+    // 4 and 5. The cut request, and the cut that follows it.
+    let mut deepest = 0.0f32;
+    for (((cut, f), v), w) in d.cut.iter_mut().zip(&t.fine_db).zip(&t.env_db).zip(&t.weight) {
+        let want = (cut_for(f - v - s.threshold, s.slope, s.knee) * w * amount).clamp(0.0, MAX_CUT_DB);
+        let now = if want >= *cut { want } else { want + (*cut - want) * s.release };
+        *cut = if now.is_finite() && now > 1.0e-4 { now } else { 0.0 };
+        deepest = deepest.max(*cut);
+    }
+    // The gain per bin: the cut, lightly smoothed across neighbours.
+    let last = d.cut.len().saturating_sub(1);
+    for (k, g) in d.gain.iter_mut().enumerate() {
+        let at = |i: usize| d.cut.get(i).copied().unwrap_or(0.0);
+        let c = 0.25 * at(k.saturating_sub(1)) + 0.5 * at(k) + 0.25 * at((k + 1).min(last));
+        *g = if c > 1.0e-4 { (-c * (std::f32::consts::LN_10 / 20.0)).exp() } else { 1.0 };
+    }
+    deepest
 }
 
 /// The resonance suppressor.
@@ -269,7 +506,12 @@ pub struct Rez {
     ch: usize,
     engine: Option<Box<Engine>>,
     s: Settings,
+    /// Mix and Trim as they glide, and the glide's coefficient per sample.
+    mix_now: f32,
+    trim_now: f32,
+    glide: f32,
     gr_meter: f32,
+    analysis: Arc<Analysis>,
 }
 
 impl Default for Rez {
@@ -280,19 +522,42 @@ impl Default for Rez {
 
 impl Rez {
     pub fn new() -> Self {
-        let mut r = Rez { p: Params::new(&REZ_PARAMS), sr: 48_000.0, ch: 0, engine: None, s: Settings::default(), gr_meter: 0.0 };
+        let mut r = Rez {
+            p: Params::new(&REZ_PARAMS),
+            sr: 48_000.0,
+            ch: 0,
+            engine: None,
+            s: Settings::default(),
+            mix_now: 1.0,
+            trim_now: 1.0,
+            glide: 0.0,
+            gr_meter: 0.0,
+            analysis: Arc::new(Analysis::with_live(LIVE_LEN)),
+        };
         r.update();
+        r.mix_now = r.s.mix;
+        r.trim_now = r.s.trim;
         r
     }
 
-    /// The cut in force at each bin from DC to Nyquist, in dB (empty before `prepare`).
-    pub fn cut_db(&self) -> &[f32] {
-        self.engine.as_ref().map_or(&[], |e| e.cut.as_slice())
+    /// The cut in force at each bin from DC to Nyquist, in dB: the deeper of the two sides'
+    /// (empty before `prepare`). Not for the audio thread (it allocates).
+    pub fn cut_db(&self) -> Vec<f32> {
+        let Some(e) = self.engine.as_ref() else { return Vec::new() };
+        (0..e.bins).map(|k| e.detectors.iter().filter_map(|d| d.cut.get(k)).fold(0.0f32, |m, c| m.max(*c))).collect()
     }
 
     /// The frequency of bin `k` of [`Rez::cut_db`], in Hz.
     pub fn bin_hz(&self, k: usize) -> f32 {
         self.engine.as_ref().map_or(0.0, |e| k as f32 * self.sr / e.n as f32)
+    }
+
+    /// The sensitivity bands as the parameters stand.
+    fn bands(&self) -> [Band; BANDS] {
+        std::array::from_fn(|i| {
+            let at = P_BANDS + i * BAND_PARAMS;
+            Band { on: self.p.on(at), freq: self.p.v(at + 1), gain: self.p.v(at + 2), q: self.p.v(at + 3) }
+        })
     }
 
     /// Works the parameters out into [`Settings`] and the per-bin tables. No allocation.
@@ -304,7 +569,13 @@ impl Rez {
         self.s.knee = if hard { 0.0 } else { SOFT_KNEE_DB };
         self.s.threshold = THRESHOLD_DB.0 + (THRESHOLD_DB.1 - THRESHOLD_DB.0) * select;
         self.s.mix = self.p.v(P_MIX) / 100.0;
+        self.s.trim = db_to_gain(self.p.v(P_TRIM));
         self.s.delta = self.p.on(P_DELTA);
+        self.s.mid_side = self.p.choice(P_STEREO) == 1;
+        self.s.link = self.p.v(P_LINK) / 100.0;
+        let balance = self.p.v(P_BALANCE) / 100.0;
+        self.s.amount = [1.0 - balance.max(0.0), 1.0 + balance.min(0.0)];
+        let bands = self.bands();
         let Some(e) = self.engine.as_mut() else { return };
         let frame_ms = 1000.0 * e.hop as f32 / self.sr;
         let coef = |ms: f32| (-frame_ms / ms.max(0.01)).exp();
@@ -316,10 +587,10 @@ impl Rez {
         let env = 2.0f32.powf(0.5 * log_lerp(ENV_OCT.1, ENV_OCT.0, select));
         let top = (e.bins - 1) as f32;
         let hz_per_bin = self.sr / e.n as f32;
-        let low = self.p.v(P_LOW);
-        let high = self.p.v(P_HIGH).max(low);
-        let edges = e.fine_lo.iter_mut().zip(e.fine_hi.iter_mut()).zip(e.env_lo.iter_mut().zip(e.env_hi.iter_mut()));
-        for (k, (((fine_lo, fine_hi), (env_lo, env_hi)), weight)) in edges.zip(e.weight.iter_mut()).enumerate() {
+        let (low, high) = (self.p.v(P_LOW), self.p.v(P_HIGH));
+        let t = &mut e.tables;
+        let edges = t.fine_lo.iter_mut().zip(t.fine_hi.iter_mut()).zip(t.env_lo.iter_mut().zip(t.env_hi.iter_mut()));
+        for (k, (((fine_lo, fine_hi), (env_lo, env_hi)), weight)) in edges.zip(t.weight.iter_mut()).enumerate() {
             let kf = k as f32;
             *fine_lo = (kf / fine).min(kf - MIN_HALF_BINS).max(-0.5);
             *fine_hi = (kf * fine).max(kf + MIN_HALF_BINS).min(top + 0.5);
@@ -328,97 +599,68 @@ impl Rez {
             let half = (kf - *fine_lo).max(*fine_hi - kf) * 3.0;
             *env_lo = (kf / env).min(kf - half).max(0.5);
             *env_hi = (kf * env).max(kf + half).min(top + 0.5);
-            // The range: full weight between Low and High, fading out over half an octave outside.
-            let hz = kf * hz_per_bin;
-            let fade = |octaves_outside: f32| {
-                let t = (1.0 - octaves_outside * 2.0).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t)
-            };
-            *weight = if k == 0 || hz <= 0.0 {
-                0.0
-            } else if hz < low {
-                fade((low / hz).log2())
-            } else if hz > high {
-                fade((hz / high).log2())
-            } else {
-                1.0
-            };
+            *weight = if k == 0 { 0.0 } else { weight_at(low, high, &bands, kf * hz_per_bin) };
         }
     }
 
     /// One frame: analyse, work out the cuts, resynthesise into the overlap-add ring.
     fn frame(e: &mut Engine, s: &Settings) -> f32 {
-        let (n, bins, pos) = (e.n, e.bins, e.pos);
+        let (n, pos) = (e.n, e.pos);
         // Analysis: each channel's last `n` samples, oldest first, windowed.
-        e.power.fill(0.0);
         for (spec, ring) in e.spec.iter_mut().zip(&e.input) {
             let (newer, older) = ring.split_at(pos.min(ring.len()));
             for ((bin, x), w) in spec.iter_mut().zip(older.iter().chain(newer)).zip(&e.window) {
                 *bin = Complex::new(x * w, 0.0);
             }
             e.forward.process_with_scratch(spec, &mut e.scratch);
-            if !e.keyed {
-                for (p, bin) in e.power.iter_mut().zip(spec.iter()) {
-                    *p += bin.norm_sqr();
-                }
-            }
         }
         if e.keyed {
-            for ring in &e.key {
+            for (spec, ring) in e.key_spec.iter_mut().zip(&e.key) {
                 let (newer, older) = ring.split_at(pos.min(ring.len()));
-                for ((bin, x), w) in e.key_spec.iter_mut().zip(older.iter().chain(newer)).zip(&e.window) {
+                for ((bin, x), w) in spec.iter_mut().zip(older.iter().chain(newer)).zip(&e.window) {
                     *bin = Complex::new(x * w, 0.0);
                 }
-                e.forward.process_with_scratch(&mut e.key_spec, &mut e.scratch);
-                for (p, bin) in e.power.iter_mut().zip(e.key_spec.iter()) {
-                    *p += bin.norm_sqr();
-                }
+                e.forward.process_with_scratch(spec, &mut e.scratch);
+            }
+        }
+        let sides = e.detectors.len() == 2;
+        let mid_side = s.mid_side && sides;
+        if mid_side {
+            to_mid_side(&mut e.spec);
+            if e.keyed {
+                to_mid_side(&mut e.key_spec);
             }
         }
 
-        // 1. The detector follows the power with Attack.
-        let mut sum = 0.0f64;
-        if let Some(first) = e.cum.first_mut() {
-            *first = 0.0;
+        // What each detector hears: its own side (or every channel), then Link's share of the
+        // other side.
+        let heard = if e.keyed { &e.key_spec } else { &e.spec };
+        for d in &mut e.detectors {
+            d.power.fill(0.0);
         }
-        for ((d, p), c) in e.detect.iter_mut().zip(&e.power).zip(e.cum.iter_mut().skip(1)) {
-            let v = *p + (*d - *p) * s.attack;
-            *d = if v.is_finite() && v > POWER_FLOOR { v } else { 0.0 };
-            sum += f64::from(*d);
-            *c = sum;
+        for (c, spec) in heard.iter().enumerate() {
+            let Some(d) = e.detectors.get_mut(if sides { c } else { 0 }) else { continue };
+            for (p, bin) in d.power.iter_mut().zip(spec.iter()) {
+                *p += bin.norm_sqr();
+            }
         }
-        // 2. FINE, in dB.
-        for ((f, lo), hi) in e.fine_db.iter_mut().zip(&e.fine_lo).zip(&e.fine_hi) {
-            *f = 10.0 * (band_mean(&e.cum, *lo, *hi).max(0.0) + POWER_FLOOR).log10();
+        if let [a, b] = e.detectors.as_mut_slice() {
+            for (pa, pb) in a.power.iter_mut().zip(b.power.iter_mut()) {
+                let (x, y) = (*pa, *pb);
+                *pa = x + s.link * y;
+                *pb = y + s.link * x;
+            }
         }
-        // 3. ENVELOPE: FINE averaged in dB.
-        let mut sum = 0.0f64;
-        for (f, c) in e.fine_db.iter().zip(e.cum.iter_mut().skip(1)) {
-            sum += f64::from(*f);
-            *c = sum;
-        }
-        for ((v, lo), hi) in e.env_db.iter_mut().zip(&e.env_lo).zip(&e.env_hi) {
-            *v = band_mean(&e.cum, *lo, *hi);
-        }
-        // 4 and 5. The cut request, and the cut that follows it.
         let mut deepest = 0.0f32;
-        for (((cut, f), v), w) in e.cut.iter_mut().zip(&e.fine_db).zip(&e.env_db).zip(&e.weight) {
-            let want = (cut_for(f - v - s.threshold, s.slope, s.knee) * w).clamp(0.0, MAX_CUT_DB);
-            let now = if want >= *cut { want } else { want + (*cut - want) * s.release };
-            *cut = if now.is_finite() && now > 1.0e-4 { now } else { 0.0 };
-            deepest = deepest.max(*cut);
-        }
-        // The gain per bin: the cut, lightly smoothed across neighbours.
-        let last = bins.saturating_sub(1);
-        for (k, g) in e.gain.iter_mut().enumerate() {
-            let at = |i: usize| e.cut.get(i).copied().unwrap_or(0.0);
-            let c = 0.25 * at(k.saturating_sub(1)) + 0.5 * at(k) + 0.25 * at((k + 1).min(last));
-            *g = if c > 1.0e-4 { (-c * (std::f32::consts::LN_10 / 20.0)).exp() } else { 1.0 };
+        for (i, d) in e.detectors.iter_mut().enumerate() {
+            let amount = if sides { s.amount.get(i).copied().unwrap_or(1.0) } else { 1.0 };
+            deepest = deepest.max(detect(d, &mut e.tables, s, amount));
         }
 
         // 6. Scale the bins (and their mirror images) and overlap-add the frame.
-        for (spec, out) in e.spec.iter_mut().zip(e.output.iter_mut()) {
-            for (k, g) in e.gain.iter().enumerate() {
+        for (c, spec) in e.spec.iter_mut().enumerate() {
+            let Some(d) = e.detectors.get(if sides { c } else { 0 }) else { continue };
+            for (k, g) in d.gain.iter().enumerate() {
                 if let Some(bin) = spec.get_mut(k) {
                     *bin *= *g;
                 }
@@ -429,6 +671,11 @@ impl Rez {
                     *bin *= *g;
                 }
             }
+        }
+        if mid_side {
+            to_left_right(&mut e.spec);
+        }
+        for (spec, out) in e.spec.iter_mut().zip(e.output.iter_mut()) {
             e.inverse.process_with_scratch(spec, &mut e.scratch);
             let (newer, older) = out.split_at_mut(pos.min(n));
             for ((o, bin), w) in older.iter_mut().chain(newer.iter_mut()).zip(spec.iter()).zip(&e.window_out) {
@@ -436,6 +683,17 @@ impl Rez {
             }
         }
         deepest
+    }
+
+    /// The live cut curves for the editor, from the detectors as they stand.
+    fn publish(e: &Engine, analysis: &Analysis) {
+        for (side, at) in [(0usize, LIVE_CUT_A), (1, LIVE_CUT_B)] {
+            let Some(d) = e.detectors.get(side).or(e.detectors.first()) else { continue };
+            for (i, (lo, hi)) in e.live_bins.iter().enumerate() {
+                let cut = d.cut.get(*lo..=*hi).map_or(0.0, |c| c.iter().fold(0.0f32, |m, v| m.max(*v)));
+                analysis.live.set(at + i, cut);
+            }
+        }
     }
 
     fn run(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
@@ -449,9 +707,14 @@ impl Rez {
         // A key that does not cover the block is no key.
         let key = key.filter(|k| !k.is_empty() && k.iter().take(ch).all(|b| b.len() >= frames));
         e.keyed = key.is_some();
+        let per_channel = 1.0 / ch as f32;
         let mut deepest = 0.0f32;
+        let mut framed = false;
         for i in 0..frames {
             let pos = e.pos;
+            self.mix_now = s.mix + (self.mix_now - s.mix) * self.glide;
+            self.trim_now = s.trim + (self.trim_now - s.trim) * self.glide;
+            let (mut pre, mut post) = (0.0f32, 0.0f32);
             for (c, buf) in io.iter_mut().take(ch).enumerate() {
                 let (Some(x), Some(inp), Some(out)) =
                     (buf.get_mut(i), e.input.get_mut(c).and_then(|r| r.get_mut(pos)), e.output.get_mut(c).and_then(|r| r.get_mut(pos)))
@@ -462,21 +725,28 @@ impl Rez {
                 let dry = *inp;
                 let wet = std::mem::take(out);
                 *inp = if x.is_finite() { *x } else { 0.0 };
-                *x = if s.delta { (dry - wet) * s.mix } else { dry + (wet - dry) * s.mix };
+                let y = if s.delta { (dry - wet) * self.mix_now } else { dry + (wet - dry) * self.mix_now };
+                *x = y * self.trim_now;
+                pre += dry;
+                post += *x;
                 let k = key.and_then(|k| k.get(c)).and_then(|b| b.get(i)).copied().unwrap_or(0.0);
                 if let Some(slot) = e.key.get_mut(c).and_then(|r| r.get_mut(pos)) {
                     *slot = if k.is_finite() { k } else { 0.0 };
                 }
             }
+            self.analysis.pre.push(pre * per_channel);
+            self.analysis.post.push(post * per_channel);
             e.pos = if pos + 1 >= e.n { 0 } else { pos + 1 };
             e.since += 1;
             if e.since >= e.hop {
                 e.since = 0;
+                framed = true;
                 deepest = deepest.max(Self::frame(e, &s));
             }
         }
-        if frames > 0 {
-            self.gr_meter = if deepest > 0.0 { deepest } else { e.cut.iter().fold(0.0f32, |m, c| m.max(*c)) };
+        if framed {
+            self.gr_meter = deepest;
+            Self::publish(e, &self.analysis);
         }
     }
 }
@@ -488,14 +758,20 @@ impl Plugin for Rez {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
         self.engine = Some(Box::new(Engine::new(self.sr, self.ch)));
+        self.glide = time_coef(GLIDE_MS, self.sr);
         self.gr_meter = 0.0;
         self.update();
+        self.mix_now = self.s.mix;
+        self.trim_now = self.s.trim;
     }
 
     fn reset(&mut self) {
         if let Some(e) = self.engine.as_mut() {
             e.reset();
+            Self::publish(e, &self.analysis);
         }
+        self.mix_now = self.s.mix;
+        self.trim_now = self.s.trim;
         self.gr_meter = 0.0;
     }
 
@@ -513,6 +789,10 @@ impl Plugin for Rez {
 
     fn gain_reduction_db(&self) -> f32 {
         self.gr_meter
+    }
+
+    fn analysis(&self) -> Option<Arc<Analysis>> {
+        Some(self.analysis.clone())
     }
 }
 
@@ -718,5 +998,139 @@ mod tests {
         r.reset();
         let y = run(&mut r, &vec![0.0; 4096]);
         assert!(y.iter().all(|v| *v == 0.0), "reset left audio in the rings");
+    }
+
+    fn run_stereo(r: &mut Rez, l: &[f32], rt: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let (mut ol, mut or) = (Vec::with_capacity(l.len()), Vec::with_capacity(l.len()));
+        for (a, b) in l.chunks(512).zip(rt.chunks(512)) {
+            let mut io = vec![a.to_vec(), b.to_vec()];
+            r.process(&mut io, a.len());
+            ol.extend_from_slice(&io[0]);
+            or.extend_from_slice(&io[1]);
+        }
+        (ol, or)
+    }
+
+    /// The cut of a 2 kHz tone in noise, with `set` applied to a fresh Rez.
+    fn tone_cut(set: impl Fn(&mut Rez)) -> f32 {
+        let mut r = prepared();
+        set(&mut r);
+        let len = 72_000;
+        let x: Vec<f32> = pink(len, 31).iter().zip(sine(2000.0, 0.1, len)).map(|(n, t)| n * 0.2 + t).collect();
+        let y = run(&mut r, &x);
+        let lat = r.latency();
+        level_at(&x[24_000..len - lat], 2000.0) - level_at(&y[lat + 24_000..], 2000.0)
+    }
+
+    #[test]
+    fn a_band_raises_or_removes_the_cut_at_its_frequency() {
+        let flat = tone_cut(|_| {});
+        let more = tone_cut(|r| {
+            r.set_param("b3_freq", 2000.0);
+            r.set_param("b3_gain", 12.0);
+        });
+        let none = tone_cut(|r| {
+            r.set_param("b3_freq", 2000.0);
+            r.set_param("b3_gain", -24.0);
+        });
+        let off = tone_cut(|r| {
+            r.set_param("b3_freq", 2000.0);
+            r.set_param("b3_gain", -24.0);
+            r.set_param("b3_on", 0.0);
+        });
+        assert!(more > flat + 3.0, "+12 dB of sensitivity: {more} dB against {flat} dB");
+        assert!(none < 1.0, "-24 dB of sensitivity still cut {none} dB");
+        assert!((off - flat).abs() < 0.05, "a band switched off changed the cut: {off} dB against {flat} dB");
+    }
+
+    #[test]
+    fn the_sensitivity_curve_is_the_range_times_the_bands() {
+        let mut bands = [Band { on: true, freq: 1000.0, gain: 0.0, q: 1.0 }; BANDS];
+        assert_eq!(bands_db(&bands, 1000.0), 0.0);
+        bands[1].gain = 12.0;
+        assert!((bands_db(&bands, 1000.0) - 12.0).abs() < 1.0e-3);
+        assert!(bands_db(&bands, 8000.0) < 1.0);
+        bands[1].on = false;
+        assert_eq!(bands_db(&bands, 1000.0), 0.0);
+        assert_eq!(range_weight(100.0, 5000.0, 1000.0), 1.0);
+        assert_eq!(range_weight(100.0, 5000.0, 40.0), 0.0);
+        assert!(range_weight(100.0, 5000.0, 80.0) > 0.0 && range_weight(100.0, 5000.0, 80.0) < 1.0);
+    }
+
+    #[test]
+    fn unlinked_sides_are_cut_on_their_own() {
+        let len = 72_000;
+        let left: Vec<f32> = pink(len, 41).iter().zip(sine(2000.0, 0.1, len)).map(|(n, t)| n * 0.2 + t).collect();
+        // The right channel carries a quiet probe at the same frequency and no resonance.
+        let right: Vec<f32> = pink(len, 43).iter().zip(sine(2000.0, 0.002, len)).map(|(n, t)| n * 0.2 + t).collect();
+        let cuts = |link: f32| {
+            let mut r = prepared();
+            r.set_param("link", link);
+            let (yl, yr) = run_stereo(&mut r, &left, &right);
+            let lat = r.latency();
+            let cut = |x: &[f32], y: &[f32]| level_at(&x[24_000..len - lat], 2000.0) - level_at(&y[lat + 24_000..], 2000.0);
+            (cut(&left, &yl), cut(&right, &yr))
+        };
+        let (l, r) = cuts(0.0);
+        assert!(l > 6.0 && r.abs() < 1.0, "unlinked: left {l} dB, right {r} dB");
+        let (l, r) = cuts(100.0);
+        assert!(l > 6.0 && (l - r).abs() < 0.5, "linked: left {l} dB, right {r} dB");
+    }
+
+    #[test]
+    fn mid_side_cuts_the_side_and_leaves_the_mid() {
+        let len = 72_000;
+        let tone = sine(2000.0, 0.1, len);
+        let noise = pink(len, 47);
+        // The tone is out of phase between the channels (all side); a 500 Hz probe is in phase.
+        let probe = sine(500.0, 0.002, len);
+        let left: Vec<f32> = (0..len).map(|i| noise[i] * 0.2 + tone[i] + probe[i]).collect();
+        let right: Vec<f32> = (0..len).map(|i| noise[i] * 0.2 - tone[i] + probe[i]).collect();
+        let mut r = prepared();
+        r.set_param("stereo", 1.0);
+        r.set_param("link", 0.0);
+        let (yl, yr) = run_stereo(&mut r, &left, &right);
+        let lat = r.latency();
+        let side = |l: &[f32], r: &[f32]| l.iter().zip(r).map(|(a, b)| (a - b) * 0.5).collect::<Vec<f32>>();
+        let mid = |l: &[f32], r: &[f32]| l.iter().zip(r).map(|(a, b)| (a + b) * 0.5).collect::<Vec<f32>>();
+        let cut = level_at(&side(&left, &right)[24_000..len - lat], 2000.0) - level_at(&side(&yl, &yr)[lat + 24_000..], 2000.0);
+        assert!(cut > 6.0, "the side's 2 kHz tone was cut by only {cut} dB");
+        let kept = level_at(&mid(&left, &right)[24_000..len - lat], 500.0) - level_at(&mid(&yl, &yr)[lat + 24_000..], 500.0);
+        assert!(kept.abs() < 0.5, "the mid's 500 Hz moved by {kept} dB");
+        // Balance all the way to the first side (mid): the side is left alone.
+        r.reset();
+        r.set_param("balance", -100.0);
+        let (yl, yr) = run_stereo(&mut r, &left, &right);
+        let cut = level_at(&side(&left, &right)[24_000..len - lat], 2000.0) - level_at(&side(&yl, &yr)[lat + 24_000..], 2000.0);
+        assert!(cut.abs() < 0.3, "balance at the mid still cut the side by {cut} dB");
+    }
+
+    #[test]
+    fn trim_scales_the_output() {
+        let x = pink(48_000, 53);
+        let mut plain = prepared();
+        let mut trimmed = prepared();
+        trimmed.set_param("trim", -6.0);
+        let (a, b) = (run(&mut plain, &x), run(&mut trimmed, &x));
+        let change = rms_db(&b[24_000..]) - rms_db(&a[24_000..]);
+        assert!((change + 6.0).abs() < 0.05, "a -6 dB trim changed the level by {change} dB");
+    }
+
+    #[test]
+    fn the_editor_gets_the_live_cut_curve_and_both_streams() {
+        let mut r = prepared();
+        let len = 48_000;
+        let x: Vec<f32> = pink(len, 59).iter().zip(sine(2000.0, 0.1, len)).map(|(n, t)| n * 0.2 + t).collect();
+        let _ = run(&mut r, &x);
+        let a = r.analysis().unwrap();
+        assert_eq!(a.live.len(), LIVE_LEN);
+        let deepest = (0..LIVE_POINTS).max_by(|i, j| a.live.get(LIVE_CUT_A + i).total_cmp(&a.live.get(LIVE_CUT_A + j))).unwrap();
+        assert!((live_hz(deepest) / 2000.0).log2().abs() < 0.12, "the live curve peaks at {} Hz", live_hz(deepest));
+        assert!(a.live.get(LIVE_CUT_A + deepest) > 6.0);
+        // Linked: the second side shows the same cut.
+        assert_eq!(a.live.get(LIVE_CUT_B + deepest), a.live.get(LIVE_CUT_A + deepest));
+        assert!(a.pre.written() >= len && a.post.written() >= len);
+        r.reset();
+        assert_eq!(a.live.get(LIVE_CUT_A + deepest), 0.0);
     }
 }

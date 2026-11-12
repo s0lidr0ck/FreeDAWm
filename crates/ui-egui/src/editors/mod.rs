@@ -15,6 +15,7 @@ pub mod levelup;
 pub mod mod_engine;
 pub mod pitch;
 pub mod reverb;
+pub mod rez;
 pub mod sat;
 pub mod shale;
 pub mod swale;
