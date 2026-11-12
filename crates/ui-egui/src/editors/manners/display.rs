@@ -48,31 +48,45 @@ pub(crate) fn draw(
     range: (f32, f32),
     sr: f32,
     dragging: &mut Option<usize>,
+    compact: bool,
 ) -> Out {
     let p = ui.painter().clone();
     paint_panel(&p, r, 10.0);
-    let b = r.shrink2(vec2(12.0, 10.0));
-    let plot = plot_rect(r);
+    let b = r.shrink2(if compact { vec2(8.0, 8.0) } else { vec2(12.0, 10.0) });
+    let plot = if compact { Rect::from_min_max(pos2(b.left(), b.top() + 18.0), pos2(b.right(), b.bottom() - 13.0)) } else { plot_rect(r) };
     let (lo, hi) = if range.0 <= range.1 { range } else { (range.1, range.0) };
 
     // ---- legend and readouts
     let head_y = b.top() + 9.0;
     let mut x = b.left();
-    for (c, t) in [(al(pal.text_body, 0.45), "Input"), (pal.text_bright, "Output"), (pal.accent, "Lift"), (cut_colour(), "Cut")] {
+    let legend: &[(Color32, &str)] = if compact {
+        &[(pal.accent, "Lift"), (cut_colour(), "Cut")]
+    } else {
+        &[(al(pal.text_body, 0.45), "Input"), (pal.text_bright, "Output"), (pal.accent, "Lift"), (cut_colour(), "Cut")]
+    };
+    for (c, t) in legend.iter().copied() {
         p.rect_filled(Rect::from_center_size(pos2(x + 5.0, head_y), vec2(10.0, 10.0)), CornerRadius::same(2), c);
         let g = p.text(pos2(x + 15.0, head_y), Align2::LEFT_CENTER, t, regular(CAPTION_SIZE), pal.text_body);
         x = g.right() + 14.0;
     }
     let reading = |i: usize| live.and_then(|l| l.readouts.get(i).copied()).filter(|v| v.is_finite()).unwrap_or(0.0);
-    let text =
-        format!("Tame \u{2212}{:.1} dB   Recover +{:.1} dB   {} \u{2013} {}", reading(0).max(0.0), reading(1).max(0.0), hz_text(lo), hz_text(hi));
+    let (cut, lift) = (reading(0).max(0.0), reading(1).max(0.0));
+    let text = if compact {
+        format!("\u{2212}{cut:.1} / +{lift:.1} dB")
+    } else {
+        format!("Tame \u{2212}{cut:.1} dB   Recover +{lift:.1} dB   {} \u{2013} {}", hz_text(lo), hz_text(hi))
+    };
     p.text(pos2(b.right(), head_y), Align2::RIGHT_CENTER, text, regular(CAPTION_SIZE), pal.text_body);
 
     // ---- the well, the grid
     p.rect_filled(plot, CornerRadius::same(3), argb(0xFF0C_0F12));
     let grid = Stroke::new(1.0, al(Color32::WHITE, 0.06));
-    for (f, name) in [(50.0, "50"), (100.0, "100"), (200.0, "200"), (500.0, "500"), (1000.0, "1k"), (2000.0, "2k"), (5000.0, "5k"), (10_000.0, "10k")]
-    {
+    let marks: &[(f32, &str)] = if compact {
+        &[(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")]
+    } else {
+        &[(50.0, "50"), (100.0, "100"), (200.0, "200"), (500.0, "500"), (1000.0, "1k"), (2000.0, "2k"), (5000.0, "5k"), (10_000.0, "10k")]
+    };
+    for (f, name) in marks.iter().copied() {
         let gx = freq_to_x(plot, f);
         p.line_segment([pos2(gx, plot.top()), pos2(gx, plot.bottom())], grid);
         p.text(pos2(gx, plot.bottom() + 3.0), Align2::CENTER_TOP, name, regular(TINY_SIZE), pal.text_faint);
