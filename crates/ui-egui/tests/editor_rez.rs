@@ -136,5 +136,5 @@ fn the_preset_strip_steps_through_rezs_own_presets() {
     // The browser opens from the name and from the drawer command.
     h.state_mut().run("ui.mix.drawer", serde_json::json!({"track": t.0, "module": m.0, "tab": "Presets"})).unwrap();
     h.run_steps(4);
-    assert!(h.query_by_label("Even Hand").is_some(), "the browser lists the factory presets");
+    assert!(h.query_by_label("Preset card Even Hand").is_some(), "the browser lists the factory presets");
 }
