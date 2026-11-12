@@ -223,6 +223,7 @@ pub(crate) fn paint_knob(g: &Painter, b: Rect, f: &KnobFace, value: f32, readout
         FaceStyle::ApiFreq => paint_api_freq(g, c, r, a, f.cap),
         FaceStyle::SslCap => paint_ssl_cap(g, c, r, a, f.cap),
         FaceStyle::Round => paint_round(g, c, r, a, f.cap),
+        FaceStyle::Silver => paint_silver(g, c, r, a, f.cap),
     }
 
     // the readout, while it is being looked at
@@ -462,6 +463,29 @@ fn paint_round(g: &Painter, c: Pos2, r: f32, a: f32, cap: Jc) {
         (r * 0.09).max(2.0),
         Jc::WHITE.alpha(0.92),
     );
+}
+
+/// The BBE 882's knob: a black ribbed skirt, a silver cap with a dark pointer line.
+fn paint_silver(g: &Painter, c: Pos2, r: f32, a: f32, cap: Jc) {
+    let skirt = polar(c, 144, |t| r * (1.0 - 0.02 * (0.5 + 0.5 * (36.0 * (t - a)).cos())));
+    drop_shadow(g, c, &skirt, 1.5, 3.5);
+    fill_star(
+        g,
+        c,
+        &skirt,
+        Fill::radial(Jc::argb(0xFF3A3B3E), pos2(c.x - r * 0.4, c.y - r * 0.6), Jc::argb(0xFF0E0E10), pos2(c.x + r * 0.7, c.y + r)),
+    );
+    stroke_closed(g, &skirt, 1.0, Jc::WHITE.alpha(0.20));
+    let at = |rad: f32| pos2(c.x + a.sin() * rad, c.y - a.cos() * rad);
+    line(g, at(r * 0.70), at(r * 0.98), (r * 0.07).max(1.6), Jc::WHITE.alpha(0.95));
+    let cr = r * 0.62;
+    fill_ellipse(
+        g,
+        Rect::from_center_size(c, vec2(2.0 * cr, 2.0 * cr)),
+        Fill::radial(cap.brighter(0.6), pos2(c.x - cr * 0.35, c.y - cr * 0.45), cap.darker(0.28), pos2(c.x + cr * 0.6, c.y + cr)),
+    );
+    stroke_closed(g, &ellipse(c, cr, cr, 48), 1.0, Jc::BLACK.alpha(0.55));
+    line(g, at(r * 0.08), at(cr * 0.96), (r * 0.085).max(2.0), Jc::argb(0xFF18181A));
 }
 
 // ============================================================================ the other hardware

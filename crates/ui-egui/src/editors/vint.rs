@@ -9,6 +9,7 @@
 mod config;
 mod draw;
 mod knob;
+mod maximizer;
 mod scope;
 mod slim;
 
@@ -73,6 +74,8 @@ pub(crate) struct Editor {
     scope: scope::View,
     /// The VU's needle (VU), and when it last moved.
     needle: (f32, f64),
+    /// The Maximizer's level lamps: the level they show, in dBu.
+    lamps: f32,
     /// Drawn in the slim layout (`UiState::slim_editors`), and its height as last laid out.
     slim: bool,
     slim_h: f32,
@@ -230,6 +233,7 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
         st.init = true;
         st.fam.presets.category = "All".into();
         st.needle = (-22.0, ui.input(|i| i.time));
+        st.lamps = -90.0;
     }
     let _ = family::take_drawer_tab(app, host, &mut st.fam);
     let pal = &PALETTE;
@@ -278,14 +282,29 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     // ---- paint()
     text_left(&p, circuit_label, "Circuit", regular(LABEL_SIZE), pal.text_body);
     text_left(&p, quality_label, "Quality", regular(LABEL_SIZE), pal.text_body);
-    text_left(&p, circuit_blurb, def.blurb, regular(CAPTION_SIZE), pal.text_faint);
-    crate::hardware_credit::hover(ui, circuit_blurb, "vint_circuit", def.blurb, def.credit);
+    // The Enhancer's Maximizer has a unit of its own (the 882's front), not the columns.
+    let maxi = maximizer::shown(host);
+    let (blurb, credit) = if maxi { (maximizer::BLURB, maximizer::CREDIT) } else { (def.blurb, def.credit) };
+    text_left(&p, circuit_blurb, blurb, regular(CAPTION_SIZE), pal.text_faint);
+    crate::hardware_credit::hover(ui, circuit_blurb, "vint_circuit", blurb, credit);
     paint_panel(&p, panel, 10.0);
     paint_panel(&p, foot, 10.0);
     let scale = (panel.width() / 1000.0).min(panel.height() / 300.0);
     let origin = pos2(panel.left() + (panel.width() - 1000.0 * scale) * 0.5, panel.top() + (panel.height() - 300.0 * scale) * 0.5);
     if !def.face.empty() {
         paint_face(ui, &p, host, panel, &def.face, scale, origin);
+    }
+    if maxi {
+        // The lamps on the 30 Hz timer, as the VU: the loudest block's output RMS since the last tick.
+        let now = ui.input(|i| i.time);
+        let dt = now - st.needle.1;
+        if !(0.0..1.0 / 30.0).contains(&dt) {
+            let rms = crate::editor_kit::live(host).map_or(0.0, |l| l.take(soundcraft_dsp::plugins::fs::vint::LIVE_OUT_LEVEL));
+            maximizer::level_step(&mut st.lamps, rms, dt.clamp(0.0, 1.0) as f32);
+            st.needle.1 = now;
+        }
+        maximizer::paint(&p, host, panel, scale, origin, st.lamps);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     text_left(&p, stage_note, def.stage, regular(CAPTION_SIZE), pal.text_faint);
 
@@ -304,7 +323,9 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     }
 
     // ---- the panel's controls
-    if def.face.empty() {
+    if maxi {
+        maximizer::controls(app, ui, host, &mut st.fam, panel, scale, origin);
+    } else if def.face.empty() {
         columns(app, ui, host, &mut st.fam, panel, cached_circuit);
     } else {
         face_controls(app, ui, host, &mut st.fam, &def.face, scale, origin);

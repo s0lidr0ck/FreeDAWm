@@ -80,3 +80,45 @@ fn vint_editor_follows_undo() {
     assert!(text_shown(&h, "0.0") && !text_shown(&h, "9.0"), "and the undo");
     let _ = pos2(0.0, 0.0);
 }
+
+/// A point of the 1000 x 300 panel, on the editor's frame (the panel is 952 px wide at (24, 127.2)).
+fn on_panel(f: egui::Rect, x: f32, y: f32) -> egui::Pos2 {
+    f.min + vec2(24.0 + x * 0.952, 127.2 + y * 0.952)
+}
+
+#[test]
+fn the_maximizer_wears_the_882s_front() {
+    let (mut h, t, m) = open("fs_vint", vec2(1800.0, 1000.0), "dark");
+    h.state_mut().run("mix.module_params", json!({"track": t.0, "module": m.0, "params": {"circuit": 4, "enhType": 0}})).unwrap();
+    h.run_steps(3);
+    assert!(text_shown(&h, "PROCESS") && !text_shown(&h, "SONIC MAXIMIZER"), "the Exciter keeps its columns");
+    h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "enhType", "value": 1})).unwrap();
+    h.run_steps(3);
+    for word in ["882", "SONIC MAXIMIZER", "LO CONTOUR", "PROCESS", "FUNCTION", "TUNE", "CLIP"] {
+        assert!(text_shown(&h, word), "{word}");
+    }
+    let f = frame(&h, t, m);
+    // The PROCESS pot: a knob drag, 0.008 per pixel, one undo step.
+    let k = on_panel(f, 566.0, 166.0);
+    drag(&mut h, k, k - vec2(0.0, 50.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "enhAmount") - 0.4).abs() < 0.01);
+    undo(&mut h);
+    assert_eq!(raw(&h, t, m, "enhAmount"), 0.0);
+    // LO CONTOUR and TUNE are the other two.
+    let k = on_panel(f, 432.0, 166.0);
+    drag(&mut h, k, k - vec2(0.0, 25.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "enhLow") - 0.2).abs() < 0.01);
+    let k = on_panel(f, 858.0, 166.0);
+    drag(&mut h, k, k + vec2(0.0, 25.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "enhTune") - 0.3).abs() < 0.01);
+    // FUNCTION takes the unit out and back in.
+    let b = on_panel(f, 712.0, 178.0);
+    click(&mut h, b);
+    assert_eq!(raw(&h, t, m, "bypass"), 1.0);
+    click(&mut h, b);
+    assert_eq!(raw(&h, t, m, "bypass"), 0.0);
+    // The Type selector above the unit goes back to the other two: its third segment is the Vitalizer.
+    click(&mut h, f.min + vec2(24.0 + 62.0 + 330.0 * 5.0 / 6.0, 127.2 - 13.6 + 14.0 + 13.0));
+    assert_eq!(raw(&h, t, m, "enhType"), 2.0);
+    assert!(!text_shown(&h, "SONIC MAXIMIZER"));
+}

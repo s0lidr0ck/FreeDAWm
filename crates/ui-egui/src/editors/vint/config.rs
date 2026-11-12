@@ -39,6 +39,8 @@ pub(crate) enum FaceStyle {
     ApiGain,
     ApiFreq,
     SslCap,
+    /// Not in the C++: the BBE 882's knob (the Maximizer's panel).
+    Silver,
 }
 
 /// `ToggleStyle`.
