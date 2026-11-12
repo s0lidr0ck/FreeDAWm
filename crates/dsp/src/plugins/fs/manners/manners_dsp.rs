@@ -111,8 +111,8 @@ impl Default for Tuning {
     /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`) at Tame 100 %,
     /// Recover 100 % and both at 50 %: 0.55 dB RMS from the reference over every moment and
     /// third octave. Bias, Brighten and Boost were not in those passes and are as first written.
-    /// A lone pure tone is cut within a decibel of the reference at Tame 100 % (and 2 dB short of
-    /// it at 50 %).
+    /// A lone pure tone is cut about 1 dB less than the reference cuts it at Tame 100 % (and 2 dB
+    /// less at 50 %).
     fn default() -> Self {
         Tuning {
             bands_per_erb: 1.43,
