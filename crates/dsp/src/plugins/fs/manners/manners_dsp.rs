@@ -15,8 +15,14 @@
 //!    round). The band's own surroundings ([`Tuning::self_width_erb`]) do not count. In dB, band
 //!    minus neighbourhood is its *dominance*.
 //! 4. Minus the dominance's median over the working range: shape, not level, and not tilt.
-//! 5. Above zero the band is dominant and Tame cuts it; below zero it is covered and Recover
+//!    Above zero the band is dominant and Tame cuts it; below zero it is covered and Recover
 //!    lifts it, unless the band is down at the floor (nothing there but noise to lift).
+//! 5. The broad balance, beside that local one: the level a few ERB wide, against pink noise
+//!    (equal power per octave) and against its own median, is how far a whole region stands over
+//!    or under the rest. Tame cuts what stands over its target ([`Tuning::tame_target`]) and
+//!    Recover lifts what lies under its own ([`Tuning::recover_target`]); the two targets are not
+//!    the same curve, and both lean further out as the signal gets quieter
+//!    ([`Tuning::tame_level`], [`Tuning::recover_level`]), as hearing does.
 //! 6. The band gains are smoothed over frequency and time, tilted by Brighten and Boost,
 //!    levelled so the frame keeps its power ([`Tuning::level_comp`]) and spread back onto the
 //!    FFT bins.
@@ -72,7 +78,28 @@ pub struct Tuning {
     pub brighten_db: f32,
     /// Boost at its ends: dB of bass (with half as much taken out of the low mids).
     pub boost_db: f32,
+    /// How wide the broad balance looks, in ERB to one sigma.
+    pub broad_width_erb: f32,
+    /// dB of cut per dB a region stands over Tame's target, at Tame 100 %.
+    pub tame_broad: f32,
+    /// dB of lift per dB a region lies under Recover's target, at Recover 100 %.
+    pub recover_broad: f32,
+    /// How much the targets lean out per 20 dB the signal is under [`Tuning::level_ref_db`]
+    /// (and in, over it).
+    pub tame_level: f32,
+    pub recover_level: f32,
+    /// The level the targets are written for, dBFS (a full-scale sine reads 0).
+    pub level_ref_db: f32,
+    /// Where Tame starts cutting a region, in dB against pink at [`TARGET_HZ`].
+    pub tame_target: [f32; TARGET_POINTS],
+    /// Where Recover starts lifting a region, in dB against pink at [`TARGET_HZ`].
+    pub recover_target: [f32; TARGET_POINTS],
 }
+
+/// The points the targets are given at.
+pub const TARGET_POINTS: usize = 8;
+/// Their frequencies, Hz (straight lines between them on the ERB scale, flat beyond the ends).
+pub const TARGET_HZ: [f32; TARGET_POINTS] = [40.0, 80.0, 160.0, 400.0, 1_000.0, 4_000.0, 10_000.0, 16_000.0];
 
 impl Default for Tuning {
     fn default() -> Self {
@@ -98,6 +125,14 @@ impl Default for Tuning {
             level_comp: 1.0,
             brighten_db: 4.5,
             boost_db: 4.0,
+            broad_width_erb: 3.0,
+            tame_broad: 0.3,
+            recover_broad: 0.38,
+            tame_level: 0.6,
+            recover_level: 1.9,
+            level_ref_db: -17.0,
+            tame_target: [-5.7, -9.3, -6.3, -1.3, 0.0, -1.3, -7.3, -8.7],
+            recover_target: [7.1, 8.2, 5.5, 0.8, 0.0, 0.0, 2.1, 7.1],
         }
     }
 }
@@ -130,6 +165,14 @@ impl Tuning {
             level_comp: f(self.level_comp, 0.0, 1.0, d.level_comp),
             brighten_db: f(self.brighten_db, 0.0, 12.0, d.brighten_db),
             boost_db: f(self.boost_db, 0.0, 12.0, d.boost_db),
+            broad_width_erb: f(self.broad_width_erb, 0.5, 12.0, d.broad_width_erb),
+            tame_broad: f(self.tame_broad, 0.0, 2.0, d.tame_broad),
+            recover_broad: f(self.recover_broad, 0.0, 2.0, d.recover_broad),
+            tame_level: f(self.tame_level, 0.0, 4.0, d.tame_level),
+            recover_level: f(self.recover_level, 0.0, 4.0, d.recover_level),
+            level_ref_db: f(self.level_ref_db, -80.0, 0.0, d.level_ref_db),
+            tame_target: std::array::from_fn(|i| f(self.tame_target[i], -40.0, 40.0, d.tame_target[i])),
+            recover_target: std::array::from_fn(|i| f(self.recover_target[i], -40.0, 40.0, d.recover_target[i])),
         }
     }
 }
@@ -237,6 +280,15 @@ pub struct MannersDsp {
     bins_per_erb: [f32; MAX_BANDS],
     /// The neighbourhood weights, row per band, each row summing to 1 (`bands` × `bands`).
     spread: Vec<f32>,
+    /// The broad balance's weights, row per band, each row summing to 1 (`bands` × `bands`).
+    wide: Vec<f32>,
+    /// Pink noise's level per ERB at each band, dB against 1 kHz.
+    pink_db: [f32; MAX_BANDS],
+    /// The targets at each band, dB against pink.
+    tame_at: [f32; MAX_BANDS],
+    recover_at: [f32; MAX_BANDS],
+    /// Scratch: each band's broad level against pink, dB.
+    broad: [f32; MAX_BANDS],
     /// 0..1 per band: inside the working range.
     range: [f32; MAX_BANDS],
     /// The static tilt per band, dB (Brighten and Boost).
@@ -298,6 +350,11 @@ impl MannersDsp {
             inv_weight: [0.0; MAX_BANDS],
             bins_per_erb: [1.0; MAX_BANDS],
             spread: Vec::new(),
+            wide: Vec::new(),
+            pink_db: [0.0; MAX_BANDS],
+            tame_at: [0.0; MAX_BANDS],
+            recover_at: [0.0; MAX_BANDS],
+            broad: [0.0; MAX_BANDS],
             range: [1.0; MAX_BANDS],
             tilt: [0.0; MAX_BANDS],
             raw: [0.0; MAX_BANDS],
@@ -387,6 +444,7 @@ impl MannersDsp {
         }
         self.bin_gain = vec![1.0; n / 2 + 1];
         self.build_bands();
+        self.build_broad();
         let fps = (sr / self.hop.max(1) as f64) as f32;
         self.level_att = frame_coef(self.tuning.level_attack_ms, fps);
         self.level_rel = frame_coef(self.tuning.level_release_ms, fps);
@@ -522,6 +580,60 @@ impl MannersDsp {
                         *s /= sum;
                     }
                 }
+            }
+        }
+    }
+
+    /// The broad balance's tables: its weights, pink noise per ERB and the two targets per band.
+    fn build_broad(&mut self) {
+        let t = self.tuning;
+        let bands = self.bands;
+        let erb = |i: usize| self.centre_erb.get(i).copied().unwrap_or(0.0);
+        let mut wide = vec![0.0; bands * bands];
+        for i in 0..bands {
+            let mut sum = 0.0f32;
+            for j in 0..bands {
+                let dz = (erb(i) - erb(j)) / t.broad_width_erb;
+                let width = 0.5 * (erb((j + 1).min(bands - 1)) - erb(j.saturating_sub(1)));
+                let w = width.max(1e-6) * (-0.5 * dz * dz).exp();
+                if let Some(s) = wide.get_mut(i * bands + j) {
+                    *s = w;
+                }
+                sum += w;
+            }
+            if sum > 0.0 {
+                for j in 0..bands {
+                    if let Some(s) = wide.get_mut(i * bands + j) {
+                        *s /= sum;
+                    }
+                }
+            }
+        }
+        self.wide = wide;
+        let target_erb: [f32; TARGET_POINTS] = std::array::from_fn(|i| hz_to_erb(TARGET_HZ[i]));
+        let at = |table: &[f32; TARGET_POINTS], z: f32| {
+            let mut v = table[0];
+            for k in 1..TARGET_POINTS {
+                if z >= target_erb[k - 1] {
+                    let f = ((z - target_erb[k - 1]) / (target_erb[k] - target_erb[k - 1])).clamp(0.0, 1.0);
+                    v = table[k - 1] + (table[k] - table[k - 1]) * f;
+                }
+            }
+            v
+        };
+        // Pink: power per Hz falls as 1/f, so per ERB it is the ERB's width over f.
+        let pink = |hz: f32| 10.0 * (erb_width_hz(hz) / hz.max(1.0)).log10();
+        for i in 0..MAX_BANDS {
+            let hz = self.centre_hz.get(i).copied().unwrap_or(1_000.0).max(1.0);
+            let z = self.centre_erb.get(i).copied().unwrap_or(0.0);
+            if let Some(v) = self.pink_db.get_mut(i) {
+                *v = pink(hz) - pink(1_000.0);
+            }
+            if let Some(v) = self.tame_at.get_mut(i) {
+                *v = at(&t.tame_target, z);
+            }
+            if let Some(v) = self.recover_at.get_mut(i) {
+                *v = at(&t.recover_target, z);
             }
         }
     }
@@ -728,21 +840,60 @@ impl MannersDsp {
             }
         }
         // The median over the bands that count: shape, not level.
+        let median_of = |v: &mut [f32]| {
+            let mid = v.len() / 2;
+            let (_, m, _) = v.select_nth_unstable_by(mid, f32::total_cmp);
+            *m
+        };
         let median = match self.sorted.get_mut(..active) {
-            Some(v) if active >= 3 => {
-                let mid = active / 2;
-                let (_, m, _) = v.select_nth_unstable_by(mid, f32::total_cmp);
-                Some(*m)
-            }
+            Some(v) if active >= 3 => Some(median_of(v)),
             _ => None,
         };
+        // The broad balance: each region against pink, and against the regions' own median.
+        let mut total = 0.0f32;
+        let mut broad_active = 0usize;
+        for i in 0..bands {
+            let mut around = 0.0f32;
+            if let Some(row) = self.wide.get(i * bands..(i + 1) * bands) {
+                for (w, l) in row.iter().zip(self.level.iter()) {
+                    around += w * l;
+                }
+            }
+            let d = pow_db(around) - self.pink_db.get(i).copied().unwrap_or(0.0);
+            if let Some(v) = self.broad.get_mut(i) {
+                *v = d;
+            }
+            if self.tmp.get(i).copied().unwrap_or(0.0) > 0.0 && self.range.get(i).copied().unwrap_or(0.0) > 0.5 {
+                if let Some(v) = self.sorted.get_mut(broad_active) {
+                    *v = d;
+                    broad_active += 1;
+                }
+            }
+            let weight = self.inv_weight.get(i).copied().unwrap_or(0.0);
+            let per_erb = self.bins_per_erb.get(i).copied().unwrap_or(1.0);
+            if weight > 0.0 {
+                total += self.level.get(i).copied().unwrap_or(0.0) / (weight * per_erb);
+            }
+        }
+        let broad_median = match self.sorted.get_mut(..broad_active) {
+            Some(v) if broad_active >= 3 => median_of(v),
+            _ => 0.0,
+        };
+        // Quieter than the reference the targets lean out, louder they lean in.
+        let quiet = ((t.level_ref_db - pow_db(total)) / 20.0).clamp(-1.0, 2.0);
+        let lean_tame = (1.0 + t.tame_level * quiet).max(0.0);
+        let lean_recover = (1.0 + t.recover_level * quiet).max(0.0);
         for i in 0..bands {
             let guard = self.tmp.get(i).copied().unwrap_or(0.0);
             let want = match median {
                 Some(m) => {
-                    let x = self.dom.get(i).copied().unwrap_or(0.0) - m - s.bias * t.bias_db;
-                    let cut = soft_cap(s.tame * t.tame_ratio * knee(x, t.knee_db), s.tame * t.max_cut_db);
-                    let lift = soft_cap(s.recover * t.recover_ratio * knee(-x, t.knee_db), s.recover * t.max_boost_db) * guard;
+                    let shift = s.bias * t.bias_db;
+                    let x = self.dom.get(i).copied().unwrap_or(0.0) - m - shift;
+                    let b = self.broad.get(i).copied().unwrap_or(0.0) - broad_median - shift;
+                    let over = (b - self.tame_at.get(i).copied().unwrap_or(0.0) * lean_tame).max(0.0);
+                    let under = (self.recover_at.get(i).copied().unwrap_or(0.0) * lean_recover - b).max(0.0);
+                    let cut = soft_cap(s.tame * (t.tame_ratio * knee(x, t.knee_db) + t.tame_broad * over), s.tame * t.max_cut_db);
+                    let lift = soft_cap(s.recover * (t.recover_ratio * knee(-x, t.knee_db) + t.recover_broad * under), s.recover * t.max_boost_db) * guard;
                     lift - cut
                 }
                 None => 0.0,

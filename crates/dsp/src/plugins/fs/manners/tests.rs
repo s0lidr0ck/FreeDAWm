@@ -367,31 +367,35 @@ fn reset_empties_the_frame_and_keeps_the_knobs() {
 #[test]
 fn steady_noise_does_not_make_the_gain_flutter() {
     // On stationary pink noise the curve should sit still: a busy curve is heard as a warble.
+    // (Where it sits is the tuning's business; how much it moves about that is this test's.)
     let len = 6 * 48_000;
     let x = stereo(pink(len, 25));
     let mut dsp = MannersDsp::new();
     dsp.prepare(48_000.0, 2);
     dsp.set(Settings { tame: 1.0, recover: 1.0, ..Settings::default() });
-    let mut worst = 0.0f32;
-    let mut sum = 0.0f64;
-    let mut count = 0usize;
+    let bands = dsp.bands();
+    let (mut sum, mut sq, mut frames) = (vec![0.0f64; bands], vec![0.0f64; bands], 0usize);
     let mut pos = 0;
     while pos + 256 <= len {
         let mut buf: Vec<Vec<f32>> = x.iter().map(|c| c[pos..pos + 256].to_vec()).collect();
         dsp.process(&mut buf, 256);
         if pos > 48_000 {
             let comp = dsp.level_comp_db();
-            for g in dsp.band_gain_db() {
-                worst = worst.max((g - comp).abs());
-                sum += f64::from(g - comp).powi(2);
-                count += 1;
+            for (i, g) in dsp.band_gain_db().iter().enumerate() {
+                let v = f64::from(g - comp);
+                sum[i] += v;
+                sq[i] += v * v;
             }
+            frames += 1;
         }
         pos += 256;
     }
-    let rms = (sum / count.max(1) as f64).sqrt();
-    assert!(rms < 1.0, "the curve moves {rms:.2} dB RMS on steady noise (worst {worst:.2})");
-    assert!(worst < 5.0, "worst {worst:.2} dB");
+    let n = frames as f64;
+    let dev: Vec<f64> = (0..bands).map(|i| (sq[i] / n - (sum[i] / n).powi(2)).max(0.0).sqrt()).collect();
+    let worst = dev.iter().copied().fold(0.0, f64::max);
+    let mean = dev.iter().sum::<f64>() / bands as f64;
+    assert!(mean < 0.6, "the curve moves {mean:.2} dB RMS about its place on steady noise (worst band {worst:.2})");
+    assert!(worst < 1.5, "worst band {worst:.2} dB");
 }
 
 #[test]
