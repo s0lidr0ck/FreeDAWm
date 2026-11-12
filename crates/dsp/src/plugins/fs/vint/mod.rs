@@ -3,6 +3,9 @@
 //! (`VINT_MODELLED_PASSIVE = 0`): seven vintage EQ / colour boxes, the four EQs solved from their
 //! schematics by modified nodal analysis (`vint_mna`), plus the MEQ-5 as the eighth circuit.
 //!
+//! One part is not the C++'s: the Enhancer's Maximizer is the BBE 882's circuit
+//! (`vint_maximizer`, FreeDAWm's own), where the C++ has three filter bands and two delays.
+//!
 //! One Rust file per C++ header: `vint_engine_dsp` (VintEngineDSP.h), `vint_filters`,
 //! `vint_halfband`, `vint_mna`, `vint_neve`, `vint_neve_pre`, `vint_api`, `vint_british`,
 //! `vint_stages`, `vint_pultec_amp` (the reachable part), and `tables/` (VintGainTable.h,
@@ -43,6 +46,7 @@ pub mod vint_british;
 pub mod vint_engine_dsp;
 pub mod vint_filters;
 pub mod vint_halfband;
+pub mod vint_maximizer;
 pub mod vint_mna;
 pub mod vint_neve;
 pub mod vint_neve_pre;
@@ -403,6 +407,8 @@ pub fn frequency_response(values: &[f32], sample_rate: f32, freqs: &[f32], out: 
         }
         v.set_param("quality", 0.0);
         v.prepare(sr, N, 1);
+        // the Maximizer's response is drawn as it is on programme (its VCA open)
+        v.dsp.hold_vca_open(true);
         let mut io = vec![vec![0.0f32; N]];
         io[0][0] = first;
         v.process(&mut io, N);

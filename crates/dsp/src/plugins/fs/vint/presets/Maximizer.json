@@ -3,7 +3,7 @@
   "name": "Maximizer",
   "group": "Mix & Master",
   "tags": "Enhancer",
-  "desc": "Phase-aligned bands, a top that backs off when it's already loud, and low contour.",
+  "desc": "The BBE 882's circuit: the highs ahead of the lows, some Process and a little Lo Contour.",
   "values": {
     "circuit": "Enhancer",
     "stage": 1.0,

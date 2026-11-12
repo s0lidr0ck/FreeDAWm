@@ -462,3 +462,48 @@ fn reset_is_a_fresh_prepare() {
     run(&mut fresh, &mut want, 512);
     assert_eq!(after_reset, want);
 }
+
+#[test]
+fn the_maximizer_is_the_882s_circuit() {
+    // Through the whole engine (stage off): the circuit's own figures, `vint_maximizer`'s.
+    let mut v: Vec<f32> = VINT_PARAMS.iter().map(|p| p.default).collect();
+    v[dsp::P_CIRCUIT] = 4.0;
+    v[dsp::P_STAGE] = 0.0;
+    v[dsp::P_ENH_TYPE] = 1.0;
+    let freqs = [50.0, 700.0, 5000.0];
+    let mut out = [0.0f32; 3];
+    // PROCESS at maximum: +13.5 dB at 5 kHz, the lows where they were.
+    v[dsp::P_ENH_AMOUNT] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[2] - 13.5).abs() < 0.5 && (out[0] + 0.7).abs() < 0.5, "{out:?}");
+    // LO CONTOUR at maximum: +14.6 dB at 50 Hz, the highs within a dB of where they were.
+    v[dsp::P_ENH_AMOUNT] = 0.0;
+    v[dsp::P_ENH_LOW] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[0] - 14.6).abs() < 0.5 && (out[2] + 1.1).abs() < 0.5, "{out:?}");
+    // Both at minimum is the input itself (the unit's switch at OUT).
+    v[dsp::P_ENH_LOW] = 0.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out.iter().all(|d| d.abs() < 0.05), "{out:?}");
+}
+
+#[test]
+fn the_maximizer_closes_its_highs_on_faint_signals() {
+    // PROCESS at maximum, a 5 kHz tone: +13.5 dB on programme; under the 882's sensitivity
+    // (-45 dBu: -63 dBFS) the VCA takes the boost away.
+    let gain_at = |amp: f32| {
+        let mut s = prepared();
+        s.set_param("circuit", 4.0);
+        s.set_param("stage", 0.0);
+        s.set_param("enhType", 1.0);
+        s.set_param("enhAmount", 1.0);
+        let src: Vec<f32> = (0..96_000).map(|i| amp * (std::f32::consts::TAU * 5000.0 * i as f32 / 48_000.0).sin()).collect();
+        let mut io = vec![src.clone(), src.clone()];
+        run(&mut s, &mut io, 512);
+        let peak = io[0][72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        20.0 * (peak / amp).log10()
+    };
+    let (programme, faint) = (gain_at(0.1), gain_at(1.0e-5));
+    assert!((programme - 13.5).abs() < 0.5, "{programme}");
+    assert!(faint.abs() < 1.5, "{faint}");
+}

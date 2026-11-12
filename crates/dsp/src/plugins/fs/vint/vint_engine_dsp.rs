@@ -8,7 +8,8 @@
 //!   1 Console        the Neve 1073 EQ, as circuits, inside the 1073's preamp (its fast model)
 //!   2 Proportional   API 550A(-1): three bands in 2 / 4 / 6 / 9 / 12 dB steps, as a circuit
 //!   3 British        SSL 4000 E channel EQ, the brown (82E02) or black (82E242) card, as circuits
-//!   4 Enhancer       exciter / maximizer / vitalizer family
+//!   4 Enhancer       exciter / maximizer / vitalizer family; the Maximizer is the BBE 882,
+//!                    as a circuit (`vint_maximizer`: FreeDAWm's own, not in the C++)
 //!   5 Air            the Dolby A encode trick: a four-band, level-dependent brightener
 //!   6 Sampler        12-bit sampler converters and their filters
 //! ```
@@ -47,6 +48,7 @@ use super::vint_api as vintapi;
 use super::vint_british as vintbri;
 use super::vint_filters::{self as vintf, Coefs, Section};
 use super::vint_halfband::{self as vinthb};
+use super::vint_maximizer as vintmax;
 use super::vint_mna::{self as vintmna, Kind, Netlist, Scratch, Solver};
 use super::vint_neve as vintneve;
 use super::vint_neve_pre::{self as vintpre, FastPre};
@@ -593,13 +595,11 @@ struct Channel {
     enh_hp1: Section,
     enh_hp2: Section,
     enh_low: Section,
-    enh_low_split: Section,
-    enh_high_split: Section,
     enh_scoop: Section,
-    enh_env: f64,
-    low_line: [f64; 512],
-    mid_line: [f64; 512],
-    line_w: i32,
+    /// the Maximizer: the 882's filter (OA1 to OA4), its summing amp (OA5), its detector's level
+    max_filter: Solver,
+    max_sum: Solver,
+    max_env: f64,
 
     // Air: the four Dolby A bands, and their level detectors
     air_b1: Section,
@@ -620,7 +620,7 @@ struct Channel {
 impl Channel {
     #[cfg(test)]
     fn solvers(&self) -> impl Iterator<Item = &Solver> {
-        std::iter::once(&self.passive).chain(self.sec.iter()).chain(self.sec_pre.iter())
+        std::iter::once(&self.passive).chain(self.sec.iter()).chain(self.sec_pre.iter()).chain([&self.max_filter, &self.max_sum])
     }
 
     fn new() -> Channel {
@@ -628,6 +628,7 @@ impl Channel {
             Solver::default(),
             [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default(), Solver::default()],
+            [Solver::default(), Solver::default()],
         )
     }
 
@@ -637,10 +638,12 @@ impl Channel {
         let passive = self.passive.take_reset();
         let sec = self.sec.each_mut().map(Solver::take_reset);
         let sec_pre = self.sec_pre.each_mut().map(Solver::take_reset);
-        *self = Channel::with_solvers(passive, sec, sec_pre);
+        let max = [self.max_filter.take_reset(), self.max_sum.take_reset()];
+        *self = Channel::with_solvers(passive, sec, sec_pre, max);
     }
 
-    fn with_solvers(passive: Solver, sec: [Solver; K_MAX_CIRCUIT_SECTIONS], sec_pre: [Solver; K_MAX_CIRCUIT_SECTIONS]) -> Channel {
+    fn with_solvers(passive: Solver, sec: [Solver; K_MAX_CIRCUIT_SECTIONS], sec_pre: [Solver; K_MAX_CIRCUIT_SECTIONS], max: [Solver; 2]) -> Channel {
+        let [max_filter, max_sum] = max;
         Channel {
             os: [vinthb::Stage::default(); 3],
             os_wet: [vinthb::Stage::default(); 3],
@@ -658,13 +661,10 @@ impl Channel {
             enh_hp1: Section::default(),
             enh_hp2: Section::default(),
             enh_low: Section::default(),
-            enh_low_split: Section::default(),
-            enh_high_split: Section::default(),
             enh_scoop: Section::default(),
-            enh_env: 0.0,
-            low_line: [0.0; 512],
-            mid_line: [0.0; 512],
-            line_w: 0,
+            max_filter,
+            max_sum,
+            max_env: 0.0,
             air_b1: Section::default(),
             air_b2a: Section::default(),
             air_b2b: Section::default(),
@@ -700,12 +700,11 @@ struct Ctx<'a> {
     con_decimation: usize,
     smoothed: &'a Values,
     smp_step: f64,
-    enh_att: f64,
-    enh_rel: f64,
+    max_att: f64,
+    max_rel: f64,
+    max_vca_open: bool,
     air_att: f64,
     air_rel: &'a [f64; 4],
-    low_delay: i32,
-    mid_delay: i32,
     inter_at_rest: &'a Interstage,
     input_at_rest: &'a InputTransformer,
 }
@@ -725,6 +724,9 @@ pub struct VintEngineDsp {
     sec_solved: bool,
     sec_skip: bool,
     passive_solved: bool,
+    /// the Maximizer's circuit: solved, and the capacitor scale it was solved for
+    max_solved: bool,
+    max_scale: f64,
     sec_count: usize,
     sec_circuit: i32,
     circuit: i32,
@@ -758,12 +760,11 @@ pub struct VintEngineDsp {
     pre_gain: f64,
 
     smp_step: f64,
-    enh_att: f64,
-    enh_rel: f64,
+    max_att: f64,
+    max_rel: f64,
+    max_vca_open: bool,
     air_att: f64,
     air_rel: [f64; 4],
-    low_delay: i32,
-    mid_delay: i32,
 
     in_peak: f32,
     out_peak: f32,
@@ -817,6 +818,8 @@ impl VintEngineDsp {
             sec_solved: false,
             sec_skip: false,
             passive_solved: false,
+            max_solved: false,
+            max_scale: 1.0,
             sec_count: 0,
             sec_circuit: -1,
             circuit: C_PASSIVE,
@@ -846,12 +849,11 @@ impl VintEngineDsp {
             pre_volts: 8.7,
             pre_gain: 1.0,
             smp_step: 0.1,
-            enh_att: 0.01,
-            enh_rel: 0.001,
+            max_att: 0.01,
+            max_rel: 0.001,
+            max_vca_open: false,
             air_att: 0.01,
             air_rel: [0.0; 4],
-            low_delay: 480,
-            mid_delay: 96,
             in_peak: 0.0,
             out_peak: 0.0,
         }
@@ -899,6 +901,12 @@ impl VintEngineDsp {
         self.byp_sm = self.bypass_target();
         self.drive_sm = f64::from(self.values[P_DRIVE]);
         self.stage_sm = self.stage_target();
+    }
+
+    /// Holds the Maximizer's VCA open, as it is on programme: for measuring the response with an
+    /// impulse, which is over before the detector has heard it.
+    pub fn hold_vca_open(&mut self, on: bool) {
+        self.max_vca_open = on;
     }
 
     /// The rate `prepare` was given (0 before the first).
@@ -981,12 +989,11 @@ impl VintEngineDsp {
                 con_decimation: self.con_decimation,
                 smoothed: &self.smoothed,
                 smp_step: self.smp_step,
-                enh_att: self.enh_att,
-                enh_rel: self.enh_rel,
+                max_att: self.max_att,
+                max_rel: self.max_rel,
+                max_vca_open: self.max_vca_open,
                 air_att: self.air_att,
                 air_rel: &self.air_rel,
-                low_delay: self.low_delay,
-                mid_delay: self.mid_delay,
                 inter_at_rest: &self.inter_at_rest,
                 input_at_rest: &self.input_at_rest,
             };
@@ -1020,8 +1027,6 @@ impl VintEngineDsp {
         let tune = f64::from(sweep(sm[P_ENH_TUNE], 700.0, 7000.0));
         let hp = bilinear(&high_pass2(0.7071), tune, os_fs);
         let lp120 = bilinear(&low_pass1(), 120.0, os_fs);
-        let lo150 = bilinear(&low_pass2(0.7071), 150.0, os_fs);
-        let hi_split = bilinear(&high_pass2(0.7071), tune, os_fs);
         let scoop = bilinear(&bell(10.0f64.powf(-6.0 * f64::from(sm[P_ENH_AMOUNT]) / 20.0), 0.5), 1000.0, os_fs);
 
         let b1 = bilinear(&low_pass2(0.7071), 80.0, os_fs);
@@ -1040,8 +1045,6 @@ impl VintEngineDsp {
             c.enh_hp1.c = hp;
             c.enh_hp2.c = hp;
             c.enh_low.c = lp120;
-            c.enh_low_split.c = lo150;
-            c.enh_high_split.c = hi_split;
             c.enh_scoop.c = scoop;
             c.air_b1.c = b1;
             c.air_b2a.c = b2a;
@@ -1053,11 +1056,7 @@ impl VintEngineDsp {
                 c.smp_rc[i].c = aa[i];
             }
         }
-        // C++ `(int) std::lround (...)`: finite here; `as` saturates where C++ is undefined.
-        self.low_delay = ((0.0025 * os_fs).round() as i32).clamp(1, 511);
-        self.mid_delay = ((0.0005 * os_fs).round() as i32).clamp(1, 511);
-        self.enh_att = 1.0 - (-1.0 / (0.002 * os_fs)).exp();
-        self.enh_rel = 1.0 - (-1.0 / (0.080 * os_fs)).exp();
+        (self.max_att, self.max_rel) = vintmax::detector_steps(os_fs);
         self.air_att = 1.0 - (-1.0 / (0.002 * os_fs)).exp();
         const REL_MS: [f64; 4] = [150.0, 80.0, 60.0, 60.0];
         for i in 0..4 {
@@ -1098,6 +1097,25 @@ impl VintEngineDsp {
                 }
             }
             self.passive_solved = true;
+        }
+        // The Maximizer's circuit: solved when the Enhancer comes into use, and again only when
+        // Tune moves its capacitors (the pots are outside the filter: they need no solve).
+        if self.circuit == C_ENHANCER {
+            let scale = vintmax::cap_scale(self.smoothed[P_ENH_TUNE]);
+            if (!self.max_solved || scale != self.max_scale)
+                && let Some(scratch) = self.scratch.as_deref_mut()
+            {
+                let filter = vintmax::filter_netlist(scale);
+                let sum = vintmax::summing_netlist();
+                for c in &mut self.ch {
+                    c.max_filter.set(&filter, self.os_fs, scratch);
+                    if !self.max_solved {
+                        c.max_sum.set_running(&sum, self.os_fs, scratch);
+                    }
+                }
+                self.max_solved = true;
+                self.max_scale = scale;
+            }
         }
         // The netlist circuits: each section solved again only when one of its parts changed, and
         // once, for both channels. While a knob glides, every other time.
@@ -1228,9 +1246,13 @@ impl VintEngineDsp {
             for b in &mut c.sec {
                 b.reset();
             }
+            c.max_filter.reset();
+            c.max_sum.reset();
+            c.max_env = 0.0;
         }
         self.sec_solved = false;
         self.passive_solved = false;
+        self.max_solved = false;
         self.configure_stage();
         self.smoothed = self.values;
         self.active_sections = 0;
@@ -1438,18 +1460,29 @@ fn enhance(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
     let amount = f64::from(sm[P_ENH_AMOUNT]);
     let low = f64::from(sm[P_ENH_LOW]);
 
-    // Every filter and both delay lines run all the time, whichever box is selected.
-    let lo = c.enh_low_split.run(x);
-    let hi = c.enh_high_split.run(x);
-    let mid = x - lo - hi;
-    c.low_line[(c.line_w & 511) as usize] = lo;
-    c.mid_line[(c.line_w & 511) as usize] = mid;
-    let lo_d = c.low_line[((c.line_w - fl.low_delay) & 511) as usize];
-    let mid_d = c.mid_line[((c.line_w - fl.mid_delay) & 511) as usize];
-    c.line_w = (c.line_w + 1) & 511;
-    c.enh_env += (if hi.abs() > c.enh_env { fl.enh_att } else { fl.enh_rel }) * (hi.abs() - c.enh_env);
+    // The Exciter's and the Vitalizer's filters run all the time, whichever box is selected.
     let band = c.enh_hp1.run(x);
     let scooped = c.enh_scoop.run(x);
+
+    if ty == 1 {
+        // The BBE 882, as a circuit (`vint_maximizer`). Amount is its PROCESS pot, Low its
+        // LO CONTOUR pot. It runs with both at minimum too, so that it is settled when one rises.
+        c.enh_low.run(x);
+        c.enh_hp2.run(0.0);
+        let lp = c.max_filter.open_circuit(x);
+        let bp = c.max_filter.node_open(vintmax::N_BP);
+        let hp = c.max_filter.node_open(vintmax::N_HP);
+        let buffer = c.max_filter.node_open(vintmax::N_BUFFER);
+        c.max_filter.commit(0.0);
+        c.max_env = vintmax::detect(c.max_env, buffer * K_VOLTS_AT_FULL_SCALE, fl.max_att, fl.max_rel);
+        let vca = if fl.max_vca_open { 1.0 } else { vintmax::vca_gain(c.max_env) };
+        let y = c.max_sum.run(vintmax::summing_drive(lp, bp, hp, vca, low, amount));
+        if amount <= 0.0 && low <= 0.0 {
+            return x; // off is the input itself
+        }
+        return y;
+    }
+
     let low_add = low_shelf_add(c, x, low, ty == 2);
 
     if amount <= 0.0 && low <= 0.0 {
@@ -1460,13 +1493,6 @@ fn enhance(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
     if ty == 0 {
         let top = c.enh_hp2.run(enh_sat(band * 4.0, 0.25));
         return x + amount * 0.35 * top + low_add;
-    }
-    if ty == 1 {
-        c.enh_hp2.run(0.0);
-        // top boost up to +10 dB, backing off as the top band gets loud (above about -30 dBFS)
-        let back_off = clamp_t(1.0 - (20.0 * (c.enh_env + 1e-9).log10() + 30.0) / 20.0, 0.0, 1.0);
-        let hi_gain = 10.0f64.powf(10.0 * amount * back_off / 20.0);
-        return lo_d + mid_d + hi * hi_gain + low_add;
     }
     let top = c.enh_hp2.run((band * 3.0).tanh());
     scooped + amount * 0.25 * top + low_add
