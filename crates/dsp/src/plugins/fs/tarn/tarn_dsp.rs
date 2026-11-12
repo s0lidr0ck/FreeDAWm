@@ -152,11 +152,13 @@ pub struct Settings {
     pub hi_hz: f32,
     /// Hear only what the engine changes (output minus input).
     pub delta: bool,
+    /// Pass the input through untouched (still a frame late, so the latency never changes).
+    pub bypass: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { tame: 0.0, recover: 0.0, bias: 0.0, brighten: 0.0, boost: 0.0, lo_hz: 20.0, hi_hz: 20_000.0, delta: false }
+        Settings { tame: 0.0, recover: 0.0, bias: 0.0, brighten: 0.0, boost: 0.0, lo_hz: 20.0, hi_hz: 20_000.0, delta: false, bypass: false }
     }
 }
 
@@ -423,6 +425,7 @@ impl TarnDsp {
             lo_hz: f(s.lo_hz, 20.0, 20_000.0, d.lo_hz),
             hi_hz: f(s.hi_hz, 20.0, 20_000.0, d.hi_hz),
             delta: s.delta,
+            bypass: s.bypass,
         };
         if new != self.set {
             self.set = new;
@@ -617,10 +620,10 @@ impl TarnDsp {
         self.gains();
         // The same real gain on a bin and its mirror keeps left real and right imaginary.
         let half = n / 2;
-        let delta = self.set.delta;
+        let (delta, bypass) = (self.set.delta, self.set.bypass);
         for k in 0..=half {
-            let g = self.bin_gain.get(k).copied().unwrap_or(1.0);
-            let g = if delta { g - 1.0 } else { g };
+            let g = if bypass { 1.0 } else { self.bin_gain.get(k).copied().unwrap_or(1.0) };
+            let g = if delta && !bypass { g - 1.0 } else { g };
             if let Some(b) = self.buf.get_mut(k) {
                 *b *= g;
             }

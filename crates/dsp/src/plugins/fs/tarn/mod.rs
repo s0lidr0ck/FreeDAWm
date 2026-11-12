@@ -8,7 +8,8 @@
 //!   always, whatever the settings.
 //! - Stereo is linked (one gain curve for both sides); mono runs the same engine on one channel.
 //!   Extra channels are left untouched (the host contract).
-//! - There is no engine bypass: the module's bypass is used.
+//! - `bypass` is the engine's own (the input a frame late, so the latency holds), kept hidden
+//!   (group "") like every engine's: the UI uses the module's bypass.
 //! - No tail beyond the latency: the gain has no memory of the audio.
 
 pub mod tarn_dsp;
@@ -26,7 +27,7 @@ const fn knob(id: &'static str, name: &'static str, min: f32, max: f32, default:
     ParamInfo { id, name, min, max, default, unit, taper, choices: &[], display: None, group }
 }
 
-pub const NUM_PARAMS: usize = 8;
+pub const NUM_PARAMS: usize = 9;
 const P_TAME: usize = 0;
 const P_RECOVER: usize = 1;
 const P_BIAS: usize = 2;
@@ -35,6 +36,7 @@ const P_BOOST: usize = 4;
 const P_LO: usize = 5;
 const P_HI: usize = 6;
 const P_DELTA: usize = 7;
+const P_BYPASS: usize = 8;
 
 pub static TARN_PARAMS: [ParamInfo; NUM_PARAMS] = [
     knob("tame", "Tame", 0.0, 100.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
@@ -45,6 +47,8 @@ pub static TARN_PARAMS: [ParamInfo; NUM_PARAMS] = [
     knob("rangeLo", "Range Low", 20.0, 20_000.0, 20.0, Unit::Hz, Taper::Log, "Range"),
     knob("rangeHi", "Range High", 20.0, 20_000.0, 20_000.0, Unit::Hz, Taper::Log, "Range"),
     knob("delta", "Delta", 0.0, 1.0, 0.0, Unit::Toggle, Taper::Linear, "Listen"),
+    // The engine's own bypass, hidden; the UI uses the module's bypass instead.
+    knob("bypass", "Bypass", 0.0, 1.0, 0.0, Unit::Toggle, Taper::Linear, ""),
 ];
 
 pub static TARN_INFO: PluginInfo = PluginInfo {
@@ -111,6 +115,7 @@ impl Tarn {
             lo_hz: self.p.v(P_LO),
             hi_hz: self.p.v(P_HI),
             delta: self.p.on(P_DELTA),
+            bypass: self.p.on(P_BYPASS),
         });
     }
 

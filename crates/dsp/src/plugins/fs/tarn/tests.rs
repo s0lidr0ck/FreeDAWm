@@ -115,7 +115,8 @@ fn registered_listed_and_reports_the_frame_as_latency() {
     assert_eq!(p.latency(), 8192);
     assert!(crate::plugins::fs::engine("fs_tarn").unwrap().fidelity.is_none(), "there is no C++ original");
     let ids: Vec<&str> = TARN_PARAMS.iter().map(|p| p.id).collect();
-    assert_eq!(ids, ["tame", "recover", "bias", "brighten", "boost", "rangeLo", "rangeHi", "delta"]);
+    assert_eq!(ids, ["tame", "recover", "bias", "brighten", "boost", "rangeLo", "rangeHi", "delta", "bypass"]);
+    assert_eq!(TARN_PARAMS[8].group, "", "the engine's bypass is hidden");
     assert_eq!(TARN_PARAMS[0].format(25.0), "25%");
     assert_eq!(TARN_PARAMS[5].format(20.0), "20.0 Hz");
 }
@@ -281,6 +282,16 @@ fn delta_is_the_output_minus_the_input() {
     let err = (0..len).map(|i| (y[0][i] - x[0][i] - d[0][i]).abs()).fold(0.0f32, f32::max);
     assert!(err < 1e-4, "{err}");
     assert!(d[0].iter().any(|v| v.abs() > 1e-3), "something changed");
+}
+
+#[test]
+fn the_engines_bypass_is_the_input_a_frame_late() {
+    let x = stereo(add(&pink(48_000, 27), &narrow(48_000, 3_000.0, 28), 6.0));
+    let mut t = tarn(&[("tame", 100.0), ("recover", 100.0), ("brighten", 100.0), ("delta", 1.0), ("bypass", 1.0)]);
+    assert_eq!(t.latency(), N);
+    let y = run(&mut t, &x, 512);
+    let err = x[0].iter().zip(&y[0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(err < 2e-5, "{err}");
 }
 
 #[test]
