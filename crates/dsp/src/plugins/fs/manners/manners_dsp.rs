@@ -89,6 +89,8 @@ pub struct Tuning {
     /// Where Brighten's tilt turns, Hz, and how many octaves the turn takes.
     pub brighten_hz: f32,
     pub brighten_width_oct: f32,
+    /// Everything fades out over half an octave above this, Hz: the very top is left alone.
+    pub top_hz: f32,
     /// A band this far over its neighbourhood is a peak on its own (a held tone, a whistle,
     /// feedback): Tame cuts it further, [`Tuning::peak_ratio`] dB per dB beyond this, up to
     /// [`Tuning::peak_max_db`] more, and narrowly (not smoothed over its neighbours).
@@ -151,6 +153,7 @@ impl Default for Tuning {
             brighten_down_db: 17.1,
             brighten_hz: 1_364.0,
             brighten_width_oct: 2.16,
+            top_hz: 13_500.0,
             peak_threshold_db: 16.6,
             peak_ratio: 0.68,
             // The fit asks for more than this; 12 dB is as far as an automatic cut should go.
@@ -199,6 +202,7 @@ impl Tuning {
             brighten_down_db: f(self.brighten_down_db, 0.0, 30.0, d.brighten_down_db),
             brighten_hz: f(self.brighten_hz, 100.0, 10_000.0, d.brighten_hz),
             brighten_width_oct: f(self.brighten_width_oct, 0.25, 6.0, d.brighten_width_oct),
+            top_hz: f(self.top_hz, 2_000.0, 40_000.0, d.top_hz),
             peak_threshold_db: f(self.peak_threshold_db, 0.0, 60.0, d.peak_threshold_db),
             peak_ratio: f(self.peak_ratio, 0.0, 2.0, d.peak_ratio),
             peak_max_db: f(self.peak_max_db, 0.0, 24.0, d.peak_max_db),
@@ -276,9 +280,14 @@ fn knee(x: f32, knee: f32) -> f32 {
     if x <= 0.0 { 0.0 } else { x * x / (x + knee.max(1e-3)) }
 }
 
-/// A soft limit: `x` for small values, never past `cap`.
+/// A soft limit: `x` nearly unchanged up to half of `cap`, never past `cap`
+/// (`x / (1 + (x/cap)³)^⅓`; the reference stays straight for longer than a tanh does).
 fn soft_cap(x: f32, cap: f32) -> f32 {
-    if cap <= 1e-6 { 0.0 } else { cap * (x / cap).tanh() }
+    if cap <= 1e-6 || x <= 0.0 {
+        return 0.0;
+    }
+    let r = x / cap;
+    x / (1.0 + r * r * r).cbrt()
 }
 
 /// A one-pole step's coefficient for a time constant, at the frame rate.
@@ -689,7 +698,8 @@ impl MannersDsp {
             let r_lo = if open_lo { 1.0 } else { fade((hz / lo).log2()) };
             let r_hi = if open_hi { 1.0 } else { fade((hi / hz).log2()) };
             if let Some(r) = self.range.get_mut(i) {
-                *r = if i < self.bands { r_lo * r_hi } else { 0.0 };
+                let top = (1.0 - 2.0 * (hz / t.top_hz).log2()).clamp(0.0, 1.0);
+                *r = if i < self.bands { r_lo * r_hi * top } else { 0.0 };
             }
             // Brighten: a tilt that turns over `brighten_width_oct` octaves around `brighten_hz`,
             // half its size either side.

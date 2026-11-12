@@ -86,6 +86,7 @@ const FIELDS: &[Field] = &[
     ("boost_db", |t| &mut t.boost_db, 0.5, 12.0),
     ("floor_db", |t| &mut t.floor_db, -100.0, -30.0),
     ("bands_per_erb", |t| &mut t.bands_per_erb, 1.0, 3.0),
+    ("top_hz", |t| &mut t.top_hz, 6000.0, 30000.0),
     ("knob_power", |t| &mut t.knob_power, 0.25, 1.5),
     ("brighten_down_db", |t| &mut t.brighten_down_db, 1.0, 30.0),
     ("brighten_hz", |t| &mut t.brighten_hz, 200.0, 8000.0),
