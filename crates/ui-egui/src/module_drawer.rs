@@ -883,14 +883,14 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
         | GraphKind::Swale
         | GraphKind::Shale
         | GraphKind::LevelUp
-        | GraphKind::Tarn
+        | GraphKind::Manners
         | GraphKind::Chamber => {
             let gh = match kind {
                 GraphKind::Chamber | GraphKind::Shale | GraphKind::LevelUp => 176.0,
                 GraphKind::Twine => 140.0,
                 GraphKind::Transient => 156.0,
                 GraphKind::Pitch | GraphKind::Filter | GraphKind::Swale => 128.0,
-                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Tarn => 120.0,
+                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Manners => 120.0,
                 GraphKind::Console | GraphKind::Dist => 112.0,
                 _ => 96.0,
             };

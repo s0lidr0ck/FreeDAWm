@@ -1,19 +1,19 @@
-//! Tuning Tarn (`fs_tarn`) against a reference render.
+//! Tuning Manners (`fs_manners`) against a reference render.
 //!
 //! ```sh
-//! cargo run --release -p soundcraft-dsp --example tarn_tune -- gen probe.wav
-//! cargo run --release -p soundcraft-dsp --example tarn_tune -- render in.wav out.wav tame=50 recover=50
-//! cargo run --release -p soundcraft-dsp --example tarn_tune -- compare probe.wav ref_t50_r50.wav@tame=50,recover=50
-//! cargo run --release -p soundcraft-dsp --example tarn_tune -- fit probe.wav ref_a.wav@tame=100 ref_b.wav@recover=100
+//! cargo run --release -p soundcraft-dsp --example manners_tune -- gen probe.wav
+//! cargo run --release -p soundcraft-dsp --example manners_tune -- render in.wav out.wav tame=50 recover=50
+//! cargo run --release -p soundcraft-dsp --example manners_tune -- compare probe.wav ref_t50_r50.wav@tame=50,recover=50
+//! cargo run --release -p soundcraft-dsp --example manners_tune -- fit probe.wav ref_a.wav@tame=100 ref_b.wav@recover=100
 //! ```
 //!
 //! - `gen` writes the probe: 24-bit stereo, synthesised here (noise and tones with known
 //!   spectra, one question per segment). Play it through the reference processor once per
 //!   setting and bounce each pass, same length, no normalising, no dither.
-//! - `render` runs any file through Tarn (latency taken off).
+//! - `render` runs any file through Manners (latency taken off).
 //! - `compare` measures what the reference did to the dry file (gain per third octave, per
-//!   moment), what Tarn does at the same knobs, and prints both per segment with the error.
-//! - `fit` moves Tarn's constants ([`Tuning`]) to shrink that error over every pair given, and
+//!   moment), what Manners does at the same knobs, and prints both per segment with the error.
+//! - `fit` moves Manners' constants ([`Tuning`]) to shrink that error over every pair given, and
 //!   prints the result as Rust to paste into `Tuning::default`.
 //!
 //! Knobs after `@` (or as arguments to `render`): `tame recover bias brighten boost` in percent,
@@ -21,7 +21,7 @@
 
 use rustfft::{FftPlanner, num_complex::Complex};
 use soundcraft_audio_io::{AudioBuffer, BitDepth, EncodeOptions, FileFormat};
-use soundcraft_dsp::plugins::fs::tarn::{Settings, TarnDsp, Tuning};
+use soundcraft_dsp::plugins::fs::manners::{MannersDsp, Settings, Tuning};
 use std::f32::consts::TAU;
 
 type Res<T> = Result<T, String>;
@@ -33,13 +33,11 @@ fn main() {
         Some("render") => render_cmd(&args[1..]),
         Some("compare") => compare_cmd(&args[1..], false),
         Some("fit") => compare_cmd(&args[1..], true),
-        _ => {
-            Err("usage: tarn_tune gen <out.wav> [rate] | render <in> <out> [k=v ..] | compare <dry> <ref@k=v,..> .. | fit <dry> <ref@k=v,..> .."
-                .into())
-        }
+        _ => Err("usage: manners_tune gen <out.wav> [rate] | render <in> <out> [k=v ..] | compare <dry> <ref@k=v,..> .. | fit <dry> <ref@k=v,..> .."
+            .into()),
     };
     if let Err(e) = r {
-        eprintln!("tarn_tune: {e}");
+        eprintln!("manners_tune: {e}");
         std::process::exit(1);
     }
 }
@@ -111,9 +109,9 @@ fn apply(pairs: &str, set: &mut Settings, tuning: &mut Tuning) -> Res<()> {
     Ok(())
 }
 
-/// The file through Tarn, the latency taken off (same length as the input).
+/// The file through Manners, the latency taken off (same length as the input).
 fn render(dry: &AudioBuffer, set: Settings, tuning: Tuning) -> Vec<Vec<f32>> {
-    let mut dsp = TarnDsp::with_tuning(tuning);
+    let mut dsp = MannersDsp::with_tuning(tuning);
     dsp.prepare(f64::from(dry.sample_rate), 2);
     dsp.set(set);
     let lat = dsp.latency_samples();
@@ -131,7 +129,7 @@ fn render_cmd(args: &[String]) -> Res<()> {
     apply(&rest.join(","), &mut set, &mut tuning)?;
     let out = render(&dry, set, tuning);
     write(output, &AudioBuffer { sample_rate: dry.sample_rate, channels: out })?;
-    println!("{output}: {input} through Tarn at {set:?}");
+    println!("{output}: {input} through Manners at {set:?}");
     Ok(())
 }
 
@@ -611,7 +609,7 @@ fn compare_cmd(args: &[String], fit: bool) -> Res<()> {
         let show = |name: &str, from: usize, to: usize| {
             let (r, m) = (mean(&p.gain, from, to), mean(&mine, from, to));
             let diff: Vec<f32> = r.iter().zip(&m).map(|(a, b)| b - a).collect();
-            println!("{}\n{}\n{}", row(&format!("{name} ref"), &r), row("  tarn", &m), row("  tarn-ref", &diff));
+            println!("{}\n{}\n{}", row(&format!("{name} ref"), &r), row("  manners", &m), row("  manners-ref", &diff));
         };
         if probe {
             for (seg, (at, len)) in SEGMENTS.iter().zip(&places) {
@@ -628,7 +626,7 @@ fn compare_cmd(args: &[String], fit: bool) -> Res<()> {
                     let off = on + part_frames;
                     let ms = |g: &[Vec<f32>], step| time_to_settle(g, b, step, part_frames, sr).map_or("-".to_string(), |v| format!("{v:.0} ms"));
                     println!(
-                        "  at {hz} Hz, 63 % of the way: ref in {} out {}, tarn in {} out {} (the meter itself blurs about {:.0} ms)",
+                        "  at {hz} Hz, 63 % of the way: ref in {} out {}, manners in {} out {} (the meter itself blurs about {:.0} ms)",
                         ms(&p.gain, on),
                         ms(&p.gain, off),
                         ms(&mine, on),

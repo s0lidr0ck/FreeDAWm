@@ -1,12 +1,12 @@
-# Tuning Tarn
+# Tuning Manners
 
-Tarn (`fs_tarn`) is the automatic balance equaliser: Tame turns down what covers its neighbours,
+Manners (`fs_manners`) is the automatic balance equaliser: Tame turns down what covers its neighbours,
 Recover lifts what is covered. Unlike the other FireStation engines it is written here in Rust
 and has no C++ original, so there is no fidelity test to say when it is right. It is tuned by
-ear and against a reference processor instead, with `crates/dsp/examples/tarn_tune.rs`.
+ear and against a reference processor instead, with `crates/dsp/examples/manners_tune.rs`.
 
 The model's constants are one struct, `Tuning` in
-`crates/dsp/src/plugins/fs/tarn/tarn_dsp.rs`. The plugin runs `Tuning::default()`; tuning means
+`crates/dsp/src/plugins/fs/manners/manners_dsp.rs`. The plugin runs `Tuning::default()`; tuning means
 changing those defaults.
 
 ## Against a reference processor
@@ -14,7 +14,7 @@ changing those defaults.
 1. Make the probe (90 s, 48 kHz, 24-bit stereo, synthesised by the tool):
 
    ```sh
-   cargo run --release -p soundcraft-dsp --example tarn_tune -- gen probe.wav
+   cargo run --release -p soundcraft-dsp --example manners_tune -- gen probe.wav
    ```
 
    It prints what each segment asks: balanced noise, tilts, narrow resonances at three
@@ -39,25 +39,25 @@ changing those defaults.
 3. Compare (the knobs each pass was made at go after `@`):
 
    ```sh
-   cargo run --release -p soundcraft-dsp --example tarn_tune -- compare probe.wav \
+   cargo run --release -p soundcraft-dsp --example manners_tune -- compare probe.wav \
        ref_tame100.wav@tame=100 ref_recover100.wav@recover=100 ref_t50_r50.wav@tame=50,recover=50
    ```
 
    Per pass and per segment it prints the gain the reference applied in each third octave once
-   settled, the gain Tarn applies at the same knobs, and the difference; for the two changing
+   settled, the gain Manners applies at the same knobs, and the difference; for the two changing
    segments, how long each takes to get 63 % of the way in and out; and the RMS error over every
    moment and band. A reference bounced late (latency not compensated) is lined up first.
 
 4. Fit:
 
    ```sh
-   cargo run --release -p soundcraft-dsp --example tarn_tune -- fit probe.wav \
+   cargo run --release -p soundcraft-dsp --example manners_tune -- fit probe.wav \
        ref_tame100.wav@tame=100 ref_recover100.wav@recover=100 ref_t50_r50.wav@tame=50,recover=50
    ```
 
    Coordinate descent over the `Tuning` fields (about three minutes per pass given). It prints
    the fitted `Tuning`; copy the values into `Tuning::default`, then run
-   `cargo test -p soundcraft-dsp --lib tarn` (the tests hold the behaviour that must survive a
+   `cargo test -p soundcraft-dsp --lib manners` (the tests hold the behaviour that must survive a
    retune: a pure delay at rest, no flutter on steady noise, the floor left alone, level kept).
 
 The fit only moves constants. Where the table shows a difference no constant can close (a
@@ -67,7 +67,7 @@ per-segment rows are there to show which.
 ## By ear
 
 ```sh
-cargo run --release -p soundcraft-dsp --example tarn_tune -- render mix.wav out.wav tame=40 recover=30
+cargo run --release -p soundcraft-dsp --example manners_tune -- render mix.wav out.wav tame=40 recover=30
 ```
 
 Any `Tuning` field can be given the same way (`slope_up_db=14`), so a constant can be auditioned

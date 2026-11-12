@@ -1,4 +1,4 @@
-//! TarnDsp: an automatic balance equaliser. Rust-native: there is no C++ original.
+//! MannersDsp: an automatic balance equaliser. Rust-native: there is no C++ original.
 //!
 //! It listens to the spectrum many times a second, works out which regions cover up their
 //! neighbours and which are covered up, and turns the first down (Tame) and the second up
@@ -207,7 +207,7 @@ fn frame_coef(ms: f32, frames_per_sec: f32) -> f32 {
 }
 
 /// The engine.
-pub struct TarnDsp {
+pub struct MannersDsp {
     tuning: Tuning,
     set: Settings,
     sr: f64,
@@ -260,20 +260,20 @@ pub struct TarnDsp {
     max_boost: f32,
 }
 
-impl Default for TarnDsp {
+impl Default for MannersDsp {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TarnDsp {
+impl MannersDsp {
     pub fn new() -> Self {
         Self::with_tuning(Tuning::default())
     }
 
-    /// An engine with its own constants (the tuning tool's). Unprepared: call [`TarnDsp::prepare`].
+    /// An engine with its own constants (the tuning tool's). Unprepared: call [`MannersDsp::prepare`].
     pub fn with_tuning(tuning: Tuning) -> Self {
-        TarnDsp {
+        MannersDsp {
             tuning: tuning.sanitized(),
             set: Settings::default(),
             sr: 48_000.0,

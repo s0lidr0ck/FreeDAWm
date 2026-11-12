@@ -66,7 +66,7 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_shale" => "Drum gate: band-limited onset detection, lookahead gate following each hit's decay, DeBleed, Kit Link, mic phase alignment.",
         "fs_swale" => "Automatic volume swells (Pick, One-Shot, Rhythmic) with Clean or Slow Gear VCA, Bloom, Alternate.",
         "fs_tape" => "Tape machine: saturation, compression, wow/flutter and head-bump colour.",
-        "fs_tarn" => {
+        "fs_manners" => {
             "Automatic balance EQ: many times a second it turns down what covers its neighbours (Tame) and lifts what is covered (Recover); for buses and masters, in small amounts."
         }
         "fs_transient" => "Transient shaper: attack and sustain on anything.",

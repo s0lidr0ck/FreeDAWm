@@ -1,7 +1,7 @@
-//! `fs_tarn`: Tarn, an automatic balance equaliser (Tame what covers, Recover what is covered).
+//! `fs_manners`: Manners, an automatic balance equaliser (Tame what covers, Recover what is covered).
 //! Rust-native: unlike the other engines here it has no C++ original, so there is nothing to be
-//! faithful to and no fidelity test; the engine is [`tarn_dsp`], its constants [`Tuning`].
-//! `examples/tarn_tune.rs` renders files through it and compares it with a reference render.
+//! faithful to and no fidelity test; the engine is [`manners_dsp`], its constants [`Tuning`].
+//! `examples/manners_tune.rs` renders files through it and compares it with a reference render.
 //!
 //! - Parameters are in their own units (percent, Hz), not FireStation's 0..1 knobs.
 //! - Latency: the STFT frame (2048 samples at 44.1/48 kHz, 4096 up to 96 kHz, 8192 above),
@@ -12,11 +12,11 @@
 //!   (group "") like every engine's: the UI uses the module's bypass.
 //! - No tail beyond the latency: the gain has no memory of the audio.
 
-pub mod tarn_dsp;
+pub mod manners_dsp;
 #[cfg(test)]
 mod tests;
 
-pub use tarn_dsp::{MAX_BANDS, Settings, TarnDsp, Tuning};
+pub use manners_dsp::{MAX_BANDS, MannersDsp, Settings, Tuning};
 
 use crate::analysis::Analysis;
 use crate::params::Params;
@@ -38,7 +38,7 @@ const P_HI: usize = 6;
 const P_DELTA: usize = 7;
 const P_BYPASS: usize = 8;
 
-pub static TARN_PARAMS: [ParamInfo; NUM_PARAMS] = [
+pub static MANNERS_PARAMS: [ParamInfo; NUM_PARAMS] = [
     knob("tame", "Tame", 0.0, 100.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
     knob("recover", "Recover", 0.0, 100.0, 25.0, Unit::Percent, Taper::Linear, "Balance"),
     knob("bias", "Bias", -100.0, 100.0, 0.0, Unit::Percent, Taper::Linear, "Balance"),
@@ -51,12 +51,12 @@ pub static TARN_PARAMS: [ParamInfo; NUM_PARAMS] = [
     knob("bypass", "Bypass", 0.0, 1.0, 0.0, Unit::Toggle, Taper::Linear, ""),
 ];
 
-pub static TARN_INFO: PluginInfo = PluginInfo {
-    id: "fs_tarn",
-    name: "Tarn",
-    short_name: "Tarn",
+pub static MANNERS_INFO: PluginInfo = PluginInfo {
+    id: "fs_manners",
+    name: "Manners",
+    short_name: "Manners",
     category: Category::FireStation,
-    params: &TARN_PARAMS,
+    params: &MANNERS_PARAMS,
     is_instrument: false,
     audiosuite: false,
     sidechain: false,
@@ -66,8 +66,15 @@ pub static TARN_INFO: PluginInfo = PluginInfo {
 };
 
 /// This engine's registration (collected by `crates/dsp/build.rs`; see [`super::EngineReg`]).
-pub const ENGINE: super::EngineReg =
-    super::EngineReg { info: &TARN_INFO, make: || Box::new(Tarn::new()), presets: &[], order: 45, fidelity: None, prepare_state: None, actions: &[] };
+pub const ENGINE: super::EngineReg = super::EngineReg {
+    info: &MANNERS_INFO,
+    make: || Box::new(Manners::new()),
+    presets: &[],
+    order: 45,
+    fidelity: None,
+    prepare_state: None,
+    actions: &[],
+};
 
 /// [`Analysis::live`]: the number of bands at `LIVE_BANDS`, then each band's centre in Hz from
 /// `LIVE_HZ` and its gain in dB from `LIVE_GAIN` (the whole curve: Tame, Recover, the tilts and
@@ -77,29 +84,33 @@ pub const LIVE_HZ: usize = 1;
 pub const LIVE_GAIN: usize = 1 + MAX_BANDS;
 pub const LIVE_LEN: usize = 1 + 2 * MAX_BANDS;
 
-/// Tarn.
+/// Manners.
 ///
 /// `readouts` (as of the last block): `[0]` the largest cut Tame made, dB; `[1]` the largest
 /// lift Recover made, dB; `[2]` the level given back, dB. `gain_reduction_db` is `[0]`.
 /// `analysis()`: `pre` the mono input, `post` the mono output, and the gain curve in the live
 /// values ([`LIVE_BANDS`] ..).
-pub struct Tarn {
+pub struct Manners {
     p: Params,
-    dsp: Box<TarnDsp>,
+    dsp: Box<MannersDsp>,
     analysis: Arc<Analysis>,
     channels: usize,
 }
 
-impl Default for Tarn {
+impl Default for Manners {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Tarn {
+impl Manners {
     pub fn new() -> Self {
-        let mut s =
-            Tarn { p: Params::new(&TARN_PARAMS), dsp: Box::new(TarnDsp::new()), analysis: Arc::new(Analysis::with_live(LIVE_LEN)), channels: 2 };
+        let mut s = Manners {
+            p: Params::new(&MANNERS_PARAMS),
+            dsp: Box::new(MannersDsp::new()),
+            analysis: Arc::new(Analysis::with_live(LIVE_LEN)),
+            channels: 2,
+        };
         s.update();
         s
     }
@@ -131,8 +142,8 @@ impl Tarn {
     }
 }
 
-impl Plugin for Tarn {
-    crate::params::param_plumbing!(TARN_INFO);
+impl Plugin for Manners {
+    crate::params::param_plumbing!(MANNERS_INFO);
 
     fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
         self.channels = channels.clamp(1, 2);

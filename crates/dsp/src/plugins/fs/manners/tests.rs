@@ -69,8 +69,8 @@ fn band_db(x: &[f32], lo: f32, hi: f32) -> f32 {
     (10.0 * (sum / count.max(1) as f64).max(1e-30).log10()) as f32
 }
 
-fn tarn(set: &[(&str, f32)]) -> Tarn {
-    let mut t = Tarn::new();
+fn manners(set: &[(&str, f32)]) -> Manners {
+    let mut t = Manners::new();
     t.prepare(SR, 512, 2);
     for (id, v) in set {
         assert!(t.set_param(id, *v), "{id}");
@@ -79,7 +79,7 @@ fn tarn(set: &[(&str, f32)]) -> Tarn {
 }
 
 /// Runs both channels through in blocks of `block` and takes the latency off the front.
-fn run(t: &mut Tarn, input: &[Vec<f32>], block: usize) -> Vec<Vec<f32>> {
+fn run(t: &mut Manners, input: &[Vec<f32>], block: usize) -> Vec<Vec<f32>> {
     let lat = t.latency();
     let len = input[0].len();
     let mut padded: Vec<Vec<f32>> = input.iter().map(|c| c.iter().copied().chain(std::iter::repeat_n(0.0, lat)).collect()).collect();
@@ -103,7 +103,7 @@ fn stereo(x: Vec<f32>) -> Vec<Vec<f32>> {
 
 #[test]
 fn registered_listed_and_reports_the_frame_as_latency() {
-    let mut p = crate::create("fs_tarn").unwrap();
+    let mut p = crate::create("fs_manners").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
     assert!(p.info().listed());
     assert_eq!(p.latency(), 2048);
@@ -113,19 +113,19 @@ fn registered_listed_and_reports_the_frame_as_latency() {
     assert_eq!(p.latency(), 4096);
     p.prepare(192_000.0, 512, 2);
     assert_eq!(p.latency(), 8192);
-    assert!(crate::plugins::fs::engine("fs_tarn").unwrap().fidelity.is_none(), "there is no C++ original");
-    let ids: Vec<&str> = TARN_PARAMS.iter().map(|p| p.id).collect();
+    assert!(crate::plugins::fs::engine("fs_manners").unwrap().fidelity.is_none(), "there is no C++ original");
+    let ids: Vec<&str> = MANNERS_PARAMS.iter().map(|p| p.id).collect();
     assert_eq!(ids, ["tame", "recover", "bias", "brighten", "boost", "rangeLo", "rangeHi", "delta", "bypass"]);
-    assert_eq!(TARN_PARAMS[8].group, "", "the engine's bypass is hidden");
-    assert_eq!(TARN_PARAMS[0].format(25.0), "25%");
-    assert_eq!(TARN_PARAMS[5].format(20.0), "20.0 Hz");
+    assert_eq!(MANNERS_PARAMS[8].group, "", "the engine's bypass is hidden");
+    assert_eq!(MANNERS_PARAMS[0].format(25.0), "25%");
+    assert_eq!(MANNERS_PARAMS[5].format(20.0), "20.0 Hz");
 }
 
 #[test]
 fn with_every_knob_at_rest_it_is_a_pure_delay() {
     let x = vec![pink(48_000, 1), pink(48_000, 2)];
     for block in [1usize, 64, 500, 4096] {
-        let mut t = tarn(&[("tame", 0.0), ("recover", 0.0)]);
+        let mut t = manners(&[("tame", 0.0), ("recover", 0.0)]);
         let y = run(&mut t, &x, block);
         for (a, b) in x.iter().zip(&y) {
             let err = a.iter().zip(b).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
@@ -138,7 +138,7 @@ fn with_every_knob_at_rest_it_is_a_pure_delay() {
 fn tame_turns_a_resonance_down_and_leaves_the_rest() {
     let len = 4 * 48_000;
     let x = add(&pink(len, 3), &narrow(len, 3_000.0, 4), 6.0);
-    let mut t = tarn(&[("tame", 100.0), ("recover", 0.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 0.0)]);
     let y = run(&mut t, &stereo(x.clone()), 512);
     let tail = 48_000..len;
     let peak = band_db(&y[0][tail.clone()], 2_800.0, 3_200.0) - band_db(&x[tail.clone()], 2_800.0, 3_200.0);
@@ -171,7 +171,7 @@ fn recover_lifts_a_covered_region_and_not_the_noise_floor() {
     // Pink noise with the band around 2 kHz 14 dB down: its neighbours cover it.
     let len = 1 << 18;
     let x = scaled_band(&pink(len, 9), 1_700.0, 2_500.0, 0.2);
-    let mut t = tarn(&[("tame", 0.0), ("recover", 100.0)]);
+    let mut t = manners(&[("tame", 0.0), ("recover", 100.0)]);
     let y = run(&mut t, &stereo(x.clone()), 512);
     let tail = 48_000..len;
     let dip = band_db(&y[0][tail.clone()], 1_800.0, 2_400.0) - band_db(&x[tail.clone()], 1_800.0, 2_400.0);
@@ -184,7 +184,7 @@ fn recover_lifts_a_covered_region_and_not_the_noise_floor() {
     // Nothing above 6 kHz at all (digital silence there): nothing to recover, so no lift.
     // (Read while the noise still runs: the end of a file is a click, which has highs.)
     let x = scaled_band(&pink(len, 10), 6_000.0, 30_000.0, 0.0);
-    let mut dsp = TarnDsp::new();
+    let mut dsp = MannersDsp::new();
     dsp.prepare(48_000.0, 2);
     dsp.set(Settings { recover: 1.0, ..Settings::default() });
     let mut io = stereo(x);
@@ -201,7 +201,7 @@ fn recover_lifts_a_covered_region_and_not_the_noise_floor() {
 fn an_even_spectrum_is_left_nearly_alone_and_keeps_its_level() {
     let len = 4 * 48_000;
     let x = pink(len, 11);
-    let mut t = tarn(&[("tame", 50.0), ("recover", 50.0)]);
+    let mut t = manners(&[("tame", 50.0), ("recover", 50.0)]);
     let y = run(&mut t, &stereo(x.clone()), 512);
     let tail = 48_000..len;
     for (lo, hi) in [(100.0, 200.0), (400.0, 800.0), (1_600.0, 3_200.0), (6_400.0, 12_800.0)] {
@@ -216,7 +216,7 @@ fn an_even_spectrum_is_left_nearly_alone_and_keeps_its_level() {
 fn the_level_is_given_back_when_a_lot_is_tamed() {
     let len = 4 * 48_000;
     let x = add(&pink(len, 12), &narrow(len, 1_000.0, 13), 8.0);
-    let mut t = tarn(&[("tame", 100.0), ("recover", 0.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 0.0)]);
     let y = run(&mut t, &stereo(x.clone()), 512);
     let rms = |v: &[f32]| (v.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
     let d = 20.0 * (rms(&y[0][48_000..]) / rms(&x[48_000..])).log10();
@@ -227,7 +227,7 @@ fn the_level_is_given_back_when_a_lot_is_tamed() {
 fn the_range_keeps_the_gain_inside_it() {
     let len = 3 * 48_000;
     let x = add(&add(&pink(len, 14), &narrow(len, 300.0, 15), 6.0), &narrow(len, 5_000.0, 16), 6.0);
-    let mut t = tarn(&[("tame", 100.0), ("recover", 0.0), ("rangeLo", 2_000.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 0.0), ("rangeLo", 2_000.0)]);
     let _ = run(&mut t, &stereo(x), 512);
     let live = &t.analysis().unwrap().live;
     let bands = live.get(LIVE_BANDS) as usize;
@@ -251,19 +251,19 @@ fn the_range_keeps_the_gain_inside_it() {
 fn brighten_and_boost_tilt_the_curve() {
     let len = 2 * 48_000;
     let x = stereo(pink(len, 17));
-    let gain_at = |t: &Tarn, want: f32| {
+    let gain_at = |t: &Manners, want: f32| {
         let live = &t.analysis().unwrap().live;
         let bands = live.get(LIVE_BANDS) as usize;
         let i = (0..bands).min_by(|a, b| (live.get(LIVE_HZ + a) - want).abs().total_cmp(&(live.get(LIVE_HZ + b) - want).abs())).unwrap();
         live.get(LIVE_GAIN + i)
     };
-    let mut t = tarn(&[("tame", 0.0), ("recover", 0.0), ("brighten", 100.0)]);
+    let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("brighten", 100.0)]);
     let _ = run(&mut t, &x, 512);
     assert!(gain_at(&t, 12_000.0) > gain_at(&t, 1_000.0) + 1.5 && gain_at(&t, 1_000.0) > gain_at(&t, 80.0) + 1.5);
-    let mut t = tarn(&[("tame", 0.0), ("recover", 0.0), ("brighten", -100.0)]);
+    let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("brighten", -100.0)]);
     let _ = run(&mut t, &x, 512);
     assert!(gain_at(&t, 12_000.0) < gain_at(&t, 80.0) - 3.0);
-    let mut t = tarn(&[("tame", 0.0), ("recover", 0.0), ("boost", 100.0)]);
+    let mut t = manners(&[("tame", 0.0), ("recover", 0.0), ("boost", 100.0)]);
     let _ = run(&mut t, &x, 512);
     assert!(gain_at(&t, 50.0) > gain_at(&t, 450.0) + 4.0, "{} {}", gain_at(&t, 50.0), gain_at(&t, 450.0));
     assert!((gain_at(&t, 450.0) - gain_at(&t, 5_000.0)) < -1.0);
@@ -274,9 +274,9 @@ fn delta_is_the_output_minus_the_input() {
     let len = 2 * 48_000;
     let x = stereo(add(&pink(len, 18), &narrow(len, 2_500.0, 19), 6.0));
     let set = [("tame", 80.0), ("recover", 60.0), ("brighten", 30.0)];
-    let mut wet = tarn(&set);
+    let mut wet = manners(&set);
     let y = run(&mut wet, &x, 512);
-    let mut delta = tarn(&set);
+    let mut delta = manners(&set);
     delta.set_param("delta", 1.0);
     let d = run(&mut delta, &x, 512);
     let err = (0..len).map(|i| (y[0][i] - x[0][i] - d[0][i]).abs()).fold(0.0f32, f32::max);
@@ -287,7 +287,7 @@ fn delta_is_the_output_minus_the_input() {
 #[test]
 fn the_engines_bypass_is_the_input_a_frame_late() {
     let x = stereo(add(&pink(48_000, 27), &narrow(48_000, 3_000.0, 28), 6.0));
-    let mut t = tarn(&[("tame", 100.0), ("recover", 100.0), ("brighten", 100.0), ("delta", 1.0), ("bypass", 1.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 100.0), ("brighten", 100.0), ("delta", 1.0), ("bypass", 1.0)]);
     assert_eq!(t.latency(), N);
     let y = run(&mut t, &x, 512);
     let err = x[0].iter().zip(&y[0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
@@ -299,9 +299,9 @@ fn mono_and_stereo_get_the_same_curve_and_the_sides_stay_apart() {
     let len = 2 * 48_000;
     let x = add(&pink(len, 20), &narrow(len, 3_000.0, 21), 6.0);
     let set = [("tame", 100.0), ("recover", 50.0)];
-    let mut st = tarn(&set);
+    let mut st = manners(&set);
     let y2 = run(&mut st, &stereo(x.clone()), 512);
-    let mut mono = Tarn::new();
+    let mut mono = Manners::new();
     mono.prepare(SR, 512, 1);
     for (id, v) in set {
         mono.set_param(id, v);
@@ -310,7 +310,7 @@ fn mono_and_stereo_get_the_same_curve_and_the_sides_stay_apart() {
     let err = (0..len).map(|i| (y1[0][i] - y2[0][i]).abs()).fold(0.0f32, f32::max);
     assert!(err < 1e-4, "{err}");
     // One side silent: it stays silent (the gain is real and the same on both).
-    let mut t = tarn(&set);
+    let mut t = manners(&set);
     let y = run(&mut t, &[x, vec![0.0; len]], 512);
     assert!(y[1].iter().all(|v| v.abs() < 1e-5));
     assert!(y[0].iter().any(|v| v.abs() > 0.01));
@@ -318,7 +318,7 @@ fn mono_and_stereo_get_the_same_curve_and_the_sides_stay_apart() {
 
 #[test]
 fn silence_hostile_values_and_odd_calls_are_harmless() {
-    let mut t = tarn(&[("tame", 100.0), ("recover", 100.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 100.0)]);
     let y = run(&mut t, &stereo(vec![0.0; 48_000]), 512);
     assert!(y.iter().flatten().all(|v| *v == 0.0));
     let mut io = vec![vec![f32::NAN; 4096], vec![f32::INFINITY; 4096]];
@@ -326,7 +326,7 @@ fn silence_hostile_values_and_odd_calls_are_harmless() {
     t.process(&mut io, 4096);
     assert!(io.iter().flatten().all(|v| v.is_finite()));
     for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1e30, 1e30] {
-        for p in &TARN_PARAMS {
+        for p in &MANNERS_PARAMS {
             assert!(t.set_param(p.id, v));
         }
         let mut io = stereo(pink(4096, 22));
@@ -334,16 +334,16 @@ fn silence_hostile_values_and_odd_calls_are_harmless() {
         assert!(io.iter().flatten().all(|v| v.is_finite()));
     }
     // The range the wrong way round is the same range.
-    let mut a = TarnDsp::new();
+    let mut a = MannersDsp::new();
     a.prepare(48_000.0, 2);
     a.set(Settings { lo_hz: 5_000.0, hi_hz: 200.0, ..Settings::default() });
-    let mut b = TarnDsp::new();
+    let mut b = MannersDsp::new();
     b.prepare(48_000.0, 2);
     b.set(Settings { lo_hz: 200.0, hi_hz: 5_000.0, ..Settings::default() });
     assert_eq!(a.range_weights(), b.range_weights());
     // A hostile tuning still builds tables.
     let bad = Tuning { bands_per_erb: f32::NAN, slope_up_db: -5.0, max_cut_db: f32::INFINITY, ..Tuning::default() };
-    let mut d = TarnDsp::with_tuning(bad);
+    let mut d = MannersDsp::with_tuning(bad);
     d.prepare(f64::NAN, 9);
     d.set(Settings { tame: 1.0, recover: 1.0, ..Settings::default() });
     let mut io = stereo(pink(8192, 23));
@@ -354,7 +354,7 @@ fn silence_hostile_values_and_odd_calls_are_harmless() {
 
 #[test]
 fn reset_empties_the_frame_and_keeps_the_knobs() {
-    let mut t = tarn(&[("tame", 70.0)]);
+    let mut t = manners(&[("tame", 70.0)]);
     let mut io = stereo(pink(4096, 24));
     t.process(&mut io, 4096);
     t.reset();
@@ -369,7 +369,7 @@ fn steady_noise_does_not_make_the_gain_flutter() {
     // On stationary pink noise the curve should sit still: a busy curve is heard as a warble.
     let len = 6 * 48_000;
     let x = stereo(pink(len, 25));
-    let mut dsp = TarnDsp::new();
+    let mut dsp = MannersDsp::new();
     dsp.prepare(48_000.0, 2);
     dsp.set(Settings { tame: 1.0, recover: 1.0, ..Settings::default() });
     let mut worst = 0.0f32;
@@ -396,7 +396,7 @@ fn steady_noise_does_not_make_the_gain_flutter() {
 
 #[test]
 fn it_costs_little() {
-    let mut t = tarn(&[("tame", 100.0), ("recover", 100.0)]);
+    let mut t = manners(&[("tame", 100.0), ("recover", 100.0)]);
     let mut io = stereo(pink(48_000, 26));
     let start = std::time::Instant::now();
     for _ in 0..4 {
