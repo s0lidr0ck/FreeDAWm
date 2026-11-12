@@ -18,7 +18,7 @@ scratch (clean-room rule): Avid plugin names are not used here, only categories.
 | Category | Pro Tools bundles (approx., by category) | FreeDAWm (ids) | Gap |
 |---|---|---|---|
 | EQ | 1-band and 7-band EQ, channel strip, vintage EQ models | `eq_1band`, `eq_7band`, `channel_strip` | Vintage models, linear phase, dynamic EQ; parametric UI (#139) |
-| Dynamics | compressor/limiter, expander/gate, de-esser, maximizer, vintage compressors, multiband | `compressor`, `expander_gate`, `de_esser`, `maximizer`, `rez` (dynamic resonance suppressor: cuts only the frequencies that stick out of the sound's own spectrum; four sensitivity bands and a range on a live graph, L/R or M/S with link and balance, delta, a key input, its own editor, 30 factory presets of its own) | Vintage/opto models, multiband, sidechain input (no key input anywhere) |
+| Dynamics | compressor/limiter, expander/gate, de-esser, maximizer, vintage compressors, multiband | `compressor`, `expander_gate`, `de_esser`, `maximizer`, `rez` (dynamic resonance suppressor: cuts only the frequencies that stick out of the sound's own spectrum; four sensitivity bands and a range on a live graph, L/R or M/S with link and balance, delta, a key input, its own editor, 111 factory presets of its own) | Vintage/opto models, multiband, sidechain input (no key input anywhere) |
 | Reverb | algorithmic room/plate/hall; convolution (paid tier) | `room_reverb`, `plate_reverb` | Hall/chamber, convolution, early-reflection editor |
 | Delay | modulated delay, tape/analog delays | `mod_delay` | Tape, ping-pong, multi-tap, tempo-sync depth |
 | Modulation | chorus, flanger, phaser, tremolo, ring/frequency shift | `chorus`, `flanger`, `phaser` | Tremolo, auto-pan, ring modulation |
