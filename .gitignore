@@ -22,3 +22,8 @@ crates/band/tests/refs/
 
 # Python bytecode (tools/ml-export)
 __pycache__/
+
+# Rez tuning audio (test signal and any processed exports) stays local: regenerate with
+# `python3 tools/rez-tuning/make_rez_test.py`.
+tools/rez-tuning/*.wav
+tools/rez-tuning/*.png
