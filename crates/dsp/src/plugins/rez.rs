@@ -36,6 +36,8 @@
 //! frequency axis ([`Analysis::live`]: [`LIVE_CUT_A`], [`LIVE_CUT_B`]), and feeds the analysis
 //! rings with the (delayed) input on `pre` and the output on `post`.
 
+pub mod presets;
+
 use crate::analysis::Analysis;
 use crate::params::{Params, choice, lin, log, toggle};
 use crate::util::{frames_in, sane_channels, sane_sr, time_coef};
@@ -168,8 +170,8 @@ static REZ_PARAMS: [ParamInfo; P_BANDS + BANDS * BAND_PARAMS] = [
     lin("selectivity", "Selectivity", 0.0, 100.0, 35.0, Unit::Percent),
     log("attack", "Attack", 1.0, 2000.0, 20.0, Unit::Ms),
     log("release", "Release", 5.0, 2000.0, 10.0, Unit::Ms),
-    log("low", "Low", 20.0, 2000.0, 60.0, Unit::Hz),
-    log("high", "High", 1000.0, 20000.0, 20000.0, Unit::Hz),
+    log("low", "Low", 20.0, 20000.0, 60.0, Unit::Hz),
+    log("high", "High", 20.0, 20000.0, 20000.0, Unit::Hz),
     choice("mode", "Mode", &MODE_NAMES, 0),
     lin("mix", "Mix", 0.0, 100.0, 100.0, Unit::Percent),
     toggle("delta", "Delta", false),

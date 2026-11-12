@@ -1,7 +1,8 @@
 //! Rez's editor: FreeDAWm's own design (no VST behind it), built on [`crate::editor_kit`] in the
 //! Engine family's look.
 //!
-//! - The header: the title, the editor's Undo and A/B, and Delta (hear what is being removed).
+//! - The header: the title, the preset strip (step through the presets, or open the browser from
+//!   the name), the editor's Undo and A/B, and Delta (hear what is being removed).
 //! - The graph, on a log frequency axis: the input and output spectra rising from the bottom, the
 //!   cut in force hanging from the top (both sides when they are not linked), and the sensitivity
 //!   curve with its four bands as dots (drag: frequency and sensitivity; Alt-drag or the wheel:
@@ -21,6 +22,7 @@ use crate::editor_kit::controls::{DialOpts, PillLook, PillStyle, SelectionStyle,
 use crate::editor_kit::family::{self, Family, FamilyState};
 use crate::editor_kit::look::{CAPTION_SIZE, LABEL_SIZE, TINY_SIZE, paint_background, paint_panel, paint_title};
 use crate::editor_kit::palette::al;
+use crate::editor_kit::presets;
 use crate::editor_kit::{
     Host, VstEditor, VstPalette, argb, consume_wheel, end_gesture, juce_wheel_delta_y, param, run_with, set_params, set_params_merged,
 };
@@ -123,6 +125,7 @@ fn value_text(host: &Host, id: &str) -> String {
 
 #[derive(Clone, Default)]
 pub(crate) struct Editor {
+    init: bool,
     fam: FamilyState,
     /// The band last hovered or dragged: its numbers stay in the readout.
     shown_band: Option<usize>,
@@ -217,8 +220,37 @@ fn header_pills(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, [
     resp.on_hover_text("Hear only what Rez is removing");
 }
 
+/// The preset strip (previous, the name, next) in its rectangles: the arrows step through the
+/// presets, the name opens the browser.
+fn preset_strip_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, [prev, name, next]: [Rect; 3]) {
+    let pal = &PALETTE;
+    for (rect, left) in [(prev, true), (next, false)] {
+        if family::arrow_pill(ui, rect, ("rez-preset-step", left), pal, left).clicked() {
+            let out = presets::step(app, host, &mut st.fam.presets, if left { -1 } else { 1 });
+            if out.recalled.is_some() {
+                end_gesture(app);
+            }
+        }
+    }
+    let shown = presets::shown_name(host).to_string();
+    let dirty = presets::is_dirty(app, host, &mut st.fam.presets);
+    if family::preset_name(ui, name, pal, &shown, dirty).clicked() {
+        presets::open(app, host, &mut st.fam.presets);
+    }
+}
+
+/// What both layouts do first: the preset browser, which covers the whole editor while it is
+/// open (then `true`: paint nothing else).
+fn prelude(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host) -> bool {
+    if !st.init {
+        st.init = true;
+        st.fam.presets.category = "All".into();
+    }
+    family::browser(app, ui, host, &PALETTE, &mut st.fam, &FAMILY, "")
+}
+
 fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, header: Rect) {
-    paint_title(ui.painter(), header, "Rez", "Resonance", &PALETTE);
+    let title_w = paint_title(ui.painter(), header, "Rez", "Resonance", &PALETTE);
     let h = pill_height(PillStyle::Small);
     let mut right = header.right();
     let mut place = |w: f32, gap: f32| {
@@ -231,6 +263,14 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
     let a = place(28.0, 8.0);
     let undo = place(48.0, 0.0);
     header_pills(st, app, ui, host, [undo, a, b, delta]);
+    // The preset strip, centred in what the title and the pills leave.
+    let free = Rect::from_min_max(pos2(header.left() + title_w + 16.0, header.top()), pos2(undo.left() - 16.0, header.bottom()));
+    let name_w = (free.width() - 2.0 * 30.0).clamp(120.0, 240.0);
+    let strip = Rect::from_center_size(free.center(), vec2(name_w + 60.0, h + 2.0));
+    let prev = Rect::from_min_size(pos2(strip.left(), strip.center().y - h * 0.5), vec2(24.0, h));
+    let next = Rect::from_min_size(pos2(strip.right() - 24.0, strip.center().y - h * 0.5), vec2(24.0, h));
+    let name = Rect::from_min_max(pos2(prev.right() + 6.0, strip.top()), pos2(next.left() - 6.0, strip.bottom()));
+    preset_strip_ui(st, app, ui, host, [prev, name, next]);
 }
 
 // ---------------------------------------------------------------------------- the graph
@@ -573,6 +613,11 @@ fn controls_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, ro
 }
 
 fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {
+    // Scripts: `ui.mix.drawer {tab: "Presets"}` opens the browser (the full editor has no other tab).
+    let _ = family::take_drawer_tab(app, host, &mut st.fam);
+    if prelude(st, app, ui, host) {
+        return;
+    }
     let full = host.rect;
     paint_background(ui.painter(), full);
     let b = full.shrink2(vec2(PAD_X, PAD_Y));

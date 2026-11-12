@@ -105,3 +105,36 @@ fn hostile_parameters_draw_without_panicking() {
     h.run_steps(4);
     assert_eq!(frame(&h, t, m).size(), SIZE);
 }
+
+#[test]
+fn the_preset_strip_steps_through_rezs_own_presets() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, t, m) = open("rez", SCREEN, "dark");
+    let preset = |h: &egui_kittest::Harness<soundcraft_ui_egui::SoundApp>| {
+        h.state().engine.session().track(t).unwrap().mixer.module(m).unwrap().preset.clone()
+    };
+    assert_eq!(preset(&h), "<factory default>");
+    // The name button sits between the two arrows: the next arrow is just right of it.
+    let name = h.get_by_label_contains("Preset").rect();
+    click(&mut h, name.right_center() + vec2(18.0, 0.0));
+    let first = preset(&h);
+    let names: Vec<&str> = soundcraft_dsp::plugins::rez::presets::REZ_PRESETS.iter().map(|p| p.name).collect();
+    assert!(names.contains(&first.as_str()), "stepped to {first:?}");
+    click(&mut h, name.right_center() + vec2(18.0, 0.0));
+    let second = preset(&h);
+    assert!(names.contains(&second.as_str()) && second != first, "then to {second:?}");
+    // A preset sets every parameter: the module now holds that preset's Depth.
+    let depth = soundcraft_dsp::plugins::rez::presets::REZ_PRESETS
+        .iter()
+        .find(|p| p.name == second)
+        .unwrap()
+        .set
+        .iter()
+        .find(|(id, _)| *id == "depth")
+        .map_or(50.0, |(_, v)| *v);
+    assert_eq!(raw(&h, t, m, "depth"), depth);
+    // The browser opens from the name and from the drawer command.
+    h.state_mut().run("ui.mix.drawer", serde_json::json!({"track": t.0, "module": m.0, "tab": "Presets"})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label("Even Hand").is_some(), "the browser lists the factory presets");
+}

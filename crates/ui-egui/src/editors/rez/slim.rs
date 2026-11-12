@@ -1,11 +1,11 @@
 //! Rez's editor in the classic drawer's width, about a mixer strip tall: the full editor's
-//! sections in its order, stacked. The title, then Undo, A, B and Delta; the graph (the same
+//! sections in its order, stacked. The title and the preset strip, then Undo, A, B and Delta; the graph (the same
 //! bands, range handles and live cut, with fewer labels) and the line about the band in hand;
 //! Depth with Sharpness and Selectivity beside it over Soft/Hard; and a More section holding
 //! Attack and Release, the stereo group (L/R or M/S, Link, Balance) and Mix and Trim. The gestures
 //! are the full editor's own code.
 
-use super::{Editor, FAMILY, PALETTE, dial_ui, graph_ui, header_pills, sens_y};
+use super::{Editor, FAMILY, PALETTE, dial_ui, graph_ui, header_pills, prelude, preset_strip_ui, sens_y};
 use crate::SoundApp;
 use crate::editor_kit::Host;
 use crate::editor_kit::controls::{PillStyle, SelectionStyle, pill_height};
@@ -49,6 +49,10 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
     if family::take_drawer_tab(app, host, &mut st.fam).as_deref() == Some("More") {
         st.slim_more = true;
     }
+    // "Presets" opens the browser, which covers the editor while it is open.
+    if prelude(st, app, ui, host) {
+        return;
+    }
     let ed = host.rect;
     let pal = &PALETTE;
     paint_background(ui.painter(), ed);
@@ -58,7 +62,10 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
     let mut y = ed.top() + PAD_Y;
 
     // ---- 1. the header: the title, then Undo, A, B and Delta
-    paint_title(ui.painter(), row(y, ROW_H + 2.0), "Rez", "Resonance", pal);
+    let head = row(y, ROW_H + 2.0);
+    let title_w = paint_title(ui.painter(), head, "Rez", "Resonance", pal);
+    let (prev, name, next) = kit::preset_strip(head, title_w);
+    preset_strip_ui(st, app, ui, host, [prev, name, next]);
     y += ROW_H + 2.0 + 6.0;
     let widths = [
         family::small_pill_w(ui, "Undo"),
