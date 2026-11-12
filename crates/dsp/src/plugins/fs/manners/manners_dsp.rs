@@ -867,11 +867,12 @@ impl MannersDsp {
             if let Some(v) = self.broad.get_mut(i) {
                 *v = d;
             }
-            if self.tmp.get(i).copied().unwrap_or(0.0) > 0.0 && self.range.get(i).copied().unwrap_or(0.0) > 0.5 {
-                if let Some(v) = self.sorted.get_mut(broad_active) {
-                    *v = d;
-                    broad_active += 1;
-                }
+            if self.tmp.get(i).copied().unwrap_or(0.0) > 0.0
+                && self.range.get(i).copied().unwrap_or(0.0) > 0.5
+                && let Some(v) = self.sorted.get_mut(broad_active)
+            {
+                *v = d;
+                broad_active += 1;
             }
             let weight = self.inv_weight.get(i).copied().unwrap_or(0.0);
             let per_erb = self.bins_per_erb.get(i).copied().unwrap_or(1.0);
@@ -897,7 +898,8 @@ impl MannersDsp {
                     let over = (b - self.tame_at.get(i).copied().unwrap_or(0.0) * lean_tame).max(0.0);
                     let under = (self.recover_at.get(i).copied().unwrap_or(0.0) * lean_recover - b).max(0.0);
                     let cut = soft_cap(s.tame * (t.tame_ratio * knee(x, t.knee_db) + t.tame_broad * over), s.tame * t.max_cut_db);
-                    let lift = soft_cap(s.recover * (t.recover_ratio * knee(-x, t.knee_db) + t.recover_broad * under), s.recover * t.max_boost_db) * guard;
+                    let lift =
+                        soft_cap(s.recover * (t.recover_ratio * knee(-x, t.knee_db) + t.recover_broad * under), s.recover * t.max_boost_db) * guard;
                     lift - cut
                 }
                 None => 0.0,
