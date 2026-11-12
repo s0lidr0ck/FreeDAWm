@@ -78,6 +78,12 @@ pub struct Tuning {
     pub brighten_db: f32,
     /// Boost at its ends: dB of bass (with half as much taken out of the low mids).
     pub boost_db: f32,
+    /// A band this far over its neighbourhood is a peak on its own (a held tone, a whistle,
+    /// feedback): Tame cuts it further, [`Tuning::peak_ratio`] dB per dB beyond this, up to
+    /// [`Tuning::peak_max_db`] more, and narrowly (not smoothed over its neighbours).
+    pub peak_threshold_db: f32,
+    pub peak_ratio: f32,
+    pub peak_max_db: f32,
     /// How wide the broad balance looks, in ERB to one sigma.
     pub broad_width_erb: f32,
     /// dB of cut per dB a region stands over Tame's target, at Tame 100 %.
@@ -103,9 +109,10 @@ pub const TARGET_HZ: [f32; TARGET_POINTS] = [40.0, 80.0, 160.0, 400.0, 1_000.0, 
 
 impl Default for Tuning {
     /// Fitted to reference bounces of the probe (`docs/manners-tuning.md`) at Tame 100 %,
-    /// Recover 100 % and both at 50 %: 0.57 dB RMS from the reference over every moment and
+    /// Recover 100 % and both at 50 %: 0.55 dB RMS from the reference over every moment and
     /// third octave. Bias, Brighten and Boost were not in those passes and are as first written.
-    /// Known gap: a lone pure tone is cut about 6 dB less than the reference cuts it.
+    /// A lone pure tone is cut within a decibel of the reference at Tame 100 % (and 2 dB short of
+    /// it at 50 %).
     fn default() -> Self {
         Tuning {
             bands_per_erb: 1.43,
@@ -129,6 +136,10 @@ impl Default for Tuning {
             level_comp: 0.625,
             brighten_db: 4.5,
             boost_db: 4.0,
+            peak_threshold_db: 16.6,
+            peak_ratio: 0.68,
+            // The fit asks for more than this; 12 dB is as far as an automatic cut should go.
+            peak_max_db: 12.0,
             broad_width_erb: 0.71,
             tame_broad: 0.35,
             recover_broad: 0.26,
@@ -169,6 +180,9 @@ impl Tuning {
             level_comp: f(self.level_comp, 0.0, 1.0, d.level_comp),
             brighten_db: f(self.brighten_db, 0.0, 12.0, d.brighten_db),
             boost_db: f(self.boost_db, 0.0, 12.0, d.boost_db),
+            peak_threshold_db: f(self.peak_threshold_db, 0.0, 60.0, d.peak_threshold_db),
+            peak_ratio: f(self.peak_ratio, 0.0, 2.0, d.peak_ratio),
+            peak_max_db: f(self.peak_max_db, 0.0, 24.0, d.peak_max_db),
             broad_width_erb: f(self.broad_width_erb, 0.5, 12.0, d.broad_width_erb),
             tame_broad: f(self.tame_broad, 0.0, 2.0, d.tame_broad),
             recover_broad: f(self.recover_broad, 0.0, 2.0, d.recover_broad),
@@ -890,6 +904,7 @@ impl MannersDsp {
         let lean_recover = (1.0 + t.recover_level * quiet).max(0.0);
         for i in 0..bands {
             let guard = self.tmp.get(i).copied().unwrap_or(0.0);
+            let mut peak = 0.0f32;
             let want = match median {
                 Some(m) => {
                     let shift = s.bias * t.bias_db;
@@ -900,10 +915,15 @@ impl MannersDsp {
                     let cut = soft_cap(s.tame * (t.tame_ratio * knee(x, t.knee_db) + t.tame_broad * over), s.tame * t.max_cut_db);
                     let lift =
                         soft_cap(s.recover * (t.recover_ratio * knee(-x, t.knee_db) + t.recover_broad * under), s.recover * t.max_boost_db) * guard;
+                    peak = soft_cap(s.tame * t.peak_ratio * (x - t.peak_threshold_db).max(0.0), s.tame * t.peak_max_db);
                     lift - cut
                 }
                 None => 0.0,
             };
+            // The dominance has been read: its place holds the band's peak cut from here on.
+            if let Some(v) = self.dom.get_mut(i) {
+                *v = if peak.is_finite() { peak } else { 0.0 };
+            }
             if let Some(w) = self.want.get_mut(i) {
                 *w = if want.is_finite() { want } else { 0.0 };
             }
@@ -922,6 +942,12 @@ impl MannersDsp {
                 if let (Some(w), Some(v)) = (self.want.get_mut(i), self.tmp.get(i)) {
                     *w = *v;
                 }
+            }
+        }
+        // A peak's own cut goes on after the smoothing, so it stays as narrow as the peak.
+        for i in 0..bands {
+            if let (Some(w), Some(p)) = (self.want.get_mut(i), self.dom.get(i)) {
+                *w -= *p;
             }
         }
         // Over time, inside the working range; then the tilts.
@@ -952,7 +978,10 @@ impl MannersDsp {
             let per_erb = self.bins_per_erb.get(i).copied().unwrap_or(1.0);
             let power = if weight > 0.0 { self.level.get(i).copied().unwrap_or(0.0) / (weight * per_erb) } else { 0.0 };
             before += power;
-            after += power * (total * 2.0 * LN10_OVER_20).exp();
+            // A peak's own cut is not made up for: turning a whistle down should not turn
+            // everything else up.
+            let peak = (self.dom.get(i).copied().unwrap_or(0.0) * range).min((-g).max(0.0));
+            after += power * ((total + peak) * 2.0 * LN10_OVER_20).exp();
         }
         self.max_cut = max_cut;
         self.max_boost = max_boost;

@@ -14,7 +14,8 @@
 //! - `compare` measures what the reference did to the dry file (gain per third octave, per
 //!   moment), what Manners does at the same knobs, and prints both per segment with the error.
 //! - `fit` moves Manners' constants ([`Tuning`]) to shrink that error over every pair given, and
-//!   prints the result as Rust to paste into `Tuning::default`.
+//!   prints the result as Rust to paste into `Tuning::default`. `MANNERS_FIT_ONLY=a,b,c` moves
+//!   just those fields.
 //!
 //! Knobs after `@` (or as arguments to `render`): `tame recover bias brighten boost` in percent,
 //! `lo hi` in Hz. Any `Tuning` field can be given the same way (`slope_up_db=12`).
@@ -85,6 +86,9 @@ const FIELDS: &[Field] = &[
     ("boost_db", |t| &mut t.boost_db, 0.5, 12.0),
     ("floor_db", |t| &mut t.floor_db, -100.0, -30.0),
     ("bands_per_erb", |t| &mut t.bands_per_erb, 1.0, 3.0),
+    ("peak_threshold_db", |t| &mut t.peak_threshold_db, 2.0, 40.0),
+    ("peak_ratio", |t| &mut t.peak_ratio, 0.02, 2.0),
+    ("peak_max_db", |t| &mut t.peak_max_db, 1.0, 24.0),
     ("broad_width_erb", |t| &mut t.broad_width_erb, 0.5, 8.0),
     ("tame_broad", |t| &mut t.tame_broad, 0.02, 1.5),
     ("recover_broad", |t| &mut t.recover_broad, 0.02, 1.5),
@@ -674,9 +678,14 @@ fn fit_tuning(start: Tuning, cost: &dyn Fn(Tuning) -> f64) -> Tuning {
     let mut best = start;
     let mut best_cost = cost(best);
     println!("\nfit: starting at {best_cost:.3} dB");
+    // `MANNERS_FIT_ONLY=a,b,c`: move just these fields.
+    let only: Option<Vec<String>> = std::env::var("MANNERS_FIT_ONLY").ok().map(|v| v.split(',').map(|n| n.trim().to_string()).collect());
     let mut step = 0.4f32;
     for round in 0..5 {
         for (name, field, lo, hi) in FIELDS {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
+                continue;
+            }
             for dir in [1.0f32, -1.0] {
                 loop {
                     let mut t = best;

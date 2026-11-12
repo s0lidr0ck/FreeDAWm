@@ -236,6 +236,31 @@ fn most_of_the_level_is_given_back_when_a_lot_is_tamed() {
 }
 
 #[test]
+fn a_lone_tone_is_cut_deep_and_narrow_without_turning_the_rest_up() {
+    // A steady 1 kHz tone 12 dB over quiet pink noise: a peak on its own.
+    let len = 4 * 48_000;
+    let bed: Vec<f32> = pink(len, 30).iter().map(|v| v * 0.25).collect();
+    let x: Vec<f32> = bed.iter().enumerate().map(|(i, v)| v + 0.1 * (std::f32::consts::TAU * 1_000.0 * i as f32 / SR).sin()).collect();
+    let run_with = |tuning: Tuning| {
+        let mut dsp = MannersDsp::with_tuning(tuning);
+        dsp.prepare(48_000.0, 2);
+        dsp.set(Settings { tame: 1.0, ..Settings::default() });
+        let mut io = stereo(x.clone());
+        dsp.process(&mut io, len);
+        let at = |want: f32| {
+            let i = (0..dsp.bands()).min_by(|a, b| (dsp.band_hz()[*a] - want).abs().total_cmp(&(dsp.band_hz()[*b] - want).abs())).unwrap();
+            dsp.band_gain_db()[i]
+        };
+        (at(1_000.0), at(2_000.0), at(500.0), dsp.level_comp_db())
+    };
+    let (tone, above, below, comp) = run_with(Tuning::default());
+    let (plain, _, _, plain_comp) = run_with(Tuning { peak_ratio: 0.0, ..Tuning::default() });
+    assert!(tone < plain - 4.0, "the peak stage cuts the tone further: {tone:.1} dB against {plain:.1} dB without it");
+    assert!(tone < above - 6.0 && tone < below - 6.0, "and narrowly: {below:.1} / {tone:.1} / {above:.1} dB at 500 Hz / 1 kHz / 2 kHz");
+    assert!((comp - plain_comp).abs() < 0.5, "its cut is not made up for: {comp:.2} dB given back against {plain_comp:.2} dB");
+}
+
+#[test]
 fn the_range_keeps_the_gain_inside_it() {
     let len = 3 * 48_000;
     let x = add(&add(&pink(len, 14), &narrow(len, 300.0, 15), 6.0), &narrow(len, 5_000.0, 16), 6.0);
