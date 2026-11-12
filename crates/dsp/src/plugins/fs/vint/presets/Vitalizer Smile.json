@@ -3,7 +3,7 @@
   "name": "Vitalizer Smile",
   "group": "Mix & Master",
   "tags": "Enhancer",
-  "desc": "The expensive smile: mids lowered, the top lifted from 5 kHz, a soft low end and a little LC sheen.",
+  "desc": "The expensive smile: mids lowered, the top lifted from 2.8 kHz, a soft low end and a little LC sheen.",
   "values": {
     "circuit": "Enhancer",
     "stage": 1.0,

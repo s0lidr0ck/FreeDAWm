@@ -290,6 +290,8 @@ pub struct Vint {
     in_peak_db: f32,
     out_peak_db: f32,
     out_rms: f32,
+    /// the Vitalizer's lamps: gain reduction (dB) and the driven peak (dBFS)
+    vit_meters: (f32, f32),
     analysis: Arc<Analysis>,
 }
 
@@ -308,6 +310,7 @@ impl Vint {
             in_peak_db: f32::NAN,
             out_peak_db: f32::NAN,
             out_rms: 0.0,
+            vit_meters: (0.0, f32::NAN),
             analysis: Arc::new(Analysis::with_live(1)),
         };
         s.push_all();
@@ -374,6 +377,8 @@ impl Plugin for Vint {
         self.dsp.process(io, nc, frames);
         self.in_peak_db = gain_to_db(self.dsp.take_input_peak());
         self.out_peak_db = gain_to_db(self.dsp.take_output_peak());
+        let (gr, driven) = self.dsp.take_vitalizer_meters();
+        self.vit_meters = (gr, gain_to_db(driven));
         // `processBlock`: the block's RMS over the first two channels, for the editor's VU.
         let chans = io.len().min(2);
         let n = io.iter().take(chans).map(Vec::len).fold(frames, usize::min);
@@ -396,6 +401,8 @@ impl Plugin for Vint {
         out[1] = self.out_peak_db;
         out[2] = dsp::knob_to_drive_db(self.dsp.drive_knob());
         out[3] = self.out_rms;
+        out[4] = self.vit_meters.0;
+        out[5] = self.vit_meters.1;
     }
 }
 

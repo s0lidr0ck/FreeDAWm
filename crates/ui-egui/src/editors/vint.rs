@@ -12,6 +12,7 @@ mod knob;
 mod maximizer;
 mod scope;
 mod slim;
+mod vitalizer;
 
 use crate::SoundApp;
 use crate::editor_kit::controls::{DialOpts, PillLook, PillStyle, SelectionStyle, dial, pill_ex, pill_height, segmented};
@@ -313,6 +314,11 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
         maximizer::paint(&p, host, panel, scale, origin, st.lamps);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
+    let vita = vitalizer::shown(host);
+    if vita {
+        vitalizer::paint(&p, host, panel, scale, origin, vitalizer::lamps(crate::editor_kit::readouts(host)));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    }
     text_left(&p, stage_note, def.stage, regular(CAPTION_SIZE), pal.text_faint);
 
     // ---- the header
@@ -332,6 +338,8 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     // ---- the panel's controls
     if maxi {
         maximizer::controls(app, ui, host, &mut st.fam, panel, scale, origin);
+    } else if vita {
+        vitalizer::controls(app, ui, host, &mut st.fam, panel, scale, origin);
     } else if def.face.empty() {
         columns(app, ui, host, &mut st.fam, panel, cached_circuit);
     } else {

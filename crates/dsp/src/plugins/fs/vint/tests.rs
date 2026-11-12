@@ -137,7 +137,7 @@ fn readouts_meter_and_drive() {
     assert_eq!(r[2], 18.0);
     // The last block's output RMS (the VU's `outLevel`): a 0.5 sine through a flat Passive.
     assert!((r[3] - 0.5 / 2f32.sqrt()).abs() < 0.03, "{r:?}");
-    assert!(r[4].is_nan());
+    assert!(r[6].is_nan());
     s.reset();
     s.readouts(&mut r);
     assert_eq!(r[3], 0.0, "a reset clears it");
@@ -527,7 +527,7 @@ fn the_vitalizer_follows_its_controls() {
     // Everything at its default is the input: Process and Intensity are at minimum.
     frequency_response(&v, 48_000.0, &freqs, &mut out);
     assert!(out.iter().all(|d| d.abs() < 0.05), "{out:?}");
-    // Process: the mids down, the top up (Mid-Hi Tune at its centre, 4.9 kHz).
+    // Process: the mids down, the top up (Mid-Hi Tune at its centre, 2.8 kHz).
     v[dsp::P_ENH_AMOUNT] = 1.0;
     frequency_response(&v, 48_000.0, &freqs, &mut out);
     assert!(out[0].abs() < 0.7 && out[1] < -3.0 && out[3] > 7.5, "{out:?}");
@@ -535,9 +535,9 @@ fn the_vitalizer_follows_its_controls() {
     v[dsp::P_VIT_BASS] = 0.0;
     frequency_response(&v, 48_000.0, &freqs, &mut out);
     assert!(out[0] > 8.0 && out[0] < 10.5, "{out:?}");
-    // Drive is the level into the filter network: 6 dB less of it, less of everything it adds.
+    // Drive is the level into the filter network: at -8 dB on its scale, less of everything it adds.
     let soft = out[0];
-    v[dsp::P_VIT_DRIVE] = 0.35;
+    v[dsp::P_VIT_DRIVE] = 0.2;
     frequency_response(&v, 48_000.0, &freqs, &mut out);
     assert!(out[0] < soft - 2.5 && out[0] > 3.0, "{out:?}");
     // The LC stage has its own level: Intensity, with Process at minimum.

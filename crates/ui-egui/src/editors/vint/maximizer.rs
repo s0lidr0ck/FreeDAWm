@@ -191,17 +191,22 @@ fn type_rects(panel: Rect) -> (Rect, Rect) {
     (Rect::from_min_size(pos2(panel.left() + 18.0, top), vec2(40.0, 26.0)), Rect::from_min_size(pos2(panel.left() + 62.0, top), vec2(330.0, 26.0)))
 }
 
-/// The unit's controls: the two pots, TUNE, the FUNCTION button, and the Type selector.
-pub(super) fn controls(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, panel: Rect, scale: f32, origin: Pos2) {
+/// The Enhancer's Type selector above a unit that has the panel to itself (`current`: its type).
+pub(super) fn type_selector(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, panel: Rect, current: usize) {
     let pal = &PALETTE;
     let (type_label, type_seg) = type_rects(panel);
     text_left(ui.painter(), type_label, "Type", regular(LABEL_SIZE), pal.text_body);
     let opts = choices(host, d::P_ENH_TYPE);
-    if let Some(i) = segmented(ui, type_seg, "vint-maximizer-type", pal, opts, 1, Some(1), SelectionStyle::Filled)
-        && i != 1
+    if let Some(i) = segmented(ui, type_seg, "vint-enhancer-type", pal, opts, 1, Some(current), SelectionStyle::Filled)
+        && i != current
     {
         family::set(app, host, st, &FAMILY, id_of(d::P_ENH_TYPE), i as f32);
     }
+}
+
+/// The unit's controls: the two pots, TUNE, the FUNCTION button, and the Type selector.
+pub(super) fn controls(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, panel: Rect, scale: f32, origin: Pos2) {
+    type_selector(app, ui, host, st, panel, 1);
 
     let scale_marks = zero_to_ten();
     // TUNE reads the filter's upper crossover: 3.2 kHz with the 882's own capacitors.

@@ -28,14 +28,27 @@
 use super::vint_mna::{Kind, Netlist};
 
 // ---------------------------------------------------------------- the controls' ranges (the manuals')
-/// Drive: -20 dB at minimum, 0 dB at the centre, +6 dB at maximum.
-pub fn drive_db(v: f32) -> f32 {
-    let v = v.clamp(0.0, 1.0);
-    if v < 0.5 { -20.0 + 40.0 * v } else { 12.0 * (v - 0.5) }
+/// The Drive knob's printed scale on the Mk3-T, in dB, at eleven even steps of its travel.
+pub const DRIVE_SCALE_DB: [f32; 11] = [-20.0, -13.0, -8.0, -5.0, -2.0, 0.0, 1.5, 3.0, 4.0, 5.0, 6.0];
+/// The Mid-Hi Tune knob's printed scale, in kHz, likewise.
+pub const TUNE_SCALE_KHZ: [f32; 11] = [22.0, 14.0, 8.5, 6.0, 4.0, 2.8, 2.2, 1.8, 1.5, 1.3, 1.1];
+
+/// A knob's position (0..1) on a scale printed at even steps: (the step below, how far past it).
+fn on_scale(v: f32) -> (usize, f32) {
+    let p = v.clamp(0.0, 1.0) * 10.0;
+    let i = (p as usize).min(9);
+    (i, p - i as f32)
 }
-/// Mid-Hi Tune: where the shelf starts, 22 kHz at the knob's left to 1.1 kHz hard right.
+/// Drive, as the knob's scale reads: -20 dB at minimum, 0 dB at the centre, +6 dB at maximum.
+pub fn drive_db(v: f32) -> f32 {
+    let (i, t) = on_scale(v);
+    DRIVE_SCALE_DB[i] + t * (DRIVE_SCALE_DB[i + 1] - DRIVE_SCALE_DB[i])
+}
+/// Mid-Hi Tune, as the knob's scale reads: where the shelf starts, 22 kHz at the knob's left,
+/// 2.8 kHz at its centre, 1.1 kHz hard right.
 pub fn tune_hz(v: f32) -> f32 {
-    22_000.0 * (1_100.0f32 / 22_000.0).powf(v.clamp(0.0, 1.0))
+    let (i, t) = on_scale(v);
+    1000.0 * TUNE_SCALE_KHZ[i] * (TUNE_SCALE_KHZ[i + 1] / TUNE_SCALE_KHZ[i]).powf(t)
 }
 /// LC-EQ: about 2 kHz hard left to about 20 kHz hard right.
 pub fn lc_hz(v: f32) -> f32 {
@@ -232,6 +245,8 @@ mod tests {
     fn the_controls_have_the_manuals_ranges() {
         assert_eq!((drive_db(0.0), drive_db(0.5), drive_db(1.0)), (-20.0, 0.0, 6.0));
         assert!((tune_hz(0.0) - 22_000.0).abs() < 1.0 && (tune_hz(1.0) - 1_100.0).abs() < 1.0);
+        assert!((tune_hz(0.5) - 2_800.0).abs() < 1.0 && (tune_hz(0.2) - 8_500.0).abs() < 1.0);
+        assert!((drive_db(0.1) - -13.0).abs() < 1e-4 && (drive_db(0.8) - 4.0).abs() < 1e-4 && (drive_db(0.55) - 0.75).abs() < 1e-4);
         assert!((lc_hz(0.0) - 2_000.0).abs() < 1.0 && (lc_hz(1.0) - 20_000.0).abs() < 1.0);
         assert_eq!(bass_sound(0.5), (0.0, false));
         assert_eq!(bass_sound(0.0), (1.0, false));
@@ -247,7 +262,7 @@ mod tests {
 
     #[test]
     fn process_lowers_the_mids_and_raises_the_top() {
-        // Mid-Hi Tune at its centre: 4.9 kHz. No bass, no LC.
+        // Mid-Hi Tune at its centre: 2.8 kHz. No bass, no LC.
         let at = |f: f64| response(f, 0.5, 0.5, 1.0, 0.5, 0.0);
         assert!(at(30.0).abs() < 0.5, "under the lowered range: {}", at(30.0));
         assert!(at(800.0) < -3.0 && at(800.0) > -5.0, "the lowered mids: {}", at(800.0));

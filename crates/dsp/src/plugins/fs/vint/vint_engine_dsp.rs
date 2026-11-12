@@ -615,6 +615,9 @@ struct Channel {
     vit_filter: Solver,
     vit_lc: Solver,
     vit_env: f64,
+    /// for its lamps, since last taken: the compressor's deepest gain, the driven signal's peak
+    vit_gr: f64,
+    vit_peak: f64,
 
     // Air: the four Dolby A bands, and their level detectors
     air_b1: Section,
@@ -698,6 +701,8 @@ impl Channel {
             vit_filter,
             vit_lc,
             vit_env: 0.0,
+            vit_gr: 1.0,
+            vit_peak: 0.0,
             air_b1: Section::default(),
             air_b2a: Section::default(),
             air_b2b: Section::default(),
@@ -977,6 +982,16 @@ impl VintEngineDsp {
     }
     pub fn take_output_peak(&mut self) -> f32 {
         std::mem::take(&mut self.out_peak)
+    }
+    /// The Vitalizer's lamps since last taken: its bass compressor's deepest gain reduction (dB,
+    /// 0 for none) and the peak of the signal Drive sends into its filters (full scale 1).
+    pub fn take_vitalizer_meters(&mut self) -> (f32, f32) {
+        let (mut gain, mut peak) = (1.0f64, 0.0f64);
+        for c in &mut self.ch {
+            gain = gain.min(std::mem::replace(&mut c.vit_gr, 1.0));
+            peak = peak.max(std::mem::take(&mut c.vit_peak));
+        }
+        ((-20.0 * gain.max(1.0e-6).log10()) as f32, peak as f32)
     }
 
     // ---- calibration hooks, for Tests/calibrate.cpp only
@@ -1576,7 +1591,10 @@ fn enhance(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
         let (bass_amount, tight) = vintvit::bass_sound(sm[P_VIT_BASS]);
         let mut bass = c.vit_bass.run(driven) * bass_amount * if tight { vintvit::K_TIGHT_GAIN } else { vintvit::K_SOFT_GAIN };
         c.vit_env += (if bass.abs() > c.vit_env { fl.vit_att } else { fl.vit_rel }) * (bass.abs() - c.vit_env);
-        bass *= vintvit::comp_gain(c.vit_env, f64::from(sm[P_VIT_COMP]));
+        let held = vintvit::comp_gain(c.vit_env, f64::from(sm[P_VIT_COMP]));
+        bass *= held;
+        c.vit_gr = c.vit_gr.min(held);
+        c.vit_peak = c.vit_peak.max(driven.abs());
         c.vit_filter.open_circuit(driven);
         let mid_hi = vintvit::mid_hi(c.vit_filter.node_open(vintvit::N_HP), c.vit_filter.node_open(vintvit::N_MID));
         c.vit_filter.commit(0.0);

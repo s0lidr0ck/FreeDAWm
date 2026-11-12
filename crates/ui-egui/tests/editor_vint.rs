@@ -124,19 +124,52 @@ fn the_maximizer_wears_the_882s_front() {
 }
 
 #[test]
-fn the_vitalizer_shows_all_its_controls() {
+fn the_vitalizer_wears_the_mk3_ts_front() {
     let (mut h, t, m) = open("fs_vint", vec2(1800.0, 1000.0), "dark");
     h.state_mut().run("mix.module_params", json!({"track": t.0, "module": m.0, "params": {"circuit": 4, "enhType": 2}})).unwrap();
     h.run_steps(3);
-    for word in ["Drive", "Mid-Hi Tune", "Process", "Bass Sound", "Bass Comp", "LC-EQ", "Intensity", "Stereo Exp."] {
+    for word in [
+        "DRIVE",
+        "BASS SOUND",
+        "BASS COMP",
+        "MID-HI TUNE",
+        "PROCESS",
+        "LC-EQ",
+        "INTENSITY",
+        "STEREO EXP.",
+        "Vitalizer",
+        "OVL",
+        "GR",
+        "SOFT",
+        "TIGHT",
+        "ON",
+    ] {
         assert!(text_shown(&h, word), "{word}");
     }
-    // Its readouts are its own: Mid-Hi Tune at its centre, Bass Sound off, the LC stage's frequency.
-    for text in ["4.92 kHz", "Off", "6.32 kHz"] {
-        assert!(text_shown(&h, text), "{text}");
-    }
-    // The Exciter keeps the Enhancer's three dials.
-    h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "enhType", "value": 0})).unwrap();
-    h.run_steps(3);
-    assert!(text_shown(&h, "Amount") && !text_shown(&h, "Bass Comp"));
+    // The scales are the hardware's: Drive in dB, Mid-Hi Tune in kHz.
+    assert!(text_shown(&h, "-13") && text_shown(&h, "8.5") && text_shown(&h, "HIGH"));
+    let f = frame(&h, t, m);
+    // PROCESS: a knob drag, 0.008 per pixel, one undo step.
+    let k = on_panel(f, 450.0, 190.0);
+    drag(&mut h, k, k - vec2(0.0, 50.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "enhAmount") - 0.4).abs() < 0.01);
+    undo(&mut h);
+    assert_eq!(raw(&h, t, m, "enhAmount"), 0.0);
+    // The Vitalizer's own knobs: Bass Sound towards Soft, Stereo Expander up.
+    let k = on_panel(f, 162.0, 190.0);
+    drag(&mut h, k, k + vec2(0.0, 25.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "vitBass") - 0.3).abs() < 0.01);
+    let k = on_panel(f, 742.0, 190.0);
+    drag(&mut h, k, k - vec2(0.0, 25.0), Modifiers::NONE);
+    assert!((raw(&h, t, m, "vitWidth") - 0.2).abs() < 0.01);
+    // ON takes the unit out and back in.
+    let b = on_panel(f, 946.0, 196.0);
+    click(&mut h, b);
+    assert_eq!(raw(&h, t, m, "bypass"), 1.0);
+    click(&mut h, b);
+    assert_eq!(raw(&h, t, m, "bypass"), 0.0);
+    // The Type selector above the unit: its first segment is the Exciter, which keeps the dials.
+    click(&mut h, f.min + vec2(24.0 + 62.0 + 330.0 / 6.0, 127.2 - 13.6 + 14.0 + 13.0));
+    assert_eq!(raw(&h, t, m, "enhType"), 0.0);
+    assert!(text_shown(&h, "Amount") && !text_shown(&h, "BASS COMP"));
 }
