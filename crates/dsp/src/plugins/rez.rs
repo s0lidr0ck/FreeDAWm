@@ -2,7 +2,9 @@
 //!
 //! Rez listens for frequencies that stick out of the sound's own spectrum and turns down only
 //! those, only while they stick out. Nothing is cut by a fixed curve: the reference is the signal
-//! itself, so it behaves the same on quiet and loud material.
+//! itself. Its constants were fitted to measurements of a reference suppressor on the test signal
+//! in `tools/rez-tuning` (Depth 50 %, Sharpness 46 %, Selectivity 36 % here correspond to its 10,
+//! 4.6 and 3.6).
 //!
 //! Per frame (an STFT: 2048 points up to 50 kHz, a new frame every N/8 samples, root-Hann windows
 //! on the way in and out):
@@ -14,9 +16,12 @@
 //!    dB.
 //! 3. ENVELOPE: FINE averaged, in dB, over a wide band (Selectivity sets the width). This is what
 //!    the sound roughly looks like without its resonances.
-//! 4. EXCESS = FINE - ENVELOPE. Where it is above the threshold (Selectivity), the part above is
-//!    a cut request, scaled by Depth and by the SENSITIVITY at that frequency (the Low/High range
-//!    and four bands that raise or lower how hard Rez works there), limited to [`MAX_CUT_DB`].
+//! 4. EXCESS = FINE - ENVELOPE. The part of it above a small threshold is a cut request, scaled
+//!    by how hard Rez works at that frequency: a built-in tilt ([`tilt_weight`]: little at the
+//!    low end, in full from about 4 kHz up) times the SENSITIVITY (the Low/High range and four
+//!    bands that raise or lower it), limited to [`MAX_CUT_DB`]. Depth is a level gate on top:
+//!    where the sound around a frequency is quieter than the gate, less of the excess counts, and
+//!    more Depth lowers the gate, so quieter material is treated too.
 //! 5. Each bin's cut rises at once and falls back with Release.
 //! 6. The bins are scaled and the frame is resynthesised by overlap-add.
 //!
@@ -44,17 +49,59 @@ pub const MAX_CUT_DB: f32 = 30.0;
 const OVERLAP: usize = 8;
 /// The knee of the Soft mode, in dB.
 const SOFT_KNEE_DB: f32 = 6.0;
+/// dB of cut per dB of excess above the threshold, in the Soft mode.
+const SOFT_SLOPE: f32 = 0.82;
 /// How much harder the Hard mode cuts than Soft at the same Depth.
 const HARD_SLOPE: f32 = 1.5;
-/// The narrowest and widest FINE band (Sharpness 100 % and 0 %), in octaves.
-const FINE_OCT: (f32, f32) = (1.0 / 24.0, 1.0 / 3.0);
-/// The narrowest and widest ENVELOPE band (Selectivity 100 % and 0 %), in octaves.
-const ENV_OCT: (f32, f32) = (0.75, 2.5);
-/// The lowest and highest threshold (Selectivity 0 % and 100 %), in dB of excess.
-const THRESHOLD_DB: (f32, f32) = (1.0, 7.0);
+/// The narrowest and widest FINE band (Sharpness 100 % and 0 %), in octaves, and the curve of
+/// the way between them (below 1: most of the narrowing happens early in the knob's travel).
+const FINE_OCT: (f32, f32) = (0.02, 2.5);
+const FINE_CURVE: f32 = 0.55;
+/// At the bottom of Sharpness the cuts are so broad they do little: the slope there, rising to 1
+/// by [`SHARP_FULL_AT`] of the knob's travel.
+const SHARP_LOW_SLOPE: f32 = 0.3;
+const SHARP_FULL_AT: f32 = 0.3;
+/// The narrowest and widest ENVELOPE band (Selectivity 100 % and 0 %), in octaves, and the curve
+/// of the way between them (above 1: most of the narrowing happens late in the knob's travel).
+const ENV_OCT: (f32, f32) = (0.17, 4.0);
+const ENV_CURVE: f32 = 2.0;
+/// At the bottom of Selectivity everything is cut a little less: the slope there, rising to 1
+/// by [`SELECT_FULL_AT`] of the knob's travel.
+const SELECT_LOW_SLOPE: f32 = 0.8;
+const SELECT_FULL_AT: f32 = 0.36;
+/// The excess, in dB, above which Rez cuts.
+const THRESHOLD_DB: f32 = 1.25;
+/// Depth is a level gate: where the sound around a frequency (its ENVELOPE) is above the gate,
+/// a resonance there is cut in full; for every dB the sound is below it, [`GATE_RATIO`] dB of the
+/// excess no longer counts, eased in over [`GATE_KNEE_DB`]. The gate, in dBFS, at Depth 0 %, and
+/// how far each percent of Depth lowers it.
+const GATE_DB_AT_ZERO: f32 = -23.0;
+const GATE_DB_PER_PERCENT: f32 = 0.86;
+const GATE_RATIO: f32 = 0.27;
+const GATE_KNEE_DB: f32 = 9.0;
+/// The gate reads the level with this many dB per octave added around 1 kHz (so sound that falls
+/// away toward the highs, as most does, is gated evenly).
+const GATE_TILT_DB_PER_OCT: f32 = 3.0;
+/// Below this much Depth the cut fades out altogether (0 % is off).
+const DEPTH_FADE_PERCENT: f32 = 7.5;
+/// How hard Rez works by frequency, before the range and the bands: (Hz, weight) points joined
+/// by straight lines on log-log axes. It leaves the low end nearly alone and works in full from
+/// about 4 kHz up.
+const TILT: [(f32, f32); 10] = [
+    (60.0, 0.015),
+    (120.0, 0.022),
+    (250.0, 0.052),
+    (500.0, 0.098),
+    (1000.0, 0.157),
+    (2000.0, 0.337),
+    (4000.0, 0.74),
+    (8000.0, 0.78),
+    (14_000.0, 1.05),
+    (20_000.0, 1.05),
+];
 /// FINE never averages fewer than this many bins each side (the low end, where a fraction of an
 /// octave is less than a bin).
-const MIN_HALF_BINS: f32 = 1.5;
+const MIN_HALF_BINS: f32 = 1.0;
 /// Power below this is silence (-200 dB): keeps the logarithm finite.
 const POWER_FLOOR: f32 = 1.0e-20;
 /// The most a sensitivity above 0 dB multiplies the cut by (+12 dB).
@@ -109,8 +156,8 @@ pub const BAND_Q: (f32, f32) = (0.3, 8.0);
 
 static REZ_PARAMS: [ParamInfo; P_BANDS + BANDS * BAND_PARAMS] = [
     lin("depth", "Depth", 0.0, 100.0, 50.0, Unit::Percent),
-    lin("sharpness", "Sharpness", 0.0, 100.0, 50.0, Unit::Percent),
-    lin("selectivity", "Selectivity", 0.0, 100.0, 50.0, Unit::Percent),
+    lin("sharpness", "Sharpness", 0.0, 100.0, 45.0, Unit::Percent),
+    lin("selectivity", "Selectivity", 0.0, 100.0, 35.0, Unit::Percent),
     log("attack", "Attack", 1.0, 200.0, 15.0, Unit::Ms),
     log("release", "Release", 5.0, 1000.0, 80.0, Unit::Ms),
     log("low", "Low", 20.0, 2000.0, 60.0, Unit::Hz),
@@ -212,10 +259,32 @@ pub fn bands_db(bands: &[Band; BANDS], hz: f32) -> f32 {
     bands.iter().map(|b| b.db_at(hz)).sum()
 }
 
-/// What the cut at `hz` is multiplied by: the range times the bands (0..=[`MAX_WEIGHT`]).
+/// How hard Rez works at `hz` before the range and the bands have their say: [`TILT`].
+pub fn tilt_weight(hz: f32) -> f32 {
+    let (first, last) = (TILT[0], TILT[TILT.len() - 1]);
+    if hz.is_nan() || hz <= 0.0 {
+        return 0.0;
+    }
+    if hz <= first.0 {
+        // Below the table: in proportion to the frequency.
+        return first.1 * hz / first.0;
+    }
+    for pair in TILT.windows(2) {
+        if let [(f0, w0), (f1, w1)] = *pair
+            && hz <= f1
+        {
+            let t = (hz / f0).ln() / (f1 / f0).ln();
+            return w0 * (w1 / w0).powf(t);
+        }
+    }
+    last.1
+}
+
+/// What the cut at `hz` is multiplied by: the tilt, the range and the bands (the last two
+/// together at most [`MAX_WEIGHT`]).
 fn weight_at(low: f32, high: f32, bands: &[Band; BANDS], hz: f32) -> f32 {
     let w = range_weight(low, high, hz) * db_to_gain(bands_db(bands, hz));
-    if w.is_finite() { w.clamp(0.0, MAX_WEIGHT) } else { 0.0 }
+    if w.is_finite() { w.clamp(0.0, MAX_WEIGHT) * tilt_weight(hz) } else { 0.0 }
 }
 
 /// The frame length for a sample rate: 2048 up to 50 kHz, doubling with the rate.
@@ -303,6 +372,8 @@ struct Tables {
     env_lo: Vec<f32>,
     env_hi: Vec<f32>,
     weight: Vec<f32>,
+    /// What the gate adds to the level it reads at each bin, in dB ([`GATE_TILT_DB_PER_OCT`]).
+    gate_tilt: Vec<f32>,
     cum: Vec<f64>,
     fine_db: Vec<f32>,
     env_db: Vec<f32>,
@@ -389,6 +460,7 @@ impl Engine {
                 env_lo: vec![0.0; bins],
                 env_hi: vec![0.0; bins],
                 weight: vec![0.0; bins],
+                gate_tilt: (0..bins).map(|k| if k == 0 { 0.0 } else { GATE_TILT_DB_PER_OCT * (k as f32 * sr / n as f32 / 1000.0).log2() }).collect(),
                 cum: vec![0.0; bins + 1],
                 fine_db: vec![0.0; bins],
                 env_db: vec![0.0; bins],
@@ -416,7 +488,8 @@ struct Settings {
     /// dB of cut per dB of excess above the threshold.
     slope: f32,
     knee: f32,
-    threshold: f32,
+    /// The level gate (Depth), as a detector power: a bin at this power gets half its cut.
+    gate_power: f32,
     /// One-pole coefficients per frame.
     attack: f32,
     release: f32,
@@ -479,10 +552,16 @@ fn detect(d: &mut Detector, t: &mut Tables, s: &Settings, amount: f32) -> f32 {
     for ((v, lo), hi) in t.env_db.iter_mut().zip(&t.env_lo).zip(&t.env_hi) {
         *v = band_mean(&t.cum, *lo, *hi);
     }
-    // 4 and 5. The cut request, and the cut that follows it.
+    // 4 and 5. The cut request (the excess counts for less the further the sound around it is
+    // below the gate), and the cut that follows it.
+    let gate_db = 10.0 * (s.gate_power.max(POWER_FLOOR)).log10();
     let mut deepest = 0.0f32;
-    for (((cut, f), v), w) in d.cut.iter_mut().zip(&t.fine_db).zip(&t.env_db).zip(&t.weight) {
-        let want = (cut_for(f - v - s.threshold, s.slope, s.knee) * w * amount).clamp(0.0, MAX_CUT_DB);
+    for ((((cut, f), v), w), tilt) in d.cut.iter_mut().zip(&t.fine_db).zip(&t.env_db).zip(&t.weight).zip(&t.gate_tilt) {
+        // How far below the gate, eased in: knee * ln(1 + e^(below / knee)).
+        let below = (gate_db - v - tilt) / GATE_KNEE_DB;
+        let below = if below > 20.0 { below } else { below.exp().ln_1p() } * GATE_KNEE_DB;
+        let over = f - v - THRESHOLD_DB - GATE_RATIO * below;
+        let want = (cut_for(over, s.slope, s.knee) * w * amount).clamp(0.0, MAX_CUT_DB);
         let now = if want >= *cut { want } else { want + (*cut - want) * s.release };
         *cut = if now.is_finite() && now > 1.0e-4 { now } else { 0.0 };
         deepest = deepest.max(*cut);
@@ -565,9 +644,11 @@ impl Rez {
         let sharp = self.p.v(P_SHARPNESS) / 100.0;
         let select = self.p.v(P_SELECTIVITY) / 100.0;
         let hard = self.p.choice(P_MODE) == 1;
-        self.s.slope = self.p.v(P_DEPTH) / 100.0 * if hard { HARD_SLOPE } else { 1.0 };
+        let depth = self.p.v(P_DEPTH);
+        let select_slope = SELECT_LOW_SLOPE + (1.0 - SELECT_LOW_SLOPE) * (select / SELECT_FULL_AT).clamp(0.0, 1.0);
+        let sharp_slope = SHARP_LOW_SLOPE + (1.0 - SHARP_LOW_SLOPE) * (sharp / SHARP_FULL_AT).clamp(0.0, 1.0);
+        self.s.slope = SOFT_SLOPE * select_slope * sharp_slope * if hard { HARD_SLOPE } else { 1.0 } * (depth / DEPTH_FADE_PERCENT).clamp(0.0, 1.0);
         self.s.knee = if hard { 0.0 } else { SOFT_KNEE_DB };
-        self.s.threshold = THRESHOLD_DB.0 + (THRESHOLD_DB.1 - THRESHOLD_DB.0) * select;
         self.s.mix = self.p.v(P_MIX) / 100.0;
         self.s.trim = db_to_gain(self.p.v(P_TRIM));
         self.s.delta = self.p.on(P_DELTA);
@@ -583,8 +664,12 @@ impl Rez {
         self.s.release = coef(self.p.v(P_RELEASE));
 
         // Half a band, as a frequency ratio.
-        let fine = 2.0f32.powf(0.5 * log_lerp(FINE_OCT.1, FINE_OCT.0, sharp));
-        let env = 2.0f32.powf(0.5 * log_lerp(ENV_OCT.1, ENV_OCT.0, select));
+        let fine = 2.0f32.powf(0.5 * log_lerp(FINE_OCT.1, FINE_OCT.0, sharp.powf(FINE_CURVE)));
+        let env = 2.0f32.powf(0.5 * log_lerp(ENV_OCT.1, ENV_OCT.0, select.powf(ENV_CURVE)));
+        // The gate as a detector power: a full-scale sine's bin holds (n / pi)^2 (the root-Hann
+        // window's sum, halved, squared).
+        let full_scale = (e.n as f32 / std::f32::consts::PI).powi(2);
+        self.s.gate_power = full_scale * db_to_gain(GATE_DB_AT_ZERO - GATE_DB_PER_PERCENT * depth).powi(2);
         let top = (e.bins - 1) as f32;
         let hz_per_bin = self.sr / e.n as f32;
         let (low, high) = (self.p.v(P_LOW), self.p.v(P_HIGH));
@@ -594,9 +679,9 @@ impl Rez {
             let kf = k as f32;
             *fine_lo = (kf / fine).min(kf - MIN_HALF_BINS).max(-0.5);
             *fine_hi = (kf * fine).max(kf + MIN_HALF_BINS).min(top + 0.5);
-            // The envelope is at least three times as wide as the fine band, and never reaches
-            // below bin 1 (DC is not part of the sound).
-            let half = (kf - *fine_lo).max(*fine_hi - kf) * 3.0;
+            // The envelope is at least twice as wide as the fine band, and never reaches below
+            // bin 1 (DC is not part of the sound).
+            let half = (kf - *fine_lo).max(*fine_hi - kf) * 2.0;
             *env_lo = (kf / env).min(kf - half).max(0.5);
             *env_hi = (kf * env).max(kf + half).min(top + 0.5);
             *weight = if k == 0 { 0.0 } else { weight_at(low, high, &bands, kf * hz_per_bin) };
@@ -644,11 +729,19 @@ impl Rez {
                 *p += bin.norm_sqr();
             }
         }
+        // (Scaled back to one channel's worth, so the level gate reads the same however many
+        // channels are heard.)
         if let [a, b] = e.detectors.as_mut_slice() {
+            let scale = 1.0 / (1.0 + s.link);
             for (pa, pb) in a.power.iter_mut().zip(b.power.iter_mut()) {
                 let (x, y) = (*pa, *pb);
-                *pa = x + s.link * y;
-                *pb = y + s.link * x;
+                *pa = (x + s.link * y) * scale;
+                *pb = (y + s.link * x) * scale;
+            }
+        } else if let Some(d) = e.detectors.first_mut() {
+            let scale = 1.0 / heard.len().max(1) as f32;
+            for p in &mut d.power {
+                *p *= scale;
             }
         }
         let mut deepest = 0.0f32;
@@ -908,17 +1001,48 @@ mod tests {
     }
 
     #[test]
-    fn the_cut_does_not_depend_on_the_input_level() {
-        let cut_at = |gain: f32| {
+    fn depth_is_a_level_gate() {
+        // The cut of a 4 kHz tone in noise at `depth` percent, the input scaled by `gain`.
+        let cut_at = |depth: f32, gain: f32| {
             let mut r = prepared();
+            r.set_param("depth", depth);
             let len = 72_000;
-            let x: Vec<f32> = pink(len, 5).iter().zip(sine(3000.0, 0.1, len)).map(|(n, t)| (n * 0.2 + t) * gain).collect();
+            let x: Vec<f32> = pink(len, 5).iter().zip(sine(4000.0, 0.1, len)).map(|(n, t)| (n * 0.2 + t) * gain).collect();
             let y = run(&mut r, &x);
             let lat = r.latency();
-            level_at(&x[24_000..len - lat], 3000.0) - level_at(&y[lat + 24_000..], 3000.0)
+            level_at(&x[24_000..len - lat], 4000.0) - level_at(&y[lat + 24_000..], 4000.0)
         };
-        let (loud, quiet) = (cut_at(1.0), cut_at(0.01));
-        assert!((loud - quiet).abs() < 0.2, "cut {loud} dB loud, {quiet} dB quiet");
+        // Deep: loud and 40 dB quieter are cut alike.
+        let (loud, quiet) = (cut_at(100.0, 1.0), cut_at(100.0, 0.01));
+        assert!(loud > 6.0 && (loud - quiet).abs() < 1.0, "depth 100 %: {loud} dB loud, {quiet} dB quiet");
+        // Shallow: the quiet one falls below the gate and is cut much less.
+        let (loud, quiet) = (cut_at(15.0, 1.0), cut_at(15.0, 0.01));
+        assert!(loud > 3.0 && quiet < loud * 0.6, "depth 15 %: {loud} dB loud, {quiet} dB quiet");
+        // More depth never cuts less, and none cuts nothing.
+        assert!(cut_at(50.0, 0.1) >= cut_at(15.0, 0.1));
+        assert!(cut_at(0.0, 1.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn rez_works_harder_toward_the_highs_and_a_band_can_bring_the_lows_back() {
+        let cut = |hz: f32, set: &dyn Fn(&mut Rez)| {
+            let mut r = prepared();
+            set(&mut r);
+            let len = 72_000;
+            let x: Vec<f32> = pink(len, 61).iter().zip(sine(hz, 0.1, len)).map(|(n, t)| n * 0.2 + t).collect();
+            let y = run(&mut r, &x);
+            let lat = r.latency();
+            level_at(&x[24_000..len - lat], hz) - level_at(&y[lat + 24_000..], hz)
+        };
+        let (low, high) = (cut(500.0, &|_| {}), cut(5000.0, &|_| {}));
+        assert!(high > 3.0 * low, "500 Hz cut {low} dB, 5 kHz {high} dB");
+        let lifted = cut(500.0, &|r| {
+            r.set_param("b2_freq", 500.0);
+            r.set_param("b2_gain", 12.0);
+        });
+        assert!(lifted > 2.5 * low, "+12 dB of sensitivity at 500 Hz: {lifted} dB against {low} dB");
+        assert!(tilt_weight(100.0) < tilt_weight(1000.0) && tilt_weight(1000.0) < tilt_weight(8000.0));
+        assert_eq!(tilt_weight(0.0), 0.0);
     }
 
     #[test]
@@ -963,8 +1087,8 @@ mod tests {
     fn a_key_decides_where_the_input_is_cut() {
         let mut r = prepared();
         let len = 72_000;
-        let x: Vec<f32> = pink(len, 23).iter().zip(sine(1000.0, 0.01, len)).map(|(n, t)| n * 0.2 + t).collect();
-        let key: Vec<f32> = pink(len, 29).iter().zip(sine(1000.0, 0.2, len)).map(|(n, t)| n * 0.2 + t).collect();
+        let x: Vec<f32> = pink(len, 23).iter().zip(sine(4000.0, 0.01, len)).map(|(n, t)| n * 0.2 + t).collect();
+        let key: Vec<f32> = pink(len, 29).iter().zip(sine(4000.0, 0.2, len)).map(|(n, t)| n * 0.2 + t).collect();
         let mut y = Vec::with_capacity(len);
         for (xb, kb) in x.chunks(512).zip(key.chunks(512)) {
             let mut io = vec![xb.to_vec(), xb.to_vec()];
@@ -973,8 +1097,8 @@ mod tests {
             y.extend_from_slice(&io[0]);
         }
         let lat = r.latency();
-        let cut = level_at(&x[24_000..len - lat], 1000.0) - level_at(&y[lat + 24_000..], 1000.0);
-        assert!(cut > 6.0, "the key's 1 kHz resonance cut the input by only {cut} dB");
+        let cut = level_at(&x[24_000..len - lat], 4000.0) - level_at(&y[lat + 24_000..], 4000.0);
+        assert!(cut > 6.0, "the key's 4 kHz resonance cut the input by only {cut} dB");
     }
 
     #[test]
