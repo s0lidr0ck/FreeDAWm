@@ -141,10 +141,14 @@ impl FsPreset {
     }
 }
 
-/// The bundled factory presets of a FireStation plugin as `(name, json)` pairs.
-/// Empty for an unknown id.
+/// The bundled factory presets of a plugin as `(name, json)` pairs: a FireStation engine's, or
+/// Rez's own (a built-in with presets in the same form). Empty for any other id.
 pub fn factory_presets(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
-    engine(plugin_id).map_or(&[], |e| e.presets)
+    match engine(plugin_id) {
+        Some(e) => e.presets,
+        None if plugin_id == super::rez::REZ_INFO.id => super::rez::presets::factory_presets(),
+        None => &[],
+    }
 }
 
 #[cfg(test)]
