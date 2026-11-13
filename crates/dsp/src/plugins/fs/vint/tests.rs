@@ -581,3 +581,40 @@ fn the_vitalizers_compressor_holds_the_bass_and_its_expander_widens() {
     let (plain_l, _) = run_with(0.0, 0.0, -0.25);
     assert!(wide_l > plain_l * 1.2 && (wide_l - wide_r).abs() < 1e-3, "{wide_l} {wide_r} {plain_l}");
 }
+
+/// The Air on a steady tone at `db_re_dolby` (Dolby Level at its default, -16 dBFS): the gain, dB.
+fn air_gain_db(freq: f32, db_re_dolby: f32, amount: f32, bands: f32) -> f32 {
+    let mut s = prepared();
+    for (id, val) in [("circuit", 5.0), ("stage", 0.0), ("airAmount", amount), ("airBands", bands), ("airRef", 0.5)] {
+        assert!(s.set_param(id, val), "{id}");
+    }
+    let amp = 10.0f32.powf((-16.0 + db_re_dolby) / 20.0);
+    let src: Vec<f32> = (0..96_000).map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / 48_000.0).sin()).collect();
+    let mut io = vec![src.clone(), src];
+    run(&mut s, &mut io, 512);
+    assert!(all_finite(&io));
+    let peak = io[0][72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    20.0 * (peak / amp).log10()
+}
+
+#[test]
+fn the_air_is_the_cat_22_in_record() {
+    // Through the whole engine: the factory's record test (3 mV, 40 dB under Dolby Level, at the
+    // tone's 850 Hz: 9.5 to 10.5 dB up), and Dolby's characteristic above it.
+    let quiet = air_gain_db(850.0, -40.0, 1.0, 0.0);
+    assert!((9.5..=10.5).contains(&quiet), "{quiet}");
+    let top = air_gain_db(15_000.0, -40.0, 1.0, 0.0);
+    assert!(top > 14.5 && top < 17.0, "{top}");
+    // loud signal is left alone: within a dB at Dolby Level, a few dB up at 20 dB under it. (The
+    // neighbouring bands pass the tone's skirts in the opposite phase and unattenuated, so the sum
+    // is a little under what band 2's compressor alone would add.)
+    let (mid, loud) = (air_gain_db(850.0, -20.0, 1.0, 0.0), air_gain_db(850.0, 0.0, 1.0, 0.0));
+    assert!(mid > 1.5 && mid < 4.5 && loud.abs() < 1.0 && mid > loud, "{mid} {loud}");
+    // Amount is how much of the noise reduction signal joins: none is the input itself
+    assert!(air_gain_db(850.0, -40.0, 0.0, 0.0).abs() < 0.01);
+    let half = air_gain_db(850.0, -40.0, 0.5, 0.0);
+    assert!(half > 5.5 && half < 7.0, "{half}");
+    // Bands: the top two leave the bottom alone, the top one the middle too
+    assert!(air_gain_db(100.0, -40.0, 1.0, 1.0).abs() < 0.2 && air_gain_db(15_000.0, -40.0, 1.0, 1.0) > 15.0);
+    assert!(air_gain_db(1000.0, -40.0, 1.0, 2.0).abs() < 0.6 && air_gain_db(15_000.0, -40.0, 1.0, 2.0) > 9.0);
+}

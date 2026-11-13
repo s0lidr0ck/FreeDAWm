@@ -5,6 +5,7 @@
 //!
 //! One part is not the C++'s: the Enhancer's Maximizer is the BBE 882's circuit
 //! (`vint_maximizer`, FreeDAWm's own), where the C++ has three filter bands and two delays.
+//! Nor is the Air: it is the Dolby Cat. No. 22 module's filters and compressors (`vint_air`).
 //! Nor is the Vitalizer: it follows SPL's patent and manuals (`vint_vitalizer`) and has six
 //! parameters of its own, appended after the C++'s 64.
 //!
@@ -43,6 +44,7 @@
 //!   save and the editor are UI-only.
 
 pub mod tables;
+pub mod vint_air;
 pub mod vint_api;
 pub mod vint_british;
 pub mod vint_engine_dsp;

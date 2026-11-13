@@ -644,7 +644,7 @@ fn build() -> [CircuitDef; 8] {
     let air = CircuitDef {
         name: "Air",
         blurb: "The Dolby A encode trick: quiet high detail lifted up to 15 dB, loud parts left alone. Air without harshness.",
-        credit: "Modelled after the Dolby A noise reduction encoder. No affiliation; Dolby is a trademark of its owner.",
+        credit: "The Dolby Cat. No. 22 A-type module in record: its band filters solved from the schematic, its compressors modelled on it and on the factory's test figures. No affiliation; Dolby is a trademark of its owner.",
         stage: "Op-amp line stage",
         columns: vec![Column {
             title: "Air",

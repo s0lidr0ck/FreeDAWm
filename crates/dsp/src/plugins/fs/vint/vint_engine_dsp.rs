@@ -11,7 +11,8 @@
 //!   4 Enhancer       exciter / maximizer / vitalizer family; the Maximizer is the BBE 882,
 //!                    as a circuit (`vint_maximizer`: FreeDAWm's own, not in the C++); the Vitalizer is
 //!                    SPL's, after its patent and manuals (`vint_vitalizer`: ours too)
-//!   5 Air            the Dolby A encode trick: a four-band, level-dependent brightener
+//!   5 Air            the Dolby A encode trick: the Cat. No. 22 module's filters as circuits and
+//!                    its four compressors (`vint_air`: FreeDAWm's own, not in the C++)
 //!   6 Sampler        12-bit sampler converters and their filters
 //! ```
 //!
@@ -45,6 +46,7 @@
 use std::sync::OnceLock;
 
 use super::tables::vint_gain_table as vintgain;
+use super::vint_air as vintair;
 use super::vint_api as vintapi;
 use super::vint_british as vintbri;
 use super::vint_filters::{self as vintf, Coefs, Section};
@@ -620,12 +622,9 @@ struct Channel {
     vit_peak: f64,
 
     // Air: the four Dolby A bands, and their level detectors
-    air_b1: Section,
-    air_b2a: Section,
-    air_b2b: Section,
-    air_b3: Section,
-    air_b4: Section,
-    air_env: [f64; 4],
+    /// the Cat. 22's filters of bands 1, 3 and 4
+    air_filters: [Solver; 3],
+    air_comp: [vintair::Compressor; 4],
 
     // Sampler: 8th-order Butterworth in and out
     smp_aa: [Section; 4],
@@ -638,13 +637,11 @@ struct Channel {
 impl Channel {
     #[cfg(test)]
     fn solvers(&self) -> impl Iterator<Item = &Solver> {
-        std::iter::once(&self.passive).chain(self.sec.iter()).chain(self.sec_pre.iter()).chain([
-            &self.max_filter,
-            &self.max_sum,
-            &self.vit_bass,
-            &self.vit_filter,
-            &self.vit_lc,
-        ])
+        std::iter::once(&self.passive)
+            .chain(self.sec.iter())
+            .chain(self.sec_pre.iter())
+            .chain([&self.max_filter, &self.max_sum, &self.vit_bass, &self.vit_filter, &self.vit_lc])
+            .chain(self.air_filters.iter())
     }
 
     fn new() -> Channel {
@@ -653,6 +650,7 @@ impl Channel {
             [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default()],
+            [Solver::default(), Solver::default(), Solver::default()],
             [Solver::default(), Solver::default(), Solver::default()],
         )
     }
@@ -665,7 +663,8 @@ impl Channel {
         let sec_pre = self.sec_pre.each_mut().map(Solver::take_reset);
         let max = [self.max_filter.take_reset(), self.max_sum.take_reset()];
         let vit = [self.vit_bass.take_reset(), self.vit_filter.take_reset(), self.vit_lc.take_reset()];
-        *self = Channel::with_solvers(passive, sec, sec_pre, max, vit);
+        let air = self.air_filters.each_mut().map(Solver::take_reset);
+        *self = Channel::with_solvers(passive, sec, sec_pre, max, vit, air);
     }
 
     fn with_solvers(
@@ -674,6 +673,7 @@ impl Channel {
         sec_pre: [Solver; K_MAX_CIRCUIT_SECTIONS],
         max: [Solver; 2],
         vit: [Solver; 3],
+        air_filters: [Solver; 3],
     ) -> Channel {
         let [max_filter, max_sum] = max;
         let [vit_bass, vit_filter, vit_lc] = vit;
@@ -703,12 +703,8 @@ impl Channel {
             vit_env: 0.0,
             vit_gr: 1.0,
             vit_peak: 0.0,
-            air_b1: Section::default(),
-            air_b2a: Section::default(),
-            air_b2b: Section::default(),
-            air_b3: Section::default(),
-            air_b4: Section::default(),
-            air_env: [0.0; 4],
+            air_filters,
+            air_comp: [vintair::Compressor::default(); 4],
             smp_aa: [Section::default(); 4],
             smp_rc: [Section::default(); 4],
             smp_phase: 0.0,
@@ -743,8 +739,7 @@ struct Ctx<'a> {
     max_vca_open: bool,
     vit_att: f64,
     vit_rel: f64,
-    air_att: f64,
-    air_rel: &'a [f64; 4],
+    air_steps: &'a vintair::Steps,
     inter_at_rest: &'a Interstage,
     input_at_rest: &'a InputTransformer,
 }
@@ -808,8 +803,9 @@ pub struct VintEngineDsp {
     max_vca_open: bool,
     vit_att: f64,
     vit_rel: f64,
-    air_att: f64,
-    air_rel: [f64; 4],
+    air_steps: vintair::Steps,
+    /// the Air's filters: solved
+    air_solved: bool,
 
     in_peak: f32,
     out_peak: f32,
@@ -901,8 +897,8 @@ impl VintEngineDsp {
             max_vca_open: false,
             vit_att: 0.01,
             vit_rel: 0.001,
-            air_att: 0.01,
-            air_rel: [0.0; 4],
+            air_steps: vintair::Steps::default(),
+            air_solved: false,
             in_peak: 0.0,
             out_peak: 0.0,
         }
@@ -1053,8 +1049,7 @@ impl VintEngineDsp {
                 max_vca_open: self.max_vca_open,
                 vit_att: self.vit_att,
                 vit_rel: self.vit_rel,
-                air_att: self.air_att,
-                air_rel: &self.air_rel,
+                air_steps: &self.air_steps,
                 inter_at_rest: &self.inter_at_rest,
                 input_at_rest: &self.input_at_rest,
             };
@@ -1097,12 +1092,6 @@ impl VintEngineDsp {
         let hp = bilinear(&high_pass2(0.7071), tune, os_fs);
         let lp120 = bilinear(&low_pass1(), 120.0, os_fs);
 
-        let b1 = bilinear(&low_pass2(0.7071), 80.0, os_fs);
-        let b2a = bilinear(&high_pass2(0.7071), 80.0, os_fs);
-        let b2b = bilinear(&low_pass2(0.7071), 3000.0, os_fs);
-        let b3 = bilinear(&high_pass2(0.7071), 3000.0, os_fs);
-        let b4 = bilinear(&high_pass2(0.7071), 9000.0, os_fs);
-
         let rate = self.smp_rate();
         self.smp_step = rate / os_fs;
         // 8th-order Butterworth at 0.42 x the machine's rate, in and out: the four section Qs
@@ -1113,11 +1102,6 @@ impl VintEngineDsp {
             c.enh_hp1.c = hp;
             c.enh_hp2.c = hp;
             c.enh_low.c = lp120;
-            c.air_b1.c = b1;
-            c.air_b2a.c = b2a;
-            c.air_b2b.c = b2b;
-            c.air_b3.c = b3;
-            c.air_b4.c = b4;
             for i in 0..4 {
                 c.smp_aa[i].c = aa[i];
                 c.smp_rc[i].c = aa[i];
@@ -1125,11 +1109,7 @@ impl VintEngineDsp {
         }
         (self.max_att, self.max_rel) = vintmax::detector_steps(os_fs);
         (self.vit_att, self.vit_rel) = vintvit::comp_steps(os_fs);
-        self.air_att = 1.0 - (-1.0 / (0.002 * os_fs)).exp();
-        const REL_MS: [f64; 4] = [150.0, 80.0, 60.0, 60.0];
-        for i in 0..4 {
-            self.air_rel[i] = 1.0 - (-1.0 / (REL_MS[i] * 0.001 * os_fs)).exp();
-        }
+        self.air_steps = vintair::Steps::for_rate(os_fs);
     }
 
     // ---------------------------------------------------------------- the EQ, re-made from gliding values
@@ -1210,6 +1190,19 @@ impl VintEngineDsp {
                 self.vit_solved = true;
                 self.vit_for = now;
             }
+        }
+        // The Air's filters: fixed parts, solved once when the Air comes into use.
+        if self.circuit == C_AIR
+            && !self.air_solved
+            && let Some(scratch) = self.scratch.as_deref_mut()
+        {
+            let nets = [vintair::band1_netlist(), vintair::band3_netlist(), vintair::band4_netlist()];
+            for c in &mut self.ch {
+                for (f, net) in c.air_filters.iter_mut().zip(&nets) {
+                    f.set_running(net, self.os_fs, scratch);
+                }
+            }
+            self.air_solved = true;
         }
         // The netlist circuits: each section solved again only when one of its parts changed, and
         // once, for both channels. While a knob glides, every other time.
@@ -1344,6 +1337,10 @@ impl VintEngineDsp {
             c.max_sum.reset();
             c.max_env = 0.0;
             c.vit_bass.reset();
+            for f in &mut c.air_filters {
+                f.reset();
+            }
+            c.air_comp = [vintair::Compressor::default(); 4];
             c.vit_filter.reset();
             c.vit_lc.reset();
             c.vit_env = 0.0;
@@ -1352,6 +1349,7 @@ impl VintEngineDsp {
         self.passive_solved = false;
         self.max_solved = false;
         self.vit_solved = false;
+        self.air_solved = false;
         self.configure_stage();
         self.smoothed = self.values;
         self.active_sections = 0;
@@ -1627,32 +1625,26 @@ fn air(c: &mut Channel, fl: &Ctx, x: f64) -> f64 {
     let sm = fl.smoothed;
     let amount = f64::from(sm[P_AIR_AMOUNT]);
     let bands = ((sm[P_AIR_BANDS] + 0.5) as i32).clamp(0, 2);
-    let ref_db = f64::from(knob_to_air_ref_db(sm[P_AIR_REF]));
+    // the first band in use: all four, bands 3 and 4, or band 4 alone
+    let first = [0usize, 2, 3][bands as usize];
 
-    let b2 = c.air_b2a.run(x);
-    let b = [c.air_b1.run(x), c.air_b2b.run(b2), c.air_b3.run(x), c.air_b4.run(x)];
-    const MAX_DB: [f64; 4] = [10.0, 10.0, 10.0, 15.0];
-    let first = if bands == 0 {
-        0
-    } else if bands == 1 {
-        2
-    } else {
-        3
-    };
-
-    let mut y = x;
-    for i in 0..4 {
-        let e = b[i].abs();
-        c.air_env[i] += (if e > c.air_env[i] { fl.air_att } else { fl.air_rel[i] }) * (e - c.air_env[i]);
-        if i < first || amount <= 0.0 {
-            continue;
-        }
-        // Full lift 40 dB and more below Dolby level, none at Dolby level.
-        let level_db = 20.0 * (c.air_env[i] * 1.4142 + 1e-9).log10() - ref_db;
-        let lift = MAX_DB[i] * clamp_t(-level_db / 40.0, 0.0, 1.0) * amount;
-        y += (10.0f64.powf(lift / 20.0) - 1.0) * b[i];
+    // The Cat. 22's side chain (`vint_air`), in millivolts: the four bands. The filters run
+    // whatever the setting, so that they are settled when it changes.
+    let mv = vintair::mv_per_unit(f64::from(knob_to_air_ref_db(sm[P_AIR_REF])));
+    let [band1, band3, band4] = &mut c.air_filters;
+    let wide = x * mv;
+    let (b1, b3, b4) = (band1.run(wide), band3.run(wide), band4.run(wide));
+    if amount <= 0.0 {
+        return x; // off is the input itself
     }
-    y
+    let b = [b1, vintair::band2(wide, b1, b3), b3, b4];
+    // The noise reduction signal: each band in use through its compressor, mixed as the module
+    // mixes them. Amount is how much of it joins the main signal (all of it: the module in record).
+    let mut nr = 0.0;
+    for i in first..4 {
+        nr += fl.air_steps.weights[i] * c.air_comp[i].run(b[i], i / 2, fl.air_steps);
+    }
+    x + amount * nr / mv
 }
 
 // ---------------------------------------------------------------- 6: Sampler
