@@ -76,6 +76,9 @@ pub enum GraphKind {
     /// the target and the gate, the gain correction, the delivery meter (integrated, true peak) and
     /// the reference and pairing state, all from the engine's readouts.
     LevelUp,
+    /// Manners: the gain curve it is applying right now over frequency (cuts below the line, lifts
+    /// above it), with the edges of its working range.
+    Manners,
 }
 
 pub fn graph_kind(plugin_id: &str) -> GraphKind {
@@ -89,7 +92,7 @@ pub fn graph_kind(plugin_id: &str) -> GraphKind {
 
 /// Whether a graph reads its module's sample streams (see [`Streams`]).
 pub fn uses_streams(kind: GraphKind) -> bool {
-    matches!(kind, GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale)
+    matches!(kind, GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale | GraphKind::Manners)
 }
 
 const F_MIN: f32 = 20.0;
@@ -367,6 +370,7 @@ pub fn draw_graph(
         GraphKind::Amp => draw_amp(ui, &p, rect, ins, module, live, sample_rate, large),
         GraphKind::Shale => crate::shale_ui::draw(ui, &p, rect, ins, module, live, streams.map(|s| &s.shale), large),
         GraphKind::LevelUp => crate::levelup_ui::draw(ui, &p, rect, ins, module, live, large),
+        GraphKind::Manners => draw_manners(&p, rect, ins, streams, large),
     }
     p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, t.module_tile_border), StrokeKind::Inside);
 }
@@ -425,6 +429,8 @@ pub struct Streams {
     /// Shale's scope bins (input peak, gate gain, detector peak), newest last, the last
     /// [`crate::shale_ui::SCOPE_BINS`] (the DSP's ten seconds).
     pub shale: VecDeque<[f32; crate::shale_ui::SCOPE_VALUES]>,
+    /// Manners' gain curve as of its last block: (band centre Hz, gain dB), low to high.
+    pub manners: Vec<(f32, f32)>,
     /// The UI pass these were last brought up to date in, plus one (0: never).
     pass: u64,
     /// Samples written to (pre, post) when last read.
@@ -465,6 +471,26 @@ impl Streams {
             GraphKind::Twine => self.feed_scope(&a.post),
             GraphKind::Transient => self.feed_bins(&a.post),
             GraphKind::Shale => self.feed_shale(&a.post),
+            GraphKind::Manners => {
+                use soundcraft_dsp::plugins::fs::manners::{LIVE_BANDS, LIVE_GAIN, LIVE_HZ, MAX_BANDS};
+                let bands = a.live.get(LIVE_BANDS);
+                let bands = if bands.is_finite() && bands > 0.0 { (bands as usize).min(MAX_BANDS) } else { 0 };
+                self.manners.clear();
+                self.manners.extend(
+                    (0..bands).map(|i| (a.live.get(LIVE_HZ + i), a.live.get(LIVE_GAIN + i))).filter(|(hz, g)| hz.is_finite() && g.is_finite()),
+                );
+                // The spectra behind the curve in its editor, at the analyzer's pace.
+                let due = match self.spec_at {
+                    Some(t) => !now.is_finite() || now < t || now - t >= SPEC_INTERVAL - 1e-3,
+                    None => true,
+                };
+                if due {
+                    self.spec_at = Some(now);
+                    let (scratch, fresh, an) = (&mut self.scratch, &mut self.fresh, &mut self.analyzer);
+                    feed_spectrum(&mut self.pre, &mut self.seen.0, &a.pre, scratch, fresh, an);
+                    feed_spectrum(&mut self.post, &mut self.seen.1, &a.post, scratch, fresh, an);
+                }
+            }
             _ => {}
         }
     }
@@ -694,7 +720,7 @@ pub(crate) fn cq_dot(rect: Rect, values: &[f32], b: &CqBand, sr: f32) -> Pos2 {
 }
 
 /// A spectrum as a filled outline over `rect`: the loudest bin under each point, tilted.
-fn spectrum(p: &egui::Painter, rect: Rect, spec: &[f32], sr: f32, fill: Color32, line: Option<Stroke>) {
+pub(crate) fn spectrum(p: &egui::Painter, rect: Rect, spec: &[f32], sr: f32, fill: Color32, line: Option<Stroke>) {
     if spec.len() < 4 {
         return;
     }
@@ -2135,6 +2161,62 @@ fn draw_twine(p: &egui::Painter, rect: Rect, ins: &Insert, live: Option<&LiveVal
     let lv = live.copied().unwrap_or_else(no_reading);
     let bars = [("CLIP", lv.readouts[2] / TWINE_GR_RANGE, true, accent), ("LIM", lv.readouts[3] / TWINE_GR_RANGE, true, t.gr_color)];
     hanging_bars(p, Rect::from_min_max(pos2(scope.right() + 1.0, rect.top()), rect.max), &bars, large);
+}
+
+/// Manners' curve scale, ±dB.
+pub const MANNERS_RANGE: f32 = 12.0;
+
+/// Manners: the gain it applies over frequency, as its engine last reported it. Cuts hang under the
+/// 0 dB line and lifts stand on it; outside the working range the graph is dimmed.
+fn draw_manners(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&Streams>, large: bool) {
+    let t = Tokens::current();
+    let accent = module_accent(&ins.plugin);
+    let zero = db_y(rect, 0.0, MANNERS_RANGE);
+    for (f, name) in [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        let x = freq_to_x(rect, f);
+        p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, t.graph_grid));
+        if large {
+            p.text(pos2(x + 2.0, rect.bottom() - 1.0), Align2::LEFT_BOTTOM, name, regular(9.0), t.text_dim);
+        }
+    }
+    for db in [-6.0, 6.0] {
+        let y = db_y(rect, db, MANNERS_RANGE);
+        p.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, t.graph_grid));
+        if large {
+            p.text(pos2(rect.left() + 2.0, y), Align2::LEFT_BOTTOM, format!("{db:+.0}"), regular(9.0), t.text_dim);
+        }
+    }
+    p.line_segment([pos2(rect.left(), zero), pos2(rect.right(), zero)], Stroke::new(1.0, t.text_dim));
+    // The working range: what lies outside it is left alone.
+    let (lo, hi) = (param(ins, "rangeLo"), param(ins, "rangeHi"));
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    let shade = t.graph_bg.gamma_multiply(0.55);
+    if lo > F_MIN * 1.02 {
+        p.rect_filled(Rect::from_min_max(rect.min, pos2(freq_to_x(rect, lo), rect.bottom())), 0.0, shade);
+    }
+    if hi < F_MAX * 0.98 {
+        p.rect_filled(Rect::from_min_max(pos2(freq_to_x(rect, hi), rect.top()), rect.max), 0.0, shade);
+    }
+    let Some(curve) = streams.map(|s| &s.manners).filter(|c| c.len() >= 2) else { return };
+    let pts: Vec<Pos2> = curve.iter().map(|(hz, db)| pos2(freq_to_x(rect, *hz), db_y(rect, *db, MANNERS_RANGE))).collect();
+    for w in pts.windows(2) {
+        if let [a, b] = w {
+            // Split where the curve crosses 0 dB, so each piece is convex and one colour.
+            let fill = |a: Pos2, b: Pos2| {
+                let color = if (a.y + b.y) * 0.5 > zero { t.gr_color.gamma_multiply(0.35) } else { accent.gamma_multiply(0.35) };
+                p.add(Shape::convex_polygon(vec![a, b, pos2(b.x, zero), pos2(a.x, zero)], color, Stroke::NONE));
+            };
+            if (a.y - zero) * (b.y - zero) < 0.0 {
+                let k = (zero - a.y) / (b.y - a.y);
+                let mid = pos2(a.x + (b.x - a.x) * k, zero);
+                fill(*a, mid);
+                fill(mid, *b);
+            } else {
+                fill(*a, *b);
+            }
+        }
+    }
+    glow_line(p, pts, accent, if large { 1.5 } else { 1.0 });
 }
 
 /// Vint's curve scale, ±dB.

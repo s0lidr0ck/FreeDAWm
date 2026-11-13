@@ -1,0 +1,17 @@
+{
+  "engine": "Manners",
+  "name": "Gentle Master",
+  "group": "Mastering",
+  "tags": "Light touch",
+  "desc": "A little of both. For a mix that is nearly there.",
+  "values": {
+    "tame": 20,
+    "recover": 20,
+    "bias": 0,
+    "brighten": 0,
+    "boost": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "delta": false
+  }
+}

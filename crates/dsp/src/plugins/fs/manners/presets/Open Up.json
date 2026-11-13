@@ -1,0 +1,17 @@
+{
+  "engine": "Manners",
+  "name": "Open Up",
+  "group": "Mastering",
+  "tags": "Mostly Recover",
+  "desc": "Brings buried detail forward and leaves the loud parts mostly alone.",
+  "values": {
+    "tame": 15,
+    "recover": 45,
+    "bias": 20,
+    "brighten": 0,
+    "boost": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "delta": false
+  }
+}

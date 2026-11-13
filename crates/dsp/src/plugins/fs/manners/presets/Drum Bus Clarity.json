@@ -1,0 +1,17 @@
+{
+  "engine": "Manners",
+  "name": "Drum Bus Clarity",
+  "group": "Drums",
+  "tags": "Even kit",
+  "desc": "Keeps one drum from covering the rest, with a little more weight.",
+  "values": {
+    "tame": 35,
+    "recover": 35,
+    "bias": 0,
+    "brighten": 0,
+    "boost": 15,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "delta": false
+  }
+}

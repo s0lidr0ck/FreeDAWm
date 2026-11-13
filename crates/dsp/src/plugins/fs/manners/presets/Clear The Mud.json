@@ -1,0 +1,17 @@
+{
+  "engine": "Manners",
+  "name": "Clear The Mud",
+  "group": "Mix Bus",
+  "tags": "Low mids only",
+  "desc": "Tames build-up between 120 and 600 Hz and touches nothing else.",
+  "values": {
+    "tame": 60,
+    "recover": 0,
+    "bias": 0,
+    "brighten": 0,
+    "boost": 0,
+    "rangeLo": 120,
+    "rangeHi": 600,
+    "delta": false
+  }
+}

@@ -12,6 +12,7 @@ pub mod delay;
 pub mod dist;
 pub mod filter;
 pub mod levelup;
+pub mod manners;
 pub mod mod_engine;
 pub mod pitch;
 pub mod reverb;
