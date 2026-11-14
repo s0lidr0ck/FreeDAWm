@@ -12,6 +12,7 @@ pub mod pitch;
 pub mod reverb;
 pub mod rez;
 pub mod sampler;
+pub mod sprawl;
 pub mod strip;
 pub mod synth;
 #[cfg(feature = "test-plugins")]
@@ -21,7 +22,7 @@ pub mod utility;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 30] = [
+const BUILTINS: [&PluginInfo; 31] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -41,6 +42,7 @@ const BUILTINS: [&PluginInfo; 30] = [
     &harmonic::LOFI_INFO,
     &harmonic::RECT_INFO,
     &pitch::PITCH_INFO,
+    &sprawl::SPRAWL_INFO,
     &utility::SHIFT_INFO,
     &utility::GAIN_INFO,
     &utility::TRIM_INFO,
@@ -103,6 +105,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "lofi" => Box::new(harmonic::LoFi::new()),
         "rectifier" => Box::new(harmonic::Rectifier::new()),
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
+        "sprawl" => Box::new(sprawl::Sprawl::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "gain" => Box::new(utility::Gain::new()),
         "trim" => Box::new(utility::Trim::new()),
@@ -146,6 +149,7 @@ mod tests {
         "lofi",
         "rectifier",
         "pitch_shifter",
+        "sprawl",
         "time_shift",
         "gain",
         "trim",

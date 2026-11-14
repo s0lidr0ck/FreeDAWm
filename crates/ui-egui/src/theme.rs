@@ -709,12 +709,16 @@ mod tests {
             assert!(station_accent(p.id).is_some(), "{}", p.id);
         }
         // One entry per engine, each a registered plugin (a FireStation engine, or a built-in
-        // with an editor of its own: Rez, Lull): a single source of truth.
+        // with an editor of its own: Rez, Lull, Sprawl): a single source of truth.
         let uis = crate::engine_ui::engine_uis();
         for (i, u) in uis.iter().enumerate() {
             assert!(!uis[i + 1..].iter().any(|o| o.id == u.id), "{} listed twice", u.id);
             let category = soundcraft_dsp::plugin_info(u.id).map(|p| p.category);
-            assert!(category == Some(soundcraft_dsp::Category::FireStation) || matches!(u.id, "rez" | "lull"), "{}: {category:?}", u.id);
+            assert!(
+                category == Some(soundcraft_dsp::Category::FireStation) || soundcraft_dsp::LISTED_STOCK.contains(&u.id),
+                "{}: {category:?}",
+                u.id
+            );
         }
         let was = is_light();
         LIGHT_THEME.store(false, Ordering::Relaxed);

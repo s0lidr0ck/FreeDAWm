@@ -83,6 +83,7 @@ fn look(id: &str) -> Look {
             ("b3_gain", 9.0),
             ("b3_q", 1.6),
         ]),
+        "sprawl" => params(&[("width", 120.0), ("stereoize", 45.0), ("b1_width", 0.0), ("b2_width", 85.0), ("b3_width", 130.0), ("b4_width", 165.0)]),
         "channel_strip" => params(&[
             ("comp_on", 1.0),
             ("comp_threshold", -30.0),

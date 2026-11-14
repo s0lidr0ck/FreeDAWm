@@ -2162,7 +2162,7 @@ mod tests {
         sorted.sort_by_key(|n| n.to_lowercase());
         assert_eq!(fs, sorted, "by name");
         assert!(fs.contains(&"CleanQ") && fs.contains(&"Comp") && fs.contains(&"Twine"));
-        assert!(fs.contains(&"Manners") && fs.contains(&"Rez"), "Rez is offered with the engines: {fs:?}");
+        assert!(fs.contains(&"Manners") && fs.contains(&"Rez") && fs.contains(&"Sprawl"), "Rez and Sprawl are offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
         assert_eq!(names, ["FireStation", "Utilities"]);
