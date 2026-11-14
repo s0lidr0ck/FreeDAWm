@@ -15,8 +15,8 @@ use std::fmt::Write as _;
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
 /// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
-/// listed) after Manners.
-pub const MAX_CHARS: usize = 46_000;
+/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line).
+pub const MAX_CHARS: usize = 47_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -64,6 +64,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_pitch" => "Pitch effects: octaver/harmonizer/whammy (POG, Micro POG, OC-2, H910, Whammy).",
         "rez" => {
             "Dynamic resonance suppressor: turns down only the frequencies that stick out of the sound's own spectrum, only while they do (harshness, ringing, boxiness); Soft and Hard modes, four sensitivity bands, L/R or M/S, Delta listen."
+        }
+        "lull" => {
+            "Gate and downward expander: Expand (gentle, by Ratio) or Gate (by Range) below the Threshold, with knee, hysteresis, hold and lookahead; a filtered detector; a sidechain key that guards against bleed or triggers."
         }
         "sprawl" => {
             "Stereo imager: four bands, each made narrower (down to mono) or wider; only the side is scaled, so the mono sum never changes. Stereoize gives a mono source sides; Mono Safe holds back what would cancel in mono."
