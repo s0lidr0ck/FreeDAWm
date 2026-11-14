@@ -6,6 +6,7 @@ pub mod eq;
 pub mod fs;
 pub mod harmonic;
 pub mod juke;
+pub mod lull;
 pub mod modulation;
 pub mod pitch;
 pub mod reverb;
@@ -20,7 +21,7 @@ pub mod utility;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 29] = [
+const BUILTINS: [&PluginInfo; 30] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -28,6 +29,7 @@ const BUILTINS: [&PluginInfo; 29] = [
     &dynamics::DEESS_INFO,
     &dynamics::MAX_INFO,
     &rez::REZ_INFO,
+    &lull::LULL_INFO,
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
@@ -89,6 +91,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "de_esser" => Box::new(dynamics::DeEsser::new()),
         "maximizer" => Box::new(dynamics::Maximizer::new()),
         "rez" => Box::new(rez::Rez::new()),
+        "lull" => Box::new(lull::Lull::new()),
         "channel_strip" => Box::new(strip::ChannelStrip::new()),
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
@@ -131,6 +134,7 @@ mod tests {
         "de_esser",
         "maximizer",
         "rez",
+        "lull",
         "channel_strip",
         "room_reverb",
         "plate_reverb",
