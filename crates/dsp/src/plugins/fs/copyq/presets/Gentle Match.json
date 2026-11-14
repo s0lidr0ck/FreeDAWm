@@ -1,0 +1,30 @@
+{
+  "engine": "CopyQ",
+  "name": "Gentle Match",
+  "group": "Match",
+  "tags": "Halfway",
+  "desc": "Half the difference, broad strokes only, and never more than 6 dB.",
+  "values": {
+    "amount": 50,
+    "detail": 25,
+    "limit": 6,
+    "dynamics": 0,
+    "follow": true,
+    "window": 10,
+    "gate": 24,
+    "channels": "Stereo",
+    "phase": "Linear Phase",
+    "autoGain": true,
+    "output": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "split1": 150,
+    "split2": 1000,
+    "split3": 6000,
+    "amtLow": 100,
+    "amtLowMid": 100,
+    "amtHighMid": 100,
+    "amtHigh": 100,
+    "delta": false
+  }
+}

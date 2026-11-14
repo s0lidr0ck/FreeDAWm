@@ -1,0 +1,30 @@
+{
+  "engine": "CopyQ",
+  "name": "Mastering Reference",
+  "group": "Mastering",
+  "tags": "Subtle",
+  "desc": "A third of the way to a reference mix, broad, mid and side matched separately.",
+  "values": {
+    "amount": 35,
+    "detail": 15,
+    "limit": 4,
+    "dynamics": 0,
+    "follow": true,
+    "window": 30,
+    "gate": 24,
+    "channels": "Mid/Side",
+    "phase": "Linear Phase",
+    "autoGain": true,
+    "output": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "split1": 150,
+    "split2": 1000,
+    "split3": 6000,
+    "amtLow": 100,
+    "amtLowMid": 100,
+    "amtHighMid": 100,
+    "amtHigh": 100,
+    "delta": false
+  }
+}

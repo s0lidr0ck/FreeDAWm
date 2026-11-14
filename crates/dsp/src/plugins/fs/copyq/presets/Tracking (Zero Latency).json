@@ -1,0 +1,30 @@
+{
+  "engine": "CopyQ",
+  "name": "Tracking (Zero Latency)",
+  "group": "Tracking",
+  "tags": "Minimum phase",
+  "desc": "No latency, for playing through. Third-octave detail.",
+  "values": {
+    "amount": 100,
+    "detail": 35,
+    "limit": 9,
+    "dynamics": 0,
+    "follow": true,
+    "window": 10,
+    "gate": 24,
+    "channels": "Stereo",
+    "phase": "Minimum Phase",
+    "autoGain": true,
+    "output": 0,
+    "rangeLo": 20,
+    "rangeHi": 20000,
+    "split1": 150,
+    "split2": 1000,
+    "split3": 6000,
+    "amtLow": 100,
+    "amtLowMid": 100,
+    "amtHighMid": 100,
+    "amtHigh": 100,
+    "delta": false
+  }
+}

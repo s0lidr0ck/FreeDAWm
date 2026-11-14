@@ -702,7 +702,7 @@ mod trait_default_tests {
     }
 
     #[test]
-    fn built_ins_have_no_state_but_cleanqs_ceiling_and_no_editor() {
+    fn built_ins_have_no_state_but_cleanqs_ceiling_and_copyqs_profiles_and_no_editor() {
         for info in plugins() {
             let mut p = create(info.id).unwrap();
             if info.id == "fs_cleanq" {
@@ -710,6 +710,11 @@ mod trait_default_tests {
                 // reads as no ceiling, as the C++ reads it.
                 assert!(p.save_state().is_some_and(|s| s.starts_with(b"<ceiling")));
                 assert!(p.load_state(b"anything") && !p.load_state(&[0xff]));
+            } else if info.id == "fs_copyq" {
+                // CopyQ keeps the profiles it matches to as its state (JSON); anything else is
+                // refused.
+                assert!(p.save_state().is_some_and(|s| s.starts_with(b"{")));
+                assert!(!p.load_state(b"anything") && !p.load_state(&[0xff]));
             } else {
                 assert!(p.save_state().is_none(), "{}", info.id);
                 assert!(!p.load_state(b"anything"), "{}", info.id);
