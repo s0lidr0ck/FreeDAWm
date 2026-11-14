@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "Close Mic Pops",
+  "group": "Vocals",
+  "tags": "Plosives",
+  "desc": "For a voice right on the mic with no pop shield.",
+  "values": {
+    "sibAmount": 40,
+    "sibRange": 12,
+    "sibLow": 4500,
+    "sibHigh": 14000,
+    "mode": "Split",
+    "ploAmount": 80,
+    "ploRange": 24,
+    "ploHigh": 220
+  }
+}

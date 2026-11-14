@@ -166,6 +166,7 @@ mod tests {
         "fs_tape",
         "fs_twine",
         "fs_manners",
+        "fs_sift",
         "fs_cleanq",
         "fs_vint",
         "fs_pitch",

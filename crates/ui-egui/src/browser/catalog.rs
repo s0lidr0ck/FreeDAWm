@@ -246,7 +246,7 @@ pub fn category_for_builtin(info: &PluginInfo) -> BrowserCategory {
     match info.id {
         "sampler" => return C::Sampler,
         "drum_synth" | "juke" => return C::Drums,
-        "fs_comp" | "fs_transient" | "fs_shale" | "fs_swale" | "fs_twine" => return C::Dynamics,
+        "fs_comp" | "fs_transient" | "fs_shale" | "fs_swale" | "fs_twine" | "fs_sift" => return C::Dynamics,
         "fs_cleanq" | "fs_vint" | "fs_manners" => return C::Eq,
         "fs_reverb" | "fs_chamber" => return C::Reverb,
         "fs_delay" => return C::Delay,
