@@ -65,6 +65,9 @@ pub fn purpose(id: &str) -> &'static str {
         "rez" => {
             "Dynamic resonance suppressor: turns down only the frequencies that stick out of the sound's own spectrum, only while they do (harshness, ringing, boxiness); Soft and Hard modes, four sensitivity bands, L/R or M/S, Delta listen."
         }
+        "sprawl" => {
+            "Stereo imager: four bands, each made narrower (down to mono) or wider; only the side is scaled, so the mono sum never changes. Stereoize gives a mono source sides; Mono Safe holds back what would cancel in mono."
+        }
         "fs_reverb" => "Reverb: Room and Hall, EMT 140 plate, spring tank, Cloud, Shimmer; decay up to 30 s, synced pre-delay, freeze, era colours.",
         "fs_sat" => "Saturation: tube/transformer/tape-style harmonic colour with drive and mix.",
         "fs_shale" => "Drum gate: band-limited onset detection, lookahead gate following each hit's decay, DeBleed, Kit Link, mic phase alignment.",
