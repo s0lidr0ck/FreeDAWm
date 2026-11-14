@@ -109,7 +109,7 @@ pub fn engine_ui(plugin: &str) -> Option<&'static EngineUi> {
 mod tests {
     #[test]
     fn every_firestation_engine_has_exactly_one_ui() {
-        // (A built-in with an editor of its own, Rez, has hooks here too: not an engine.)
+        // (The built-ins with an editor of their own, Rez and Sprawl, have hooks here too: not engines.)
         let fs = |id: &&str| soundcraft_dsp::plugins::fs::engine(id).is_some();
         let mut ids: Vec<&str> = super::engine_uis().iter().map(|u| u.id).filter(fs).collect();
         ids.sort_unstable();

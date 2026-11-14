@@ -1,11 +1,11 @@
-//! Imager: a four-band stereo imager.
+//! Sprawl: a four-band stereo imager.
 //!
-//! Imager works on the difference between the two channels. The signal is taken apart into its
+//! Sprawl works on the difference between the two channels. The signal is taken apart into its
 //! mid `(L + R) / 2` and its side `(L - R) / 2`, both are split into four bands, and each band's
 //! side is turned up or down by that band's Width (times the overall Width): 0 % is mono, 100 %
 //! leaves the band as it came, 200 % doubles its side. The mid is never scaled, so the mono sum
 //! of the output is the mono sum of the input whatever the widths are (and Stereoize, below):
-//! what Imager adds disappears in mono instead of colouring it.
+//! what Sprawl adds disappears in mono instead of colouring it.
 //!
 //! - The bands are split by fourth-order Linkwitz-Riley crossovers (two Butterworth sections
 //!   each way) in a tree: the middle split first, then the low half at the low split and the
@@ -25,7 +25,7 @@
 //! (Trim still applies to the pair or the mono channel only). Every buffer is allocated in
 //! `prepare`; `process` and `set_param` never allocate.
 //!
-//! For its editor Imager publishes ([`Analysis::live`]) the correlation of its output, each
+//! For its editor Sprawl publishes ([`Analysis::live`]) the correlation of its output, each
 //! band's correlation, side share and side gain in force, and a ring of recent output samples
 //! for a vectorscope; the analysis rings carry the mono sum of the input and of the output.
 //! `readouts`: `[0]` the output's correlation (-1..1), `[1]` its side share (0..1).
@@ -83,7 +83,7 @@ pub const LIVE_BAND_GAIN: usize = LIVE_BAND_SIDE + BANDS;
 /// of the right (a ring: which point is the newest does not matter to a scope).
 pub const LIVE_SCOPE_L: usize = LIVE_BAND_GAIN + BANDS;
 pub const LIVE_SCOPE_R: usize = LIVE_SCOPE_L + SCOPE_POINTS;
-/// How many live values Imager publishes.
+/// How many live values Sprawl publishes.
 pub const LIVE_LEN: usize = LIVE_SCOPE_R + SCOPE_POINTS;
 
 const P_WIDTH: usize = 0;
@@ -96,7 +96,7 @@ const P_BANDS: usize = P_SPLITS + SPLITS;
 /// The splits' defaults, in Hz.
 pub const SPLIT_DEFAULTS: [f32; SPLITS] = [120.0, 1000.0, 6000.0];
 
-static IMAGER_PARAMS: [ParamInfo; P_BANDS + BANDS] = [
+static SPRAWL_PARAMS: [ParamInfo; P_BANDS + BANDS] = [
     lin("width", "Width", 0.0, MAX_WIDTH, 100.0, Unit::Percent),
     lin("stereoize", "Stereoize", 0.0, 100.0, 0.0, Unit::Percent),
     toggle("safe", "Mono Safe", false),
@@ -116,12 +116,12 @@ pub const BAND_IDS: [&str; BANDS] = ["b1_width", "b2_width", "b3_width", "b4_wid
 /// What the bands are called.
 pub const BAND_NAMES: [&str; BANDS] = ["Low", "Low Mid", "High Mid", "High"];
 
-pub static IMAGER_INFO: PluginInfo = PluginInfo {
-    id: "imager",
-    name: "Imager",
-    short_name: "Imager",
+pub static SPRAWL_INFO: PluginInfo = PluginInfo {
+    id: "sprawl",
+    name: "Sprawl",
+    short_name: "Sprawl",
     category: Category::Other,
-    params: &IMAGER_PARAMS,
+    params: &SPRAWL_PARAMS,
     is_instrument: false,
     audiosuite: false,
     sidechain: false,
@@ -130,7 +130,7 @@ pub static IMAGER_INFO: PluginInfo = PluginInfo {
     midi_out: false,
 };
 
-/// The splits Imager works with for the settings `set` (Hz, from the lowest up) at sample rate
+/// The splits Sprawl works with for the settings `set` (Hz, from the lowest up) at sample rate
 /// `sr`: in order, [`MIN_SPLIT_RATIO`] apart at least, inside [`SPLIT_HZ`] and below Nyquist. A
 /// split set past its neighbour is held at the nearest place it can be; a NaN is its default.
 pub fn splits(set: [f32; SPLITS], sr: f32) -> [f32; SPLITS] {
@@ -374,7 +374,7 @@ impl Engine {
 }
 
 /// The stereo imager.
-pub struct Imager {
+pub struct Sprawl {
     p: Params,
     sr: f32,
     ch: usize,
@@ -389,16 +389,16 @@ pub struct Imager {
     analysis: Arc<Analysis>,
 }
 
-impl Default for Imager {
+impl Default for Sprawl {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Imager {
+impl Sprawl {
     pub fn new() -> Self {
-        let mut i = Imager {
-            p: Params::new(&IMAGER_PARAMS),
+        let mut i = Sprawl {
+            p: Params::new(&SPRAWL_PARAMS),
             sr: 48_000.0,
             ch: 0,
             engine: None,
@@ -506,8 +506,8 @@ impl Imager {
     }
 }
 
-impl Plugin for Imager {
-    crate::params::param_plumbing!(IMAGER_INFO);
+impl Plugin for Sprawl {
+    crate::params::param_plumbing!(SPRAWL_INFO);
 
     fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
@@ -577,8 +577,8 @@ mod tests {
         (0..len).map(|i| amp * (TAU * hz * i as f32 / SR).sin()).collect()
     }
 
-    fn prepared(set: &[(&str, f32)]) -> Imager {
-        let mut im = Imager::new();
+    fn prepared(set: &[(&str, f32)]) -> Sprawl {
+        let mut im = Sprawl::new();
         for (id, v) in set {
             assert!(im.set_param(id, *v), "{id}");
         }
@@ -586,7 +586,7 @@ mod tests {
         im
     }
 
-    fn run(im: &mut Imager, l: &[f32], r: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    fn run(im: &mut Sprawl, l: &[f32], r: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let (mut ol, mut or) = (Vec::new(), Vec::new());
         for (a, b) in l.chunks(512).zip(r.chunks(512)) {
             let mut io = vec![a.to_vec(), b.to_vec()];
@@ -667,7 +667,8 @@ mod tests {
         let got = mid(&ol, &or);
         let worst = want.iter().zip(&got).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
         assert!(worst < 1.0e-5, "the mono sum moved by {worst}");
-        assert!(rms(&side(&ol, &or)) > rms(&side(&pl, &pr)) * 1.2, "and the image did change");
+        let moved: Vec<f32> = side(&ol, &or).iter().zip(side(&pl, &pr)).map(|(a, b)| a - b).collect();
+        assert!(rms(&moved) > 0.02, "and the image did change: {}", rms(&moved));
     }
 
     #[test]
@@ -692,7 +693,7 @@ mod tests {
         assert!(db(level(&s, 60.0), 0.3) < -50.0, "60 Hz is mono: {} dB", db(level(&s, 60.0), 0.3));
         assert!(db(level(&s, 5000.0), 0.3).abs() < 0.05, "5 kHz is as it came: {} dB", db(level(&s, 5000.0), 0.3));
 
-        let mut im = prepared(&[("b3_width", 200.0)]);
+        let mut im = prepared(&[("split3", 16_000.0), ("b3_width", 200.0)]);
         let (ol, or) = run(&mut im, &l, &r);
         let s = side(&ol, &or);
         assert!((db(level(&s, 5000.0), 0.3) - 6.02).abs() < 0.1 && db(level(&s, 60.0), 0.3).abs() < 0.05);
@@ -795,7 +796,10 @@ mod tests {
         let (b, _) = run(&mut im, &x, &y);
         let step = (b[0] - a[a.len() - 1]).abs();
         assert!(step < 0.1, "a jump of {step}");
-        assert!(rms(&b) < 1.0e-4, "and it gets there");
+        let long = sine(1000.0, 0.5, LEN);
+        let inverted: Vec<f32> = long.iter().map(|v| -v).collect();
+        let (c, _) = run(&mut im, &long, &inverted);
+        assert!(b[b.len() - 1].abs() < 0.05 && rms(&c) < 1.0e-5, "and it gets there: {}", rms(&c));
     }
 
     #[test]
@@ -831,14 +835,14 @@ mod tests {
     #[test]
     fn mono_more_channels_hostile_input_and_no_prepare_are_safe() {
         // Unprepared: nothing happens.
-        let mut im = Imager::new();
+        let mut im = Sprawl::new();
         let mut io = vec![vec![0.5; 64]; 2];
         im.process(&mut io, 64);
         im.reset();
         assert_eq!(io[0][0], 0.5);
 
         // Mono: the channel passes (Trim applies).
-        let mut im = Imager::new();
+        let mut im = Sprawl::new();
         assert!(im.set_param("trim", -6.0) && im.set_param("width", 0.0));
         im.prepare(SR, 64, 1);
         let mut io = vec![vec![0.5; 64]];
@@ -856,7 +860,7 @@ mod tests {
 
         // Hostile: NaN and infinite samples, more frames than there are, short and missing buffers.
         let mut im = prepared(&[("stereoize", 100.0), ("safe", 1.0), ("width", 200.0)]);
-        for id in IMAGER_INFO.params.iter().map(|p| p.id) {
+        for id in SPRAWL_INFO.params.iter().map(|p| p.id) {
             assert!(im.set_param(id, f32::NAN) && im.set_param(id, f32::INFINITY) && im.set_param(id, f32::NEG_INFINITY));
         }
         assert!(!im.set_param("no_such", 1.0));
