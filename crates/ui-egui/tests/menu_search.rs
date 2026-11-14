@@ -90,7 +90,8 @@ fn a_menu_opens_with_an_empty_search() {
 
 #[test]
 fn picks_without_the_search_still_close_the_menu() {
-    let first = soundcraft_dsp::listed_plugins().find(|p| !p.is_instrument && p.category == soundcraft_dsp::Category::Other).unwrap();
+    let first =
+        soundcraft_dsp::listed_plugins().find(|p| !p.is_instrument && !p.with_engines() && p.category == soundcraft_dsp::Category::Other).unwrap();
     let category = "Utilities ⏵".to_string();
     let mut h = harness(vox());
     h.get_by_label("Add module").click();
