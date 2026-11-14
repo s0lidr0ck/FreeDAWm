@@ -14,8 +14,9 @@ use std::fmt::Write as _;
 
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
-/// slice and warp parameters; its 64 slices are one line).
-pub const MAX_CHARS: usize = 45_000;
+/// slice and warp parameters; its 64 slices are one line), and from 45 000 for CopyQ (its 24
+/// parameters add 1 000).
+pub const MAX_CHARS: usize = 46_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -68,6 +69,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_tape" => "Tape machine: saturation, compression, wow/flutter and head-bump colour.",
         "fs_manners" => {
             "Automatic balance EQ: many times a second it turns down what covers its neighbours (Tame) and lifts what is covered (Recover); for buses and masters, in small amounts."
+        }
+        "fs_copyq" => {
+            "Match EQ: makes a sound's tone meet a measured profile (`mix.copyq_measure` measures one, `mix.module_copyq` sets what a module matches to); link groups make tracks match one another."
         }
         "fs_transient" => "Transient shaper: attack and sustain on anything.",
         "fs_twine" => "Mastering clipper and true-peak limiter, married; the last module on a master.",

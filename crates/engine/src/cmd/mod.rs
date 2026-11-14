@@ -48,6 +48,7 @@ pub mod mix_view;
 pub(crate) mod ml;
 pub(crate) use mix::restore_plugin_param_ids;
 mod chain;
+pub(crate) mod copyq;
 pub(crate) mod module;
 pub(crate) mod module_asset;
 pub(crate) mod module_ceiling;
@@ -190,6 +191,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plugin_state::specs());
         v.extend(module::specs());
         v.extend(module_ceiling::specs());
+        v.extend(copyq::specs());
         v.extend(module_asset::specs());
         v.extend(module_link::specs());
         v.extend(module_preset::specs());

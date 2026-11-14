@@ -206,7 +206,8 @@ fn test_signal() -> [Vec<f32>; 2] {
 }
 
 /// The meters of `module` with `params` set, after the test signal ran through the plugin.
-fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId) -> Option<StripMeter> {
+/// `state`: the module's stored state, for a plugin that works from one (CopyQ's target).
+fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId, state: Option<&[u8]>) -> Option<StripMeter> {
     let mut p = soundcraft_dsp::create(plugin)?;
     const BLOCK: usize = 480;
     p.prepare(SR, BLOCK, 2);
@@ -215,16 +216,23 @@ fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId) -> Option<S
             p.set_param(k, v as f32);
         }
     }
+    if let Some(state) = state {
+        p.load_state(state);
+    }
     let input = test_signal();
     let mut m = ModuleMeter { module, ..ModuleMeter::default() };
-    let mut start = 0;
-    while start < input[0].len() {
-        let frames = BLOCK.min(input[0].len() - start);
-        let mut io: Vec<Vec<f32>> = input.iter().map(|ch| ch[start..start + frames].to_vec()).collect();
-        m.in_peak = io.iter().flat_map(|c| c.iter()).fold(0.0f32, |a, x| a.max(x.abs()));
-        p.process(&mut io, frames);
-        m.out_peak = io.iter().flat_map(|c| c.iter()).fold(0.0f32, |a, x| a.max(x.abs())).min(4.0);
-        start += frames;
+    // CopyQ has to hear a few seconds before it trusts what it measured.
+    let rounds = if plugin == "fs_copyq" { 4 } else { 1 };
+    for _ in 0..rounds {
+        let mut start = 0;
+        while start < input[0].len() {
+            let frames = BLOCK.min(input[0].len() - start);
+            let mut io: Vec<Vec<f32>> = input.iter().map(|ch| ch[start..start + frames].to_vec()).collect();
+            m.in_peak = io.iter().flat_map(|c| c.iter()).fold(0.0f32, |a, x| a.max(x.abs()));
+            p.process(&mut io, frames);
+            m.out_peak = io.iter().flat_map(|c| c.iter()).fold(0.0f32, |a, x| a.max(x.abs())).min(4.0);
+            start += frames;
+        }
     }
     m.gr_db = p.gain_reduction_db().max(0.0);
     p.readouts(&mut m.readouts);
@@ -277,7 +285,13 @@ fn open(info: &soundcraft_dsp::PluginInfo) -> Result<(SoundApp, Target), String>
         let preset = look(info.id).preset.unwrap_or("<factory default>");
         app.run("mix.module_params", json!({"track": t.0, "module": m.0, "params": params, "preset": preset}))?;
     }
-    if let Some(strip) = feed(info.id, &params, m) {
+    if info.id == "fs_copyq" {
+        // Matching to a made-up profile, so its display has a target and a response to show.
+        let warm = app.run("mix.copyq_measure", json!({"factory": "Warm (-4.5 dB/oct)"}))?;
+        app.run("mix.module_copyq", json!({"track": t.0, "module": m.0, "targets": [{"profile": warm["profile"]}]}))?;
+    }
+    let state = app.engine.session().track(t).and_then(|tr| tr.module(m)).and_then(|i| i.state_bytes());
+    if let Some(strip) = feed(info.id, &params, m, state.as_deref()) {
         app.preview_meters = Some(MeterSnapshot { tracks: [(t, strip)].into_iter().collect(), main: StripMeter::default() });
     }
     app.ui.drawers.insert(t, m);

@@ -8,6 +8,7 @@ pub mod amp;
 pub mod chamber;
 pub mod cleanq;
 pub mod comp;
+pub mod copyq;
 pub mod delay;
 pub mod dist;
 pub mod filter;
