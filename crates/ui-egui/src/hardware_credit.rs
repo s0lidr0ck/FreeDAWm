@@ -107,7 +107,7 @@ mod tests {
         assert!(preset_credit("fs_amp", "Twin Surf Drip").contains("Fender Twin Reverb"));
         assert!(preset_credit("fs_amp", "JTM45 Full Tilt").contains("Marshall"));
         assert!(preset_credit("fs_vint", "Kick Pultec Trick").contains("Pultec"));
-        assert!(preset_credit("fs_vint", "Dolby Air").starts_with("Modelled after"));
+        assert!(preset_credit("fs_vint", "Dolby Air").starts_with("The Dolby Cat. No. 22"));
         assert_eq!(preset_credit("fs_chamber", "Gold Plaster Twin"), "", "only the amp's presets name amps");
     }
 }
