@@ -9,8 +9,10 @@
 mod config;
 mod draw;
 mod knob;
+mod maximizer;
 mod scope;
 mod slim;
+mod vitalizer;
 
 use crate::SoundApp;
 use crate::editor_kit::controls::{DialOpts, PillLook, PillStyle, SelectionStyle, dial, pill_ex, pill_height, segmented};
@@ -18,7 +20,7 @@ use crate::editor_kit::family::{self, Family, FamilyState};
 use crate::editor_kit::look::{CAPTION_SIZE, LABEL_SIZE, paint_background, paint_panel, paint_title};
 use crate::editor_kit::{Host, VstEditor, VstPalette, argb, end_gesture, param, set_params_merged};
 use crate::theme::{bold, regular};
-use config::{Face, FaceStyle, Glyph, Kind, Placed, ToggleStyle, circuit, circuits, format_knob, step_text};
+use config::{Face, FaceStyle, Glyph, Kind, Placed, ToggleStyle, circuit, circuits, columns_for, format_knob, format_knob_for, step_text};
 use draw::{Fill, Jc, fill_ellipse, fill_round_rect, line, quad, round_rect, stroke_closed, text_up};
 use egui::{Align2, Id, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 use soundcraft_dsp::plugins::fs::vint::vint_engine_dsp::{self as d, NUM_PARAMS};
@@ -73,6 +75,8 @@ pub(crate) struct Editor {
     scope: scope::View,
     /// The VU's needle (VU), and when it last moved.
     needle: (f32, f64),
+    /// The Maximizer's level lamps: the level they show, in dBu.
+    lamps: f32,
     /// Drawn in the slim layout (`UiState::slim_editors`), and its height as last laid out.
     slim: bool,
     slim_h: f32,
@@ -225,11 +229,26 @@ fn apply_knob(app: &mut SoundApp, host: &Host, st: &mut FamilyState, param_i: us
     }
 }
 
+/// The Maximizer's level lamps on the 30 Hz timer, as the VU: the loudest block's output RMS
+/// since the last tick. Returns the level they show, in dBu.
+fn maximizer_level(st: &mut Editor, ui: &Ui, host: &Host) -> f32 {
+    let now = ui.input(|i| i.time);
+    let dt = now - st.needle.1;
+    if !(0.0..1.0 / 30.0).contains(&dt) {
+        let rms = crate::editor_kit::live(host).map_or(0.0, |l| l.take(soundcraft_dsp::plugins::fs::vint::LIVE_OUT_LEVEL));
+        maximizer::level_step(&mut st.lamps, rms, dt.clamp(0.0, 1.0) as f32);
+        st.needle.1 = now;
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    st.lamps
+}
+
 fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {
     if !st.init {
         st.init = true;
         st.fam.presets.category = "All".into();
         st.needle = (-22.0, ui.input(|i| i.time));
+        st.lamps = -90.0;
     }
     let _ = family::take_drawer_tab(app, host, &mut st.fam);
     let pal = &PALETTE;
@@ -278,14 +297,33 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     // ---- paint()
     text_left(&p, circuit_label, "Circuit", regular(LABEL_SIZE), pal.text_body);
     text_left(&p, quality_label, "Quality", regular(LABEL_SIZE), pal.text_body);
-    text_left(&p, circuit_blurb, def.blurb, regular(CAPTION_SIZE), pal.text_faint);
-    crate::hardware_credit::hover(ui, circuit_blurb, "vint_circuit", def.blurb, def.credit);
+    // The Enhancer's Maximizer has a unit of its own (the 882's front), not the columns.
+    let maxi = maximizer::shown(host);
+    let enh_type = (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2);
+    let (blurb, credit) = if maxi {
+        (maximizer::BLURB, maximizer::CREDIT)
+    } else if cached_circuit == d::C_ENHANCER && enh_type == 2 {
+        (config::VITALIZER_BLURB, config::VITALIZER_CREDIT)
+    } else {
+        (def.blurb, def.credit)
+    };
+    text_left(&p, circuit_blurb, blurb, regular(CAPTION_SIZE), pal.text_faint);
+    crate::hardware_credit::hover(ui, circuit_blurb, "vint_circuit", blurb, credit);
     paint_panel(&p, panel, 10.0);
     paint_panel(&p, foot, 10.0);
     let scale = (panel.width() / 1000.0).min(panel.height() / 300.0);
     let origin = pos2(panel.left() + (panel.width() - 1000.0 * scale) * 0.5, panel.top() + (panel.height() - 300.0 * scale) * 0.5);
     if !def.face.empty() {
         paint_face(ui, &p, host, panel, &def.face, scale, origin);
+    }
+    if maxi {
+        let level = maximizer_level(st, ui, host);
+        maximizer::paint(&p, host, &maximizer::Lay::wide(panel, scale, origin), level);
+    }
+    let vita = vitalizer::shown(host);
+    if vita {
+        vitalizer::paint(&p, host, &vitalizer::Lay::wide(panel, scale, origin), vitalizer::lamps(crate::editor_kit::readouts(host)));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     text_left(&p, stage_note, def.stage, regular(CAPTION_SIZE), pal.text_faint);
 
@@ -304,7 +342,15 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     }
 
     // ---- the panel's controls
-    if def.face.empty() {
+    if maxi {
+        let (label, seg) = maximizer::wide_type_rects(panel);
+        maximizer::type_selector(app, ui, host, &mut st.fam, label, seg, 1);
+        maximizer::controls(app, ui, host, &mut st.fam, &maximizer::Lay::wide(panel, scale, origin));
+    } else if vita {
+        let (label, seg) = maximizer::wide_type_rects(panel);
+        maximizer::type_selector(app, ui, host, &mut st.fam, label, seg, 2);
+        vitalizer::controls(app, ui, host, &mut st.fam, &vitalizer::Lay::wide(panel, scale, origin));
+    } else if def.face.empty() {
         columns(app, ui, host, &mut st.fam, panel, cached_circuit);
     } else {
         face_controls(app, ui, host, &mut st.fam, &def.face, scale, origin);
@@ -389,7 +435,8 @@ fn take_top(c: &mut Rect, h: f32) -> Rect {
 /// The flavour circuits' columns (`place`), and their titles.
 fn columns(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, panel: Rect, circuit_i: i32) {
     let pal = &PALETTE;
-    let cols = &circuit(circuit_i).columns;
+    let enh_type = (pv(host, d::P_ENH_TYPE).round() as i32).clamp(0, 2);
+    let cols = columns_for(circuit_i, enh_type);
     let inner = panel.shrink(10.0);
     let n = cols.len().max(1) as f32;
     let col_w = 150f32.min((inner.width() / n).trunc());
@@ -407,7 +454,7 @@ fn columns(app: &mut SoundApp, ui: &mut Ui, host: &Host, st: &mut FamilyState, p
                 Kind::Knob | Kind::Step => {
                     let cell = take_top(&mut c, K_CELL_H);
                     let r = keep_centre(cell, (col_w - 6.0).min(100.0), K_CELL_H);
-                    let text = format_knob(ctl.param, pv(host, ctl.param));
+                    let text = format_knob_for(ctl.param, pv(host, ctl.param), enh_type);
                     let default = host.info.param(id).map_or(0.5, |p| p.to_normalized(p.default));
                     let o = DialOpts { label: ctl.label, value_text: &text, default, small: true, ..DialOpts::default() };
                     // The variable-rate knob only means something on the Variable machine.

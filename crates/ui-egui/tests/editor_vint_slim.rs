@@ -86,3 +86,37 @@ fn the_circuit_menu_picks_with_one_undo_step() {
     let f = frame(&h, t, m);
     assert!(at(&h, f, "briLowGain").is_some(), "the SSL strip's face");
 }
+
+#[test]
+fn the_maximizer_and_the_vitalizer_keep_their_fronts_in_the_drawer() {
+    // (the Enhancer's type, every control on its unit, a knob to drag, its bypass button)
+    let units: [(i32, &[&str], (&str, &str), &str); 2] = [
+        (1, &["Lo Contour", "Process", "Tune", "Function"], ("Process", "enhAmount"), "Function"),
+        (2, &["vitDrive", "vitBass", "vitComp", "enhTune", "enhAmount", "vitLcFreq", "vitIntensity", "vitWidth", "On"], ("vitComp", "vitComp"), "On"),
+    ];
+    for (enh_type, controls, (knob, id), button) in units {
+        let (mut h, t, m) = slim(4);
+        h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "enhType", "value": enh_type})).unwrap();
+        h.run_steps(6);
+        let f = frame(&h, t, m);
+        assert!((f.width() - W).abs() <= 1.0, "type {enh_type}: the classic drawer's width: {}", f.width());
+        for label in controls.iter().chain(&["Undo", "Bypass", "Circuit", "Mix", "Output"]) {
+            let r = at(&h, f, label).unwrap_or_else(|| panic!("type {enh_type}: {label}"));
+            assert!(f.shrink2(vec2(4.0, 0.0)).contains_rect(r), "type {enh_type}: {label} at {r:?} leaves the drawer {f:?}");
+        }
+        // a knob on the unit: one drag, one undo step
+        let n = steps(&h);
+        let k = at(&h, f, knob).unwrap().center();
+        drag(&mut h, k, k - vec2(0.0, 30.0), Modifiers::NONE);
+        assert!(raw(&h, t, m, id) > 0.2, "type {enh_type}: {id} went up: {}", raw(&h, t, m, id));
+        assert_eq!(steps(&h), n + 1, "type {enh_type}: the drag is one undo step");
+        // the unit's own button takes it out
+        let b = at(&h, frame(&h, t, m), button).unwrap().center();
+        click(&mut h, b);
+        assert_eq!(raw(&h, t, m, "bypass"), 1.0, "type {enh_type}");
+        // back on the Exciter, the Enhancer's dials
+        h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "enhType", "value": 0})).unwrap();
+        h.run_steps(6);
+        assert!(at(&h, frame(&h, t, m), "Amount").is_some(), "type {enh_type}: the Enhancer's dials");
+    }
+}
