@@ -373,6 +373,13 @@ impl Bank {
     /// Solves the band gains for channel `ch` so the bank reads `want` (dB) at the band centres.
     fn solve(&mut self, ch: usize, want: &[f32; BANDS]) {
         let n = self.active;
+        // A flat curve needs no solving (the usual case while nothing is matched).
+        if want.iter().take(n).all(|w| w.abs() < 1.0e-4) {
+            if let Some(t) = self.target.get_mut(ch) {
+                *t = [0.0; BANDS];
+            }
+            return;
+        }
         let mut g = [0.0f32; BANDS];
         let apply = |inv: &[[f32; BANDS]; BANDS], e: &[f32; BANDS], g: &mut [f32; BANDS]| {
             for (m, gm) in g.iter_mut().enumerate().take(n) {

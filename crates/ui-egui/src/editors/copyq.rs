@@ -900,7 +900,7 @@ mod tests {
 
     #[test]
     fn size_and_readouts() {
-        assert_eq!(SIZE, vec2(1040.0, 662.0));
+        assert_eq!(SIZE, vec2(1040.0, 656.0));
         assert_eq!(hz_text(20.0), "20 Hz");
         assert_eq!(hz_text(2_500.0), "2.5 kHz");
         assert_eq!(seconds_text(4.26), "4.3 s");
