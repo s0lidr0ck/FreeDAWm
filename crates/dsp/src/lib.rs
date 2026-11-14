@@ -216,10 +216,22 @@ pub const HIDDEN_STOCK: &[Category] = &[
     Category::Dither,
 ];
 
+/// The plugins of a [`HIDDEN_STOCK`] category that the lists show all the same, by id: ones no
+/// FireStation engine covers. They are offered with the engines ([`PluginInfo::with_engines`]).
+pub const LISTED_STOCK: &[&str] = &["rez"];
+
 impl PluginInfo {
-    /// Whether the plugin lists show this plugin (not one of the [`HIDDEN_STOCK`] categories).
+    /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories,
+    /// or one of [`LISTED_STOCK`].
     pub fn listed(&self) -> bool {
-        !HIDDEN_STOCK.contains(&self.category)
+        !HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id)
+    }
+
+    /// Whether the lists offer this plugin among the FireStation engines (the picker's first
+    /// group, first in a search tie, the first section of Scout's module list): the engines
+    /// themselves and [`LISTED_STOCK`].
+    pub fn with_engines(&self) -> bool {
+        self.category == Category::FireStation || LISTED_STOCK.contains(&self.id)
     }
 
     /// Looks up a parameter description by id.
@@ -697,7 +709,12 @@ mod trait_default_tests {
             assert_eq!(listed(id), Some(true), "{id}");
         }
         assert!(plugins().iter().filter(|p| p.category == Category::FireStation || p.is_instrument).all(|p| p.listed()));
-        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category)));
+        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id)));
+        // Rez is a stock dynamics plugin no engine covers: listed, with the engines.
+        assert_eq!(listed("rez"), Some(true));
+        assert!(plugin_info("rez").is_some_and(|p| p.with_engines() && HIDDEN_STOCK.contains(&p.category)));
+        assert!(LISTED_STOCK.iter().all(|id| plugin_info(id).is_some()), "every exception is a real plugin");
+        assert!(plugin_info("gain").is_some_and(|p| !p.with_engines()) && plugin_info("fs_comp").is_some_and(PluginInfo::with_engines));
         assert!(listed_plugins().any(|p| p.category == Category::FireStation));
     }
 

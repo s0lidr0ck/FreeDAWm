@@ -1111,20 +1111,21 @@ pub(crate) enum Pick {
 }
 
 /// The picker's groups of built-in plugins (effects, or `instruments`), in order: the FireStation
-/// engines first (by name), then the rest by category in the registry's order ("Utilities" for
+/// engines and the stock plugins listed with them ([`soundcraft_dsp::PluginInfo::with_engines`])
+/// first (by name), then the rest by category in the registry's order ("Utilities" for
 /// the effects, "Built-in" for the instruments). Only the listed plugins
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
     use soundcraft_dsp::Category;
     let listed = || soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument == instruments);
     let mut out = Vec::new();
-    let mut fs: Vec<_> = listed().filter(|p| p.category == Category::FireStation).collect();
+    let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
     fs.sort_by_cached_key(|p| p.name.to_lowercase());
     if !fs.is_empty() {
         out.push(("FireStation".to_string(), fs));
     }
     let mut cats: Vec<Category> = Vec::new();
-    for p in listed().filter(|p| p.category != Category::FireStation) {
+    for p in listed().filter(|p| !p.with_engines()) {
         if !cats.contains(&p.category) {
             cats.push(p.category);
         }
@@ -1135,7 +1136,7 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
             Category::Instrument => "Built-in".to_string(),
             c => format!("{c:?}"),
         };
-        out.push((name, listed().filter(|p| p.category == c).collect()));
+        out.push((name, listed().filter(|p| !p.with_engines() && p.category == c).collect()));
     }
     out
 }
@@ -1156,7 +1157,7 @@ pub fn search_rank(query: &str, p: &soundcraft_dsp::PluginInfo) -> Option<(u8, u
     } else {
         return None;
     };
-    Some((tier, u8::from(p.category != soundcraft_dsp::Category::FireStation)))
+    Some((tier, u8::from(!p.with_engines())))
 }
 
 /// The listed built-in plugins matching a search (`query` lower-case), best first (see
@@ -2161,6 +2162,7 @@ mod tests {
         sorted.sort_by_key(|n| n.to_lowercase());
         assert_eq!(fs, sorted, "by name");
         assert!(fs.contains(&"CleanQ") && fs.contains(&"Comp") && fs.contains(&"Twine"));
+        assert!(fs.contains(&"Manners") && fs.contains(&"Rez"), "Rez is offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
         assert_eq!(names, ["FireStation", "Utilities"]);
@@ -2169,7 +2171,8 @@ mod tests {
             assert!(ids.contains(&id), "{id}");
         }
         for (_, l) in &groups {
-            assert!(l.iter().all(|p| p.listed() && !p.is_instrument && !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category)));
+            assert!(l.iter().all(|p| p.listed() && !p.is_instrument));
+            assert!(l.iter().all(|p| !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category) || soundcraft_dsp::LISTED_STOCK.contains(&p.id)));
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
