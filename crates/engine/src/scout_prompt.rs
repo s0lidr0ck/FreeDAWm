@@ -15,8 +15,8 @@ use std::fmt::Write as _;
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
 /// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
-/// listed) after Manners.
-pub const MAX_CHARS: usize = 46_000;
+/// listed) after Manners, and from 46 000 for Sift.
+pub const MAX_CHARS: usize = 47_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -68,6 +68,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_reverb" => "Reverb: Room and Hall, EMT 140 plate, spring tank, Cloud, Shimmer; decay up to 30 s, synced pre-delay, freeze, era colours.",
         "fs_sat" => "Saturation: tube/transformer/tape-style harmonic colour with drive and mix.",
         "fs_shale" => "Drum gate: band-limited onset detection, lookahead gate following each hit's decay, DeBleed, Kit Link, mic phase alignment.",
+        "fs_sift" => {
+            "De-esser for vocals that also catches plosives: sorts a voice into the voice, its sibilance (s, sh, t) and its plosives (p, b) and turns each down on its own, judged by shape so a quiet take is treated like a loud one; Listen plays one part alone."
+        }
         "fs_swale" => "Automatic volume swells (Pick, One-Shot, Rhythmic) with Clean or Slow Gear VCA, Bloom, Alternate.",
         "fs_tape" => "Tape machine: saturation, compression, wow/flutter and head-bump colour.",
         "fs_manners" => {

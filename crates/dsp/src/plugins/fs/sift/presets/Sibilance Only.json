@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "Sibilance Only",
+  "group": "Vocals",
+  "tags": "No plosive work",
+  "desc": "Leaves the low end alone.",
+  "values": {
+    "sibAmount": 55,
+    "sibRange": 12,
+    "sibLow": 4500,
+    "sibHigh": 14000,
+    "mode": "Split",
+    "ploAmount": 0,
+    "ploRange": 18,
+    "ploHigh": 180
+  }
+}

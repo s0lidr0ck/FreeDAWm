@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "High Sibilance",
+  "group": "Vocals",
+  "tags": "Above 7 kHz",
+  "desc": "For a thin, whistly s; leaves the 4 to 7 kHz presence alone.",
+  "values": {
+    "sibAmount": 60,
+    "sibRange": 12,
+    "sibLow": 7000,
+    "sibHigh": 16000,
+    "mode": "Split",
+    "ploAmount": 30,
+    "ploRange": 18,
+    "ploHigh": 180
+  }
+}

@@ -10,10 +10,12 @@
 //!   (group "") like every engine's: the UI uses the module's bypass.
 //! - No tail beyond the latency.
 
+mod presets;
 pub mod sift_dsp;
 #[cfg(test)]
 mod tests;
 
+pub use presets::PRESETS;
 pub use sift_dsp::{Listen, Meters, Settings, SiftDsp, frame_len};
 
 use crate::analysis::Analysis;
@@ -84,8 +86,15 @@ pub static SIFT_INFO: PluginInfo = PluginInfo {
 };
 
 /// This engine's registration (collected by `crates/dsp/build.rs`; see [`super::EngineReg`]).
-pub const ENGINE: super::EngineReg =
-    super::EngineReg { info: &SIFT_INFO, make: || Box::new(Sift::new()), presets: &[], order: 47, fidelity: None, prepare_state: None, actions: &[] };
+pub const ENGINE: super::EngineReg = super::EngineReg {
+    info: &SIFT_INFO,
+    make: || Box::new(Sift::new()),
+    presets: PRESETS,
+    order: 47,
+    fidelity: None,
+    prepare_state: None,
+    actions: &[],
+};
 
 /// [`Analysis::live`]: running maxima the editor takes (resets) as it draws: the sibilance cut
 /// and the plosive cut in dB, and how sure the engine was of each, 0..1.
