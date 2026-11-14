@@ -708,11 +708,17 @@ mod tests {
         for p in soundcraft_dsp::plugins().iter().filter(|p| p.category == soundcraft_dsp::Category::FireStation) {
             assert!(station_accent(p.id).is_some(), "{}", p.id);
         }
-        // One entry per engine, each a registered FireStation plugin: a single source of truth.
+        // One entry per engine, each a registered plugin (a FireStation engine, or a built-in
+        // with an editor of its own: Rez, Sprawl): a single source of truth.
         let uis = crate::engine_ui::engine_uis();
         for (i, u) in uis.iter().enumerate() {
             assert!(!uis[i + 1..].iter().any(|o| o.id == u.id), "{} listed twice", u.id);
-            assert_eq!(soundcraft_dsp::plugin_info(u.id).map(|p| p.category), Some(soundcraft_dsp::Category::FireStation), "{}", u.id);
+            let category = soundcraft_dsp::plugin_info(u.id).map(|p| p.category);
+            assert!(
+                category == Some(soundcraft_dsp::Category::FireStation) || soundcraft_dsp::LISTED_STOCK.contains(&u.id),
+                "{}: {category:?}",
+                u.id
+            );
         }
         let was = is_light();
         LIGHT_THEME.store(false, Ordering::Relaxed);

@@ -36,7 +36,7 @@ fn vox_id(h: &Harness<SoundApp>) -> TrackId {
 
 /// Two listed utilities (the stock effects are hidden), and their group's menu label.
 fn two_effects() -> (String, &'static soundcraft_dsp::PluginInfo, &'static soundcraft_dsp::PluginInfo) {
-    let utility = |p: &&soundcraft_dsp::PluginInfo| !p.is_instrument && p.category == soundcraft_dsp::Category::Other;
+    let utility = |p: &&soundcraft_dsp::PluginInfo| !p.is_instrument && !p.with_engines() && p.category == soundcraft_dsp::Category::Other;
     let first = soundcraft_dsp::listed_plugins().find(utility).unwrap();
     let other = soundcraft_dsp::listed_plugins().filter(utility).find(|p| p.id != first.id).unwrap();
     ("Utilities ⏵".to_string(), first, other)

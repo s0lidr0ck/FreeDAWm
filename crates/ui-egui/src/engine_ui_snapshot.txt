@@ -4,6 +4,7 @@ compressor 127b060baea67f19
 expander_gate 049c7b595eb23813
 de_esser 47e8377b16e23f36
 maximizer 50dd061899d6f1e1
+rez 368d0f47c856b59d
 channel_strip 972133c2b0f750d0
 room_reverb 7f34261548967265
 plate_reverb 046d960db95b6c58
@@ -15,6 +16,7 @@ saturator e1d765ff89e97bc4
 lofi 2fc79712d0f46065
 rectifier ebc90bb1809e84b0
 pitch_shifter 973599220a59e242
+sprawl b23534ac4ede4df4
 time_shift a63f2d7d8a5fb3a5
 gain 1effb23166eea76d
 trim 7410a8109fca1899
@@ -30,6 +32,7 @@ fs_sat ad2f990efe8687fb
 fs_comp 76936655812c764a
 fs_tape 4014bd718ef468ae
 fs_twine 338f83150c9ad555
+fs_manners 7551996e0e021276
 fs_cleanq 31404bde1e55cce7
 fs_vint 6b9aa6514ae30d48
 fs_pitch cd2caa3fc0f91cb7

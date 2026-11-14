@@ -164,7 +164,7 @@ fn old_and_corrupt_state_still_opens() {
 
 // ---------------------------------------------------------------------------- Task 19
 
-const FIRESTATION: [&str; 18] = [
+const FIRESTATION: [&str; 19] = [
     "fs_cleanq",
     "fs_sat",
     "fs_tape",
@@ -183,6 +183,7 @@ const FIRESTATION: [&str; 18] = [
     "fs_amp",
     "fs_shale",
     "fs_levelup",
+    "fs_manners",
 ];
 
 #[test]

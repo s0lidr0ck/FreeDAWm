@@ -78,6 +78,7 @@ fn builtins_and_firestation() {
         ("fs_dist", C::Distortion),
         ("fs_filter", C::Modulation),
         ("fs_levelup", C::Utility),
+        ("fs_manners", C::Eq),
         ("fs_mod", C::Modulation),
         ("fs_pitch", C::Pitch),
         ("fs_reverb", C::Reverb),
