@@ -75,7 +75,7 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
     let now = feed_history(st, host);
     scope_ui(st, app, ui, host, panel, now, true);
     let readout = Rect::from_min_size(pos2(x0 + 2.0, panel.bottom() + 4.0), vec2(w - 4.0, READOUT_H));
-    kit::wrapped(ui, readout, &summary(host), CAPTION_SIZE, pal.text_faint, 2);
+    kit::wrapped(ui, readout, &summary(host, true), CAPTION_SIZE, pal.text_faint, 2);
     y = y.max(readout.bottom()) + GAP;
 
     // ---- 3. the main dials: Threshold, with Range and Release beside it, over Expand / Gate

@@ -495,8 +495,9 @@ pub fn curve_level_x(plot: Rect, db: f32) -> f32 {
     level_x(plot, db)
 }
 
-/// The line under the display: what the settings come to, in words.
-fn summary(host: &Host) -> String {
+/// The line under the display: what the settings come to, in words (`compact`: the slim
+/// layout's two short rows).
+fn summary(host: &Host, compact: bool) -> String {
     let c = curve_of(host);
     let what = if c.gate {
         format!("Gate: {:.0} dB down below {:.0} dB", c.range, c.threshold)
@@ -504,6 +505,7 @@ fn summary(host: &Host) -> String {
         format!("Expander: {:.1}:1 below {:.0} dB, {:.0} dB at most", c.ratio, c.threshold, c.range)
     };
     let key = match (&host.ins.sidechain, param(host, "key") > 0.5) {
+        (None, _) if compact => "no key picked".to_string(),
         (None, _) => "no key (pick one in the strip above to guard against bleed or to trigger)".to_string(),
         (Some(_), true) => "the key opens it".to_string(),
         (Some(_), false) => format!("the key guards it by up to {:.0} dB", param(host, "guard")),
@@ -607,7 +609,7 @@ fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) 
     let now = feed_history(st, host);
     curve_ui(st, app, ui, host, curve, now);
     scope_ui(st, app, ui, host, scope, now, false);
-    ui.painter().text(readout, Align2::LEFT_CENTER, summary(host), regular(CAPTION_SIZE), PALETTE.text_faint);
+    ui.painter().text(readout, Align2::LEFT_CENTER, summary(host, false), regular(CAPTION_SIZE), PALETTE.text_faint);
     controls_ui(st, app, ui, host, row_a, row_b);
 }
 
