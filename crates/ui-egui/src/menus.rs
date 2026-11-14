@@ -120,6 +120,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.mix.full_editor", "Open Full Plugin Editor", "", None),
     ("ui.mix.instrument_window", "Open Instrument Window", "", None),
     ("ui.mix.ceiling_learn", "Learn CleanQ Ceiling", "", None),
+    ("ui.imprint.save", "Save Imprint IR…", "", None),
     ("ui.mix.wide_editors", "Plugin Editors as in the VST", "View > Mix Window Views > Plugin Editors as in the VST", None),
     ("ui.mix.slim_editors", "Slim Plugin Editors", "View > Mix Window Views > Slim Plugin Editors", None),
     // Channel width for the Mix window's selected channels, or all (`channel_width`).
@@ -1426,6 +1427,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             json!({"on": app.ui.slim_editors})
         }
         "ui.mix.ceiling_learn" => return Some(crate::cleanq_ceiling::learn_command(app, p)),
+        "ui.imprint.save" => return Some(crate::imprint_ui::save_command(app, p)),
         "ui.shortcuts.get" | "ui.shortcuts.set" | "ui.shortcuts.reset" => return Some(crate::shortcut_editor::command(app, id, p)),
         "ui.set" => match serde_json::to_value(&app.ui) {
             Ok(mut cur) => {

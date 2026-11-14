@@ -5,6 +5,7 @@ pub mod dynamics;
 pub mod eq;
 pub mod fs;
 pub mod harmonic;
+pub mod imprint;
 pub mod juke;
 pub mod modulation;
 pub mod pitch;
@@ -21,7 +22,7 @@ pub mod utility;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 30] = [
+const BUILTINS: [&PluginInfo; 31] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -42,6 +43,7 @@ const BUILTINS: [&PluginInfo; 30] = [
     &pitch::PITCH_INFO,
     &sprawl::SPRAWL_INFO,
     &utility::SHIFT_INFO,
+    &imprint::IMPRINT_INFO,
     &utility::GAIN_INFO,
     &utility::TRIM_INFO,
     &utility::INVERT_INFO,
@@ -104,6 +106,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
         "sprawl" => Box::new(sprawl::Sprawl::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
+        "imprint" => Box::new(imprint::Imprint::new()),
         "gain" => Box::new(utility::Gain::new()),
         "trim" => Box::new(utility::Trim::new()),
         "invert" => Box::new(utility::Invert::default()),
@@ -147,6 +150,7 @@ mod tests {
         "pitch_shifter",
         "sprawl",
         "time_shift",
+        "imprint",
         "gain",
         "trim",
         "invert",

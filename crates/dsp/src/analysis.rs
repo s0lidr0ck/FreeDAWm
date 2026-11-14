@@ -152,6 +152,10 @@ pub struct Analysis {
     report: [AtomicU32; REPORT_LEN],
     /// The plugin's live values for its editor (empty unless built [`Analysis::with_live`]).
     pub live: LiveValues,
+    /// Something more of the plugin's own that its editor shares with it (Imprint's take: the
+    /// recording an impulse response is made from). What it is is the plugin's business; the
+    /// plugin keeps a reference of its own, so the audio thread never drops the last one.
+    pub extra: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl std::fmt::Debug for Analysis {
@@ -175,6 +179,11 @@ impl Analysis {
     /// Streams plus `n` [`LiveValues`].
     pub fn with_live(n: usize) -> Analysis {
         Analysis { live: LiveValues::new(n), ..Self::default() }
+    }
+
+    /// Streams, `n` [`LiveValues`] and the plugin's own shared data ([`Analysis::extra`]).
+    pub fn with_extra(n: usize, extra: Arc<dyn std::any::Any + Send + Sync>) -> Analysis {
+        Analysis { live: LiveValues::new(n), extra: Some(extra), ..Self::default() }
     }
 
     /// Writes the report (audio thread; atomic stores only). Values past [`REPORT_LEN`] are

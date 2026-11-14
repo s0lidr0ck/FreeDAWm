@@ -429,6 +429,9 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         let cr = Rect::from_min_size(pos2(x0, y), vec2(inner_w, h));
         crate::vocal_editor::hook(ui.ctx(), &format!("mix-{}-chain", id.0), cr);
         let meters = snap.and_then(|s| s.tracks.get(&id));
+        if let Some(m) = meters {
+            crate::imprint_ui::remember(id, m);
+        }
         let mut c = ui.new_child(egui::UiBuilder::new().id_salt(("chain", id.0)).max_rect(cr).layout(egui::Layout::top_down(egui::Align::Min)));
         c.set_clip_rect(cr.expand2(vec2(4.0, 2.0)).intersect(ui.clip_rect()));
         let frozen_part = if natural > h + 0.5 {

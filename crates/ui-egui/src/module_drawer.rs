@@ -907,6 +907,9 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
     if ins.plugin == "fs_amp" {
         y = amp_ir_row(app, &mut body, track.id, ins, inner, y) + 8.0;
     }
+    if ins.plugin == "imprint" {
+        y = crate::imprint_ui::drawer_rows(app, &mut body, track.id, ins, inner, y, meters);
+    }
 
     let hero = hero_param_for(info, ins);
     if let Some(hp) = hero {
