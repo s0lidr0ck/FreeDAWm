@@ -218,8 +218,8 @@ pub const HIDDEN_STOCK: &[Category] = &[
 
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
-/// a [`HIDDEN_STOCK`] category (Rez) is shown all the same.
-pub const LISTED_STOCK: &[&str] = &["rez", "sprawl"];
+/// a [`HIDDEN_STOCK`] category (Rez, Lull) is shown all the same.
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl"];
 
 impl PluginInfo {
     /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories,
@@ -714,6 +714,9 @@ mod trait_default_tests {
         // Rez is a stock dynamics plugin no engine covers: listed, with the engines.
         assert_eq!(listed("rez"), Some(true));
         assert!(plugin_info("rez").is_some_and(|p| p.with_engines() && HIDDEN_STOCK.contains(&p.category)));
+        // Lull likewise: a stock gate and expander with an editor of its own.
+        assert_eq!(listed("lull"), Some(true));
+        assert!(plugin_info("lull").is_some_and(|p| p.with_engines() && HIDDEN_STOCK.contains(&p.category)));
         // Sprawl is a stock stereo imager: listed by its category, offered with the engines too.
         assert!(plugin_info("sprawl").is_some_and(|p| p.listed() && p.with_engines() && !HIDDEN_STOCK.contains(&p.category)));
         assert!(LISTED_STOCK.iter().all(|id| plugin_info(id).is_some()), "every exception is a real plugin");
