@@ -87,7 +87,7 @@ Transient, Amp, ChamberMade, Swale; then Shale, LevelUp, Scout2).
 |---|---|---|---|
 | Plugin format | AAX only (Native and DSP) | CLAP, VST3, Audio Units (macOS) | Users' libraries mostly ship VST3/AU too. AAX (#109) needs Avid's SDK licence and PACE signing: owner decision, likely never |
 | VST2, LV2, LADSPA | — | ❌ (#30) | Beyond Pro Tools; VST2 SDK is no longer licensable |
-| Scan, vendor menus, instrument picker | ✅ | ✅ | #23. One flat menu: FireStation, Utilities, then one submenu per vendor with its CLAP, VST3 and Audio Units plugins together (a plugin in several formats listed once, CLAP first; the search lists every format). Spec 2026-10-28-plugin-menu |
+| Scan, vendor menus, instrument picker | ✅ | ✅ | #23. One flat menu: Built-In (the FireStation engines and FreeDAWm's own designs; named FireStation until 2026-11-15), Utilities, then one submenu per vendor with its CLAP, VST3 and Audio Units plugins together (a plugin in several formats listed once, CLAP first; the search lists every format). Spec 2026-10-28-plugin-menu |
 | Audio, parameters, automation, latency (PDC) | ✅ | ✅ | |
 | Notes / MIDI to instruments | ✅ | ✅ | But no live MIDI input (G-02) |
 | A plugin's MIDI output into another track | ✅ (MIDI nodes) | 🟡 | Built-in modules: `Plugin::midi_out` (a fixed 64-event ring per slot, read by the mix engine after `process`); Shale sends a note per hit, and any instrument or MIDI track can take one or several modules as its input (`track.input module:…`, the input menu's MIDI from; recorded as MIDI clips). Hosted VST3/CLAP plugins that output MIDI are not read yet: their `midi_out` is the default (nothing) |
