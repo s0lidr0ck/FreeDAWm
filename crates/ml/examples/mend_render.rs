@@ -1,9 +1,9 @@
 //! Mend (the live insert on Smule Renaissance) against the whole-file model on a WAV excerpt: how
 //! closely the two agree, how long the model takes per block, and 24-bit WAVs of both.
 //!
-//! `cargo run --release -p soundcraft-ml --example mend_render -- <in.wav> <start s> <dur s> <outdir> [realtime]`
+//! `cargo run --release -p soundcraft-ml --example mend_render -- <in.wav> <start s> <dur s> <outdir> [realtime] [live] [block=512]`
 //!
-//! Without `realtime` Mend renders offline (it waits for every answer). With it the input is fed
+//! `live` runs Mend's Live mode (DeepFilterNet) instead of Studio. Without `realtime` Mend renders offline (it waits for every answer). With it the input is fed
 //! at the speed of playback, so the answers that come late are heard as the input.
 
 use soundcraft_dsp::Plugin;
@@ -33,7 +33,9 @@ fn main() -> Result<(), String> {
     let [input, start, dur, outdir, rest @ ..] = args.as_slice() else {
         return Err("usage: mend_render <in.wav> <start s> <dur s> <outdir> [realtime]".into());
     };
-    let realtime = rest.first().is_some_and(|a| a == "realtime");
+    let realtime = rest.iter().any(|a| a == "realtime");
+    let live = rest.iter().any(|a| a == "live");
+    let block: usize = rest.iter().find_map(|a| a.strip_prefix("block=")).and_then(|b| b.parse().ok()).unwrap_or(512);
     let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
     let (_, buf) = soundcraft_audio_io::decode(&bytes, None).map_err(|e| e.to_string())?;
     let rate = buf.sample_rate;
@@ -62,14 +64,15 @@ fn main() -> Result<(), String> {
     soundcraft_ml::live::start();
     let mut mend = Mend::new();
     mend.set_offline(!realtime);
-    mend.prepare(rate as f32, 512, 2);
+    mend.set_param("mode", if live { 1.0 } else { 0.0 });
+    mend.prepare(rate as f32, block, 2);
     let lat = mend.latency();
     let mut out = Vec::with_capacity(mono.len() + lat);
     let t = std::time::Instant::now();
     let padded: Vec<f32> = mono.iter().copied().chain(std::iter::repeat_n(0.0, lat)).collect();
     let mut readouts = [f32::NAN; 8];
     let (mut worst_load, mut played) = (0.0f32, 0usize);
-    for block in padded.chunks(512) {
+    for block in padded.chunks(block) {
         let mut io = vec![block.to_vec(), block.to_vec()];
         mend.process(&mut io, block.len());
         out.extend_from_slice(&io[0]);

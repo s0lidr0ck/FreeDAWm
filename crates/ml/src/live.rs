@@ -10,6 +10,9 @@
 //! the whole-file result on sung vocals. Less look-ahead costs more than that quickly, and none
 //! at all does not work.
 //!
+//! - A link in **Live** mode gets DeepFilterNet 3 instead ([`crate::denoise::Stream`]): every
+//!   hop of 10 ms is answered as soon as the three hops after it are in, and each pass costs
+//!   only the new hops (the graphs carry their state), a millisecond or two.
 //! - One model for the whole process, loaded when the first link arrives and let go when the
 //!   last has been gone a while. Instances take turns, so two cost twice the time, not twice the
 //!   threads.
@@ -18,11 +21,12 @@
 //! - A model that is not installed is looked for again every few seconds, so installing it
 //!   starts Mend without a restart.
 
+use crate::denoise;
 use crate::job::Ctx;
 use crate::runtime::{Device, OnnxModel};
 use crate::stft::Stft;
 use crate::{MlError, Result, srs};
-use soundcraft_dsp::plugins::mend::link::{HOP, Link, MODEL_RATE, Plan, State};
+use soundcraft_dsp::plugins::mend::link::{HOP, LIVE_HOP, Link, MODEL_RATE, Mode, Plan, State};
 use soundcraft_dsp::plugins::mend::take_new_links;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,20 +112,40 @@ struct Loader {
     model: Option<Renaissance>,
     tried: Option<Instant>,
     failed: Option<State>,
+    /// DeepFilterNet's graphs (built in), for the links in Live mode.
+    live: Option<denoise::Models>,
+    live_tried: Option<Instant>,
 }
 
 impl Loader {
     /// The model, loading it if it is time to; `Err` is the state the links should show.
-    fn get(&mut self, links: &[Served]) -> std::result::Result<&mut Renaissance, State> {
+    /// The live model, loading it the first time.
+    fn live(&mut self, link: &Link) -> std::result::Result<&mut denoise::Models, State> {
+        if self.live.is_none() {
+            if self.live_tried.is_some_and(|at| at.elapsed() < RETRY) {
+                return Err(State::Failed);
+            }
+            link.set_state(State::Loading);
+            self.live_tried = Some(Instant::now());
+            match denoise::Models::open() {
+                Ok(m) => self.live = Some(m),
+                Err(e) => {
+                    log::warn!("Mend (Live): {e}");
+                    return Err(State::Failed);
+                }
+            }
+        }
+        self.live.as_mut().ok_or(State::Failed)
+    }
+
+    fn get(&mut self, link: &Link) -> std::result::Result<&mut Renaissance, State> {
         if self.model.is_none() {
             if let (Some(at), Some(state)) = (self.tried, self.failed)
                 && at.elapsed() < RETRY
             {
                 return Err(state);
             }
-            for s in links {
-                s.link.set_state(State::Loading);
-            }
+            link.set_state(State::Loading);
             self.tried = Some(Instant::now());
             match load() {
                 Ok(m) => (self.model, self.failed) = (Some(m), None),
@@ -169,33 +193,47 @@ fn serve(loader: &mut Loader) {
             s.listen();
         }
         let mut worked = false;
-        match loader.get(&links) {
-            Ok(model) => {
-                let mut broke = false;
-                for s in &mut links {
-                    s.link.set_state(State::Ready);
-                    match s.step(model) {
-                        Ok(did) => worked |= did,
-                        Err(e) => {
-                            log::warn!("Mend: {e}");
-                            broke = true;
-                        }
-                    }
-                }
-                if broke {
+        let mut any_live = false;
+        for s in &mut links {
+            let link = Arc::clone(&s.link);
+            let live = s.mode == Mode::Live;
+            any_live |= live;
+            let did = if live {
+                loader.live(&link).map(|m| {
+                    link.set_state(State::Ready);
+                    s.step_live(m)
+                })
+            } else {
+                loader.get(&link).map(|m| {
+                    link.set_state(State::Ready);
+                    s.step(m)
+                })
+            };
+            match did {
+                Ok(Ok(did)) => worked |= did,
+                Ok(Err(e)) => {
+                    log::warn!("Mend: {e}");
                     // Start again with a fresh model after a pause.
-                    (loader.model, loader.tried, loader.failed) = (None, Some(Instant::now()), Some(State::Failed));
+                    if live {
+                        (loader.live, loader.live_tried) = (None, Some(Instant::now()));
+                    } else {
+                        (loader.model, loader.tried, loader.failed) = (None, Some(Instant::now()), Some(State::Failed));
+                    }
+                    link.set_state(State::Failed);
+                    s.forget();
                 }
-            }
-            Err(state) => {
-                for s in &mut links {
-                    s.link.set_state(state);
+                Err(state) => {
+                    link.set_state(state);
                     s.forget();
                 }
             }
         }
+        if !links.iter().any(|s| s.mode == Mode::Live) {
+            loader.live = None;
+        }
         if !worked {
-            std::thread::sleep(Duration::from_millis(5));
+            // A live link's answer is due within a hop.
+            std::thread::sleep(Duration::from_millis(if any_live { 1 } else { 5 }));
         }
     }
 }
@@ -223,6 +261,12 @@ pub struct Served {
     fresh: Vec<f32>,
     /// Frames of this stream were dropped: it cannot be answered, a new one has been asked for.
     lost: bool,
+    /// The stream's mode, and in Live mode its de-noiser, whether its first hop (the lead-in) has
+    /// been dropped, and whether both sides have carried the same sound all along.
+    mode: Mode,
+    live: Option<denoise::Stream>,
+    led_in: bool,
+    same: bool,
 }
 
 impl Served {
@@ -242,6 +286,10 @@ impl Served {
             gain: None,
             fresh: Vec::new(),
             lost: false,
+            mode: Mode::Studio,
+            live: None,
+            led_in: false,
+            same: true,
         }
     }
 
@@ -255,6 +303,9 @@ impl Served {
         }
         self.gain = None;
         self.waiting = None;
+        self.mode = self.link.mode();
+        self.live = (self.mode == Mode::Live).then(|| denoise::Stream::new(self.link.channels));
+        (self.led_in, self.same) = (false, true);
         self.link.answer_starts(stream, self.made);
     }
 
@@ -293,19 +344,96 @@ impl Served {
         }
         self.gain = None;
         self.waiting = None;
+        self.live = None;
         self.lost = true;
+    }
+
+    /// Queues an answer waiting for room; `None` when there was none, else whether it went.
+    fn flush(&mut self) -> Option<bool> {
+        let out = self.waiting.take()?;
+        if !self.link.room_for_answer(out.len() / self.link.channels) {
+            self.waiting = Some(out);
+            return Some(false);
+        }
+        self.link.answer(&out);
+        self.made += (out.len() / self.link.channels) as u64;
+        Some(true)
+    }
+
+    /// Live mode: de-noises every hop that is in; whether it did any work.
+    pub fn step_live(&mut self, models: &mut denoise::Models) -> Result<bool> {
+        if let Some(went) = self.flush() {
+            return Ok(went);
+        }
+        if self.lost {
+            self.link.ask_restart();
+            return Ok(false);
+        }
+        let ch = self.link.channels;
+        let have = self.heard.first().map_or(0, Vec::len);
+        let hops = have / LIVE_HOP;
+        if hops == 0 {
+            return Ok(false);
+        }
+        // Half a second behind in real time: the answers would all be late.
+        if !self.link.offline() && have > self.link.plan.rate as usize / 2 {
+            self.forget();
+            self.link.ask_restart();
+            return Ok(false);
+        }
+        let began = Instant::now();
+        let n = hops * LIVE_HOP;
+        if self.same && ch == 2 && !self.sides_match(self.base, self.base + n) {
+            if self.led_in {
+                // The second side's model has not heard the stream so far: start a new one.
+                self.forget();
+                self.link.ask_restart();
+                return Ok(false);
+            }
+            self.same = false;
+        }
+        let Some(stream) = self.live.as_mut() else { return Ok(false) };
+        for h in 0..hops {
+            let hop: Vec<&[f32]> = self.heard.iter().map(|c| c.get(h * LIVE_HOP..(h + 1) * LIVE_HOP).unwrap_or_default()).collect();
+            stream.push(&hop);
+        }
+        for h in &mut self.heard {
+            h.drain(..n.min(h.len()));
+        }
+        self.base += n;
+        let mut cleaned = stream.pull(models, self.same && ch == 2)?;
+        let mut frames = cleaned.first().map_or(0, Vec::len);
+        if !self.led_in && frames >= LIVE_HOP {
+            // The first hop out is the synthesis's lead-in, not sound.
+            for c in &mut cleaned {
+                c.drain(..LIVE_HOP.min(c.len()));
+            }
+            frames -= LIVE_HOP;
+            self.led_in = true;
+        }
+        if frames == 0 {
+            return Ok(true);
+        }
+        let mut out = vec![0.0f32; frames * ch];
+        for (i, frame) in out.chunks_exact_mut(ch).enumerate() {
+            for (c, o) in frame.iter_mut().enumerate() {
+                *o = cleaned.get(c).or(cleaned.first()).and_then(|x| x.get(i)).copied().unwrap_or(0.0);
+            }
+        }
+        // The audio side may have moved on while the model ran.
+        if self.link.stream().0 != self.stream {
+            return Ok(true);
+        }
+        self.link.set_load(began.elapsed().as_secs_f32() / (n as f32 / self.link.plan.rate as f32));
+        self.waiting = Some(out);
+        self.flush();
+        Ok(true)
     }
 
     /// Answers the next block if it can be; whether it did any work.
     pub fn step(&mut self, cleaner: &mut dyn Clean) -> Result<bool> {
-        if let Some(out) = self.waiting.take() {
-            if !self.link.room_for_answer(out.len() / self.link.channels) {
-                self.waiting = Some(out);
-                return Ok(false);
-            }
-            self.link.answer(&out);
-            self.made += (out.len() / self.link.channels) as u64;
-            return Ok(true);
+        if let Some(went) = self.flush() {
+            return Ok(went);
         }
         if self.lost {
             // Asked every time: the request is cheap and a new stream clears `lost`.
@@ -375,7 +503,8 @@ impl Served {
         self.base = keep_from;
         self.link.set_load(began.elapsed().as_secs_f32() / (p.block as f32 / p.rate as f32));
         self.waiting = Some(out);
-        self.step(cleaner)
+        self.flush();
+        Ok(true)
     }
 
     /// `len` frames of channel `c` from stream frame `from` (silence before the stream began).
@@ -540,5 +669,111 @@ mod tests {
         let mut r = [f32::NAN; 8];
         m.readouts(&mut r);
         assert_eq!((r[0], r[2]), (3.0, 0.0));
+    }
+
+    /// A voice-like tone with noise, and the tone alone.
+    fn noisy_voice(n: usize, rate: f32) -> (Vec<f32>, Vec<f32>) {
+        let mut seed = 7u32;
+        let clean: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let f = 220.0 * (1.0 + 0.01 * (2.0 * std::f32::consts::PI * 5.0 * t).sin());
+                (1..6).map(|h| 0.15 / h as f32 * (2.0 * std::f32::consts::PI * f * h as f32 * t).sin()).sum::<f32>()
+            })
+            .collect();
+        let noisy = clean
+            .iter()
+            .map(|c| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                c + ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.08
+            })
+            .collect();
+        (noisy, clean)
+    }
+
+    #[test]
+    fn live_mode_answers_within_its_short_latency_with_the_de_noised_sound() {
+        let mut m = Mend::new();
+        assert!(m.set_param("mode", 1.0));
+        m.prepare(48_000.0, 512, 2);
+        let lat = m.latency();
+        assert_eq!(lat, 2912, "61 ms at a block of 512");
+        let mut served = Served::new(Arc::clone(m.link().unwrap()));
+        let mut models = denoise::Models::open().unwrap();
+        let (noisy, _) = noisy_voice(96_000 + lat, 48_000.0);
+        let mut out = Vec::new();
+        for b in noisy.chunks(512) {
+            let mut io = vec![b.to_vec(), b.to_vec()];
+            m.process(&mut io, b.len());
+            assert_eq!(io[0], io[1]);
+            out.extend_from_slice(&io[0]);
+            served.link.set_state(State::Ready);
+            served.listen();
+            assert_eq!(served.mode, Mode::Live);
+            served.step_live(&mut models).unwrap();
+        }
+        let mut r = [f32::NAN; 8];
+        m.readouts(&mut r);
+        assert_eq!((r[0], r[2], r[4]), (2.0, 1.0, 0.0), "answering, never late: {r:?}");
+        // What comes out is the whole-clip de-noiser's result, one latency later.
+        let whole = denoise::denoise_48k(std::slice::from_ref(&noisy), 100.0, &Ctx::default()).unwrap().remove(0);
+        let (mut sig, mut diff) = (0.0f64, 0.0f64);
+        for i in 24_000..90_000 {
+            sig += f64::from(whole[i]).powi(2);
+            diff += f64::from(whole[i] - out[lat + i]).powi(2);
+        }
+        let db = 10.0 * (sig / diff.max(1e-30)).log10();
+        assert!(db > 50.0, "Live is {db:.1} dB from the whole-clip de-noiser");
+    }
+
+    #[test]
+    fn changing_mode_changes_the_latency_and_starts_a_new_stream() {
+        let mut m = Mend::new();
+        m.prepare(48_000.0, 512, 2);
+        let studio = m.latency();
+        let mut served = Served::new(Arc::clone(m.link().unwrap()));
+        let mut models = denoise::Models::open().unwrap();
+        let mut half = Half::default();
+        let (noisy, _) = noisy_voice(200_000, 48_000.0);
+        let mut out = Vec::new();
+        for (k, b) in noisy.chunks(512).enumerate() {
+            if k == 40 {
+                assert!(m.set_param("mode", 1.0));
+                assert!(m.latency() < studio / 10);
+            }
+            let mut io = vec![b.to_vec(), b.to_vec()];
+            m.process(&mut io, b.len());
+            out.extend_from_slice(&io[0]);
+            served.link.set_state(State::Ready);
+            served.listen();
+            if served.mode == Mode::Live {
+                served.step_live(&mut models).unwrap()
+            } else {
+                served.step(&mut half).unwrap()
+            };
+        }
+        assert_eq!(served.mode, Mode::Live);
+        let lat = m.latency();
+        // Well after the change the de-noised sound plays, in time with the input: the two
+        // line up at the new latency, not a little either side of it.
+        let corr =
+            |lag: i64| -> f64 { (100_000..180_000).map(|i| f64::from(noisy[i]) * f64::from(out[(lat as i64 + i as i64 + lag) as usize])).sum() };
+        assert!(corr(0) > 1.5 * corr(-20) && corr(0) > 1.5 * corr(20), "{} {} {}", corr(-20), corr(0), corr(20));
+        let mut r = [f32::NAN; 8];
+        m.readouts(&mut r);
+        assert_eq!(r[2], 1.0);
+    }
+
+    #[test]
+    fn live_mode_at_a_rate_it_cannot_run_passes_the_sound_through() {
+        let mut m = Mend::new();
+        assert!(m.set_param("mode", 1.0));
+        m.prepare(96_000.0, 512, 2);
+        assert_eq!(m.latency(), 0);
+        let mut io = vec![vec![0.25f32; 512]; 2];
+        m.process(&mut io, 512);
+        assert!(io[0].iter().all(|v| *v == 0.25));
+        assert!(m.set_param("mode", 0.0));
+        assert!(m.latency() > 200_000, "Studio still runs there");
     }
 }

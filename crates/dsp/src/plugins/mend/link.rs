@@ -70,6 +70,39 @@ impl Plan {
     }
 }
 
+/// The Live mode's hop (DeepFilterNet's), in frames at the session rate.
+pub const LIVE_HOP: usize = 480;
+/// How many hops past a hop the live model needs before it can answer it: its look-ahead (two)
+/// and the synthesis delay (one).
+pub const LIVE_LOOK_HOPS: usize = 3;
+
+/// How the Live mode cuts the stream: a hop at a time, at the session rate itself. DeepFilterNet
+/// is a 48 kHz model; at 44.1 kHz it is run as if the sound were at 48 kHz (everything 8 %
+/// lower to it, well within the voices it knows) instead of converting, which would cost
+/// latency. Other rates have no Live mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LivePlan {
+    /// The whole latency, in frames: the model's look, one hop for the worker to answer in, and
+    /// the host's largest block (the input arrives a block at a time).
+    pub latency: usize,
+}
+
+impl LivePlan {
+    pub fn for_rate(rate: u32, max_block: usize) -> Option<LivePlan> {
+        matches!(rate, 44_100 | 48_000).then(|| LivePlan { latency: (LIVE_LOOK_HOPS + 2) * LIVE_HOP + max_block.clamp(1, 8192) })
+    }
+}
+
+/// Which model answers ([`Link::mode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Mode {
+    /// Smule Renaissance, a block of about a second at a time.
+    Studio = 0,
+    /// DeepFilterNet 3, a hop at a time.
+    Live = 1,
+}
+
 /// What the worker is doing with a link ([`Link::state`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -147,7 +180,11 @@ impl Queue {
 
 /// One Mend instance's connection to the worker.
 pub struct Link {
+    /// The Studio mode's plan.
     pub plan: Plan,
+    /// The Live mode's (`None`: not at this rate).
+    pub live: Option<LivePlan>,
+    mode: AtomicU8,
     /// Channels in each frame (1 or 2).
     pub channels: usize,
     to_worker: Queue,
@@ -174,11 +211,13 @@ impl std::fmt::Debug for Link {
 }
 
 impl Link {
-    pub fn new(plan: Plan, channels: usize) -> Link {
+    pub fn new(plan: Plan, live: Option<LivePlan>, channels: usize) -> Link {
         let channels = channels.clamp(1, 2);
         let samples = plan.rate as usize * QUEUE_SECS * channels;
         Link {
             plan,
+            live,
+            mode: AtomicU8::new(Mode::Studio as u8),
             channels,
             to_worker: Queue::new(samples),
             from_worker: Queue::new(samples),
@@ -200,6 +239,16 @@ impl Link {
 
     pub fn set_state(&self, s: State) {
         self.state.store(s as u8, Ordering::Relaxed);
+    }
+
+    /// The mode the audio side is in. It changes only together with a new stream
+    /// ([`Link::restart`] after it), so the worker reads it when a stream begins.
+    pub fn mode(&self) -> Mode {
+        if self.mode.load(Ordering::Acquire) == Mode::Live as u8 && self.live.is_some() { Mode::Live } else { Mode::Studio }
+    }
+
+    pub fn set_mode(&self, mode: Mode) {
+        self.mode.store(mode as u8, Ordering::Release);
     }
 
     /// The model's time per block as a share of the block's length (1.0: only just keeping up).
@@ -349,9 +398,19 @@ mod tests {
     }
 
     #[test]
+    fn the_live_plan_is_short_and_only_at_the_rates_it_can_run() {
+        assert_eq!(LivePlan::for_rate(48_000, 512).map(|p| p.latency), Some(2912));
+        assert_eq!(LivePlan::for_rate(44_100, 256).map(|p| p.latency), Some(2656));
+        assert!(LivePlan::for_rate(96_000, 512).is_none());
+        let link = Link::new(Plan::for_rate(96_000).unwrap(), None, 2);
+        link.set_mode(Mode::Live);
+        assert_eq!(link.mode(), Mode::Studio, "no Live mode at this rate");
+    }
+
+    #[test]
     fn queues_carry_frames_in_order_and_wrap() {
         let plan = Plan::for_rate(8_000).unwrap();
-        let link = Link::new(plan, 2);
+        let link = Link::new(plan, None, 2);
         let mut seen = Vec::new();
         let mut n = 0.0f32;
         for round in 0..200 {
@@ -378,7 +437,7 @@ mod tests {
     #[test]
     fn a_full_queue_says_so() {
         let plan = Plan::for_rate(8_000).unwrap();
-        let link = Link::new(plan, 1);
+        let link = Link::new(plan, None, 1);
         let io = vec![vec![0.25f32; 4096]];
         let mut sent = 0;
         while link.room_for(4096) {

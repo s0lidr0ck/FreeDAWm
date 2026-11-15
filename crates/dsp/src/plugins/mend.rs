@@ -7,9 +7,14 @@
 //!   sound back, and Mend plays it against the input delayed by the same amount. The worker
 //!   belongs to the desktop app (`soundcraft_ml::live`); a build without it (the browser's)
 //!   plays the input through.
-//! - **Latency: about 2.9 s, always** ([`link::Plan::latency`]): one block, the model's
-//!   look-ahead, and one more block for the model to answer in. Delay compensation hides it on
-//!   playback. It is no use while recording: monitor without it.
+//! - **Studio** (the default) is that model. **Latency: about 2.9 s** ([`link::Plan::latency`]):
+//!   one block, the model's look-ahead, and one more block for the model to answer in. Delay
+//!   compensation hides it on playback. It is no use while recording.
+//! - **Live** is DeepFilterNet 3 instead (the de-noiser of Clean Vocal's Speech mode), a hop of
+//!   10 ms at a time. **Latency: 50 ms and the host's block** ([`link::LivePlan`]; 61 ms at 512
+//!   frames). It takes noise off, not the room, and it was trained on speech: held sung notes
+//!   can pump. At 44.1 and 48 kHz only; elsewhere Live passes the sound through.
+//! - Changing Mode changes the latency and starts the cleaning again.
 //! - When the answer is not there in time (the model is not installed, still loading, or the
 //!   computer cannot keep up), Mend plays the delayed input for that stretch. An offline render
 //!   ([`Plugin::set_offline`]) waits for the answer instead, so a bounce is always cleaned.
@@ -26,7 +31,7 @@ pub mod link;
 use crate::params::{Params, choice, lin};
 use crate::util::{frames_in, sane_channels, sane_sr};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
-use link::{Link, Plan, State};
+use link::{Link, LivePlan, Mode, Plan, State};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -35,6 +40,7 @@ pub const ID: &str = "mend";
 const P_AMOUNT: usize = 0;
 const P_LISTEN: usize = 1;
 const P_OUT: usize = 2;
+const P_MODE: usize = 3;
 
 /// How long the swap between the cleaned sound and the input takes, in ms.
 const SWAP_MS: f32 = 8.0;
@@ -48,10 +54,11 @@ const PICKUP_PATIENCE: Duration = Duration::from_secs(5);
 /// The same while the model is still loading.
 const LOADING_PATIENCE: Duration = Duration::from_secs(90);
 
-static MEND_PARAMS: [ParamInfo; 3] = [
+static MEND_PARAMS: [ParamInfo; 4] = [
     lin("amount", "Amount", 0.0, 100.0, 100.0, Unit::Percent),
     choice("listen", "Listen", &["Cleaned", "Removed"], 0),
     lin("out", "Output", -24.0, 12.0, 0.0, Unit::Db),
+    choice("mode", "Mode", &["Studio", "Live"], 0),
 ];
 
 pub static MEND_INFO: PluginInfo = PluginInfo {
@@ -104,6 +111,9 @@ pub struct Mend {
     link: Option<Arc<Link>>,
     offline: bool,
     latency: usize,
+    /// Each mode's latency (0: the mode cannot run at this rate, the sound passes through).
+    latencies: [usize; 2],
+    mode: Mode,
     /// The input, kept for one latency: `[channel][frame]`, written round and round.
     dry: Vec<Vec<f32>>,
     dry_at: usize,
@@ -147,6 +157,8 @@ impl Mend {
             link: None,
             offline: false,
             latency: 0,
+            latencies: [0; 2],
+            mode: Mode::Studio,
             dry: Vec::new(),
             dry_at: 0,
             wet: Vec::new(),
@@ -173,6 +185,26 @@ impl Mend {
         self.amount_to = (self.p.v(P_AMOUNT) / 100.0).clamp(0.0, 1.0);
         self.gain_to = db_to_gain(self.p.v(P_OUT));
         self.removed = self.p.choice(P_LISTEN) == 1;
+        let mode = if self.p.choice(P_MODE) == 1 { Mode::Live } else { Mode::Studio };
+        if mode != self.mode {
+            self.mode = mode;
+            self.enter_mode();
+        }
+    }
+
+    /// Takes up `self.mode`: its latency, an empty delay and a new stream. Allocates nothing.
+    fn enter_mode(&mut self) {
+        self.latency = self.latencies.get(self.mode as usize).copied().unwrap_or(0);
+        if let Some(link) = &self.link {
+            link.set_mode(self.mode);
+        }
+        for d in &mut self.dry {
+            d.fill(0.0);
+        }
+        self.dry_at = 0;
+        self.have = 0.0;
+        self.was_late = false;
+        self.restart();
     }
 
     /// The link to the worker, for tests and for a host that serves it itself.
@@ -217,6 +249,10 @@ impl Mend {
     /// One chunk of at most `self.wet`'s frames.
     fn chunk(&mut self, io: &mut [Vec<f32>], start: usize, n: usize) {
         let Some(link) = self.link.clone() else { return };
+        if self.latency == 0 {
+            // This mode cannot run at this rate: the sound passes through.
+            return;
+        }
         let ch = self.ch.min(io.len()).min(self.dry.len());
         let lat = self.latency as u64;
         if link.take_lost() {
@@ -269,7 +305,7 @@ impl Mend {
         }
         self.was_late = late;
         let wch = link.channels;
-        let len = self.dry.first().map_or(0, Vec::len).max(1);
+        let len = self.latency.clamp(1, self.dry.first().map_or(1, Vec::len).max(1));
         for i in 0..n {
             let wet_i = i.checked_sub(skip).filter(|k| *k < got);
             let target = if wet_i.is_some() { 1.0 } else { 0.0 };
@@ -318,13 +354,18 @@ impl Plugin for Mend {
         }
         self.swap_coef = coef(SWAP_MS, self.sr);
         self.glide_coef = coef(GLIDE_MS, self.sr);
-        let plan = Plan::for_rate(self.sr.round() as u32);
-        self.latency = plan.map_or(0, |p| p.latency());
-        self.dry = (0..self.ch).map(|_| vec![0.0; self.latency.max(1)]).collect();
+        let rate = self.sr.round() as u32;
+        let plan = Plan::for_rate(rate);
+        let live = plan.and_then(|_| LivePlan::for_rate(rate, max_block));
+        self.latencies = [plan.map_or(0, |p| p.latency()), live.map_or(0, |l| l.latency)];
+        self.latency = self.latencies.get(self.mode as usize).copied().unwrap_or(0);
+        let longest = self.latencies.iter().copied().max().unwrap_or(0);
+        self.dry = (0..self.ch).map(|_| vec![0.0; longest.max(1)]).collect();
         self.wet = vec![0.0; max_block.clamp(64, 8192) * self.ch];
         self.link = plan.map(|p| {
-            let link = Arc::new(Link::new(p, self.ch));
+            let link = Arc::new(Link::new(p, live, self.ch));
             link.set_offline(self.offline);
+            link.set_mode(self.mode);
             offer(&link);
             link
         });

@@ -7,4 +7,4 @@ use crate::module_graphs::GraphKind;
 /// Mend's accent (ARGB): a clear sea green.
 pub const ACCENT: u32 = 0xFF5F_C9A6;
 
-pub const UI: EngineUi = EngineUi { key_knobs: &["amount", "out"], hero: Some("amount"), ..EngineUi::new("mend", ACCENT, GraphKind::Level) };
+pub const UI: EngineUi = EngineUi { key_knobs: &["amount", "mode", "out"], hero: Some("amount"), ..EngineUi::new("mend", ACCENT, GraphKind::Level) };
