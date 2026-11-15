@@ -885,13 +885,15 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
         | GraphKind::LevelUp
         | GraphKind::Manners
         | GraphKind::Sift
+        | GraphKind::Rez
+        | GraphKind::Lull
         | GraphKind::Chamber => {
             let gh = match kind {
                 GraphKind::Chamber | GraphKind::Shale | GraphKind::LevelUp => 176.0,
-                GraphKind::Twine => 140.0,
+                GraphKind::Twine | GraphKind::Lull => 140.0,
                 GraphKind::Transient => 156.0,
                 GraphKind::Pitch | GraphKind::Filter | GraphKind::Swale => 128.0,
-                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Manners | GraphKind::Sift => 120.0,
+                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Manners | GraphKind::Sift | GraphKind::Rez => 120.0,
                 GraphKind::Console | GraphKind::Dist => 112.0,
                 _ => 96.0,
             };
@@ -1381,7 +1383,7 @@ fn hero_band(
     let lv = live.unwrap_or_default();
     bars.push(("IN", level_pos(lv.in_peak), t.meter_green));
     bars.push(("OUT", level_pos(lv.out_peak), t.meter_green));
-    if matches!(kind, GraphKind::Compressor | GraphKind::Comp | GraphKind::Twine) {
+    if matches!(kind, GraphKind::Compressor | GraphKind::Comp | GraphKind::Twine | GraphKind::Rez | GraphKind::Lull) {
         let gr = if lv.gr_db.is_finite() { (lv.gr_db.abs() / GR_RANGE).clamp(0.0, 1.0) } else { 0.0 };
         bars.push(("GR", gr, t.gr_color));
     }

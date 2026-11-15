@@ -82,6 +82,12 @@ pub enum GraphKind {
     /// Sift: the last seconds of the voice going in, with what was taken off its sibilance
     /// hanging from the top and what was taken off its plosives standing on the bottom.
     Sift,
+    /// Rez: what it is taking off right now over frequency, hanging from the top over the input's
+    /// spectrum, with the edges of its range and (large) its sensitivity curve.
+    Rez,
+    /// Lull: its curve (level in against level out) with the threshold in force, the live level
+    /// riding it, whether it is open, and the gain reduction.
+    Lull,
 }
 
 pub fn graph_kind(plugin_id: &str) -> GraphKind {
@@ -95,7 +101,10 @@ pub fn graph_kind(plugin_id: &str) -> GraphKind {
 
 /// Whether a graph reads its module's sample streams (see [`Streams`]).
 pub fn uses_streams(kind: GraphKind) -> bool {
-    matches!(kind, GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale | GraphKind::Manners | GraphKind::Sift)
+    matches!(
+        kind,
+        GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale | GraphKind::Manners | GraphKind::Sift | GraphKind::Rez
+    )
 }
 
 const F_MIN: f32 = 20.0;
@@ -378,6 +387,8 @@ pub fn draw_graph(
             let accent = module_accent(&ins.plugin);
             sift_timeline(&p, rect, streams, accent, large);
         }
+        GraphKind::Rez => draw_rez(&p, rect, ins, streams, sample_rate, large),
+        GraphKind::Lull => draw_lull(&p, rect, ins, live, large),
     }
     p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, t.module_tile_border), StrokeKind::Inside);
 }
@@ -440,6 +451,8 @@ pub struct Streams {
     pub sift: VecDeque<(f32, f32)>,
     /// Manners' gain curve as of its last block: (band centre Hz, gain dB), low to high.
     pub manners: Vec<(f32, f32)>,
+    /// Rez's cut in dB at each of its live points (the deeper side), eased: quick down, slow back.
+    pub rez: Vec<f32>,
     /// Columns ever pushed onto `scope`.
     scope_pushed: u64,
     /// The UI pass these were last brought up to date in, plus one (0: never).
@@ -520,6 +533,28 @@ impl Streams {
                     let (scratch, fresh, an) = (&mut self.scratch, &mut self.fresh, &mut self.analyzer);
                     feed_spectrum(&mut self.pre, &mut self.seen.0, &a.pre, scratch, fresh, an);
                     feed_spectrum(&mut self.post, &mut self.seen.1, &a.post, scratch, fresh, an);
+                }
+            }
+            GraphKind::Rez => {
+                use soundcraft_dsp::plugins::rez::{LIVE_CUT_A, LIVE_CUT_B, LIVE_POINTS};
+                self.rez.resize(LIVE_POINTS, 0.0);
+                for (i, shown) in self.rez.iter_mut().enumerate() {
+                    let side = |at: usize| {
+                        let v = a.live.get(at + i);
+                        if v.is_finite() { v.max(0.0) } else { 0.0 }
+                    };
+                    let v = side(LIVE_CUT_A).max(side(LIVE_CUT_B));
+                    *shown = if v >= *shown { v } else { *shown + (v - *shown) * REZ_EASE };
+                }
+                // The input's spectrum behind the cut, at the analyzer's pace.
+                let due = match self.spec_at {
+                    Some(t) => !now.is_finite() || now < t || now - t >= SPEC_INTERVAL - 1e-3,
+                    None => true,
+                };
+                if due {
+                    self.spec_at = Some(now);
+                    let (scratch, fresh, an) = (&mut self.scratch, &mut self.fresh, &mut self.analyzer);
+                    feed_spectrum(&mut self.pre, &mut self.seen.0, &a.pre, scratch, fresh, an);
                 }
             }
             _ => {}
@@ -2292,6 +2327,169 @@ fn draw_manners(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&St
     glow_line(p, pts, accent, if large { 1.5 } else { 1.0 });
 }
 
+/// Rez's graph: the cut that fills its height, dB, and how much of the way back a released cut
+/// comes per frame.
+pub const REZ_CUT_RANGE: f32 = 18.0;
+const REZ_EASE: f32 = 0.35;
+/// Rez's sensitivity curve (large only): the dB a quarter of the height stands for.
+const REZ_SENS_RANGE: f32 = 24.0;
+
+/// Where a cut of `db` hangs to in `rect` (0 dB: the top; [`REZ_CUT_RANGE`]: the bottom).
+pub fn rez_cut_y(rect: Rect, db: f32) -> f32 {
+    let v = if db.is_finite() { (db / REZ_CUT_RANGE).clamp(0.0, 1.0) } else { 0.0 };
+    rect.top() + rect.height() * v
+}
+
+/// Rez's sensitivity bands as its settings have them.
+fn rez_bands(ins: &Insert) -> [soundcraft_dsp::plugins::rez::Band; soundcraft_dsp::plugins::rez::BANDS] {
+    use soundcraft_dsp::plugins::rez::{BAND_IDS, Band};
+    BAND_IDS.map(|[on, freq, gain, q]| Band { on: param(ins, on) >= 0.5, freq: param(ins, freq), gain: param(ins, gain), q: param(ins, q) })
+}
+
+/// Rez: the cut it is making over frequency, hanging from the top over the input's spectrum.
+/// Outside Low..High the graph is dimmed; large, the sensitivity curve rides the middle.
+fn draw_rez(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&Streams>, sample_rate: f32, large: bool) {
+    use soundcraft_dsp::plugins::rez as dsp;
+    let t = Tokens::current();
+    let accent = module_accent(&ins.plugin);
+    for (f, name) in [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        let x = freq_to_x(rect, f);
+        p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, t.graph_grid));
+        if large {
+            p.text(pos2(x + 2.0, rect.bottom() - 1.0), Align2::LEFT_BOTTOM, name, regular(9.0), t.text_dim);
+        }
+    }
+    for db in [6.0, 12.0] {
+        let y = rez_cut_y(rect, db);
+        p.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, t.graph_grid));
+        if large {
+            p.text(pos2(rect.left() + 2.0, y), Align2::LEFT_BOTTOM, format!("-{db:.0}"), regular(9.0), t.text_dim);
+        }
+    }
+    if let Some(s) = streams {
+        spectrum(p, rect, &s.pre, sane_sr(sample_rate), t.graph_fill.gamma_multiply(0.6), None);
+    }
+    let (low, high) = (param(ins, "low"), param(ins, "high"));
+    let high = high.max(low);
+    let shade = t.graph_bg.gamma_multiply(0.55);
+    if low > F_MIN * 1.02 {
+        p.rect_filled(Rect::from_min_max(rect.min, pos2(freq_to_x(rect, low), rect.bottom())), 0.0, shade);
+    }
+    if high < F_MAX * 0.98 {
+        p.rect_filled(Rect::from_min_max(pos2(freq_to_x(rect, high), rect.top()), rect.max), 0.0, shade);
+    }
+    if large {
+        // The sensitivity curve: the bands about the middle of the graph.
+        let bands = rez_bands(ins);
+        let mid = rect.center().y;
+        let n = (rect.width() as usize / 3).clamp(2, 160);
+        let pts: Vec<Pos2> = (0..n)
+            .map(|i| {
+                let x = rect.left() + rect.width() * i as f32 / (n - 1) as f32;
+                let db = dsp::bands_db(&bands, x_to_freq(rect, x));
+                let db = if db.is_finite() { db.clamp(-REZ_SENS_RANGE, REZ_SENS_RANGE) } else { 0.0 };
+                pos2(x, mid - db / REZ_SENS_RANGE * rect.height() * 0.25)
+            })
+            .collect();
+        p.add(Shape::line(pts, Stroke::new(1.0, t.text_dim.gamma_multiply(0.7))));
+        let mode = soundcraft_dsp::plugin_info(&ins.plugin).and_then(|i| i.param("mode")).map(|m| m.format(param(ins, "mode"))).unwrap_or_default();
+        let delta = if param(ins, "delta") >= 0.5 { " · Delta" } else { "" };
+        p.text(rect.right_bottom() - vec2(5.0, 3.0), Align2::RIGHT_BOTTOM, format!("{mode}{delta}"), bold(9.0), accent);
+    }
+    let Some(cut) = streams.map(|s| &s.rez).filter(|c| c.len() >= 2) else { return };
+    let pts: Vec<Pos2> = cut.iter().enumerate().map(|(i, db)| pos2(freq_to_x(rect, dsp::live_hz(i)), rez_cut_y(rect, *db))).collect();
+    for w in pts.windows(2) {
+        if let [a, b] = w
+            && (a.y.max(b.y) - rect.top()) > 0.2
+        {
+            p.add(Shape::convex_polygon(vec![pos2(a.x, rect.top()), pos2(b.x, rect.top()), *b, *a], accent.gamma_multiply(0.3), Stroke::NONE));
+        }
+    }
+    glow_line(p, pts, accent, if large { 1.5 } else { 1.0 });
+}
+
+/// Lull's graph: the quietest level on its axes, dBFS.
+pub const LULL_MIN_DB: f32 = -80.0;
+
+/// Lull's static curve as its settings have it.
+pub fn lull_curve(ins: &Insert) -> soundcraft_dsp::plugins::lull::Curve {
+    soundcraft_dsp::plugins::lull::Curve {
+        gate: param(ins, "mode") >= 0.5,
+        threshold: param(ins, "threshold"),
+        range: param(ins, "range"),
+        ratio: param(ins, "ratio"),
+        knee: param(ins, "knee"),
+    }
+}
+
+/// Lull: level in against level out, with the threshold in force (the Guard moves it), the live
+/// level riding the curve (bright while open), and the gain reduction hanging beside it.
+fn draw_lull(p: &egui::Painter, rect: Rect, ins: &Insert, live: Option<&LiveValues>, large: bool) {
+    let t = Tokens::current();
+    let accent = module_accent(&ins.plugin);
+    let curve = lull_curve(ins);
+    let lv = live.copied().unwrap_or_else(no_reading);
+    // Readouts: detector level, output level, gain reduction, open, threshold in force.
+    let [level, _, gr, open, thr_now, ..] = lv.readouts;
+    let thr = if thr_now.is_finite() { thr_now.clamp(LULL_MIN_DB, 0.0) } else { curve.threshold };
+    let bars_w = if large { 22.0 } else { 9.0 };
+    let plot = Rect::from_min_max(rect.min, pos2(rect.max.x - bars_w, rect.max.y));
+    let pos = |inp: f32, out: f32| {
+        let fx = ((inp - LULL_MIN_DB) / -LULL_MIN_DB).clamp(0.0, 1.0);
+        let fy = ((out - LULL_MIN_DB) / -LULL_MIN_DB).clamp(0.0, 1.0);
+        pos2(plot.left() + 2.0 + (plot.width() - 6.0) * fx, plot.bottom() - 2.0 - (plot.height() - 4.0) * fy)
+    };
+    for db in [-60.0, -40.0, -20.0] {
+        let a = pos(db, LULL_MIN_DB);
+        let b = pos(LULL_MIN_DB, db);
+        p.line_segment([pos2(a.x, plot.top()), pos2(a.x, plot.bottom())], Stroke::new(1.0, t.graph_grid));
+        p.line_segment([pos2(plot.left(), b.y), pos2(plot.right(), b.y)], Stroke::new(1.0, t.graph_grid));
+        if large {
+            p.text(pos2(a.x - 2.0, plot.bottom() - 1.0), Align2::RIGHT_BOTTOM, format!("{db:.0}"), regular(8.5), t.text_dim);
+        }
+    }
+    // The 1:1 line, the threshold, and the reduction wedge between the line and the curve.
+    p.line_segment([pos(LULL_MIN_DB, LULL_MIN_DB), pos(0.0, 0.0)], Stroke::new(1.0, t.graph_grid));
+    let tx = pos(thr, LULL_MIN_DB).x;
+    p.line_segment([pos2(tx, plot.top()), pos2(tx, plot.bottom())], Stroke::new(1.0, accent.gamma_multiply(0.55)));
+    let steps = 80;
+    let xs: Vec<f32> = (0..=steps).map(|i| LULL_MIN_DB + -LULL_MIN_DB * i as f32 / steps as f32).collect();
+    let pts: Vec<Pos2> = xs.iter().map(|x| pos(*x, *x - curve.reduction_at(*x, thr))).collect();
+    for (w, xw) in pts.windows(2).zip(xs.windows(2)) {
+        if let ([a, b], [xa, xb]) = (w, xw) {
+            let (ua, ub) = (pos(*xa, *xa), pos(*xb, *xb));
+            if (ua.y - a.y).abs() > 0.2 || (ub.y - b.y).abs() > 0.2 {
+                p.add(Shape::convex_polygon(vec![ua, ub, *b, *a], accent.gamma_multiply(0.14), Stroke::NONE));
+            }
+        }
+    }
+    glow_line(p, pts, accent, if large { 2.0 } else { 1.5 });
+    let is_open = open.is_finite() && open >= 0.5;
+    if level.is_finite() {
+        let inp = level.clamp(LULL_MIN_DB, 0.0);
+        // Where the gate has it now (the gain in force), not where the curve will settle.
+        let now = if gr.is_finite() { gr.clamp(0.0, curve.range.max(0.0)) } else { curve.reduction_at(inp, thr) };
+        let at = pos(inp, inp - now);
+        let c = if is_open { t.text } else { t.text_dim };
+        p.circle_filled(at, 6.0, c.gamma_multiply(0.18));
+        p.circle_filled(at, 3.0, c);
+    }
+    if large {
+        let mode = soundcraft_dsp::plugin_info(&ins.plugin).and_then(|i| i.param("mode")).map(|m| m.format(param(ins, "mode"))).unwrap_or_default();
+        let state = if !level.is_finite() {
+            ""
+        } else if is_open {
+            " · Open"
+        } else {
+            " · Closed"
+        };
+        p.text(plot.min + vec2(5.0, 4.0), Align2::LEFT_TOP, format!("{mode}{state}"), bold(9.0), accent);
+    }
+    // The reduction against the Range (at least 12 dB of scale, so a shallow range still reads).
+    let scale = curve.range.max(12.0);
+    hanging_bars(p, Rect::from_min_max(pos2(plot.right() + 1.0, rect.top()), rect.max), &[("GR", gr / scale, true, t.gr_color)], large);
+}
+
 /// Vint's curve scale, ±dB.
 pub const VINT_RANGE: f32 = 24.0;
 /// The least time between two computes of one module's Vint curve, seconds.
@@ -2873,6 +3071,86 @@ mod tests {
                 }
                 let r = Rect::from_min_size(pos2(5.0, 5.0), vec2(160.0, 80.0));
                 assert!(cleanq_band_drag(ui, r, &ins, f32::NAN).is_none());
+            }
+        });
+        h.run();
+    }
+
+    #[test]
+    fn rez_and_lull_have_their_own_graphs() {
+        use soundcraft_dsp::plugins::rez::{LIVE_CUT_A, LIVE_CUT_B, LIVE_LEN, LIVE_POINTS};
+        assert_eq!(graph_kind("rez"), GraphKind::Rez);
+        assert_eq!(graph_kind("lull"), GraphKind::Lull);
+        assert!(uses_streams(GraphKind::Rez) && !uses_streams(GraphKind::Lull));
+
+        // Rez's cut: the deeper side, taken at once and let go slowly; nonsense reads as no cut.
+        let a = Analysis::with_live(LIVE_LEN);
+        a.live.set(LIVE_CUT_A + 10, 6.0);
+        a.live.set(LIVE_CUT_B + 10, 9.0);
+        a.live.set(LIVE_CUT_A + 11, f32::NAN);
+        a.live.set(LIVE_CUT_B + 12, -4.0);
+        let mut s = Streams::default();
+        s.feed(&a, GraphKind::Rez, 1.0);
+        assert_eq!(s.rez.len(), LIVE_POINTS);
+        assert_eq!((s.rez[10], s.rez[11], s.rez[12]), (9.0, 0.0, 0.0));
+        a.live.set(LIVE_CUT_B + 10, 0.0);
+        s.feed(&a, GraphKind::Rez, 2.0);
+        assert!(s.rez[10] > 6.0 && s.rez[10] < 9.0, "the deeper side let go, easing back to the other: {}", s.rez[10]);
+        let r = Rect::from_min_size(pos2(0.0, 10.0), vec2(100.0, 90.0));
+        assert_eq!(rez_cut_y(r, 0.0), 10.0);
+        assert_eq!(rez_cut_y(r, REZ_CUT_RANGE * 0.5), 55.0);
+        assert_eq!(rez_cut_y(r, 1e9), 100.0);
+        assert_eq!(rez_cut_y(r, f32::NAN), 10.0);
+
+        // Lull's curve is its settings' own, clamped.
+        let mut ins = Insert::new("lull");
+        ins.params.insert("mode".into(), 1.0);
+        ins.params.insert("threshold".into(), -30.0);
+        ins.params.insert("range".into(), 1e9);
+        let c = lull_curve(&ins);
+        assert!(c.gate && c.threshold == -30.0 && c.range == 80.0);
+        assert_eq!(c.reduction(0.0), 0.0);
+        assert_eq!(c.reduction(-70.0), 80.0);
+
+        let hostile = LiveValues {
+            in_peak: f32::NAN,
+            out_peak: 9.0,
+            gr_db: f32::INFINITY,
+            readouts: [f32::INFINITY, f32::NAN, -5.0, 1e9, -1e9, 0.0, 0.0, 0.0],
+        };
+        let closed =
+            LiveValues { in_peak: 0.1, out_peak: 0.01, gr_db: 20.0, readouts: [-50.0, -70.0, 20.0, 0.0, -24.0, f32::NAN, f32::NAN, f32::NAN] };
+        let fed = fed_analysis(10_000);
+        s.feed(&fed, GraphKind::Rez, 3.0);
+        let mut ready = false;
+        let mut h = egui_kittest::Harness::new_ui(move |ui| {
+            if !ready {
+                crate::fonts::install(ui.ctx());
+                ready = true;
+                return;
+            }
+            for plugin in ["rez", "lull"] {
+                let mut ins = Insert::new(plugin);
+                for (k, v) in [
+                    ("low", 9000.0),
+                    ("high", 200.0),
+                    ("b1_gain", f32::NAN),
+                    ("b2_q", 0.0),
+                    ("threshold", f32::NAN),
+                    ("knee", -3.0),
+                    ("ratio", f32::INFINITY),
+                ] {
+                    ins.params.insert(k.into(), v);
+                }
+                let kind = graph_kind(plugin);
+                for r in
+                    [Rect::from_min_size(pos2(5.0, 5.0), vec2(160.0, 80.0)), Rect::from_min_size(pos2(5.0, 5.0), vec2(40.0, 12.0)), Rect::NOTHING]
+                {
+                    for live in [Some(&hostile), Some(&closed), None] {
+                        draw_graph(ui, r, kind, &ins, Id::NULL, live, Some(&s), f32::NAN, true);
+                        draw_graph(ui, r, kind, &ins, Id::NULL, live, None, 0.0, false);
+                    }
+                }
             }
         });
         h.run();

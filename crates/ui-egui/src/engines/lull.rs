@@ -9,5 +9,5 @@ pub const UI: EngineUi = EngineUi {
     tile_labels: &[("threshold", "Thresh")],
     model_param: Some("mode"),
     wide_editor: Some(crate::editors::lull::draw),
-    ..EngineUi::new("lull", crate::editors::lull::ACCENT, GraphKind::Level)
+    ..EngineUi::new("lull", crate::editors::lull::ACCENT, GraphKind::Lull)
 };

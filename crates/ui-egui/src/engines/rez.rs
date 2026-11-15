@@ -8,5 +8,5 @@ pub const UI: EngineUi = EngineUi {
     hero: Some("depth"),
     tile_labels: &[("sharpness", "Sharp"), ("selectivity", "Select")],
     wide_editor: Some(crate::editors::rez::draw),
-    ..EngineUi::new("rez", crate::editors::rez::ACCENT, GraphKind::Level)
+    ..EngineUi::new("rez", crate::editors::rez::ACCENT, GraphKind::Rez)
 };
