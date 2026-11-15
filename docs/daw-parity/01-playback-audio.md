@@ -1,0 +1,239 @@
+# Four-DAW parity, section 1: playing audio
+
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+
+> Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
+> Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
+> affiliated with or endorsed by any of them. See [NOTICE](../../NOTICE).
+
+The first of seven sections comparing FreeDAWm with four reference DAWs: **playing audio**,
+recording audio, mixing, built-in effects, MIDI recording, MIDI writing, and each DAW's unique
+features. The existing parity docs ([`target-app-parity.md`](../target-app-parity.md),
+[`gaps.md`](../gaps.md)) measure against Pro Tools alone; this series widens the reference.
+
+**Scope of this section:** everything between pressing Play and hearing audio clips: transport and
+locating, looping, speed and scrub, the audio engine, media and formats, how a clip is rendered,
+tempo-following and time-stretch, and auditioning. Recording, the mixer, plug-ins and MIDI are
+later sections.
+
+## How this was measured
+
+- **FreeDAWm:** read from the code on `main` at 8649ca7 (0.9.11), not from the docs. Each feature is
+  marked by what the audio thread or the playhead really does. Several menu options store a value
+  that nothing reads; those are marked **flag only**. The headline claims were re-read by hand.
+- **The four DAWs:** from their published manuals and release notes, as known up to the versions
+  above. Nothing was run side by side, so behaviour details (fade curves, stretch quality) are not
+  compared. Entries are for each product's top edition.
+
+**Legend.** Other DAWs: ● has it · ◐ partly or by another route · ○ does not.
+FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
+
+## Summary
+
+| Area | FreeDAWm today | Distance from the four |
+|---|---|---|
+| A. Transport and locating | Solid core; several play commands are wrong | Small: bugs and small features |
+| B. Looping | Gapless and sample-accurate, but fixed at Play | Small |
+| C. Speed, scrub, shuttle | Half speed only; no scrub audio at all | **Large**: all four scrub |
+| D. Audio engine | Device choice, wide delay compensation, disk cache | Medium: sound quality at mismatched rates, clicks on stop/locate, realtime safety |
+| E. Media and formats | Reads everything; streams only WAV | Small to medium |
+| F. Clip rendering | Gain, envelopes, fades, clip EQ/comp, comping | Medium: channel bugs, no automatic fades, no per-clip pitch |
+| G. Tempo and time-stretch | Offline WSOLA only; "Elastic" is a label | **Large**: all four stretch in real time and follow tempo |
+| H. Auditioning | None for files or clips | **Large**: all four preview before placing |
+
+Three things every one of the four does and FreeDAWm does not: **scrub audio**, **audio that
+follows the tempo in real time**, and **previewing a file or clip before using it**.
+
+## A. Transport and locating
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Play, stop, toggle on Space | ● | ● | ● | ● | **Works** |
+| Play the selection once | ● | ● | ● | ● | **Works**; with only an insertion point it plays one sample and stops |
+| Pause (resume from where it stopped) | ◐ | ● | ● | ● | **Missing**: Pause is Stop |
+| Return to zero, go to end | ● | ● | ● | ● | **Works**, seamless while playing |
+| Rewind / fast forward while held | ● | ● | ● | ● | **Partial**: one jump of 1 s per press, no hold, no acceleration |
+| Locate by clicking the ruler | ● | ● | ● | ● | **Works** |
+| Locate by typing in the counter | ● | ● | ● | ● | **Missing**: the counter is read-only |
+| Counter formats (bars, time, timecode, samples) | ● | ● | ● | ● | **Works**: five formats, main and sub counter |
+| Markers, recall while playing | ● | ● | ● | ● | **Works**, five marker rulers |
+| Pre-roll and post-roll on playback | ● | ● | ◐ | ● | **Works** (not when looping) |
+| Play start separate from the selection | ● | ● | ● | ● | **Flag only**: Dynamic Transport stores a flag; the timeline selection is never drawn or played |
+| Return to start on stop, or stay | ● | ● | ● | ● | **Works** (Insertion Follows Playback) |
+| Audition around an edit (play up to / from the start or end) | ● | ◐ | ◐ | ● | **Missing** |
+| Follow modes: none, page, continuous, centred | ● | ● | ● | ● | **Works**: five modes, pauses when you scroll by hand |
+| Keep playing while you edit | ● | ● | ● | ● | **Works**: a new session snapshot is swapped in without a gap |
+| Click during playback | ● | ● | ● | ● | **Works**: synthesized, accent on beat 1; no sample sounds, no separate click output |
+| Chase external timecode or clock | ● | ● | ● | ● | **Flag only** (belongs to the hardware sections) |
+
+## B. Looping
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Gapless loop | ● | ● | ● | ● | **Works**: wraps inside the audio callback on the exact sample, disk cache pre-reads the loop start |
+| Loop range separate from the selection | ● | ● | ● | ● | **Partial**: a sticky loop range exists, used when the insertion point is inside it |
+| Move or resize the loop while playing | ● | ● | ● | ● | **Missing**: the loop is fixed at Play |
+| Turn looping on or off while playing | ● | ● | ● | ● | **Missing**: takes effect at the next Play |
+| Loop follows the selection | ● | ● | ● | ● | **Works** (it is the default behaviour) |
+| Skip a range during playback | ○ | ○ | ● | ● | **Missing** |
+| Smooth loop join (no click at the wrap) | ● | ● | ● | ● | **Missing**: no crossfade or declick at the wrap |
+
+## C. Speed, scrub and shuttle
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Scrub audio by dragging | ● | ◐ | ● | ● | **Missing**: the Scrubber tool moves the playhead silently |
+| Shuttle / jog at variable speed | ● | ○ | ● | ● | **Missing** |
+| Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
+| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Missing** in the interface; the player already accepts 0.1–4× |
+| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Missing** |
+
+Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
+Varispeed is the only whole-project speed control among the four.
+
+## D. Audio engine
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Choose device, sample rate and buffer | ● | ● | ● | ● | **Works** (Playback Engine window) |
+| ASIO on Windows | ● | ● | n/a | ● | **Partial**: only in a personal build (`cargo xtask build-asio`) |
+| Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected |
+| Recover when the device disappears | ● | ● | ● | ● | **Partial**: detected and reported; reconnect is a manual button |
+| Session rate differs from the device rate | n/a | ● | ● | n/a | **Partial**: plays, but through a two-point linear resampler with no filter |
+| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel; aux, folder and master strips are serial; worker threads have no realtime priority |
+| Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
+| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer |
+| Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
+| Skip plug-ins on silent tracks | ● | ● | ● | ● | **Missing**: every active strip runs every block |
+| CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
+| No click on stop, locate and start | ● | ● | ● | ● | **Missing**: output cuts to zero; plug-ins are reset, so reverb tails are cut |
+| Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: adding a track or plug-in allocates on the audio thread |
+| Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only |
+| Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Missing** (belongs to the mixing section) |
+| Runs in a browser | ○ | ○ | ○ | ○ | **Works**, single-threaded |
+
+## E. Media and formats
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| WAV, BWF, RF64, AIFF | ● | ● | ● | ● | **Works** |
+| FLAC, MP3, AAC/M4A, Ogg, Opus, CAF | ◐ | ● | ● | ● | **Works** (more than Pro Tools reads) |
+| Files at another sample rate | ● | ● | ● | ● | **Works**: converted with a high-quality sinc at import or open |
+| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only) |
+| Compressed and long files without filling memory | ● | ● | ● | ● | **Partial**: anything that is not WAV at the session rate is decoded whole into memory on every open; AIFF does not stream |
+| Waveform cache | ● | ● | ● | ● | **Works** |
+
+## F. How a clip is rendered
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Clip gain | ● | ● | ● | ● | **Works**, −144 to +36 dB |
+| Gain envelope inside the clip | ● | ● | ○ | ● | **Works**, with render and conversion to and from volume automation |
+| Fades drawn in real time, several shapes | ● | ● | ● | ● | **Works**: five shapes plus a continuous curve |
+| Crossfades | ● | ● | ● | ● | **Partial**: both sides always share one shape |
+| Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Missing** |
+| Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Missing**: an unfaded cut can click |
+| Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
+| Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
+| Mute a clip | ● | ● | ● | ● | **Works** |
+| Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Missing** (Process › Reverse writes a file) |
+| Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Missing** |
+| Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Partial**: pastes linked copies |
+| Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Partial**: an overlap is cut away at edit time; there is no layered editing |
+| Takes and swipe comping | ● | ● | ● | ● | **Works**; a take cannot be auditioned without making it active |
+| Stereo clip on a mono track | ● | ● | ● | ● | **Partial**: plays the left channel only |
+| Split a stereo track into mono | ● | ● | ● | ● | **Partial**: both new tracks play the left channel |
+| Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
+| Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
+| ARA editors | ● | ● | ● | ● | **Missing** |
+
+## G. Tempo and time-stretch
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed with linear interpolation |
+| Audio follows tempo changes | ● | ● | ● | ● | **Missing**: clips stay at their sample positions; the tick timebase is a flag for audio |
+| Choice of stretch algorithm | ● | ● | ● | ● | **Flag only**: polyphonic, rhythmic, monophonic and X-Form all run the same render |
+| Warp markers you can drag | ● | ● | ● | ● | **Missing**: markers are written by Straighten and never edited or read |
+| Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
+| Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |
+| Conform a clip to the session tempo | ● | ● | ● | ● | **Partial**: once, as varispeed, so the pitch changes |
+| Loops that match tempo when dropped in | ● | ● | ● | ● | **Missing** |
+| Loops that match key | ○ | ◐ | ● | ◐ | **Missing** |
+
+## H. Auditioning
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Preview a file before importing | ● | ● | ● | ● | **Missing** |
+| Preview in time with the session tempo | ● | ● | ● | ● | **Missing** |
+| Preview while the session plays, in sync | ● | ● | ● | ● | **Missing** |
+| Audition a clip from the clip list or pool | ● | ● | ● | ● | **Missing** |
+| Preview volume and output | ● | ● | ● | ● | **Missing** |
+
+The player already has a raw preview voice (`Player::preview`, used only by Juke's hit picker), so
+the engine side of H is partly there.
+
+## Bugs found on the way
+
+All in features the docs count as done. Each needs a regression test with its fix.
+
+| # | Bug | Where |
+|---|---|---|
+| 1 | With Loop Playback on, a selection of 64 samples or less plays on to the end of the session | `crates/playback/src/lib.rs:647`, `crates/ui-egui/src/lib.rs:2166` |
+| 2 | `transport.play {from}` ignores `from` when stopped; Edit › Play Timeline plays the edit selection | `crates/engine/src/cmd/transport.rs:10`, `cmd/edit_more.rs:128` |
+| 3 | Play Selection with an insertion point plays one sample | `crates/ui-egui/src/lib.rs:2243` |
+| 4 | A stereo clip on a mono track plays only the left channel | `crates/mix/src/lib.rs:3262` |
+| 5 | Split into Mono makes two tracks that both play the left channel | `crates/engine/src/cmd/track.rs:463` |
+| 6 | After Process, the clip's effects are baked in and still active, so they are heard twice | `cmd/audiosuite.rs:118` |
+| 7 | Elastic Properties on a non-elastic track changes speed but not length: the tail is cut or runs into silence | `cmd/clip.rs:202` |
+| 8 | Clip Gain › Bypass erases the gain and its envelope | `cmd/clip.rs:83` |
+| 9 | Reconnect opens the new device before closing the old one (ASIO allows one) | `crates/ui-egui/src/lib.rs:2080` |
+| 10 | Solo modes AFL, PFL, Latch and Momentary do nothing; only SIP and X-OR work | `cmd/options.rs:258`, `menus.rs:953` |
+| 11 | A missing configured device falls back to the system default with only a log line | `crates/playback/src/devices.rs:355` |
+| 12 | Clip effects allocate on the audio thread the first time a clip plays | `crates/mix/src/lib.rs:2560` |
+
+## Suggested order of work
+
+Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../target-app-parity.md)); all are judgements.
+
+**1. Fix what is wrong (≈ 10–16 h).** Bugs 1–9 and 11. Small, and each is in a path people use daily.
+
+**2. What all four have (≈ 75–120 h).**
+
+| Work | Est. (h) | Notes |
+|---|---:|---|
+| Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | Cheapest audible improvement |
+| Loop range and loop on/off change while playing | 3–5 | A new player command; the loop logic exists |
+| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | The player's speed path can carry it once it has a better resampler |
+| A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | The offline sinc exists; this needs a realtime form |
+| Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | Builds on `Player::preview` |
+| Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
+| Typing a position into the counter; pause | 2–4 | |
+| Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | Shrinks G-06 |
+
+**3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
+(Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10; per-clip transpose and non-destructive
+reverse, 8–12; clip effects that take any module, 8–12; automatic crossfades on overlap and layered
+editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (build strips off the audio
+thread) and worker thread priority, 8–14; automatic device recovery, 3–6.
+
+**Where FreeDAWm is already level or ahead:** gapless looping, uninterrupted playback while
+editing, the breadth of delay compensation, formats read, clip gain envelopes with conversion to
+automation, freeze up to a chosen module, built-in vocal tuning heard live, and the browser build.
+
+## Sources
+
+Versions were checked on 2026-11-15:
+[Pro Tools 2026.4](https://www.avid.com/resource-center/whats-new-in-pro-tools-20264),
+[Fender Studio Pro 8.2](https://www.fender.com/newsroom/273556-fender-studio-pro-8-2-expands-mixing-and-creative-production-tools/),
+[Logic Pro 13.0](https://macrumors.com/2026/11/05/apples-creator-studio-updates-start-rolling-out),
+[Cubase 15](https://www.musicradar.com/music-tech/steinberg-unveils-cubase-15-a-major-leap-forward-for-its-flagship-daw-with-new-instruments-effects-modulators-and-ai-powered-stem-separation).
+Feature entries for the four come from their manuals as known, not from a side-by-side run; treat a
+◐ as "check before relying on it".
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-15 | major | First version: playing audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
