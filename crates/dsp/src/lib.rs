@@ -219,8 +219,8 @@ pub const HIDDEN_STOCK: &[Category] = &[
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
-/// drawer with its response picker, for now.)
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault"];
+/// drawer with its response picker, for now, and Mend's the drawer with its model's status.)
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend"];
 
 impl PluginInfo {
     /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories,
