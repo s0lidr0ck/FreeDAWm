@@ -1228,7 +1228,8 @@ fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, ins: &Insert, info: &'
     let g = p.layout_job(job);
     let title_clip = Rect::from_min_max(pos2(inner.min.x, y), pos2(power.min.x - 4.0, y + 20.0));
     p.with_clip_rect(title_clip).galley(pos2(inner.min.x, y + 1.0), g, t.text);
-    let sub = if off { format!("{} · bypassed", info.name) } else { info.name.to_string() };
+    let name = crate::plugin_titles::titled(info);
+    let sub = if off { format!("{name} · bypassed") } else { name };
     p.with_clip_rect(title_clip.translate(vec2(0.0, 14.0))).text(pos2(inner.min.x, y + 16.0), Align2::LEFT_TOP, sub, regular(9.5), t.text_dim);
     let y = y + 34.0;
 

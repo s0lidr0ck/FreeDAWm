@@ -1194,7 +1194,7 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
     for (i, (group, list)) in groups.into_iter().enumerate() {
         ui.menu_button(group, |ui| {
             for p in list {
-                if ui.button(p.name).clicked() {
+                if ui.button(crate::plugin_titles::titled(p)).clicked() {
                     pick_module(app, ui, id, pick, p.id);
                 }
             }
@@ -1334,7 +1334,7 @@ pub fn instrument_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId) {
     for (group, list) in picker_groups(true) {
         ui.menu_button(group, |ui| {
             for p in list {
-                if ui.button(p.name).clicked() {
+                if ui.button(crate::plugin_titles::titled(p)).clicked() {
                     picked = Some(p.id.to_string());
                 }
             }
@@ -1378,7 +1378,7 @@ fn plugin_search(ui: &mut Ui, search: &MenuSearch, instruments: bool) -> Option<
     hosted.sort_by_cached_key(|(p, format)| (p.name.to_lowercase(), *format));
     let n = built_in.len() + hosted.len();
     let picked = search.rows(ui, n, 320.0, |ui, i, highlighted| match built_in.get(i) {
-        Some(p) => menu_row(ui, highlighted, p.name),
+        Some(p) => menu_row(ui, highlighted, &crate::plugin_titles::titled(p)),
         None => {
             let (p, format) = &hosted[i - built_in.len()];
             let label = if p.vendor.is_empty() { format!("{} ({format})", p.name) } else { format!("{} — {} ({format})", p.name, p.vendor) };

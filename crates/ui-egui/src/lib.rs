@@ -72,6 +72,7 @@ pub mod open_progress;
 pub mod ops_windows;
 pub mod palette;
 pub mod panels;
+pub mod plugin_titles;
 pub mod preferences;
 mod recent;
 pub mod record_offset;
