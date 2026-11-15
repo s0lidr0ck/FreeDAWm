@@ -177,7 +177,7 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
     harness.get_by_label("Built-in ⏵").hover();
     harness.step();
     harness.step();
-    harness.get_by_label("Drum Synth").click();
+    harness.get_by_label("Drum Synth - Synthesized Drum Kit").click();
     harness.step();
     harness.step();
     let app = harness.state();
