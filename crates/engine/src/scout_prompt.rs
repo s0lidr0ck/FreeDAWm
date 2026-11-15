@@ -83,6 +83,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_manners" => {
             "Automatic balance EQ: many times a second it turns down what covers its neighbours (Tame) and lifts what is covered (Recover); for buses and masters, in small amounts."
         }
+        "fs_copyq" => {
+            "Match EQ: makes a sound's tone meet a measured profile (`mix.copyq_measure` measures one, `mix.module_copyq` sets what a module matches to); link groups make tracks match one another."
+        }
         "fs_transient" => "Transient shaper: attack and sustain on anything.",
         "fs_twine" => "Mastering clipper and true-peak limiter, married; the last module on a master.",
         "fs_vint" => "Vintage EQ / colour boxes: seven circuits (four passive/active EQs solved by nodal analysis) plus the MEQ-5.",

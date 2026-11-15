@@ -101,7 +101,7 @@ pub(crate) fn link_row(app: &mut SoundApp, ui: &mut Ui, track: &Track, ins: &Ins
 }
 
 /// `links`: the plugin links (a module whose plugin does not, still in a group, can only leave).
-fn link_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, links: bool) {
+pub(crate) fn link_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, links: bool) {
     let mut pick: Option<Value> = None;
     ui.label(egui::RichText::new("Link group").small().weak());
     if ui.add(egui::Button::selectable(ins.link_group.is_none(), "Off (not linked)")).clicked() {

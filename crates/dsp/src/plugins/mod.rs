@@ -172,6 +172,7 @@ mod tests {
         "fs_manners",
         "fs_sift",
         "fs_cleanq",
+        "fs_copyq",
         "fs_vint",
         "fs_pitch",
         "fs_mod",
