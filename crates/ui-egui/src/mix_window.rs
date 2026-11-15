@@ -1104,6 +1104,10 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
     });
 }
 
+/// The picker's name for its first group: the FireStation engines and the stock plugins listed
+/// with them, which are all FreeDAWm's own.
+pub const BUILT_IN_GROUP: &str = "Built-In";
+
 /// What picking a plugin in [`module_picker`] does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pick {
@@ -1115,7 +1119,7 @@ pub(crate) enum Pick {
 
 /// The picker's groups of built-in plugins (effects, or `instruments`), in order: the FireStation
 /// engines and the stock plugins listed with them ([`soundcraft_dsp::PluginInfo::with_engines`])
-/// first (by name), then the rest by category in the registry's order ("Utilities" for
+/// first (by name, under [`BUILT_IN_GROUP`]), then the rest by category in the registry's order ("Utilities" for
 /// the effects, "Built-in" for the instruments). Only the listed plugins
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
@@ -1125,7 +1129,7 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
     let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
     fs.sort_by_cached_key(|p| p.name.to_lowercase());
     if !fs.is_empty() {
-        out.push(("FireStation".to_string(), fs));
+        out.push((BUILT_IN_GROUP.to_string(), fs));
     }
     let mut cats: Vec<Category> = Vec::new();
     for p in listed().filter(|p| !p.with_engines()) {
@@ -1186,11 +1190,11 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
         return;
     }
     let groups = picker_groups(false);
-    let fs_first = groups.first().is_some_and(|(g, _)| g == "FireStation");
+    let fs_first = groups.first().is_some_and(|(g, _)| g == BUILT_IN_GROUP);
     for (i, (group, list)) in groups.into_iter().enumerate() {
         ui.menu_button(group, |ui| {
             for p in list {
-                if ui.button(p.name).clicked() {
+                if ui.button(crate::plugin_titles::titled(p)).clicked() {
                     pick_module(app, ui, id, pick, p.id);
                 }
             }
@@ -1330,7 +1334,7 @@ pub fn instrument_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId) {
     for (group, list) in picker_groups(true) {
         ui.menu_button(group, |ui| {
             for p in list {
-                if ui.button(p.name).clicked() {
+                if ui.button(crate::plugin_titles::titled(p)).clicked() {
                     picked = Some(p.id.to_string());
                 }
             }
@@ -1374,7 +1378,7 @@ fn plugin_search(ui: &mut Ui, search: &MenuSearch, instruments: bool) -> Option<
     hosted.sort_by_cached_key(|(p, format)| (p.name.to_lowercase(), *format));
     let n = built_in.len() + hosted.len();
     let picked = search.rows(ui, n, 320.0, |ui, i, highlighted| match built_in.get(i) {
-        Some(p) => menu_row(ui, highlighted, p.name),
+        Some(p) => menu_row(ui, highlighted, &crate::plugin_titles::titled(p)),
         None => {
             let (p, format) = &hosted[i - built_in.len()];
             let label = if p.vendor.is_empty() { format!("{} ({format})", p.name) } else { format!("{} — {} ({format})", p.name, p.vendor) };
@@ -2159,7 +2163,7 @@ mod tests {
     fn the_picker_lists_firestation_then_utilities_only() {
         use soundcraft_dsp::Category;
         let groups = super::picker_groups(false);
-        assert_eq!(groups[0].0, "FireStation");
+        assert_eq!(groups[0].0, "Built-In");
         let fs: Vec<&str> = groups[0].1.iter().map(|p| p.name).collect();
         let mut sorted = fs.clone();
         sorted.sort_by_key(|n| n.to_lowercase());
@@ -2168,7 +2172,7 @@ mod tests {
         assert!(fs.contains(&"Manners") && fs.contains(&"Rez") && fs.contains(&"Sprawl"), "Rez and Sprawl are offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
-        assert_eq!(names, ["FireStation", "Utilities"]);
+        assert_eq!(names, ["Built-In", "Utilities"]);
         let ids: Vec<&str> = groups[1].1.iter().map(|p| p.id).collect();
         for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
             assert!(ids.contains(&id), "{id}");
@@ -2180,10 +2184,11 @@ mod tests {
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
         assert!(groups[1].1.iter().all(|p| p.category == Category::Other));
-        // The instruments: the built-in ones, unchanged.
+        // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);
-        assert_eq!(inst[0].1.len(), soundcraft_dsp::plugins().iter().filter(|p| p.is_instrument).count());
+        assert_eq!(inst[0].1.len(), soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument).count());
+        assert!(inst[0].1.iter().all(|p| p.id != "drum_synth") && inst[0].1.iter().any(|p| p.id == "juke"));
     }
 
     #[test]

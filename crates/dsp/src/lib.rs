@@ -219,14 +219,19 @@ pub const HIDDEN_STOCK: &[Category] = &[
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
-/// drawer with its response picker, for now.)
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault"];
+/// drawer with its response picker, for now, and Mend's the drawer with its model's status.)
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend"];
+
+/// Plugins kept out of every plugin list by id, whatever their category: Drum Synth, which Juke
+/// has taken over from. Like the [`HIDDEN_STOCK`] ones they still load from sessions, play (a
+/// MIDI file's drum track gets Drum Synth) and can be set by id (`mix.instrument`).
+pub const HIDDEN_PLUGINS: &[&str] = &["drum_synth"];
 
 impl PluginInfo {
-    /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories,
-    /// or one of [`LISTED_STOCK`].
+    /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories
+    /// (or one of [`LISTED_STOCK`]), and not one of [`HIDDEN_PLUGINS`].
     pub fn listed(&self) -> bool {
-        !HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id)
+        (!HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id)) && !HIDDEN_PLUGINS.contains(&self.id)
     }
 
     /// Whether the lists offer this plugin among the FireStation engines (the picker's first
@@ -710,7 +715,13 @@ mod trait_default_tests {
         for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
             assert_eq!(listed(id), Some(true), "{id}");
         }
-        assert!(plugins().iter().filter(|p| p.category == Category::FireStation || p.is_instrument).all(|p| p.listed()));
+        // Every engine and every instrument is listed, but Drum Synth (Juke took over from it),
+        // which still runs.
+        assert!(
+            plugins().iter().filter(|p| p.category == Category::FireStation || p.is_instrument).all(|p| p.listed() != HIDDEN_PLUGINS.contains(&p.id))
+        );
+        assert_eq!(listed("drum_synth"), Some(false));
+        assert!(create("drum_synth").is_some() && HIDDEN_PLUGINS.iter().all(|id| plugin_info(id).is_some()));
         assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id)));
         // Rez is a stock dynamics plugin no engine covers: listed, with the engines.
         assert_eq!(listed("rez"), Some(true));

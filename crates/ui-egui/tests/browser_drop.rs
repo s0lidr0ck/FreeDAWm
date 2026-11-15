@@ -88,11 +88,11 @@ fn nth(h: &Harness<SoundApp>, label: &str, n: usize) -> Pos2 {
 #[test]
 fn drop_instrument_on_instrument_track_sets_it() {
     let mut h = browser(app(), BrowserTab::Instruments);
-    let from = card(&mut h, "Drum Synth");
+    let from = card(&mut h, "Lift - Sampler");
     let to = row(&h, "Keys").center();
     drag(&mut h, from, to, Modifiers::NONE);
     let keys = h.state().engine.session().track_by_name("Keys").unwrap().instrument.clone().unwrap();
-    assert_eq!(keys.plugin, "drum_synth");
+    assert_eq!(keys.plugin, "sampler");
     // And on the Instrument column's slot.
     let from = card(&mut h, "Lift - Sampler");
     let slot = h.get_by_role_and_label(Role::Button, "Instrument").rect().center();
@@ -106,10 +106,10 @@ fn drop_instrument_on_audio_track_is_refused() {
     let mut h = browser(app(), BrowserTab::Instruments);
     let session = h.state().engine.session().clone();
     let undo = undo_len(&h);
-    let from = card(&mut h, "Drum Synth");
+    let from = card(&mut h, "Lift - Sampler");
     let to = header(&h, "Voice");
     drag(&mut h, from, to, Modifiers::NONE);
-    assert_eq!(h.state().ui.status, "Drum Synth is an instrument: drop it on an instrument track or below the tracks");
+    assert_eq!(h.state().ui.status, "Lift - Sampler is an instrument: drop it on an instrument track or below the tracks");
     assert_eq!(h.state().engine.session().tracks, session.tracks);
     assert_eq!(undo_len(&h), undo);
 }
@@ -163,14 +163,14 @@ fn drop_below_tracks_creates_track() {
     let below = |h: &Harness<SoundApp>| pos2(row(h, "Keys").center().x, row(h, "Keys").max.y + 120.0);
     let tracks = h.state().engine.session().tracks.len();
     let undo = undo_len(&h);
-    let from = card(&mut h, "Drum Synth");
+    let from = card(&mut h, "Lift - Sampler");
     let to = below(&h);
     drag(&mut h, from, to, Modifiers::NONE);
     let s = h.state().engine.session();
     assert_eq!(s.tracks.len(), tracks + 1);
     let new = s.tracks.last().unwrap();
     assert_eq!(new.kind, TrackKind::Instrument);
-    assert_eq!(new.instrument.as_ref().unwrap().plugin, "drum_synth");
+    assert_eq!(new.instrument.as_ref().unwrap().plugin, "sampler");
     assert_eq!(s.edit.selected_tracks, [new.id], "the new track is selected");
     assert_eq!(undo_len(&h), undo + 1);
     editor_support::undo(&mut h);
@@ -211,19 +211,19 @@ fn double_click_uses_selected_track() {
     // An instrument goes to an instrument track's instrument slot.
     h.get_by_role_and_label(Role::RadioButton, "Instruments").click();
     h.run_steps(3);
-    let at = card(&mut h, "Drum Synth");
+    let at = card(&mut h, "Lift - Sampler");
     // Not onto an audio track: it says what would work, and nothing changes.
     let voice = track(&h, "Voice");
     h.state_mut().run("edit.select", json!({"tracks": [voice.0]})).unwrap();
     let undo = undo_len(&h);
     pause(&mut h);
     double_click(&mut h, at);
-    assert_eq!(h.state().ui.status, "Select an instrument track, or drag Drum Synth below the tracks");
+    assert_eq!(h.state().ui.status, "Select an instrument track, or drag Lift - Sampler below the tracks");
     assert_eq!(undo_len(&h), undo);
     h.state_mut().run("edit.select", json!({"tracks": [keys.0]})).unwrap();
     pause(&mut h);
     double_click(&mut h, at);
-    assert_eq!(h.state().engine.session().track(keys).unwrap().instrument.as_ref().unwrap().plugin, "drum_synth");
+    assert_eq!(h.state().engine.session().track(keys).unwrap().instrument.as_ref().unwrap().plugin, "sampler");
     // The card menu's "Insert on selected track" does the same.
     let at = card(&mut h, "Lift - Sampler");
     right_click(&mut h, at);

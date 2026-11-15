@@ -132,7 +132,7 @@ fn edit_window_insert_list_opens_changes_and_adds_plugins() {
     for _ in 0..10 {
         step(&mut h);
     }
-    let pick = h.get_by_label(plugin.name).rect().center();
+    let pick = h.get_by_label(&soundcraft_ui_egui::plugin_titles::titled(plugin)).rect().center();
     click(&mut h, pick);
     assert_eq!(insert(&h, 1).as_deref(), Some(plugin.id));
     assert_eq!(insert(&h, 2), None);

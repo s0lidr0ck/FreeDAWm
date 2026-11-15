@@ -262,6 +262,9 @@ impl Default for Engine {
 impl Engine {
     pub fn new(mut session: Session) -> Self {
         install_panic_hook();
+        // Mend's model worker (idle until a Mend exists; the browser build has none).
+        #[cfg(not(target_arch = "wasm32"))]
+        soundcraft_ml::live::start();
         crate::cmd::module_ceiling::prepare_states(&mut session);
         crate::midi_cleanup::refresh(&mut session);
         crate::vocal::refresh_fingerprints_in(&mut session);

@@ -75,7 +75,7 @@ fn first_module(h: &Harness<SoundApp>) -> Option<soundcraft_model::ModuleId> {
 fn picking_a_plugin_from_the_plus_row_opens_it() {
     let (category, plugin, _) = two_effects();
     let mut h = harness(vox(), MainWindow::Mix);
-    pick(&mut h, "Add module", false, &category, plugin.name);
+    pick(&mut h, "Add module", false, &category, &soundcraft_ui_egui::plugin_titles::titled(plugin));
     assert_eq!(inserted(&h).as_deref(), Some(plugin.id));
     assert_eq!(opened(&h), first_module(&h), "the new module's drawer opened");
     assert!(opened(&h).is_some());
@@ -108,7 +108,7 @@ fn replacing_a_module_opens_the_new_plugin() {
     h.run_steps(3);
     h.get_by_label(&category).hover();
     h.run_steps(3);
-    h.get_by_label(second.name).click();
+    h.get_by_label(&soundcraft_ui_egui::plugin_titles::titled(second)).click();
     h.run_steps(3);
     assert_eq!(inserted(&h).as_deref(), Some(second.id));
     assert_eq!(h.state().engine.session().tracks[0].mixer.inserts.len(), 1, "replaced in place");
@@ -121,7 +121,7 @@ fn replacing_a_module_opens_the_new_plugin() {
 fn the_edit_windows_inserts_column_opens_it_too() {
     let (category, plugin, _) = two_effects();
     let mut h = harness(vox(), MainWindow::Edit);
-    pick(&mut h, "Add insert", false, &category, plugin.name);
+    pick(&mut h, "Add insert", false, &category, &soundcraft_ui_egui::plugin_titles::titled(plugin));
     assert_eq!(inserted(&h).as_deref(), Some(plugin.id));
     assert_eq!(opened(&h), first_module(&h));
 }

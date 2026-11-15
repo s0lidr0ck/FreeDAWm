@@ -106,6 +106,7 @@ pub struct OnnxModel {
     session: ort::session::Session,
     on_gpu: bool,
     dml_config: Vec<(String, String)>,
+    arena: bool,
     cancel: Option<crate::Cancel>,
     /// Why DirectML isn't used, when it was wanted.
     pub fallback_note: Option<String>,
@@ -138,14 +139,20 @@ impl Source {
 }
 
 /// Build a session for `src` on the CPU (`gpu == false`) or DirectML.
-fn build(id: &str, src: &Source, gpu: bool, dml_config: &[(String, String)]) -> Result<ort::session::Session> {
+/// Whether sessions use ORT's memory arenas when the caller does not say.
+fn arena_default() -> bool {
+    crate::env_var_os("ML_ARENA").is_some_and(|v| v == "1")
+}
+
+fn build(id: &str, src: &Source, gpu: bool, dml_config: &[(String, String)], arena: bool) -> Result<ort::session::Session> {
     let threads = std::thread::available_parallelism().map_or(4, std::num::NonZero::get).clamp(1, 16);
     let mut b = ort::session::Session::builder().map_err(|e| rt(id, "session builder", e))?;
     b = b.with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3).map_err(|e| rt(id, "optimization level", e))?;
     // Memory: the arenas keep their high-water mark for the session's life (the karaoke RoFormer
     // on the CPU reached 14.5 GB with them); initializers go straight to the device allocator.
     // FREEDAWM_ML_ARENA=1 (or SOUNDCRAFT_ML_ARENA=1) turns the arenas back on (for comparison).
-    let arena = crate::env_var_os("ML_ARENA").is_some_and(|v| v == "1");
+    // A caller whose inputs are all one size asks for them itself ([`OnnxModel::open_model_steady`]):
+    // the mark is then fixed, and the arenas make such a model nearly twice as fast on the CPU.
     if !arena {
         b = b.with_config_entry("session.use_device_allocator_for_initializers", "1").map_err(|e| rt(id, "initializer allocator", e))?;
         b = b.with_memory_pattern(false).map_err(|e| rt(id, "memory pattern", e))?;
@@ -203,6 +210,17 @@ impl OnnxModel {
     /// folder; a card may list several). A card with `recommended_ep: "cpu"` runs on the CPU
     /// under [`Device::Auto`] (the GPU is still tried when asked for).
     pub fn open_model_file(model: &crate::models::InstalledModel, file: &str, device: Device, cancel: &crate::Cancel) -> Result<Self> {
+        Self::open_model_file_with(model, file, device, cancel, arena_default())
+    }
+
+    /// As [`OnnxModel::open_model`] with ORT's memory arenas on: for a model that is run again and
+    /// again on inputs of one size (Mend's), where the arenas' high-water mark is fixed and they
+    /// make the CPU runs much faster (Renaissance: 1.8 times).
+    pub fn open_model_steady(model: &crate::models::InstalledModel, device: Device, cancel: &crate::Cancel) -> Result<Self> {
+        Self::open_model_file_with(model, &model.card.file, device, cancel, true)
+    }
+
+    fn open_model_file_with(model: &crate::models::InstalledModel, file: &str, device: Device, cancel: &crate::Cancel, arena: bool) -> Result<Self> {
         let card = &model.card;
         let path = Path::new(file);
         if file.is_empty() || path.is_absolute() || path.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
@@ -219,7 +237,7 @@ impl OnnxModel {
             .unwrap_or_default();
         let id = if card.id.is_empty() { "model" } else { card.id.as_str() };
         let wanted = if dml_ok { device } else { Device::Cpu };
-        let mut m = Self::open_with(id, Source::File(model.dir.join(file)), wanted, config)?;
+        let mut m = Self::open_with(id, Source::File(model.dir.join(file)), wanted, config, arena)?;
         if !dml_ok && device.wants_gpu() {
             m.fallback_note = Some("CPU (this model does not run correctly on DirectML)".into());
         }
@@ -228,22 +246,24 @@ impl OnnxModel {
     }
 
     fn open_source(id: &str, src: Source, device: Device) -> Result<Self> {
-        Self::open_with(id, src, device, Vec::new())
+        Self::open_with(id, src, device, Vec::new(), arena_default())
     }
 
-    fn open_with(id: &str, src: Source, device: Device, dml_config: Vec<(String, String)>) -> Result<Self> {
+    fn open_with(id: &str, src: Source, device: Device, dml_config: Vec<(String, String)>, arena: bool) -> Result<Self> {
         let mut note = None;
         if device.wants_gpu() {
-            match build(id, &src, true, &dml_config) {
-                Ok(session) => return Ok(OnnxModel { id: id.into(), src, session, on_gpu: true, dml_config, cancel: None, fallback_note: None }),
+            match build(id, &src, true, &dml_config, arena) {
+                Ok(session) => {
+                    return Ok(OnnxModel { id: id.into(), src, session, on_gpu: true, dml_config, arena, cancel: None, fallback_note: None });
+                }
                 Err(e) => {
                     log::warn!("{e}; running on the CPU");
                     note = Some(format!("DirectML unavailable ({e}); ran on the CPU"));
                 }
             }
         }
-        let session = build(id, &src, false, &[])?;
-        Ok(OnnxModel { id: id.into(), src, session, on_gpu: false, dml_config, cancel: None, fallback_note: note })
+        let session = build(id, &src, false, &[], arena)?;
+        Ok(OnnxModel { id: id.into(), src, session, on_gpu: false, dml_config, arena, cancel: None, fallback_note: note })
     }
 
     pub fn on_gpu(&self) -> bool {
@@ -273,7 +293,7 @@ impl OnnxModel {
             Err(MlError::Cancelled) => Err(MlError::Cancelled),
             Err(e) if self.on_gpu => {
                 log::warn!("{e}; retrying on the CPU");
-                self.session = build(&self.id, &self.src, false, &self.dml_config)?;
+                self.session = build(&self.id, &self.src, false, &self.dml_config, self.arena)?;
                 self.on_gpu = false;
                 self.fallback_note = Some(format!("DirectML failed ({e}); finished on the CPU"));
                 self.run_once(retry.unwrap_or_default())

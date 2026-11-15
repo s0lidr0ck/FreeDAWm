@@ -57,19 +57,19 @@ fn an_insert_menu_searches_as_soon_as_it_opens() {
     let mut h = harness(vox());
     open(&mut h, "Add module");
     type_text(&mut h, "tr");
-    assert!(h.query_by_label(reverbs[0].name).is_some(), "typing went to the search");
+    assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(reverbs[0])).is_some(), "typing went to the search");
     assert!(h.query_by_label_contains("Utilities").is_none(), "the matches replace the groups");
 
     h.get_by_role(Role::TextInput).click();
     h.run_steps(3);
-    assert!(h.query_by_label(reverbs[0].name).is_some(), "a click in the field keeps the menu open");
+    assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(reverbs[0])).is_some(), "a click in the field keeps the menu open");
 
     press(&mut h, Key::ArrowUp);
     press(&mut h, Key::ArrowDown);
     press(&mut h, Key::Enter);
     let insert = h.state().engine.session().tracks[0].mixer.inserts.first().cloned().expect("Enter inserts the highlighted plugin");
     assert_eq!(insert.plugin, reverbs[1].id);
-    assert!(h.query_by_label(reverbs[0].name).is_none(), "picking closes the menu");
+    assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(reverbs[0])).is_none(), "picking closes the menu");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn a_menu_opens_with_an_empty_search() {
     open(&mut h, "Add module");
     type_text(&mut h, "tr");
     press(&mut h, Key::Escape);
-    assert!(h.query_by_label(built_in(false, "tr")[0].name).is_none(), "Escape closes the menu");
+    assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(built_in(false, "tr")[0])).is_none(), "Escape closes the menu");
 
     open(&mut h, "Add module");
     assert!(h.query_by_label_contains("Utilities").is_some(), "the old search is gone, so the groups show");
@@ -98,7 +98,7 @@ fn picks_without_the_search_still_close_the_menu() {
     h.run_steps(3);
     h.get_by_label(&category).hover();
     h.run_steps(3);
-    h.get_by_label(first.name).click();
+    h.get_by_label(&soundcraft_ui_egui::plugin_titles::titled(first)).click();
     h.run_steps(3);
     assert_eq!(h.state().engine.session().tracks[0].mixer.inserts.iter().map(|i| i.plugin.as_str()).collect::<Vec<_>>(), [first.id]);
     assert!(h.query_by_label(&category).is_none(), "a plugin from a group closes the menu");
@@ -130,7 +130,7 @@ fn an_instrument_menu_searches_as_soon_as_it_opens() {
     press(&mut h, Key::Enter);
     let instrument = h.state().engine.session().tracks[0].instrument.clone().unwrap();
     assert_eq!(instrument.plugin, drums[0].id);
-    assert!(h.query_by_label(drums[0].name).is_none(), "picking closes the menu");
+    assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(drums[0])).is_none(), "picking closes the menu");
 }
 
 #[test]

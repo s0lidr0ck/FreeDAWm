@@ -8,6 +8,7 @@ pub mod harmonic;
 pub mod imprint;
 pub mod juke;
 pub mod lull;
+pub mod mend;
 pub mod modulation;
 pub mod pitch;
 pub mod reverb;
@@ -24,7 +25,7 @@ pub mod vault;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 33] = [
+const BUILTINS: [&PluginInfo; 34] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -37,6 +38,7 @@ const BUILTINS: [&PluginInfo; 33] = [
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
     &vault::VAULT_INFO,
+    &mend::MEND_INFO,
     &modulation::DELAY_INFO,
     &modulation::CHORUS_INFO,
     &modulation::FLANGER_INFO,
@@ -102,6 +104,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
         "vault" => Box::new(vault::Vault::new()),
+        "mend" => Box::new(mend::Mend::new()),
         "mod_delay" => Box::new(modulation::ModDelay::new()),
         "chorus" => Box::new(modulation::ModFx::chorus()),
         "flanger" => Box::new(modulation::ModFx::flanger()),
@@ -148,6 +151,7 @@ mod tests {
         "room_reverb",
         "plate_reverb",
         "vault",
+        "mend",
         "mod_delay",
         "chorus",
         "flanger",

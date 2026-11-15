@@ -40,6 +40,7 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("lofi", include_bytes!("../../assets/browser-thumbs/lofi.png")),
     ("lull", include_bytes!("../../assets/browser-thumbs/lull.png")),
     ("maximizer", include_bytes!("../../assets/browser-thumbs/maximizer.png")),
+    ("mend", include_bytes!("../../assets/browser-thumbs/mend.png")),
     ("mod_delay", include_bytes!("../../assets/browser-thumbs/mod_delay.png")),
     ("phaser", include_bytes!("../../assets/browser-thumbs/phaser.png")),
     ("pitch_shifter", include_bytes!("../../assets/browser-thumbs/pitch_shifter.png")),

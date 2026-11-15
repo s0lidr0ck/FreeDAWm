@@ -4590,14 +4590,17 @@ impl MixEngine {
     /// so the mode takes: VST3 deactivates, runs `setupProcessing` with `kOffline`/`kRealtime`
     /// and activates again; CLAP deactivates, sets `clap.render` and activates. The instance
     /// keeps its state. Main thread only (plugins want their activation there); built-in plugins
-    /// ignore the mode and are left alone. A plugin that refuses the mode logs and renders on
-    /// in realtime mode.
+    /// ignore the mode and are left alone, but for Mend, which is only told (it waits for its
+    /// model's answers offline; it needs no preparing again). A plugin that refuses the mode logs
+    /// and renders on in realtime mode.
     fn set_hosted_offline(&mut self, offline: bool) {
         let (sr, mb) = (self.sample_rate, self.max_block);
         let again = |id: &str, ch: usize, plugin: &mut Box<dyn Plugin>| {
             if is_third_party(id) {
                 plugin.set_offline(offline);
                 plugin.prepare(sr, mb, ch);
+            } else if id == soundcraft_dsp::plugins::mend::ID {
+                plugin.set_offline(offline);
             }
         };
         for st in self.strips.values_mut() {
