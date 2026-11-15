@@ -15,8 +15,9 @@ use std::fmt::Write as _;
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
 /// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
-/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift.
-pub const MAX_CHARS: usize = 48_000;
+/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift,
+/// and from 48 000 for the Vitalizer's six parameters in Vint (400).
+pub const MAX_CHARS: usize = 49_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
