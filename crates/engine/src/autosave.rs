@@ -187,9 +187,23 @@ struct Autosave {
 impl Autosave {
     /// A new folder under `root` for the session called `name`.
     fn create(root: &Path, name: &str) -> Result<Autosave> {
-        let stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis();
-        let dir = root.join(format!("{} {stamp}-{}", sanitize_name(name), std::process::id()));
-        let lock = std::fs::create_dir_all(&dir).and_then(|()| std::fs::File::create(dir.join(LOCK))).map_err(|err| io_error(&dir, err))?;
+        let mut stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis();
+        std::fs::create_dir_all(root).map_err(|err| io_error(root, err))?;
+        // The folder must be a new one: a session closed and another opened within the same
+        // millisecond would otherwise share a folder, and discarding the first deletes the second.
+        let mut tries = 0;
+        let dir = loop {
+            let dir = root.join(format!("{} {stamp}-{}", sanitize_name(name), std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => break dir,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && tries < 1000 => {
+                    stamp += 1;
+                    tries += 1;
+                }
+                Err(err) => return Err(io_error(&dir, err)),
+            }
+        };
+        let lock = std::fs::File::create(dir.join(LOCK)).map_err(|err| io_error(&dir, err))?;
         lock.try_lock().map_err(|err| EngineError::Io(format!("{}: {err}", dir.display())))?;
         Ok(Autosave { dir, lock: Some(lock), copies: BTreeMap::new(), next: 1, recording: false })
     }
@@ -451,6 +465,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("soundcraft-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn folders_made_in_the_same_millisecond_are_different_folders() {
+        let root = folder("autosave-same-ms");
+        let made: Vec<Autosave> = (0..50).map(|_| Autosave::create(&root, "Untitled").unwrap()).collect();
+        let mut dirs: Vec<&PathBuf> = made.iter().map(|a| &a.dir).collect();
+        dirs.sort();
+        dirs.dedup();
+        assert_eq!(dirs.len(), 50);
+        drop(made);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn record(e: &mut Engine, level: f32) {

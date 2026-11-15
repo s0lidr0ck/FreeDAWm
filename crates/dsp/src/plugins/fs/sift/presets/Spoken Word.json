@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "Spoken Word",
+  "group": "Speech",
+  "tags": "Podcast, voice-over",
+  "desc": "Even sibilance and tamed pops for a close speaking voice.",
+  "values": {
+    "sibAmount": 60,
+    "sibRange": 12,
+    "sibLow": 5000,
+    "sibHigh": 14000,
+    "mode": "Split",
+    "ploAmount": 70,
+    "ploRange": 20,
+    "ploHigh": 180
+  }
+}
