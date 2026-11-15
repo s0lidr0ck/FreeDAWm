@@ -287,9 +287,10 @@ impl PartialEq for AssetData {
 
 /// Module assets made ready, keyed by their reference (an `Insert::assets` value: `bundled:<name>`
 /// or a file path) and the sample rate they were made for (not serialised; the engine makes them
-/// when a module's asset is set and when a session opens). Two kinds are kept apart, as the same
-/// file can be both: prepared assets (an Amp's cabinet IR) and reference audio (the slots
-/// [`REFERENCE_KEYS`](crate::REFERENCE_KEYS) name: the whole file at the session rate).
+/// when a module's asset is set and when a session opens). Three kinds are kept apart, as the
+/// same file can be more than one: prepared assets (an Amp's cabinet IR), reference audio (the
+/// slots [`REFERENCE_KEYS`](crate::REFERENCE_KEYS) name: the whole file at the session rate) and
+/// reverb responses (Vault's, under [`SPACE_IR_KEY`](crate::SPACE_IR_KEY)).
 /// [`AssetPool::get_for`] picks the kind from the module's asset key.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AssetPool {
@@ -298,10 +299,32 @@ pub struct AssetPool {
     map: BTreeMap<String, BTreeMap<u32, AssetData>>,
     /// The same for reference audio.
     audio: BTreeMap<String, BTreeMap<u32, AssetData>>,
+    /// The same for reverb responses.
+    spaces: BTreeMap<String, BTreeMap<u32, AssetData>>,
 }
 
+type AssetMap = BTreeMap<String, BTreeMap<u32, AssetData>>;
+
 impl AssetPool {
-    /// A prepared asset (not reference audio).
+    fn kind(&self, key: &str) -> &AssetMap {
+        if crate::is_reference_key(key) {
+            &self.audio
+        } else if key == crate::SPACE_IR_KEY {
+            &self.spaces
+        } else {
+            &self.map
+        }
+    }
+    fn kind_mut(&mut self, key: &str) -> &mut AssetMap {
+        if crate::is_reference_key(key) {
+            &mut self.audio
+        } else if key == crate::SPACE_IR_KEY {
+            &mut self.spaces
+        } else {
+            &mut self.map
+        }
+    }
+    /// A prepared asset (not reference audio, not a reverb response).
     pub fn insert(&mut self, reference: &str, rate: u32, data: AssetData) {
         self.map.entry(reference.to_string()).or_default().insert(rate, data);
     }
@@ -314,22 +337,20 @@ impl AssetPool {
     }
     /// Stores the asset made for module asset key `key` (its kind follows the key).
     pub fn insert_for(&mut self, key: &str, reference: &str, rate: u32, data: AssetData) {
-        let map = if crate::is_reference_key(key) { &mut self.audio } else { &mut self.map };
-        map.entry(reference.to_string()).or_default().insert(rate, data);
+        self.kind_mut(key).entry(reference.to_string()).or_default().insert(rate, data);
     }
     /// The asset module asset key `key` takes from `reference` at `rate`. Does not allocate.
     pub fn get_for(&self, key: &str, reference: &str, rate: u32) -> Option<&AssetData> {
-        let map = if crate::is_reference_key(key) { &self.audio } else { &self.map };
-        map.get(reference)?.get(&rate)
+        self.kind(key).get(reference)?.get(&rate)
     }
     pub fn contains_for(&self, key: &str, reference: &str, rate: u32) -> bool {
         self.get_for(key, reference, rate).is_some()
     }
     /// The number of (kind, reference, rate) entries.
     pub fn len(&self) -> usize {
-        self.map.values().chain(self.audio.values()).map(BTreeMap::len).sum()
+        self.map.values().chain(self.audio.values()).chain(self.spaces.values()).map(BTreeMap::len).sum()
     }
     pub fn is_empty(&self) -> bool {
-        self.map.values().chain(self.audio.values()).all(BTreeMap::is_empty)
+        self.map.values().chain(self.audio.values()).chain(self.spaces.values()).all(BTreeMap::is_empty)
     }
 }

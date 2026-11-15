@@ -703,6 +703,10 @@ pub fn is_reference_key(key: &str) -> bool {
     REFERENCE_KEYS.contains(&key)
 }
 
+/// The `Insert::assets` key of Vault's impulse response: a reverb response made ready for its
+/// convolution. `soundcraft_dsp::plugins::vault::IR_KEY` names the same.
+pub const SPACE_IR_KEY: &str = "vaultIr";
+
 /// Numbers made ready for a plugin from its stored state (see [`Insert::prepared`]), shared by
 /// every snapshot of the document. `rev` tells one preparation from another without comparing
 /// the numbers (the mix engine hands a new one over once); equality compares only the numbers.
