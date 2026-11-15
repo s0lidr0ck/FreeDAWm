@@ -43,6 +43,7 @@ pub mod live_midi;
 pub mod lyric_ruler;
 pub mod lyrics_lane;
 pub mod lyrics_panel;
+mod mend_ui;
 pub mod menus;
 pub mod midi_cleanup_panel;
 pub mod midi_devices;

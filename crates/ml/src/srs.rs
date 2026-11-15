@@ -73,7 +73,7 @@ pub fn run(model: &InstalledModel, audio: &[Vec<f32>], device: Device, ctx: &Ctx
 }
 
 /// One normalised channel through the network, in frame chunks with context.
-fn restore_one(onnx: &mut OnnxModel, stft: &Stft, x: &[f32], core: usize, context: usize, ctx: &Ctx) -> Result<Vec<f32>> {
+pub(crate) fn restore_one(onnx: &mut OnnxModel, stft: &Stft, x: &[f32], core: usize, context: usize, ctx: &Ctx) -> Result<Vec<f32>> {
     let len = x.len();
     let spec = stft.forward(x);
     let (bins, frames) = (stft.bins(), stft.frames(len));

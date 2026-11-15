@@ -912,6 +912,9 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
     if ins.plugin == "vault" {
         y = crate::vault_ui::drawer_rows(app, &mut body, track.id, ins, inner, y);
     }
+    if ins.plugin == "mend" {
+        y = crate::mend_ui::drawer_rows(app, &mut body, ins, inner, y, meters);
+    }
     if ins.plugin == "imprint" {
         y = crate::imprint_ui::drawer_rows(app, &mut body, track.id, ins, inner, y, meters);
     }

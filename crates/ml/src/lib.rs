@@ -45,6 +45,7 @@ pub mod htdemucs;
 pub mod job;
 pub mod karaoke;
 pub mod kits;
+pub mod live;
 pub mod llama_bpe;
 pub mod lyrics;
 pub mod midi;
