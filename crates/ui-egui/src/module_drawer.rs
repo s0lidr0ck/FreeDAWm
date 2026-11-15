@@ -885,13 +885,14 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
         | GraphKind::LevelUp
         | GraphKind::Manners
         | GraphKind::CopyQ
+        | GraphKind::Sift
         | GraphKind::Chamber => {
             let gh = match kind {
                 GraphKind::Chamber | GraphKind::Shale | GraphKind::LevelUp => 176.0,
                 GraphKind::Twine => 140.0,
                 GraphKind::Transient => 156.0,
                 GraphKind::Pitch | GraphKind::Filter | GraphKind::Swale => 128.0,
-                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Manners | GraphKind::CopyQ => 120.0,
+                GraphKind::Mod | GraphKind::Delay | GraphKind::Reverb | GraphKind::Manners | GraphKind::Sift | GraphKind::CopyQ => 120.0,
                 GraphKind::Console | GraphKind::Dist => 112.0,
                 _ => 96.0,
             };
@@ -907,6 +908,9 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
     y += 8.0;
     if ins.plugin == "fs_amp" {
         y = amp_ir_row(app, &mut body, track.id, ins, inner, y) + 8.0;
+    }
+    if ins.plugin == "imprint" {
+        y = crate::imprint_ui::drawer_rows(app, &mut body, track.id, ins, inner, y, meters);
     }
 
     let hero = hero_param_for(info, ins);

@@ -29,6 +29,7 @@ pub mod fs_presets;
 pub mod hardware_credit;
 pub mod hit_picker;
 pub mod icons;
+mod imprint_ui;
 pub mod juke_fx;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod juke_kits_ui;

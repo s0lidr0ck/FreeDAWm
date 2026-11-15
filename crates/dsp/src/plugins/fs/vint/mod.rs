@@ -3,6 +3,12 @@
 //! (`VINT_MODELLED_PASSIVE = 0`): seven vintage EQ / colour boxes, the four EQs solved from their
 //! schematics by modified nodal analysis (`vint_mna`), plus the MEQ-5 as the eighth circuit.
 //!
+//! One part is not the C++'s: the Enhancer's Maximizer is the BBE 882's circuit
+//! (`vint_maximizer`, FreeDAWm's own), where the C++ has three filter bands and two delays.
+//! Nor is the Air: it is the Dolby Cat. No. 22 module's filters and compressors (`vint_air`).
+//! Nor is the Vitalizer: it follows SPL's patent and manuals (`vint_vitalizer`) and has six
+//! parameters of its own, appended after the C++'s 64.
+//!
 //! One Rust file per C++ header: `vint_engine_dsp` (VintEngineDSP.h), `vint_filters`,
 //! `vint_halfband`, `vint_mna`, `vint_neve`, `vint_neve_pre`, `vint_api`, `vint_british`,
 //! `vint_stages`, `vint_pultec_amp` (the reachable part), and `tables/` (VintGainTable.h,
@@ -38,16 +44,19 @@
 //!   save and the editor are UI-only.
 
 pub mod tables;
+pub mod vint_air;
 pub mod vint_api;
 pub mod vint_british;
 pub mod vint_engine_dsp;
 pub mod vint_filters;
 pub mod vint_halfband;
+pub mod vint_maximizer;
 pub mod vint_mna;
 pub mod vint_neve;
 pub mod vint_neve_pre;
 pub mod vint_pultec_amp;
 pub mod vint_stages;
+pub mod vint_vitalizer;
 
 mod presets;
 
@@ -120,6 +129,17 @@ fn enh_tune_text(v: f32) -> String {
 /// The low contour: up to +8 dB.
 fn enh_low_text(v: f32) -> String {
     db_text(8.0 * v)
+}
+fn vit_drive_text(v: f32) -> String {
+    db_text(vint_vitalizer::drive_db(v))
+}
+/// Bass Sound: nothing at the centre, Soft to the left, Tight to the right.
+fn vit_bass_text(v: f32) -> String {
+    let (amount, tight) = vint_vitalizer::bass_sound(v);
+    if amount <= 0.0 { "Off".into() } else { format!("{} {:.0}%", if tight { "Tight" } else { "Soft" }, amount * 100.0) }
+}
+fn vit_lc_text(v: f32) -> String {
+    hz_text(vint_vitalizer::lc_hz(v))
 }
 fn air_ref_text(v: f32) -> String {
     format!("{:.1} dBFS", dsp::knob_to_air_ref_db(v))
@@ -213,6 +233,13 @@ pub static VINT_PARAMS: [ParamInfo; NUM_PARAMS] = [
             "Mic -40", "Mic -45", "Mic -50", "Off", "Mic -55", "Mic -60", "Mic -65", "Mic -70", "Mic -75", "Mic -80",
         ],
     ),
+    // The Vitalizer's own controls: not in the C++ (`vint_vitalizer`).
+    knob01("vitDrive", "Vitalizer Drive", 0.5, "Enhancer", vit_drive_text),
+    knob01("vitBass", "Vitalizer Bass Sound", 0.5, "Enhancer", vit_bass_text),
+    knob01("vitComp", "Vitalizer Bass Comp", 0.0, "Enhancer", pct_text),
+    knob01("vitLcFreq", "Vitalizer LC-EQ", 0.5, "Enhancer", vit_lc_text),
+    knob01("vitIntensity", "Vitalizer Intensity", 0.0, "Enhancer", pct_text),
+    knob01("vitWidth", "Vitalizer Stereo Expander", 0.0, "Enhancer", pct_text),
 ];
 
 pub static VINT_INFO: PluginInfo = PluginInfo {
@@ -265,6 +292,8 @@ pub struct Vint {
     in_peak_db: f32,
     out_peak_db: f32,
     out_rms: f32,
+    /// the Vitalizer's lamps: gain reduction (dB) and the driven peak (dBFS)
+    vit_meters: (f32, f32),
     analysis: Arc<Analysis>,
 }
 
@@ -283,6 +312,7 @@ impl Vint {
             in_peak_db: f32::NAN,
             out_peak_db: f32::NAN,
             out_rms: 0.0,
+            vit_meters: (0.0, f32::NAN),
             analysis: Arc::new(Analysis::with_live(1)),
         };
         s.push_all();
@@ -349,6 +379,8 @@ impl Plugin for Vint {
         self.dsp.process(io, nc, frames);
         self.in_peak_db = gain_to_db(self.dsp.take_input_peak());
         self.out_peak_db = gain_to_db(self.dsp.take_output_peak());
+        let (gr, driven) = self.dsp.take_vitalizer_meters();
+        self.vit_meters = (gr, gain_to_db(driven));
         // `processBlock`: the block's RMS over the first two channels, for the editor's VU.
         let chans = io.len().min(2);
         let n = io.iter().take(chans).map(Vec::len).fold(frames, usize::min);
@@ -371,6 +403,8 @@ impl Plugin for Vint {
         out[1] = self.out_peak_db;
         out[2] = dsp::knob_to_drive_db(self.dsp.drive_knob());
         out[3] = self.out_rms;
+        out[4] = self.vit_meters.0;
+        out[5] = self.vit_meters.1;
     }
 }
 
@@ -403,6 +437,8 @@ pub fn frequency_response(values: &[f32], sample_rate: f32, freqs: &[f32], out: 
         }
         v.set_param("quality", 0.0);
         v.prepare(sr, N, 1);
+        // the Maximizer's response is drawn as it is on programme (its VCA open)
+        v.dsp.hold_vca_open(true);
         let mut io = vec![vec![0.0f32; N]];
         io[0][0] = first;
         v.process(&mut io, N);

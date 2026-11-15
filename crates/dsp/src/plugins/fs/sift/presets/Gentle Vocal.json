@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "Gentle Vocal",
+  "group": "Vocals",
+  "tags": "Light touch",
+  "desc": "A little off the sibilance and the worst thumps. A place to start.",
+  "values": {
+    "sibAmount": 35,
+    "sibRange": 8,
+    "sibLow": 4500,
+    "sibHigh": 14000,
+    "mode": "Split",
+    "ploAmount": 35,
+    "ploRange": 12,
+    "ploHigh": 180
+  }
+}

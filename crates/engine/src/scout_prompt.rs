@@ -15,9 +15,9 @@ use std::fmt::Write as _;
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
 /// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
-/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), then
-/// from 47 000 for CopyQ (1 100: its 24 parameters and its line).
-pub const MAX_CHARS: usize = 49_000;
+/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift,
+/// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350).
+pub const MAX_CHARS: usize = 49_500;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -75,6 +75,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_reverb" => "Reverb: Room and Hall, EMT 140 plate, spring tank, Cloud, Shimmer; decay up to 30 s, synced pre-delay, freeze, era colours.",
         "fs_sat" => "Saturation: tube/transformer/tape-style harmonic colour with drive and mix.",
         "fs_shale" => "Drum gate: band-limited onset detection, lookahead gate following each hit's decay, DeBleed, Kit Link, mic phase alignment.",
+        "fs_sift" => {
+            "De-esser for vocals that also catches plosives: sorts a voice into the voice, its sibilance (s, sh, t) and its plosives (p, b) and turns each down on its own, judged by shape so a quiet take is treated like a loud one; Listen plays one part alone."
+        }
         "fs_swale" => "Automatic volume swells (Pick, One-Shot, Rhythmic) with Clean or Slow Gear VCA, Bloom, Alternate.",
         "fs_tape" => "Tape machine: saturation, compression, wow/flutter and head-bump colour.",
         "fs_manners" => {
@@ -92,6 +95,7 @@ pub fn purpose(id: &str) -> &'static str {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }
         "subtractive_synth" => "Instrument: subtractive synthesizer (oscillators, filter, envelopes).",
+        "imprint" => "Utility: captures an impulse response with a sine sweep on Play (Send, Return or Loop); saved from its drawer.",
         "time_shift" => "Utility: shifts the signal in time (sample-accurate delay or advance) to align tracks.",
         "gain" => "Utility: clean gain change.",
         "trim" => "Utility: input trim for gain staging.",
