@@ -83,7 +83,7 @@ pub enum GraphKind {
     /// hanging from the top and what was taken off its plosives standing on the bottom.
     Sift,
     /// Rez: what it is taking off right now over frequency, hanging from the top over the input's
-    /// spectrum, with the edges of its range and (large) its sensitivity curve.
+    /// spectrum, with the edges of its range and its sensitivity curve.
     Rez,
     /// Lull: its curve (level in against level out) with the threshold in force, the live level
     /// riding it, whether it is open, and the gain reduction.
@@ -2331,7 +2331,7 @@ fn draw_manners(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&St
 /// comes per frame.
 pub const REZ_CUT_RANGE: f32 = 18.0;
 const REZ_EASE: f32 = 0.35;
-/// Rez's sensitivity curve (large only): the dB a quarter of the height stands for.
+/// Rez's sensitivity curve: the dB a quarter of the height stands for.
 const REZ_SENS_RANGE: f32 = 24.0;
 
 /// Where a cut of `db` hangs to in `rect` (0 dB: the top; [`REZ_CUT_RANGE`]: the bottom).
@@ -2347,7 +2347,7 @@ fn rez_bands(ins: &Insert) -> [soundcraft_dsp::plugins::rez::Band; soundcraft_ds
 }
 
 /// Rez: the cut it is making over frequency, hanging from the top over the input's spectrum.
-/// Outside Low..High the graph is dimmed; large, the sensitivity curve rides the middle.
+/// Outside Low..High the graph is dimmed; the sensitivity curve rides the middle.
 fn draw_rez(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&Streams>, sample_rate: f32, large: bool) {
     use soundcraft_dsp::plugins::rez as dsp;
     let t = Tokens::current();
@@ -2378,7 +2378,7 @@ fn draw_rez(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&Stream
     if high < F_MAX * 0.98 {
         p.rect_filled(Rect::from_min_max(pos2(freq_to_x(rect, high), rect.top()), rect.max), 0.0, shade);
     }
-    if large {
+    {
         // The sensitivity curve: the bands about the middle of the graph.
         let bands = rez_bands(ins);
         let mid = rect.center().y;
@@ -2392,6 +2392,8 @@ fn draw_rez(p: &egui::Painter, rect: Rect, ins: &Insert, streams: Option<&Stream
             })
             .collect();
         p.add(Shape::line(pts, Stroke::new(1.0, t.text_dim.gamma_multiply(0.7))));
+    }
+    if large {
         let mode = soundcraft_dsp::plugin_info(&ins.plugin).and_then(|i| i.param("mode")).map(|m| m.format(param(ins, "mode"))).unwrap_or_default();
         let delta = if param(ins, "delta") >= 0.5 { " · Delta" } else { "" };
         p.text(rect.right_bottom() - vec2(5.0, 3.0), Align2::RIGHT_BOTTOM, format!("{mode}{delta}"), bold(9.0), accent);
