@@ -20,6 +20,7 @@ pub mod reverb;
 pub mod rez;
 pub mod sat;
 pub mod shale;
+pub mod sift;
 pub mod sprawl;
 pub mod swale;
 pub mod tape;
