@@ -58,7 +58,8 @@ fn strong(s: &mut Vint, circuit: usize) {
 #[test]
 fn table_matches_the_cpp_order_and_defaults() {
     let ids: Vec<&str> = VINT_PARAMS.iter().map(|p| p.id).collect();
-    assert_eq!(ids.len(), 64, "Parameters.h has 64 entries (conPre was appended last)");
+    assert_eq!(ids.len(), 70, "Parameters.h has 64 entries (conPre was appended last); the Vitalizer's six are ours");
+    assert_eq!(&ids[64..], ["vitDrive", "vitBass", "vitComp", "vitLcFreq", "vitIntensity", "vitWidth"]);
     assert_eq!(&ids[..7], ["circuit", "stage", "drive", "mix", "output", "quality", "bypass"]);
     assert_eq!(ids[dsp::P_PAS_MID_HIGH_PEAK], "pasMidHighPeak");
     assert_eq!(ids[dsp::P_CON_HIGH_GAIN], "conHighGain");
@@ -78,7 +79,7 @@ fn table_matches_the_cpp_order_and_defaults() {
             id if id.starts_with("con") => "Console",
             id if id.starts_with("pro") => "Proportional",
             id if id.starts_with("bri") => "British",
-            id if id.starts_with("enh") => "Enhancer",
+            id if id.starts_with("enh") || id.starts_with("vit") => "Enhancer",
             id if id.starts_with("air") => "Air",
             _ => "Sampler",
         };
@@ -136,7 +137,7 @@ fn readouts_meter_and_drive() {
     assert_eq!(r[2], 18.0);
     // The last block's output RMS (the VU's `outLevel`): a 0.5 sine through a flat Passive.
     assert!((r[3] - 0.5 / 2f32.sqrt()).abs() < 0.03, "{r:?}");
-    assert!(r[4].is_nan());
+    assert!(r[6].is_nan());
     s.reset();
     s.readouts(&mut r);
     assert_eq!(r[3], 0.0, "a reset clears it");
@@ -461,4 +462,159 @@ fn reset_is_a_fresh_prepare() {
     let mut want = vec![src[0].clone(), src[1].clone()];
     run(&mut fresh, &mut want, 512);
     assert_eq!(after_reset, want);
+}
+
+#[test]
+fn the_maximizer_is_the_882s_circuit() {
+    // Through the whole engine (stage off): the circuit's own figures, `vint_maximizer`'s.
+    let mut v: Vec<f32> = VINT_PARAMS.iter().map(|p| p.default).collect();
+    v[dsp::P_CIRCUIT] = 4.0;
+    v[dsp::P_STAGE] = 0.0;
+    v[dsp::P_ENH_TYPE] = 1.0;
+    let freqs = [50.0, 700.0, 5000.0];
+    let mut out = [0.0f32; 3];
+    // PROCESS at maximum: +13.5 dB at 5 kHz, the lows where they were.
+    v[dsp::P_ENH_AMOUNT] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[2] - 13.5).abs() < 0.5 && (out[0] + 0.7).abs() < 0.5, "{out:?}");
+    // LO CONTOUR at maximum: +14.6 dB at 50 Hz, the highs within a dB of where they were.
+    v[dsp::P_ENH_AMOUNT] = 0.0;
+    v[dsp::P_ENH_LOW] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[0] - 14.6).abs() < 0.5 && (out[2] + 1.1).abs() < 0.5, "{out:?}");
+    // Both at minimum is the input itself (the unit's switch at OUT).
+    v[dsp::P_ENH_LOW] = 0.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out.iter().all(|d| d.abs() < 0.05), "{out:?}");
+}
+
+#[test]
+fn the_maximizer_closes_its_highs_on_faint_signals() {
+    // PROCESS at maximum, a 5 kHz tone: +13.5 dB on programme; under the 882's sensitivity
+    // (-45 dBu: -63 dBFS) the VCA takes the boost away.
+    let gain_at = |amp: f32| {
+        let mut s = prepared();
+        s.set_param("circuit", 4.0);
+        s.set_param("stage", 0.0);
+        s.set_param("enhType", 1.0);
+        s.set_param("enhAmount", 1.0);
+        let src: Vec<f32> = (0..96_000).map(|i| amp * (std::f32::consts::TAU * 5000.0 * i as f32 / 48_000.0).sin()).collect();
+        let mut io = vec![src.clone(), src.clone()];
+        run(&mut s, &mut io, 512);
+        let peak = io[0][72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        20.0 * (peak / amp).log10()
+    };
+    let (programme, faint) = (gain_at(0.1), gain_at(1.0e-5));
+    assert!((programme - 13.5).abs() < 0.5, "{programme}");
+    assert!(faint.abs() < 1.5, "{faint}");
+}
+
+/// The Enhancer on its Vitalizer, stage off, everything else at its default.
+fn vitalizer_values() -> Vec<f32> {
+    let mut v: Vec<f32> = VINT_PARAMS.iter().map(|p| p.default).collect();
+    v[dsp::P_CIRCUIT] = 4.0;
+    v[dsp::P_STAGE] = 0.0;
+    v[dsp::P_ENH_TYPE] = 2.0;
+    v
+}
+
+#[test]
+fn the_vitalizer_follows_its_controls() {
+    // Through the whole engine: `vint_vitalizer`'s own figures.
+    let freqs = [45.0, 800.0, 6300.0, 20_000.0];
+    let mut out = [0.0f32; 4];
+    let mut v = vitalizer_values();
+    // Everything at its default is the input: Process and Intensity are at minimum.
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out.iter().all(|d| d.abs() < 0.05), "{out:?}");
+    // Process: the mids down, the top up (Mid-Hi Tune at its centre, 2.8 kHz).
+    v[dsp::P_ENH_AMOUNT] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0].abs() < 0.7 && out[1] < -3.0 && out[3] > 7.5, "{out:?}");
+    // Bass Sound, Soft: the bottom up with it.
+    v[dsp::P_VIT_BASS] = 0.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0] > 8.0 && out[0] < 10.5, "{out:?}");
+    // Drive is the level into the filter network: at -8 dB on its scale, less of everything it adds.
+    let soft = out[0];
+    v[dsp::P_VIT_DRIVE] = 0.2;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!(out[0] < soft - 2.5 && out[0] > 3.0, "{out:?}");
+    // The LC stage has its own level: Intensity, with Process at minimum.
+    let mut v = vitalizer_values();
+    v[dsp::P_VIT_INTENSITY] = 1.0;
+    frequency_response(&v, 48_000.0, &freqs, &mut out);
+    assert!((out[2] - 10.1).abs() < 0.6 && out[0].abs() < 0.2, "{out:?}");
+}
+
+#[test]
+fn the_vitalizers_compressor_holds_the_bass_and_its_expander_widens() {
+    let run_with = |comp: f32, width: f32, right_amp: f32| {
+        let mut s = prepared();
+        for (id, val) in [
+            ("circuit", 4.0),
+            ("stage", 0.0),
+            ("enhType", 2.0),
+            ("enhAmount", 1.0),
+            ("enhTune", 0.0),
+            ("vitBass", 0.0),
+            ("vitComp", comp),
+            ("vitWidth", width),
+        ] {
+            assert!(s.set_param(id, val), "{id}");
+        }
+        let tone = |amp: f32| -> Vec<f32> { (0..96_000).map(|i| amp * (std::f32::consts::TAU * 45.0 * i as f32 / 48_000.0).sin()).collect() };
+        let mut io = vec![tone(0.25), tone(right_amp)];
+        run(&mut s, &mut io, 512);
+        assert!(all_finite(&io));
+        let peak = |c: &[f32]| c[72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        (peak(&io[0]), peak(&io[1]))
+    };
+    // Bass Comp: the loud 45 Hz the Soft bass adds is held back, and only that.
+    let (open, _) = run_with(0.0, 0.0, 0.25);
+    let (held, _) = run_with(1.0, 0.0, 0.25);
+    assert!(open > 0.25 * 2.7 && held < open * 0.75 && held > 0.25, "{open} {held}");
+    // Stereo Expander: nothing on a mono signal, the difference raised on a wide one.
+    let (l0, r0) = run_with(0.0, 1.0, 0.25);
+    assert!((l0 - open).abs() < 1e-4 && (r0 - open).abs() < 1e-4, "{l0} {r0}");
+    let (wide_l, wide_r) = run_with(0.0, 1.0, -0.25);
+    let (plain_l, _) = run_with(0.0, 0.0, -0.25);
+    assert!(wide_l > plain_l * 1.2 && (wide_l - wide_r).abs() < 1e-3, "{wide_l} {wide_r} {plain_l}");
+}
+
+/// The Air on a steady tone at `db_re_dolby` (Dolby Level at its default, -16 dBFS): the gain, dB.
+fn air_gain_db(freq: f32, db_re_dolby: f32, amount: f32, bands: f32) -> f32 {
+    let mut s = prepared();
+    for (id, val) in [("circuit", 5.0), ("stage", 0.0), ("airAmount", amount), ("airBands", bands), ("airRef", 0.5)] {
+        assert!(s.set_param(id, val), "{id}");
+    }
+    let amp = 10.0f32.powf((-16.0 + db_re_dolby) / 20.0);
+    let src: Vec<f32> = (0..96_000).map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / 48_000.0).sin()).collect();
+    let mut io = vec![src.clone(), src];
+    run(&mut s, &mut io, 512);
+    assert!(all_finite(&io));
+    let peak = io[0][72_000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    20.0 * (peak / amp).log10()
+}
+
+#[test]
+fn the_air_is_the_cat_22_in_record() {
+    // Through the whole engine: the factory's record test (3 mV, 40 dB under Dolby Level, at the
+    // tone's 850 Hz: 9.5 to 10.5 dB up), and Dolby's characteristic above it.
+    let quiet = air_gain_db(850.0, -40.0, 1.0, 0.0);
+    assert!((9.5..=10.5).contains(&quiet), "{quiet}");
+    let top = air_gain_db(15_000.0, -40.0, 1.0, 0.0);
+    assert!(top > 14.5 && top < 17.0, "{top}");
+    // loud signal is left alone: within a dB at Dolby Level, a few dB up at 20 dB under it. (The
+    // neighbouring bands pass the tone's skirts in the opposite phase and unattenuated, so the sum
+    // is a little under what band 2's compressor alone would add.)
+    let (mid, loud) = (air_gain_db(850.0, -20.0, 1.0, 0.0), air_gain_db(850.0, 0.0, 1.0, 0.0));
+    assert!(mid > 1.5 && mid < 4.5 && loud.abs() < 1.0 && mid > loud, "{mid} {loud}");
+    // Amount is how much of the noise reduction signal joins: none is the input itself
+    assert!(air_gain_db(850.0, -40.0, 0.0, 0.0).abs() < 0.01);
+    let half = air_gain_db(850.0, -40.0, 0.5, 0.0);
+    assert!(half > 5.5 && half < 7.0, "{half}");
+    // Bands: the top two leave the bottom alone, the top one the middle too
+    assert!(air_gain_db(100.0, -40.0, 1.0, 1.0).abs() < 0.2 && air_gain_db(15_000.0, -40.0, 1.0, 1.0) > 15.0);
+    assert!(air_gain_db(1000.0, -40.0, 1.0, 2.0).abs() < 0.6 && air_gain_db(15_000.0, -40.0, 1.0, 2.0) > 9.0);
 }

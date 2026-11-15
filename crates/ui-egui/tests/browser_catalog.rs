@@ -84,6 +84,7 @@ fn builtins_and_firestation() {
         ("fs_reverb", C::Reverb),
         ("fs_sat", C::Distortion),
         ("fs_shale", C::Dynamics),
+        ("fs_sift", C::Dynamics),
         ("fs_swale", C::Dynamics),
         ("fs_tape", C::Distortion),
         ("fs_transient", C::Dynamics),

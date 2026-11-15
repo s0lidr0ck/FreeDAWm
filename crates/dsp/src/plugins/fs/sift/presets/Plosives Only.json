@@ -1,0 +1,17 @@
+{
+  "engine": "Sift",
+  "name": "Plosives Only",
+  "group": "Vocals",
+  "tags": "No de-essing",
+  "desc": "Leaves the top alone.",
+  "values": {
+    "sibAmount": 0,
+    "sibRange": 12,
+    "sibLow": 4500,
+    "sibHigh": 14000,
+    "mode": "Split",
+    "ploAmount": 65,
+    "ploRange": 18,
+    "ploHigh": 180
+  }
+}

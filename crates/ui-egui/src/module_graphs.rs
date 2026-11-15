@@ -79,6 +79,9 @@ pub enum GraphKind {
     /// Manners: the gain curve it is applying right now over frequency (cuts below the line, lifts
     /// above it), with the edges of its working range.
     Manners,
+    /// Sift: the last seconds of the voice going in, with what was taken off its sibilance
+    /// hanging from the top and what was taken off its plosives standing on the bottom.
+    Sift,
 }
 
 pub fn graph_kind(plugin_id: &str) -> GraphKind {
@@ -92,7 +95,7 @@ pub fn graph_kind(plugin_id: &str) -> GraphKind {
 
 /// Whether a graph reads its module's sample streams (see [`Streams`]).
 pub fn uses_streams(kind: GraphKind) -> bool {
-    matches!(kind, GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale | GraphKind::Manners)
+    matches!(kind, GraphKind::CleanQ | GraphKind::Twine | GraphKind::Transient | GraphKind::Shale | GraphKind::Manners | GraphKind::Sift)
 }
 
 const F_MIN: f32 = 20.0;
@@ -371,6 +374,10 @@ pub fn draw_graph(
         GraphKind::Shale => crate::shale_ui::draw(ui, &p, rect, ins, module, live, streams.map(|s| &s.shale), large),
         GraphKind::LevelUp => crate::levelup_ui::draw(ui, &p, rect, ins, module, live, large),
         GraphKind::Manners => draw_manners(&p, rect, ins, streams, large),
+        GraphKind::Sift => {
+            let accent = module_accent(&ins.plugin);
+            sift_timeline(&p, rect, streams, accent, large);
+        }
     }
     p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, t.module_tile_border), StrokeKind::Inside);
 }
@@ -429,8 +436,12 @@ pub struct Streams {
     /// Shale's scope bins (input peak, gate gain, detector peak), newest last, the last
     /// [`crate::shale_ui::SCOPE_BINS`] (the DSP's ten seconds).
     pub shale: VecDeque<[f32; crate::shale_ui::SCOPE_VALUES]>,
+    /// Sift's cuts per scope column (sibilance dB, plosive dB), newest last, as long as `scope`.
+    pub sift: VecDeque<(f32, f32)>,
     /// Manners' gain curve as of its last block: (band centre Hz, gain dB), low to high.
     pub manners: Vec<(f32, f32)>,
+    /// Columns ever pushed onto `scope`.
+    scope_pushed: u64,
     /// The UI pass these were last brought up to date in, plus one (0: never).
     pass: u64,
     /// Samples written to (pre, post) when last read.
@@ -471,6 +482,26 @@ impl Streams {
             GraphKind::Twine => self.feed_scope(&a.post),
             GraphKind::Transient => self.feed_bins(&a.post),
             GraphKind::Shale => self.feed_shale(&a.post),
+            GraphKind::Sift => {
+                use soundcraft_dsp::plugins::fs::sift::{LIVE_PLO_CUT, LIVE_SIB_CUT};
+                // The input as a scope, and beside each new column the largest cuts since the last.
+                let before = self.scope_pushed;
+                self.feed_scope(&a.pre);
+                let new = (self.scope_pushed - before).min(SCOPE_COLS as u64);
+                if new > 0 {
+                    let cut = |i: usize| {
+                        let v = a.live.take(i);
+                        if v.is_finite() { v.max(0.0) } else { 0.0 }
+                    };
+                    let cuts = (cut(LIVE_SIB_CUT), cut(LIVE_PLO_CUT));
+                    for _ in 0..new {
+                        while self.sift.len() >= SCOPE_COLS {
+                            self.sift.pop_front();
+                        }
+                        self.sift.push_back(cuts);
+                    }
+                }
+            }
             GraphKind::Manners => {
                 use soundcraft_dsp::plugins::fs::manners::{LIVE_BANDS, LIVE_GAIN, LIVE_HZ, MAX_BANDS};
                 let bands = a.live.get(LIVE_BANDS);
@@ -562,6 +593,7 @@ impl Streams {
                     self.scope.pop_front();
                 }
                 self.scope.push_back((*lo, *hi));
+                self.scope_pushed += 1;
                 *n = 0;
             }
         }
@@ -2161,6 +2193,47 @@ fn draw_twine(p: &egui::Painter, rect: Rect, ins: &Insert, live: Option<&LiveVal
     let lv = live.copied().unwrap_or_else(no_reading);
     let bars = [("CLIP", lv.readouts[2] / TWINE_GR_RANGE, true, accent), ("LIM", lv.readouts[3] / TWINE_GR_RANGE, true, t.gr_color)];
     hanging_bars(p, Rect::from_min_max(pos2(scope.right() + 1.0, rect.top()), rect.max), &bars, large);
+}
+
+/// Sift's cut lanes: this many dB fills a lane.
+pub const SIFT_RANGE: f32 = 18.0;
+/// The colour of Sift's plosive cuts (its sibilance cuts wear the module's accent).
+pub const SIFT_PLOSIVE: Color32 = Color32::from_rgb(0x8F, 0xB7, 0xE5);
+
+/// Sift's timeline in `rect`: the input scrolling by (dim), the sibilance cuts hanging from the
+/// top in `accent` and the plosive cuts standing on the bottom in [`SIFT_PLOSIVE`].
+pub(crate) fn sift_timeline(p: &egui::Painter, rect: Rect, streams: Option<&Streams>, accent: Color32, large: bool) {
+    let t = Tokens::current();
+    let mid = rect.center().y;
+    let half = rect.height() * 0.5 - 2.0;
+    p.line_segment([pos2(rect.left(), mid), pos2(rect.right(), mid)], Stroke::new(1.0, t.graph_grid));
+    let Some(s) = streams else { return };
+    let w = rect.width() / SCOPE_COLS as f32;
+    let x_of = |i: usize, n: usize| rect.right() - (n - 1 - i) as f32 * w - w * 0.5;
+    let wave = Stroke::new(w.max(1.0), t.text_dim.gamma_multiply(0.7));
+    let n = s.scope.len();
+    for (i, (lo, hi)) in s.scope.iter().enumerate() {
+        let x = x_of(i, n);
+        let (lo, hi) = (lo.clamp(-1.0, 1.0), hi.clamp(-1.0, 1.0));
+        p.line_segment([pos2(x, mid - hi * half), pos2(x, mid - lo * half)], wave);
+    }
+    // A lane is 45 % of the height: the two never meet.
+    let lane = rect.height() * 0.45;
+    let n = s.sift.len();
+    for (i, (sib, plo)) in s.sift.iter().enumerate() {
+        let x = x_of(i, n);
+        let h = |db: f32| (db / SIFT_RANGE).clamp(0.0, 1.0) * lane;
+        if *sib > 0.05 {
+            p.line_segment([pos2(x, rect.top() + 1.0), pos2(x, rect.top() + 1.0 + h(*sib))], Stroke::new(w.max(1.0), accent));
+        }
+        if *plo > 0.05 {
+            p.line_segment([pos2(x, rect.bottom() - 1.0), pos2(x, rect.bottom() - 1.0 - h(*plo))], Stroke::new(w.max(1.0), SIFT_PLOSIVE));
+        }
+    }
+    if large {
+        p.text(rect.min + vec2(5.0, 4.0), Align2::LEFT_TOP, "sibilance", regular(8.5), accent);
+        p.text(pos2(rect.left() + 5.0, rect.bottom() - 4.0), Align2::LEFT_BOTTOM, "plosives", regular(8.5), SIFT_PLOSIVE);
+    }
 }
 
 /// Manners' curve scale, ±dB.
