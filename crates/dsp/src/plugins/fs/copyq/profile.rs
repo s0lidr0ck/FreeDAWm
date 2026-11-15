@@ -214,7 +214,9 @@ impl Profile {
             return None;
         }
         let grid = o.get("grid").and_then(Value::as_object)?;
-        if grid.get("points").and_then(Value::as_u64) != Some(GRID_N as u64) || grid.get("per_octave").and_then(Value::as_u64) != Some(PER_OCTAVE as u64) {
+        if grid.get("points").and_then(Value::as_u64) != Some(GRID_N as u64)
+            || grid.get("per_octave").and_then(Value::as_u64) != Some(PER_OCTAVE as u64)
+        {
             return None;
         }
         let bytes = b64_decode(o.get("curves").and_then(Value::as_str)?)?;
@@ -222,7 +224,8 @@ impl Profile {
             return None;
         }
         let mut p = Profile::silent();
-        let mut values = bytes.chunks_exact(2).map(|b| f32::from(i16::from_le_bytes([b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)])) / 100.0);
+        let mut values =
+            bytes.chunks_exact(2).map(|b| f32::from(i16::from_le_bytes([b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)])) / 100.0);
         for c in p.curves.iter_mut() {
             for slot in c.iter_mut() {
                 *slot = sane_db(values.next().unwrap_or(FLOOR_DB));
@@ -264,8 +267,13 @@ pub fn clean_name(name: &str) -> String {
 }
 
 /// The made-up profiles every install has: straight spectral slopes, no recording behind them.
-pub const FACTORY_TILTS: [(&str, f32); 5] =
-    [("Flat (white noise)", 3.01), ("Bright (-1.5 dB/oct)", 1.5), ("Pink (-3 dB/oct)", 0.0), ("Warm (-4.5 dB/oct)", -1.5), ("Dark (-6 dB/oct)", -3.01)];
+pub const FACTORY_TILTS: [(&str, f32); 5] = [
+    ("Flat (white noise)", 3.01),
+    ("Bright (-1.5 dB/oct)", 1.5),
+    ("Pink (-3 dB/oct)", 0.0),
+    ("Warm (-4.5 dB/oct)", -1.5),
+    ("Dark (-6 dB/oct)", -3.01),
+];
 
 /// The factory profiles ([`FACTORY_TILTS`]), made on the spot.
 pub fn factory_profiles() -> Vec<Profile> {

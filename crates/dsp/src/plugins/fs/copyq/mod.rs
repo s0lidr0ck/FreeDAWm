@@ -54,7 +54,18 @@ const fn switch(id: &'static str, name: &'static str, default: f32, group: &'sta
     knob(id, name, 0.0, 1.0, default, Unit::Toggle, Taper::Linear, group)
 }
 const fn pick(id: &'static str, name: &'static str, choices: &'static [&'static str], group: &'static str) -> ParamInfo {
-    ParamInfo { id, name, min: 0.0, max: (choices.len() - 1) as f32, default: 0.0, unit: Unit::Choice, taper: Taper::Linear, choices, display: None, group }
+    ParamInfo {
+        id,
+        name,
+        min: 0.0,
+        max: (choices.len() - 1) as f32,
+        default: 0.0,
+        unit: Unit::Choice,
+        taper: Taper::Linear,
+        choices,
+        display: None,
+        group,
+    }
 }
 
 pub const CHANNEL_CHOICES: [&str; 3] = ["Stereo", "Mid/Side", "Left/Right"];
@@ -245,7 +256,12 @@ impl CopyQ {
             lo_hz: p.v(P_LO),
             hi_hz: p.v(P_HI),
             split_hz: [p.v(P_SPLIT), p.v(P_SPLIT + 1), p.v(P_SPLIT + 2)],
-            range_amount: [p.v(P_RANGE_AMOUNT) / 100.0, p.v(P_RANGE_AMOUNT + 1) / 100.0, p.v(P_RANGE_AMOUNT + 2) / 100.0, p.v(P_RANGE_AMOUNT + 3) / 100.0],
+            range_amount: [
+                p.v(P_RANGE_AMOUNT) / 100.0,
+                p.v(P_RANGE_AMOUNT + 1) / 100.0,
+                p.v(P_RANGE_AMOUNT + 2) / 100.0,
+                p.v(P_RANGE_AMOUNT + 3) / 100.0,
+            ],
             capture: p.on(P_CAPTURE),
             role: match p.choice(P_LINK) {
                 1 => Role::Send,

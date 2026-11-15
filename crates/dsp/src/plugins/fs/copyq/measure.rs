@@ -15,7 +15,9 @@
 //!   but a passage that really is quieter is, a few seconds in).
 //! - [`measure_audio`] runs all of it over a recording (a file, a clip), off the audio thread.
 
-use super::profile::{ALL, CH, CURVES, Curve, FLOOR_DB, GRID_N, LEFT, LOUD, LV, MID, PER_OCTAVE, Profile, QUIET, RIGHT, SIDE, SUM, curve_index, grid_hz};
+use super::profile::{
+    ALL, CH, CURVES, Curve, FLOOR_DB, GRID_N, LEFT, LOUD, LV, MID, PER_OCTAVE, Profile, QUIET, RIGHT, SIDE, SUM, curve_index, grid_hz,
+};
 use rustfft::{FftPlanner, num_complex::Complex};
 
 /// A frame under this level is never measured, dB.
@@ -143,7 +145,14 @@ impl Default for Meter {
 
 impl Meter {
     pub fn new() -> Self {
-        Meter { acc: Box::new([[0.0; GRID_N]; CURVES]), count: [0.0; LV], level: [FLOOR_DB; LV], seconds: [0.0; LV], programme: FLOOR_DB, last_level: FLOOR_DB }
+        Meter {
+            acc: Box::new([[0.0; GRID_N]; CURVES]),
+            count: [0.0; LV],
+            level: [FLOOR_DB; LV],
+            seconds: [0.0; LV],
+            programme: FLOOR_DB,
+            last_level: FLOOR_DB,
+        }
     }
 
     /// Forgets everything measured.

@@ -778,7 +778,11 @@ impl CopyQDsp {
     pub fn set(&mut self, s: Settings) {
         let d = Settings::default();
         let f = |v: f32, lo: f32, hi: f32, def: f32| if v.is_finite() { v.clamp(lo, hi) } else { def };
-        let mut split = [f(s.split_hz[0], 20.0, 20_000.0, d.split_hz[0]), f(s.split_hz[1], 20.0, 20_000.0, d.split_hz[1]), f(s.split_hz[2], 20.0, 20_000.0, d.split_hz[2])];
+        let mut split = [
+            f(s.split_hz[0], 20.0, 20_000.0, d.split_hz[0]),
+            f(s.split_hz[1], 20.0, 20_000.0, d.split_hz[1]),
+            f(s.split_hz[2], 20.0, 20_000.0, d.split_hz[2]),
+        ];
         split.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut range_amount = d.range_amount;
         for (o, v) in range_amount.iter_mut().zip(s.range_amount) {

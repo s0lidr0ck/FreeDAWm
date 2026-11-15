@@ -103,7 +103,9 @@ impl CopyQLink {
             return;
         }
         let has = |lv: usize| shape.has.get(lv).copied().unwrap_or(false);
-        let flags = (u32::from(shape.stereo) * FLAG_STEREO) | (u32::from(has(super::profile::LOUD)) * FLAG_LOUD) | (u32::from(has(super::profile::QUIET)) * FLAG_QUIET);
+        let flags = (u32::from(shape.stereo) * FLAG_STEREO)
+            | (u32::from(has(super::profile::LOUD)) * FLAG_LOUD)
+            | (u32::from(has(super::profile::QUIET)) * FLAG_QUIET);
         slab.store(at + FLAGS, flags);
         for (lv, level) in shape.level.iter().enumerate() {
             slab.store_f32(at + LEVEL + lv, *level);

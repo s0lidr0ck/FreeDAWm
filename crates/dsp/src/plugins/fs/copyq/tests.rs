@@ -1,6 +1,8 @@
 use super::bells::{fit_bells, fit_error};
 use super::measure::measure_audio;
-use super::profile::{ALL, Curve, FACTORY_TILTS, LOUD, MID, PREPARED_LEN, QUIET, SIDE, SUM, b64_decode, b64_encode, factory_profiles, grid_hz, grid_pos, prepare_state};
+use super::profile::{
+    ALL, Curve, FACTORY_TILTS, LOUD, MID, PREPARED_LEN, QUIET, SIDE, SUM, b64_decode, b64_encode, factory_profiles, grid_hz, grid_pos, prepare_state,
+};
 use super::*;
 use crate::LinkSlab;
 use crate::plugins::fs::FsPreset;
@@ -448,7 +450,9 @@ fn capture_measures_everything_passes_the_audio_and_reset_measure_forgets_it() {
 #[test]
 fn mid_and_side_are_matched_apart_so_the_width_carries_over() {
     let (m, s) = (pink(LEN, 15), pink(LEN, 16));
-    let image = |side: f32| -> Vec<Vec<f32>> { vec![m.iter().zip(&s).map(|(a, b)| a + b * side).collect(), m.iter().zip(&s).map(|(a, b)| a - b * side).collect()] };
+    let image = |side: f32| -> Vec<Vec<f32>> {
+        vec![m.iter().zip(&s).map(|(a, b)| a + b * side).collect(), m.iter().zip(&s).map(|(a, b)| a - b * side).collect()]
+    };
     let (narrow, wide) = (image(0.1), image(0.5));
     let target = profile_of(&wide, "wide");
     assert!(target.stereo);
