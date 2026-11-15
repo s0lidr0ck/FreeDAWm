@@ -16,8 +16,9 @@ use std::fmt::Write as _;
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
 /// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
 /// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift,
-/// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350).
-pub const MAX_CHARS: usize = 49_500;
+/// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350),
+/// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ.
+pub const MAX_CHARS: usize = 50_500;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
