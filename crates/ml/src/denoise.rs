@@ -395,7 +395,7 @@ struct StreamChannel {
 }
 
 /// DeepFilterNet 3 a few frames at a time, for live use ([`crate::live`]): the same analysis,
-/// stages and synthesis as [`denoise_48k`], with no attenuation limit. The graphs carry their
+/// stages, attenuation limit and synthesis as [`denoise_48k`]. The graphs carry their
 /// state from one [`Stream::pull`] to the next, so the result is that of one pass over the
 /// whole sound, at the cost of the new frames only.
 pub struct Stream {
@@ -404,10 +404,16 @@ pub struct Stream {
     base: usize,
     pushed: usize,
     pulled: usize,
+    /// How much of the noisy spectrum is mixed back (`None`: no limit).
+    lim: Option<f32>,
 }
 
 impl Stream {
-    pub fn new(channels: usize) -> Stream {
+    /// A stream of `channels` channels that takes noise down by at most `atten_db` dB (100: no
+    /// limit).
+    pub fn new(channels: usize, atten_db: f32) -> Stream {
+        let atten = if atten_db.is_finite() { atten_db.abs().min(100.0) } else { DEFAULT_ATTEN_DB };
+        let lim = (atten < 100.0).then(|| 10f32.powf(-atten / 20.0));
         let ch = (0..channels.max(1))
             .map(|_| {
                 let mut st = DFState::new(SAMPLE_RATE as usize, FFT, HOP, NB_ERB, MIN_NB_ERB_FREQS);
@@ -415,7 +421,7 @@ impl Stream {
                 StreamChannel { st, carry: Carry::new(), spec: Vec::new(), erb: Vec::new(), cplx: Vec::new() }
             })
             .collect();
-        Stream { ch, base: 0, pushed: 0, pulled: 0 }
+        Stream { ch, base: 0, pushed: 0, pulled: 0, lim }
     }
 
     /// Takes one hop ([`STREAM_HOP`] samples) of every channel.
@@ -512,6 +518,11 @@ impl Stream {
                         }
                     }
                 }
+                if let Some(lim) = self.lim {
+                    for (f, b) in buf.iter_mut().enumerate() {
+                        *b = *b * (1.0 - lim) + at(t as isize, f) * lim;
+                    }
+                }
                 if let Some(dst) = y.get_mut(k * HOP..(k + 1) * HOP) {
                     ch.st.synthesis(&mut buf, dst);
                     for v in dst.iter_mut() {
@@ -604,7 +615,7 @@ mod tests {
         let whole = denoise_48k(std::slice::from_ref(&noisy), 100.0, &Ctx::default()).unwrap().remove(0);
         let mut models = Models::open().unwrap();
         for block in [1usize, 4, 37] {
-            let mut st = Stream::new(1);
+            let mut st = Stream::new(1, 100.0);
             let mut out = Vec::new();
             for hop in noisy.chunks(HOP) {
                 st.push(&[hop]);
@@ -629,9 +640,9 @@ mod tests {
     fn two_different_sides_share_one_mask() {
         let (tone, noisy) = noisy_tone();
         let quiet: Vec<f32> = tone.iter().map(|v| v * 0.5).collect();
-        let whole = denoise_48k(&[noisy.clone(), quiet.clone()], 100.0, &Ctx::default()).unwrap();
+        let whole = denoise_48k(&[noisy.clone(), quiet.clone()], 18.0, &Ctx::default()).unwrap();
         let mut models = Models::open().unwrap();
-        let mut st = Stream::new(2);
+        let mut st = Stream::new(2, 18.0);
         let mut out = vec![Vec::new(), Vec::new()];
         for (l, r) in noisy.chunks(HOP).zip(quiet.chunks(HOP)) {
             st.push(&[l, r]);

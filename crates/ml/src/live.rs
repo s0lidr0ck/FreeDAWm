@@ -36,6 +36,11 @@ use std::time::{Duration, Instant};
 const SILENCE: f32 = 1e-4;
 /// How long the join between two blocks' answers is faded over, in seconds.
 const JOIN_SECS: f32 = 0.01;
+/// The most the Live mode takes noise down by, in dB. With no limit DeepFilterNet mutes some
+/// quiet frames and not others, and the noise between phrases pumps (measured on a sung vocal:
+/// the floor's level spread 37 dB from window to window, 5 dB at this limit); 18 dB was picked
+/// by ear.
+const LIVE_ATTEN_DB: f32 = 18.0;
 /// How many blocks the answers may fall behind the input before the stream is started again.
 const BEHIND_BLOCKS: usize = 3;
 /// How often a model that is not there is looked for again.
@@ -304,7 +309,7 @@ impl Served {
         self.gain = None;
         self.waiting = None;
         self.mode = self.link.mode();
-        self.live = (self.mode == Mode::Live).then(|| denoise::Stream::new(self.link.channels));
+        self.live = (self.mode == Mode::Live).then(|| denoise::Stream::new(self.link.channels, LIVE_ATTEN_DB));
         (self.led_in, self.same) = (false, true);
         self.link.answer_starts(stream, self.made);
     }
@@ -716,7 +721,7 @@ mod tests {
         m.readouts(&mut r);
         assert_eq!((r[0], r[2], r[4]), (2.0, 1.0, 0.0), "answering, never late: {r:?}");
         // What comes out is the whole-clip de-noiser's result, one latency later.
-        let whole = denoise::denoise_48k(std::slice::from_ref(&noisy), 100.0, &Ctx::default()).unwrap().remove(0);
+        let whole = denoise::denoise_48k(std::slice::from_ref(&noisy), LIVE_ATTEN_DB, &Ctx::default()).unwrap().remove(0);
         let (mut sig, mut diff) = (0.0f64, 0.0f64);
         for i in 24_000..90_000 {
             sig += f64::from(whole[i]).powi(2);

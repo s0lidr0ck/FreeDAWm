@@ -12,8 +12,8 @@
 //!   compensation hides it on playback. It is no use while recording.
 //! - **Live** is DeepFilterNet 3 instead (the de-noiser of Clean Vocal's Speech mode), a hop of
 //!   10 ms at a time. **Latency: 50 ms and the host's block** ([`link::LivePlan`]; 61 ms at 512
-//!   frames). It takes noise off, not the room, and it was trained on speech: held sung notes
-//!   can pump. At 44.1 and 48 kHz only; elsewhere Live passes the sound through.
+//!   frames). It takes noise down by at most 18 dB (more makes the noise floor pump) and leaves
+//!   the room in; it was trained on speech, so held sung notes can pump. At 44.1 and 48 kHz only; elsewhere Live passes the sound through.
 //! - Changing Mode changes the latency and starts the cleaning again.
 //! - When the answer is not there in time (the model is not installed, still loading, or the
 //!   computer cannot keep up), Mend plays the delayed input for that stretch. An offline render

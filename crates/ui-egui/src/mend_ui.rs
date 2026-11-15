@@ -55,7 +55,7 @@ pub(crate) fn drawer_rows(app: &mut SoundApp, ui: &mut Ui, ins: &Insert, inner: 
     let note = match (live, readouts.map(|r| r[3]).filter(|s| s.is_finite() && *s > 0.0)) {
         (true, Some(secs)) => {
             format!(
-                "Live: {:.0} ms of latency. It takes noise off, not the room, and can pump on held sung notes. Studio cleans more.",
+                "Live: {:.0} ms of latency. It turns noise down (18 dB at most), not the room, and can pump on held sung notes. Studio cleans more.",
                 secs * 1000.0
             )
         }
