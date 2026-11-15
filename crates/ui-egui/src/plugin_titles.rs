@@ -34,7 +34,6 @@ pub fn subtitle(id: &str) -> &'static str {
         "vault" => "Convolution Reverb",
         "mend" => "Vocal Cleaner",
         "imprint" => "Impulse Response Capture",
-        "drum_synth" => "Synthesized Drum Kit",
         "subtractive_synth" => "Analog-Style Synth",
         "time_shift" => "Track Alignment",
         "trim" => "Input Level for Gain Staging",

@@ -177,13 +177,13 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
     harness.get_by_label("Built-in ⏵").hover();
     harness.step();
     harness.step();
-    harness.get_by_label("Drum Synth - Synthesized Drum Kit").click();
+    harness.get_by_label("Lift - Sampler").click();
     harness.step();
     harness.step();
     let app = harness.state();
     let replacement = app.engine.session().track(instrument).unwrap().instrument.as_ref().unwrap();
-    assert_eq!(replacement.plugin, "drum_synth");
-    for param in soundcraft_dsp::plugin_info("drum_synth").unwrap().params {
+    assert_eq!(replacement.plugin, "sampler");
+    for param in soundcraft_dsp::plugin_info("sampler").unwrap().params {
         assert_eq!(replacement.params.get(param.id), Some(&param.default));
     }
     assert_eq!(app.engine.session().edit.selected_tracks, session.edit.selected_tracks);

@@ -2184,10 +2184,11 @@ mod tests {
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
         assert!(groups[1].1.iter().all(|p| p.category == Category::Other));
-        // The instruments: the built-in ones, unchanged.
+        // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);
-        assert_eq!(inst[0].1.len(), soundcraft_dsp::plugins().iter().filter(|p| p.is_instrument).count());
+        assert_eq!(inst[0].1.len(), soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument).count());
+        assert!(inst[0].1.iter().all(|p| p.id != "drum_synth") && inst[0].1.iter().any(|p| p.id == "juke"));
     }
 
     #[test]
