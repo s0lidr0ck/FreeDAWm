@@ -18,7 +18,8 @@ use firestation::amp::{AMP_NAMES, AMP_PARAMS, IR_KEYS, ImpulseAsset, NUM_AMPS};
 use serde_json::json;
 use soundcraft_dsp::SampleSource;
 use soundcraft_dsp::plugins::fs as firestation;
-use soundcraft_model::{AssetData, Insert, ModuleId, REFERENCE_KEYS, Session, is_reference_key};
+use soundcraft_dsp::plugins::vault::ir::SpaceIr;
+use soundcraft_model::{AssetData, Insert, ModuleId, REFERENCE_KEYS, SPACE_IR_KEY, Session, is_reference_key};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,6 +27,9 @@ use std::sync::Arc;
 pub const BUNDLED: &str = "bundled:";
 /// The largest IR file read (a few seconds of 192 kHz stereo float is under 10 MB).
 const MAX_IR_FILE_BYTES: u64 = 32 << 20;
+/// The largest reverb response file read (a minute of four channels at 192 kHz float is 184 MB;
+/// most are a few MB).
+const MAX_SPACE_FILE_BYTES: u64 = 256 << 20;
 /// The largest reference file read (a long mix as 32-bit float WAV at 96 kHz fits).
 const MAX_REFERENCE_FILE_BYTES: u64 = 2 << 30;
 /// The most samples (frames x channels) a reference holds at the session rate: 30 minutes of
@@ -57,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Module IR",
             [],
             None,
-            "{track?, module: id, ir: bundled name (\"Fender/….wav\") | {path} | null, amp?: index or name (default: the module's current amp)}: the Amp module's cabinet impulse response for that amp, read and made ready here (resampled to the session rate); loading one sets that amp's Cabinet to IR, as the engine's editor does; null clears it → {track, module, amp, key, ir, frames, sample_rate}",
+            "{track?, module: id, ir: bundled name (\"Fender/….wav\") | {path} | null, amp?: index or name (default: the module's current amp)}: an Amp module's cabinet impulse response for that amp, or a Vault module's reverb response ({path} or null; it has no bundled ones and no amp), read and made ready here (resampled to the session rate); on an Amp, loading one sets that amp's Cabinet to IR, as the engine's editor does; null clears it (Vault then plays its built-in space) → {track, module, amp, key, ir, frames, sample_rate} (Vault: channels instead of amp)",
             has_selection,
             module_ir
         ),
@@ -140,6 +144,9 @@ fn module_ir(e: &mut Engine, p: &Value) -> Result<Value> {
         .map(ModuleId)
         .ok_or_else(|| bad(C, "`module` must be a module id"))?;
     let ins = e.session().track(t).and_then(|tr| tr.mixer.module(id)).cloned().ok_or_else(|| bad(C, format!("no module {}", id.0)))?;
+    if ins.plugin == "vault" {
+        return vault_ir(e, C, t, id, p.get("ir"));
+    }
     if ins.plugin != "fs_amp" {
         return Err(bad(C, format!("`{}` takes no impulse response", ins.plugin)));
     }
@@ -184,6 +191,36 @@ fn module_ir(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"track": t, "module": id.0, "amp": amp, "key": key, "ir": reference, "frames": frames, "sample_rate": sample_rate}))
 }
 
+/// `mix.module_ir` for a Vault module: its reverb response from a file, or none.
+fn vault_ir(e: &mut Engine, cmd: &str, t: soundcraft_model::TrackId, id: ModuleId, ir: Option<&Value>) -> Result<Value> {
+    let reference = match ir {
+        None => return Err(bad(cmd, "`ir` required: {path} or null")),
+        Some(Value::Null) => None,
+        Some(Value::Object(o)) => {
+            let path = o.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "`ir.path` must be a file path"))?;
+            Some(std::path::absolute(path).map_or_else(|_| path.to_string(), |p| p.display().to_string()))
+        }
+        Some(_) => return Err(bad(cmd, "`ir` must be {path} or null: Vault has no bundled impulse responses")),
+    };
+    let rate = e.session().sample_rate.hz();
+    // Read and make it ready before touching the session: a bad file changes nothing.
+    let made = match &reference {
+        Some(r) => Some(make_asset(SPACE_IR_KEY, r, rate, None).map_err(|err| EngineError::Io(format!("{cmd}: {err}")))?),
+        None => None,
+    };
+    let (frames, channels, sample_rate) = made.as_ref().map_or((0, 0, 0.0), |a| (a.frames(), a.num_channels(), a.sample_rate()));
+    let s = e.session_mut();
+    if let (Some(r), Some(asset)) = (&reference, made) {
+        s.assets.insert_for(SPACE_IR_KEY, r, rate, AssetData(Arc::new(asset)));
+    }
+    let ins = super::module::find_mut(e, cmd, t, id)?;
+    match &reference {
+        Some(r) => ins.assets.insert(SPACE_IR_KEY.to_string(), r.clone()),
+        None => ins.assets.remove(SPACE_IR_KEY),
+    };
+    Ok(json!({"track": t, "module": id.0, "key": SPACE_IR_KEY, "ir": reference, "frames": frames, "channels": channels, "sample_rate": sample_rate}))
+}
+
 /// The amp an `amp` parameter names (an index or a name), else the module's current amp.
 fn amp_param(cmd: &str, ins: &Insert, v: Option<&Value>) -> Result<usize> {
     let current = || ins.params.get("amp").map_or(0, |a| if a.is_finite() { a.round().clamp(0.0, (NUM_AMPS - 1) as f32) as usize } else { 0 });
@@ -224,6 +261,9 @@ fn make_asset(key: &str, reference: &str, rate: u32, session_file: Option<&Path>
     if is_reference_key(key) {
         return make_reference_audio(reference, rate, session_file);
     }
+    if key == SPACE_IR_KEY {
+        return make_space_ir(reference, rate, session_file);
+    }
     let (bytes, ext) = read_reference(reference, session_file, MAX_IR_FILE_BYTES)?;
     let (info, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| format!("{reference}: {err}"))?;
     let first = buf.channels.first().ok_or_else(|| format!("{reference}: no audio"))?;
@@ -231,6 +271,17 @@ fn make_asset(key: &str, reference: &str, rate: u32, session_file: Option<&Path>
         return Err(format!("{reference}: no audio"));
     }
     let ir = ImpulseAsset::new(first, f64::from(info.sample_rate), f64::from(rate)).map_err(|err| format!("{reference}: {err}"))?;
+    Ok(Arc::new(ir))
+}
+
+/// A reverb response for Vault from a file: every channel it uses, at the session rate.
+fn make_space_ir(reference: &str, rate: u32, session_file: Option<&Path>) -> std::result::Result<Arc<dyn SampleSource>, String> {
+    if reference.starts_with(BUNDLED) {
+        return Err(format!("{reference}: no bundled reverb impulse responses"));
+    }
+    let (bytes, ext) = read_reference(reference, session_file, MAX_SPACE_FILE_BYTES)?;
+    let (info, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| format!("{reference}: {err}"))?;
+    let ir = SpaceIr::new(&buf.channels, f64::from(info.sample_rate), f64::from(rate)).map_err(|err| format!("{reference}: {err}"))?;
     Ok(Arc::new(ir))
 }
 
@@ -329,9 +380,15 @@ fn load_assets(s: &mut Session, wanted: Vec<(String, String)>, session_file: Opt
     let rate = s.sample_rate.hz();
     let mut missing = Vec::new();
     // (kind, reference) pairs that failed: one report each, however many modules name them
-    let mut failed: Vec<(bool, String)> = Vec::new();
+    let mut failed: Vec<(u8, String)> = Vec::new();
     for (k, r) in wanted {
-        let kind = is_reference_key(&k);
+        let kind = if is_reference_key(&k) {
+            1
+        } else if k == SPACE_IR_KEY {
+            2
+        } else {
+            0
+        };
         if s.assets.contains_for(&k, &r, rate) || failed.iter().any(|(fk, fr)| *fk == kind && *fr == r) {
             continue;
         }
@@ -597,6 +654,126 @@ mod tests {
     }
 
     // ---- reference audio (`mix.module_reference`) ------------------------------------------
+
+    fn vault_track(e: &mut Engine) -> (TrackId, u64) {
+        e.execute("track.new", &json!({"count": 1, "format": "stereo"})).unwrap();
+        let t = e.session().tracks.last().unwrap().id;
+        let m = e.execute("mix.module_add", &json!({"track": t, "plugin": "vault", "params": {"mix": 100.0}})).unwrap()["module"].as_u64().unwrap();
+        (t, m)
+    }
+
+    /// Writes a generated stereo decay (no recorded audio) as a WAV.
+    fn space_wav(path: &std::path::Path, rate: u32, secs: f32, channels: usize) {
+        let n = (rate as f32 * secs) as usize;
+        let one =
+            |seed: f32| -> Vec<f32> { (1..=n).map(|i| 0.5 * (i as f32 * seed).sin() * (-(i as f32) / (rate as f32 * secs / 6.0)).exp()).collect() };
+        let buf = AudioBuffer { sample_rate: rate, channels: (0..channels).map(|c| one(0.31 + 0.07 * c as f32)).collect() };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(path, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+    }
+
+    fn vault_assets(e: &Engine, m: u64) -> std::collections::BTreeMap<String, String> {
+        e.session().tracks.last().unwrap().mixer.module(soundcraft_model::ModuleId(m as u32)).unwrap().assets.clone()
+    }
+
+    #[test]
+    fn a_reverb_response_loads_into_vault_and_reaches_the_sound() {
+        let d = dir("vault-load");
+        let mut e = Engine::new(soundcraft_model::Session::default());
+        let (t, m) = vault_track(&mut e);
+        let wav = d.join("tone.wav");
+        let tone: Vec<f32> = (0..24_000).map(|i| if i % 6000 < 40 { 0.5 } else { 0.0 }).collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![tone.clone(), tone] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&wav, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        e.execute("file.import_audio", &json!({"path": wav.display().to_string(), "track": t, "at": 0})).unwrap();
+        let built_in = render(&e);
+        assert!(built_in[0].iter().map(|v| v.abs()).sum::<f32>() > 1.0, "the built-in space sounds");
+
+        let ir = d.join("hall.wav");
+        space_wav(&ir, 44_100, 0.6, 2);
+        let r = e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap();
+        assert_eq!(r["key"], "vaultIr");
+        assert_eq!(r["channels"], 2);
+        assert_eq!(r["sample_rate"].as_f64(), Some(48_000.0), "made for the session rate");
+        assert!(r["frames"].as_u64().is_some_and(|f| (20_000..30_000).contains(&f)), "{}", r["frames"]);
+        let reference = vault_assets(&e, m)["vaultIr"].clone();
+        assert!(e.session().assets.contains_for("vaultIr", &reference, 48_000));
+        assert!(!e.session().assets.contains(&reference, 48_000), "kept apart from cabinet responses");
+        let loaded = render(&e);
+        assert!(loaded.iter().flatten().all(|v| v.is_finite()));
+        let diff: f32 = built_in[0].iter().zip(&loaded[0]).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 1.0, "the loaded response sounds different from the built-in space ({diff})");
+
+        // undo takes it out again; null clears it
+        e.run("edit.undo").unwrap();
+        assert!(vault_assets(&e, m).is_empty());
+        e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap();
+        e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": null})).unwrap();
+        assert!(vault_assets(&e, m).is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_same_file_serves_an_amp_and_a_vault_each_in_its_own_form() {
+        let d = dir("vault-shared");
+        let ir = d.join("both.wav");
+        space_wav(&ir, 48_000, 0.3, 1);
+        let mut e = Engine::new(soundcraft_model::Session::default());
+        let (t, amp) = amp_track(&mut e);
+        let vault = e.execute("mix.module_add", &json!({"track": t, "plugin": "vault"})).unwrap()["module"].as_u64().unwrap();
+        let path = json!({"path": ir.display().to_string()});
+        e.execute("mix.module_ir", &json!({"track": t, "module": amp, "ir": path})).unwrap();
+        e.execute("mix.module_ir", &json!({"track": t, "module": vault, "ir": path})).unwrap();
+        assert_eq!(e.session().assets.len(), 2, "one cabinet response and one reverb response");
+        assert!(render(&e).iter().flatten().all(|v| v.is_finite()));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn vault_bad_inputs_change_nothing() {
+        let d = dir("vault-bad");
+        let mut e = Engine::new(soundcraft_model::Session::default());
+        let (t, m) = vault_track(&mut e);
+        let run = |e: &mut Engine, ir: serde_json::Value| {
+            e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": ir})).map_err(|x| x.to_string())
+        };
+        assert!(e.execute("mix.module_ir", &json!({"track": t, "module": m})).is_err());
+        assert!(run(&mut e, json!("Marshall/gb sm57.wav")).unwrap_err().contains("no bundled"));
+        assert!(run(&mut e, json!({"path": d.join("nope.wav").display().to_string()})).is_err());
+        let junk = d.join("junk.wav");
+        std::fs::write(&junk, b"not audio at all").unwrap();
+        assert!(run(&mut e, json!({"path": junk.display().to_string()})).is_err());
+        let silent = d.join("silent.wav");
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 4800]] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&silent, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        assert!(run(&mut e, json!({"path": silent.display().to_string()})).unwrap_err().contains("silent"));
+        assert!(vault_assets(&e, m).is_empty() && e.session().assets.is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_saved_session_reopens_with_vaults_response_at_a_new_rate_too() {
+        let d = dir("vault-reopen");
+        let mut e = Engine::new(soundcraft_model::Session::default());
+        let (t, m) = vault_track(&mut e);
+        let ir = d.join("Elsewhere").join("room.wav");
+        std::fs::create_dir_all(ir.parent().unwrap()).unwrap();
+        space_wav(&ir, 48_000, 0.4, 4);
+        let r = e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap();
+        assert_eq!(r["channels"], 4, "four channels are true stereo");
+        let path = d.join("Song").join("Song.fdawm");
+        e.execute("session.save", &json!({"path": path.to_string_lossy()})).unwrap();
+
+        let mut f = Engine::new(soundcraft_model::Session::default());
+        let missing = crate::io::open_session(&mut f, &path.display().to_string()).unwrap();
+        assert!(missing.is_empty(), "{missing:?}");
+        let reference = vault_assets(&f, m)["vaultIr"].clone();
+        assert!(f.session().assets.contains_for("vaultIr", &reference, 48_000));
+        assert!(render(&f).iter().flatten().all(|v| v.is_finite()));
+        let _ = std::fs::remove_dir_all(d);
+    }
 
     fn ref_track(e: &mut Engine) -> (TrackId, u64) {
         e.execute("track.new", &json!({"count": 1, "format": "stereo"})).unwrap();

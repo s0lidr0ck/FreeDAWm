@@ -19,11 +19,12 @@ pub mod synth;
 #[cfg(feature = "test-plugins")]
 pub mod test_link;
 pub mod utility;
+pub mod vault;
 
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 32] = [
+const BUILTINS: [&PluginInfo; 33] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -35,6 +36,7 @@ const BUILTINS: [&PluginInfo; 32] = [
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
+    &vault::VAULT_INFO,
     &modulation::DELAY_INFO,
     &modulation::CHORUS_INFO,
     &modulation::FLANGER_INFO,
@@ -99,6 +101,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "channel_strip" => Box::new(strip::ChannelStrip::new()),
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
+        "vault" => Box::new(vault::Vault::new()),
         "mod_delay" => Box::new(modulation::ModDelay::new()),
         "chorus" => Box::new(modulation::ModFx::chorus()),
         "flanger" => Box::new(modulation::ModFx::flanger()),
@@ -144,6 +147,7 @@ mod tests {
         "channel_strip",
         "room_reverb",
         "plate_reverb",
+        "vault",
         "mod_delay",
         "chorus",
         "flanger",

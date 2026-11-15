@@ -53,4 +53,5 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("subtractive_synth", include_bytes!("../../assets/browser-thumbs/subtractive_synth.png")),
     ("time_shift", include_bytes!("../../assets/browser-thumbs/time_shift.png")),
     ("trim", include_bytes!("../../assets/browser-thumbs/trim.png")),
+    ("vault", include_bytes!("../../assets/browser-thumbs/vault.png")),
 ];

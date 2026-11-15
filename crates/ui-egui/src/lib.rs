@@ -98,6 +98,7 @@ pub mod theme;
 pub mod timeline_link;
 pub mod toolbar;
 pub mod user_files;
+mod vault_ui;
 pub mod video_track;
 pub mod video_window;
 pub mod vocal_editor;
