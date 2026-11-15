@@ -16,6 +16,7 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("fs_chamber", include_bytes!("../../assets/browser-thumbs/fs_chamber.png")),
     ("fs_cleanq", include_bytes!("../../assets/browser-thumbs/fs_cleanq.png")),
     ("fs_comp", include_bytes!("../../assets/browser-thumbs/fs_comp.png")),
+    ("fs_copyq", include_bytes!("../../assets/browser-thumbs/fs_copyq.png")),
     ("fs_delay", include_bytes!("../../assets/browser-thumbs/fs_delay.png")),
     ("fs_dist", include_bytes!("../../assets/browser-thumbs/fs_dist.png")),
     ("fs_filter", include_bytes!("../../assets/browser-thumbs/fs_filter.png")),

@@ -74,6 +74,7 @@ fn builtins_and_firestation() {
         ("fs_chamber", C::Reverb),
         ("fs_cleanq", C::Eq),
         ("fs_comp", C::Dynamics),
+        ("fs_copyq", C::Eq),
         ("fs_delay", C::Delay),
         ("fs_dist", C::Distortion),
         ("fs_filter", C::Modulation),
