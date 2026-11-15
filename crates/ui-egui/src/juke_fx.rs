@@ -5,7 +5,6 @@
 use crate::theme::{bold, regular};
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2};
 use serde_json::{Value, json};
-use soundcraft_dsp::Category;
 use soundcraft_model::{Insert, KitBus, KitFx, ModuleId, TrackId};
 
 const LABEL: Color32 = Color32::from_rgb(0xD9, 0xCC, 0xB6);
@@ -23,12 +22,12 @@ pub enum FxAction {
 /// The effects a slot offers: built-in, not instruments, FireStation's first.
 pub fn effects() -> Vec<&'static soundcraft_dsp::PluginInfo> {
     let mut v: Vec<_> = soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).collect();
-    v.sort_by_key(|p| (p.category != Category::FireStation, p.name));
+    v.sort_by_key(|p| (!p.with_engines(), p.name));
     v
 }
 
 fn pick_menu(ui: &mut Ui, tid: TrackId, bus: KitBus, slot: usize, out: &mut Option<FxAction>) {
-    let (fs, rest): (Vec<_>, Vec<_>) = effects().into_iter().partition(|p| p.category == Category::FireStation);
+    let (fs, rest): (Vec<_>, Vec<_>) = effects().into_iter().partition(|p| p.with_engines());
     let mut item = |ui: &mut Ui, p: &soundcraft_dsp::PluginInfo| {
         if ui.button(crate::chain_view::plugin_name(p.id)).clicked() {
             *out = Some(FxAction::Run("mix.kit_fx", json!({"track": tid.0, "bus": bus.id(), "slot": slot + 1, "plugin": p.id})));
@@ -134,7 +133,7 @@ mod tests {
     fn slots_offer_effects_firestation_first() {
         let v = effects();
         assert!(v.iter().all(|p| !p.is_instrument));
-        assert!(v.first().is_some_and(|p| p.category == Category::FireStation));
+        assert!(v.first().is_some_and(|p| p.category == soundcraft_dsp::Category::FireStation));
         assert!(v.iter().any(|p| p.id == "fs_reverb"));
     }
 }

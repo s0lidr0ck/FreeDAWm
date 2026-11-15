@@ -124,7 +124,8 @@ fn edit_window_insert_list_opens_changes_and_adds_plugins() {
     assert_eq!(insert(&h, 1), None);
 
     // The row after the last module adds one at the end.
-    let plugin = soundcraft_dsp::listed_plugins().find(|p| !p.is_instrument && p.category == soundcraft_dsp::Category::Other).unwrap();
+    let plugin =
+        soundcraft_dsp::listed_plugins().find(|p| !p.is_instrument && !p.with_engines() && p.category == soundcraft_dsp::Category::Other).unwrap();
     click(&mut h, slot(1));
     let category = h.get_by_label("Utilities ⏵").rect().center();
     h.state_mut().synthetic.push(Event::PointerMoved(category));

@@ -6,11 +6,13 @@ pub mod eq;
 pub mod fs;
 pub mod harmonic;
 pub mod juke;
+pub mod lull;
 pub mod modulation;
 pub mod pitch;
 pub mod reverb;
 pub mod rez;
 pub mod sampler;
+pub mod sprawl;
 pub mod strip;
 pub mod synth;
 #[cfg(feature = "test-plugins")]
@@ -20,7 +22,7 @@ pub mod utility;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 29] = [
+const BUILTINS: [&PluginInfo; 31] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -28,6 +30,7 @@ const BUILTINS: [&PluginInfo; 29] = [
     &dynamics::DEESS_INFO,
     &dynamics::MAX_INFO,
     &rez::REZ_INFO,
+    &lull::LULL_INFO,
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
@@ -39,6 +42,7 @@ const BUILTINS: [&PluginInfo; 29] = [
     &harmonic::LOFI_INFO,
     &harmonic::RECT_INFO,
     &pitch::PITCH_INFO,
+    &sprawl::SPRAWL_INFO,
     &utility::SHIFT_INFO,
     &utility::GAIN_INFO,
     &utility::TRIM_INFO,
@@ -89,6 +93,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "de_esser" => Box::new(dynamics::DeEsser::new()),
         "maximizer" => Box::new(dynamics::Maximizer::new()),
         "rez" => Box::new(rez::Rez::new()),
+        "lull" => Box::new(lull::Lull::new()),
         "channel_strip" => Box::new(strip::ChannelStrip::new()),
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
@@ -100,6 +105,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "lofi" => Box::new(harmonic::LoFi::new()),
         "rectifier" => Box::new(harmonic::Rectifier::new()),
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
+        "sprawl" => Box::new(sprawl::Sprawl::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "gain" => Box::new(utility::Gain::new()),
         "trim" => Box::new(utility::Trim::new()),
@@ -131,6 +137,7 @@ mod tests {
         "de_esser",
         "maximizer",
         "rez",
+        "lull",
         "channel_strip",
         "room_reverb",
         "plate_reverb",
@@ -142,6 +149,7 @@ mod tests {
         "lofi",
         "rectifier",
         "pitch_shifter",
+        "sprawl",
         "time_shift",
         "gain",
         "trim",

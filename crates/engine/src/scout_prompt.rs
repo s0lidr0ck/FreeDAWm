@@ -14,9 +14,10 @@ use std::fmt::Write as _;
 
 /// The prompt stays under this many characters (about 11 k tokens). Raised from 40 000 for Juke (its
 /// 33 pad parameters, one line each for all 16 pads, add 2 800) and Lift - Sampler (its filter, LFO,
-/// slice and warp parameters; its 64 slices are one line), and from 45 000 for CopyQ (its 24
-/// parameters add 1 000).
-pub const MAX_CHARS: usize = 46_000;
+/// slice and warp parameters; its 64 slices are one line), then from 45 000 for Rez (1 000, once it was
+/// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), then
+/// from 47 000 for CopyQ (1 100: its 24 parameters and its line).
+pub const MAX_CHARS: usize = 49_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -62,6 +63,15 @@ pub fn purpose(id: &str) -> &'static str {
         }
         "fs_mod" => "Modulation: fourteen circuits (BBD choruses and flangers, phasers, tremolos, vibratos).",
         "fs_pitch" => "Pitch effects: octaver/harmonizer/whammy (POG, Micro POG, OC-2, H910, Whammy).",
+        "rez" => {
+            "Dynamic resonance suppressor: turns down only the frequencies that stick out of the sound's own spectrum, only while they do (harshness, ringing, boxiness); Soft and Hard modes, four sensitivity bands, L/R or M/S, Delta listen."
+        }
+        "lull" => {
+            "Gate and downward expander: Expand (gentle, by Ratio) or Gate (by Range) below the Threshold, with knee, hysteresis, hold and lookahead; a filtered detector; a sidechain key that guards against bleed or triggers."
+        }
+        "sprawl" => {
+            "Stereo imager: four bands, each made narrower (down to mono) or wider; only the side is scaled, so the mono sum never changes. Stereoize gives a mono source sides; Mono Safe holds back what would cancel in mono."
+        }
         "fs_reverb" => "Reverb: Room and Hall, EMT 140 plate, spring tank, Cloud, Shimmer; decay up to 30 s, synced pre-delay, freeze, era colours.",
         "fs_sat" => "Saturation: tube/transformer/tape-style harmonic colour with drive and mix.",
         "fs_shale" => "Drum gate: band-limited onset detection, lookahead gate following each hit's decay, DeBleed, Kit Link, mic phase alignment.",
@@ -303,7 +313,8 @@ Choices list index=label (default label).\n\n",
     let mut cats: Vec<Category> = Vec::new();
     for p in soundcraft_dsp::listed_plugins() {
         let c = match p.category {
-            Category::FireStation | Category::Instrument => p.category,
+            _ if p.with_engines() => Category::FireStation,
+            Category::Instrument => p.category,
             _ => Category::Other,
         };
         if !cats.contains(&c) {
@@ -320,7 +331,8 @@ Choices list index=label (default label).\n\n",
         let _ = writeln!(out, "## {}\n", category_name(c));
         for p in soundcraft_dsp::listed_plugins() {
             let pc = match p.category {
-                Category::FireStation | Category::Instrument => p.category,
+                _ if p.with_engines() => Category::FireStation,
+                Category::Instrument => p.category,
                 _ => Category::Other,
             };
             if pc == c {

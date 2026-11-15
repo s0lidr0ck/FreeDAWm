@@ -70,6 +70,9 @@ fn look(id: &str) -> Look {
         "expander_gate" => params(&[("threshold", -30.0), ("range", 40.0)]),
         "de_esser" => params(&[("freq", 7500.0), ("threshold", -42.0), ("range", 14.0)]),
         "maximizer" => params(&[("threshold", -9.0), ("ceiling", -1.0)]),
+        "lull" => {
+            params(&[("threshold", -26.0), ("range", 24.0), ("ratio", 3.0), ("knee", 10.0), ("hold", 60.0), ("release", 220.0), ("sc_hp", 150.0)])
+        }
         "rez" => params(&[
             ("depth", 85.0),
             ("selectivity", 30.0),
@@ -80,6 +83,7 @@ fn look(id: &str) -> Look {
             ("b3_gain", 9.0),
             ("b3_q", 1.6),
         ]),
+        "sprawl" => params(&[("width", 120.0), ("stereoize", 45.0), ("b1_width", 0.0), ("b2_width", 85.0), ("b3_width", 130.0), ("b4_width", 165.0)]),
         "channel_strip" => params(&[
             ("comp_on", 1.0),
             ("comp_threshold", -30.0),
