@@ -501,6 +501,9 @@ struct AudioState {
     midi: Option<Arc<midi_in::MidiHub>>,
     /// Loop recording: the pass under way (each wrap of the loop starts the next).
     midi_pass: u16,
+    /// Recording turned on and its first block not yet heard: the pedals already down go into the
+    /// take then ([`midi_in::MidiHub::record_pedals`]).
+    midi_take_fresh: bool,
     /// A recording's live MIDI clock (set each fill): the hub's time at the callback's start, and
     /// the timeline frames from what the callback starts playing to the next block rendered
     /// (the previous callback's unplayed frames, then each block rendered, through a loop wrap).
@@ -630,6 +633,7 @@ impl AudioState {
             punch: None,
             midi: None,
             midi_pass: 0,
+            midi_take_fresh: false,
             midi_now: 0,
             midi_lead: 0,
             midi_floor: None,
@@ -669,6 +673,7 @@ impl AudioState {
                     self.recording = r;
                     self.punch = None;
                     self.midi_pass = 0;
+                    self.midi_take_fresh = r;
                 }
                 Cmd::Punch(p) => self.punch = p,
                 // The app keeps its own handle: the one replaced is never the last.
@@ -1213,6 +1218,9 @@ impl AudioState {
             h.drain_into(&mut self.mix.live_midi, h.now_us(), n, rate);
             if self.recording && self.playing {
                 let floor = self.midi_floor.unwrap_or(i64::MIN);
+                if std::mem::take(&mut self.midi_take_fresh) {
+                    h.record_pedals(self.pos.saturating_sub(self.midi_lead).max(floor), self.midi_pass);
+                }
                 h.record_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass, floor);
             }
         }

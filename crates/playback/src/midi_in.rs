@@ -18,7 +18,7 @@
 use soundcraft_mix::{LiveEvent, LiveMidi, MAX_MIDI_PORTS, port_id};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Messages one port's ring holds between two blocks.
@@ -167,6 +167,9 @@ pub struct MidiHub {
     /// The notes held now on any port and channel (bit per pitch), for naming a chord as it is
     /// played (the Chords ruler's picker).
     held: [AtomicU64; 2],
+    /// Each slot's pedals down now: bit per channel, the sustain pedal (CC 64) in the low 16 bits,
+    /// the sostenuto pedal (CC 66) in the high 16, so a take started with one down has it down.
+    pedals: [AtomicU32; MAX_MIDI_PORTS],
 }
 
 impl MidiHub {
@@ -179,6 +182,7 @@ impl MidiHub {
             thru: AtomicBool::new(true),
             record: MidiRing::new(RECORD_RING),
             held: [AtomicU64::new(0), AtomicU64::new(0)],
+            pedals: std::array::from_fn(|_| AtomicU32::new(0)),
         })
     }
 
@@ -217,6 +221,39 @@ impl MidiHub {
     /// Forgets the notes held (All MIDI Notes Off: their note-offs may never come).
     pub fn clear_held(&self) {
         self.held.iter().for_each(|w| w.store(0, Ordering::Relaxed));
+    }
+
+    /// Slot `slot`'s pedals as the message from it leaves them.
+    fn pedal(&self, slot: usize, msg: [u8; 3]) {
+        if msg[0] & 0xF0 != 0xB0 || !matches!(msg[1], 64 | 66) {
+            return;
+        }
+        let Some(p) = self.pedals.get(slot) else { return };
+        let bit = 1u32 << (u32::from(msg[0] & 0x0F) + if msg[1] == 66 { 16 } else { 0 });
+        if msg[2] >= 64 {
+            p.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            p.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+
+    /// Audio thread, on a take's first block: the pedals down now on the open ports, pressed at
+    /// timeline `at` in pass `pass` (a pedal pressed before Record is down in the take). Never
+    /// allocates.
+    pub fn record_pedals(&self, at: i64, pass: u16) {
+        for (slot, p) in self.pedals.iter().enumerate() {
+            let bits = p.load(Ordering::Relaxed);
+            if bits == 0 || self.ids.get(slot).is_none_or(|i| i.load(Ordering::Acquire) == 0) {
+                continue;
+            }
+            for k in 0..32u32 {
+                if bits & (1 << k) != 0 {
+                    let msg = [0xB0 | (k % 16) as u8, if k >= 16 { 66 } else { 64 }, 127];
+                    let packed = pack(msg) | ((slot as u64 & 0xFF) << 24) | (u64::from(pass) << 32);
+                    self.record.push(at as u64, packed);
+                }
+            }
+        }
     }
 
     fn note_held(&self, msg: [u8; 3]) {
@@ -344,6 +381,7 @@ impl PortSink {
             a.store(stamp.max(1), Ordering::Relaxed);
         }
         self.hub.note_held(msg);
+        self.hub.pedal(self.slot, msg);
         if let Some(r) = self.hub.rings.get(self.slot) {
             r.push(stamp, pack(msg));
         }
@@ -782,6 +820,23 @@ mod tests {
         out.clear();
         hub.take_recorded(&mut out);
         assert_eq!(out.iter().map(|x| x.at).collect::<Vec<_>>(), vec![48_000, 48_048]);
+    }
+
+    #[test]
+    fn a_pedal_down_before_the_take_is_down_in_it() {
+        let hub = MidiHub::new();
+        let keys = hub.typing();
+        keys.send_at(5, &[0xB2, 64, 127]);
+        keys.send_at(6, &[0xB0, 66, 100]);
+        keys.send_at(7, &[0xB0, 64, 127]);
+        keys.send_at(8, &[0xB0, 64, 0]);
+        hub.discard();
+        hub.record_pedals(4_800, 0);
+        let mut out = Vec::new();
+        hub.take_recorded(&mut out);
+        let got: Vec<(i64, u8, [u8; 3])> = out.iter().map(|x| (x.at, x.port, x.msg)).collect();
+        let slot = TYPING_SLOT as u8;
+        assert_eq!(got, vec![(4_800, slot, [0xB2, 64, 127]), (4_800, slot, [0xB0, 66, 127])]);
     }
 
     #[test]

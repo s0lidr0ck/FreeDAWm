@@ -117,7 +117,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Controller moves recorded as plug-in or mixer automation | ● | ● | ● | ● | **Missing** |
 | Thin or reduce controller data on the way in | ● | ◐ | ● | ● | **Missing** |
 | A note held when recording starts | ◐ | ◐ | ◐ | ◐ | Dropped |
-| A note still held at Stop or at the loop end | ● | ● | ● | ● | **Works**: cut at the end. A pedal still down is not released (bug 8) |
+| A note still held at Stop or at the loop end | ● | ● | ● | ● | **Works**: cut at the end; a pedal still down comes up there |
 
 ## E. Record modes
 
@@ -234,7 +234,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 5 | In a loop, a downbeat played slightly early is moved to the end of the pass before, where it is cut to almost nothing and its note-off is orphaned. With input quantize it snaps to the loop end, outside the clip. The same happens to a note played just before Stop | `engine/src/midi_record.rs:80, 146-149` |
 | 6 | **Fixed.** All MIDI Notes Off now reaches the audio thread (`Player::all_notes_off`): every instrument gets the note-offs of the keys live input holds, sustain and sostenuto up, All Notes Off and All Sound Off on all 16 channels and its own voice reset; clips playing chase their controllers again. Test: `mix` `tests::all_notes_off_lets_go_of_every_note_and_pedal_now` | `mix/src/lib.rs` (`MixEngine::all_notes_off`); `playback/src/lib.rs`; `ui-egui/src/lib.rs` |
 | 7 | **Claim wrong.** Checked in midir 0.11.1's source: its CoreMIDI backend walks each packet and calls back once per message (`backend/coremidi/mod.rs`, `handle_input`); ALSA decodes one sequencer event per call and WinMM delivers one short message per call. So `parse` never sees two messages in one buffer and nothing is lost there; no code was changed. (midir itself stops reading a CoreMIDI packet at a data byte with no status byte, i.e. running status inside a packet; that is the library's, not FreeDAWm's.) | `playback/src/midi_in.rs:110-122` |
-| 8 | A take stopped with the sustain pedal down keeps the pedal-down with no release, so sustain can hang after the clip. A pedal pressed before the take starts is lost | `engine/src/band_print.rs:225-230`; `engine/src/midi_record.rs:138` |
+| 8 | **Fixed.** A sustain or sostenuto pedal still down when a clip ends comes up on its last tick; one pressed before the take, before the punch point or held over a loop wrap is down from the clip's start (the hub keeps each port's pedals and puts them into the take's first block, `MidiHub::record_pedals`). Tests: `midi_record::tests::a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start`, `a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass`; `midi_in::tests::a_pedal_down_before_the_take_is_down_in_it` | `engine/src/midi_record.rs` (`pedals_down_at`, `lift_pedals`); `playback/src/midi_in.rs` |
 | 9 | Events lost because the window stopped redrawing during a take (more than 16,384 waiting) are counted but never reported. Lost note-offs show as notes running to the end of the clip | `playback/src/midi_in.rs:28, 318`; `ui-egui/src/lib.rs:2456-2458` |
 | 10 | Unplug and replug within two seconds: the port keeps its slot, so notes held at the unplug are never released | `playback/src/midi_in.rs:437-470` |
 | 11 | Two devices with the same name collapse into one; the second cannot be used | `playback/src/midi_in.rs:526-535` |
@@ -314,3 +314,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 4 and 14 fixed: Record pressed before or inside a playing loop keeps every pass and leaves what came before the punch point |
 | 2026-11-16 | minor | Bug 6 fixed: All MIDI Notes Off lets go of every note and pedal |
 | 2026-11-16 | minor | Bug 7 corrected: the claim was wrong (midir calls back once per message on every backend FreeDAWm uses) |
+| 2026-11-16 | minor | Bug 8 fixed: a pedal down at the end of a take comes up, and one pressed before it is kept |

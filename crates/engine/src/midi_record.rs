@@ -150,9 +150,16 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
                 None => None,
             };
             let Some(range) = range.and_then(|r| r.intersect(&take.punch.unwrap_or(r))).filter(|r| !r.is_empty()) else { continue };
-            let list: Vec<(Samples, [u8; 3], bool)> =
-                mine.iter().filter(|x| x.2 == pass).map(|&(at, msg, _)| (at, msg, true)).filter(|(at, _, _)| range.contains(*at)).collect();
+            // A pedal down when the range starts (pressed before the punch point or the take, or
+            // held over a loop wrap) is down from its start.
+            let mut list: Vec<(Samples, [u8; 3], bool)> =
+                pedals_down_at(&mine, pass, range.start).into_iter().map(|m| (range.start, m, true)).collect();
+            list.extend(mine.iter().filter(|x| x.2 == pass).map(|&(at, msg, _)| (at, msg, true)).filter(|(at, _, _)| range.contains(*at)));
             let mut seq: Sequence = crate::band_print::events_to_sequence(s, range, &list);
+            // One still down when it ends comes up on its last tick (the clip plays nothing on its
+            // end), or it would hold every note after the clip.
+            let last = s.tempo.samples_to_ticks(range.end, s.sample_rate).saturating_sub(s.tempo.samples_to_ticks(range.start, s.sample_rate));
+            lift_pedals(&mut seq, last);
             if seq.notes.is_empty() && seq.ctrls.is_empty() {
                 continue;
             }
@@ -195,6 +202,54 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         e.push_undo("Record", before);
     }
     out
+}
+
+/// The sustain and sostenuto pedals (CC 64, 66) down at `(pass, at)` by `events` (where played,
+/// with their pass), as messages that press them.
+fn pedals_down_at(events: &[(Samples, [u8; 3], u16)], pass: u16, at: Samples) -> Vec<[u8; 3]> {
+    let mut before: Vec<&(Samples, [u8; 3], u16)> =
+        events.iter().filter(|x| (x.2, x.0) < (pass, at) && x.1[0] & 0xF0 == 0xB0 && matches!(x.1[1], 64 | 66)).collect();
+    before.sort_by_key(|x| (x.2, x.0));
+    // By channel and pedal: the last value.
+    let mut down = [[false; 2]; 16];
+    for x in before {
+        if let Some(d) = down.get_mut(usize::from(x.1[0] & 0x0F)).and_then(|c| c.get_mut(usize::from(x.1[1] == 66))) {
+            *d = x.1[2] >= 64;
+        }
+    }
+    let mut out = Vec::new();
+    for (ch, pedals) in (0u8..).zip(down) {
+        for (cc, d) in [64u8, 66].into_iter().zip(pedals) {
+            if d {
+                out.push([0xB0 | ch, cc, 127]);
+            }
+        }
+    }
+    out
+}
+
+/// Lifts the sustain and sostenuto pedals `seq` leaves down, at tick `len - 1` (or the pedal's
+/// own tick, if later) of a clip `len` ticks long.
+fn lift_pedals(seq: &mut Sequence, len: i64) {
+    use soundcraft_midi::{CtrlEvent, CtrlKind};
+    let mut last: Vec<(u8, u8, i64, i32)> = Vec::new();
+    for c in &seq.ctrls {
+        let CtrlKind::Cc(cc @ (64 | 66)) = c.kind else { continue };
+        match last.iter_mut().find(|x| x.0 == c.channel && x.1 == cc) {
+            Some(x) if c.tick >= x.2 => (x.2, x.3) = (c.tick, c.value),
+            Some(_) => {}
+            None => last.push((c.channel, cc, c.tick, c.value)),
+        }
+    }
+    let lifts: Vec<CtrlEvent> = last
+        .into_iter()
+        .filter(|x| x.3 >= 64)
+        .map(|(channel, cc, tick, _)| CtrlEvent { tick: len.saturating_sub(1).max(tick), channel, kind: CtrlKind::Cc(cc), value: 0 })
+        .collect();
+    if !lifts.is_empty() {
+        seq.ctrls.extend(lifts);
+        seq.sort();
+    }
 }
 
 #[cfg(test)]
@@ -247,7 +302,8 @@ mod tests {
         let q = TICKS_PER_QUARTER;
         assert_eq!(notes, vec![(60, 0, 0, 2 * q), (64, 1, 2 * q, 2 * q), (67, 0, 3 * q, q)]);
         let ctrls: Vec<(i64, CtrlKind, i32)> = seq.ctrls.iter().map(|x| (x.tick, x.kind, x.value)).collect();
-        assert_eq!(ctrls, vec![(q, CtrlKind::Cc(64), 127), (q + q / 2, CtrlKind::PitchBend, 96 * 128 - 8192)]);
+        // The pedal still down at the end comes up on the clip's last tick.
+        assert_eq!(ctrls, vec![(q, CtrlKind::Cc(64), 127), (q + q / 2, CtrlKind::PitchBend, 96 * 128 - 8192), (4 * q - 1, CtrlKind::Cc(64), 0)]);
         assert_eq!(e.undo_label(), Some("Record"));
         e.execute("edit.undo", &json!({})).unwrap();
         assert!(e.session().find_clip(ids[0]).is_none());
@@ -414,6 +470,43 @@ mod tests {
         let c = clip(&e, ids[0]);
         assert_eq!((c.start, c.length), (2 * Q, 2 * Q));
         assert!(e.session().find_clip(id).is_some(), "the clip before the punch point stays");
+    }
+
+    #[test]
+    fn a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start() {
+        let mut e = Engine::default();
+        armed(&mut e, "midi:all", 0);
+        let take = MidiTake { start: 4 * Q, end: 8 * Q, looped: None, punch: Some(Range::new(5 * Q, 8 * Q)), latency: 480 };
+        let events = [
+            // Pressed in the pre-roll, before the punch point.
+            ev(4 * Q + 480, "K", [0xB1, 64, 127]),
+            ev(6 * Q + 480, "K", [0x91, 60, 100]),
+            ev(7 * Q + 480, "K", [0x81, 60, 0]),
+        ];
+        let ids = record_live_midi(&mut e, &take, &events);
+        let c = clip(&e, ids[0]);
+        let ctrls: Vec<(i64, u8, CtrlKind, i32)> = c.midi_playing().unwrap().ctrls.iter().map(|x| (x.tick, x.channel, x.kind, x.value)).collect();
+        let len = 3 * TICKS_PER_QUARTER;
+        assert_eq!(ctrls, vec![(0, 1, CtrlKind::Cc(64), 127), (len - 1, 1, CtrlKind::Cc(64), 0)]);
+    }
+
+    #[test]
+    fn a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let take = MidiTake { start: 0, end: 8 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        let events = vec![
+            ev(3 * Q, "K", [0xB0, 64, 127]),
+            RecordedEvent { pass: 1, ..ev(Q, "K", [0x90, 60, 100]) },
+            RecordedEvent { pass: 1, ..ev(2 * Q, "K", [0xB0, 64, 0]) },
+        ];
+        record_live_midi(&mut e, &take, &events);
+        let tr = e.session().track(t).unwrap();
+        let ctrls =
+            |p: usize| -> Vec<(i64, i32)> { tr.playlists[p].clips[0].midi_playing().unwrap().ctrls.iter().map(|x| (x.tick, x.value)).collect() };
+        let q = TICKS_PER_QUARTER;
+        assert_eq!(ctrls(0), vec![(3 * q, 127), (4 * q - 1, 0)]);
+        assert_eq!(ctrls(1), vec![(0, 127), (2 * q, 0)]);
     }
 
     #[test]
