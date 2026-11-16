@@ -376,6 +376,10 @@ struct PluginSlot {
     llm_pos: i64,
     /// Not run since it was made or reset: a low-latency monitoring change applies at once.
     llm_fresh: bool,
+    /// The insert's input on its way past it while it is bypassed or crossfading to or from that:
+    /// delayed by the plugin's latency (none on the low-latency monitoring path), so a bypass
+    /// keeps the strip's delay compensation and crossfades without a comb (`insert_step`).
+    dry: DelayLine,
     /// The plugin declares MIDI output (`PluginInfo::midi_out`): `midi` is filled after each
     /// `process` and read by the strips whose input is this module.
     emits: bool,
@@ -935,6 +939,7 @@ impl SlotCtx<'_> {
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
+            dry: DelayLine::default(),
             emits,
             midi: MidiOut::new(),
         })
@@ -1379,6 +1384,7 @@ impl MixEngine {
                 p.failed = false;
                 p.llm_pos = LLM_SETTLED;
                 p.llm_fresh = true;
+                p.dry.clear();
             }
             if let Some(i) = &mut s.instrument {
                 i.plugin.all_notes_off();
@@ -1663,11 +1669,19 @@ impl MixEngine {
         let mb = self.max_block;
         for t in &s.tracks {
             let Some(st) = self.strips.get_mut(&t.id) else { continue };
+            let ch = st.buf.len();
+            // A latent insert's bypass line: its latency plus the same headroom, so a latency
+            // that changes while playing re-aligns without allocating.
+            for p in st.plugins.iter_mut().flatten() {
+                let l = p.plugin.latency().max(p.dry.need());
+                if l > 0 || p.dry.active() {
+                    p.dry.reserve(l.saturating_add(headroom).min(MAX_LATENCY), ch);
+                }
+            }
             // Strips `render` never delays (a reactivated track re-syncs).
             if t.inactive || matches!(t.kind, TrackKind::Master | TrackKind::Vca) {
                 continue;
             }
-            let ch = st.buf.len();
             st.align.reserve(cap(&st.align), ch);
             for k in &mut st.keys {
                 k.delay.reserve(cap(&k.delay), ch);
@@ -2039,11 +2053,12 @@ impl MixEngine {
                         && slot.module == ins.id
                     {
                         meter.failed = slot.failed;
-                        if ins.active && !ins.bypass && !slot.failed {
+                        if ins.active && !slot.failed {
                             apply_params(slot, ins, t, Some(ins.id), pos);
                             full_m = full_m.saturating_add(slot.plugin.latency());
-                            let run = llm_step(slot, strip.llm && slot.plugin.latency() > 0, xf);
-                            if slot.llm_off && i < 64 {
+                            let (run, room) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
+                            fits &= room;
+                            if slot.llm_off && !ins.bypass && i < 64 {
                                 bits |= 1 << i;
                             }
                             if run == LlmRun::Skip {
@@ -2051,9 +2066,6 @@ impl MixEngine {
                                     *m = meter;
                                 }
                                 continue;
-                            }
-                            if run == LlmRun::Fade {
-                                copy_dry(&strip.buf, &mut strip.llm_dry, frames);
                             }
                             slot.plugin.set_transport(&transport);
                             slot.plugin.process(&mut strip.buf, frames);
@@ -2461,6 +2473,53 @@ fn llm_step(slot: &mut PluginSlot, off: bool, xf: usize) -> LlmRun {
     }
 }
 
+/// One active insert's bypass and low-latency monitoring for this block: what it does
+/// (`llm_step`, off when bypassed or a latent module on the low-latency path), with `dry` holding
+/// its input on the way past it. A bypassed insert (and one crossfading to or from that) passes its
+/// input delayed by the plugin's latency, so bypass neither clicks nor moves the strip's delay
+/// compensation, and a plugin switched back on starts clean (`llm_step` resets it) and is heard
+/// once its latency has passed. On the low-latency path the dry input is not delayed. A skipped
+/// insert's dry input is copied into `buf`. False when the dry line needs more room than it has
+/// (the next `sync` grows it). Does not allocate.
+fn insert_step(
+    slot: &mut PluginSlot,
+    bypass: bool,
+    llm: bool,
+    buf: &mut [Vec<f32>],
+    dry: &mut [Vec<f32>],
+    frames: usize,
+    xf: usize,
+) -> (LlmRun, bool) {
+    let lat = slot.plugin.latency();
+    let run = llm_step(slot, bypass || (llm && lat > 0), xf);
+    let delayed = lat > 0 || slot.dry.delay() > 0;
+    if run == LlmRun::Run && !delayed {
+        return (run, true);
+    }
+    copy_dry(buf, dry, frames);
+    let mut fits = true;
+    if delayed {
+        // Only a line the output uses asks for more room (a sync then grows the strip's lines).
+        fits = slot.dry.set(if llm { 0 } else { lat }, dry.len(), xf) || run == LlmRun::Run;
+        slot.dry.process(dry, frames);
+        if run == LlmRun::Skip {
+            copy_dry(dry, buf, frames);
+        }
+    }
+    (run, fits)
+}
+
+/// The latency an active insert adds to its strip this block, after `insert_step` said `run`:
+/// a skipped one its dry line's delay, one that runs (or crossfades) the plugin's, but none when
+/// low-latency monitoring takes it out.
+fn insert_latency(slot: &PluginSlot, run: LlmRun, llm: bool) -> usize {
+    match run {
+        LlmRun::Skip => slot.dry.delay(),
+        _ if llm && slot.llm_off => 0,
+        _ => slot.plugin.latency(),
+    }
+}
+
 /// Crossfades a faded insert's output `buf` with its input `dry` (`llm_step`), and advances it.
 fn llm_blend(slot: &mut PluginSlot, buf: &mut [Vec<f32>], dry: &[Vec<f32>], frames: usize, xf: usize) {
     let xf = xf.max(1) as i64;
@@ -2862,11 +2921,14 @@ fn process_strip(
             // Last block's MIDI was read before this strip ran again; a module that does not run
             // this block (bypassed, failed) emits nothing.
             slot.midi.clear();
-            // Low-latency monitoring takes a latent module on the live path out (see `llm_step`).
-            let run = if ins.active && !ins.bypass && !slot.failed {
+            // Bypass crossfades and keeps the module's latency; low-latency monitoring takes a
+            // latent module on the live path out (see `insert_step`).
+            let live_mod = ins.active && !slot.failed;
+            let run = if live_mod {
                 apply_params(slot, ins, t, Some(ins.id), pos);
-                let run = llm_step(slot, strip.llm && slot.plugin.latency() > 0, live.xf);
-                if slot.llm_off {
+                let (run, fits) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
+                strip.key_regrow |= !fits;
+                if slot.llm_off && !ins.bypass {
                     skipped = skipped.saturating_add(slot.plugin.latency());
                     if i < 64 {
                         bits |= 1 << i;
@@ -2876,10 +2938,10 @@ fn process_strip(
             } else {
                 LlmRun::Skip
             };
+            if live_mod && run == LlmRun::Skip {
+                latency = latency.saturating_add(insert_latency(slot, run, on_llm));
+            }
             if run != LlmRun::Skip {
-                if run == LlmRun::Fade {
-                    copy_dry(&strip.buf, &mut strip.llm_dry, frames);
-                }
                 slot.plugin.set_transport(&transport);
                 match strip.keys.iter_mut().find(|k| k.module == ins.id).filter(|_| ins.sidechain.is_some()) {
                     Some(key) => {
@@ -2911,9 +2973,7 @@ fn process_strip(
                 } else {
                     // A module low-latency monitoring takes out adds no latency, even while it
                     // fades out.
-                    if !slot.llm_off {
-                        latency = latency.saturating_add(slot.plugin.latency());
-                    }
+                    latency = latency.saturating_add(insert_latency(slot, run, on_llm));
                     meter.gr_db = slot.plugin.gain_reduction_db();
                     if gr == 0.0 {
                         gr = meter.gr_db;
@@ -4364,7 +4424,8 @@ fn note_insert_latency(t: &Track, strip: &mut Strip, pos: Samples) {
     let mut latency = 0usize;
     for (i, ins) in t.mixer.inserts.iter().enumerate() {
         let Some(Some(slot)) = strip.plugins.get_mut(i) else { continue };
-        if slot.module != ins.id || !ins.active || ins.bypass || slot.failed {
+        // A bypassed module keeps its latency (`insert_step`).
+        if slot.module != ins.id || !ins.active || slot.failed {
             continue;
         }
         apply_params(slot, ins, t, Some(ins.id), pos);
@@ -5764,6 +5825,7 @@ mod tests {
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
+            dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
         };
@@ -5810,6 +5872,7 @@ mod tests {
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
+            dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
         };
@@ -5901,6 +5964,7 @@ mod tests {
             llm_off: false,
             llm_pos: LLM_SETTLED,
             llm_fresh: true,
+            dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
         };

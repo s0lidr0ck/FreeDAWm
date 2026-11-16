@@ -63,7 +63,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager | Medium: **no meter plug-ins** (spectrum, loudness, phase), no dither in the menu, no tuner |
 | I. Presets | 936 factory presets, a searchable browser, chain and track presets | Small: two save paths that disagree, no rename, no default preset |
 | J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
-| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: bypass is a hard switch, no controller mapping, no racks or macros |
+| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no controller mapping, no racks or macros |
 
 Three things every one of the four does and FreeDAWm does not: **a compressor you can key from
 another track**; **effects that process every channel of a surround track**; and **meter
@@ -235,8 +235,8 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Bypass without a click | ● | ● | ● | ● | **Missing**: an instant switch; stale reverb or delay returns on un-bypass (bug 4) |
-| Bypass keeps other tracks in time | ● | ● | ● | ● | **Missing**: bypassing an effect with latency shifts compensation at once |
+| Bypass without a click | ● | ● | ● | ● | **Works**: a crossfade; a plugin switched back on starts clean |
+| Bypass keeps other tracks in time | ● | ● | ● | ● | **Works**: a bypassed insert keeps its latency |
 | Latency reported for delay compensation | ● | ● | ● | ● | **Works**, except Pitch, Sat and Vint (bug 5) |
 | Tails included in bounce and freeze | ● | ● | ● | ● | **Partial**: Delay, Mod and Filter report fixed tails (bug 6) |
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
@@ -260,7 +260,7 @@ them is the owner's decision, not a repair.
 | 1 | Saving a user preset from a wide editor stores parameters the editor deliberately keeps out of presets (LevelUp's reference, link group and learn state; CopyQ capture; others). Loading it restores them | `ui-egui/src/editor_kit/presets.rs:221-230, 693` |
 | 2 | **Fixed.** On a track wider than stereo, 24 effects (every engine, Mend, Vault) processed left and right only; centre, LFE and surrounds passed unprocessed. They now run one instance on the first two channels and a mono instance on each other channel (`dsp/src/plugins/per_channel.rs`), with the same parameters, transport, assets and state. Detection is not linked across them. Test: `per_channel.rs` (a 5.1 surround channel sounds as on a mono track) | `dsp/src/plugins/fs/*/mod.rs` (`channels.min(2)`) |
 | 3 | Saving from the narrow drawer writes no name or tags, skips the Dist knob bank and the Amp, Vault and CleanQ loaded files, and lets a user preset share a factory preset's name, after which the factory one wins | `ui-egui/src/panels.rs:971-1029` |
-| 4 | Bypass is an instant switch: no crossfade, no reset when switched back on, and the track's delay compensation changes in the same block | `mix/src/lib.rs:1939, 2721, 2770` |
+| 4 | **Fixed.** Bypass was an instant switch with no reset, and the track's delay compensation changed in the same block. A bypass now crossfades (the mixer's 10 ms), a bypassed insert keeps its latency (its input goes past it through a delay of that length, so no track moves), and a plugin switched back on is reset and heard once its latency has passed (`insert_step` in `mix/src/lib.rs`). Test: `mix/tests/insert_bypass.rs` | `mix/src/lib.rs:1939, 2721, 2770` |
 | 5 | *By design.* Pitch reports no latency though its shifted voices run 6–20 ms late; Sat and Vint also report none | `dsp/src/plugins/fs/pitch/mod.rs:14-16`; `fs/sat/mod.rs:16`; `fs/vint/mod.rs:40` |
 | 6 | Delay reports an 8 s tail whatever the feedback or freeze; Mod 0.25 s; Filter 1 s; ChamberMade counts four tape repeats. A bounce or freeze can cut the tail | `dsp/src/plugins/fs/delay/mod.rs:251-254`; `fs/mod_engine/mod.rs:398-401`; `fs/filter/mod.rs:303`; `fs/chamber/mod.rs:409-414` |
 | 7 | The Delay buffer is a fixed number of samples: 10.9 s at 48 kHz, 2.7 s at 192 kHz. Longer synced times are silently shortened and lose sync | `dsp/src/plugins/fs/delay/delay_engine_dsp.rs:59-60, 966` |
@@ -292,7 +292,7 @@ track. Then bug 4.
 |---|---:|---|
 | Key input on Comp, with a ducking preset | 4–8 | The routing side is in section 3's list; this is the engine side |
 | Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Partly done** with bug 2: per channel (front pair stereo); linked detection for dynamics remains |
-| Click-free bypass that keeps delay compensation steady | 4–6 | |
+| Click-free bypass that keeps delay compensation steady | 4–6 | **Done** with bug 4 |
 | A simple channel EQ and compressor in the menu (unhide and tidy the stock ones, or presets of CleanQ and Comp) | 3–6 | Owner's call which |
 | Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | The measuring code exists |
 | Tuner; channel utility (swap, mono, mid/side, per-channel polarity); dither in the menu | 6–10 | |
@@ -328,3 +328,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 |---|---|---|
 | 2026-11-16 | major | First version: built-in effects against Pro Tools, Studio Pro, Logic Pro and Cubase |
 | 2026-11-16 | minor | Bug 2 fixed: stereo-only effects process every channel of a surround track |
+| 2026-11-16 | minor | Bug 4 fixed: bypass crossfades, keeps the insert's latency and resets the plugin when it comes back |
