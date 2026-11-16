@@ -1010,7 +1010,7 @@ fn nudge(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session();
     let value = if bool_or(p, "next", false) { s.edit.nudge.stepped(true) } else { s.edit.nudge };
     let step = value.step_samples(s.edit.selection.start, s.sample_rate, &s.tempo, s.frame_rate) * count * if dir == 0 { 1 } else { dir };
-    let ids = clip_ids_param(e, p);
+    let ids = nudge_clips(e, p);
     let s = e.session_mut();
     let n = if ids.is_empty() { 0 } else { ops::move_clips(s, &ids, step, &[]) };
     s.edit.selection = s.edit.selection.shifted(step);
@@ -1018,6 +1018,22 @@ fn nudge(e: &mut Engine, p: &Value) -> Result<Value> {
         s.edit.selection = s.edit.selection.shifted(-s.edit.selection.start);
     }
     Ok(json!({"moved": n, "by": step}))
+}
+
+/// The clips a nudge moves: those named or selected as objects, else those wholly inside the
+/// edit selection on the selected tracks. A clip the selection only partly covers stays: the
+/// selection moves without it rather than dragging along material outside it.
+fn nudge_clips(e: &Engine, p: &Value) -> Vec<soundcraft_model::ClipId> {
+    let s = e.session();
+    if p.get("clips").is_some() || p.get("clip").is_some() || !s.edit.selected_clips.is_empty() || s.edit.selection.is_empty() {
+        return clip_ids_param(e, p);
+    }
+    let r = s.edit.selection;
+    s.tracks
+        .iter()
+        .filter(|t| s.edit.selected_tracks.contains(&t.id))
+        .flat_map(|t| t.clips().iter().filter(|c| c.start >= r.start && c.end() <= r.end).map(|c| c.id))
+        .collect()
 }
 
 fn move_clips(e: &mut Engine, p: &Value) -> Result<Value> {

@@ -87,7 +87,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Missing**: only the grid is ever snapped to |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Missing** |
 | Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
-| Nudge by a chosen value | ● | ● | ● | ● | **Partial**: moves whole clips even when only part is selected |
+| Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
 | Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Missing** |
 | Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Missing** |
 
@@ -280,8 +280,8 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
 | 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips are mixed together, so there is no order to keep: the commands now leave the playlist alone and say so. A real front/back order belongs with the overlap modes (tier 2). Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
 | 15 | Dragging a folder track moves the folder without its members | `ui-egui/src/edit_window.rs:1301` |
-| 16 | Nudge with a partial selection moves whole clips; clips nudged past zero are each clamped, closing the gaps between them | `engine/src/cmd/edit.rs:907-921`; `engine/src/edit.rs:481` |
-| 17 | Shuffle trim ripples clips from one point and automation from another | `engine/src/edit.rs:783-784` |
+| 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
+| 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
 | 18 | Time and frame grids round the step to whole samples: 29.97 fps at 48 kHz drifts about 0.9 s an hour, and both ignore the timecode start | `time/src/grid.rs:127-128, 159-160` |
 | 19 | "Delete Unused Playlists" removes take layers but leaves the comp's references to them; the stored target playlist is an index that goes stale | `engine/src/cmd/track.rs:159-173`; `engine/src/cmd/comp.rs:325` |
 | 20 | Processing a clip does not shorten fades to the new length, clear warp markers or swap the fades on Reverse; and it drops the handles | `engine/src/cmd/audiosuite.rs:69-121` |
@@ -348,3 +348,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 7 and 8 fixed: Insert/Cut Time move every playlist, the tempo and meter map and keys; Identify Beat restores the tempo after the selection |
 | 2026-11-16 | minor | Bugs 10, 11 and 22 fixed: Commit keeps pan and automation, Strip Silence keeps muted clips, Export Clips writes each clip alone |
 | 2026-11-16 | minor | Bugs 12 and 14 fixed: Conform keeps the pitch on Elastic tracks; front/back no longer unsorts the playlist |
+| 2026-11-16 | minor | Bugs 16 and 17 fixed: partial-selection nudge, spacing at the session start, Shuffle trim automation |

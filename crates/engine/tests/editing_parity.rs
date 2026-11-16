@@ -391,3 +391,40 @@ fn identify_beat_restores_the_tempo_after_the_selection() {
     assert_eq!(s.tempo.tempo_at_tick(4 * q), 120.0, "after it, the old tempo again");
     assert_eq!(s.tempo.samples_to_ticks(72_000 + 96_000, s.sample_rate), 8 * q, "two seconds later is one bar later, as before");
 }
+
+// ---- bug 16: Nudge moved clips the selection only touched, and closed gaps at zero ---------
+
+#[test]
+fn nudge_moves_only_the_clips_inside_the_selection() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1000, 0), (1200, 200, 5000)]);
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 500, "end": 1500}));
+    let by = run(&mut e, "edit.nudge", json!({"direction": 1}))["by"].as_i64().unwrap();
+    assert!(by > 0);
+    assert_eq!(e.session().find_clip(c[0]).unwrap().1.start, 0, "the clip the selection only touches stays");
+    assert_eq!(e.session().find_clip(c[1]).unwrap().1.start, 1200 + by);
+}
+
+#[test]
+fn clips_moved_past_the_session_start_keep_their_spacing() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(100, 100, 0), (1000, 100, 5000)]);
+    run(&mut e, "edit.move_clips", json!({"clips": [c[0].0, c[1].0], "by": -500}));
+    assert_eq!(clips(&e, t), vec![(0, 100, 0), (900, 100, 5000)]);
+}
+
+// ---- bug 17: a Shuffle trim moved clips from one point and automation from another ---------
+
+#[test]
+fn shuffle_trims_move_automation_with_the_crossfade_partner() {
+    let mut e = engine("shuffle");
+    let (t, c) = track(&mut e, &[(0, 1000, 0), (900, 1100, 5000)]);
+    e.session_mut().edit.automation_follows_edit = true;
+    for at in [950, 1500] {
+        run(&mut e, "automation.set_point", json!({"track": t.0, "param": "volume", "at": at, "value": -6.0}));
+    }
+    run(&mut e, "edit.trim_clip", json!({"clip": c[0].0, "end": 800}));
+    assert_eq!(clips(&e, t), vec![(0, 800, 0), (700, 1100, 5000)]);
+    let pts: Vec<i64> = e.session().track(t).unwrap().lane(&soundcraft_model::AutoParam::Volume).unwrap().points.iter().map(|p| p.at).collect();
+    assert_eq!(pts, vec![750, 1300], "both points moved with the partner");
+}

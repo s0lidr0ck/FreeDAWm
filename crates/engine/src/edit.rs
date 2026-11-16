@@ -564,6 +564,10 @@ pub fn move_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(Trac
         }
     }
     let n = moving.len();
+    // A move left stops at the session start for all of them together, keeping their spacing
+    // (each stopping on its own would close the gaps between them).
+    let floor = moving.iter().map(|(_, c)| c.start).min().unwrap_or(0).max(0);
+    let delta = delta.max(-floor);
     // Automation Follows Edit: the points under each clip go with it (empty when it's off).
     let points: Vec<Vec<(AutoParam, AutomationPoint)>> = moving.iter().map(|(tid, c)| take_automation(s, *tid, c.start, c.end(), c.start)).collect();
     let placed: Vec<(TrackId, Clip)> = moving
@@ -872,8 +876,12 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
     *pl.clip_mut(id)? = c.clone();
     pl.sort();
     if shuffle {
-        let moved = ripple(s, track, old.start.saturating_add(1), c.end().saturating_sub(old.end()));
-        follow_automation(s, track, old.end(), moved);
+        // The clips after this one move, a crossfade partner starting inside it included; the
+        // automation moves from the same place (the partner's start, else this clip's end).
+        let from = old.start.saturating_add(1);
+        let first = s.track(track).map(|t| t.clips()).unwrap_or_default().iter().filter(|x| x.id != id && x.start >= from).map(|x| x.start).min();
+        let moved = ripple(s, track, from, c.end().saturating_sub(old.end()));
+        follow_automation(s, track, first.map_or(old.end(), |f| f.min(old.end())), moved);
     }
     Some(c)
 }
