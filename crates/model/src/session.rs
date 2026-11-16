@@ -474,6 +474,50 @@ impl Session {
     pub fn bus_by_name(&self, name: &str) -> Option<&Bus> {
         self.busses.iter().find(|b| b.name.eq_ignore_ascii_case(name))
     }
+
+    /// Whether audio played into a bus in `start` reaches bus `target`: through the tracks that
+    /// take one of them as input and play on through their outputs and sends, transitively.
+    pub fn bus_reaches(&self, start: &[BusId], target: BusId) -> bool {
+        let mut seen: Vec<BusId> = Vec::new();
+        let mut todo: Vec<BusId> = start.to_vec();
+        while let Some(b) = todo.pop() {
+            if b == target {
+                return true;
+            }
+            if seen.contains(&b) {
+                continue;
+            }
+            seen.push(b);
+            for t in self.tracks.iter().filter(|t| t.mixer.input == crate::Route::Bus(b)) {
+                for r in std::iter::once(&t.mixer.output).chain(t.mixer.sends.iter().flatten().map(|x| &x.target)) {
+                    if let crate::Route::Bus(n) = r {
+                        todo.push(*n);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether playing track `t` into `route` (an output or a send) would feed it back into
+    /// itself: the route reaches the bus `t` takes its input from. Such a loop plays silence.
+    pub fn route_loops(&self, t: TrackId, route: &crate::Route) -> bool {
+        match (route, self.track(t).map(|tr| &tr.mixer.input)) {
+            (crate::Route::Bus(b), Some(crate::Route::Bus(input))) => self.bus_reaches(&[*b], *input),
+            _ => false,
+        }
+    }
+
+    /// Whether track `t` taking its input from `route` would feed it back into itself: its
+    /// outputs or sends reach that bus.
+    pub fn input_loops(&self, t: TrackId, route: &crate::Route) -> bool {
+        let (crate::Route::Bus(b), Some(tr)) = (route, self.track(t)) else { return false };
+        let outs: Vec<BusId> = std::iter::once(&tr.mixer.output)
+            .chain(tr.mixer.sends.iter().flatten().map(|x| &x.target))
+            .filter_map(|r| if let crate::Route::Bus(n) = r { Some(*n) } else { None })
+            .collect();
+        self.bus_reaches(&outs, *b)
+    }
     pub fn group(&self, id: GroupId) -> Option<&Group> {
         self.groups.iter().find(|g| g.id == id)
     }

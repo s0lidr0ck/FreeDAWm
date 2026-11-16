@@ -1303,6 +1303,10 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
             .map_or(ChannelFormat::Stereo, |t| if t.kind == TrackKind::Aux { t.format } else { ChannelFormat::Stereo });
         r = Route::Bus(s.add_bus(&name.clone(), fmt));
     }
+    // A route that feeds a track back into itself plays silence: refused.
+    if let Some(tr) = tracks.iter().filter_map(|t| s.track(*t)).find(|tr| if input { s.input_loops(tr.id, &r) } else { s.route_loops(tr.id, &r) }) {
+        return Err(bad(cmd, format!("That would feed `{}` into itself", tr.name)));
+    }
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
             if input {

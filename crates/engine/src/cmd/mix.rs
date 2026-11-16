@@ -451,6 +451,13 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
     let bus = str_param(p, "bus").ok_or_else(|| bad("mix.send", "`bus` required"))?.to_string();
     let t = tracks_required(e, "mix.send", p)?.first().copied().ok_or_else(|| bad("mix.send", "no track"))?;
     let explicit = optional_slot(p, "mix.send", SEND_SLOTS)?;
+    // A send that feeds its track back into itself plays silence: refused (a new bus cannot).
+    if let Some(b) = e.session().bus_by_name(&bus)
+        && e.session().route_loops(t, &soundcraft_model::Route::Bus(b.id))
+    {
+        let name = e.session().track(t).map(|x| x.name.clone()).unwrap_or_default();
+        return Err(bad("mix.send", format!("That would feed `{name}` into itself")));
+    }
     let s = e.session_mut();
     let bid = s.add_bus(&bus, soundcraft_model::ChannelFormat::Stereo);
     let tr = s.track_mut(t).ok_or_else(|| bad("mix.send", "no track"))?;
@@ -1073,6 +1080,30 @@ mod tests {
 
     fn volumes(e: &Engine) -> Vec<f32> {
         [3, 6].iter().map(|id| e.session().track(TrackId(*id)).unwrap().mixer.volume_db).collect()
+    }
+
+    /// Mix bug 15: an output or a send that fed a track back into itself was accepted and went
+    /// silent.
+    #[test]
+    fn a_route_that_loops_back_is_refused() {
+        let mut e = Engine::default();
+        let ids = e.execute("track.new", &json!({"count": 1, "kind": "aux", "name": "Verb"})).unwrap()["tracks"].clone();
+        let verb = ids[0].as_u64().unwrap();
+        e.execute("track.input", &json!({"tracks": [verb], "input": "Verb Bus"})).unwrap();
+        let ids = e.execute("track.new", &json!({"count": 1, "kind": "aux", "name": "Echo"})).unwrap()["tracks"].clone();
+        let echo = ids[0].as_u64().unwrap();
+        e.execute("track.input", &json!({"tracks": [echo], "input": "Echo Bus"})).unwrap();
+        e.execute("track.output", &json!({"tracks": [verb], "output": "Echo Bus"})).unwrap();
+        let before = e.session().clone();
+        // Echo → Verb Bus → Verb → Echo Bus → Echo: a loop.
+        let err = e.execute("track.output", &json!({"tracks": [echo], "output": "Verb Bus"})).unwrap_err().to_string();
+        assert!(err.contains("into itself"), "{err}");
+        assert!(e.execute("mix.send", &json!({"tracks": [echo], "bus": "Verb Bus"})).is_err());
+        assert!(e.execute("track.output", &json!({"tracks": [verb], "output": "Verb Bus"})).is_err(), "straight into itself");
+        assert!(e.execute("track.input", &json!({"tracks": [verb], "input": "Echo Bus"})).is_err(), "an input its output reaches");
+        assert_eq!(e.session().tracks, before.tracks);
+        // Not a loop: fine.
+        e.execute("track.output", &json!({"tracks": [echo], "output": "main"})).unwrap();
     }
 
     #[test]
