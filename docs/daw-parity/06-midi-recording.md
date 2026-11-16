@@ -39,18 +39,18 @@ and, on Stop, gets a clip with the notes placed by when they were played, correc
 latency, cut to the punch range and aware of loop passes. Stuck notes are guarded against in most
 cases. Several tracks can record different ports and channels in one pass, with audio alongside.
 
-Around that middle there are three kinds of gap:
+Around that middle there were three kinds of gap; where they stand after the work listed in the
+revision history:
 
-1. **One record mode.** A take always erases what is under it. There is no merge or overdub, no
-   drum-machine style loop where passes add up, and no MIDI takes to comp. The MIDI Merge switch
-   in the transport is drawn and stored but not read.
-2. **Switches that do nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize (the engine can
-   do it; no control turns it on), MIDI Track Offsets, the input filter, MIDI Thru in the Options
-   menu, and capture of what was just played ("retrospective record") all exist as commands or
-   settings with nothing behind them.
-3. **Nothing goes out, and nothing is mapped.** There is no MIDI output at all: no hardware
-   synths, no clock or timecode, no MIDI track playing an instrument on another track. There is no
-   MIDI learn, no control surface, and no transport control from a controller.
+1. **Record modes.** Settled: Replace (the default), Merge (the MIDI Merge switch: overdub, loop
+   passes adding up in one clip) and New Playlist. Loop passes after the first keep the rest of the
+   song. Still missing: MIDI takes to comp, and hearing earlier passes while the loop runs.
+2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
+   Offsets, count-off set-up and capture of what was just played now work. Still stored and
+   unread: the input filter, MIDI Thru in the Options menu and the other settings bug 22 lists.
+3. **Nothing goes out, and nothing is mapped.** Unchanged: no MIDI output, no hardware synths, no
+   clock or timecode, no MIDI track playing an instrument on another track, no MIDI learn, no
+   control surface, no transport control from a controller.
 
 The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
 synth). There is no piano, and only the synth answers the sustain pedal and pitch bend.
@@ -227,29 +227,29 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | **Fixed.** Notes played between pressing Record and the transport rolling, or a first downbeat played a little early, moved before the take's start by the output latency and were dropped. An event heard from the take's start on that the latency would move before it now begins the take (`midi_record::played_at`). Test: `midi_record::tests::notes_played_before_the_transport_rolled_begin_the_take_despite_latency` (512 samples of latency) | `engine/src/midi_record.rs` (`played_at`) |
-| 2 | **Fixed.** Each loop pass after the first went on a new, empty playlist, so the rest of the song vanished from playback. Each now goes on a copy of the track's playlist as it was before the take, as audio passes do. Test: `midi_record::tests::loop_recording_makes_a_clip_per_pass_on_new_playlists` | `engine/src/midi_record.rs` (`record_midi_on`) |
-| 3 | **Settled** by the record modes (tier 2): Replace still clears the take's whole range, as Replace does in the four; Merge (the MIDI Merge switch) keeps what was there and adds the take; New Playlist keeps the old part on its own playlist | `engine/src/midi_record.rs` (`RecordMode`) |
-| 4 | **Fixed.** Record pressed while a loop plays and the playhead is before it: the take now knows the loop (`midi_devices::finish_take` takes the transport's), its first pass runs from the record point to the loop's end and each later pass is the loop. Test: `midi_record::tests::record_pressed_before_a_playing_loop_keeps_every_pass` | `engine/src/midi_record.rs` (`pass_range`); `ui-egui/src/midi_devices.rs` |
-| 5 | **Fixed.** A note begun in the last 32nd note of a pass (or half the input-quantize grid, if larger) and still held at its end, or released but about to be quantized onto it, was played early for the next downbeat: in a loop it now starts the next pass, its note-off with it. At the end of a take it stays as played, a sliver if Stop cut it (left out, the last note of a take that ends on its last event, as a remote recorder's does, would be lost). Tests: `midi_record::tests::a_downbeat_played_early_at_a_loop_end_starts_the_next_pass`, `with_input_quantize_an_early_downbeat_does_not_snap_outside_the_clip`, `a_note_begun_just_before_the_last_pass_ends_stays_as_played` | `engine/src/midi_record.rs` (`settle_early_notes`) |
-| 6 | **Fixed.** All MIDI Notes Off now reaches the audio thread (`Player::all_notes_off`): every instrument gets the note-offs of the keys live input holds, sustain and sostenuto up, All Notes Off and All Sound Off on all 16 channels and its own voice reset; clips playing chase their controllers again. Test: `mix` `tests::all_notes_off_lets_go_of_every_note_and_pedal_now` | `mix/src/lib.rs` (`MixEngine::all_notes_off`); `playback/src/lib.rs`; `ui-egui/src/lib.rs` |
-| 7 | **Claim wrong.** Checked in midir 0.11.1's source: its CoreMIDI backend walks each packet and calls back once per message (`backend/coremidi/mod.rs`, `handle_input`); ALSA decodes one sequencer event per call and WinMM delivers one short message per call. So `parse` never sees two messages in one buffer and nothing is lost there; no code was changed. (midir itself stops reading a CoreMIDI packet at a data byte with no status byte, i.e. running status inside a packet; that is the library's, not FreeDAWm's.) | `playback/src/midi_in.rs:110-122` |
-| 8 | **Fixed.** A sustain or sostenuto pedal still down when a clip ends comes up on its last tick; one pressed before the take, before the punch point or held over a loop wrap is down from the clip's start (the hub keeps each port's pedals and puts them into the take's first block, `MidiHub::record_pedals`). Tests: `midi_record::tests::a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start`, `a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass`; `midi_in::tests::a_pedal_down_before_the_take_is_down_in_it` | `engine/src/midi_record.rs` (`pedals_down_at`, `lift_pedals`); `playback/src/midi_in.rs` |
-| 9 | **Fixed.** Recorded events the window did not collect in time are now reported at Stop, in the status line and the log, with what a lost note-off does (`midi_devices::lost_in_take`). The loss itself is not prevented: the record ring holds 16,384 events between frames | `ui-egui/src/midi_devices.rs`; `ui-egui/src/lib.rs` |
-| 10 | Unplug and replug within two seconds: the port keeps its slot, so notes held at the unplug are never released | `playback/src/midi_in.rs:437-470` |
-| 11 | Two devices with the same name collapse into one; the second cannot be used | `playback/src/midi_in.rs:526-535` |
-| 12 | What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
-| 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs` | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
-| 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it` | `engine/src/midi_record.rs` (`pass_range`) |
-| 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
-| 16 | **Partly fixed.** Event › More MIDI › Input Quantize opens a window (on/off, grid, strength, swing) and MIDI Track Offsets one (milliseconds per MIDI track); Setup › Click/Countoff… opens one too (level, sounds, only while recording, count-off bars) instead of being greyed out. Step Input still runs its command with defaults (step entry is its own tier-2 item) | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `ui-egui/src/menubar.txt` |
-| 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes` | `ui-egui/src/live_midi.rs` |
-| 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip` | `ui-egui/src/musical_typing.rs` |
-| 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
-| 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs` | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
-| 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs` | `engine/src/io.rs` (`export_midi`) |
-| 22 | **Partly fixed.** MIDI Merge is read now (record modes). Still stored and unread: QuickPunch, TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, the second set of device flags | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
-| 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`) | `ui-egui/src/menubar.txt` |
+| 1 | **Fixed.** Notes played between pressing Record and the transport rolling, or a first downbeat played a little early, moved before the take's start by the output latency and were dropped. An event heard from the take's start on that the latency would move before it now begins the take (`midi_record::played_at`). Test: `midi_record::tests::notes_played_before_the_transport_rolled_begin_the_take_despite_latency` (512 samples of latency). Commit `f8a6d2d`. | `engine/src/midi_record.rs` (`played_at`) |
+| 2 | **Fixed.** Each loop pass after the first went on a new, empty playlist, so the rest of the song vanished from playback. Each now goes on a copy of the track's playlist as it was before the take, as audio passes do. Test: `midi_record::tests::loop_recording_makes_a_clip_per_pass_on_new_playlists`. Commit `79fca68`. | `engine/src/midi_record.rs` (`record_midi_on`) |
+| 3 | **Settled** by the record modes (tier 2): Replace still clears the take's whole range, as Replace does in the four; Merge (the MIDI Merge switch) keeps what was there and adds the take; New Playlist keeps the old part on its own playlist. Commit `68d0dc0`. | `engine/src/midi_record.rs` (`RecordMode`) |
+| 4 | **Fixed.** Record pressed while a loop plays and the playhead is before it: the take now knows the loop (`midi_devices::finish_take` takes the transport's), its first pass runs from the record point to the loop's end and each later pass is the loop. Test: `midi_record::tests::record_pressed_before_a_playing_loop_keeps_every_pass`. Commit `120c0de`. | `engine/src/midi_record.rs` (`pass_range`); `ui-egui/src/midi_devices.rs` |
+| 5 | **Fixed.** A note begun in the last 32nd note of a pass (or half the input-quantize grid, if larger) and still held at its end, or released but about to be quantized onto it, was played early for the next downbeat: in a loop it now starts the next pass, its note-off with it. At the end of a take it stays as played, a sliver if Stop cut it (left out, the last note of a take that ends on its last event, as a remote recorder's does, would be lost). Tests: `midi_record::tests::a_downbeat_played_early_at_a_loop_end_starts_the_next_pass`, `with_input_quantize_an_early_downbeat_does_not_snap_outside_the_clip`, `a_note_begun_just_before_the_last_pass_ends_stays_as_played`. Commits `78904fa`, `985028c`. | `engine/src/midi_record.rs` (`settle_early_notes`) |
+| 6 | **Fixed.** All MIDI Notes Off now reaches the audio thread (`Player::all_notes_off`): every instrument gets the note-offs of the keys live input holds, sustain and sostenuto up, All Notes Off and All Sound Off on all 16 channels and its own voice reset; clips playing chase their controllers again. Test: `mix` `tests::all_notes_off_lets_go_of_every_note_and_pedal_now`. Commit `602cd08`. | `mix/src/lib.rs` (`MixEngine::all_notes_off`); `playback/src/lib.rs`; `ui-egui/src/lib.rs` |
+| 7 | **Claim wrong.** Checked in midir 0.11.1's source: its CoreMIDI backend walks each packet and calls back once per message (`backend/coremidi/mod.rs`, `handle_input`); ALSA decodes one sequencer event per call and WinMM delivers one short message per call. So `parse` never sees two messages in one buffer and nothing is lost there; no code was changed. (midir itself stops reading a CoreMIDI packet at a data byte with no status byte, i.e. running status inside a packet; that is the library's, not FreeDAWm's.). Commit `47d0223`. | `playback/src/midi_in.rs:110-122` |
+| 8 | **Fixed.** A sustain or sostenuto pedal still down when a clip ends comes up on its last tick; one pressed before the take, before the punch point or held over a loop wrap is down from the clip's start (the hub keeps each port's pedals and puts them into the take's first block, `MidiHub::record_pedals`). Tests: `midi_record::tests::a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start`, `a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass`; `midi_in::tests::a_pedal_down_before_the_take_is_down_in_it`. Commit `1372c52`. | `engine/src/midi_record.rs` (`pedals_down_at`, `lift_pedals`); `playback/src/midi_in.rs` |
+| 9 | **Fixed.** Recorded events the window did not collect in time are now reported at Stop, in the status line and the log, with what a lost note-off does (`midi_devices::lost_in_take`). The loss itself is not prevented: the record ring holds 16,384 events between frames. Commit `9046321`. | `ui-egui/src/midi_devices.rs`; `ui-egui/src/lib.rs` |
+| 10 | **Not started** (part of the tier-2 devices item; midir's port ids are stable on macOS and Windows, so a quick replug cannot be told from a port that stayed). Unplug and replug within two seconds: the port keeps its slot, so notes held at the unplug are never released | `playback/src/midi_in.rs:437-470` |
+| 11 | **Not started** (part of the tier-2 devices item (ports would be told apart by midir's port id, not their name)). Two devices with the same name collapse into one; the second cannot be used | `playback/src/midi_in.rs:526-535` |
+| 12 | **Not started** (part of the tier-2 low-latency item: the player would keep the callback's later events for its later parts; needs a loopback measurement to confirm). What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
+| 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs`. Commit `ac4252a`. | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
+| 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it`. Commit `120c0de`. | `engine/src/midi_record.rs` (`pass_range`) |
+| 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading. Commit `b1f5bbc`. | `ui-egui/src/dialogs.rs` |
+| 16 | **Partly fixed.** Event › More MIDI › Input Quantize opens a window (on/off, grid, strength, swing) and MIDI Track Offsets one (milliseconds per MIDI track); Setup › Click/Countoff… opens one too (level, sounds, only while recording, count-off bars) instead of being greyed out. Step Input still runs its command with defaults (step entry is its own tier-2 item). Commit `6d66dce`. | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `ui-egui/src/menubar.txt` |
+| 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes`. Commit `83ce5f3`. | `ui-egui/src/live_midi.rs` |
+| 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip`. Commits `f6a245f`, `0f4e38a`. | `ui-egui/src/musical_typing.rs` |
+| 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading. Commits `149f728`, `f2ecfd9`. | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
+| 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs`. Commit `91059d3`. | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
+| 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs`. Commit `b34b914`. | `engine/src/io.rs` (`export_midi`) |
+| 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, the second set of device flags. Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
+| 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`). Commit `352090a`. | `ui-egui/src/menubar.txt` |
 
 ## Suggested order of work
 
@@ -265,26 +265,26 @@ either wire the control or take it off the menu.
 
 | Work | Est. (h) | Notes |
 |---|---:|---|
-| Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Settles bug 3 |
-| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Needs clips to exist while the loop runs |
-| MIDI takes: lanes, pick a take, comp between takes | 12–18 | Extend the audio comping model to MIDI tracks |
-| Capture what was just played (a listening buffer behind the existing command) | 5–8 | |
-| Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | |
-| Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches |
-| Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | |
-| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | |
-| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Touches the mixer; coordinate with section 3 work |
-| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | |
-| MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | |
-| Mackie Control and HUI surfaces | 12–20 | Listed in section 3 as well; count once |
-| Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | |
-| Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Fixes bug 12 |
-| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | |
-| Devices: identical names, more than 15 ports, aliases | 4–6 | Bugs 10 and 11 |
-| Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | The piano needs a sample set with a licence that allows shipping it |
-| MIDI take survives a crash | 3–5 | |
+| Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Done (`68d0dc0`): Replace, Merge, New Playlist; settles bug 3 |
+| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Partly: passes add up with MIDI Merge (`68d0dc0`). Earlier passes heard and undo of the last pass are not done: they need clips to exist while the loop runs |
+| MIDI takes: lanes, pick a take, comp between takes | 12–18 | Not started (large: the audio comping model would have to take MIDI clips) |
+| Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; not with it stopped |
+| Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in not done |
+| Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
+| Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Not started |
+| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
+| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
+| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Not started (large) |
+| MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Not started |
+| Mackie Control and HUI surfaces | 12–20 | Not started (left for last, as section 3's mixing work may take it) |
+| Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Not started (Musical Typing's step mode fixed: bug 18) |
+| Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Not started; bug 12 open |
+| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
+| Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
+| Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
+| MIDI take survives a crash | 3–5 | Not started |
 
-**3. What most have (≈ 40–65 h).** Auto-arm of the selected track, 2–3; note repeat, 4–6;
+**3. What most have (≈ 40–65 h).** Not started yet. Auto-arm of the selected track, 2–3; note repeat, 4–6;
 recording into a step pattern and from the drum machine's pads, 8–12; MPE set-up and per-note
 editing data, 8–14; scale lock on input and a chord track that shapes input, 6–10; fit the tempo
 to a free performance, 8–12; MIDI 2.0 (Logic, partly Cubase), 6–10. A programmable input
@@ -330,3 +330,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Record modes: Replace, Merge (the MIDI Merge switch, read at last) and New Playlist; merged loop passes add up; settles bug 3 |
 | 2026-11-16 | minor | MIDI Track Offsets apply to what is recorded |
 | 2026-11-16 | minor | Capture MIDI: what was just played without Record becomes a take |
+| 2026-11-16 | minor | Status of the work list, commits on the fixed bugs, summary brought up to date |
