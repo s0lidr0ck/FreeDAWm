@@ -431,7 +431,10 @@ fn max_settings_stay_bounded() {
     let tail = s.tail_samples();
     let rt = r[0].max(r[1]).max(r[2]);
     assert!(tail as f32 >= (rt + 0.2 + 2.0) * 48_000.0 - 1.0, "{tail}");
-    assert!(tail <= (27.3 * 48_000.0) as usize, "{tail}");
+    // Full Repeats (a loop gain of 0.9): 88 tape repeats to fall 80 dB, not the C++'s four.
+    let tape = 0.001 * d::knob_to_tape_ms(1.0);
+    assert!(tail as f32 >= (rt + 0.2 + 87.0 * tape) * 48_000.0, "{tail}");
+    assert!(tail as f32 <= (25.0 + 0.2 + 88.0 * tape) * 48_000.0, "{tail}");
     // And at the highest rate the delays stay in their fixed buffers.
     s.prepare(192_000.0, 512, 2);
     let mut io = vec![hits(SR, 0.9), hits(SR, 0.9)];

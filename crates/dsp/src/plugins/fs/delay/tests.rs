@@ -136,12 +136,39 @@ fn table_matches_the_cpp_order_and_defaults() {
 }
 
 #[test]
-fn registered_with_no_latency_and_an_eight_second_tail() {
+fn registered_with_no_latency_and_at_least_an_eight_second_tail() {
     let mut p = crate::create("fs_delay").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
     p.prepare(48_000.0, 512, 2);
     assert_eq!(p.latency(), 0);
+    // Default 350 ms at 40% loop gain: eleven echoes to -80 dB, over the C++'s 8 s floor.
+    let t = p.tail_samples();
+    assert!((384_000..480_000).contains(&t), "{t}");
+    // Little feedback: the floor.
+    p.set_param("feedback", 0.0);
     assert_eq!(p.tail_samples(), 384_000);
+}
+
+/// Bug 6 of the built-in effects parity list: the tail was 8 s whatever the feedback or freeze,
+/// so a bounce or freeze cut long echoes off.
+#[test]
+fn the_tail_follows_the_feedback_the_time_and_freeze() {
+    let mut p = crate::create("fs_delay").unwrap();
+    p.prepare(48_000.0, 512, 2);
+    let at = |p: &dyn Plugin| p.tail_samples() as f64 / 48_000.0;
+    // 1 s echoes at 70% (80% loop gain): about 43 of them to fall 80 dB.
+    p.set_param("time", 50f32.log(100.0));
+    p.set_param("feedback", 0.7);
+    let long = at(&*p);
+    assert!(long > 40.0, "{long}");
+    p.set_param("feedback", 0.3);
+    let short = at(&*p);
+    assert!(short < long && short > 8.0, "{short}");
+    p.set_param("freeze", 1.0);
+    assert_eq!(at(&*p), MAX_TAIL_S);
+    p.set_param("freeze", 0.0);
+    p.set_param("feedback", 1.0);
+    assert_eq!(at(&*p), MAX_TAIL_S, "a runaway loop");
 }
 
 #[test]

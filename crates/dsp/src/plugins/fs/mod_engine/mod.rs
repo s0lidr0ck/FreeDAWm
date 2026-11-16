@@ -361,6 +361,22 @@ impl ModEngine {
     }
 }
 
+/// How long Mod rings on after the input stops, in seconds: the C++'s 0.25 s
+/// (`getTailLengthSeconds`), plus, for the two flangers, as long as their Regen loop takes to
+/// fall 80 dB (a loop of at most 20 ms at a gain of Regen times the circuit's ceiling: about
+/// 3.6 s at full Regen on the A/DA).
+pub(crate) fn tail_seconds(p: &Params) -> f64 {
+    let circuit = (p.v(d::P_CIRCUIT) + 0.5) as i32;
+    let ceiling = match circuit {
+        6 => 0.88,
+        7 => 0.95,
+        _ => 0.0,
+    };
+    let gain = f64::from(p.v(d::P_REGEN).clamp(0.0, 1.0)) * ceiling;
+    let ring = if gain > 1e-3 { 0.020 * (1e-4f64).ln() / gain.ln() } else { 0.0 };
+    0.25 + ring
+}
+
 impl Plugin for ModEngine {
     fn info(&self) -> &'static PluginInfo {
         &MOD_INFO
@@ -396,8 +412,7 @@ impl Plugin for ModEngine {
     }
 
     fn tail_samples(&self) -> usize {
-        // `getTailLengthSeconds`: 0.25 s.
-        (0.25 * self.dsp.sample_rate()) as usize
+        (tail_seconds(&self.p) * self.dsp.sample_rate()) as usize
     }
 
     fn set_transport(&mut self, transport: &Transport) {
