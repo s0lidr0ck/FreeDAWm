@@ -33,6 +33,16 @@ pub fn specs() -> Vec<CommandSpec> {
         toggle!("options.click", "Click", ["Options"], None, click),
         toggle!("options.countoff", "Count Off", [], None, countoff),
         toggle!("options.midi_merge", "MIDI Merge", [], None, midi_merge),
+        cmd!(noundo "options.midi_record_mode", "MIDI Record Mode", [], None, "{mode?: replace|merge|new_playlist} — what a MIDI take does to the MIDI under it (merge is the MIDI Merge switch) → {mode}", always, |e, p| {
+            use crate::midi_record::{RecordMode, record_mode, set_record_mode};
+            if let Some(m) = str_param(p, "mode") {
+                let Some((mode, _)) = RecordMode::ALL.iter().find(|(_, n)| *n == m) else {
+                    return Err(bad("options.midi_record_mode", format!("unknown mode `{m}`: replace, merge or new_playlist")));
+                };
+                set_record_mode(e.session_mut(), *mode);
+            }
+            Ok(json!({"mode": record_mode(e.session()).name()}))
+        }),
         toggle!("options.pre_fader_metering", "Pre-Fader Metering", ["Options"], None, pre_fader_metering),
         toggle!("options.delay_compensation", "Delay Compensation", ["Options"], None, delay_compensation),
         // Short ramps on clip edges without a fade of their own (and across the loop's edges

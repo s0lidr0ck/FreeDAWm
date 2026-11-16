@@ -425,8 +425,25 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                     ("Loop Rec", loop_rec, "options.loop_record"),
                     ("Pre/Post", prepost, "options.pre_post_roll"),
                 ] {
-                    if ui.selectable_label(on, label).clicked() {
+                    let r = ui.selectable_label(on, label);
+                    if r.clicked() {
                         let _ = app.run(cmd, json!({}));
+                    }
+                    if cmd == "options.midi_merge" {
+                        // The MIDI record mode: Merge is this switch; right-click for the others.
+                        let mode = soundcraft_engine::midi_record::record_mode(app.engine.session());
+                        r.on_hover_text("On: a MIDI take merges into the clips under it. Right-click for the record mode").context_menu(|ui| {
+                            for (m, text) in [
+                                (soundcraft_engine::midi_record::RecordMode::Replace, "Replace"),
+                                (soundcraft_engine::midi_record::RecordMode::Merge, "Merge"),
+                                (soundcraft_engine::midi_record::RecordMode::NewPlaylist, "New Playlist"),
+                            ] {
+                                if ui.radio(mode == m, text).clicked() {
+                                    let _ = app.run("options.midi_record_mode", json!({"mode": m.name()}));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 }
             });

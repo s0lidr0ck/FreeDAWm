@@ -26,6 +26,9 @@
 //!   left out. Controllers (sustain, mod wheel, pitch bend, aftertouch, program) are kept.
 //! - **Input Quantize** (Event › MIDI Operations › Input Quantize) quantizes the notes on the
 //!   session's grid when it is on; the played performance is kept to restore.
+//! - **Record mode** ([`RecordMode`]): Replace clears what the take covers; Merge (the MIDI Merge
+//!   switch) joins the take into the MIDI clips it overlaps, loop passes adding up in one clip;
+//!   New Playlist puts the take on a copy of the track's playlist, the old one kept.
 //! - One undo step, "Record".
 
 use soundcraft_midi::Sequence;
@@ -114,6 +117,7 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         return Vec::new();
     }
     let before = e.session_arc();
+    let mode = record_mode(e.session());
     let quantize = e.session().edit.flag("midi.input_quantize");
     let opts = crate::cmd::event_more::quantize_opts(e.session());
     let passes = events.iter().map(|x| x.pass).max().unwrap_or(0);
@@ -135,8 +139,13 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
             })
             .collect();
         // The playlist as it was before this take: each loop pass after the first goes on a copy
-        // of it, so the rest of the song stays on the track whichever pass is active.
-        let base: Vec<Clip> = if take.looped.is_some() { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
+        // of it, so the rest of the song stays on the track whichever pass is active (and with
+        // New Playlist, the first too).
+        let base: Vec<Clip> = if take.looped.is_some() || mode == RecordMode::NewPlaylist {
+            s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let mut placed_first = false;
         // A downbeat played a little early, in the last moment of a pass, starts the next one.
         let window = (TICKS_PER_QUARTER / 8).max(if quantize { opts.grid_ticks / 2 } else { 0 });
@@ -156,7 +165,8 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
             if seq.notes.is_empty() && seq.ctrls.is_empty() {
                 continue;
             }
-            let performance = quantize.then(|| seq.clone());
+            // Merged, the clip holds what was there too: the performance kept is a new clip's.
+            let performance = (quantize && mode != RecordMode::Merge).then(|| seq.clone());
             if quantize {
                 // On the session's grid: the notes' ticks from the session start while quantizing.
                 let base = s.tempo.samples_to_ticks(range.start, s.sample_rate);
@@ -165,9 +175,10 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
                 seq.notes.iter_mut().for_each(|n| n.start = n.start.saturating_sub(base).max(0));
                 seq.sort();
             }
-            // Each pass after the first that went down on this track: a new playlist, holding what
-            // the track held before the take.
-            if placed_first {
+            // Each pass after the first that went down on this track (and with New Playlist the
+            // first): a new playlist, holding what the track held before the take. Merged passes
+            // add up in one clip instead.
+            if mode != RecordMode::Merge && (placed_first || mode == RecordMode::NewPlaylist) {
                 let mut clips = base.clone();
                 for c in &mut clips {
                     c.id = s.new_clip_id();
@@ -179,15 +190,25 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
                     t.active_playlist = t.playlists.len() - 1;
                 }
             }
-            let id = s.new_clip_id();
-            let name = s.track(tid).map(|t| t.name.clone()).unwrap_or_default();
-            let mut clip = Clip::midi(id, name, range.start, range.len(), seq);
-            clip.midi_channels = true;
-            crate::edit::place_clip(s, tid, clip);
+            let id = if mode == RecordMode::Merge {
+                merge_take(s, tid, range, seq)
+            } else {
+                let id = s.new_clip_id();
+                let name = s.track(tid).map(|t| t.name.clone()).unwrap_or_default();
+                let mut clip = Clip::midi(id, name, range.start, range.len(), seq);
+                clip.midi_channels = true;
+                crate::edit::place_clip(s, tid, clip);
+                id
+            };
             if let Some(p) = performance {
                 s.midi_originals.insert(id.0, p);
             }
             placed_first = true;
+            // Merged, an earlier pass's clip went into this one (a clip on another playlist is
+            // not found, so only then).
+            if mode == RecordMode::Merge {
+                out.retain(|c| s.find_clip(*c).is_some());
+            }
             out.push(id);
         }
     }
@@ -195,6 +216,103 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         e.push_undo("Record", before);
     }
     out
+}
+
+/// What a take does to the MIDI under it (Options › MIDI Record Mode; the transport's MIDI Merge
+/// switch turns Merge on and off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordMode {
+    /// The take's range is cleared and the take put there (the default).
+    Replace,
+    /// The take joins the MIDI clips it overlaps into one clip with both: overdub. Loop passes
+    /// add up in it, drum-machine style.
+    Merge,
+    /// The take goes on a new playlist that starts as a copy of the track's; the playlist it
+    /// replaced keeps what was there.
+    NewPlaylist,
+}
+
+impl RecordMode {
+    pub const ALL: [(RecordMode, &'static str); 3] =
+        [(RecordMode::Replace, "replace"), (RecordMode::Merge, "merge"), (RecordMode::NewPlaylist, "new_playlist")];
+
+    /// Its name in commands and the session (`replace`, `merge`, `new_playlist`).
+    pub fn name(self) -> &'static str {
+        RecordMode::ALL.iter().find(|(m, _)| *m == self).map_or("replace", |(_, n)| n)
+    }
+}
+
+/// The session's MIDI record mode: Merge while MIDI Merge is on, else the stored one
+/// (`midi.record_mode`: 2 New Playlist, else Replace).
+pub fn record_mode(s: &Session) -> RecordMode {
+    if s.edit.midi_merge {
+        RecordMode::Merge
+    } else if s.edit.value("midi.record_mode", 0.0) == 2.0 {
+        RecordMode::NewPlaylist
+    } else {
+        RecordMode::Replace
+    }
+}
+
+/// Sets the session's MIDI record mode (MIDI Merge on exactly for Merge).
+pub fn set_record_mode(s: &mut Session, mode: RecordMode) {
+    s.edit.midi_merge = mode == RecordMode::Merge;
+    let v = match mode {
+        RecordMode::NewPlaylist => 2.0,
+        RecordMode::Merge => 1.0,
+        RecordMode::Replace => 0.0,
+    };
+    s.edit.values.insert("midi.record_mode".into(), v);
+}
+
+/// Merge mode: `take` (a sequence over `range`, its channels kept) joins the unmuted MIDI clips
+/// on `track` that overlap `range` in one clip over all of them, keeping the first one's name.
+/// Returns its id.
+fn merge_take(s: &mut Session, track: TrackId, range: Range, take: Sequence) -> ClipId {
+    let sr = s.sample_rate;
+    let under: Vec<&Clip> = s
+        .track(track)
+        .map(|t| t.clips().iter().filter(|c| !c.muted && c.midi_playing().is_some() && c.start < range.end && c.end() > range.start).collect())
+        .unwrap_or_default();
+    let span = under.iter().fold(range, |r, c| Range::new(r.start.min(c.start), r.end.max(c.end())));
+    let name = under.first().map(|c| c.name.clone()).or_else(|| s.track(track).map(|t| t.name.clone())).unwrap_or_default();
+    let tick = |at: Samples| s.tempo.samples_to_ticks(at, sr);
+    let base = tick(span.start);
+    let mut merged = Sequence::default();
+    for part in crate::edit::copy_range(s, track, span).into_iter().filter(|c| !c.muted) {
+        let at = tick(span.start.saturating_add(part.start)).saturating_sub(base);
+        let len = tick(span.start.saturating_add(part.end())).saturating_sub(base).saturating_sub(at);
+        let flatten = !part.midi_channels;
+        let soundcraft_model::ClipContent::Midi { mut sequence } = part.content else { continue };
+        if flatten {
+            // It played on channel 1: so it does in the merged clip, which keeps channels.
+            crate::edit::channel_one(&mut sequence);
+        }
+        for mut n in sequence.notes.into_iter().filter(|n| (0..len).contains(&n.start)) {
+            n.length = n.length.min(len - n.start);
+            n.start += at;
+            merged.notes.push(n);
+        }
+        for mut c in sequence.ctrls.into_iter().filter(|c| (0..len).contains(&c.tick)) {
+            c.tick += at;
+            merged.ctrls.push(c);
+        }
+    }
+    let at = tick(range.start).saturating_sub(base);
+    merged.notes.extend(take.notes.into_iter().map(|mut n| {
+        n.start += at;
+        n
+    }));
+    merged.ctrls.extend(take.ctrls.into_iter().map(|mut c| {
+        c.tick += at;
+        c
+    }));
+    merged.sort();
+    let id = s.new_clip_id();
+    let mut clip = Clip::midi(id, name, span.start, span.len(), merged);
+    clip.midi_channels = true;
+    crate::edit::place_clip(s, track, clip);
+    id
 }
 
 /// The range pass `pass` of `passes` covers (see the module docs), cut to the punch range;
@@ -618,6 +736,75 @@ mod tests {
         let ids = record_live_midi(&mut e, &take, &[ev(Q, "K", [0x90, 50, 100]), ev(4 * Q - 500, "K", [0x90, 36, 100])]);
         let pitches: Vec<u8> = clip(&e, ids[0]).midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
         assert_eq!(pitches, vec![50, 36]);
+    }
+
+    /// A clip with one note of `pitch` at tick `at` on `t`, from `start` for `len`.
+    fn old_clip(e: &mut Engine, t: TrackId, start: Samples, len: Samples, pitch: u8, at: i64) -> ClipId {
+        let mut seq = Sequence::default();
+        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 90, release_velocity: 64, channel: 0, start: at, length: 100 });
+        let id = e.session_mut().new_clip_id();
+        crate::edit::place_clip(e.session_mut(), t, Clip::midi(id, "Old", start, len, seq));
+        id
+    }
+
+    #[test]
+    fn merge_mode_overdubs_into_the_clip_under_the_take() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let old = old_clip(&mut e, t, 0, 4 * Q, 40, 0);
+        e.execute("options.midi_record_mode", &json!({"mode": "merge"})).unwrap();
+        assert!(e.session().edit.midi_merge, "the MIDI Merge switch shows it");
+        let take = MidiTake { start: 2 * Q, end: 6 * Q, looped: None, punch: None, latency: 480 };
+        let ids = record_live_midi(&mut e, &take, &[ev(3 * Q + 480, "K", [0x91, 60, 100])]);
+        assert_eq!(ids.len(), 1);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!(tr.clips().len(), 1, "one clip");
+        assert!(e.session().find_clip(old).is_none());
+        let c = &tr.clips()[0];
+        assert_eq!((c.start, c.length, c.name.as_str()), (0, 6 * Q, "Old"));
+        let notes: Vec<(u8, u8, i64)> = c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.channel, n.start)).collect();
+        assert_eq!(notes, vec![(40, 0, 0), (60, 1, 3 * TICKS_PER_QUARTER)]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().find_clip(old).is_some(), "one undo brings the old clip back");
+    }
+
+    #[test]
+    fn merged_loop_passes_add_up_in_one_clip() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        e.execute("options.midi_merge", &json!({"value": true})).unwrap();
+        let take = MidiTake { start: 0, end: 12 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        let events = vec![
+            ev(0, "K", [0x90, 36, 100]),
+            RecordedEvent { pass: 1, ..ev(Q, "K", [0x90, 38, 100]) },
+            RecordedEvent { pass: 2, ..ev(2 * Q, "K", [0x90, 42, 100]) },
+        ];
+        let ids = record_live_midi(&mut e, &take, &events);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!(tr.playlists.len(), 1, "no playlist per pass");
+        assert_eq!(tr.clips().len(), 1);
+        assert_eq!(ids, vec![tr.clips()[0].id]);
+        let pitches: Vec<u8> = tr.clips()[0].midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![36, 38, 42]);
+    }
+
+    #[test]
+    fn new_playlist_mode_keeps_the_old_part_on_its_playlist() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let old = old_clip(&mut e, t, 0, 4 * Q, 40, 0);
+        let out = e.execute("options.midi_record_mode", &json!({"mode": "new_playlist"})).unwrap();
+        assert_eq!(out["mode"], "new_playlist");
+        let take = MidiTake { start: 2 * Q, end: 3 * Q, looped: None, punch: None, latency: 0 };
+        record_live_midi(&mut e, &take, &[ev(2 * Q, "K", [0x90, 60, 100])]);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.playlists.len(), tr.active_playlist), (2, 1));
+        assert!(tr.playlists[0].clips.iter().any(|c| c.id == old && c.length == 4 * Q), "the old part, whole");
+        assert_eq!(tr.playlists[1].clips.len(), 3, "the copy cut around the take, and the take");
+        // Replace (the default) clears what the take covers.
+        e.execute("options.midi_record_mode", &json!({"mode": "replace"})).unwrap();
+        assert_eq!(record_mode(e.session()), RecordMode::Replace);
+        assert!(e.execute("options.midi_record_mode", &json!({"mode": "overdub"})).is_err());
     }
 
     #[test]
