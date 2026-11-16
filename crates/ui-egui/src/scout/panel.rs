@@ -313,12 +313,20 @@ fn eq_text(lo: f32, hi: f32, g_lo: f32, g_hi: f32, dynamic: bool, q: Option<f32>
     what
 }
 
+/// Hover text of a suggestion's Apply button: what it does, and that nothing else happens.
+pub const APPLY_HOVER: &str = "Apply this one suggestion to the track (one undo step). Nothing is sent: the answer already here is used.";
+
 /// The answer's suggestions as rows tagged "Track · Module"; the EQ ones numbered and coloured as
-/// their guides are on the Clean Q graphs (one sequence per answer).
-fn suggestion_rows(ui: &mut Ui, t: &Tokens, s: &Session, list: &[Guide]) {
+/// their guides are on the Clean Q graphs (one sequence per answer). Each row has an Apply button
+/// (the user's consent for that one step); returns the index of the one clicked.
+fn suggestion_rows(ui: &mut Ui, t: &Tokens, s: &Session, list: &[Guide]) -> Option<usize> {
+    let mut apply = None;
     for (i, g) in list.iter().enumerate() {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
+            if ui.small_button("Apply").on_hover_text(APPLY_HOVER).clicked() {
+                apply = Some(i);
+            }
             match g {
                 Guide::Eq { track, lo_hz, hi_hz, gain_lo_db, gain_hi_db, dynamic, q, label } => {
                     // One sequence per answer, as the graph's chips number them.
@@ -350,6 +358,7 @@ fn suggestion_rows(ui: &mut Ui, t: &Tokens, s: &Session, list: &[Guide]) {
             }
         });
     }
+    apply
 }
 
 fn answer_card(app: &mut SoundApp, ui: &mut Ui, turn: &ScoutTurn, shown: bool) {
@@ -366,7 +375,18 @@ fn answer_card(app: &mut SoundApp, ui: &mut Ui, turn: &ScoutTurn, shown: bool) {
             if !turn.guides.is_empty() {
                 ui.add_space(6.0);
                 ui.label(RichText::new("SUGGESTIONS").font(bold(10.5)).color(t.text_dim));
-                suggestion_rows(ui, &t, &session, &turn.guides);
+                if let Some(i) = suggestion_rows(ui, &t, &session, &turn.guides) {
+                    app.ui.status = match app.run("scout.apply", json!({"turn": turn.id, "guide": i})) {
+                        Ok(v) => {
+                            let action = v.get("action").and_then(serde_json::Value::as_str).unwrap_or("Applied");
+                            match v.get("note").and_then(serde_json::Value::as_str) {
+                                Some(note) => format!("{action}. {note}"),
+                                None => action.to_string(),
+                            }
+                        }
+                        Err(e) => e.to_string(),
+                    };
+                }
             }
             for n in &turn.notes {
                 ui.label(RichText::new(n).font(regular(10.5)).color(t.text_dim));

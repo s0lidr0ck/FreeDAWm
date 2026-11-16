@@ -66,6 +66,7 @@ mod plugin_state;
 mod query;
 pub(crate) mod sampler;
 mod scout;
+mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
@@ -231,6 +232,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(zoom_toggle::specs());
         v.extend(editor_link::specs());
         v.extend(scout::specs());
+        v.extend(scout_apply::specs());
         v.extend(scout_profile::specs());
         v.extend(looping::specs());
         v.extend(band::specs());
