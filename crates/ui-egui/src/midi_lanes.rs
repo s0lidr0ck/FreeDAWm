@@ -1,6 +1,8 @@
 //! The MIDI Editor's controller lanes, under the velocity lane: CC (mod wheel, volume,
 //! expression, sustain, any other number), pitch bend and aftertouch, picked from the header's
-//! **Lanes** menu. Each lane draws its events as a stepped line with a point per event and edits
+//! **Lanes** menu. Each lane draws its events as a line with a point per event (a value held to
+//! the next point, or a ramp to it where the point ramps: the Line and Curve tools and Ramp
+//! Between Points write those) and edits
 //! them as the automation lanes do: a click adds a point (the Pencil too), a drag on a point moves
 //! the selected points, Alt-click deletes one, Shift-click adds to the selection, a drag on empty
 //! space selects the points inside, the Pencil drags a freehand line that replaces what it crosses,
@@ -435,14 +437,30 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         }
         order.sort_by_key(|x| x.1);
         let mut line: Vec<Pos2> = Vec::with_capacity(order.len() * 2 + 1);
-        for (k, (_, tick, v, _)) in order.iter().enumerate() {
+        // The segment the previous point starts: held (a step) or a ramp to this one.
+        let mut prev: Option<(i64, i32, soundcraft_midi::CtrlShape)> = None;
+        for (i, tick, v, _) in &order {
             let (x, y) = (geo.x_of(*tick), lg.y_of(*v));
-            if k > 0
-                && let Some(prev) = line.last().copied()
-            {
-                line.push(pos2(x, prev.y));
+            match prev {
+                Some((t0, v0, shape)) if !shape.is_step() && *tick > t0 => {
+                    // A curve drawn through a point every few screen points.
+                    let n = ((x - geo.x_of(t0)).abs() / 3.0).clamp(1.0, 400.0) as i64;
+                    for k in 1..n {
+                        let f = k as f64 / n as f64;
+                        let tk = t0 + ((*tick - t0) as f64 * f) as i64;
+                        line.push(pos2(geo.x_of(tk), lg.y_of(shape.value(v0, *v, f))));
+                    }
+                }
+                Some(_) => {
+                    if let Some(last) = line.last().copied() {
+                        line.push(pos2(x, last.y));
+                    }
+                }
+                None => {}
             }
             line.push(pos2(x, y));
+            let shape = seq.ctrls.get(*i).map_or(soundcraft_midi::CtrlShape::Step, |c| c.shape);
+            prev = Some((*tick, *v, shape));
         }
         if let Some(last) = line.last().copied() {
             line.push(pos2(r.max.x, last.y));
@@ -605,8 +623,13 @@ fn point_menu(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, kind
         _ => Vec::new(),
     };
     if sel.len() >= 2 {
-        if ui.button("Ramp Between Points").on_hover_text("Replace the steps between the selected points with ramps").clicked() {
+        if ui.button("Ramp Between Points").on_hover_text("A smooth ramp from each selected point to the next (the points between go)").clicked() {
             let _ = app.run("midi.ctrl_ramp", json!({"clip": cid.0, "indices": sel}));
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        if ui.button("Step Between Points").on_hover_text("Each selected point holds its value until the next (no ramp)").clicked() {
+            let _ = app.run("midi.ctrl_ramp", json!({"clip": cid.0, "indices": sel, "shape": "step"}));
             app.midi.ctrl_sel = None;
             ui.close();
         }

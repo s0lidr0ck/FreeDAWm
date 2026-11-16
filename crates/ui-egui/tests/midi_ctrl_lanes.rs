@@ -185,7 +185,7 @@ fn lane_helpers() {
         notes: vec![],
         ctrls: [CtrlKind::PitchBend, CtrlKind::Cc(11), CtrlKind::Program, CtrlKind::Cc(1), CtrlKind::Cc(11)]
             .iter()
-            .map(|k| soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: *k, value: 0 })
+            .map(|k| soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: *k, value: 0, shape: Default::default() })
             .collect(),
     };
     assert_eq!(midi_lanes::lanes_with_data(&seq), vec![CtrlKind::Cc(1), CtrlKind::Cc(11), CtrlKind::PitchBend, CtrlKind::Program]);
@@ -245,8 +245,8 @@ fn lanes_show_and_write_one_channel() {
     assert!(ev.iter().filter(|x| x.1 == 0).count() > 2, "{ev:?}");
 }
 
-/// The Line tool: a drag on empty lane space draws a ramp (values where they change, the end
-/// exact); program change and poly pressure have lanes.
+/// The Line tool: a drag on empty lane space draws a ramp (two points, the first ramping to the
+/// second); program change and poly pressure have lanes.
 #[test]
 fn the_line_tool_draws_a_ramp_and_program_has_a_lane() {
     let (mut h, clip) = harness();
@@ -255,11 +255,13 @@ fn the_line_tool_draws_a_ramp_and_program_has_a_lane() {
     let (a, b) = (at(&h, CtrlKind::Cc(1), 960, 20), at(&h, CtrlKind::Cc(1), 1920, 100));
     drag(&mut h, a, b);
     let e = events(&mut h, clip, "cc1");
-    assert!(e.len() > 6, "{e:?}");
     let ramp: Vec<&(i64, i64)> = e.iter().filter(|x| (960..=1920).contains(&x.0)).collect();
+    assert_eq!(ramp.len(), 2, "{e:?}");
     assert!((18..=22).contains(&ramp[0].1), "{e:?}");
-    assert!(ramp.windows(2).all(|w| w[1].1 > w[0].1), "{e:?}");
-    assert!((96..=104).contains(&ramp[ramp.len() - 1].1), "{e:?}");
+    assert!((96..=104).contains(&ramp[1].1), "{e:?}");
+    let listed = h.state_mut().run("midi.ctrls", json!({"clip": clip, "lane": "cc1"})).unwrap();
+    let first = listed["events"].as_array().unwrap().iter().find(|x| x["tick"] == 960).cloned().unwrap();
+    assert_eq!(first["ramp"], json!(0.0), "{listed}");
     assert_eq!(h.state().engine.undo_label(), Some("Draw Controller Line"));
     // A program change shows its own lane.
     h.state_mut().run("midi.ctrl_add", json!({"clip": clip, "lane": "program", "tick": 0, "value": 3})).unwrap();

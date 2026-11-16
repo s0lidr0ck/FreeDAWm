@@ -361,14 +361,18 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
                             stack.push_back((tick, d2));
                         }
                     }
-                    0xA0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PolyPressure(d1), value: i32::from(d2) }),
-                    0xB0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Cc(d1), value: i32::from(d2) }),
-                    0xC0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Program, value: i32::from(d1) }),
-                    0xD0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::ChannelPressure, value: i32::from(d1) }),
+                    0xA0 => {
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PolyPressure(d1), value: i32::from(d2), shape: Default::default() })
+                    }
+                    0xB0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Cc(d1), value: i32::from(d2), shape: Default::default() }),
+                    0xC0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Program, value: i32::from(d1), shape: Default::default() }),
+                    0xD0 => {
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::ChannelPressure, value: i32::from(d1), shape: Default::default() })
+                    }
                     _ => {
                         // 0xE0 pitch bend: LSB then MSB, centred on 8192.
                         let v = (i32::from(d2) << 7 | i32::from(d1)) - 8192;
-                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PitchBend, value: v });
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PitchBend, value: v, shape: Default::default() });
                     }
                 }
             }

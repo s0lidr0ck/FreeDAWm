@@ -1415,7 +1415,7 @@ mod tests {
     fn consolidating_midi_merges_the_clips_as_they_sound() {
         let (mut e, t, at) = keys();
         let s = e.session_mut();
-        let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64 };
+        let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64, shape: Default::default() };
         let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![] };
         let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![] };
         let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc] };
@@ -1440,7 +1440,7 @@ mod tests {
         let s = e.session_mut();
         let q = soundcraft_time::TICKS_PER_QUARTER;
         let lower = soundcraft_midi::Note { channel: 2, ..note(0, 1, 48) };
-        let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127 };
+        let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127, shape: Default::default() };
         let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks] };
         // A plain clip whose notes say channel 10: it plays them on channel 1.
         let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] };

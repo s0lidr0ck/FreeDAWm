@@ -54,6 +54,52 @@ pub struct CtrlEvent {
     pub channel: u8,
     pub kind: CtrlKind,
     pub value: i32,
+    /// How the value goes on to the next event of this lane and channel: held (the default, and
+    /// every event saved before ramps existed) or a ramp.
+    #[serde(default, skip_serializing_if = "CtrlShape::is_step")]
+    pub shape: CtrlShape,
+}
+
+/// How a controller's value goes from one event to the next event of its lane and channel.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum CtrlShape {
+    /// Held until the next event, as MIDI itself does.
+    #[default]
+    Step,
+    /// A ramp to the next event's value, bent by the curve (-1..1: 0 straight, above 0 starts
+    /// fast, below 0 starts slow). It plays as a stream of values; MIDI files get it as steps
+    /// ([`Sequence::stepped_ctrls`]).
+    Ramp(f32),
+}
+
+impl CtrlShape {
+    pub fn is_step(&self) -> bool {
+        matches!(self, CtrlShape::Step)
+    }
+
+    /// The share of the way to the next value at `x` (0..1) along the segment (0 for a step).
+    pub fn at(self, x: f64) -> f64 {
+        let x = if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+        match self {
+            CtrlShape::Step => 0.0,
+            CtrlShape::Ramp(c) => {
+                let k = if c.is_finite() { f64::from(c.clamp(-1.0, 1.0)) * 5.0 } else { 0.0 };
+                if k.abs() < 1e-6 { x } else { (1.0 - (-k * x).exp()) / (1.0 - (-k).exp()) }
+            }
+        }
+    }
+
+    /// The value at `x` (0..1) of a segment from `a` to `b`, rounded.
+    pub fn value(self, a: i32, b: i32, x: f64) -> i32 {
+        (f64::from(a) + (f64::from(b) - f64::from(a)) * self.at(x)).round() as i32
+    }
+}
+
+impl CtrlEvent {
+    /// Whether `other` is on the same lane (kind) and channel.
+    pub fn same_lane(&self, other: &CtrlEvent) -> bool {
+        self.kind == other.kind && self.channel == other.channel
+    }
 }
 
 /// The MIDI content of a region or track.
@@ -94,6 +140,41 @@ impl Sequence {
         }
     }
 
+    /// The event after `ctrls[i]` on its lane and channel (where a ramp from it goes).
+    pub fn next_in_lane(&self, i: usize) -> Option<&CtrlEvent> {
+        let a = self.ctrls.get(i)?;
+        self.ctrls.iter().skip(i + 1).find(|b| b.same_lane(a))
+    }
+
+    /// The controller events with every ramp written out as steps: the value where it changes, at
+    /// most one every `step` ticks (as a MIDI file or a device without ramps takes them). Every
+    /// event comes back as a step; sorted by tick.
+    pub fn stepped_ctrls(&self, step: i64) -> Vec<CtrlEvent> {
+        const MAX: usize = 1_000_000;
+        let step = step.clamp(1, 3840);
+        let mut out: Vec<CtrlEvent> = Vec::with_capacity(self.ctrls.len());
+        for (i, a) in self.ctrls.iter().enumerate() {
+            out.push(CtrlEvent { shape: CtrlShape::Step, ..*a });
+            if a.shape.is_step() {
+                continue;
+            }
+            let Some(b) = self.next_in_lane(i).filter(|b| b.tick > a.tick) else { continue };
+            let span = (b.tick - a.tick) as f64;
+            let mut last = a.value;
+            let mut t = a.tick.saturating_add(step);
+            while t < b.tick && out.len() < MAX {
+                let v = a.shape.value(a.value, b.value, (t - a.tick) as f64 / span);
+                if v != last {
+                    out.push(CtrlEvent { tick: t, value: v, shape: CtrlShape::Step, ..*a });
+                    last = v;
+                }
+                t = t.saturating_add(step);
+            }
+        }
+        out.sort_by_key(|c| c.tick);
+        out
+    }
+
     /// Notes whose start lies in the half-open range `[start, end)`.
     pub fn notes_in(&self, start: i64, end: i64) -> impl Iterator<Item = &Note> + '_ {
         self.notes.iter().filter(move |n| n.start >= start && n.start < end)
@@ -129,5 +210,44 @@ impl Sequence {
         self.ctrls = kept;
         self.sort();
         before - (self.notes.len() + self.ctrls.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(tick: i64, value: i32, shape: CtrlShape) -> CtrlEvent {
+        CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(1), value, shape }
+    }
+
+    #[test]
+    fn events_saved_before_ramps_load_as_steps_and_steps_save_as_before() {
+        let old: CtrlEvent = serde_json::from_str(r#"{"tick":5,"channel":0,"kind":{"Cc":1},"value":9}"#).unwrap();
+        assert_eq!(old.shape, CtrlShape::Step);
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"tick":5,"channel":0,"kind":{"Cc":1},"value":9}"#);
+        let ramp = ev(0, 0, CtrlShape::Ramp(0.5));
+        let back: CtrlEvent = serde_json::from_str(&serde_json::to_string(&ramp).unwrap()).unwrap();
+        assert_eq!(back, ramp);
+    }
+
+    #[test]
+    fn ramps_write_out_as_thinned_steps() {
+        let other = CtrlEvent { kind: CtrlKind::Cc(7), ..ev(50, 3, CtrlShape::Step) };
+        let seq = Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Ramp(0.0)), other, ev(1000, 100, CtrlShape::Step)] };
+        assert_eq!(seq.next_in_lane(0).map(|c| c.tick), Some(1000));
+        let out = seq.stepped_ctrls(10);
+        let cc1: Vec<(i64, i32)> = out.iter().filter(|c| c.kind == CtrlKind::Cc(1)).map(|c| (c.tick, c.value)).collect();
+        assert!(out.iter().all(|c| c.shape.is_step()));
+        assert_eq!(cc1.first(), Some(&(0, 0)));
+        assert_eq!(cc1.last(), Some(&(1000, 100)));
+        // One event a value at most, no closer than 10 ticks, rising in a straight line.
+        assert!(cc1.windows(2).all(|w| w[1].0 - w[0].0 >= 10 && w[1].1 > w[0].1), "{cc1:?}");
+        assert_eq!(cc1.iter().find(|c| c.0 == 500).map(|c| c.1), Some(50));
+        assert!(out.iter().any(|c| c.kind == CtrlKind::Cc(7)));
+        // A step stays one event; a curve that starts fast is above the line halfway.
+        let steps = Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Step), ev(1000, 100, CtrlShape::Step)] };
+        assert_eq!(steps.stepped_ctrls(10).len(), 2);
+        assert!(CtrlShape::Ramp(1.0).value(0, 100, 0.5) > 60 && CtrlShape::Ramp(-1.0).value(0, 100, 0.5) < 40);
     }
 }

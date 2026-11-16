@@ -1412,18 +1412,10 @@ impl<'p, R: Read + Seek> Importer<'p, '_, R> {
                 continue;
             }
             let tick = (to_rel_beats(self, pt.time, from, at) * TPQ).round() as i64;
-            seq.ctrls.push(soundcraft_midi::CtrlEvent { tick, channel, kind, value: to_value(pt.value) });
-            // A ramp to the next point: a value every 32nd note.
-            if let Some(next) = pts.get(i + 1).filter(|n| !pt.hold && n.time < to && (n.value - pt.value).abs() > 1e-9) {
-                let t1 = (to_rel_beats(self, next.time, from, at) * TPQ).round() as i64;
-                let step = (soundcraft_time::TICKS_PER_QUARTER / 8).max(1);
-                let mut tk = tick + step;
-                while tk < t1 && seq.ctrls.len() < MAX_EVENTS {
-                    let f = (tk - tick) as f64 / (t1 - tick).max(1) as f64;
-                    seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: tk, channel, kind, value: to_value(pt.value + (next.value - pt.value) * f) });
-                    tk += step;
-                }
-            }
+            // A point that is not held ramps to the next one.
+            let ramps = pts.get(i + 1).is_some_and(|n| !pt.hold && n.time < to && (n.value - pt.value).abs() > 1e-9);
+            let shape = if ramps { soundcraft_midi::CtrlShape::Ramp(0.0) } else { soundcraft_midi::CtrlShape::Step };
+            seq.ctrls.push(soundcraft_midi::CtrlEvent { tick, channel, kind, value: to_value(pt.value), shape });
         }
     }
 

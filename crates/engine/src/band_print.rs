@@ -211,14 +211,38 @@ pub fn events_to_sequence(s: &Session, range: Range, events: &[(Samples, [u8; 3]
                 }
             }
             0xB0 if d1 >= 120 => {}
-            0xB0 => seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::Cc(pitch), value: i32::from(d2 & 0x7F) }),
+            0xB0 => seq.ctrls.push(CtrlEvent {
+                tick: tick(at),
+                channel: ch,
+                kind: CtrlKind::Cc(pitch),
+                value: i32::from(d2 & 0x7F),
+                shape: Default::default(),
+            }),
             0xE0 => {
                 let v = i32::from(d1 & 0x7F) | (i32::from(d2 & 0x7F) << 7);
-                seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::PitchBend, value: v - 8192 });
+                seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::PitchBend, value: v - 8192, shape: Default::default() });
             }
-            0xD0 => seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::ChannelPressure, value: i32::from(d1 & 0x7F) }),
-            0xA0 => seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::PolyPressure(pitch), value: i32::from(d2 & 0x7F) }),
-            0xC0 => seq.ctrls.push(CtrlEvent { tick: tick(at), channel: ch, kind: CtrlKind::Program, value: i32::from(d1 & 0x7F) }),
+            0xD0 => seq.ctrls.push(CtrlEvent {
+                tick: tick(at),
+                channel: ch,
+                kind: CtrlKind::ChannelPressure,
+                value: i32::from(d1 & 0x7F),
+                shape: Default::default(),
+            }),
+            0xA0 => seq.ctrls.push(CtrlEvent {
+                tick: tick(at),
+                channel: ch,
+                kind: CtrlKind::PolyPressure(pitch),
+                value: i32::from(d2 & 0x7F),
+                shape: Default::default(),
+            }),
+            0xC0 => seq.ctrls.push(CtrlEvent {
+                tick: tick(at),
+                channel: ch,
+                kind: CtrlKind::Program,
+                value: i32::from(d1 & 0x7F),
+                shape: Default::default(),
+            }),
             _ => {}
         }
     }

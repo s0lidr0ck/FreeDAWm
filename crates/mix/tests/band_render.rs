@@ -539,7 +539,7 @@ fn back_on_the_clips_chases_their_controllers() {
     lay_song(&mut s, 0);
     let t = musician_track(&mut s, 0);
     let mut seq = soundcraft_midi::Sequence::default();
-    seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 99 });
+    seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 99, shape: Default::default() });
     let cid = s.new_clip_id();
     s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 10 * 48_000, seq));
     let (inst, log) = tape(t);

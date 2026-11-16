@@ -12,7 +12,7 @@ use soundcraft_ui_egui::{Services, SoundApp};
 #[test]
 fn rows_hold_every_kind_in_time_order_and_filter() {
     let n = |start, channel| Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel, start, length: 10 };
-    let c = |tick, kind, channel| CtrlEvent { tick, channel, kind, value: 5 };
+    let c = |tick, kind, channel| CtrlEvent { tick, channel, kind, value: 5, shape: Default::default() };
     let seq = Sequence {
         notes: vec![n(-10, 0), n(0, 0), n(480, 1)],
         ctrls: vec![c(0, CtrlKind::Program, 0), c(100, CtrlKind::Cc(1), 0), c(200, CtrlKind::PitchBend, 1), c(300, CtrlKind::PolyPressure(60), 0)],

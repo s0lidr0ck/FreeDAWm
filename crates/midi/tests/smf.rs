@@ -49,13 +49,13 @@ fn round_trip() {
             note(60, 1920, 240),
         ],
         ctrls: vec![
-            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Program, value: 5 },
-            CtrlEvent { tick: 10, channel: 0, kind: CtrlKind::Cc(7), value: 100 },
-            CtrlEvent { tick: 20, channel: 1, kind: CtrlKind::PitchBend, value: -8192 },
-            CtrlEvent { tick: 30, channel: 1, kind: CtrlKind::PitchBend, value: 8191 },
-            CtrlEvent { tick: 40, channel: 1, kind: CtrlKind::PitchBend, value: 0 },
-            CtrlEvent { tick: 50, channel: 2, kind: CtrlKind::ChannelPressure, value: 77 },
-            CtrlEvent { tick: 60, channel: 2, kind: CtrlKind::PolyPressure(61), value: 12 },
+            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Program, value: 5, shape: Default::default() },
+            CtrlEvent { tick: 10, channel: 0, kind: CtrlKind::Cc(7), value: 100, shape: Default::default() },
+            CtrlEvent { tick: 20, channel: 1, kind: CtrlKind::PitchBend, value: -8192, shape: Default::default() },
+            CtrlEvent { tick: 30, channel: 1, kind: CtrlKind::PitchBend, value: 8191, shape: Default::default() },
+            CtrlEvent { tick: 40, channel: 1, kind: CtrlKind::PitchBend, value: 0, shape: Default::default() },
+            CtrlEvent { tick: 50, channel: 2, kind: CtrlKind::ChannelPressure, value: 77, shape: Default::default() },
+            CtrlEvent { tick: 60, channel: 2, kind: CtrlKind::PolyPressure(61), value: 12, shape: Default::default() },
         ],
     };
     seq.sort();
@@ -178,8 +178,8 @@ fn running_status_and_velocity_zero_note_off() {
     assert_eq!(
         seq.ctrls,
         vec![
-            CtrlEvent { tick: 960, channel: 1, kind: CtrlKind::Cc(7), value: 100 },
-            CtrlEvent { tick: 976, channel: 1, kind: CtrlKind::Cc(10), value: 64 },
+            CtrlEvent { tick: 960, channel: 1, kind: CtrlKind::Cc(7), value: 100, shape: Default::default() },
+            CtrlEvent { tick: 976, channel: 1, kind: CtrlKind::Cc(10), value: 64, shape: Default::default() },
         ]
     );
 }
@@ -345,8 +345,8 @@ fn writer_clamps_out_of_range_data_bytes() {
     for raw in [127u8, 128, 255] {
         let mut seq = Sequence::default();
         seq.notes.push(Note { pitch: raw, velocity: 100, muted: false, release_velocity: raw, channel: 0, start: 0, length: 960 });
-        seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(raw), value: 64 });
-        seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::PolyPressure(raw), value: 64 });
+        seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(raw), value: 64, shape: Default::default() });
+        seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::PolyPressure(raw), value: 64, shape: Default::default() });
         let smf = Smf { tracks: vec![SmfTrack { name: String::new(), sequence: seq }], ..Smf::default() };
         let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
         let s = &back.tracks.last().unwrap().sequence;

@@ -4556,12 +4556,9 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             }
         }
         let ctrls = |inst: &mut PluginSlot| {
-            for c in sequence.ctrls.iter().filter(|c| c.tick >= 0) {
+            for (i, c) in sequence.ctrls.iter().enumerate() {
                 let tick = c.tick.saturating_add(delay);
-                if !near.contains(&tick) {
-                    continue;
-                }
-                let at = at_tick(tick);
+                let at = if c.tick >= 0 && near.contains(&tick) { at_tick(tick) } else { end };
                 if at >= pos && at < end && at < clip.end() {
                     let offset = usize::try_from(at - pos).unwrap_or(0);
                     let mut m = ctrl_message(c.kind, c.value, dp);
@@ -4571,6 +4568,11 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                     } else {
                         inst.plugin.midi(offset, m);
                     }
+                }
+                // A ramp to the next point of its lane plays on as a stream of values.
+                if !c.shape.is_step() {
+                    let span = (clip.start, clip.end(), pos, end);
+                    send_ramp(inst, sequence, i, &|t: i64| at_tick(t.saturating_add(delay)), span, chans, dp);
                 }
             }
         };
@@ -4738,6 +4740,57 @@ fn deliver_module_midi(events: &StripMidi, inst: &mut PluginSlot, held: &mut Vec
     }
 }
 
+/// How often a controller ramp sends a value, in samples (under a millisecond at 44.1 kHz and up).
+pub const RAMP_STEP: i64 = 32;
+
+/// The values a ramp from `sequence.ctrls[i]` to the next event of its lane and channel sends in
+/// the block `pos..end` (`span`: the clip's start and end, then the block's): one every
+/// [`RAMP_STEP`] samples counted from the ramp's start, where the value changes, inside the clip.
+/// The two points themselves go out as events. `at` places a tick. Audio thread: no allocation.
+fn send_ramp(
+    inst: &mut PluginSlot,
+    sequence: &soundcraft_midi::Sequence,
+    i: usize,
+    at: &dyn Fn(i64) -> Samples,
+    (clip_start, clip_end, pos, end): (Samples, Samples, Samples, Samples),
+    chans: bool,
+    transpose: i64,
+) {
+    let Some(a) = sequence.ctrls.get(i) else { return };
+    let a_at = at(a.tick);
+    if a_at >= end {
+        return;
+    }
+    let Some(b) = sequence.next_in_lane(i) else { return };
+    let b_at = at(b.tick);
+    if b_at <= pos || b_at <= a_at {
+        return;
+    }
+    let len = (b_at - a_at) as f64;
+    let value = |m: i64| if m <= 0 { a.value } else { a.shape.value(a.value, b.value, (m * RAMP_STEP) as f64 / len) };
+    let first = ((pos - a_at).max(0) + RAMP_STEP - 1) / RAMP_STEP;
+    let mut m = first.max(1);
+    loop {
+        let x = a_at.saturating_add(m.saturating_mul(RAMP_STEP));
+        if x >= end || x >= b_at || x >= clip_end {
+            break;
+        }
+        let v = value(m);
+        // The end value is the next point's own, sent at its time.
+        if x >= clip_start && x >= pos && v != value(m - 1) && v != b.value {
+            let offset = usize::try_from(x - pos).unwrap_or(0);
+            let mut msg = ctrl_message(a.kind, v, transpose);
+            if chans {
+                msg[0] |= a.channel & 0x0F;
+                inst.plugin.midi_raw(offset, msg);
+            } else {
+                inst.plugin.midi(offset, msg);
+            }
+        }
+        m += 1;
+    }
+}
+
 /// A controller event as a MIDI 1.0 message on channel 1 (where the notes go), with `transpose`
 /// applied to a poly-pressure key.
 fn ctrl_message(kind: CtrlKind, value: i32, transpose: i64) -> [u8; 3] {
@@ -4804,7 +4857,7 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
         let base = s.tempo.samples_to_ticks(clip.start, sr);
         let until = pos.min(clip.end());
         // Events a start trim hid (before tick 0) count as set when the clip starts.
-        for c in sequence.ctrls.iter().filter(|c| ch.is_none_or(|ch| c.channel & 0x0F == ch)) {
+        for (i, c) in sequence.ctrls.iter().enumerate().filter(|(_, c)| ch.is_none_or(|ch| c.channel & 0x0F == ch)) {
             let slot = match c.kind {
                 CtrlKind::Cc(n) => usize::from(n & 0x7F),
                 CtrlKind::PitchBend => BEND,
@@ -4817,7 +4870,18 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
                 && let Some(l) = last.get_mut(slot)
                 && at >= l.0
             {
-                *l = (at, c.value);
+                // Inside a ramp: the value it has reached (at its last step before `until`).
+                let mut value = c.value;
+                if !c.shape.is_step()
+                    && let Some(b) = sequence.next_in_lane(i)
+                {
+                    let b_at = s.tempo.tick_to_samples(base.saturating_add(b.tick), sr);
+                    if b_at > at {
+                        let m = (until.saturating_sub(1).min(b_at) - at) / RAMP_STEP;
+                        value = c.shape.value(c.value, b.value, (m * RAMP_STEP) as f64 / (b_at - at) as f64);
+                    }
+                }
+                *l = (at, value);
             }
         }
     }
@@ -7406,7 +7470,7 @@ mod tests {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
         s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.ears"));
-        let cc = |tick, kind, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind, value };
+        let cc = |tick, kind, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind, value, shape: Default::default() };
         let ctrls = vec![cc(4, CtrlKind::Cc(64), 127), cc(960, CtrlKind::PitchBend, -8192), cc(1920, CtrlKind::Cc(64), 0)];
         let seq = soundcraft_midi::Sequence { ctrls, ..Default::default() };
         let cid = s.new_clip_id();
@@ -7422,6 +7486,54 @@ mod tests {
         assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), vec![(0, [0xB0, 121, 0]), (0, [0xB0, 64, 127]), (0, [0xE0, 0, 0])]);
         render_block(&mut eng, &s, 36_512);
         assert!(heard.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_controller_ramp_plays_smoothly_and_is_chased_mid_ramp() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.ears"));
+        // CC1 ramps from 0 to 127 over a beat (24 000 samples at 120 bpm), then holds; a step
+        // point at the same time on CC7 holds as before.
+        let cc = |tick, n, value, shape| soundcraft_midi::CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(n), value, shape };
+        let ramp = soundcraft_midi::CtrlShape::Ramp(0.0);
+        let step = soundcraft_midi::CtrlShape::Step;
+        let ctrls = vec![cc(0, 1, 0, ramp), cc(0, 7, 10, step), cc(960, 1, 127, step), cc(960, 7, 90, step)];
+        let seq = soundcraft_midi::Sequence { ctrls, ..Default::default() };
+        let cid = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 48_000 * 4, seq));
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ears = Ears { inner: soundcraft_dsp::create("gain").unwrap(), heard: Arc::clone(&heard) };
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_external_instances(true);
+        eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Instrument, id: "clap:test.ears".into(), ch: 2, plugin: Box::new(ears) }]);
+        let mut cc1 = Vec::new();
+        let mut cc7 = Vec::new();
+        for b in 0..50 {
+            render_block(&mut eng, &s, b * 512);
+            for (off, m) in std::mem::take(&mut *heard.lock().unwrap()) {
+                let at = b * 512 + off as i64;
+                match m {
+                    [0xB0, 1, v] => cc1.push((at, v)),
+                    [0xB0, 7, v] => cc7.push((at, v)),
+                    _ => {}
+                }
+            }
+        }
+        // CC7 steps: its two points only.
+        assert_eq!(cc7, vec![(0, 10), (24_000, 90)]);
+        // CC1 passes through every value on the way up, each on a 32-sample step, in order.
+        assert_eq!(cc1.first(), Some(&(0, 0)));
+        assert_eq!(cc1.last(), Some(&(24_000, 127)));
+        assert_eq!(cc1.len(), 128, "every value once");
+        assert!(cc1.windows(2).all(|w| w[1].1 == w[0].1 + 1 && w[1].0 > w[0].0), "{cc1:?}");
+        assert!(cc1.iter().all(|(at, _)| at % RAMP_STEP == 0));
+        // Halfway along it, a locate chases the value reached there, and the ramp carries on.
+        render_block(&mut eng, &s, 12_000);
+        let got = std::mem::take(&mut *heard.lock().unwrap());
+        let chased = got.iter().find(|(o, m)| *o == 0 && m[0] == 0xB0 && m[1] == 1).map(|(_, m)| m[2]);
+        assert!(chased.is_some_and(|v| (62..=64).contains(&v)), "{got:?}");
+        assert!(got.iter().any(|(o, m)| *o > 0 && m[1] == 1 && m[2] > chased.unwrap_or(0)), "{got:?}");
     }
 
     /// Records the LFE layout the mixer hands it.
@@ -7556,7 +7668,7 @@ mod tests {
         s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.tape"));
         let mut seq = soundcraft_midi::Sequence::default();
         seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 4, length: 16 });
-        let cc = |tick, kind, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind, value };
+        let cc = |tick, kind, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind, value, shape: Default::default() };
         seq.ctrls = vec![cc(2, CtrlKind::Program, 7), cc(8, CtrlKind::Cc(1), 50), cc(12, CtrlKind::PitchBend, 0)];
         let cid = s.new_clip_id();
         s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 48_000, seq));
@@ -7662,7 +7774,7 @@ mod tests {
                 soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 2, start: 0, length: 8 },
                 soundcraft_midi::Note { pitch: 64, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 8 },
             ],
-            ctrls: vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 2, kind: CtrlKind::Cc(1), value: 50 }],
+            ctrls: vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 2, kind: CtrlKind::Cc(1), value: 50, shape: Default::default() }],
         };
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         render_block(&mut eng, &s, 0);
@@ -7742,7 +7854,7 @@ mod tests {
         let mut seq = soundcraft_midi::Sequence::default();
         let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 8 };
         seq.notes = vec![note(50, -100), note(60, 0)];
-        seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: -50, channel: 0, kind: CtrlKind::Program, value: 9 }];
+        seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: -50, channel: 0, kind: CtrlKind::Program, value: 9, shape: Default::default() }];
         // 25 samples a tick: the clip starts on tick 10.
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 250, 48_000, seq));
         render_block(&mut eng, &s, 0);
@@ -8381,7 +8493,7 @@ mod tests {
         // A keyswitch and a note with the controller that sets them up, all on tick 4.
         seq.notes.push(soundcraft_midi::Note { pitch: 24, velocity: 1, muted: false, release_velocity: 0, channel: 0, start: 4, length: 2 });
         seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, muted: false, release_velocity: 64, channel: 2, start: 4, length: 16 });
-        seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70 }];
+        seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70, shape: Default::default() }];
         let mut clip = Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq.clone());
         clip.midi_channels = true;
         let (s, mut eng, heard) = taped_clip(clip);
@@ -8438,16 +8550,16 @@ mod tests {
         let mut seq = soundcraft_midi::Sequence::default();
         seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, muted: false, release_velocity: 64, channel: 8, start: 2, length: 2 });
         seq.ctrls = vec![
-            soundcraft_midi::CtrlEvent { tick: 2, channel: 0, kind: CtrlKind::Cc(11), value: 40 },
-            soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70 },
-            soundcraft_midi::CtrlEvent { tick: 8, channel: 2, kind: CtrlKind::Cc(1), value: 30 },
-            soundcraft_midi::CtrlEvent { tick: 100, channel: 2, kind: CtrlKind::Cc(1), value: 99 }, // after this block
+            soundcraft_midi::CtrlEvent { tick: 2, channel: 0, kind: CtrlKind::Cc(11), value: 40, shape: Default::default() },
+            soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70, shape: Default::default() },
+            soundcraft_midi::CtrlEvent { tick: 8, channel: 2, kind: CtrlKind::Cc(1), value: 30, shape: Default::default() },
+            soundcraft_midi::CtrlEvent { tick: 100, channel: 2, kind: CtrlKind::Cc(1), value: 99, shape: Default::default() }, // after this block
         ];
         let mut clip = Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq);
         clip.midi_channels = true;
         let (mut s, mut eng, heard) = taped_clip(clip);
         let plain = soundcraft_midi::Sequence {
-            ctrls: vec![soundcraft_midi::CtrlEvent { tick: 1, channel: 5, kind: CtrlKind::Cc(7), value: 80 }],
+            ctrls: vec![soundcraft_midi::CtrlEvent { tick: 1, channel: 5, kind: CtrlKind::Cc(7), value: 80, shape: Default::default() }],
             ..Default::default()
         };
         let t = s.tracks[0].id;

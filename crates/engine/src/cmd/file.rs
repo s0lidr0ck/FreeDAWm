@@ -738,10 +738,10 @@ mod tests {
         let _audio = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Room"));
         let mut keys_seq = Sequence::default();
         keys_seq.notes.push(Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 480 });
-        keys_seq.ctrls.push(CtrlEvent { tick: 10, channel: 0, kind: CtrlKind::Cc(7), value: 90 });
+        keys_seq.ctrls.push(CtrlEvent { tick: 10, channel: 0, kind: CtrlKind::Cc(7), value: 90, shape: Default::default() });
         let mut drum_seq = Sequence::default();
         drum_seq.notes.push(Note { pitch: 36, velocity: 110, muted: false, release_velocity: 64, channel: 9, start: 0, length: 120 });
-        drum_seq.ctrls.push(CtrlEvent { tick: 20, channel: 9, kind: CtrlKind::Cc(11), value: 40 });
+        drum_seq.ctrls.push(CtrlEvent { tick: 20, channel: 9, kind: CtrlKind::Cc(11), value: 40, shape: Default::default() });
         let a = s.new_clip_id();
         let b = s.new_clip_id();
         crate::edit::place_clip(&mut s, keys, Clip::midi(a, "Keys", 0, 48_000, keys_seq));

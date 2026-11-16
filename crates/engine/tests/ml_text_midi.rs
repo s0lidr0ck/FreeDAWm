@@ -145,7 +145,7 @@ fn with_riff(program: Option<i32>, channel: u8) -> (Engine, u64) {
         });
     }
     if let Some(p) = program {
-        seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel, kind: CtrlKind::Program, value: p });
+        seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel, kind: CtrlKind::Program, value: p, shape: Default::default() });
     }
     let cid = s.new_clip_id();
     soundcraft_engine::edit::place_clip(s, t, soundcraft_model::Clip::midi(cid, "Riff", 192_000, 3 * 24_000, seq));

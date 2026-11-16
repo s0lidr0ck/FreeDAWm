@@ -612,7 +612,13 @@ fn lift_pedals(seq: &mut Sequence, len: i64) {
     let lifts: Vec<CtrlEvent> = last
         .into_iter()
         .filter(|x| x.3 >= 64)
-        .map(|(channel, cc, tick, _)| CtrlEvent { tick: len.saturating_sub(1).max(tick), channel, kind: CtrlKind::Cc(cc), value: 0 })
+        .map(|(channel, cc, tick, _)| CtrlEvent {
+            tick: len.saturating_sub(1).max(tick),
+            channel,
+            kind: CtrlKind::Cc(cc),
+            value: 0,
+            shape: Default::default(),
+        })
         .collect();
     if !lifts.is_empty() {
         seq.ctrls.extend(lifts);

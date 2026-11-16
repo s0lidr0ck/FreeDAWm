@@ -4,15 +4,16 @@
 //!
 //! A lane is named `cc1`…`cc127` (also `cc0`, `cc:7`), `pitchbend` (`pb`), `aftertouch`
 //! (`pressure`), `polyat60` (poly pressure on one key; `poly60`) or `program` (`pc`). Values:
-//! 0-127, pitch bend -8192..8191 (0 = centre). Lines, curves and ramps are written as events
-//! where the value changes, at most one every `step` ticks (thinned on write). Events are addressed by index
+//! 0-127, pitch bend -8192..8191 (0 = centre). Lines, curves and ramps are written as a point
+//! whose segment ramps to the next point of its lane and channel ([`CtrlShape::Ramp`]), played as
+//! a stream of values; `stepped` writes the steps instead. Events are addressed by index
 //! in the clip's controller list (all lanes, sorted by tick); a command that can re-sort them
 //! returns where the events it touched ended up.
 
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_midi::{CtrlEvent, CtrlKind, Sequence};
+use soundcraft_midi::{CtrlEvent, CtrlKind, CtrlShape, Sequence};
 use soundcraft_model::{ClipContent, ClipId};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -22,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List MIDI Controllers",
             [],
             None,
-            "{clip, lane?: cc1|pitchbend|aftertouch} -> {events: [{index, tick, channel, lane, value}], lanes: [lane with events]}",
+            "{clip, lane?: cc1|pitchbend|aftertouch} -> {events: [{index, tick, channel, lane, value, ramp?: curve}], lanes: [lane with events]}",
             always,
             list
         ),
@@ -60,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Draw Controller Line",
             [],
             None,
-            "{clip, lane, from: [tick, value], to: [tick, value], curve?: 0 (-1..1: below 0 starts slow, above 0 starts fast), step?: 30 ticks, channel?: 0} -> {events} — replaces the lane's events on the channel between the ends",
+            "{clip, lane, from: [tick, value], to: [tick, value], curve?: 0 (-1..1: below 0 starts slow, above 0 starts fast), channel?: 0, stepped?: false, step?: 30 ticks} -> {events} — replaces the lane's events on the channel between the ends with the two points and a ramp from one to the other (stepped: steps, one every `step` ticks at most)",
             always,
             line
         ),
@@ -69,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ramp Controller Points",
             [],
             None,
-            "{clip, indices: [n], curve?: 0, step?: 30 ticks} -> {events} — between each picked point and the next of its lane and channel, a ramp replaces the steps",
+            "{clip, indices: [n], curve?: 0, shape?: ramp|step, stepped?: false, step?: 30 ticks} -> {events} — between each picked point and the next of its lane and channel, the points between go and the first ramps to the next (shape step: holds to it; stepped: steps written out)",
             always,
             ramp
         ),
@@ -187,7 +188,11 @@ fn list(e: &mut Engine, p: &Value) -> Result<Value> {
             lanes.push(name.clone());
         }
         if only.is_none_or(|k| same(k, c.kind)) {
-            events.push(json!({"index": i, "tick": c.tick, "channel": c.channel, "lane": name, "value": c.value}));
+            let mut ev = json!({"index": i, "tick": c.tick, "channel": c.channel, "lane": name, "value": c.value});
+            if let CtrlShape::Ramp(curve) = c.shape {
+                ev["ramp"] = json!(curve);
+            }
+            events.push(ev);
         }
     }
     Ok(json!({"events": events, "lanes": lanes}))
@@ -202,7 +207,7 @@ fn add(e: &mut Engine, p: &Value) -> Result<Value> {
     let channel = i64_or(p, "channel", 0).clamp(0, 15) as u8;
     let seq = seq_mut(e, id, C)?;
     seq.ctrls.retain(|c| !(c.tick == tick && c.channel == channel && same(c.kind, kind)));
-    seq.ctrls.push(CtrlEvent { tick, channel, kind, value: clamp_value(kind, value) });
+    seq.ctrls.push(CtrlEvent { tick, channel, kind, value: clamp_value(kind, value), shape: Default::default() });
     let last = seq.ctrls.len() - 1;
     let kept = sort_tracked(seq, &[last]);
     Ok(json!({"index": kept.first()}))
@@ -294,7 +299,7 @@ fn draw(e: &mut Engine, p: &Value) -> Result<Value> {
     let seq = seq_mut(e, id, C)?;
     seq.ctrls.retain(|c| !(same(c.kind, kind) && c.channel == channel && c.tick >= lo && c.tick <= hi));
     let n = thin.len();
-    seq.ctrls.extend(thin.into_iter().map(|(tick, value)| CtrlEvent { tick, channel, kind, value }));
+    seq.ctrls.extend(thin.into_iter().map(|(tick, value)| CtrlEvent { tick, channel, kind, value, shape: Default::default() }));
     seq.ctrls.sort_by_key(|c| c.tick);
     Ok(json!({"events": n}))
 }
@@ -332,7 +337,7 @@ pub fn ramp_points(kind: CtrlKind, a: (i64, i32), b: (i64, i32), curve: f64, ste
 /// Replaces `kind`'s events on `channel` in `lo..=hi` with `pts`.
 fn write_span(seq: &mut Sequence, kind: CtrlKind, channel: u8, lo: i64, hi: i64, pts: &[(i64, i32)]) {
     seq.ctrls.retain(|c| !(same(c.kind, kind) && c.channel == channel && c.tick >= lo && c.tick <= hi));
-    seq.ctrls.extend(pts.iter().map(|(tick, value)| CtrlEvent { tick: *tick, channel, kind, value: *value }));
+    seq.ctrls.extend(pts.iter().map(|(tick, value)| CtrlEvent { tick: *tick, channel, kind, value: *value, shape: Default::default() }));
     seq.ctrls.sort_by_key(|c| c.tick);
 }
 
@@ -349,10 +354,28 @@ fn line(e: &mut Engine, p: &Value) -> Result<Value> {
     let (Some(a), Some(b)) = (pair(p, "from"), pair(p, "to")) else { return Err(bad(C, "`from` and `to` ([tick, value]) required")) };
     let (a, b) = ((a.0.max(0), clamp_value(kind, a.1)), (b.0.max(0), clamp_value(kind, b.1)));
     let curve = p.get("curve").and_then(Value::as_f64).unwrap_or(0.0);
-    let pts = ramp_points(kind, a, b, curve, i64_or(p, "step", 30));
     let seq = seq_mut(e, id, C)?;
+    // Two points and the segment between them; with `stepped`, the steps as before ramps existed.
+    let pts = if p.get("stepped").and_then(Value::as_bool).unwrap_or(false) {
+        ramp_points(kind, a, b, curve, i64_or(p, "step", 30))
+    } else if a.0 == b.0 {
+        vec![b]
+    } else {
+        vec![(a.0.min(b.0), if a.0 <= b.0 { a.1 } else { b.1 }), (a.0.max(b.0), if a.0 <= b.0 { b.1 } else { a.1 })]
+    };
     write_span(seq, kind, channel, a.0.min(b.0), a.0.max(b.0), &pts);
+    if pts.len() == 2 && !p.get("stepped").and_then(Value::as_bool).unwrap_or(false) {
+        let first = pts.first().map_or(0, |x| x.0);
+        if let Some(c) = seq.ctrls.iter_mut().find(|c| same(c.kind, kind) && c.channel == channel && c.tick == first) {
+            c.shape = segment(curve);
+        }
+    }
     Ok(json!({"events": pts.len()}))
+}
+
+/// The ramp shape a `curve` parameter asks for (-1..1).
+fn segment(curve: f64) -> CtrlShape {
+    CtrlShape::Ramp(if curve.is_finite() { curve.clamp(-1.0, 1.0) as f32 } else { 0.0 })
 }
 
 fn ramp(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -360,6 +383,8 @@ fn ramp(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = clip_id(p, C)?;
     let idx = indices(p);
     let curve = p.get("curve").and_then(Value::as_f64).unwrap_or(0.0);
+    let to_steps = matches!(str_param(p, "shape"), Some("step" | "steps"));
+    let stepped = p.get("stepped").and_then(Value::as_bool).unwrap_or(false);
     let step = i64_or(p, "step", 30);
     let seq = seq_mut(e, id, C)?;
     let mut picked: Vec<CtrlEvent> = idx.iter().filter_map(|i| seq.ctrls.get(*i).copied()).collect();
@@ -368,9 +393,18 @@ fn ramp(e: &mut Engine, p: &Value) -> Result<Value> {
     for (i, a) in picked.iter().enumerate() {
         // The next picked point of the same lane and channel.
         let Some(b) = picked.iter().skip(i + 1).find(|b| same(b.kind, a.kind) && b.channel == a.channel && b.tick > a.tick) else { continue };
-        let pts = ramp_points(a.kind, (a.tick, a.value), (b.tick, b.value), curve, step);
-        write_span(seq, a.kind, a.channel, a.tick, b.tick, &pts);
-        n += pts.len();
+        if stepped {
+            let pts = ramp_points(a.kind, (a.tick, a.value), (b.tick, b.value), curve, step);
+            write_span(seq, a.kind, a.channel, a.tick, b.tick, &pts);
+            n += pts.len();
+            continue;
+        }
+        // The points between go; the first point ramps (or steps) to the second.
+        seq.ctrls.retain(|c| !(same(c.kind, a.kind) && c.channel == a.channel && c.tick > a.tick && c.tick < b.tick));
+        if let Some(c) = seq.ctrls.iter_mut().find(|c| same(c.kind, a.kind) && c.channel == a.channel && c.tick == a.tick) {
+            c.shape = if to_steps { CtrlShape::Step } else { segment(curve) };
+        }
+        n += 2;
     }
     if n == 0 {
         return Err(bad(C, "pick at least two points of one lane"));
@@ -538,16 +572,28 @@ mod tests {
         assert!(!l.contains(&(960, 7)), "the line replaced what was under it");
         assert!(l.contains(&(100, 99)), "another channel's point stays");
         assert_eq!(l.last(), Some(&(1920, 127)));
+        // The line is its two points, the first ramping to the second.
+        assert_eq!(l, vec![(0, 0), (100, 99), (1920, 127)]);
+        assert_eq!(e.execute("midi.ctrls", &json!({"clip": c, "lane": "cc1"})).unwrap()["events"][0]["ramp"], json!(0.0));
+        // `stepped` writes the steps instead.
+        e.execute("midi.ctrl_line", &json!({"clip": c, "lane": "cc1", "from": [0, 0], "to": [1920, 127], "step": 60, "stepped": true})).unwrap();
+        assert!(lane(&mut e, c, "cc1").len() > 20);
         // Ramp between two points (indices of the steps 0 and 127 at 3000 and 3960).
         let mut e = Engine::default();
         let c = clip(&mut e);
         for (t, v) in [(3000, 0), (3480, 30), (3960, 120)] {
             e.execute("midi.ctrl_add", &json!({"clip": c, "lane": "cc11", "tick": t, "value": v})).unwrap();
         }
-        e.execute("midi.ctrl_ramp", &json!({"clip": c, "indices": [0, 2], "step": 120})).unwrap();
+        e.execute("midi.ctrl_ramp", &json!({"clip": c, "indices": [0, 2]})).unwrap();
+        assert_eq!(lane(&mut e, c, "cc11"), vec![(3000, 0), (3960, 120)], "the step between goes; the first point ramps");
+        let ramp = |e: &mut Engine| e.execute("midi.ctrls", &json!({"clip": c, "lane": "cc11"})).unwrap()["events"][0]["ramp"].clone();
+        assert_eq!(ramp(&mut e), json!(0.0));
+        e.execute("midi.ctrl_ramp", &json!({"clip": c, "indices": [0, 1], "shape": "step"})).unwrap();
+        assert_eq!(ramp(&mut e), Value::Null, "back to a step");
+        // The old way: the steps written out.
+        e.execute("midi.ctrl_ramp", &json!({"clip": c, "indices": [0, 1], "stepped": true, "step": 120})).unwrap();
         let l = lane(&mut e, c, "cc11");
         assert_eq!((l.first(), l.last(), l.len()), (Some(&(3000, 0)), Some(&(3960, 120)), 9));
-        assert!(!l.contains(&(3480, 30)), "the step between is replaced");
         assert!(l.windows(2).all(|w| w[1].1 >= w[0].1), "{l:?}");
         // Thin the ramp's inner points: a straight line keeps only its ends.
         let n = l.len();

@@ -599,8 +599,10 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
                     n.length = (b - a).max(1);
                     seq.notes.push(n);
                 }
-                for ev in sequence.ctrls.iter() {
-                    let mut ev = *ev;
+                // Ramps go to the file as steps where the value changes, at most one every 10
+                // ticks (a 64th note is 120).
+                for ev in sequence.stepped_ctrls(10) {
+                    let mut ev = ev;
                     let tick = if ev.tick < 0 { 0 } else { ev.tick.saturating_add(delay) };
                     if tick >= len {
                         continue;
@@ -4180,9 +4182,9 @@ mod name_tests {
     #[test]
     fn a_controller_only_midi_track_is_imported_with_its_events() {
         let ctrls = vec![
-            soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 100 },
-            soundcraft_midi::CtrlEvent { tick: 480, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 64 },
-            soundcraft_midi::CtrlEvent { tick: 960, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 20 },
+            soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 100, shape: Default::default() },
+            soundcraft_midi::CtrlEvent { tick: 480, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 64, shape: Default::default() },
+            soundcraft_midi::CtrlEvent { tick: 960, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(7), value: 20, shape: Default::default() },
         ];
         let sequence = soundcraft_midi::Sequence { ctrls: ctrls.clone(), ..Default::default() };
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: "Vol".into(), sequence }], ..Default::default() };

@@ -68,8 +68,8 @@ fn pedal_edits_reach_the_instrument() {
     let seq = Sequence {
         notes: vec![note(64, 90, 0, 4800)],
         ctrls: vec![
-            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(64), value: 127 },
-            CtrlEvent { tick: 5000, channel: 0, kind: CtrlKind::Cc(64), value: 0 },
+            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(64), value: 127, shape: Default::default() },
+            CtrlEvent { tick: 5000, channel: 0, kind: CtrlKind::Cc(64), value: 0, shape: Default::default() },
         ],
     };
     let (mut e, t, id) = setup(seq, &[(0, 3840, 0), (3840, 3840, 3)]);

@@ -724,7 +724,10 @@ impl Ex<'_> {
             CtrlKind::PolyPressure(p) => (3, p),
             CtrlKind::Program => (4, 0),
         };
-        for c in &seq.ctrls {
+        // A straight ramp is a linear point; a curved one goes as steps.
+        let curved = seq.ctrls.iter().any(|c| matches!(c.shape, soundcraft_midi::CtrlShape::Ramp(k) if k.abs() > 1e-3));
+        let ctrls = if curved { seq.stepped_ctrls(10) } else { seq.ctrls.clone() };
+        for c in &ctrls {
             let k = (c.channel, key(c.kind));
             if !keys.contains(&k) {
                 keys.push(k);
@@ -742,12 +745,17 @@ impl Ex<'_> {
             }
             let mut p = Element::new("Points").with("id", self.id()).with("unit", "normalized");
             p.push(target);
-            for c in seq.ctrls.iter().filter(|c| c.channel == channel && key(c.kind) == (kind, n)) {
+            for c in ctrls.iter().filter(|c| c.channel == channel && key(c.kind) == (kind, n)) {
                 let v = match c.kind {
                     CtrlKind::PitchBend => f64::from(c.value.clamp(-8192, 8191) + 8192) / 16383.0,
                     _ => f64::from(c.value.clamp(0, 127)) / 127.0,
                 };
-                p.push(Element::new("RealPoint").with("time", fmt_num(c.tick as f64 / TPQ)).with("value", fmt_num(v)).with("interpolation", "hold"));
+                p.push(
+                    Element::new("RealPoint")
+                        .with("time", fmt_num(c.tick as f64 / TPQ))
+                        .with("value", fmt_num(v))
+                        .with("interpolation", if c.shape.is_step() { "hold" } else { "linear" }),
+                );
             }
             out.push(p);
         }

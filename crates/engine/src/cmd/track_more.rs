@@ -764,9 +764,9 @@ mod tests {
             && let ClipContent::Midi { sequence } = &mut pl.clips[0].content
         {
             sequence.ctrls.clear();
-            sequence.ctrls.push(CtrlEvent { tick: 100, channel: 0, kind: CtrlKind::Cc(7), value: 90 });
-            sequence.ctrls.push(CtrlEvent { tick: 200, channel: 0, kind: CtrlKind::PitchBend, value: 10 });
-            sequence.ctrls.push(CtrlEvent { tick: -30, channel: 0, kind: CtrlKind::Cc(1), value: 5 });
+            sequence.ctrls.push(CtrlEvent { tick: 100, channel: 0, kind: CtrlKind::Cc(7), value: 90, shape: Default::default() });
+            sequence.ctrls.push(CtrlEvent { tick: 200, channel: 0, kind: CtrlKind::PitchBend, value: 10, shape: Default::default() });
+            sequence.ctrls.push(CtrlEvent { tick: -30, channel: 0, kind: CtrlKind::Cc(1), value: 5, shape: Default::default() });
         }
         s.edit.values.insert(track_key("rtp", keys, "delay"), 50.0);
         e.execute("edit.select", &json!({"tracks": [keys.0]})).unwrap();
