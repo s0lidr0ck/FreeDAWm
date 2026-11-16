@@ -3255,7 +3255,11 @@ fn process_strip(
                 // latent module on the live path out (see `insert_step`).
                 let live_mod = ins.active && !slot.failed;
                 let run = if live_mod {
-                    apply_params(slot, ins, t, Some(ins.id), pos);
+                    // Its automation is read where its input is on the timeline: behind by the
+                    // strip's input delay and the modules before it (as the fader's is), so a
+                    // move lines up with the audio it moves, in playback and bounce alike.
+                    let apos = pos.saturating_sub(i64::try_from(strip.base.saturating_add(latency)).unwrap_or(0));
+                    apply_params(slot, ins, t, Some(ins.id), apos);
                     let (run, fits) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
                     strip.key_regrow |= !fits;
                     if slot.llm_off && !ins.bypass {
