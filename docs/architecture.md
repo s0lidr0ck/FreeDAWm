@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** trivial (delay compensation includes the master faders' inserts (#351); previously minor: bounces stream to disk) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-16 · **Change:** minor (the monitor stage; previously trivial: delay compensation includes the master faders' inserts (#351)) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 FreeDAWm is a Cargo workspace of small crates with enforced layering (`cargo xtask layers`).
 Nothing below the UI knows about egui, so the interface can be replaced.
@@ -52,6 +52,14 @@ bounces offline (`RangeRender`, streamed to the file block by block) and realtim
 (`soundcraft_playback::Player`, which owns it on the audio thread and receives new session
 snapshots through a channel).
 
+The **monitor stage** (`soundcraft_dsp::monitor`) is the one thing only the listener hears. The
+player runs it on the stereo main mix just before the device, after the meters and the remote tap:
+a simulated output (SIM: a curve, high/low-pass and stereo width) and then a hearing correction
+(EAR: one curve per ear), both minimum-phase biquad cascades, so it adds no latency. `RangeRender`
+has no such stage, so bounces, exports, freezes and commits cannot contain it. What is on, and with
+which profile, is in `ui.json`, not the session; the profiles are JSON files in the Library folder's
+`Monitor Profiles` (`soundcraft_engine::monitor_profiles`).
+
 Device I/O today is the system's *default* output and *default* input device, opened as two
 separate cpal streams; the mix renders 512-sample blocks and resamples to the device rate when
 they differ. There is no device or buffer-size selection, no ASIO, and no MIDI device layer yet
@@ -80,6 +88,7 @@ app as an MCP server. See `control-protocol.md` and `mcp.md`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | The monitor stage (EAR and SIM): heard on the device only, never rendered |
 | 2026-10-13 | trivial | delay compensation includes the master faders' inserts (#351) |
 | 2026-10-10 | minor | Added video, vst3-host and au-host to the layer diagram; documented device I/O limits and in-memory media |
 | 2026-10-05 | major | First architecture overview |

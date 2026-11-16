@@ -1241,6 +1241,7 @@ fn io_outputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
 pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     crate::shortcut_editor::window(app, ctx);
     crate::preferences::window(app, ctx);
+    crate::monitor_ui::window(app, ctx);
 }
 
 /// Clip Effects: per-clip EQ, dynamics and gain (stored as `clip_fx.<clip>.*` values).

@@ -20,6 +20,7 @@ pub mod derive;
 pub mod drum_import;
 pub mod link;
 pub mod meter;
+pub mod monitor;
 pub mod offline;
 mod osc;
 pub mod pan;
