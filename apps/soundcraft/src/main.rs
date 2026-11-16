@@ -551,8 +551,10 @@ fn open_path(app: &mut SoundApp, p: &str) {
     let lower = p.to_ascii_lowercase();
     let r = if soundcraft_engine::model::is_session_path(&lower) {
         dialogs::run_or_ask(app, "session.open", serde_json::json!({"path": p}))
-    } else if lower.ends_with(".mid") || lower.ends_with(".midi") || lower.ends_with(".smf") {
-        app.run("file.import_midi", serde_json::json!({"path": p}))
+    } else if soundcraft_ui_egui::windows::is_midi_file(p) {
+        // At the insertion point, as audio is.
+        let at = app.engine.session().edit.selection.start;
+        app.run("file.import_midi", serde_json::json!({"path": p, "at": at}))
     } else {
         let at = app.engine.session().edit.selection.start;
         app.run("file.import_audio", serde_json::json!({"path": p, "at": at}))

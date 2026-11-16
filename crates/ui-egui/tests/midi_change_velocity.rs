@@ -77,6 +77,14 @@ fn quantize_and_change_duration_menu_items_ask_before_acting() {
     assert!(app.run("event.change_duration", json!({"clips": [clip.0]})).is_err());
 }
 
+/// Bug 17: the browser knows a MIDI file by its extension in any case.
+#[test]
+fn the_browser_knows_midi_files_in_any_case() {
+    use soundcraft_ui_egui::windows::is_midi_file;
+    assert!(is_midi_file("SONG.MID") && is_midi_file("a.midi") && is_midi_file("b.Kar"));
+    assert!(!is_midi_file("mid") && !is_midi_file("x.wav"));
+}
+
 #[test]
 fn it_acts_on_the_selected_clips_with_each_mode() {
     let (mut app, clip) = app_with_clip();

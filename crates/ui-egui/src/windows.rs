@@ -231,6 +231,14 @@ fn metadata(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_metadata = open;
 }
 
+/// A standard MIDI file by its name: `.mid`, `.midi`, `.smf` or `.kar`, in any case (`SONG.MID`).
+pub fn is_midi_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| ["mid", "midi", "smf", "kar"].iter().any(|m| x.eq_ignore_ascii_case(m)))
+}
+
 fn event_list(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_event_list;
     win(ctx, &mut open, "MIDI Event List", vec2(420.0, 360.0), |ui| {
@@ -477,8 +485,10 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                         app.ui.workspace_dir = path;
                     } else if soundcraft_model::is_session_path(&name) {
                         let _ = crate::dialogs::run_or_ask(app, "session.open", json!({"path": path}));
-                    } else if name.ends_with(".mid") || name.ends_with(".midi") {
-                        let _ = app.run("file.import_midi", json!({"path": path}));
+                    } else if is_midi_file(&name) {
+                        // At the insertion point, as the line under the list says (and audio does).
+                        let at = app.engine.session().edit.selection.start;
+                        let _ = app.run("file.import_midi", json!({"path": path, "at": at}));
                     } else {
                         let at = app.engine.session().edit.selection.start;
                         let _ = app.run("file.import_audio", json!({"path": path, "at": at}));

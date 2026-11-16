@@ -407,19 +407,21 @@ const MAX_MIDI_METERS: usize = 10_000;
 pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: bool) -> Result<Vec<TrackId>> {
     let smf = soundcraft_midi::read_smf(bytes).map_err(|err| EngineError::Io(err.to_string()))?;
     let s = e.session_mut();
+    // Where the file's tick 0 lands: the file's tempo and meter changes go in from there, with
+    // its notes (a tempo set there leaves the time before it, so this tick stays put).
+    let base_tick = s.tempo.samples_to_ticks(at, s.sample_rate);
     if tempo_map {
         // Each meter is placed by walking the ones before it.
         if smf.meters.len() > MAX_MIDI_METERS {
             return Err(EngineError::Io(format!("MIDI file: more than {MAX_MIDI_METERS} meter changes")));
         }
         for (tick, bpm) in &smf.tempos {
-            let _ = s.tempo.set_tempo(*tick, *bpm);
+            let _ = s.tempo.set_tempo(base_tick.saturating_add(*tick), *bpm);
         }
         for (tick, n, d) in &smf.meters {
-            let _ = s.tempo.set_meter(*tick, u32::from(*n), u32::from(*d));
+            let _ = s.tempo.set_meter(base_tick.saturating_add(*tick), u32::from(*n), u32::from(*d));
         }
     }
-    let base_tick = s.tempo.samples_to_ticks(at, s.sample_rate);
     let mut out = Vec::new();
     for (i, tr) in smf.tracks.iter().enumerate() {
         let lyrics: Vec<(i64, &str)> = smf.lyrics.iter().filter(|l| l.0 == i).map(|l| (l.1, l.2.as_str())).collect();
@@ -559,23 +561,53 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
     }
     for t in chosen {
         let mut seq = soundcraft_midi::Sequence::default();
-        // What plays: unmuted clips, within their trimmed window (notes cut at the clip's end).
+        // The file holds what the track plays: its MIDI Real-Time Properties and MIDI Track
+        // Offset applied, as the mix applies them.
+        let value = |key: String, d: f64| s.edit.value(&key, d);
+        let dv = value(format!("rtp.{}.velocity", t.id.0), 0.0).clamp(-127.0, 127.0) as i64;
+        let dp = value(format!("rtp.{}.transpose", t.id.0), 0.0).clamp(-127.0, 127.0) as i64;
+        let dur = value(format!("rtp.{}.duration", t.id.0), 100.0).clamp(1.0, 1000.0) / 100.0;
+        let delay = value(format!("rtp.{}.delay", t.id.0), 0.0).clamp(-1e7, 1e7) as i64;
+        let offset = value(format!("midi.offset.{}", t.id.0), 0.0);
+        let offset = if offset.is_finite() { offset as i64 } else { 0 };
+        let sr = s.sample_rate;
+        let moved = |tick: i64| {
+            if offset == 0 { tick } else { s.tempo.samples_to_ticks(s.tempo.tick_to_samples(tick, sr).saturating_add(offset), sr) }
+        };
+        // Muted clips are silent, so they are left out; a clip on Cleaned gives its cleaned notes.
         for c in t.clips().iter().filter(|c| !c.muted) {
-            let Some(sequence) = c.midi_playing() else { continue };
-            let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
-            let len = s.tempo.samples_to_ticks(c.end(), s.sample_rate).saturating_sub(base);
-            for n in sequence.notes.iter().filter(|n| (0..len).contains(&n.start)) {
-                let mut n = *n;
-                let end = n.end().min(len);
-                let (a, b) = (file_tick(n.start.saturating_add(base)), file_tick(end.saturating_add(base)));
-                n.start = a;
-                n.length = (b - a).max(1);
-                seq.notes.push(n);
-            }
-            for ev in sequence.ctrls.iter().filter(|x| (0..len).contains(&x.tick)) {
-                let mut ev = *ev;
-                ev.tick = file_tick(ev.tick.saturating_add(base));
-                seq.ctrls.push(ev);
+            if let Some(sequence) = c.midi_playing() {
+                let base = s.tempo.samples_to_ticks(c.start, sr);
+                // What the clip plays: notes hidden before its start or past its end are left out,
+                // a note is cut at the end, and controllers hidden before the start set the state
+                // at it.
+                let len = s.tempo.samples_to_ticks(c.end(), sr).saturating_sub(base);
+                for n in sequence.notes.iter().filter(|n| n.start >= 0) {
+                    let mut n = *n;
+                    n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
+                    n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
+                    let start = n.start.saturating_add(delay);
+                    let end = start.saturating_add(((n.length as f64 * dur) as i64).max(1)).min(len);
+                    if start >= len || end <= start {
+                        continue;
+                    }
+                    let (a, b) = (file_tick(moved(start.saturating_add(base))), file_tick(moved(end.saturating_add(base))));
+                    n.start = a;
+                    n.length = (b - a).max(1);
+                    seq.notes.push(n);
+                }
+                for ev in sequence.ctrls.iter() {
+                    let mut ev = *ev;
+                    let tick = if ev.tick < 0 { 0 } else { ev.tick.saturating_add(delay) };
+                    if tick >= len {
+                        continue;
+                    }
+                    if let soundcraft_midi::CtrlKind::PolyPressure(k) = ev.kind {
+                        ev.kind = soundcraft_midi::CtrlKind::PolyPressure((i64::from(k) + dp).clamp(0, 127) as u8);
+                    }
+                    ev.tick = file_tick(moved(tick.saturating_add(base)));
+                    seq.ctrls.push(ev);
+                }
             }
         }
         seq.sort();
@@ -4030,6 +4062,25 @@ mod name_tests {
         }
     }
 
+    /// Bug 17: a MIDI file imported at bar 3 brings its tempo there, not to the song's start.
+    #[test]
+    fn a_midi_file_imported_later_brings_its_tempo_with_its_notes() {
+        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
+        let smf = soundcraft_midi::Smf {
+            tracks: vec![soundcraft_midi::SmfTrack { name: "Lead".into(), sequence }],
+            tempos: vec![(0, 90.0), (3840, 100.0)],
+            ..Default::default()
+        };
+        let mut e = Engine::default();
+        // Bar 3 at 120 bpm.
+        import_midi_bytes(&mut e, &soundcraft_midi::write_smf(&smf).unwrap(), 192_000, true).unwrap();
+        let map = &e.session().tempo;
+        assert_eq!(map.tempo_at_tick(0), 120.0, "the song before the file keeps its tempo");
+        assert!((map.tempo_at_tick(7_680) - 90.0).abs() < 1e-3);
+        assert!((map.tempo_at_tick(7_680 + 3_840) - 100.0).abs() < 1e-3);
+    }
+
     #[test]
     fn midi_longer_than_a_day_is_refused() {
         let held = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: (1 << 28) - 1 };
@@ -4319,6 +4370,28 @@ mod smf_tempo_tests {
             }
         }
         secs
+    }
+
+    /// Bug 16: the file holds what plays: no muted clip, no note hidden past a clip's end or
+    /// before its start, Real-Time Properties (transpose, velocity) applied.
+    #[test]
+    fn smf_export_writes_what_plays() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
+        let note = |pitch, start| Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 240 };
+        let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000)], ctrls: Vec::new() };
+        let a = s.new_clip_id();
+        crate::edit::place_clip(&mut s, t, Clip::midi(a, "a", 0, 96_000, seq));
+        let b = s.new_clip_id();
+        let mut muted = Clip::midi(b, "b", 96_000, 96_000, Sequence { notes: vec![note(70, 0)], ctrls: Vec::new() });
+        muted.muted = true;
+        crate::edit::place_clip(&mut s, t, muted);
+        s.edit.values.insert(format!("rtp.{}.transpose", t.0), 2.0);
+        s.edit.values.insert(format!("rtp.{}.velocity", t.0), -10.0);
+        let e = Engine::new(s);
+        let smf = soundcraft_midi::read_smf(&export_midi(&e, None).unwrap()).unwrap();
+        let got: Vec<(u8, u8)> = smf.tracks[0].sequence.notes.iter().map(|n| (n.pitch, n.velocity)).collect();
+        assert_eq!(got, vec![(62, 90)]);
     }
 
     #[test]
