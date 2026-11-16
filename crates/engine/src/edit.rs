@@ -782,8 +782,9 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
         lo = lo.max(0);
     }
     let file = |c: &Clip| {
-        let start = c.start.saturating_sub(c.source_offset());
-        material_len(s, c).map(|n| (start.min(c.start), start.saturating_add(n).max(c.end())))
+        // Where the file starts and ends on the timeline, at the clip's stretch.
+        let start = c.start.saturating_sub(c.timeline_span(c.source_offset()));
+        material_len(s, c).map(|n| (start.min(c.start), start.saturating_add(c.timeline_span(n)).max(c.end())))
     };
     let t = TimeCtx::of(s);
     let mut c = old.clone();
@@ -824,7 +825,10 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
     }
     let handles: Vec<(ClipId, Samples)> = {
         let Some(tr) = s.track(track) else { return 0 };
-        tr.clips().iter().map(|c| (c.id, material_len(s, c).map_or(0, |n| n.saturating_sub(c.source_offset()).saturating_sub(c.length)))).collect()
+        tr.clips()
+            .iter()
+            .map(|c| (c.id, material_len(s, c).map_or(0, |n| c.timeline_span(n.saturating_sub(c.source_offset())).saturating_sub(c.length))))
+            .collect()
     };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     pl.sort();
@@ -839,7 +843,7 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
             let before = boundary - range.start.max(a.start);
             let after = range.end.min(b.end()) - boundary;
             let a_handle = handles.iter().find(|h| h.0 == a.id).map_or(0, |h| h.1);
-            let b_handle = b.source_offset();
+            let b_handle = b.timeline_span(b.source_offset());
             // Extend each clip into the other's territory using its handles.
             let ext_a = after.min(a_handle).max(0);
             let ext_b = before.min(b_handle).max(0);

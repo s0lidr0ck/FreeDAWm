@@ -830,10 +830,11 @@ fn trim_to_file(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some((frames, lo, hi)) = trim_limits(s, id)
             && let Some(c) = s.find_clip_mut(id)
         {
-            let off = c.source_offset();
-            let new_start = c.start - off;
+            // The file's ends on the timeline, at the clip's stretch.
+            let new_start = c.start - c.timeline_span(c.source_offset());
+            let file_end = new_start + c.timeline_span(frames);
             c.trim_start_to(new_start.max(lo));
-            c.trim_end_to((new_start + frames).min(hi));
+            c.trim_end_to(file_end.min(hi));
             n += 1;
         }
     }
@@ -849,9 +850,10 @@ fn trim_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some((frames, lo, hi)) = trim_limits(s, id)
             && let Some(c) = s.find_clip_mut(id)
         {
-            let file_start = c.start - c.source_offset();
+            let file_start = c.start - c.timeline_span(c.source_offset());
+            let file_end = file_start + c.timeline_span(frames);
             c.trim_start_to(r.start.max(file_start).max(lo));
-            c.trim_end_to(r.end.min(file_start + frames).min(hi));
+            c.trim_end_to(r.end.min(file_end).min(hi));
             n += 1;
         }
     }

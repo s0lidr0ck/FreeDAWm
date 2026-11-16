@@ -143,3 +143,31 @@ fn copying_a_crossfaded_pair_to_another_track_keeps_it_whole() {
     assert!(pair_at(&e, u, 0), "copy_to: {:?}", clips(&e, u));
     assert!(pair_at(&e, t, 0));
 }
+
+// ---- bug 3: trimming or splitting a stretched clip read the wrong part of the file ---------
+
+/// A clip at twice its length (stretch 2): 2000 timeline samples play file samples 1000..2000.
+fn stretched() -> (Engine, TrackId, ClipId) {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 2000, 1000)]);
+    e.session_mut().find_clip_mut(c[0]).unwrap().stretch = 2.0;
+    (e, t, c[0])
+}
+
+#[test]
+fn splitting_a_stretched_clip_keeps_each_piece_on_its_audio() {
+    let (mut e, t, _) = stretched();
+    run(&mut e, "edit.separate", json!({"tracks": [t.0], "at": 1000}));
+    // The right half starts 1000 timeline samples in: 500 file samples at stretch 2.
+    assert_eq!(clips(&e, t), vec![(0, 1000, 1000), (1000, 1000, 1500)]);
+}
+
+#[test]
+fn trimming_a_stretched_clip_keeps_the_rest_in_place() {
+    let (mut e, t, id) = stretched();
+    run(&mut e, "edit.trim_clip", json!({"clip": id.0, "start": 400}));
+    assert_eq!(clips(&e, t), vec![(400, 1600, 1200)]);
+    // Back out past the file's start (1000 file samples, 2000 on the timeline): stops at 0.
+    run(&mut e, "edit.trim_clip", json!({"clip": id.0, "start": 0}));
+    assert_eq!(clips(&e, t), vec![(0, 2000, 1000)]);
+}

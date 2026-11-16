@@ -139,7 +139,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip groups that select and move as one | ● | ● | ● | ● | **Flag only**: the group is stored and exported, never used in editing |
 | Loop a clip without making copies | ● | ◐ | ● | ◐ | **Partial**: makes real copies, N times or to a length |
 | Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
-| Clip stretch ratio | ● | ● | ● | ● | **Partial**: works, but trimming or splitting a stretched clip then plays the wrong audio (bug 3) |
+| Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
 | Reverse a clip without a new file | ○ | ● | ● | ◐ | **Missing**: offline only |
 | Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), but lost on split or copy (bug 5) and allocated on the audio thread (bug 13) |
 | Sync point | ● | ● | ● | ● | **Works** |
@@ -267,7 +267,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 |---|---|---|
 | 1 | **Fixed.** Selecting clips A and C and pressing Delete also removed clip B between them, on every track involved. Delete, Cut and Copy now act on the selected clips alone while the selection is still the span they set (`object_clips`, `edit::remove_clips`); a range passed or chosen still clears the range. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`object_clips`, `cut_copy_objects`, `clear`) |
 | 2 | **Fixed.** Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy placed clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cut the first off. They now place their clips together (`edit::put_clips`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`paste`, `put_clips`); `engine/src/cmd/clip.rs` (`loop_clips`); `engine/src/cmd/clip_more.rs` (`copy_to`) |
-| 3 | Trimming or splitting a stretched clip advances the file position by timeline samples, not source samples, so the remaining piece plays from the wrong place | `model/src/clip.rs:447-453`; `mix/src/lib.rs:3398` |
+| 3 | **Fixed.** Trimming or splitting a stretched clip advanced the file position by timeline samples, not source samples, so the remaining piece played from the wrong place. `Clip::trim_start_to` now moves the offset by `source_span` (timeline ÷ ratio, as playback reads it), and the Trim tool, Trim to File, Trim to Fill and crossfade handles measure the file at the clip's ratio. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs` (`trim_start_to`, `source_span`, `timeline_span`); `engine/src/edit.rs` (`trim_clip`, `create_fades`) |
 | 4 | An edit-locked clip can still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped | `engine/src/edit.rs:82-455, 800-882` |
 | 5 | Per-clip effects are stored under the clip's id, so a split's right half and every copy play without them | `engine/src/cmd/clip_more.rs:194`; `mix/src/lib.rs:2882` |
 | 6 | Heal joins two pieces when only their clip gain matches; the second piece's gain line, mute, stretch and channel are dropped | `engine/src/edit.rs:432-455` |
@@ -340,3 +340,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | major | First version: editing audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
 | 2026-11-16 | minor | Bug 1 fixed: Delete, Cut and Copy of selected clips leave the clips between them alone |
 | 2026-11-16 | minor | Bug 2 fixed: pasted, duplicated, repeated, looped and copied crossfaded pairs keep their crossfade |
+| 2026-11-16 | minor | Bug 3 fixed: trimming or splitting a stretched clip keeps each piece on its audio |

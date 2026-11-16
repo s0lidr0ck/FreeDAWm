@@ -444,12 +444,33 @@ impl Clip {
         g
     }
 
+    /// The stretch ratio playback applies to an audio clip (timeline samples per file sample):
+    /// [`Clip::stretch`] when it is usable, else 1. MIDI and video clips are never stretched.
+    pub fn stretch_ratio(&self) -> f64 {
+        if self.is_audio() && self.stretch.is_finite() && self.stretch > 0.0 { self.stretch } else { 1.0 }
+    }
+
+    /// How many file samples `timeline` samples of this clip play (rounded): the same number
+    /// unless the clip is stretched.
+    pub fn source_span(&self, timeline: Samples) -> Samples {
+        let r = self.stretch_ratio();
+        if (r - 1.0).abs() < 1e-9 { timeline } else { soundcraft_time::to_samples(timeline as f64 / r) }
+    }
+
+    /// How many timeline samples `file` samples of the source take in this clip (rounded): the
+    /// inverse of [`Clip::source_span`].
+    pub fn timeline_span(&self, file: Samples) -> Samples {
+        let r = self.stretch_ratio();
+        if (r - 1.0).abs() < 1e-9 { file } else { soundcraft_time::to_samples(file as f64 * r) }
+    }
+
     /// Move the start edge to `new_start` keeping material anchored (trim start).
     pub fn trim_start_to(&mut self, new_start: Samples) {
         let new_start = new_start.min(self.end() - 1);
         let delta = new_start - self.start;
+        let file_delta = self.source_span(delta);
         if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
-            *offset = offset.saturating_add(delta);
+            *offset = offset.saturating_add(file_delta);
         }
         // MIDI note ticks are re-anchored by the engine, which knows the tempo map; a MIDI clip's
         // lyrics (time from its start) follow here, the ones before the new start dropped as its
