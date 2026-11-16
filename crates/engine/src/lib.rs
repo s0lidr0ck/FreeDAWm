@@ -31,6 +31,8 @@ pub mod midi_record;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod movie_export;
 pub mod open_job;
 pub mod pattern;
 pub mod peak_cache;

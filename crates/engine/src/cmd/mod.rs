@@ -59,6 +59,7 @@ pub(crate) mod module_ceiling;
 pub(crate) mod module_link;
 mod module_preset;
 mod more_util;
+pub mod movie_bounce;
 pub mod notes;
 mod options;
 mod pattern;
@@ -233,6 +234,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(editor_link::specs());
         v.extend(scout::specs());
         v.extend(scout_apply::specs());
+        v.extend(movie_bounce::specs());
         v.extend(scout_profile::specs());
         v.extend(looping::specs());
         v.extend(band::specs());

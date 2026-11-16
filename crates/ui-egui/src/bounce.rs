@@ -69,10 +69,57 @@ fn step_stems(app: &mut SoundApp, ctx: &egui::Context) {
     app.stems = None;
 }
 
+/// Starts the movie `file.bounce_movie` writes for `params`; [`step`] writes it a few frames at a
+/// time, the status line showing how far it is.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_movie(app: &mut SoundApp, params: &Value) {
+    if app.rendering() {
+        app.ui.status = "A render is already running".into();
+        return;
+    }
+    if crate::open_progress::refuses(app) {
+        return;
+    }
+    app.stop_play();
+    app.capture_plugin_states();
+    match soundcraft_engine::cmd::movie_bounce::movie_job(&app.engine, params) {
+        Ok(job) => {
+            app.movie = Some(job);
+            app.ui.status = "Bouncing the movie…".into();
+        }
+        Err(e) => app.ui.status = e.to_string(),
+    }
+}
+
+/// Writes the running movie bounce for a moment (see [`start_movie`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn step_movie(app: &mut SoundApp, ctx: &egui::Context) {
+    let Some(job) = &mut app.movie else { return };
+    app.ui.status = match job.step(slice()) {
+        Ok(None) => {
+            app.ui.status = format!("Bouncing the movie… {:.0} %", job.progress() * 100.0);
+            ctx.request_repaint();
+            return;
+        }
+        Ok(Some(done)) => {
+            let name = job.path().file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let mut line = format!("Bounced {name} ({} frames, {}×{}, {:.3} fps)", done.frames, done.width, done.height, done.fps);
+            if done.black_frames > 0 {
+                line.push_str(&format!("; {} black where no Video clip plays", done.black_frames));
+            }
+            line
+        }
+        Err(e) => e.to_string(),
+    };
+    app.movie = None;
+}
+
 /// Renders the running bounce for a moment. Called from `logic`, which eframe keeps calling while
 /// the window is hidden as long as a repaint is requested, so a bounce doesn't pause then.
 pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     step_stems(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    step_movie(app, ctx);
     if app.bounce.is_none() || !crate::render::instances_ready(app, ctx) {
         return;
     }

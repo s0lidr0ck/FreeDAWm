@@ -574,6 +574,7 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
         "file.export_clip_groups" => ".scgrp",
         "file.export_session_text" => ".txt",
         "file.export_dawproject" => ".dawproject",
+        "file.bounce_movie" => ".mov",
         _ if id.contains("session") => ".fdawm",
         _ => "",
     };
@@ -1233,6 +1234,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         action = None;
     }
     let saving = action.as_ref().is_some_and(|(cmd, _)| cmd.starts_with("session.save"));
+    #[cfg(not(target_arch = "wasm32"))]
+    let action = match action {
+        // A movie is written behind the status line's progress, not in one long frame.
+        Some((cmd, params)) if cmd == "file.bounce_movie" => {
+            keep = false;
+            crate::bounce::start_movie(app, &params);
+            None
+        }
+        other => other,
+    };
     if let Some((cmd, params)) = action {
         keep = false;
         match run_then(app, &cmd, params) {

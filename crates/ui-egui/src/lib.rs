@@ -940,6 +940,9 @@ pub struct SoundApp {
     pub bounce: Option<soundcraft_engine::io::Bounce>,
     /// Export › Stems in progress, rendered a slice per frame (see [`bounce::start_stems`]).
     pub stems: Option<soundcraft_engine::io::StemsJob>,
+    /// The movie bounce (File › Export › Movie) in progress, a few frames per frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub movie: Option<soundcraft_engine::movie_export::MovieBounce>,
     /// The Freeze / Commit / Bounce render running (see [`render`]).
     pub(crate) track_render: Option<soundcraft_engine::render_job::RenderJob>,
     /// Edit › Split into Files copying behind its progress window (see [`split_progress`]).
@@ -1103,6 +1106,8 @@ impl SoundApp {
             video: video_track::VideoPool::default(),
             bounce: None,
             stems: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            movie: None,
             track_render: None,
             split: None,
             lending: None,
@@ -1227,7 +1232,19 @@ impl SoundApp {
     /// A render (Bounce Mix, Freeze, Commit) is running: the transport cannot start, and the
     /// audio device cannot change ([`SoundApp::apply_audio_config`], [`SoundApp::reconnect_audio`]).
     pub fn rendering(&self) -> bool {
-        self.bounce.is_some() || self.stems.is_some() || self.track_render.is_some()
+        self.bounce.is_some() || self.stems.is_some() || self.track_render.is_some() || self.movie_running()
+    }
+
+    /// A movie bounce is running.
+    pub fn movie_running(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.movie.is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// The second half of [`SoundApp::run`]: the command itself and what the UI does after it.

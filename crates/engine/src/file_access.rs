@@ -468,8 +468,10 @@ mod tests {
             // `io` and this module are the checked gateway; `autosave` writes the app's own
             // recovery folder and `brand` copies its own settings folder (never a command's
             // path); `peak_cache` checks the roots itself for the waveform cache it keeps beside a
-            // session's audio; `tests*.rs` are test-only modules.
-            if path.parent() == Some(src.as_path()) && matches!(name, "io.rs" | "file_access.rs" | "autosave.rs" | "brand.rs" | "peak_cache.rs")
+            // session's audio; `movie_export` checks the roots itself for the movies it reads and
+            // the movie it writes; `tests*.rs` are test-only modules.
+            if path.parent() == Some(src.as_path())
+                && matches!(name, "io.rs" | "file_access.rs" | "autosave.rs" | "brand.rs" | "peak_cache.rs" | "movie_export.rs")
                 || name.starts_with("tests")
             {
                 continue;

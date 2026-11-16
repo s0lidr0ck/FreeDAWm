@@ -66,7 +66,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Sketch: a clip-launcher window, also on a tablet | **Missing** | DAWproject import drops launcher clips and says so |
 | Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is a mark that says it is one; no renderer, no ADM |
 | Speech-to-text on dialogue with text search | **Partial** | Lyric transcription with word times, searchable (AI › Find in Transcript…); no dialogue-specific lane |
-| Video: several tracks, editing, satellite link, pull up and down | **Partial** | One video track with H.264, ProRes and Motion JPEG playback, timecode and feet+frames; no editing, no export |
+| Video: several tracks, editing, satellite link, pull up and down | **Partial** | One video track with H.264, ProRes and Motion JPEG playback, timecode and feet+frames; export to a ProRes movie with the mix; no editing |
 | Destructive record, QuickPunch, TrackPunch | **Flag only** | Ordinary range punch works; the three modes are stored and unread |
 | EUCON control surfaces | **Missing** | No control-surface protocol of any kind |
 | Scripting SDK | **Works** | Every command, from a script, a command line or an agent (section F) |
@@ -137,7 +137,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F); no talkback, no video |
 | ARA 2 and spectral editing | **Missing** | A view flag exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | A read-only score with print and MusicXML export; drum step sequencer only |
-| Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
+| Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; export to a ProRes movie; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
 | Vocal synthesis (Omnivocal, beta) | **Missing** | Song generation produces finished audio, not an editable sung part |
 
 ## E. Where three or four now agree
@@ -175,7 +175,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
 | Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads. No recording, hardware MIDI, third-party plug-ins, models or networking, and nothing is kept between visits |
-| Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs. Playback only |
+| Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
 
@@ -189,7 +189,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (COMMIT_row4): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
 | 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (COMMIT_row5): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23) |
 | 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (COMMIT_row6): the Network window and the pairing prompt say that a paired device can do everything the user can, and that the local link is not encrypted while the internet one is. The encrypted local link is tier 4 |
-| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` |  |
+| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (COMMIT_video): Bounce to Movie uses both |
 
 ## Suggested order of work
 
@@ -206,7 +206,7 @@ local link allows in the Network window (row 6).
 | Work | Est. (h) | Why | Status |
 |---|---:|---|---|
 | Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) |  |
-| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (COMMIT_loudness): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export: see below |
+| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (COMMIT_loudness): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (COMMIT_video): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
 | Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (COMMIT_scout): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
 | Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option |  |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (COMMIT_transcript): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
@@ -247,5 +247,5 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript |
+| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |
