@@ -2924,7 +2924,10 @@ fn process_strip(
         taps.feed_pre(&strip.buf, win);
     }
     let mut gr = 0.0f32;
-    let mut latency = 0usize;
+    // The instrument's own latency (a hosted instrument with look-ahead) is compensated as an
+    // insert's is: the strip's sound is that late. The built-in instruments report none; a frozen
+    // track plays its render, without the instrument.
+    let mut latency = if frozen.is_none() { strip.instrument.as_ref().filter(|i| !i.failed).map_or(0, |i| i.plugin.latency()) } else { 0 };
     let mut level = chain_peak(&strip.buf, frames);
     let mut bits = 0u64;
     let mut skipped = 0usize;
@@ -3958,43 +3961,69 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
     let end = pos.saturating_add(frames as i64);
     // Pitches some note sounds on in this block (started before its end, not ended before it).
     let mut alive = [false; 128];
-    // A printed band clip (muted or not, in this block or not) may have left a note on any channel.
-    let printed = t.clips().iter().any(|c| c.midi_channels);
+    // A clip that plays on its channels (muted or not, in this block or not) may have left a note on any.
+    let printed = || t.clips().iter().any(plays_channels);
+    // MIDI Real-Time Properties (non-destructive velocity/transpose/duration/delay).
+    let rtp = |name: &str, d: f64| Key::new(format_args!("rtp.{}.{name}", t.id.0)).map_or(d, |k| s.edit.value(k.as_str(), d));
+    let (dv, dp, dur, delay) = if s.edit.values.is_empty() {
+        (0i64, 0i64, 1.0f64, 0i64)
+    } else {
+        (
+            rtp("velocity", 0.0).clamp(-127.0, 127.0) as i64,
+            rtp("transpose", 0.0).clamp(-127.0, 127.0) as i64,
+            rtp("duration", 100.0).clamp(1.0, 1000.0) / 100.0,
+            rtp("delay", 0.0).clamp(-1e7, 1e7) as i64,
+        )
+    };
     for clip in t.clips() {
         if clip.muted {
             continue;
         }
         let Some(sequence) = clip.midi_playing() else { continue };
         // Through the clip's end: a note-off clamped to it lands there, and when that is a block
-        // boundary it plays in the block that starts on it.
-        if clip.start >= end || clip.end() < pos {
+        // boundary it plays in the block that starts on it. A negative delay plays the clip's
+        // first notes before its start.
+        if (clip.start >= end && delay >= 0) || clip.end() < pos {
             continue;
         }
         let base = s.tempo.samples_to_ticks(clip.start, sr);
-        // A printed band clip plays each event on its own channel (`Clip::midi_channels`).
-        let chans = clip.midi_channels;
-        // MIDI Real-Time Properties (non-destructive velocity/transpose/duration/delay).
-        let rtp = |name: &str, d: f64| Key::new(format_args!("rtp.{}.{name}", t.id.0)).map_or(d, |k| s.edit.value(k.as_str(), d));
-        let (dv, dp, dur, delay) = if s.edit.values.is_empty() {
-            (0i64, 0i64, 1.0f64, 0i64)
-        } else {
-            (
-                rtp("velocity", 0.0).clamp(-127.0, 127.0) as i64,
-                rtp("transpose", 0.0).clamp(-127.0, 127.0) as i64,
-                rtp("duration", 100.0).clamp(1.0, 1000.0) / 100.0,
-                rtp("delay", 0.0).clamp(-1e7, 1e7) as i64,
-            )
+        if delay < 0 && s.tempo.tick_to_samples(base.saturating_add(delay), sr).min(clip.start) >= end {
+            continue;
+        }
+        // A printed band or recorded clip, or one with events off channel 1, plays each event on its
+        // own channel ([`plays_channels`]).
+        let chans = plays_channels(clip);
+        // Where an event `tick` ticks into the clip sounds. The clip's start need not fall on a
+        // tick: an event in the clip is never placed before it (and skipped as playback starts
+        // there); one a negative delay moves before the start plays before it.
+        let at_tick = |tick: i64| {
+            let at = s.tempo.tick_to_samples(base.saturating_add(tick), sr);
+            if tick >= 0 { at.max(clip.start) } else { at }
         };
         let near = s.tempo.samples_to_ticks(pos, sr).saturating_sub(base).saturating_sub(1)
             ..=s.tempo.samples_to_ticks(end, sr).saturating_sub(base).saturating_add(1);
+        // Events before tick 0 are what a start trim hid: they don't play in place, but the state
+        // they leave (a program, the pedal) is sent as the clip starts, in their order, before
+        // its first notes.
+        if clip.start >= pos && clip.start < end {
+            let offset = usize::try_from(clip.start - pos).unwrap_or(0);
+            for c in sequence.ctrls.iter().take_while(|c| c.tick < 0) {
+                let mut m = ctrl_message(c.kind, c.value, dp);
+                if chans {
+                    m[0] |= c.channel & 0x0F;
+                    inst.plugin.midi_raw(offset, m);
+                } else {
+                    inst.plugin.midi(offset, m);
+                }
+            }
+        }
         let ctrls = |inst: &mut PluginSlot| {
-            // Events before tick 0 are what a start trim hid: they don't play.
             for c in sequence.ctrls.iter().filter(|c| c.tick >= 0) {
-                let tick = c.tick.saturating_add(delay).max(0);
+                let tick = c.tick.saturating_add(delay);
                 if !near.contains(&tick) {
                     continue;
                 }
-                let at = s.tempo.tick_to_samples(base.saturating_add(tick), sr);
+                let at = at_tick(tick);
                 if at >= pos && at < end && at < clip.end() {
                     let offset = usize::try_from(at - pos).unwrap_or(0);
                     let mut m = ctrl_message(c.kind, c.value, dp);
@@ -4012,14 +4041,30 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         if chans {
             ctrls(inst);
         }
-        for n0 in &sequence.notes {
+        // A note as it plays (Real-Time Properties applied), with where it starts and ends.
+        let shaped = |n0: &soundcraft_midi::Note| {
             let mut n = *n0;
             n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
             n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
             n.length = ((n.length as f64 * dur) as i64).max(1);
-            n.start = n.start.saturating_add(delay).max(0);
-            let on = s.tempo.tick_to_samples(base.saturating_add(n.start), sr);
-            let off = s.tempo.tick_to_samples(base.saturating_add(n.start).saturating_add(n.length), sr).min(clip.end());
+            n.start = n.start.saturating_add(delay);
+            let on = at_tick(n.start);
+            let off = at_tick(n.start.saturating_add(n.length)).min(clip.end()).max(on);
+            (n, on, off)
+        };
+        // Another note of this pitch (and channel, when channels are kept) of the clip sounding
+        // across `at`: started before it, ending after it. Overlapping notes of one pitch share one
+        // voice: a note starting over it retriggers it (its note-off first, so every note-on has
+        // its own note-off), and only the last to end closes it.
+        let sounding_across = |me: &soundcraft_midi::Note, pitch: u8, ch: u8, at: Samples| {
+            sequence.notes.iter().filter(|m| m.start >= 0 && !std::ptr::eq(*m, me)).any(|m| {
+                let (x, on, off) = shaped(m);
+                x.pitch == pitch && (!chans || x.channel & 0x0F == ch) && on < at && off > at && on < clip.end()
+            })
+        };
+        // Notes before tick 0 are what a start trim hid: they don't play.
+        for n0 in sequence.notes.iter().filter(|n| n.start >= 0) {
+            let (n, on, off) = shaped(n0);
             if on >= clip.end() {
                 continue;
             }
@@ -4032,16 +4077,23 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             }
             if on >= pos && on < end {
                 let offset = usize::try_from(on - pos).unwrap_or(0);
+                let retrigger = sounding_across(n0, n.pitch, ch, on);
                 if chans {
+                    if retrigger {
+                        inst.plugin.midi_raw(offset, [0x80 | ch, n.pitch & 0x7F, 0]);
+                    }
                     inst.plugin.midi_raw(offset, [0x90 | ch, n.pitch & 0x7F, n.velocity]);
                 } else {
+                    if retrigger {
+                        inst.plugin.note_off(offset, n.pitch);
+                    }
                     inst.plugin.note_on(offset, n.pitch, n.velocity);
                 }
                 if !held.contains(&n.pitch) && held.len() < 128 {
                     held.push(n.pitch);
                 }
             }
-            if off >= pos && off < end {
+            if off >= pos && off < end && !sounding_across(n0, n.pitch, ch, off) {
                 let offset = usize::try_from(off - pos).unwrap_or(0);
                 if chans {
                     inst.plugin.midi_raw(offset, [0x80 | ch, n.pitch & 0x7F, n.release_velocity & 0x7F]);
@@ -4057,6 +4109,7 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
     }
     let sounds = |p: u8| alive.get(usize::from(p & 0x7F)).copied().unwrap_or(false);
     if held.iter().any(|p| !sounds(*p)) {
+        let printed = printed();
         for &p in held.iter().filter(|p| !sounds(**p)) {
             if printed {
                 // Which channel it sounded on is not kept: close it on each.
@@ -4092,7 +4145,7 @@ pub fn hears_live_midi(t: &Track, thru: bool) -> bool {
 fn release_clip_notes(s: &Session, id: TrackId, st: &mut Strip) {
     if let Some(inst) = st.instrument.as_mut() {
         if !st.held.is_empty() {
-            let printed = s.tracks.iter().find(|t| t.id == id).is_some_and(|t| t.clips().iter().any(|c| c.midi_channels));
+            let printed = s.tracks.iter().find(|t| t.id == id).is_some_and(|t| t.clips().iter().any(plays_channels));
             for &p in &st.held {
                 if printed {
                     for ch in 0..16u8 {
@@ -4154,6 +4207,15 @@ fn ctrl_message(kind: CtrlKind, value: i32, transpose: i64) -> [u8; 3] {
     }
 }
 
+/// Whether a clip plays each event on its own channel: a printed band or recorded clip
+/// (`Clip::midi_channels`), or one with a note or controller set off channel 1 (the editor's
+/// Channel field, a multi-channel file). Every other clip plays on channel 1 through `note_on`,
+/// `note_off` and `midi`, exactly as it always has. No allocation.
+fn plays_channels(c: &Clip) -> bool {
+    c.midi_channels
+        || c.midi_playing().is_some_and(|q| q.notes.iter().any(|n| n.channel & 0x0F != 0) || q.ctrls.iter().any(|e| e.channel & 0x0F != 0))
+}
+
 /// Before an instrument plays from `pos`: reset its controllers, then send each one the last value
 /// it had on this track before `pos`. Clips play on channel 1 and are chased there; a printed band
 /// clip (`Clip::midi_channels`) plays each event on its own channel, so its controllers are chased
@@ -4164,7 +4226,7 @@ fn chase_controllers(s: &Session, t: &Track, pos: Samples, inst: &mut PluginSlot
     let pos = pos.saturating_sub(midi_offset(s, t));
     chase_channel(s, t, pos, None, inst);
     let mut used = 0u16;
-    for clip in t.clips().iter().filter(|c| c.midi_channels && !c.muted) {
+    for clip in t.clips().iter().filter(|c| plays_channels(c) && !c.muted) {
         let Some(sequence) = clip.midi_playing() else { continue };
         for n in &sequence.notes {
             used |= 1 << (n.channel & 0x0F);
@@ -4189,12 +4251,13 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
     let sr = s.sample_rate;
     for clip in t.clips() {
         let Some(sequence) = clip.midi_playing() else { continue };
-        if clip.muted || clip.start >= pos || clip.midi_channels != ch.is_some() {
+        if clip.muted || clip.start >= pos || plays_channels(clip) != ch.is_some() {
             continue;
         }
         let base = s.tempo.samples_to_ticks(clip.start, sr);
         let until = pos.min(clip.end());
-        for c in sequence.ctrls.iter().filter(|c| c.tick >= 0 && ch.is_none_or(|ch| c.channel & 0x0F == ch)) {
+        // Events a start trim hid (before tick 0) count as set when the clip starts.
+        for c in sequence.ctrls.iter().filter(|c| ch.is_none_or(|ch| c.channel & 0x0F == ch)) {
             let slot = match c.kind {
                 CtrlKind::Cc(n) => usize::from(n & 0x7F),
                 CtrlKind::PitchBend => BEND,
@@ -4202,7 +4265,7 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
                 CtrlKind::Program => PROGRAM,
                 CtrlKind::PolyPressure(_) => continue,
             };
-            let at = s.tempo.tick_to_samples(base.saturating_add(c.tick), sr);
+            let at = s.tempo.tick_to_samples(base.saturating_add(c.tick), sr).max(clip.start);
             if at < until
                 && let Some(l) = last.get_mut(slot)
                 && at >= l.0
@@ -6749,6 +6812,138 @@ mod tests {
         (s, eng, heard)
     }
 
+    /// An instrument that reports a look-ahead.
+    struct LateKeys(Box<dyn Plugin>);
+
+    impl Plugin for LateKeys {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            self.0.info()
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.0.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.0.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.0.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.0.param(id)
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.0.process(io, frames);
+        }
+        fn latency(&self) -> usize {
+            300
+        }
+    }
+
+    /// Bug 23: an instrument's latency is compensated: the mix waits for it as for an insert's.
+    #[test]
+    fn an_instruments_latency_is_compensated() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.late"));
+        s.edit.delay_compensation = true;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_external_instances(true);
+        let late = LateKeys(soundcraft_dsp::create("gain").unwrap());
+        eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Instrument, id: "clap:test.late".into(), ch: 2, plugin: Box::new(late) }]);
+        render_block(&mut eng, &s, 0);
+        render_block(&mut eng, &s, 512);
+        assert_eq!(eng.latency, 300);
+    }
+
+    /// Bug 19: two overlapping notes of one pitch: the second retriggers the voice and the sound
+    /// lasts to the later end; the first note-off does not cut the second note short.
+    #[test]
+    fn overlapping_notes_of_one_pitch_each_get_their_own_end() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        let note = |start, length| soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start, length };
+        seq.notes = vec![note(0, 16), note(8, 4)];
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
+        render_block(&mut eng, &s, 0);
+        let mut got: Vec<(usize, [u8; 3])> =
+            std::mem::take(&mut *heard.lock().unwrap()).into_iter().filter(|(_, _, m)| m[0] & 0xE0 == 0x80).map(|(_, o, m)| (o, m)).collect();
+        // In time order (equal times keep the order they were sent in).
+        got.sort_by_key(|(o, _)| *o);
+        assert_eq!(got, vec![(0, [0x90, 60, 100]), (200, [0x80, 60, 0]), (200, [0x90, 60, 100]), (400, [0x80, 60, 0])]);
+    }
+
+    /// Bug 9: a drawn note set to channel 3 plays on channel 3 (its controllers on theirs), and is
+    /// closed on every channel when it is cut off.
+    #[test]
+    fn a_note_set_off_channel_1_plays_on_its_channel() {
+        let seq = soundcraft_midi::Sequence {
+            notes: vec![
+                soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 2, start: 0, length: 8 },
+                soundcraft_midi::Note { pitch: 64, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 8 },
+            ],
+            ctrls: vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 2, kind: CtrlKind::Cc(1), value: 50 }],
+        };
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
+        render_block(&mut eng, &s, 0);
+        let got = std::mem::take(&mut *heard.lock().unwrap());
+        assert!(got.contains(&(true, 0, [0x92, 60, 100])), "{got:?}");
+        assert!(got.contains(&(true, 0, [0x90, 64, 90])), "{got:?}");
+        assert!(got.contains(&(true, 100, [0xB2, 1, 50])), "{got:?}");
+        assert!(got.contains(&(true, 200, [0x82, 60, 64])), "{got:?}");
+    }
+
+    /// Bug 8: a clip that starts between two ticks (25 samples a tick: 260 is tick 10.4) plays
+    /// its first note at its start, so playback started there hears it.
+    #[test]
+    fn a_note_at_the_start_of_a_clip_off_the_tick_grid_plays_from_the_start() {
+        let seq = soundcraft_midi::Sequence {
+            notes: vec![soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 8 }],
+            ..Default::default()
+        };
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 260, 48_000, seq));
+        render_block(&mut eng, &s, 260);
+        let got = std::mem::take(&mut *heard.lock().unwrap());
+        assert!(got.contains(&(false, 0, [0x90, 60, 100])), "{got:?}");
+    }
+
+    /// Bug 10: a negative Real-Time Properties delay plays the early notes before the clip's
+    /// start, each at its own time, rather than all together on the start.
+    #[test]
+    fn a_negative_delay_moves_early_notes_before_the_clip_rather_than_piling_them() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 4 };
+        seq.notes = vec![note(60, 0), note(62, 40)];
+        // The clip starts on tick 100 (2 500 samples); 40 ticks early is 1 000 samples.
+        let (mut s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 2_500, 48_000, seq));
+        let t = s.tracks[0].id;
+        s.edit.values.insert(format!("rtp.{}.delay", t.0), -40.0);
+        render_block(&mut eng, &s, 1_024);
+        render_block(&mut eng, &s, 1_536);
+        render_block(&mut eng, &s, 2_048);
+        let ons: Vec<(usize, u8)> =
+            std::mem::take(&mut *heard.lock().unwrap()).into_iter().filter(|(_, _, m)| m[0] == 0x90).map(|(_, o, m)| (o, m[1])).collect();
+        assert_eq!(ons, vec![(476, 60), (452, 62)], "60 at 1 500, 62 at 2 500");
+    }
+
+    /// Bug 5: what a start trim hid (negative ticks) does not play, but its controllers set the
+    /// state the clip starts in, before its first note, and are chased after a seek into it.
+    #[test]
+    fn notes_hidden_by_a_start_trim_are_silent_and_their_controllers_set_the_start_state() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 8 };
+        seq.notes = vec![note(50, -100), note(60, 0)];
+        seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: -50, channel: 0, kind: CtrlKind::Program, value: 9 }];
+        // 25 samples a tick: the clip starts on tick 10.
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 250, 48_000, seq));
+        render_block(&mut eng, &s, 0);
+        assert_eq!(
+            std::mem::take(&mut *heard.lock().unwrap()),
+            vec![(false, 0, [0xB0, 121, 0]), (false, 250, [0xC0, 9, 0]), (false, 250, [0x90, 60, 100]), (false, 450, [0x80, 60, 0])]
+        );
+        render_block(&mut eng, &s, 10_000);
+        let after: Vec<_> = std::mem::take(&mut *heard.lock().unwrap()).into_iter().filter(|x| *x != ALL_OFF).collect();
+        assert_eq!(after, vec![(false, 0, [0xB0, 121, 0]), (false, 0, [0xC0, 9, 0])]);
+    }
+
     /// Live MIDI for the next block: `(offset, port slot, message)`, slots 0 "Keys", 1 "DIN".
     fn play_live(eng: &mut MixEngine, thru: bool, events: &[(u32, u8, [u8; 3])]) {
         eng.live_midi.ports[0] = port_id("Keys");
@@ -7391,7 +7586,24 @@ mod tests {
                 (true, 500, [0x82, 48, 64])
             ]
         );
-        // Unflagged, the same clip plays as every clip does: channel 1, notes first.
+        // Unflagged, a clip with a note off channel 1 plays its channels too (bug 9 of section 7;
+        // it used to put everything on channel 1); one all on channel 1 plays as before.
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq.clone()));
+        render_block(&mut eng, &s, 0);
+        let h: Vec<_> = heard.lock().unwrap().iter().filter(|x| !(x.2[0] & 0xF0 == 0xB0 && x.2[1] == 121)).copied().collect();
+        assert_eq!(
+            h,
+            vec![
+                (true, 100, [0xB0, 11, 70]),
+                (true, 100, [0x90, 24, 1]),
+                (true, 150, [0x80, 24, 0]),
+                (true, 100, [0x92, 48, 90]),
+                (true, 500, [0x82, 48, 64])
+            ]
+        );
+        if let Some(n) = seq.notes.get_mut(1) {
+            n.channel = 0;
+        }
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         render_block(&mut eng, &s, 0);
         let h: Vec<_> = heard.lock().unwrap().iter().filter(|x| x.2 != [0xB0, 121, 0]).copied().collect();
@@ -7434,11 +7646,14 @@ mod tests {
             h,
             vec![
                 (false, 0, [0xB0, 121, 0]),
-                (false, 0, [0xB0, 7, 80]),
                 (true, 0, [0xB0, 121, 0]),
                 (true, 0, [0xB0, 11, 70]),
                 (true, 0, [0xB2, 121, 0]),
                 (true, 0, [0xB2, 1, 30]),
+                // The unflagged clip's CC7 is set on channel 6: it now plays (and is chased) there
+                // (bug 9 of section 7; it used to go to channel 1).
+                (true, 0, [0xB5, 121, 0]),
+                (true, 0, [0xB5, 7, 80]),
                 (true, 0, [0xB8, 121, 0]),
             ]
         );
