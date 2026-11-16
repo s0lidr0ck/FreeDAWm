@@ -2237,9 +2237,7 @@ impl SoundApp {
         let mut ids = soundcraft_engine::io::place_recording(&mut self.engine, &plan, takes);
         // Armed tracks playing modules' MIDI: their take is what the mix gave them over the pass
         // (within the punch range), printed now from the session as it stands.
-        let pass = Range::new(plan.start, end);
-        let pass = plan.punch.map_or(Some(pass), |p| pass.intersect(&p));
-        if let Some(r) = pass.filter(|r| !r.is_empty()) {
+        if let Some(r) = soundcraft_engine::module_record::print_range(&plan, end) {
             ids.extend(soundcraft_engine::module_record::record_module_inputs(&mut self.engine, r, None));
         }
         // Armed tracks on hardware MIDI input: what they heard, as clips.

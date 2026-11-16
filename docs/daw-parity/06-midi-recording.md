@@ -239,7 +239,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 10 | Unplug and replug within two seconds: the port keeps its slot, so notes held at the unplug are never released | `playback/src/midi_in.rs:437-470` |
 | 11 | Two devices with the same name collapse into one; the second cannot be used | `playback/src/midi_in.rs:526-535` |
 | 12 | What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
-| 13 | Module MIDI input recorded in a loop keeps only the last partial pass, or an empty range after a punch partway through | `ui-egui/src/lib.rs:2162-2166` |
+| 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs` | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it` | `engine/src/midi_record.rs` (`pass_range`) |
 | 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
 | 16 | Menu items that run their command with no values and so change nothing: Input Quantize, MIDI Track Offsets. Step Input always enters the same eighth note | `ui-egui/src/menus.rs:949-965, 1075-1076`; `ui-egui/src/menubar.txt:435-440` |
@@ -320,3 +320,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 17 fixed: the live take shows only its channel, where its notes will be placed |
 | 2026-11-16 | minor | Bug 20 fixed: new MIDI tracks and imported tracks listen to every MIDI input |
 | 2026-11-16 | minor | Bug 9 fixed: MIDI events lost during a take are reported at Stop |
+| 2026-11-16 | minor | Bug 13 fixed: module MIDI recorded in a loop prints over the loop |
