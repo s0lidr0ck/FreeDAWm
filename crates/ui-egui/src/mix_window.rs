@@ -1087,6 +1087,10 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         if ui.add(egui::Button::selectable(ins.bypass, "Bypass")).clicked() {
             run_pick(app, ui, "mix.module_bypass", json!({"track": id.0, "module": ins.id.0}));
         }
+        // Inactive: the module does not run at all (its CPU is free), as Pro Tools' Make Inactive.
+        if ui.add(egui::Button::selectable(!ins.active, "Inactive")).clicked() {
+            run_pick(app, ui, "mix.module_active", json!({"track": id.0, "module": ins.id.0}));
+        }
         if edit_list && crate::module_drawer::has_drawer(&ins.plugin) && ui.button("Open in Window").clicked() {
             // The generic window: every parameter as a slider, outside the Mix window.
             crate::chain_view::open_window(app, id, ins.id);

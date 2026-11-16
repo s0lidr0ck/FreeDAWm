@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a new send brings its return and takes a default level) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: a module can be made inactive) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -78,7 +78,7 @@ miss a peak, and can read pre-fader).
 | Ten or more inserts per channel | ● | ● | ● | ● | **Works**: up to 32 modules |
 | Reorder, copy and move by dragging | ● | ● | ● | ● | **Works** |
 | Bypass | ● | ● | ● | ● | **Works** |
-| Deactivate a plug-in to free CPU | ● | ● | ◐ | ● | **Flag only**: the engine honours it, nothing can set it |
+| Deactivate a plug-in to free CPU | ● | ● | ◐ | ● | **Works**: Inactive in an insert's menu (`mix.module_active`); the instance stays loaded |
 | Post-fader inserts | ◐ | ◐ | ○ | ● | **Missing**; the master's inserts run before its fader, where Pro Tools runs them after |
 | Chain presets | ● | ● | ● | ● | **Works** |
 | Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
@@ -278,7 +278,7 @@ one a mix engineer would not forgive.
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
-AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation, 5–8; hardware
+AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation (**deactivation done**), 5–8; hardware
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 3: a module can be made inactive |
 | 2026-11-16 | minor | tier 2: a new send brings its return and takes a default level |
 | 2026-11-16 | minor | tier 2: group attributes and Suspend All Groups |
 | 2026-11-16 | minor | tier 2: fader-section automation sample-accurate and delay-compensated |
