@@ -2158,7 +2158,8 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
 /// The record-enabled audio tracks, each with the device input channels it records (resolved by
 /// [`Session::input_channels`](soundcraft_model::Session::input_channels): a named input, or the
 /// legacy "In 3" / "In 3-4"; a mono input feeds both sides of a stereo track) and a new take file
-/// `<track>_<NN>.wav` in the `Audio Files` of the session's folder (`unsaved_dir` until it is saved).
+/// `<track>_<NN>.wav` in the `Audio Files` of the session's folder (`unsaved_dir` until it is saved),
+/// `NN` counting that track's takes.
 /// An input that doesn't resolve, or needs a channel the device lacks (`input_channels`), is
 /// refused by track and input name; it never wraps onto other channels. A track with no
 /// hardware input records the device's first channels, as it monitors them
@@ -2166,8 +2167,7 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
 pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std::result::Result<Vec<(TrackId, Vec<usize>, PathBuf)>, String> {
     let dir = e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir);
     let s = e.session();
-    let take_no = s.sources.len() + 1;
-    let mut plan = Vec::new();
+    let mut plan: Vec<(TrackId, Vec<usize>, PathBuf)> = Vec::new();
     // A frozen track plays its render: a take on it would go unheard (and edit what was frozen).
     if let Some(t) = s.tracks.iter().find(|t| t.mixer.record_arm && t.frozen_audio().is_some()) {
         return Err(format!("`{}` is frozen. {}", t.name, crate::cmd::freeze::UNFREEZE_TO_RECORD));
@@ -2188,11 +2188,28 @@ pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std:
             // No hardware input: the channels the track monitors (`default_input_channel`).
             _ => (0..t.channels()).map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels)).collect(),
         };
-        let file = |n: usize| dir.join("Audio Files").join(format!("{}_{n:02}.wav", sanitize_name(&t.name)));
-        let path = (take_no..take_no + 1_000).map(file).find(|p| !p.exists()).unwrap_or_else(|| file(take_no));
+        let stem = sanitize_name(&t.name);
+        let file = |n: usize| dir.join("Audio Files").join(format!("{stem}_{n:02}.wav"));
+        // Numbered per track: one past the track's highest take in the session, skipping files
+        // already there (and another armed track's of the same name).
+        let take_no = s.sources.iter().filter_map(|x| take_number(&x.name, &stem)).max().map_or(1, |n| n.saturating_add(1));
+        let path = (take_no..take_no.saturating_add(1_000))
+            .map(file)
+            .find(|p| !p.exists() && !plan.iter().any(|x| x.2 == *p))
+            .unwrap_or_else(|| file(take_no));
         plan.push((t.id, inputs, path));
     }
     Ok(plan)
+}
+
+/// The number of take `name` (a source's name, `<stem>_<NN>`) of a track whose takes are named
+/// `<stem>_…`.
+fn take_number(name: &str, stem: &str) -> Option<usize> {
+    let n = name.strip_prefix(stem)?.strip_prefix('_')?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok()
 }
 
 /// A remote recorder's input as a track input (`Remote: <PC> › <input>`, see `soundcraft-net`):
@@ -2750,6 +2767,38 @@ mod record_tests {
 
     fn clip_rows(e: &Engine, t: TrackId) -> Vec<(Samples, Samples, Samples)> {
         e.session().track(t).unwrap().playlists.iter().flat_map(|p| p.clips.iter().map(|c| (c.start, c.length, c.source_offset()))).collect()
+    }
+
+    #[test]
+    fn take_numbers_count_each_tracks_takes() {
+        // Bug: the number came from the session's source count, so a first take could be Vox_21.
+        let dir = test_dir("take-numbers");
+        let mut e = Engine::default();
+        for k in 0..20 {
+            let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 10]] };
+            add_source(e.session_mut(), &format!("Loop {k}"), buf, None, FileFormat::Wav);
+        }
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let gtr = armed(&mut e, "Gtr", "mono", "In 2");
+        let plan = plan_takes(&e, &dir, 2).unwrap();
+        assert_eq!(plan[0].2, dir.join("Audio Files/Vox_01.wav"));
+        assert_eq!(plan[1].2, dir.join("Audio Files/Gtr_01.wav"));
+        // Vox has takes 1 and 3: its next is 4; Gtr's is still 1. A name that only starts like
+        // a take (Vox_Old) does not count.
+        for name in ["Vox_01", "Vox_03", "Vox_Old", "Vox Double_07"] {
+            let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 10]] };
+            add_source(e.session_mut(), name, buf, None, FileFormat::Wav);
+        }
+        let plan = plan_takes(&e, &dir, 2).unwrap();
+        assert_eq!((plan[0].0, plan[0].2.clone()), (vox, dir.join("Audio Files/Vox_04.wav")));
+        assert_eq!((plan[1].0, plan[1].2.clone()), (gtr, dir.join("Audio Files/Gtr_01.wav")));
+        // Two armed tracks of the same name never share a file.
+        e.session_mut().track_mut(gtr).unwrap().name = "Vox".into();
+        let plan = plan_takes(&e, &dir, 2).unwrap();
+        assert_ne!(plan[0].2, plan[1].2);
+        assert_eq!(take_number("Vox_12", "Vox"), Some(12));
+        assert_eq!(take_number("Vox_", "Vox"), None);
+        assert_eq!(take_number("Vox_+1", "Vox"), None);
     }
 
     #[test]
