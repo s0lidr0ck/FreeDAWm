@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: bounce a bus, with a tail) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: the Automation window's write enables work) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -144,7 +144,7 @@ miss a peak, and can read pre-fader).
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Missing** |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
-| Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Flag only**: the Automation window's switches are read by nothing |
+| Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
 | Write from a MIDI controller or control surface | ● | ● | ● | ● | **Missing**: no controller mapping, no HUI or Mackie Control |
 | Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
 
@@ -266,7 +266,7 @@ one a mix engineer would not forgive.
 |---|---:|---|
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values remain once per block, not delay-compensated |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass done; faders and pan knobs follow**; the rest remains |
-| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | |
+| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Pre-fader option and click-free output meter done**; RMS, scales and a master loudness meter remain |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: the Automation window's write enables work |
 | 2026-11-16 | minor | tier 2: bounce a bus, with a tail |
 | 2026-11-16 | minor | tier 2: Mix faders and pan knobs follow their automation |
 | 2026-11-16 | minor | tier 2: automation is thinned after a writing pass |

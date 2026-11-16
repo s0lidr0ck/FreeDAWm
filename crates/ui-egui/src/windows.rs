@@ -114,11 +114,11 @@ fn automation(app: &mut SoundApp, ctx: &egui::Context) {
         });
         ui.separator();
         ui.label("Enabled parameters");
-        for f in ["volume", "pan", "mute", "send level", "send pan", "send mute", "plugin"] {
-            let id = format!("automation.enable.{}", f.replace(' ', "_"));
-            let mut on = !app.engine.session().edit.flag(&format!("{id}.off"));
-            if crate::widgets::checkbox(ui, &mut on, f).changed() {
-                app.engine.session_mut().edit.set_flag(&format!("{id}.off"), !on);
+        // What passes write: a type switched off still plays its lanes.
+        for ty in soundcraft_engine::cmd::WRITE_TYPES {
+            let mut on = !app.engine.session().edit.flag(&soundcraft_engine::cmd::write_disabled_flag(ty));
+            if crate::widgets::checkbox(ui, &mut on, ty.replace('_', " ")).changed() {
+                let _ = app.run("automation.enable", json!({"type": ty, "value": on}));
             }
         }
         ui.separator();

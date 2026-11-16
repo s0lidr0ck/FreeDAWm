@@ -42,6 +42,29 @@ const PASS: &str = "automation_pass";
 /// Pass off). Unset, the lanes a pass wrote are thinned when it ends, as Pro Tools does.
 pub const KEEP_PASS_POINTS: &str = "automation.keep_pass_points";
 
+/// The parameter types the Automation window enables for writing, as `automation.enable`
+/// names them. A type switched off is not written (its lanes still play), as Pro Tools' write
+/// enables do.
+pub const WRITE_TYPES: [&str; 7] = ["volume", "pan", "mute", "send_level", "send_pan", "send_mute", "plugin"];
+
+/// The write-enable type of `p` (the trim lane goes with volume).
+fn write_type(p: &AutoParam) -> &'static str {
+    match p {
+        AutoParam::Volume | AutoParam::Trim => "volume",
+        AutoParam::Pan(_) => "pan",
+        AutoParam::Mute => "mute",
+        AutoParam::SendLevel(_) => "send_level",
+        AutoParam::SendPan(_) => "send_pan",
+        AutoParam::SendMute(_) => "send_mute",
+        AutoParam::Plugin { .. } => "plugin",
+    }
+}
+
+/// The `s.edit` flag that switches writing of type `ty` off.
+pub fn write_disabled_flag(ty: &str) -> String {
+    format!("automation.enable.{ty}.off")
+}
+
 /// How far thinning after a pass may move a lane: a twentieth of a dB, a thousandth of the pan.
 fn pass_tolerance(p: &AutoParam) -> f32 {
     match p {
@@ -71,6 +94,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{tracks?, db: -144..24, touch?: bool} — the trim the fader sets in Trim mode, written to the trim lane while playing; touch false lets the fader go",
             has_selection,
             trim
+        ),
+        crate::cmd!(
+            "automation.enable",
+            "Enable Automation Writing",
+            [],
+            None,
+            "{type: volume|pan|mute|send_level|send_pan|send_mute|plugin, value?: bool} — whether passes write that type (on unless turned off); toggles when omitted",
+            always,
+            |e, p| {
+                let ty = str_param(p, "type").map(str::to_ascii_lowercase).unwrap_or_default();
+                if !WRITE_TYPES.contains(&ty.as_str()) {
+                    return Err(bad("automation.enable", format!("`type` is one of {}", WRITE_TYPES.join(", "))));
+                }
+                let flag = write_disabled_flag(&ty);
+                let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| e.session().edit.flag(&flag));
+                e.session_mut().edit.set_flag(&flag, !on);
+                Ok(json!({"type": ty, "value": on}))
+            }
         ),
         crate::cmd!(
             "automation.thin_after_pass",
@@ -390,7 +431,7 @@ impl Engine {
             params.sort();
             params.dedup();
             for p in params {
-                if !writable(s, tr.id, &p) {
+                if !writable(s, tr.id, &p) || s.edit.flag(&write_disabled_flag(write_type(&p))) {
                     continue;
                 }
                 let v = if p == AutoParam::Trim {
@@ -580,6 +621,23 @@ mod tests {
         e.automation_ui_held(Vec::new());
         stop(&mut e, 21 * q);
         assert!(points(&e, t, &AutoParam::Volume).len() >= 20);
+    }
+
+    /// Tier 2: a parameter type switched off in the Automation window is not written, though its
+    /// lanes still play.
+    #[test]
+    fn a_disabled_type_is_not_written() {
+        let (mut e, t, _, q) = kick("write");
+        e.execute("automation.enable", &json!({"type": "pan", "value": false})).unwrap();
+        let pan_before = points(&e, t, &AutoParam::Pan(0));
+        e.execute("mix.volume", &json!({"track": t.0, "db": -6.0})).unwrap();
+        play(&mut e, q);
+        play(&mut e, 2 * q);
+        stop(&mut e, 3 * q);
+        assert!(!points(&e, t, &AutoParam::Volume).is_empty(), "volume is written");
+        assert_eq!(points(&e, t, &AutoParam::Pan(0)), pan_before, "pan is not");
+        assert!(e.execute("automation.enable", &json!({"type": "colour"})).is_err());
+        assert_eq!(e.execute("automation.enable", &json!({"type": "pan"})).unwrap()["value"], true, "toggles back on");
     }
 
     /// Tier 2: a control shows what its automation plays, except while it is touched or written.

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 mod audio_midi;
 pub(crate) mod auto_write;
-pub use auto_write::{KEEP_PASS_POINTS, TOUCH_HOLD_SECONDS};
+pub use auto_write::{KEEP_PASS_POINTS, TOUCH_HOLD_SECONDS, WRITE_TYPES, write_disabled_flag};
 mod audiosuite;
 mod automation_edit;
 mod band;
