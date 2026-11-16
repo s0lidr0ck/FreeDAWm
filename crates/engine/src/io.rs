@@ -2095,6 +2095,15 @@ pub(crate) fn load_session_file_reporting(
             decoded.push(Ok(Loaded::Disk(f)));
             continue;
         }
+        // Decoded once before (another format or rate): its decode plays from disk.
+        if !sampled.contains(&i)
+            && !absolute
+            && soundcraft_model::disk::streaming_enabled()
+            && let Some(f) = crate::decode_cache::open(&dir, Path::new(shown), rate)
+        {
+            decoded.push(Ok(Loaded::Disk(f)));
+            continue;
+        }
         decoded.push(read_file(shown).map_err(|_| shown.clone()).and_then(|bytes| {
             decode_buffer(&bytes, Path::new(shown).extension().and_then(|x| x.to_str()), rate)
                 .map(Loaded::Memory)
@@ -2112,7 +2121,13 @@ pub(crate) fn load_session_file_reporting(
                 audio.push(Ok(streamed_audio(f, (!absolute).then_some(dir.as_path()), file, rate)));
                 continue;
             }
-            Ok(Loaded::Memory(b)) => Ok(b),
+            Ok(Loaded::Memory(b)) => {
+                // Kept decoded for the next open, which then plays it from disk.
+                if !absolute && !sampled.contains(&i) && soundcraft_model::disk::streaming_enabled() {
+                    crate::decode_cache::store(&dir, file, rate, &b);
+                }
+                Ok(b)
+            }
             Err(e) => Err(e),
         };
         audio.push(buf.map(|b| {

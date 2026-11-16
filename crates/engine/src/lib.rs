@@ -14,6 +14,7 @@ pub mod catalog_more;
 pub mod clip_group_file;
 pub mod cmd;
 pub mod dawproject;
+pub mod decode_cache;
 pub mod demo;
 pub mod edit;
 pub mod file_access;

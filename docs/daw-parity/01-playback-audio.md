@@ -120,7 +120,7 @@ Varispeed is the only whole-project speed control among the four.
 | FLAC, MP3, AAC/M4A, Ogg, Opus, CAF | ◐ | ● | ● | ● | **Works** (more than Pro Tools reads) |
 | Files at another sample rate | ● | ● | ● | ● | **Works**: converted with a high-quality sinc at import or open |
 | Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only) |
-| Compressed and long files without filling memory | ● | ● | ● | ● | **Partial**: anything that is not WAV at the session rate is decoded whole into memory on every open; AIFF does not stream |
+| Compressed and long files without filling memory | ● | ● | ● | ● | **Works** from the second open: a file that is not WAV at the session rate is decoded into memory once and kept as a float WAV in the project's `Decoded` folder, which later opens stream; a session never saved still decodes every time |
 | Waveform cache | ● | ● | ● | ● | **Works** |
 
 ## F. How a clip is rendered
@@ -210,7 +210,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | **Partly done** (2026-11-16): Workspace files and Clip List clips at a preview level (`ui-egui/src/audition.rs`); left: the import dialog, session tempo, in sync with playback |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
 | Typing a position into the counter; pause | 2–4 | **Done** (2026-11-16) |
-| Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | Shrinks G-06 |
+| Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | **Done** (2026-11-16): `engine/src/decode_cache.rs`; shrinks G-06 |
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**varispeed done** 2026-11-16, tape style;
@@ -237,6 +237,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: files that cannot stream are decoded once and then streamed |
 | 2026-11-16 | minor | audio on tick tracks follows tempo edits (offline renders) |
 | 2026-11-16 | minor | tier 3: varispeed |
 | 2026-11-16 | minor | tier 2: scrub audio with the Scrubber |
