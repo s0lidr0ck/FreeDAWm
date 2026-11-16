@@ -26,6 +26,7 @@ pub mod pan;
 mod params;
 pub mod pitch_detect;
 pub mod plugins;
+mod resample;
 pub mod scout;
 pub mod slices;
 pub mod spectrum;

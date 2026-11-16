@@ -1781,7 +1781,7 @@ impl MixEngine {
                 strip.sample = None;
                 strip.inst_readouts = [f32::NAN; 8];
             }
-            sync_sample(strip, want, s);
+            sync_sample(strip, want, s, cx.retired_assets);
             if let (Some(slot), Some(ins)) = (strip.instrument.as_mut(), want) {
                 sync_kit_samples(slot, ins, s, cx.retired_assets);
                 sync_kit_fx(slot, ins, cx.sr, cx.mb, cx.offline, cx.retired);
@@ -4743,7 +4743,7 @@ fn collect_released(slot: &mut PluginSlot, out: &mut Vec<Arc<dyn SampleSource>>)
 
 /// Hands a strip's instrument the audio of its insert's sample source when it changed (a new
 /// sample, a cleared one, or a new instance). Missing media plays nothing.
-fn sync_sample(strip: &mut Strip, want: Option<&soundcraft_model::Insert>, s: &Session) {
+fn sync_sample(strip: &mut Strip, want: Option<&soundcraft_model::Insert>, s: &Session, retired: &mut Vec<Arc<dyn SampleSource>>) {
     let audio = want.and_then(|i| i.sample).and_then(|id| s.pool.get(id));
     let same = match (strip.sample.as_ref(), audio) {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -4756,6 +4756,11 @@ fn sync_sample(strip: &mut Strip, want: Option<&soundcraft_model::Insert>, s: &S
     if let Some(inst) = strip.instrument.as_mut() {
         let shared = audio.map(|a| Arc::new(PoolSample(Arc::clone(a))) as Arc<dyn SampleSource>);
         inst.plugin.set_sample(shared);
+        // The old sound (and with it the old audio, if the session let go of it) is dropped off
+        // the audio thread.
+        while let Some(a) = inst.plugin.take_released_asset() {
+            retired.push(a);
+        }
     }
     strip.sample = audio.cloned();
 }
