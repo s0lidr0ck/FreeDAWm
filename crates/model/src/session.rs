@@ -376,6 +376,10 @@ pub struct Session {
     /// Session notes (Window › Notes), in list order (omitted from the file while empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::notes::de_notes")]
     pub notes: Vec<crate::Note>,
+    /// Grooves taken from clips (Groove from Clip), for Quantize and playback quantize; the
+    /// built-in ones are made in code and not stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grooves: Vec<soundcraft_midi::ops::Groove>,
     /// The lyric sheet (Window › Lyrics; omitted from the file while empty).
     #[serde(default, skip_serializing_if = "crate::LyricSheet::is_empty", deserialize_with = "crate::sheet::de_sheet")]
     pub lyric_sheet: crate::LyricSheet,
@@ -438,6 +442,7 @@ impl Session {
             scout: crate::ScoutState::default(),
             band: crate::BandState::default(),
             notes: Vec::new(),
+            grooves: Vec::new(),
             lyric_sheet: crate::LyricSheet::default(),
             studio_tuning: crate::StudioTuning::default(),
             midi_maps: Vec::new(),

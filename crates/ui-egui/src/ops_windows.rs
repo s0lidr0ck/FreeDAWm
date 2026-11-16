@@ -24,6 +24,16 @@ pub struct OpsState {
     pub quant_grid: String,
     pub quant_strength: f64,
     pub quant_swing: f64,
+    /// Quantize: only notes within this % of half a grid step, a random offset (% of half a
+    /// step), note ends too, lengths kept, and the groove followed instead of the grid ("": none).
+    pub quant_window: f64,
+    pub quant_random: f64,
+    pub quant_ends: bool,
+    pub quant_keep_length: bool,
+    pub quant_groove: String,
+    /// The MIDI Real-Time Properties' playback quantize: grid ("off" or a note value) and strength.
+    pub rtp_quantize: String,
+    pub rtp_q_strength: f64,
     pub transpose: i64,
     pub velocity_add: i64,
     /// Change Duration: "legato", "set", "add" or "scale", and its value (ticks, or percent to scale).
@@ -72,6 +82,13 @@ impl Default for OpsState {
             quant_grid: "1/16".into(),
             quant_strength: 100.0,
             quant_swing: 0.0,
+            quant_window: 100.0,
+            quant_random: 0.0,
+            quant_ends: false,
+            quant_keep_length: true,
+            quant_groove: String::new(),
+            rtp_quantize: "off".into(),
+            rtp_q_strength: 100.0,
             transpose: 12,
             velocity_add: 10,
             dur_mode: "legato".into(),
@@ -421,7 +438,16 @@ pub fn editor_selection(app: &SoundApp) -> Option<(soundcraft_model::ClipId, Vec
 /// which act on whole clips).
 pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)> {
     Some(match o.midi_op.as_str() {
-        "quantize" => ("event.quantize", json!({"grid": o.quant_grid, "strength": o.quant_strength, "swing": o.quant_swing})),
+        "quantize" => {
+            let mut p = json!({
+                "grid": o.quant_grid, "strength": o.quant_strength, "swing": o.quant_swing, "window": o.quant_window,
+                "random": o.quant_random, "ends": o.quant_ends, "keep_length": o.quant_keep_length,
+            });
+            if !o.quant_groove.is_empty() {
+                p["groove"] = json!(o.quant_groove);
+            }
+            ("event.quantize", p)
+        }
         "transpose" => ("event.transpose", json!({"semitones": o.transpose})),
         "change velocity" => ("event.change_velocity", json!({"add": o.velocity_add})),
         "change duration" => {
@@ -491,8 +517,30 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.selectable_value(&mut app.ops.quant_grid, g.to_string(), g);
                     }
                 });
+                groove_combo(app, ui, "Groove", |o| &mut o.quant_groove);
                 ui.add(egui::Slider::new(&mut app.ops.quant_strength, 0.0..=100.0).text("Strength %"));
-                ui.add(egui::Slider::new(&mut app.ops.quant_swing, 0.0..=100.0).text("Swing %"));
+                ui.add_enabled(app.ops.quant_groove.is_empty(), egui::Slider::new(&mut app.ops.quant_swing, 0.0..=100.0).text("Swing %"));
+                ui.add(egui::Slider::new(&mut app.ops.quant_window, 0.0..=100.0).text("Window %"))
+                    .on_hover_text("Only notes within this much of half a grid step from their line move");
+                ui.add(egui::Slider::new(&mut app.ops.quant_random, 0.0..=100.0).text("Random %"))
+                    .on_hover_text("A random offset after quantizing, up to this much of half a grid step");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut app.ops.quant_ends, "Note ends too");
+                    ui.add_enabled(!app.ops.quant_ends, egui::Checkbox::new(&mut app.ops.quant_keep_length, "Keep lengths"));
+                });
+                if ui
+                    .button("Groove from Selected Clip")
+                    .on_hover_text("Take the timing of the selected MIDI clip as a groove, on this grid")
+                    .clicked()
+                {
+                    let r = app.run("event.groove_from_clip", json!({"grid": app.ops.quant_grid}));
+                    if let Ok(v) = &r
+                        && let Some(name) = v.get("name").and_then(|n| n.as_str())
+                    {
+                        app.ops.quant_groove = name.to_string();
+                    }
+                    result_line(ui, &r);
+                }
             }
             "transpose" => {
                 ui.add(egui::Slider::new(&mut app.ops.transpose, -48..=48).text("Semitones"));
@@ -583,6 +631,32 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_midi_ops = open;
 }
 
+/// The grooves to pick from (built in and taken from clips), `""` being none.
+pub fn groove_names(app: &mut SoundApp) -> Vec<String> {
+    app.run("event.grooves", json!({}))
+        .ok()
+        .and_then(|v| {
+            v.get("grooves").and_then(|g| g.as_array()).map(|a| a.iter().filter_map(|g| g.get("name")?.as_str().map(str::to_string)).collect())
+        })
+        .unwrap_or_default()
+}
+
+/// A Groove picker over `field` of the window's state: None (the grid) or a groove's name.
+fn groove_combo(app: &mut SoundApp, ui: &mut egui::Ui, label: &str, field: fn(&mut OpsState) -> &mut String) {
+    let names = groove_names(app);
+    let cur = field(&mut app.ops).clone();
+    egui::ComboBox::from_label(label).selected_text(if cur.is_empty() { "None (the grid)".to_string() } else { cur.clone() }).show_ui(ui, |ui| {
+        if ui.selectable_label(cur.is_empty(), "None (the grid)").clicked() {
+            field(&mut app.ops).clear();
+        }
+        for n in names {
+            if ui.selectable_label(cur == n, n.as_str()).clicked() {
+                *field(&mut app.ops) = n;
+            }
+        }
+    });
+}
+
 /// Select Notes' form: the ranges a note must fall in, and select or split.
 fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
     let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
@@ -661,6 +735,23 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
             if ui.add(egui::Slider::new(&mut app.ops.rtp_delay, -960..=960).text("Delay (ticks)")).changed() {
                 changed = Some(("delay", json!(app.ops.rtp_delay)));
             }
+            // Playback quantize: the notes play on the grid and stay where they are.
+            let before = app.ops.rtp_quantize.clone();
+            egui::ComboBox::from_label("Quantize").selected_text(before.clone()).show_ui(ui, |ui| {
+                for g in std::iter::once("off").chain(QUANTIZE_GRIDS) {
+                    ui.selectable_value(&mut app.ops.rtp_quantize, g.to_string(), g);
+                }
+            });
+            if app.ops.rtp_quantize != before {
+                let ticks = soundcraft_engine::cmd::event::note_value_ticks(&app.ops.rtp_quantize).unwrap_or(0);
+                changed = Some(("quantize", json!(ticks)));
+            }
+            if ui
+                .add_enabled(app.ops.rtp_quantize != "off", egui::Slider::new(&mut app.ops.rtp_q_strength, 0.0..=100.0).text("Quantize strength %"))
+                .changed()
+            {
+                changed = Some(("q_strength", json!(app.ops.rtp_q_strength)));
+            }
         });
         if let Some(why) = &why {
             sliders.response.on_disabled_hover_text(why.as_str());
@@ -683,6 +774,8 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
                 app.ops.rtp_transpose = 0;
                 app.ops.rtp_duration = 100.0;
                 app.ops.rtp_delay = 0;
+                app.ops.rtp_quantize = "off".into();
+                app.ops.rtp_q_strength = 100.0;
             }
         });
     });

@@ -410,6 +410,39 @@ fn write_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut notes = 0;
     for t in &tracks {
         let r = rtp_of(s, *t);
+        // Playback quantize (the clip's own, else the track's) is written first, as it plays;
+        // the performance before is kept for Restore Performance.
+        let quantized: Vec<(u64, Option<soundcraft_model::Clip>)> = match s.track(*t) {
+            Some(tr) => tr
+                .clips()
+                .iter()
+                .map(|c| {
+                    let q = soundcraft_mix::play_quantize(s, tr, c).map(std::borrow::Cow::into_owned);
+                    let mut c2 = c.clone();
+                    if let (Some(q), ClipContent::Midi { sequence }) = (q, &mut c2.content) {
+                        let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+                        for n in sequence.notes.iter_mut() {
+                            n.start = soundcraft_mix::quantized_start(s, base, &q, n.start);
+                        }
+                        (c.id.0, Some(c2))
+                    } else {
+                        (c.id.0, None)
+                    }
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        for (id, c) in quantized {
+            if let Some(c) = c
+                && let Some(ClipContent::Midi { sequence }) = s.find_clip(soundcraft_model::ClipId(id)).map(|(_, x)| x.content.clone())
+            {
+                s.midi_originals.entry(id).or_insert(sequence);
+                if let Some(slot) = s.find_clip_mut(soundcraft_model::ClipId(id)) {
+                    slot.content = c.content;
+                    slot.play_quantize = None;
+                }
+            }
+        }
         let Some(pl) = s.track_mut(*t).and_then(Track::playlist_mut) else { continue };
         for c in &mut pl.clips {
             let ClipContent::Midi { sequence } = &mut c.content else { continue };

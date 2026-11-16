@@ -100,8 +100,28 @@ pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: 
     if grid <= 0 {
         return;
     }
-    let strength = unit(opts.strength);
     let swing = unit(opts.swing);
+    quantize_toward(notes, opts, seed, |t| nearest_line_in(t, grid, swing, span(t)));
+}
+
+/// [`quantize_on`] toward the points of `groove` instead of grid lines (its period counted from
+/// each bar: `bar_start(t)` is the start of the bar holding `t`). The window, ends, length and
+/// random options measure in half of `opts.grid_ticks`, as on a grid.
+pub fn quantize_to_groove(notes: &mut [Note], groove: &Groove, opts: &QuantizeOptions, seed: u64, bar_start: impl Fn(i64) -> i64) {
+    if opts.grid_ticks <= 0 {
+        return;
+    }
+    quantize_toward(notes, opts, seed, |t| groove.nearest(t, bar_start(t)));
+}
+
+/// The quantize loop: each note's start (and end, with `quantize_ends`) moves toward
+/// `target(tick)` by the options' strength, within their window.
+fn quantize_toward(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, target: impl Fn(i64) -> i64) {
+    let grid = opts.grid_ticks;
+    if grid <= 0 {
+        return;
+    }
+    let strength = unit(opts.strength);
     let include = unit(opts.include_within);
     let exclude = unit(opts.exclude_within);
     let random = unit(opts.random);
@@ -111,8 +131,7 @@ pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: 
     for n in notes.iter_mut() {
         let old_start = n.start;
         let old_end = n.end();
-        let target = nearest_line_in(old_start, grid, swing, span(old_start));
-        let d = target.saturating_sub(old_start);
+        let d = target(old_start).saturating_sub(old_start);
         let dist = d.unsigned_abs() as f64;
         if include < 1.0 && dist > include * half {
             continue;
@@ -126,7 +145,7 @@ pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: 
         }
         n.start = new_start;
         n.length = if opts.quantize_ends {
-            let end_target = nearest_line_in(old_end, grid, swing, span(old_end));
+            let end_target = target(old_end);
             let new_end = old_end.saturating_add(round_i64(end_target.saturating_sub(old_end) as f64 * strength));
             new_end.saturating_sub(new_start)
         } else if opts.preserve_duration {
@@ -135,6 +154,141 @@ pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: 
             old_end.saturating_sub(new_start)
         }
         .max(1);
+    }
+}
+
+/// A groove: where the notes of a repeating span (`period` ticks, counted from each bar line)
+/// fall, as offsets into it. Quantizing to a groove moves each note toward its nearest point.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Groove {
+    pub name: String,
+    /// Ticks the groove repeats every (counted from each bar line).
+    pub period: i64,
+    /// Offsets into the period, sorted, each in `0..period`.
+    pub points: Vec<i64>,
+}
+
+impl Groove {
+    /// A groove from `points` (sorted, deduplicated, kept in `0..period`); `None` without a
+    /// positive period or points.
+    pub fn new(name: &str, period: i64, points: &[i64]) -> Option<Groove> {
+        if period <= 0 {
+            return None;
+        }
+        let mut p: Vec<i64> = points.iter().map(|x| x.rem_euclid(period)).collect();
+        p.sort_unstable();
+        p.dedup();
+        (!p.is_empty()).then(|| Groove { name: name.to_string(), period, points: p })
+    }
+
+    /// The groove point nearest to tick `t`, the period counted from `bar_start` (the start of
+    /// the bar holding `t`).
+    pub fn nearest(&self, t: i64, bar_start: i64) -> i64 {
+        groove_nearest(&self.points, self.period, t, bar_start)
+    }
+}
+
+/// [`Groove::nearest`] on bare points (no allocation: for the audio thread).
+pub fn groove_nearest(points: &[i64], period: i64, t: i64, bar_start: i64) -> i64 {
+    if period <= 0 || points.is_empty() {
+        return t;
+    }
+    let rel = t.saturating_sub(bar_start);
+    let cycle = bar_start.saturating_add(rel.div_euclid(period).saturating_mul(period));
+    let mut best = t;
+    let mut best_d = u64::MAX;
+    // This cycle's points, the last of the cycle before and the first of the next.
+    let before = points.last().map(|p| cycle.saturating_sub(period).saturating_add(*p));
+    let after = points.first().map(|p| cycle.saturating_add(period).saturating_add(*p));
+    for line in points.iter().map(|p| cycle.saturating_add(*p)).chain(before).chain(after) {
+        let d = line.abs_diff(t);
+        if d < best_d {
+            best_d = d;
+            best = line;
+        }
+    }
+    best
+}
+
+/// The grooves built in: swung 8ths and 16ths (the second of each pair placed at 54 to 66 % of
+/// the pair, 66 % being a triplet feel), and 16ths pushed or laid back by 20 ticks. Made here,
+/// not loaded from anywhere.
+pub fn builtin_grooves() -> Vec<Groove> {
+    let mut v = Vec::new();
+    for pct in [54, 58, 62, 66] {
+        // A pair of 8ths is a quarter note (960 ticks); of 16ths, an 8th (480).
+        v.extend(Groove::new(&format!("Swing 8ths {pct}%"), 960, &[0, 960 * pct / 100]));
+        v.extend(Groove::new(&format!("Swing 16ths {pct}%"), 480, &[0, 480 * pct / 100]));
+    }
+    v.extend(Groove::new("Pushed 16ths", 480, &[0, 240 - 20]));
+    v.extend(Groove::new("Laid-Back 16ths", 480, &[0, 240 + 20]));
+    v
+}
+
+/// A groove taken from notes: the period is cut into `slot`-tick steps, and each step's point is
+/// where the notes near it fall on average (the median offset of those within half a step;
+/// a step no note is near stays straight). `bar_start(t)` is the start of the bar holding `t`.
+/// `None` when no note is near any step or the sizes are not positive.
+pub fn groove_from_notes(name: &str, notes: &[Note], period: i64, slot: i64, bar_start: impl Fn(i64) -> i64) -> Option<Groove> {
+    if period <= 0 || slot <= 0 || slot > period {
+        return None;
+    }
+    let steps = (period / slot).clamp(1, 256);
+    let mut offsets: Vec<Vec<i64>> = vec![Vec::new(); steps as usize];
+    for n in notes.iter().filter(|n| n.start >= 0) {
+        let pos = n.start.saturating_sub(bar_start(n.start)).rem_euclid(period);
+        let k = ((pos + slot / 2) / slot).rem_euclid(steps);
+        let mut off = pos - k * slot;
+        // A note just before the period's end belongs to the next period's first step.
+        if off > period / 2 {
+            off -= period;
+        }
+        if off.abs() <= slot / 2
+            && let Some(v) = offsets.get_mut(k as usize)
+        {
+            v.push(off);
+        }
+    }
+    if offsets.iter().all(Vec::is_empty) {
+        return None;
+    }
+    let points: Vec<i64> = offsets
+        .iter_mut()
+        .zip(0i64..)
+        .map(|(v, k)| {
+            v.sort_unstable();
+            k * slot + v.get(v.len() / 2).copied().unwrap_or(0)
+        })
+        .collect();
+    Groove::new(name, period, &points)
+}
+
+/// Quantize applied as a clip or track plays: the notes stay where they are; each plays from
+/// where quantizing its start would put it (toward the grid, or the groove when there is one),
+/// keeping its length.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlayQuantize {
+    /// Grid spacing in ticks (ignored with a groove).
+    pub grid: i64,
+    /// 0..=1: how far notes move toward their line.
+    pub strength: f32,
+    /// 0..=1, as [`QuantizeOptions::swing`].
+    #[serde(default)]
+    pub swing: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groove: Option<Groove>,
+}
+
+impl PlayQuantize {
+    /// Where a note starting at `t` plays; `bar` is the bar holding `t` (its start and the next
+    /// bar's start). No allocation.
+    pub fn start(&self, t: i64, bar: (i64, i64)) -> i64 {
+        let target = match &self.groove {
+            Some(g) => groove_nearest(&g.points, g.period, t, bar.0),
+            None if self.grid > 0 => nearest_line_in(t, self.grid, unit(self.swing), bar),
+            None => return t,
+        };
+        t.saturating_add(round_i64(target.saturating_sub(t) as f64 * unit(self.strength)))
     }
 }
 

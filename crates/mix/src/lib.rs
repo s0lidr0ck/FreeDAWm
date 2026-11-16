@@ -4121,6 +4121,43 @@ pub fn midi_lag(s: &Session, t: &Track) -> Samples {
 /// slider, the Cleaned/Original switch, a muted or removed clip moved its note-off behind the
 /// playhead or dropped the note) gets its note-off at the block's start: otherwise it would ring
 /// until the next stop or seek. Found in the same pass over the notes, with a table on the stack.
+/// The playback quantize `clip` on `t` plays with: its own, else its track's (the Real-Time
+/// Properties `quantize` grid in ticks, `q_strength` and `q_swing` in percent). No allocation.
+pub fn play_quantize<'a>(
+    s: &Session,
+    t: &Track,
+    clip: &'a soundcraft_model::Clip,
+) -> Option<std::borrow::Cow<'a, soundcraft_midi::ops::PlayQuantize>> {
+    if let Some(q) = &clip.play_quantize {
+        return Some(std::borrow::Cow::Borrowed(q));
+    }
+    if s.edit.values.is_empty() {
+        return None;
+    }
+    let rtp = |name: &str, d: f64| Key::new(format_args!("rtp.{}.{name}", t.id.0)).map_or(d, |k| s.edit.value(k.as_str(), d));
+    let grid = rtp("quantize", 0.0).clamp(0.0, 15_360.0) as i64;
+    (grid > 0).then(|| {
+        std::borrow::Cow::Owned(soundcraft_midi::ops::PlayQuantize {
+            grid,
+            strength: (rtp("q_strength", 100.0).clamp(0.0, 100.0) / 100.0) as f32,
+            swing: (rtp("q_swing", 0.0).clamp(0.0, 100.0) / 100.0) as f32,
+            groove: None,
+        })
+    })
+}
+
+/// Where a note `start` ticks into a clip starting on tick `base` plays under `q`: its grid
+/// counted from each bar, never before the clip's start (a hidden note, before it, is left).
+pub fn quantized_start(s: &Session, base: i64, q: &soundcraft_midi::ops::PlayQuantize, start: i64) -> i64 {
+    if start < 0 {
+        return start;
+    }
+    let bar = s.tempo.bar_beat_at_tick(base.saturating_add(start)).bar;
+    let a = s.tempo.bar_start_tick(bar).saturating_sub(base);
+    let b = s.tempo.bar_start_tick(bar.saturating_add(1)).saturating_sub(base);
+    q.start(start, (a, b)).max(0)
+}
+
 fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mut PluginSlot, held: &mut Vec<u8>) {
     let sr = s.sample_rate;
     // MIDI Track Offsets: the track's notes sound `offset` samples later (earlier if negative), so
@@ -4210,9 +4247,14 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         if chans {
             ctrls(inst);
         }
-        // A note as it plays (Real-Time Properties applied), with where it starts and ends.
+        // A note as it plays (playback quantize and Real-Time Properties applied), with where it
+        // starts and ends.
+        let pq = play_quantize(s, t, clip);
         let shaped = |n0: &soundcraft_midi::Note| {
             let mut n = *n0;
+            if let Some(q) = &pq {
+                n.start = quantized_start(s, base, q, n.start);
+            }
             n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
             n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
             n.length = ((n.length as f64 * dur) as i64).max(1);

@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Quantize...",
             ["Event", "MIDI Operations"],
             Some("Alt+0"),
-            "{grid?: 1/16 | ticks, strength?: 100, swing?: 0, clips?, indices?: [n] (one clip: those notes)} — lines counted from each bar",
+            "{grid?: 1/16 | ticks, strength?: 100, swing?: 0, groove?: name (event.grooves; instead of the grid lines), window?: 100 (only notes within this % of half a grid step), random?: 0 (% of half a step), ends?: false (quantize note ends too), keep_length?: true, clips?, indices?: [n] (one clip: those notes)} — lines counted from each bar",
             has_selection,
             quantize
         ),
@@ -503,7 +503,7 @@ pub fn note_value_ticks(text: &str) -> Option<i64> {
 
 /// The `grid` parameter: ticks, or a note value ([`note_value_ticks`]); 1/16 when left out. A
 /// grid that can't be read is refused rather than silently made 1/16.
-fn grid_ticks(id: &str, p: &Value) -> Result<i64> {
+pub(crate) fn grid_ticks(id: &str, p: &Value) -> Result<i64> {
     match p.get("grid") {
         None | Some(Value::Null) => Ok(TICKS_PER_QUARTER / 4),
         Some(Value::Number(n)) => {
@@ -521,13 +521,27 @@ fn quantize(e: &mut Engine, p: &Value) -> Result<Value> {
         grid_ticks: grid_ticks("event.quantize", p)?,
         strength: (f32_or(p, "strength", 100.0) / 100.0).clamp(0.0, 1.0),
         swing: (f32_or(p, "swing", 0.0) / 100.0).clamp(0.0, 1.0),
+        include_within: (f32_or(p, "window", 100.0) / 100.0).clamp(0.0, 1.0),
+        random: (f32_or(p, "random", 0.0) / 100.0).clamp(0.0, 1.0),
+        quantize_ends: bool_or(p, "ends", false),
+        preserve_duration: bool_or(p, "keep_length", true),
         ..QuantizeOptions::default()
+    };
+    let groove = match str_param(p, "groove").map(str::trim).filter(|g| !g.is_empty()) {
+        Some(name) => Some(
+            super::groove::groove_named(e.session(), name)
+                .ok_or_else(|| bad("event.quantize", format!("no groove called '{name}' (see event.grooves)")))?,
+        ),
+        None => None,
     };
     // The grid counts from each bar's start, as the MIDI Editor draws it. A note in the clip is
     // not moved before its start (where it would no longer play).
     midi_op(e, p, move |n, t| {
         let inside: Vec<bool> = n.iter().map(|x| x.start >= 0).collect();
-        soundcraft_midi::ops::quantize_on(n, &opts, soundcraft_midi::ops::DEFAULT_SEED, |x| t.bar(x));
+        match &groove {
+            Some(g) => soundcraft_midi::ops::quantize_to_groove(n, g, &opts, soundcraft_midi::ops::DEFAULT_SEED, |x| t.bar(x).0),
+            None => soundcraft_midi::ops::quantize_on(n, &opts, soundcraft_midi::ops::DEFAULT_SEED, |x| t.bar(x)),
+        }
         for (x, was) in n.iter_mut().zip(inside) {
             if was && x.start < 0 {
                 x.start = 0;

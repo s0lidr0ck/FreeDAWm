@@ -290,6 +290,9 @@ pub struct Clip {
     /// Clip Effects bypassed: kept but not heard.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub effects_bypass: bool,
+    /// A MIDI clip's playback quantize: its notes play quantized and stay where they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_quantize: Option<soundcraft_midi::ops::PlayQuantize>,
 }
 
 /// The most Clip Effects settings a clip keeps (a hostile file is cut down to these).
@@ -332,6 +335,7 @@ impl Clip {
             gain_bypass: false,
             effects: Vec::new(),
             effects_bypass: false,
+            play_quantize: None,
         }
     }
 

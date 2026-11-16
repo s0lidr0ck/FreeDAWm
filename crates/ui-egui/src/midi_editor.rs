@@ -251,6 +251,47 @@ impl Default for MidiEditorState {
     }
 }
 
+/// The More menu's Playback Quantize: Off, a grid, a groove, and Apply to Notes.
+fn playback_quantize_menu(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId, cur: Option<&soundcraft_midi::ops::PlayQuantize>) {
+    let run = |app: &mut SoundApp, p: serde_json::Value| {
+        let mut p = p;
+        p["clips"] = json!([cid.0]);
+        if let Err(e) = app.run("clip.play_quantize", p) {
+            app.ui.status = e;
+        }
+    };
+    if ui.radio(cur.is_none(), "Off").clicked() {
+        run(app, json!({"grid": "off"}));
+        ui.close();
+    }
+    for g in ["1/4", "1/8", "1/8t", "1/16", "1/16t", "1/32"] {
+        let ticks = soundcraft_engine::cmd::event::note_value_ticks(g).unwrap_or(0);
+        let on = cur.is_some_and(|q| q.groove.is_none() && q.grid == ticks);
+        if ui.radio(on, g).clicked() {
+            run(app, json!({"grid": g}));
+            ui.close();
+        }
+    }
+    ui.menu_button("Groove", |ui| {
+        for name in crate::ops_windows::groove_names(app) {
+            let on = cur.and_then(|q| q.groove.as_ref()).is_some_and(|g| g.name == name);
+            if ui.radio(on, name.as_str()).clicked() {
+                run(app, json!({"groove": name}));
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+    if ui
+        .add_enabled(cur.is_some(), egui::Button::new("Apply to Notes"))
+        .on_hover_text("Move the notes where they play (Restore Performance brings them back)")
+        .clicked()
+    {
+        run(app, json!({"apply": true}));
+        ui.close();
+    }
+}
+
 /// Which part of a note a drag holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
@@ -444,6 +485,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.ui.show_midi_ops = true;
             ui.close();
         }
+        ui.menu_button(if clip.play_quantize.is_some() { "Playback Quantize •" } else { "Playback Quantize" }, |ui| {
+            playback_quantize_menu(app, ui, cid, clip.play_quantize.as_ref())
+        })
+        .response
+        .on_hover_text("The clip plays quantized; its notes stay where they are");
         // Mute the selected notes, or unmute them when every one is muted.
         let picked: Vec<&soundcraft_midi::Note> = app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).collect();
         let all_muted = !picked.is_empty() && picked.iter().all(|n| n.muted);

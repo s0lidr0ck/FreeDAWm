@@ -557,6 +557,10 @@ fn midi_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
         store_value(&mut s.edit, p, "transpose", &track_key("rtp", *t, "transpose"), -127.0, 127.0);
         store_value(&mut s.edit, p, "duration", &track_key("rtp", *t, "duration"), 1.0, 1000.0);
         store_value(&mut s.edit, p, "delay", &track_key("rtp", *t, "delay"), -1e7, 1e7);
+        // Playback quantize: a grid in ticks (0: off), its strength and swing in percent.
+        store_value(&mut s.edit, p, "quantize", &track_key("rtp", *t, "quantize"), 0.0, 15_360.0);
+        store_value(&mut s.edit, p, "q_strength", &track_key("rtp", *t, "q_strength"), 0.0, 100.0);
+        store_value(&mut s.edit, p, "q_swing", &track_key("rtp", *t, "q_swing"), 0.0, 100.0);
     }
     Ok(json!({"rtp": values_with_prefix(&s.edit, "rtp.")}))
 }

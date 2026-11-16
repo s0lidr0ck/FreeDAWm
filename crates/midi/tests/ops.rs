@@ -272,6 +272,52 @@ fn sequence_serde_round_trip() {
 }
 
 #[test]
+fn grooves_are_built_in_and_followed() {
+    let all = builtin_grooves();
+    let swing = all.iter().find(|g| g.name == "Swing 8ths 66%").unwrap();
+    assert_eq!((swing.period, swing.points.clone()), (960, vec![0, 633]));
+    // Counted from the bar (at 100): the off-beat of beat 2 is 100 + 960 + 633.
+    assert_eq!(swing.nearest(100 + 960 + 500, 100), 100 + 960 + 633);
+    assert_eq!(swing.nearest(100 + 960 + 900, 100), 100 + 1920, "the next period's first point");
+    assert!(Groove::new("x", 0, &[1]).is_none() && Groove::new("x", 10, &[]).is_none());
+    let mut v = vec![n(60, 470, 100), n(62, 100, 100)];
+    let opts = QuantizeOptions { grid_ticks: 480, ..QuantizeOptions::default() };
+    quantize_to_groove(&mut v, swing, &opts, DEFAULT_SEED, |_| 0);
+    assert_eq!(starts(&v), vec![633, 0]);
+}
+
+#[test]
+fn a_groove_is_taken_from_notes() {
+    // 16ths, each off-beat 16th 40 ticks late, one bar of 4/4.
+    let v: Vec<Note> = (0..16).map(|k| n(60, k * 240 + if k % 2 == 1 { 40 } else { 0 }, 60)).collect();
+    let g = groove_from_notes("feel", &v, 3840, 240, |_| 0).unwrap();
+    assert_eq!(g.points.len(), 16);
+    assert_eq!(&g.points[..4], &[0, 280, 480, 760]);
+    assert!(groove_from_notes("none", &[], 3840, 240, |_| 0).is_none());
+}
+
+#[test]
+fn quantize_window_ends_and_playback_quantize() {
+    let opts = QuantizeOptions { grid_ticks: 240, include_within: 0.5, ..QuantizeOptions::default() };
+    // Within half of half a step (60 ticks) moves; 100 off does not.
+    let mut v = vec![n(60, 50, 100), n(60, 340, 100)];
+    quantize(&mut v, &opts);
+    assert_eq!(starts(&v), vec![0, 340]);
+    let opts = QuantizeOptions { grid_ticks: 240, quantize_ends: true, ..QuantizeOptions::default() };
+    let mut v = vec![n(60, 10, 200)];
+    quantize(&mut v, &opts);
+    assert_eq!((v[0].start, v[0].length), (0, 240));
+    let opts = QuantizeOptions { grid_ticks: 240, preserve_duration: false, ..QuantizeOptions::default() };
+    let mut v = vec![n(60, 10, 200)];
+    quantize(&mut v, &opts);
+    assert_eq!((v[0].start, v[0].length), (0, 210), "the end stays put");
+    let q = PlayQuantize { grid: 240, strength: 0.5, swing: 0.0, groove: None };
+    assert_eq!(q.start(100, (0, 3840)), 50);
+    let off = PlayQuantize { grid: 0, strength: 1.0, swing: 0.0, groove: None };
+    assert_eq!(off.start(77, (0, 3840)), 77);
+}
+
+#[test]
 fn notes_are_picked_by_rule() {
     let mut v = vec![n(60, 0, 240), n(62, 960, 480), n(64, 3840 + 960, 240), n(72, 4000, 960)];
     v[1].velocity = 40;

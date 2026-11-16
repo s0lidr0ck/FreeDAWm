@@ -115,10 +115,10 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Quantize the selected notes: grid, strength, swing | ● | ● | ● | ● | **Works**: the selected notes (every note when none is), on the grid counted from the bar (bugs 1 and 2, fixed); triplet, dotted and quintuplet grids |
-| Quantize window, note ends, keep length, random offset | ● | ● | ● | ● | **Flag only** |
-| Groove templates; take a groove from audio or MIDI | ● | ● | ● | ● | **Missing** |
-| Quantize applied at playback, original kept | ● | ● | ● | ● | **Missing**: quantize rewrites the notes |
-| Restore the original performance | ● | ● | ● | ● | **Partial**: only for takes recorded with input quantize, or after an explicit flatten; kept in place through trims and splits (bug 12, fixed) |
+| Quantize window, note ends, keep length, random offset | ● | ● | ● | ● | **Works**: window, random offset, note ends and keep lengths in the MIDI Operations window (`event.quantize` `window`, `random`, `ends`, `keep_length`) |
+| Groove templates; take a groove from audio or MIDI | ● | ● | ● | ● | **Partial**: built-in swung 8ths and 16ths (54 to 66 %), pushed and laid-back 16ths, made in code; Groove from Selected Clip takes a MIDI clip's timing (each grid step where its notes fall, over one bar), kept in the session; Quantize and playback quantize follow either. Timing only (no velocity accents); not from audio; the editor's drawing grid is not swung |
+| Quantize applied at playback, original kept | ● | ● | ● | ● | **Works**: per clip (MIDI Editor › More › Playback Quantize: a grid or a groove) or per track (Real-Time Properties › Quantize, with strength); the notes stay where they are and play, freeze, bounce and export quantized; Apply to Notes and Write to Notes write it and keep the performance for Restore Performance. The editor draws the notes where they are written, not where they play |
+| Restore the original performance | ● | ● | ● | ● | **Works** with playback quantize (turn it off), after applying it (Apply to Notes, Write to Notes), for takes recorded with input quantize and after an explicit flatten; kept in place through trims and splits (bug 12, fixed). A destructive Quantize is undone with Undo |
 | Humanise timing | ● | ● | ● | ● | **Works**: timing and velocity, seeded, in the MIDI Operations window |
 | Transpose | ● | ● | ● | ● | **Works** by semitones |
 | Transpose within the key | ● | ● | ● | ● | **Missing** |
@@ -379,3 +379,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Bugs 26 and 28 fixed, 27 partly (triangle and cymbal oscillators): stolen voices fade, the sampler's cutoff glides; the sampler answers the sustain pedal and pitch bend |
 | 2026-11-16 | minor | Bugs 20, 15 (Repeat) and 24 fixed: controller lanes per channel, Repeat in bars on tick tracks, CLAP note-only plug-ins hear bend, pressure and the expression controllers, note-offs carry release velocity |
 | 2026-11-16 | minor | Selection and note mute: select by clicking a key, Select by Rule… sets the editor selection, notes can be muted |
+| 2026-11-16 | minor | Quantize done more fully: window, random offset, note ends and lengths; built-in grooves and a groove from a clip; playback quantize per clip and per track with the notes left in place |
