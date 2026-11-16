@@ -71,6 +71,7 @@ pub use band::{
 mod band_lanes;
 pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
+pub mod external_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
@@ -955,7 +956,8 @@ impl SlotCtx<'_> {
                 None => None,
             }
         } else {
-            let state = if third { ins.state_bytes() } else { None };
+            // External MIDI keeps its port in its state too.
+            let state = if third || ins.plugin == external_midi::ID { ins.state_bytes() } else { None };
             create_instance_for(&ins.plugin, state.as_deref(), self.sr, self.mb, ch, self.offline).map(|n| n.plugin)
         }?;
         *self.serial = self.serial.wrapping_add(1);
@@ -1695,9 +1697,10 @@ impl MixEngine {
             }
             let want = t.instrument.as_ref();
             let ich = ch.max(2);
-            let load = |l: u64| if cx.external { 0 } else { l };
-            if strip.instrument.as_ref().map(|p| (p.id.as_str(), p.ch, load(p.state_load)))
-                != want.map(|i| (i.plugin.as_str(), ich, load(i.state_load)))
+            // (External MIDI is made here even for a realtime host: a new port is a new instance.)
+            let load = |id: &str, l: u64| if cx.external && id != external_midi::ID { 0 } else { l };
+            if strip.instrument.as_ref().map(|p| (p.id.as_str(), p.ch, load(&p.id, p.state_load)))
+                != want.map(|i| (i.plugin.as_str(), ich, load(&i.plugin, i.state_load)))
                 || (want.is_some() && cx.waiting(t.id, SlotKey::Instrument))
             {
                 let old = strip.instrument.take();
@@ -5830,7 +5833,8 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     {
         return Some(p);
     }
-    soundcraft_dsp::create(id)
+    external_midi::create(id)
+        .or_else(|| soundcraft_dsp::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
         .or_else(|| soundcraft_au_host::create(id))

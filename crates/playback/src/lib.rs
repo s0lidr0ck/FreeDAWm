@@ -33,6 +33,7 @@ pub mod feed;
 pub mod jack;
 pub mod measure;
 pub mod midi_in;
+pub mod midi_out;
 mod outmap;
 pub mod pw;
 pub mod record;
@@ -514,6 +515,8 @@ struct AudioState {
     /// (the previous callback's unplayed frames, then each block rendered, through a loop wrap).
     midi_now: u64,
     midi_lead: i64,
+    /// MIDI output's clock at the callback's start (`soundcraft_mix::external_midi`).
+    out_now: u64,
     /// Where the take starts, until the first block after a Play (without a count-off) has
     /// rolled: MIDI recorded in that block never lands before it (a note played between the
     /// Record press and the transport rolling is the take's first, not lost before it).
@@ -644,6 +647,7 @@ impl AudioState {
             midi_take_fresh: false,
             midi_now: 0,
             midi_lead: 0,
+            out_now: 0,
             midi_floor: None,
             lent: false,
             measure: None,
@@ -1239,6 +1243,16 @@ impl AudioState {
         if self.playing {
             self.midi_floor = None;
         }
+        // MIDI output: this block is heard after the frames before it this callback, the
+        // device's output latency and the mix's delay compensation; External MIDI instruments
+        // stamp their messages from then so the hardware plays with the audio beside it.
+        let out_hub = soundcraft_mix::external_midi::hub();
+        if out_hub.any_open() {
+            let rate = self.session.sample_rate.as_f64().max(1.0);
+            let frames_ahead = self.midi_lead.saturating_add(i64::try_from(self.mix.latency).unwrap_or(0)).max(0) as f64;
+            let ahead_us = frames_ahead * 1e6 / rate + self.shared.out_latency_ns.load(Ordering::Relaxed) as f64 / 1e3;
+            out_hub.begin_block(self.out_now.saturating_add(ahead_us as u64).max(1));
+        }
         let width = self.main_width.min(self.main.len());
         let main = self.main.get_mut(..width).unwrap_or_default();
         self.mix.render(&self.session, self.pos, n, main);
@@ -1428,8 +1442,10 @@ impl AudioState {
         // The live MIDI clock: what this callback starts playing is the rest of the last block.
         if let Some(h) = &self.midi {
             self.midi_now = h.now_us();
-            self.midi_lead = (self.pending_len as f64 - self.read).max(0.0).round() as i64;
         }
+        self.midi_lead = (self.pending_len as f64 - self.read).max(0.0).round() as i64;
+        // MIDI output's clock (External MIDI instruments): the hub's time at the callback's start.
+        self.out_now = soundcraft_mix::external_midi::hub().now_us();
         let speed_milli = self.shared.speed.load(Ordering::Relaxed);
         let direct = (self.device_rate - self.session.sample_rate.as_f64()).abs() < 0.5 && speed_milli == 1000;
         if direct && let Some(feed) = &self.feed {

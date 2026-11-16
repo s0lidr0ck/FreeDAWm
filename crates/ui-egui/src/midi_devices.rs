@@ -1,5 +1,6 @@
 //! Setup › MIDI Input Devices: the MIDI input ports (USB keyboards and controllers, an audio
-//! interface's 5-pin MIDI In) with an Enable checkbox and a live activity light each, and MIDI
+//! interface's 5-pin MIDI In) with an Enable checkbox and a live activity light each, the MIDI
+//! output ports (`soundcraft_playback::midi_out`) with an Enable checkbox each, and MIDI
 //! Thru. The choices are app settings (`ui.json`: `midi.inputs` by port name, `midi.thru`), not
 //! the session's. The ports themselves are `soundcraft_playback::midi_in::MidiInputs`, rescanned
 //! when the window opens and every 2 s.
@@ -28,8 +29,15 @@ pub fn tick(app: &mut SoundApp) {
         p.set_midi(std::sync::Arc::clone(&hub));
         app.midi_sent = true;
     }
+    if app.midi_outputs.is_none() && app.use_system_midi {
+        app.midi_outputs = soundcraft_playback::midi_out::MidiOutputs::system(app.ui.midi_outputs.clone());
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_inputs {
+        m.tick(std::time::Instant::now());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(m) = &mut app.midi_outputs {
         m.tick(std::time::Instant::now());
     }
 }
@@ -204,6 +212,76 @@ pub fn set_enabled(app: &mut SoundApp, name: &str, on: bool) {
     }
 }
 
+/// Enables or disables an output port by name, and keeps the choice in the settings.
+pub fn set_output_enabled(app: &mut SoundApp, name: &str, on: bool) {
+    if let Some(m) = &mut app.midi_outputs {
+        m.set_enabled(name, on);
+        app.ui.midi_outputs = m.choices().clone();
+    } else {
+        app.ui.midi_outputs.insert(name.to_string(), on);
+    }
+}
+
+/// The output ports a track can send to: the open ones, and the track's own when it is not
+/// (marked so), as `(name, available)`.
+pub fn output_choices(app: &SoundApp, current: Option<&str>) -> Vec<(String, bool)> {
+    let open: Vec<String> = app.midi_outputs.as_ref().map(|m| m.ports().into_iter().filter(|p| p.open).map(|p| p.name).collect()).unwrap_or_default();
+    let mut out: Vec<(String, bool)> = open.iter().map(|p| (p.clone(), true)).collect();
+    if let Some(c) = current.filter(|c| !c.is_empty() && !open.iter().any(|p| p == c)) {
+        out.push((c.to_string(), false));
+    }
+    out
+}
+
+/// The output menu's MIDI section (instrument and MIDI tracks): send what the track plays to a
+/// hardware MIDI output port (its instrument becomes External MIDI), and the channel.
+pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let Some(track) = app.engine.session().track(id) else { return };
+    if !track.kind.is_midi() {
+        return;
+    }
+    let current = track.instrument.as_ref().and_then(soundcraft_engine::cmd::midi_out::output_port);
+    let channel = track.instrument.as_ref().and_then(|i| i.params.get("channel").copied()).unwrap_or(0.0) as u8;
+    ui.separator();
+    ui.strong("MIDI Output");
+    let dim = Tokens::current().text_dim;
+    let choices = output_choices(app, current.as_deref());
+    if choices.is_empty() {
+        ui.label(egui::RichText::new("No MIDI output ports (Setup › MIDI Input Devices lists them)").small().color(dim));
+    }
+    for (name, available) in choices {
+        let label = if available {
+            egui::RichText::new(format!("MIDI: {name}"))
+        } else {
+            egui::RichText::new(format!("MIDI: {name} (not connected)")).color(dim)
+        };
+        if ui.add(egui::Button::selectable(current.as_deref() == Some(name.as_str()), label)).clicked() {
+            if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": name})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    }
+    let Some(port) = current else { return };
+    ui.menu_button(if channel == 0 { "MIDI Channel: as played".to_string() } else { format!("MIDI Channel: {channel}") }, |ui| {
+        for ch in 0..=16u8 {
+            let label = if ch == 0 { "As played".to_string() } else { ch.to_string() };
+            if ui.add(egui::Button::selectable(channel == ch, label)).clicked() {
+                if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": port, "channel": ch})) {
+                    app.ui.status = e;
+                }
+                ui.close();
+            }
+        }
+    });
+    if ui.button("No MIDI output").clicked() {
+        if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": null})) {
+            app.ui.status = e;
+        }
+        ui.close();
+    }
+}
+
 /// The MIDI inputs a track's input menu offers: All Inputs, then each enabled port present now
 /// (and the track's own port when it is unplugged or disabled, marked so), as `(label, device,
 /// available)`; `device` is `None` for All Inputs.
@@ -283,10 +361,13 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         app.midi_window_was_open = false;
         return;
     }
-    if !std::mem::replace(&mut app.midi_window_was_open, true)
-        && let Some(m) = &mut app.midi_inputs
-    {
-        m.rescan();
+    if !std::mem::replace(&mut app.midi_window_was_open, true) {
+        if let Some(m) = &mut app.midi_inputs {
+            m.rescan();
+        }
+        if let Some(m) = &mut app.midi_outputs {
+            m.rescan();
+        }
     }
     let t = Tokens::current();
     egui::Window::new("MIDI Input Devices").open(&mut open).default_size(vec2(440.0, 300.0)).resizable(true).show(ctx, |ui| {
@@ -329,13 +410,46 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             set_enabled(app, &name, on);
         }
         ui.separator();
+        ui.strong("Outputs");
+        let outs = app.midi_outputs.as_ref().map(|m| m.ports()).unwrap_or_default();
+        if app.midi_outputs.is_none() {
+            ui.label(egui::RichText::new("MIDI output is not available here.").color(t.text_dim));
+        } else if outs.is_empty() {
+            ui.label(egui::RichText::new("No MIDI output ports found.").small().color(t.text_dim));
+        }
+        let mut out_toggles = Vec::new();
+        egui::Grid::new("midi-outputs").num_columns(3).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
+            for p in &outs {
+                let mut on = p.enabled;
+                if ui.checkbox(&mut on, "").on_hover_text("Enable this output: tracks can send to it (track output menu › MIDI Output)").changed() {
+                    out_toggles.push((p.name.clone(), on));
+                }
+                ui.label(&p.name);
+                let state = match (&p.error, p.present, p.reserved, p.open) {
+                    (Some(err), _, _, _) => format!("Could not open: {err}"),
+                    (None, false, _, _) => "Not connected".into(),
+                    (None, true, true, _) => "Used by a control surface".into(),
+                    (None, true, false, true) => "Open".into(),
+                    (None, true, false, false) => "Disabled".into(),
+                };
+                ui.label(egui::RichText::new(state).small().color(t.text_dim));
+                ui.end_row();
+            }
+        });
+        for (name, on) in out_toggles {
+            set_output_enabled(app, &name, on);
+        }
+        ui.separator();
         ui.checkbox(&mut app.ui.midi_thru, "MIDI Thru")
             .on_hover_text("Record-enabled instrument and MIDI tracks play what comes in (input-monitored tracks always do)");
         ui.horizontal(|ui| {
-            if ui.button("Rescan").clicked()
-                && let Some(m) = &mut app.midi_inputs
-            {
-                m.rescan();
+            if ui.button("Rescan").clicked() {
+                if let Some(m) = &mut app.midi_inputs {
+                    m.rescan();
+                }
+                if let Some(m) = &mut app.midi_outputs {
+                    m.rescan();
+                }
             }
             let dropped = app.midi_hub.as_ref().map_or(0, |h| h.dropped());
             if dropped > 0 {
@@ -349,7 +463,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use soundcraft_playback::midi_in::{FakeBackend, MidiInputs};
 
@@ -485,6 +599,25 @@ mod tests {
             })
             .collect();
         assert_eq!(spans, vec![(0, 20_000, vec![60]), (30_000, 48_000, vec![64])], "what was played punched out is left out");
+    }
+
+    #[test]
+    fn outputs_are_enabled_in_the_window_and_a_track_sends_to_one() {
+        use soundcraft_playback::midi_out::{FakeOutBackend, MidiOutputs};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let fake = FakeOutBackend::with_ports(&["UI Test Juno", "UI Test Moog"]);
+        let mut m = MidiOutputs::new(fake.boxed(), app.ui.midi_outputs.clone());
+        m.rescan();
+        app.midi_outputs = Some(m);
+        set_output_enabled(&mut app, "UI Test Moog", false);
+        assert!(fake.is_open("UI Test Juno") && !fake.is_open("UI Test Moog"));
+        assert_eq!(serde_json::to_value(&app.ui).unwrap()["midi.outputs"]["UI Test Moog"], false);
+        assert_eq!(output_choices(&app, None), vec![("UI Test Juno".to_string(), true)]);
+        assert_eq!(output_choices(&app, Some("Gone")).last(), Some(&("Gone".to_string(), false)));
+        let t = app.engine.execute("track.new", &json!({"kind": "midi"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("mix.midi_output", json!({"track": t, "port": "UI Test Juno"})).unwrap();
+        let ins = app.engine.session().track(TrackId(t)).unwrap().instrument.clone().unwrap();
+        assert_eq!(soundcraft_engine::cmd::midi_out::output_port(&ins).as_deref(), Some("UI Test Juno"));
     }
 
     #[test]

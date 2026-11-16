@@ -348,6 +348,10 @@ pub struct UiState {
     /// port not named is enabled.
     #[serde(default, rename = "midi.inputs")]
     pub midi_inputs: std::collections::BTreeMap<String, bool>,
+    /// MIDI output ports enabled (true) or not, by port name (`midi.outputs`): per machine. A
+    /// port not named is enabled.
+    #[serde(default, rename = "midi.outputs")]
+    pub midi_outputs: std::collections::BTreeMap<String, bool>,
     /// MIDI Thru (`midi.thru`): record-enabled instrument and MIDI tracks play their live MIDI.
     #[serde(default = "default_true", rename = "midi.thru")]
     pub midi_thru: bool,
@@ -548,6 +552,7 @@ impl Default for UiState {
             show_midi_inputs: false,
             show_network: false,
             midi_inputs: std::collections::BTreeMap::new(),
+            midi_outputs: std::collections::BTreeMap::new(),
             midi_thru: true,
             show_shortcuts: false,
             show_preferences: false,
@@ -823,6 +828,8 @@ pub struct SoundApp {
     /// The MIDI input ports (`midi_devices`): the system's once the host sets
     /// `use_system_midi`, or a test's fake.
     pub midi_inputs: Option<soundcraft_playback::midi_in::MidiInputs>,
+    /// The MIDI output ports (`midi_devices`): opened as the inputs are.
+    pub midi_outputs: Option<soundcraft_playback::midi_out::MidiOutputs>,
     /// The desktop host opens the system's MIDI ports (tests and offscreen renders don't).
     pub use_system_midi: bool,
     /// The current player has been lent the MIDI hub.
@@ -1063,6 +1070,7 @@ impl SoundApp {
             #[cfg(target_arch = "wasm32")]
             midi_hub: None,
             midi_inputs: None,
+            midi_outputs: None,
             use_system_midi: false,
             midi_sent: false,
             midi_window_was_open: false,

@@ -48,6 +48,7 @@ mod midi;
 mod midi_cleanup;
 pub mod midi_ctrl;
 mod midi_ops;
+pub mod midi_out;
 mod mix;
 pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
@@ -233,6 +234,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(module_link::specs());
         v.extend(module_preset::specs());
         v.extend(instrument::specs());
+        v.extend(midi_out::specs());
         v.extend(sampler::specs());
         v.extend(video::specs());
         v.extend(zoom_toggle::specs());

@@ -1588,7 +1588,8 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
 /// A built-in plugin's description, else a hosted CLAP (`clap:<id>`), VST3 (`vst3:<class id>`) or
 /// Audio Unit (`au:<type>:<subtype>:<manufacturer>`) plugin's.
 pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
-    soundcraft_dsp::plugin_info(id)
+    soundcraft_mix::external_midi::plugin_info(id)
+        .or_else(|| soundcraft_dsp::plugin_info(id))
         .or_else(|| soundcraft_clap_host::plugin_info(id))
         .or_else(|| soundcraft_vst3_host::plugin_info(id))
         .or_else(|| soundcraft_au_host::plugin_info(id))
@@ -2159,6 +2160,8 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         crate::midi_devices::input_menu(app, ui, id);
         crate::band::input_menu(app, ui, id);
         crate::band::module_input_menu(app, ui, id);
+    } else {
+        crate::midi_devices::output_menu(app, ui, id);
     }
     if input && session.track(id).is_some_and(|t| t.kind == TrackKind::Audio) {
         ui.separator();

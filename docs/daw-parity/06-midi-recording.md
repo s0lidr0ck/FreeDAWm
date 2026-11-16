@@ -48,8 +48,8 @@ revision history:
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
    Offsets, count-off set-up and capture of what was just played now work. Still stored and
    unread: the input filter, MIDI Thru in the Options menu and the other settings bug 22 lists.
-3. **Nothing goes out, and nothing is mapped.** Unchanged: no MIDI output, no hardware synths, no
-   clock or timecode, no MIDI track playing an instrument on another track, no MIDI learn, no
+3. **Nothing goes out, and nothing is mapped.** MIDI output to hardware ports works (External
+   MIDI). Still missing: clock or timecode out, no MIDI track playing an instrument on another track, no MIDI learn, no
    control surface, no transport control from a controller.
 
 The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
@@ -198,13 +198,13 @@ Compared in full in section 7; listed here for what matters while recording.
 | Synth | ● | ● | ● | ● | **Works**: 16 voices; velocity, sustain, pitch bend fixed at ±2 semitones; no mod wheel or aftertouch |
 | Sampler | ● | ● | ● | ● | **Partial**: velocity only; no sustain pedal, bend or mod wheel |
 | Drum machine and drum synth | ● | ● | ● | ● | **Works**: velocity layers; notes only |
-| Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Missing**: no MIDI output |
+| Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Partial**: External MIDI plays it (MIDI output); its audio comes back on an ordinary audio track, and its own latency is not measured or compensated |
 
 ## K. Controllers and sync
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| MIDI output to hardware | ● | ● | ● | ● | **Missing** |
+| MIDI output to hardware | ● | ● | ● | ● | **Works**: an instrument or MIDI track's output menu › MIDI Output sends what it plays (clips, live input, chased controllers) to a hardware port, on its own channels or one; ports are enabled in Setup › MIDI Input Devices › Outputs; each message leaves when the audio beside it is heard (output latency and delay compensation included); a stop, a locate, All MIDI Notes Off and closing the port let go of every note left on. The audio thread only pushes into a lock-free ring; a sender thread per port talks to the driver |
 | MIDI clock out and in | ● | ● | ● | ● | **Flag only** (out), **Missing** (in) |
 | MIDI timecode and machine control | ● | ◐ | ● | ● | **Missing** |
 | MIDI learn: move a knob, it is mapped to a parameter | ◐ | ● | ● | ● | **Missing** |
@@ -274,7 +274,7 @@ either wire the control or take it off the menu.
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Not started |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
-| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Not started (large) |
+| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Not started |
 | Mackie Control and HUI surfaces | 12–20 | Not started (left for last, as section 3's mixing work may take it) |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Not started (Musical Typing's step mode fixed: bug 18) |
@@ -332,3 +332,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Capture MIDI: what was just played without Record becomes a take |
 | 2026-11-16 | minor | Status of the work list, commits on the fixed bugs, summary brought up to date |
 | 2026-11-16 | minor | Merge is the default MIDI record mode for new sessions; saved sessions keep theirs |
+| 2026-11-16 | minor | MIDI output to hardware ports (External MIDI), enabled in Setup › MIDI Input Devices |
