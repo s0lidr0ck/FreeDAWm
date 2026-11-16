@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 8 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 9 was not a bug) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -178,7 +178,7 @@ Lines move while section 1's work is in progress, so functions are named.
 | 6 | **Fixed:** undoing a take, or deleting an armed track during one, left the file in Audio Files; such files are deleted on save (when no undo step can bring them back) or when the session closes, never while the session, its history, a session file in the project or an autosave names them (`clean_unused_takes`) | `add_recording_in` in `crates/engine/src/io.rs` |
 | 7 | **Fixed:** with monitoring Off, an armed track played its old clips under the take being recorded; inside the take (the punch range) they are silent now | clip branch of the strip render in `crates/mix/src/lib.rs` |
 | 8 | **Fixed:** take numbers started at the session's source count plus one; they now count each track's takes | `plan_takes` |
-| 9 | Clear Clip Indicators reports success from the engine and does nothing | `track.clear_clip_indicators` in `crates/engine/src/cmd/track.rs` |
+| 9 | **Not a bug:** Clear Clip Indicators does nothing in the engine because the clip lights are the app's meters: the app clears them after the command runs, from the menu, Alt+C, the control channel and MCP alike (tested); a headless engine has none | `track.clear_clip_indicators` in `crates/engine/src/cmd/track.rs` |
 | 10 | A track with more than two channels repeats the last input channel | `track_input_channel` in `crates/model/src/mixer.rs` |
 
 ## Suggested order of work
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

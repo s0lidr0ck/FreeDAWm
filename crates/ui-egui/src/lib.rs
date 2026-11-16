@@ -2858,6 +2858,10 @@ mod tests {
         app.main_meter.clip = true;
         app.run("track.clear_clip_indicators", json!({})).unwrap();
         assert!(!app.meters[&kick].clip && !app.main_meter.clip);
+        // The control channel and MCP (`run_sync`) clear them too.
+        app.meters.entry(kick).or_default().clip = true;
+        app.run_sync("track.clear_clip_indicators", json!({})).unwrap();
+        assert!(!app.meters[&kick].clip);
     }
 
     #[test]

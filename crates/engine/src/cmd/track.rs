@@ -150,6 +150,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.selected_tracks = vec![t];
             Ok(json!({"track": t}))
         }),
+        // The clip lights are the app's meters (`SoundApp::run_with` clears them after this
+        // runs, from every route); a headless engine has none.
         cmd!("track.clear_clip_indicators", "Clear All Clip Indicators", ["Track"], Some("Alt+C"), "{}", always, |_, _| Ok(json!({"cleared": true}))),
         cmd!("track.clear_trim_automation", "Clear Trim Automation", ["Track"], None, "{tracks?}", has_selection, super::track_more::clear_trim),
         cmd!("track.create_click", "Create Click Track", ["Track"], None, "{}", always, create_click),
