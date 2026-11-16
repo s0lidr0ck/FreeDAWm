@@ -129,13 +129,20 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
             input.device.as_ref().is_none_or(|d| *d == x.port) && (input.channel == 0 || x.msg[0] >= 0xF0 || (x.msg[0] & 0x0F) + 1 == input.channel)
         };
         // Each event where it was played: `latency` earlier, and an event heard in the first
-        // `latency` samples after a loop wrap was played at the end of the pass before.
+        // `latency` samples after a loop wrap was played at the end of the pass before. A track
+        // with a MIDI Track Offset plays its notes that much later: they go that much earlier,
+        // so the take plays back where it was played.
+        let offset = s.edit.value(&format!("midi.offset.{}", tid.0), 0.0);
+        let offset = if offset.is_finite() { offset as Samples } else { 0 };
         let mine: Vec<(Samples, [u8; 3], u16)> = events
             .iter()
             .filter(filter)
             .map(|x| {
                 let (at, pass) = played_at(take, x.at, x.pass);
-                (at, x.msg, pass)
+                // (Still not before the take's start, as `played_at` keeps it.)
+                let placed = at.saturating_sub(offset);
+                let placed = if pass == 0 && x.at >= take.start { placed.max(take.start) } else { placed };
+                (placed, x.msg, pass)
             })
             .collect();
         // The playlist as it was before this take: each loop pass after the first goes on a copy
@@ -805,6 +812,19 @@ mod tests {
         e.execute("options.midi_record_mode", &json!({"mode": "replace"})).unwrap();
         assert_eq!(record_mode(e.session()), RecordMode::Replace);
         assert!(e.execute("options.midi_record_mode", &json!({"mode": "overdub"})).is_err());
+    }
+
+    #[test]
+    fn a_track_with_a_midi_offset_records_where_it_will_play_back_right() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        // The track's notes sound 2,400 samples late.
+        e.execute("event.midi_track_offsets", &json!({"track": t.0, "offset": 2_400})).unwrap();
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 480 };
+        let ids = record_live_midi(&mut e, &take, &[ev(Q + 480, "K", [0x90, 60, 100]), ev(2 * Q + 480, "K", [0x80, 60, 0])]);
+        let n = clip(&e, ids[0]).midi_playing().unwrap().notes[0];
+        let at = e.session().tempo.samples_to_ticks(Q - 2_400, e.session().sample_rate);
+        assert_eq!((n.start, n.length), (at, TICKS_PER_QUARTER));
     }
 
     #[test]

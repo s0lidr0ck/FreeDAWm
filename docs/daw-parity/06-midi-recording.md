@@ -99,7 +99,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | The driver's own timestamp used | ● | ● | ● | ● | **Missing**: events are stamped when FreeDAWm's callback runs |
 | Follows the tempo map, including ramps | ● | ● | ● | ● | **Works** |
 | Resolution | 960 | 960+ | 960 | 480+ | 960 ticks per quarter note |
-| Per-track playback offset also applied to what is recorded | ● | ● | ● | ● | **Missing**: a track with an offset plays its new take shifted |
+| Per-track playback offset also applied to what is recorded | ● | ● | ● | ● | **Works**: a take on a track with a MIDI Track Offset is placed that much earlier, so it plays back where it was played |
 | Play freely with no click, then fit the tempo to the performance | ◐ | ◐ | ● | ● | **Missing** for MIDI |
 
 ## D. What is kept
@@ -328,3 +328,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 16 partly fixed: Input Quantize, MIDI Track Offsets and Click/Countoff have windows |
 | 2026-11-16 | minor | MIDI takes follow QuickPunch's punches: punch out and keep playing works for MIDI |
 | 2026-11-16 | minor | Record modes: Replace, Merge (the MIDI Merge switch, read at last) and New Playlist; merged loop passes add up; settles bug 3 |
+| 2026-11-16 | minor | MIDI Track Offsets apply to what is recorded |
