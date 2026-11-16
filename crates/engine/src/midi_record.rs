@@ -215,9 +215,10 @@ fn pass_range(take: &MidiTake, pass: u16, passes: u16) -> Option<Range> {
 
 /// Notes begun in the last `window` ticks of a pass and still held at its end (or, with input
 /// quantize on, which would snap them onto its end, released too) were played early for the next
-/// downbeat: in a loop they start the next pass (their note-off with them), and at the end of the
-/// take, where no pass follows, they are left out instead of being cut to a sliver. `events` are
-/// where played, with their pass.
+/// downbeat: in a loop they start the next pass (their note-off with them). At the end of the
+/// take, where no pass follows, they stay as played (a take whose end is its last event, as a
+/// remote recorder's can be, would otherwise lose its last note). `events` are where played,
+/// with their pass.
 fn settle_early_notes(
     s: &Session,
     take: &MidiTake,
@@ -231,7 +232,6 @@ fn settle_early_notes(
     let is_off = |m: [u8; 3]| m[0] & 0xF0 == 0x80 || (m[0] & 0xF0 == 0x90 && m[2] == 0);
     let mut order: Vec<usize> = (0..events.len()).collect();
     order.sort_by_key(|&i| events.get(i).map(|x| (x.2, x.0)));
-    let mut drop = vec![false; events.len()];
     for (k, &i) in order.iter().enumerate() {
         let Some(&(at, msg, pass)) = events.get(i) else { continue };
         if !is_on(msg) {
@@ -253,25 +253,15 @@ fn settle_early_notes(
         if off.is_some() && !quantize {
             continue;
         }
-        match take.looped.filter(|_| pass < passes) {
-            Some(l) => {
-                if let Some(x) = events.get_mut(i) {
-                    *x = (l.start, msg, pass + 1);
-                }
-                if let Some(x) = off.and_then(|j| events.get_mut(j)) {
-                    *x = (l.start.saturating_add(x.0.saturating_sub(at)), x.1, pass + 1);
-                }
-            }
-            None => {
-                for j in std::iter::once(i).chain(off) {
-                    if let Some(d) = drop.get_mut(j) {
-                        *d = true;
-                    }
-                }
-            }
+        let Some(l) = take.looped.filter(|_| pass < passes) else { continue };
+        if let Some(x) = events.get_mut(i) {
+            *x = (l.start, msg, pass + 1);
+        }
+        if let Some(x) = off.and_then(|j| events.get_mut(j)) {
+            *x = (l.start.saturating_add(x.0.saturating_sub(at)), x.1, pass + 1);
         }
     }
-    events.into_iter().zip(drop).filter(|(_, d)| !d).map(|(x, _)| x).collect()
+    events
 }
 
 /// The sustain and sostenuto pedals (CC 64, 66) down at `(pass, at)` by `events` (where played,
@@ -620,13 +610,14 @@ mod tests {
     }
 
     #[test]
-    fn a_note_begun_just_before_stop_is_left_out() {
+    fn a_note_begun_just_before_the_last_pass_ends_stays_as_played() {
         let mut e = Engine::default();
         armed(&mut e, "midi:all", 0);
-        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        // A take whose end is its last event (a remote recorder's): its last note is kept.
+        let take = MidiTake { start: 0, end: 4 * Q - 499, looped: None, punch: None, latency: 0 };
         let ids = record_live_midi(&mut e, &take, &[ev(Q, "K", [0x90, 50, 100]), ev(4 * Q - 500, "K", [0x90, 36, 100])]);
         let pitches: Vec<u8> = clip(&e, ids[0]).midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
-        assert_eq!(pitches, vec![50]);
+        assert_eq!(pitches, vec![50, 36]);
     }
 
     #[test]
