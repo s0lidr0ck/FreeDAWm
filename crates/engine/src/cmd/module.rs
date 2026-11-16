@@ -44,6 +44,15 @@ pub fn specs() -> Vec<CommandSpec> {
             module_active
         ),
         cmd!(
+            "mix.module_post_fader",
+            "Post-Fader",
+            [],
+            None,
+            "{track?, module: id, value?: bool} — the module runs after the fader and mute (not in the pre-fader sends; never frozen); toggles when omitted → {post_fader}",
+            has_selection,
+            module_post_fader
+        ),
+        cmd!(
             "mix.module_param",
             "Set Module Parameter",
             [],
@@ -410,6 +419,18 @@ fn module_active(e: &mut Engine, p: &Value) -> Result<Value> {
     let ins = find_mut(e, C, t, module_id(C, p)?)?;
     ins.active = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.active);
     Ok(json!({"active": ins.active}))
+}
+
+fn module_post_fader(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_post_fader";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    if e.session().track(t).and_then(|tr| tr.mixer.module(id)).is_none() {
+        return Err(bad(C, "only a chain module can run after the fader"));
+    }
+    let ins = find_mut(e, C, t, id)?;
+    ins.post_fader = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.post_fader);
+    Ok(json!({"post_fader": ins.post_fader}))
 }
 
 fn module_param(e: &mut Engine, p: &Value) -> Result<Value> {

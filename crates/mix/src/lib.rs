@@ -497,6 +497,9 @@ struct Strip {
     clipbuf: Vec<Vec<f32>>,
     /// Total latency of the active inserts (samples).
     latency: usize,
+    /// Of it, the post-fader modules' (`Insert::post_fader`): the pre-fader copy is that much
+    /// earlier than the post-fader signal.
+    post_lat: usize,
     /// Delay compensation: align this strip with the slowest one (post- and pre-fader paths),
     /// plus extra delay for direct-to-main outputs so they line up with aux returns.
     align: DelayLine,
@@ -695,6 +698,7 @@ impl Strip {
             clip_fx: HashMap::new(),
             clipbuf: Vec::new(),
             latency: 0,
+            post_lat: 0,
             align: DelayLine::default(),
             align_pre: DelayLine::default(),
             out_extra: DelayLine::default(),
@@ -2162,9 +2166,11 @@ impl MixEngine {
             st.align.process(&mut st.buf, frames);
             st.post_at = st.latency.max(lmax);
             if t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
-                fits &= st.align_pre.set(lmax.saturating_sub(st.latency), ch, xf);
+                // Before the post-fader modules: it waits for them too.
+                let pre_lat = st.latency.saturating_sub(st.post_lat);
+                fits &= st.align_pre.set(lmax.saturating_sub(pre_lat), ch, xf);
                 st.align_pre.process(&mut st.pre, frames);
-                st.pre_at = st.post_at;
+                st.pre_at = pre_lat.max(lmax);
             }
             // A hardware output waits for the aux returns as the main mix does, so what it plays
             // lines up with the main mix.
@@ -2256,6 +2262,10 @@ impl MixEngine {
                 let mut level = chain_peak(&strip.buf, frames);
                 let mut bits = 0u64;
                 for (i, ins) in t.mixer.inserts.iter().enumerate() {
+                    // Post-fader modules run on the main mix after the master fader (below).
+                    if ins.post_fader {
+                        continue;
+                    }
                     let mut meter = ModuleMeter { module: ins.id, in_peak: level, out_peak: level, ..ModuleMeter::default() };
                     if let Some(Some(slot)) = strip.plugins.get_mut(i)
                         && slot.module == ins.id
@@ -2311,6 +2321,52 @@ impl MixEngine {
                             if let (Some(d), Some(x)) = (m.get_mut(i), src.get(i)) {
                                 *d = x * g;
                             }
+                        }
+                    }
+                }
+                // Post-fader modules (`Insert::post_fader`, a dither last): on the main mix after
+                // the master fader.
+                if t.mixer.inserts.iter().any(|i| i.post_fader) {
+                    for (d, src) in strip.buf.iter_mut().zip(self.main.iter()) {
+                        if let (Some(d), Some(x)) = (d.get_mut(..frames), src.get(..frames)) {
+                            d.copy_from_slice(x);
+                        }
+                    }
+                    for (i, ins) in t.mixer.inserts.iter().enumerate().filter(|(_, i)| i.post_fader) {
+                        let level = chain_peak(&strip.buf, frames);
+                        let mut meter = ModuleMeter { module: ins.id, in_peak: level, out_peak: level, ..ModuleMeter::default() };
+                        if let Some(Some(slot)) = strip.plugins.get_mut(i)
+                            && slot.module == ins.id
+                            && ins.active
+                            && !slot.failed
+                        {
+                            apply_params(slot, ins, t, Some(ins.id), pos);
+                            full_m = full_m.saturating_add(slot.plugin.latency());
+                            let (run, room) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
+                            fits &= room;
+                            if run != LlmRun::Skip {
+                                slot.plugin.set_transport(&transport);
+                                slot.plugin.process(&mut strip.buf, frames);
+                                if run == LlmRun::Fade {
+                                    llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, xf);
+                                }
+                                collect_released(slot, &mut strip.released);
+                                if contain_failure(slot, &mut strip.buf, frames) {
+                                    strip.failures.record(SlotKey::Module(ins.id));
+                                    meter.failed = true;
+                                } else {
+                                    meter.gr_db = slot.plugin.gain_reduction_db();
+                                }
+                                meter.out_peak = chain_peak(&strip.buf, frames);
+                            }
+                        }
+                        if let Some(m) = strip.mods.get_mut(i) {
+                            *m = meter;
+                        }
+                    }
+                    for (d, src) in self.main.iter_mut().zip(strip.buf.iter()) {
+                        if let (Some(d), Some(x)) = (d.get_mut(..frames), src.get(..frames)) {
+                            d.copy_from_slice(x);
                         }
                     }
                 }
@@ -3165,89 +3221,134 @@ fn process_strip(
     let mut bits = 0u64;
     let mut skipped = 0usize;
     let on_llm = strip.llm;
-    for (i, ins) in t.mixer.inserts.iter().enumerate() {
-        if i < frozen_mods {
-            if let Some(m) = strip.mods.get_mut(i) {
-                *m = ModuleMeter { module: ins.id, ..ModuleMeter::default() };
+    // The pre-fader modules, then the fader section, then the post-fader modules
+    // (`Insert::post_fader`) on what the fader left. A post-fader module is never frozen.
+    let mut pre_latency = 0usize;
+    for post in [false, true] {
+        if post {
+            pre_latency = latency.min(MAX_LATENCY);
+            let at = FaderAt { prints, silent_print, gr, bits, skipped, latency: pre_latency };
+            fader_section(s, t, strip, live, pos, frames, solo_muted, at);
+            if !t.mixer.inserts.iter().any(|i| i.post_fader) {
+                break;
             }
-            continue;
         }
-        let mut meter = ModuleMeter { module: ins.id, in_peak: level, out_peak: level, ..ModuleMeter::default() };
-        if let Some(Some(slot)) = strip.plugins.get_mut(i)
-            && slot.module == ins.id
-        {
-            meter.failed = slot.failed;
-            // Last block's MIDI was read before this strip ran again; a module that does not run
-            // this block (bypassed, failed) emits nothing.
-            slot.midi.clear();
-            // Bypass crossfades and keeps the module's latency; low-latency monitoring takes a
-            // latent module on the live path out (see `insert_step`).
-            let live_mod = ins.active && !slot.failed;
-            let run = if live_mod {
-                apply_params(slot, ins, t, Some(ins.id), pos);
-                let (run, fits) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
-                strip.key_regrow |= !fits;
-                if slot.llm_off && !ins.bypass {
-                    skipped = skipped.saturating_add(slot.plugin.latency());
-                    if i < 64 {
-                        bits |= 1 << i;
-                    }
-                }
-                run
-            } else {
-                LlmRun::Skip
-            };
-            if live_mod && run == LlmRun::Skip {
-                latency = latency.saturating_add(insert_latency(slot, run, on_llm));
+        for (i, ins) in t.mixer.inserts.iter().enumerate() {
+            if ins.post_fader != post {
+                continue;
             }
-            if run != LlmRun::Skip {
-                slot.plugin.set_transport(&transport);
-                match strip.keys.iter_mut().find(|k| k.module == ins.id).filter(|_| ins.sidechain.is_some()) {
-                    Some(key) => {
-                        // Line the key up with this module's main input: the earlier one waits.
-                        let main_at = strip.base.saturating_add(latency);
-                        // On the low-latency path the main input never waits for a key.
-                        let (wait_key, wait_main) =
-                            if live.pdc { (main_at.saturating_sub(key.at), if on_llm { 0 } else { key.at.saturating_sub(main_at) }) } else { (0, 0) };
-                        let ch = strip.buf.len();
-                        strip.key_regrow |= !key.main_delay.set(wait_main, ch, live.xf);
-                        key.main_delay.process(&mut strip.buf, frames);
-                        latency = latency.saturating_add(key.main_delay.delay());
-                        strip.key_regrow |= !key.delay.set(wait_key, ch, live.xf);
-                        key.delay.process(&mut key.buf, frames);
-                        slot.plugin.process_with_sidechain(&mut strip.buf, frames, Some(&key.buf));
+            if i < frozen_mods && !post {
+                if let Some(m) = strip.mods.get_mut(i) {
+                    *m = ModuleMeter { module: ins.id, ..ModuleMeter::default() };
+                }
+                continue;
+            }
+            let mut meter = ModuleMeter { module: ins.id, in_peak: level, out_peak: level, ..ModuleMeter::default() };
+            if let Some(Some(slot)) = strip.plugins.get_mut(i)
+                && slot.module == ins.id
+            {
+                meter.failed = slot.failed;
+                // Last block's MIDI was read before this strip ran again; a module that does not run
+                // this block (bypassed, failed) emits nothing.
+                slot.midi.clear();
+                // Bypass crossfades and keeps the module's latency; low-latency monitoring takes a
+                // latent module on the live path out (see `insert_step`).
+                let live_mod = ins.active && !slot.failed;
+                let run = if live_mod {
+                    apply_params(slot, ins, t, Some(ins.id), pos);
+                    let (run, fits) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
+                    strip.key_regrow |= !fits;
+                    if slot.llm_off && !ins.bypass {
+                        skipped = skipped.saturating_add(slot.plugin.latency());
+                        if i < 64 {
+                            bits |= 1 << i;
+                        }
                     }
-                    None => slot.plugin.process(&mut strip.buf, frames),
-                }
-                if run == LlmRun::Fade {
-                    llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, live.xf);
-                }
-                if slot.emits {
-                    slot.plugin.midi_out(&mut slot.midi);
-                }
-                collect_released(slot, &mut strip.released);
-                if contain_failure(slot, &mut strip.buf, frames) {
-                    strip.failures.record(SlotKey::Module(ins.id));
-                    meter.failed = true;
+                    run
                 } else {
-                    // A module low-latency monitoring takes out adds no latency, even while it
-                    // fades out.
+                    LlmRun::Skip
+                };
+                if live_mod && run == LlmRun::Skip {
                     latency = latency.saturating_add(insert_latency(slot, run, on_llm));
-                    meter.gr_db = slot.plugin.gain_reduction_db();
-                    if gr == 0.0 {
-                        gr = meter.gr_db;
-                    }
-                    read_readouts(&*slot.plugin, &mut meter.readouts);
                 }
-                level = chain_peak(&strip.buf, frames);
-                meter.out_peak = level;
+                if run != LlmRun::Skip {
+                    slot.plugin.set_transport(&transport);
+                    match strip.keys.iter_mut().find(|k| k.module == ins.id).filter(|_| ins.sidechain.is_some()) {
+                        Some(key) => {
+                            // Line the key up with this module's main input: the earlier one waits.
+                            let main_at = strip.base.saturating_add(latency);
+                            // On the low-latency path the main input never waits for a key.
+                            let (wait_key, wait_main) = if live.pdc {
+                                (main_at.saturating_sub(key.at), if on_llm { 0 } else { key.at.saturating_sub(main_at) })
+                            } else {
+                                (0, 0)
+                            };
+                            let ch = strip.buf.len();
+                            strip.key_regrow |= !key.main_delay.set(wait_main, ch, live.xf);
+                            key.main_delay.process(&mut strip.buf, frames);
+                            latency = latency.saturating_add(key.main_delay.delay());
+                            strip.key_regrow |= !key.delay.set(wait_key, ch, live.xf);
+                            key.delay.process(&mut key.buf, frames);
+                            slot.plugin.process_with_sidechain(&mut strip.buf, frames, Some(&key.buf));
+                        }
+                        None => slot.plugin.process(&mut strip.buf, frames),
+                    }
+                    if run == LlmRun::Fade {
+                        llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, live.xf);
+                    }
+                    if slot.emits {
+                        slot.plugin.midi_out(&mut slot.midi);
+                    }
+                    collect_released(slot, &mut strip.released);
+                    if contain_failure(slot, &mut strip.buf, frames) {
+                        strip.failures.record(SlotKey::Module(ins.id));
+                        meter.failed = true;
+                    } else {
+                        // A module low-latency monitoring takes out adds no latency, even while it
+                        // fades out.
+                        latency = latency.saturating_add(insert_latency(slot, run, on_llm));
+                        meter.gr_db = slot.plugin.gain_reduction_db();
+                        if gr == 0.0 {
+                            gr = meter.gr_db;
+                        }
+                        read_readouts(&*slot.plugin, &mut meter.readouts);
+                    }
+                    level = chain_peak(&strip.buf, frames);
+                    meter.out_peak = level;
+                }
             }
-        }
-        // `sync` sized `mods` to the chain; never grow it here.
-        if let Some(m) = strip.mods.get_mut(i) {
-            *m = meter;
+            // `sync` sized `mods` to the chain; never grow it here.
+            if let Some(m) = strip.mods.get_mut(i) {
+                *m = meter;
+            }
         }
     }
+    // With the post-fader modules: the strip's whole latency (`post_at`); the pre-fader copy
+    // stays at `pre_at`, before them.
+    strip.gr = gr;
+    strip.llm_bits = bits;
+    strip.llm_latency = skipped.min(MAX_LATENCY);
+    strip.latency = latency.min(MAX_LATENCY);
+    strip.post_lat = strip.latency.saturating_sub(pre_latency);
+    strip.post_at = strip.base.saturating_add(strip.latency);
+}
+
+/// Where the pre-fader modules left the chain (see [`fader_section`]).
+struct FaderAt {
+    prints: bool,
+    silent_print: bool,
+    gr: f32,
+    bits: u64,
+    skipped: usize,
+    /// The pre-fader modules' latency.
+    latency: usize,
+}
+
+/// The chain after its pre-fader modules: Scout POST, record with inserts, the pre-fader copy,
+/// the fader and the mute.
+#[allow(clippy::too_many_arguments)]
+fn fader_section(s: &Session, t: &Track, strip: &mut Strip, live: &LiveInput<'_>, pos: Samples, frames: usize, solo_muted: bool, at: FaderAt) {
+    let FaderAt { prints, silent_print, gr, bits, skipped, latency } = at;
     // Scout POST: after the last insert, before the pre-fader copy, the fader and the pan.
     if let (Some(win), Some(taps)) = (live.scout, strip.scout.as_deref_mut()) {
         taps.feed_post(&strip.buf, win);
@@ -3268,7 +3369,8 @@ fn process_strip(
     strip.gr = gr;
     strip.llm_bits = bits;
     strip.llm_latency = skipped.min(MAX_LATENCY);
-    strip.latency = latency.min(MAX_LATENCY);
+    strip.latency = latency;
+    strip.post_lat = 0;
     strip.post_at = strip.base.saturating_add(strip.latency);
     strip.pre_at = strip.post_at;
     // The fader section reads its automation where the audio now in the buffer is on the
@@ -6022,6 +6124,11 @@ fn pre_fader_session(s: &Session, track: TrackId, trim_automation: bool) -> Sess
             // The render is what the frozen track would play live.
             t.frozen = false;
             t.freeze = None;
+            // Post-fader modules come after a fader the render does not have: they stay live
+            // (never frozen; a commit moves them onto the new track).
+            for i in t.mixer.inserts.iter_mut().filter(|i| i.post_fader) {
+                i.active = false;
+            }
         } else {
             t.inactive = true;
         }

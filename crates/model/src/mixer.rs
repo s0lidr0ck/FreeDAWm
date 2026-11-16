@@ -766,6 +766,12 @@ pub struct Insert {
     /// group, on any track, shares one value bus. `None`: not linked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_group: Option<u32>,
+    /// The module runs after the fader and mute instead of before them (Cubase's post-fader
+    /// slots; on the master, Pro Tools' place for its inserts): it is not in the pre-fader copy
+    /// (pre-fader sends, keys, meters), is never frozen, and a commit keeps it live on the new
+    /// track.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub post_fader: bool,
     /// Which loading of `state` the running plugin instance should have: a hosted preset loaded
     /// into the module (`mix.module_preset`) changes it, so the instance is created again from
     /// `state`, and undo (which puts the previous value back) does the same with the previous
@@ -1017,6 +1023,7 @@ impl Insert {
             kit: None,
             kit_fx: Vec::new(),
             link_group: None,
+            post_fader: false,
             state_load: 0,
             foreign: None,
         }

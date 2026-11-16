@@ -51,3 +51,25 @@ fn commit_keeps_pan_mute_and_fader_automation_but_not_what_it_baked_in() {
     assert!(nt.lane(&AutoParam::Pan(0)).is_some_and(|l| l.points.len() == 1));
     assert!(nt.lane(&AutoParam::Trim).is_none_or(|l| l.points.is_empty()), "the trim is in the audio");
 }
+
+#[test]
+fn commit_leaves_a_post_fader_module_live_on_the_new_track() {
+    let (mut e, t) = track_with_clip(ChannelFormat::Stereo);
+    let r = e.execute("mix.insert", &json!({"track": t.0, "plugin": "gain", "params": {"gain": 6.0}})).unwrap();
+    let m = r["module"].as_u64().unwrap();
+    assert_eq!(e.execute("mix.module_post_fader", &json!({"track": t.0, "module": m})).unwrap()["post_fader"], true);
+    e.session_mut()
+        .track_mut(t)
+        .unwrap()
+        .lane_mut(&AutoParam::Plugin { module: soundcraft_model::ModuleId(m as u32), param: "gain".into() })
+        .set_point(0, 3.0);
+    let n = commit(&mut e, t);
+    let nt = e.session().track(n).unwrap();
+    assert_eq!(nt.mixer.inserts.len(), 1, "the post-fader module moved on");
+    assert!(nt.mixer.inserts[0].post_fader && nt.mixer.inserts[0].plugin == "gain");
+    assert!(nt.automation.iter().any(|l| matches!(&l.param, AutoParam::Plugin { .. })), "with its lane");
+    // The commit's audio is without it (0.25 stays 0.25, not +6 dB).
+    let src = nt.clips()[0].source().unwrap();
+    let peak = e.session().pool.get(src).unwrap().channel(0).unwrap().iter().fold(0.0f32, |p, x| p.max(x.abs()));
+    assert!((peak - 0.25).abs() < 1e-3, "{peak}");
+}

@@ -1404,10 +1404,17 @@ fn commit_with(e: &mut Engine, t: TrackId, range: Range, part: bool) -> Result<O
     let mixer = tr.mixer.clone();
     // What the render leaves to the fader section goes on with the new track: its pan, mute and
     // their automation, and the sends'. The trim and the modules' lanes are in the audio.
+    // Post-fader modules are not in the render (they come after the fader): they move onto the
+    // new track, live, with their lanes.
+    let post: Vec<soundcraft_model::Insert> = tr.mixer.inserts.iter().filter(|i| i.post_fader).cloned().collect();
     let lanes: Vec<_> = tr
         .automation
         .iter()
-        .filter(|l| !matches!(l.param, soundcraft_model::AutoParam::Trim | soundcraft_model::AutoParam::Plugin { .. }))
+        .filter(|l| match &l.param {
+            soundcraft_model::AutoParam::Trim => false,
+            soundcraft_model::AutoParam::Plugin { module, .. } => post.iter().any(|i| i.id == *module),
+            _ => true,
+        })
         .cloned()
         .collect();
     let buf = AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
@@ -1432,6 +1439,8 @@ fn commit_with(e: &mut Engine, t: TrackId, range: Range, part: bool) -> Result<O
         ntr.mixer.mute = mixer.mute;
         ntr.mixer.automation_mode = mixer.automation_mode;
         ntr.mixer.vca = mixer.vca;
+        // (the new track's chain is empty: the ids carry over, and the lanes with them)
+        ntr.mixer.inserts = post;
         ntr.automation = lanes;
         if let Some(pl) = ntr.playlist_mut() {
             pl.clips.push(Clip::audio(cid, name, src, 0, range.start, range.len()));
