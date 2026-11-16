@@ -26,6 +26,16 @@ pub struct OpsState {
     pub quant_swing: f64,
     pub transpose: i64,
     pub velocity_add: i64,
+    /// Change Duration: "legato", "set", "add" or "scale", and its value (ticks, or percent to scale).
+    pub dur_mode: String,
+    pub dur_value: f64,
+    /// Strum: ticks between strings and upward or not; Humanize: ± ticks and ± velocity; Half or
+    /// Double Time: half time (twice as long) or not.
+    pub strum_ticks: i64,
+    pub strum_up: bool,
+    pub human_timing: i64,
+    pub human_velocity: i64,
+    pub half_time: bool,
     pub rtp_velocity: i64,
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
@@ -57,6 +67,13 @@ impl Default for OpsState {
             quant_swing: 0.0,
             transpose: 12,
             velocity_add: 10,
+            dur_mode: "legato".into(),
+            dur_value: 0.0,
+            strum_ticks: 30,
+            strum_up: true,
+            human_timing: 10,
+            human_velocity: 8,
+            half_time: true,
             rtp_velocity: 0,
             rtp_transpose: 0,
             rtp_duration: 100.0,
@@ -362,6 +379,70 @@ fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_time_ops = open;
 }
 
+/// The MIDI Operations window's operations.
+pub const MIDI_OPS: [&str; 11] = [
+    "quantize",
+    "transpose",
+    "change velocity",
+    "change duration",
+    "fix overlaps",
+    "humanize",
+    "strum",
+    "reverse",
+    "half or double time",
+    "flatten performance",
+    "restore performance",
+];
+
+/// The grids Quantize offers (`event.quantize` reads each).
+pub const QUANTIZE_GRIDS: [&str; 14] =
+    ["1/1", "1/2", "1/4", "1/4t", "1/4d", "1/8", "1/8t", "1/8d", "1/16", "1/16t", "1/16d", "1/32", "1/32t", "1/64"];
+
+/// The notes selected in the MIDI Editor while it shows them: the operation acts on those.
+pub fn editor_selection(app: &SoundApp) -> Option<(soundcraft_model::ClipId, Vec<usize>)> {
+    let clip = app.ui.show_midi_editor.then(|| crate::midi_editor::target_clip(app)).flatten()?;
+    (!app.midi.selected.is_empty() && app.midi.clip == Some(clip)).then(|| (clip, app.midi.selected.clone()))
+}
+
+/// The command and values the window's operation runs (`None`: Flatten or Restore Performance,
+/// which act on whole clips).
+pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)> {
+    Some(match o.midi_op.as_str() {
+        "quantize" => ("event.quantize", json!({"grid": o.quant_grid, "strength": o.quant_strength, "swing": o.quant_swing})),
+        "transpose" => ("event.transpose", json!({"semitones": o.transpose})),
+        "change velocity" => ("event.change_velocity", json!({"add": o.velocity_add})),
+        "change duration" => {
+            let v = o.dur_value;
+            let p = match o.dur_mode.as_str() {
+                "set" => json!({"set": v.round().max(1.0) as i64}),
+                "add" => json!({"add": v.round() as i64}),
+                "scale" => json!({"scale": (v / 100.0).clamp(0.01, 100.0)}),
+                _ => json!({"legato": v.round().max(0.0) as i64}),
+            };
+            ("event.change_duration", p)
+        }
+        "fix overlaps" => ("event.fix_overlaps", json!({})),
+        "humanize" => ("event.humanize", json!({"timing": o.human_timing, "velocity": o.human_velocity})),
+        "strum" => ("event.strum", json!({"ticks": o.strum_ticks, "direction": if o.strum_up { "up" } else { "down" }})),
+        "reverse" => ("event.reverse_notes", json!({})),
+        "half or double time" => ("event.time_scale", json!({"factor": if o.half_time { 2.0 } else { 0.5 }})),
+        _ => return None,
+    })
+}
+
+/// Event › Quantize… and Change Duration… from a menu: the MIDI Operations window on that
+/// operation, where its grid, strength and swing (or its kind of change) are chosen.
+pub fn open_midi_op(app: &mut SoundApp, id: &str) -> bool {
+    let op = match id {
+        "event.quantize" => "quantize",
+        "event.change_duration" => "change duration",
+        _ => return false,
+    };
+    app.ops.midi_op = op.into();
+    app.ui.show_midi_ops = true;
+    true
+}
+
 fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_midi_ops;
     if !open {
@@ -369,14 +450,14 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
     }
     egui::Window::new("MIDI Operations").open(&mut open).default_size(vec2(360.0, 220.0)).show(ctx, |ui| {
         egui::ComboBox::from_label("Operation").selected_text(app.ops.midi_op.clone()).show_ui(ui, |ui| {
-            for c in ["quantize", "transpose", "change velocity", "flatten performance", "restore performance"] {
+            for c in MIDI_OPS {
                 ui.selectable_value(&mut app.ops.midi_op, c.to_string(), c);
             }
         });
         match app.ops.midi_op.as_str() {
             "quantize" => {
                 egui::ComboBox::from_label("Grid").selected_text(app.ops.quant_grid.clone()).show_ui(ui, |ui| {
-                    for g in ["1/4", "1/8", "1/8t", "1/16", "1/16t", "1/32"] {
+                    for g in QUANTIZE_GRIDS {
                         ui.selectable_value(&mut app.ops.quant_grid, g.to_string(), g);
                     }
                 });
@@ -389,18 +470,65 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             "change velocity" => {
                 ui.add(egui::Slider::new(&mut app.ops.velocity_add, -127..=127).text("Add"));
             }
+            "change duration" => {
+                egui::ComboBox::from_label("Change").selected_text(app.ops.dur_mode.clone()).show_ui(ui, |ui| {
+                    for m in ["legato", "set", "add", "scale"] {
+                        ui.selectable_value(&mut app.ops.dur_mode, m.to_string(), m);
+                    }
+                });
+                let (label, range) = match app.ops.dur_mode.as_str() {
+                    "legato" => ("Gap (ticks)", 0.0..=960.0),
+                    "set" => ("Length (ticks)", 1.0..=15_360.0),
+                    "add" => ("Ticks", -3_840.0..=3_840.0),
+                    _ => ("Percent", 1.0..=1_000.0),
+                };
+                ui.add(egui::Slider::new(&mut app.ops.dur_value, range).text(label));
+            }
+            "humanize" => {
+                ui.add(egui::Slider::new(&mut app.ops.human_timing, 0..=240).text("Timing ± ticks"));
+                ui.add(egui::Slider::new(&mut app.ops.human_velocity, 0..=64).text("Velocity ±"));
+            }
+            "strum" => {
+                ui.add(egui::Slider::new(&mut app.ops.strum_ticks, 0..=240).text("Ticks between notes"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut app.ops.strum_up, true, "Up (lowest first)");
+                    ui.radio_value(&mut app.ops.strum_up, false, "Down");
+                });
+            }
+            "half or double time" => {
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut app.ops.half_time, true, "Half time");
+                    ui.radio_value(&mut app.ops.half_time, false, "Double time");
+                });
+            }
             _ => {}
         }
-        ui.label(egui::RichText::new("Applies to the selected MIDI clips (or those under the selection).").small());
+        let picked = editor_selection(app);
+        let whom = if picked.is_some() {
+            "Applies to the notes selected in the MIDI Editor."
+        } else {
+            "Applies to the selected MIDI clips (or those under the selection)."
+        };
+        ui.label(egui::RichText::new(whom).small());
         if ui.button(egui::RichText::new("Apply").strong()).clicked() {
-            let r = match app.ops.midi_op.as_str() {
-                "quantize" => {
-                    app.run("event.quantize", json!({"grid": app.ops.quant_grid, "strength": app.ops.quant_strength, "swing": app.ops.quant_swing}))
+            let r = match midi_op_params(&app.ops) {
+                Some((id, mut p)) => {
+                    if let Some((clip, sel)) = &picked {
+                        p["clips"] = json!([clip.0]);
+                        p["indices"] = json!(sel);
+                    }
+                    let r = app.run(id, p);
+                    // The selection stays on its notes through the re-sort.
+                    if picked.is_some()
+                        && let Ok(v) = &r
+                        && let Some(a) = v.get("indices").and_then(|x| x.as_array())
+                    {
+                        app.midi.selected = a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
+                    }
+                    r
                 }
-                "transpose" => app.run("event.transpose", json!({"semitones": app.ops.transpose})),
-                "change velocity" => app.run("event.change_velocity", json!({"add": app.ops.velocity_add})),
-                "flatten performance" => app.run("event.flatten_performance", json!({})),
-                _ => app.run("event.restore_performance", json!({})),
+                None if app.ops.midi_op == "flatten performance" => app.run("event.flatten_performance", json!({})),
+                None => app.run("event.restore_performance", json!({})),
             };
             result_line(ui, &r);
         }

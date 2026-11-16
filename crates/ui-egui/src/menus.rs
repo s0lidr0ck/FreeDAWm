@@ -259,7 +259,6 @@ const DIALOG_COMMANDS: &[&str] = &[
     "edit.shift",
     "edit.fades_create",
     "setup.session",
-    "event.quantize",
     "event.transpose",
     "event.change_velocity",
     "edit.strip_silence",
@@ -1097,6 +1096,11 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         app.ui.audiosuite = p.get("process").and_then(Value::as_str).map(str::to_string);
         return;
     }
+    // Quantize… and Change Duration… ask for their values in the MIDI Operations window (run with
+    // none, Change Duration applied legato and Quantize always used 16ths).
+    if crate::ops_windows::open_midi_op(app, soundcraft_engine::canonical_id(id)) {
+        return;
+    }
     if wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id) {
         return;
     }
@@ -1116,7 +1120,9 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
 /// Keyboard shortcut for a dialog command, or one that would close a modified session: open its
 /// dialog. Returns true when handled.
 pub fn invoke_shortcut_dialog(app: &mut SoundApp, id: &str) -> bool {
-    (wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id)) || crate::dialogs::ask_to_save(app, id, &json!({}))
+    crate::ops_windows::open_midi_op(app, id)
+        || (wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id))
+        || crate::dialogs::ask_to_save(app, id, &json!({}))
 }
 
 /// Commands that open a dialog first: the listed ones, Score Setup, and anything that needs a path.
@@ -1132,7 +1138,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "event.quantize" | "event.change_duration" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.

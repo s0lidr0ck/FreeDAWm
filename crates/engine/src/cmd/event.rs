@@ -427,27 +427,50 @@ pub(super) fn midi_op(e: &mut Engine, p: &Value, f: impl Fn(&mut [soundcraft_mid
     })
 }
 
-fn grid_ticks(p: &Value) -> i64 {
+/// A note value as ticks: "1/1" (or "bar") to "1/128", with "t" for a triplet, "d" or "." for
+/// dotted, "q" for a quintuplet ("1/8t", "1/16d", "1/4."). `None` for anything else.
+pub fn note_value_ticks(text: &str) -> Option<i64> {
+    let t = text.trim().to_ascii_lowercase();
+    if t == "bar" || t == "1" {
+        return Some(TICKS_PER_QUARTER * 4);
+    }
+    let body = t.strip_prefix("1/")?;
+    let (digits, kind) = match body.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => (body.get(..i)?, body.get(i..)?),
+        None => (body, ""),
+    };
+    let n: i64 = digits.parse().ok()?;
+    if !matches!(n, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128) {
+        return None;
+    }
+    let plain = TICKS_PER_QUARTER * 4 / n;
+    match kind {
+        "" => Some(plain),
+        "t" => Some(plain * 2 / 3),
+        "d" | "." => Some(plain * 3 / 2),
+        "q" => Some(plain * 4 / 5),
+        _ => None,
+    }
+}
+
+/// The `grid` parameter: ticks, or a note value ([`note_value_ticks`]); 1/16 when left out. A
+/// grid that can't be read is refused rather than silently made 1/16.
+fn grid_ticks(id: &str, p: &Value) -> Result<i64> {
     match p.get("grid") {
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(240).clamp(1, TICKS_PER_QUARTER * 16),
-        Some(Value::String(s)) => match s.trim() {
-            "1/1" | "1" | "bar" => TICKS_PER_QUARTER * 4,
-            "1/2" => TICKS_PER_QUARTER * 2,
-            "1/4" => TICKS_PER_QUARTER,
-            "1/8" => TICKS_PER_QUARTER / 2,
-            "1/8t" => TICKS_PER_QUARTER / 3,
-            "1/16t" => TICKS_PER_QUARTER / 6,
-            "1/32" => TICKS_PER_QUARTER / 8,
-            "1/64" => TICKS_PER_QUARTER / 16,
-            _ => TICKS_PER_QUARTER / 4,
-        },
-        _ => TICKS_PER_QUARTER / 4,
+        None | Some(Value::Null) => Ok(TICKS_PER_QUARTER / 4),
+        Some(Value::Number(n)) => {
+            n.as_i64().map(|v| v.clamp(1, TICKS_PER_QUARTER * 16)).ok_or_else(|| bad(id, "`grid` must be whole ticks or a note value like 1/8t"))
+        }
+        Some(Value::String(s)) => note_value_ticks(s)
+            .filter(|t| *t > 0)
+            .ok_or_else(|| bad(id, format!("unknown grid `{s}`: use 1/1 to 1/128, with t (triplet), d (dotted) or q (quintuplet)"))),
+        Some(_) => Err(bad(id, "`grid` must be ticks or a note value like 1/8t")),
     }
 }
 
 fn quantize(e: &mut Engine, p: &Value) -> Result<Value> {
     let opts = QuantizeOptions {
-        grid_ticks: grid_ticks(p),
+        grid_ticks: grid_ticks("event.quantize", p)?,
         strength: (f32_or(p, "strength", 100.0) / 100.0).clamp(0.0, 1.0),
         swing: (f32_or(p, "swing", 0.0) / 100.0).clamp(0.0, 1.0),
         ..QuantizeOptions::default()
@@ -474,8 +497,11 @@ fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
         VelocityOp::Scale((v as f32).clamp(0.0, 10.0))
     } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
         VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 }
-    } else {
+    } else if p.get("min").is_some() || p.get("max").is_some() {
         VelocityOp::Limit { min: i64_or(p, "min", 1).clamp(1, 127) as u8, max: i64_or(p, "max", 127).clamp(1, 127) as u8 }
+    } else {
+        // Nothing to do is said, not done silently.
+        return Err(bad("event.change_velocity", "give set, add, scale, from and to, or min and max"));
     };
     midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity(n, op))
 }
@@ -487,8 +513,11 @@ fn duration(e: &mut Engine, p: &Value) -> Result<Value> {
         DurationOp::Add(v)
     } else if let Some(v) = p.get("scale").and_then(Value::as_f64) {
         DurationOp::Scale((v as f32).clamp(0.01, 100.0))
-    } else {
+    } else if p.get("legato").is_some() {
         DurationOp::Legato { gap: i64_or(p, "legato", 0).max(0) }
+    } else {
+        // Legato only when asked for: run with no values (a menu item) it used to apply legato.
+        return Err(bad("event.change_duration", "give set, add, scale or legato"));
     };
     midi_op(e, p, move |n, _| soundcraft_midi::ops::change_duration(n, op))
 }

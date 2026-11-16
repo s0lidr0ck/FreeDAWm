@@ -432,9 +432,6 @@ impl Dialogs {
             "event.transpose" => {
                 Dialog::Number { cmd: id.into(), title: "Transpose".into(), key: "semitones".into(), value: 12.0, suffix: "semitones".into() }
             }
-            "event.quantize" => {
-                Dialog::Number { cmd: id.into(), title: "Quantize strength".into(), key: "strength".into(), value: 100.0, suffix: "%".into() }
-            }
             "edit.fades_create" => Dialog::Fades { shape: "equal power".into() },
             "event.change_velocity" => Dialog::ChangeVelocity(VelocityDialog::default()),
             "edit.strip_silence" => Dialog::StripSilence { threshold: -48.0, min_ms: 50.0, pre_ms: 5.0, post_ms: 20.0 },

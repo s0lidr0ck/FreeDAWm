@@ -282,6 +282,64 @@ pub fn change_duration(notes: &mut [Note], op: DurationOp) {
     }
 }
 
+/// Plays the notes backwards in the span they cover: a note ending `d` ticks before the last end
+/// starts `d` ticks after the first start. Lengths, pitches and velocities stay.
+pub fn reverse(notes: &mut [Note]) {
+    let (Some(first), Some(last)) = (notes.iter().map(|n| n.start).min(), notes.iter().map(Note::end).max()) else { return };
+    for n in notes.iter_mut() {
+        n.start = first.saturating_add(last.saturating_sub(n.end()));
+    }
+}
+
+/// Stretches the notes in time by `factor` from the first one's start: 2 is half time (twice as
+/// long), 0.5 double time. Lengths stay at least one tick; non-finite or non-positive factors
+/// change nothing.
+pub fn scale_time(notes: &mut [Note], factor: f64) {
+    if !factor.is_finite() || factor <= 0.0 {
+        return;
+    }
+    let Some(first) = notes.iter().map(|n| n.start).min() else { return };
+    for n in notes.iter_mut() {
+        n.start = first.saturating_add(round_i64(n.start.saturating_sub(first) as f64 * factor));
+        n.length = round_i64(n.length as f64 * factor).max(1);
+    }
+}
+
+/// Strums each chord (notes starting together): each note after the first in pitch order (lowest
+/// first when `up`, as a downward strum on a guitar plays them; highest first otherwise) starts
+/// `step` ticks after the one before, keeping its end.
+pub fn strum(notes: &mut [Note], step: i64, up: bool) {
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by_key(|&i| notes.get(i).map(|n| (n.start, if up { i32::from(n.pitch) } else { -i32::from(n.pitch) })));
+    let mut k = 0i64;
+    let mut chord_start = None;
+    for i in order {
+        let Some(n) = notes.get_mut(i) else { continue };
+        if chord_start != Some(n.start) {
+            chord_start = Some(n.start);
+            k = 0;
+        }
+        let end = n.end();
+        n.start = n.start.saturating_add(step.saturating_mul(k));
+        n.length = end.saturating_sub(n.start).max(1);
+        k += 1;
+    }
+}
+
+/// Humanise: each note's start moves by up to ± `timing` ticks and its velocity by up to
+/// ± `velocity`, from a seeded generator (the same seed gives the same result).
+pub fn humanize(notes: &mut [Note], timing: i64, velocity: u8, seed: u64) {
+    let mut rng = XorShift::new(seed);
+    for n in notes.iter_mut() {
+        if timing > 0 {
+            n.start = n.start.saturating_add(round_i64(rng.next_signed() * timing as f64));
+        }
+        if velocity > 0 {
+            n.velocity = clamp_vel(i64::from(n.velocity) + round_i64(rng.next_signed() * f64::from(velocity)));
+        }
+    }
+}
+
 /// Select/Split Notes by pitch: returns `(notes with pitch in pitch_from..=pitch_to, the rest)`,
 /// both in input order. The bounds are swapped if reversed.
 pub fn split_notes(notes: &[Note], pitch_from: u8, pitch_to: u8) -> (Vec<Note>, Vec<Note>) {

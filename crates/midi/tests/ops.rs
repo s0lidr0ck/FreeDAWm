@@ -124,6 +124,32 @@ fn transpose_clamps() {
     assert!(notes.iter().all(|n| n.pitch == 127));
 }
 
+#[test]
+fn reverse_half_time_strum_and_humanize() {
+    let mut notes = vec![n(60, 0, 240), n(62, 480, 480)];
+    reverse(&mut notes);
+    assert_eq!(starts(&notes), vec![720, 0]);
+    let mut notes = vec![n(60, 960, 240), n(62, 1440, 480)];
+    scale_time(&mut notes, 2.0);
+    assert_eq!(notes.iter().map(|x| (x.start, x.length)).collect::<Vec<_>>(), vec![(960, 480), (1920, 960)]);
+    scale_time(&mut notes, 0.5);
+    assert_eq!(notes.iter().map(|x| (x.start, x.length)).collect::<Vec<_>>(), vec![(960, 240), (1440, 480)]);
+    // A C triad strummed up, 30 ticks a string; the ends stay.
+    let mut notes = vec![n(67, 0, 960), n(60, 0, 960), n(64, 0, 960), n(72, 960, 10)];
+    strum(&mut notes, 30, true);
+    assert_eq!(
+        notes.iter().map(|x| (x.pitch, x.start, x.end())).collect::<Vec<_>>(),
+        vec![(67, 60, 960), (60, 0, 960), (64, 30, 960), (72, 960, 970)]
+    );
+    let mut a = vec![n(60, 1000, 100); 8];
+    let mut b = a.clone();
+    humanize(&mut a, 20, 10, 7);
+    humanize(&mut b, 20, 10, 7);
+    assert_eq!(a, b, "seeded");
+    assert!(a.iter().all(|x| (980..=1020).contains(&x.start) && (90..=110).contains(&x.velocity)));
+    assert!(a.iter().any(|x| x.start != 1000));
+}
+
 /// Bug 6: a chord moved past the top keeps its intervals.
 #[test]
 fn transpose_within_keeps_the_shape() {
