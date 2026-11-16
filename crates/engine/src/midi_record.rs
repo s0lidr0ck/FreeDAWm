@@ -39,7 +39,7 @@ use crate::Engine;
 
 /// One recorded event: its timeline position as heard, the port it came from (by name), the
 /// message, and its loop pass (0 without a loop).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecordedEvent {
     pub at: Samples,
     pub port: String,
@@ -121,6 +121,23 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         e.push_undo("Record", before);
     }
     out
+}
+
+/// [`record_live_midi`] for a take punched out and in on the fly (QuickPunch: `punches`, the last
+/// possibly open): the take is kept to each punch (as the audio takes are), what was played
+/// between them left out. Without punches, the whole take.
+pub fn record_punches(e: &mut Engine, take: &MidiTake, punches: &[Range], events: &[RecordedEvent]) -> Vec<ClipId> {
+    if punches.is_empty() {
+        return record_live_midi(e, take, events);
+    }
+    let mut ids = Vec::new();
+    for p in punches {
+        let Some(r) = Range::new(p.start, p.end.min(take.end)).intersect(&take.punch.unwrap_or(*p)).filter(|r| !r.is_empty()) else {
+            continue;
+        };
+        ids.extend(record_live_midi(e, &MidiTake { punch: Some(r), ..*take }, events));
+    }
+    ids
 }
 
 /// [`record_midi_on`] without the undo step, on a session: what the loop-recording preview puts
@@ -347,6 +364,17 @@ impl LoopPreview {
         self.made = place_passes(s, &tracks, take, &kept, Some(upto));
         self.applied = true;
         true
+    }
+
+    /// `s` with the preview taken off, when it is on (what an autosave writes while the loop
+    /// runs: a recovery places the whole take from what was spilled, once).
+    pub fn lifted(&self, s: &Session) -> Option<Session> {
+        if !self.applied {
+            return None;
+        }
+        let mut s = s.clone();
+        self.clone().restore(&mut s);
+        Some(s)
     }
 
     /// Takes the preview off: the tracks as they were before the take.

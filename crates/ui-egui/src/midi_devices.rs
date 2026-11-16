@@ -53,6 +53,12 @@ pub(crate) fn start_take(app: &mut SoundApp) {
         h.take_recorded(&mut stale);
         app.midi_rec_lost_at = h.record_dropped();
     }
+    // The take's MIDI is spilled to the autosave folder as it comes (a crash keeps it); what was
+    // spilled for an earlier take goes.
+    let latency = take_latency(app);
+    if let Some(root) = app.autosave_dir.clone() {
+        app.autosaver.get_or_insert_with(|| soundcraft_engine::autosave::Autosaver::new(root)).midi_take(latency);
+    }
 }
 
 /// Most events Capture MIDI keeps (the newest).
@@ -124,8 +130,15 @@ pub(crate) fn lost_in_take(app: &SoundApp) -> u64 {
 
 /// While recording (each frame): the live MIDI heard since the last frame.
 pub(crate) fn collect(app: &mut SoundApp) {
+    let from = app.midi_rec.len();
     if let Some(h) = &app.midi_hub {
         h.take_recorded(&mut app.midi_rec);
+    }
+    // Spilled to the autosave folder at once.
+    if app.midi_rec.len() > from
+        && let Some(w) = &app.autosaver
+    {
+        w.midi(recorded_events(app, app.midi_rec.get(from..).unwrap_or_default()));
     }
 }
 
@@ -200,6 +213,9 @@ pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, St
     let Some(p) = &mut app.midi_loop_preview else { return Err("No MIDI is being loop recorded.".into()) };
     let Some(pass) = p.undo_last_pass() else { return Err("No finished loop pass to undo yet.".into()) };
     let upto = p.shown();
+    if let Some(w) = &app.autosaver {
+        w.midi_drop(pass);
+    }
     show_passes(app, upto);
     app.ui.status = format!("Loop pass {} undone", u32::from(pass) + 1);
     Ok(serde_json::json!({"pass": pass}))
@@ -245,20 +261,8 @@ pub(crate) fn finish_take(
     if events.is_empty() {
         return Vec::new();
     }
-    // QuickPunch: punched out and in again while recording, the take is kept to each punch (as
-    // the audio takes are), what was played between them left out.
-    if plan.punches.is_empty() {
-        return soundcraft_engine::midi_record::record_live_midi(&mut app.engine, &take, &events);
-    }
-    let mut ids = Vec::new();
-    for p in &plan.punches {
-        let Some(r) = soundcraft_time::Range::new(p.start, p.end.min(end)).intersect(&take.punch.unwrap_or(*p)).filter(|r| !r.is_empty()) else {
-            continue;
-        };
-        let t = soundcraft_engine::midi_record::MidiTake { punch: Some(r), ..take };
-        ids.extend(soundcraft_engine::midi_record::record_live_midi(&mut app.engine, &t, &events));
-    }
-    ids
+    // QuickPunch: punched out and in again while recording, the take is kept to each punch.
+    soundcraft_engine::midi_record::record_punches(&mut app.engine, &take, &plan.punches, &events)
 }
 
 /// The names of the input ports present now (for the track input menus).

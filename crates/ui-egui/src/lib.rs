@@ -1964,7 +1964,10 @@ impl SoundApp {
     fn queue_autosave(&mut self, root: std::path::PathBuf) {
         self.autosaved_rev = self.engine.revision;
         let w = self.autosaver.get_or_insert_with(|| soundcraft_engine::autosave::Autosaver::new(root));
-        w.write(self.engine.session_arc(), self.engine.path.clone(), self.take_plan.clone());
+        // Loop recording MIDI: without the passes shown meanwhile (a recovery places the take
+        // from what was spilled).
+        let lifted = self.midi_loop_preview.as_ref().and_then(|p| p.lifted(self.engine.session())).map(std::sync::Arc::new);
+        w.write(lifted.unwrap_or_else(|| self.engine.session_arc()), self.engine.path.clone(), self.take_plan.clone());
     }
 
     /// Write the session to its own folder under `root` and wait for it; false when that failed.

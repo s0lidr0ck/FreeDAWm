@@ -131,7 +131,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | MIDI and audio recorded in one pass | ● | ● | ● | ● | **Works**, as separate undo steps |
 | Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Partial**: only a chain module's MIDI output (the drum gate's triggers) |
 | One undo for the pass | ● | ● | ● | ● | **Partial**: two or three steps when audio and MIDI are both armed |
-| The take survives a crash | ◐ | ◐ | ◐ | ◐ | **Missing**: a MIDI take is held in memory until Stop |
+| The take survives a crash | ◐ | ◐ | ◐ | ◐ | **Works**: what a take hears is spilled to the autosave folder as it comes (`recording-midi.jsonl`), and recovery places it as Stop would have, with the audio takes |
 
 ## F. Loops and takes
 
@@ -139,8 +139,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Each loop pass kept as a take | ● | ● | ● | ● | **Works**: each pass after the first on a new playlist that starts as a copy of the track's |
 | Passes add up into one clip (drum-machine style) | ● | ● | ● | ● | **Works** with MIDI Merge on; the passes appear at Stop |
-| Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Works**: at each wrap the finished passes go on the armed tracks as Stop will place them (merged, they add up; otherwise the last is on top), and the next pass plays them; no undo step until Stop |
-| Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take; erasing held notes is missing |
+| Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Works**: at each wrap the finished passes go on the armed tracks as Stop will place them (merged, they add up; otherwise the last is on top), and the next pass plays them; no undo step until Stop (`c458cdf`) |
+| Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take (`c458cdf`); erasing held notes is missing |
 | Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Missing**: comping is for audio tracks only |
 | Note repeat | ○ | ● | ● | ◐ | **Missing** |
 | Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Missing**: recording over a pattern clip erases it; the drum machine's pads are not recorded |
@@ -266,7 +266,7 @@ either wire the control or take it off the menu.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Done (`68d0dc0`): Replace, Merge, New Playlist; settles bug 3 |
-| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Done: passes add up with MIDI Merge (`68d0dc0`); finished passes are on the tracks while the loop runs and Undo takes the last back (`midi_record::LoopPreview`) |
+| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Done: passes add up with MIDI Merge (`68d0dc0`); finished passes are on the tracks while the loop runs and Undo takes the last back (`midi_record::LoopPreview`, `c458cdf`) |
 | MIDI takes: lanes, pick a take, comp between takes | 12–18 | Not started (large: the audio comping model would have to take MIDI clips) |
 | Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; not with it stopped |
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in not done |
@@ -282,7 +282,7 @@ either wire the control or take it off the menu.
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
-| MIDI take survives a crash | 3–5 | Not started |
+| MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery |
 
 **Designs for what remains of K (not built).**
 
@@ -358,3 +358,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Control surfaces: Mackie Control (with extenders) and HUI, Setup › Control Surfaces |
 | 2026-11-16 | minor | MIDI learn, the MIDI Mappings window, MMC and learnt transport keys; mapped messages kept out of takes |
 | 2026-11-16 | minor | Loop recording: earlier passes are heard while later ones record, and Undo takes back the last pass while looping |
+| 2026-11-16 | minor | A MIDI take survives a crash: spilled to the autosave folder as it is played, placed by recovery |
