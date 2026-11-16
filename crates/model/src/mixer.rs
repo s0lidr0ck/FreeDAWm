@@ -188,6 +188,12 @@ impl ChannelFormat {
     pub fn has_lfe(self) -> bool {
         self.speakers().contains(&Speaker::Lfe)
     }
+    /// Each channel's loudness weight ([`Speaker::loudness_weight`]); 1.0 for every channel of
+    /// an Ambisonics format (it has no speakers).
+    pub fn loudness_weights(self) -> Vec<f32> {
+        let sp = self.speakers();
+        if sp.is_empty() { vec![1.0; self.channels()] } else { sp.iter().map(|s| s.loudness_weight()).collect() }
+    }
     pub fn has_height(self) -> bool {
         self.speakers().iter().any(|s| s.is_height())
     }
@@ -299,6 +305,16 @@ impl Speaker {
     }
     pub fn is_lfe(self) -> bool {
         self == Speaker::Lfe
+    }
+    /// The channel weight loudness measurement gives this speaker (ITU-R BS.1770-4, table 3):
+    /// 0 for the LFE, 1.41 (+1.5 dB) for a speaker at ear height between 60° and 120° from the
+    /// front, 1.0 for every other.
+    pub fn loudness_weight(self) -> f32 {
+        match self {
+            Speaker::Lfe => 0.0,
+            Speaker::Ls | Speaker::Rs | Speaker::Lss | Speaker::Rss | Speaker::Lw | Speaker::Rw => 1.41,
+            _ => 1.0,
+        }
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -1429,6 +1445,20 @@ mod tests {
         v["inserts"] = serde_json::json!([null, {"plugin": "gain"}, null, {"plugin": "trim"}]);
         let back: Mixer = serde_json::from_value(v).unwrap();
         assert_eq!(back.inserts.iter().map(|i| i.plugin.as_str()).collect::<Vec<_>>(), ["gain", "trim"]);
+    }
+
+    /// Mix bug 9: loudness weighted only a 6-channel layout, as 5.1, whatever it was.
+    #[test]
+    fn loudness_weights_follow_the_speakers() {
+        assert_eq!(ChannelFormat::Surround51.loudness_weights(), [1.0, 1.0, 1.0, 0.0, 1.41, 1.41]);
+        // 7.1: L R C LFE Lrs Rrs Lss Rss: the rears at ±150° are not boosted, the sides are.
+        assert_eq!(ChannelFormat::Surround71.loudness_weights(), [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.41, 1.41]);
+        // 6.0 has six channels but no LFE.
+        assert_eq!(ChannelFormat::Surround60.loudness_weights(), [1.0, 1.0, 1.0, 1.41, 1.41, 1.0]);
+        let w = ChannelFormat::Atmos714.loudness_weights();
+        assert_eq!(w.len(), 12);
+        assert_eq!(&w[8..], [1.0; 4], "heights count once");
+        assert_eq!(ChannelFormat::Ambisonics(1).loudness_weights(), [1.0; 4]);
     }
 
     #[test]

@@ -663,7 +663,13 @@ impl Bounce {
             let _ = std::fs::remove_file(&part);
             EngineError::Io(format!("{}: {err}", path.display()))
         })?;
-        let meter = soundcraft_dsp::meter::LoudnessMeter::new(s.sample_rate.as_f64() as f32, channels);
+        let mut meter = soundcraft_dsp::meter::LoudnessMeter::new(s.sample_rate.as_f64() as f32, channels);
+        // Weighted by where each channel plays, not guessed from the channel count.
+        if fmt.channels() == channels {
+            for (c, w) in fmt.loudness_weights().into_iter().enumerate() {
+                meter.set_channel_weight(c, w);
+            }
+        }
         Ok(Bounce {
             session: s,
             path: path.to_path_buf(),
