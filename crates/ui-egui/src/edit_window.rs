@@ -2553,6 +2553,10 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
     if clip.edit_locked || clip.time_locked {
         painter.text(pos2(r.max.x - 10.0, r.min.y + 7.0), Align2::CENTER_CENTER, "🔒", regular(9.0), Color32::WHITE);
     }
+    // A shared MIDI clip: its copies change with it.
+    if clip.shared.is_some() {
+        painter.text(pos2(r.max.x - 22.0, r.min.y + 7.0), Align2::CENTER_CENTER, "=", bold(10.0), Color32::WHITE);
+    }
     let _ = app;
 }
 

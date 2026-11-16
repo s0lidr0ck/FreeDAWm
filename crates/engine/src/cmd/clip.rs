@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Stretch Clip",
             [],
             None,
-            "{clip, start?: position, end?: position} — stretches an audio clip so its edges reach these points (the other edge stays): by its track's Elastic algorithm, by speed on a Varispeed track, pitch-preserving (polyphonic) on a plain one",
+            "{clip, start?: position, end?: position} — stretches an audio clip so its edges reach these points (the other edge stays): by its track's Elastic algorithm, by speed on a Varispeed track, pitch-preserving (polyphonic) on a plain one; a MIDI clip's notes and controllers scale with it",
             always,
             stretch_to
         ),
@@ -284,8 +284,11 @@ fn stretch_to(e: &mut Engine, p: &Value) -> Result<Value> {
     let start = position_param(e, C, p, "start")?;
     let end = position_param(e, C, p, "end")?;
     let (track, c) = e.session().find_clip(id).map(|(t, c)| (t, c.clone())).ok_or_else(|| bad(C, "no such clip"))?;
+    if matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) {
+        return crate::midi_stretch::stretch(e, id, start, end);
+    }
     if !c.is_audio() {
-        return Err(bad(C, "only audio clips stretch"));
+        return Err(bad(C, "only audio and MIDI clips stretch"));
     }
     if c.edit_locked {
         return Err(bad(C, "the clip is edit-locked"));

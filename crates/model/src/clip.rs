@@ -318,6 +318,10 @@ pub struct Clip {
     /// its length.
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub transpose_cents: i32,
+    /// A shared (alias) MIDI clip: every clip with the same id plays the same notes and
+    /// controllers, and a note edit in one is made in all. `None`: an independent clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<u64>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -383,6 +387,7 @@ impl Clip {
             loop_len: 0,
             loop_phase: 0,
             transpose_cents: 0,
+            shared: None,
         }
     }
 

@@ -30,6 +30,8 @@ pub mod lyric_tools;
 pub mod lyrics;
 pub mod midi_cleanup;
 pub mod midi_record;
+pub mod midi_shared;
+pub mod midi_stretch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
@@ -767,6 +769,11 @@ impl Engine {
                     && self.doc.tracks.iter().any(|t| t.clips().iter().any(|c| c.follow_chords.is_some()))
                 {
                     chord_follow::follow(Arc::make_mut(&mut self.doc));
+                }
+                // Shared MIDI clips take a note edit made in one of them, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc) && self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") && midi_shared::any(&self.doc)
+                {
+                    midi_shared::follow(id, &before, Arc::make_mut(&mut self.doc));
                 }
                 // A frozen track's frozen parts and edit-locked clips are not edited: the command
                 // is undone.

@@ -55,9 +55,10 @@ The gaps are of four kinds:
    in the clip, unseen and unheard.
 3. **Much of what the four offer around notes was absent.** The second round added note mute,
    grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
-   in the editor, controller ramps and a full event list (the rows below say how far each
-   goes). Still absent: shared clip copies, stretching a clip, an index for dense clips, chord
-   pads, editable drum maps, per-note probability and note entry in the score.
+   in the editor, controller ramps and a full event list; the third round editing across
+   clips, ramps that play smoothly, shared clip copies and stretching a clip (the rows below
+   say how far each goes). Still absent: an index for dense clips, chord pads, editable drum
+   maps, per-note probability and note entry in the score.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
    filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
    automated, instrument latency is not compensated, and notes from clips reach the instrument
@@ -182,10 +183,10 @@ The gaps are of four kinds:
 | Trim the start; drag it back out | ● | ● | ● | ● | **Works**: what falls before the new start is hidden, its controllers set the starting state, and dragging back returns it (bug 5, fixed) |
 | Join clips | ● | ● | ● | ● | **Partial**: Consolidate works; Heal is for audio only |
 | Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; Loop and Repeat space MIDI copies on tick tracks in bars (bug 15, fixed) |
-| Loop a clip; copies that change together | ◐ | ● | ● | ● | **Partial**: independent copies only |
+| Loop a clip; copies that change together | ◐ | ● | ● | ● | **Works**: Clip › Duplicate as Shared Copy (`clip.share`) puts a copy after each selected MIDI clip that shares its notes and controllers (marked `=` on the timeline); a note edit in any (the editor, the event list, the MIDI Operations, Reverse, Apply to Notes) is made in all, in the same undo step, and Duplicate or paste of a shared clip shares too. Each copy keeps its own place, length, mute, transpose and velocity. Clip › Make Independent ends it; an edit that changes one copy's notes some other way (a start trim, a split, Consolidate) leaves that copy on its own. Loop still makes independent copies |
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
 | Transpose and velocity offset per clip | ● | ● | ● | ● | **Works**: MIDI Editor › More › Clip transpose and Clip velocity (`clip.midi_offsets`), applied as the clip plays and in MIDI export, with the track's Real-Time Properties; the notes stay as written |
-| Stretch a clip so the notes scale | ● | ● | ● | ● | **Missing** |
+| Stretch a clip so the notes scale | ● | ● | ● | ● | **Works**: trimming a MIDI clip's edge with Alt held (as for audio; `clip.stretch_to`) scales its notes' starts and lengths and its controllers in ticks from its start, the other edge staying; one undo step. A Juke pattern clip is refused |
 | Reverse a clip | ◐ | ● | ● | ● | **Works**: More › Reverse Clip (`clip.midi_reverse`): notes and controllers play backwards in the clip's window, each controller value holding over the mirror of its span |
 | Bounce a clip or selection to audio in place | ● | ● | ● | ● | **Partial**: freeze and commit work on the whole track |
 
@@ -201,7 +202,7 @@ The gaps are of four kinds:
 | Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
 | Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties), undoable; a negative delay plays early notes before the clip (bug 10, fixed) |
 | MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Missing** |
-| Dense clips play without cost growing | ● | ● | ● | ● | **Partial**: every block scans every note of each clip under the playhead and walks the tempo map for each |
+| Dense clips play without cost growing | ● | ● | ● | ● | **Partial**: every block scans every note of each clip under the playhead and walks the tempo map for each. Design (not built): beside each MIDI clip's notes the engine keeps a derived index, made off the audio thread whenever they change (where MIDI Cleanup previews are refreshed), of the notes in start order and the longest note's length; the scheduler binary-searches the first note that can sound in the block (start at least the block's first tick less the longest length, less the largest playback-quantize move) and stops at the first start past the block's end. It is checked by playing random clips (overlaps, mutes, channels, delays, playback quantize, start trims) block by block through the current scheduler and the indexed one and comparing every message and offset |
 
 ## J. Tempo and arrangement
 
@@ -392,3 +393,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Commits noted on the third round's MIDI rows |
 | 2026-11-16 | minor | Several MIDI clips edited at once: the roll spans every selected clip; select, move, copy, resize, delete, draw and quantize act on notes in any of them, one undo step |
 | 2026-11-16 | minor | Controller ramps in the model: Line, Curve and Ramp Between Points write a point with a ramp to the next, played as a value every 32 samples, drawn as a line, written to MIDI files as steps |
+| 2026-11-16 | minor | Shared MIDI clip copies that change together (Make Independent ends it); an Alt-trim stretches a MIDI clip, its notes scaling; a design for indexing dense clips |

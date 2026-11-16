@@ -39,6 +39,7 @@ pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
 pub mod clip_follow;
 pub mod clip_midi;
+pub mod clip_shared;
 pub mod groove;
 mod health;
 mod instrument;
@@ -228,6 +229,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(groove::specs());
         v.extend(clip_follow::specs());
         v.extend(clip_midi::specs());
+        v.extend(clip_shared::specs());
         v.extend(midi_cleanup::specs());
         v.extend(midi_ops::specs());
         v.extend(view_more::specs());
