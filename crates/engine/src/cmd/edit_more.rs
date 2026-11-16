@@ -802,8 +802,8 @@ fn coalesce_volume_to_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         let lane = tr.lane(&AutoParam::Volume).cloned();
         let fader = tr.mixer.volume_db;
-        let Some(pl) = tr.playlist_mut() else { continue };
-        for c in pl.clips.iter_mut().filter(|c| c.is_audio()) {
+        // Every playlist and take layer: the fader and its automation go for all of them.
+        for c in tr.playlists.iter_mut().flat_map(|pl| pl.clips.iter_mut()).filter(|c| c.is_audio()) {
             let mut offs: Vec<Samples> = vec![0, c.length];
             offs.extend(c.gain_env.iter().map(|x| x.0));
             if let Some(l) = &lane {

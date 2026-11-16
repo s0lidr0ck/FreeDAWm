@@ -428,3 +428,62 @@ fn shuffle_trims_move_automation_with_the_crossfade_partner() {
     let pts: Vec<i64> = e.session().track(t).unwrap().lane(&soundcraft_model::AutoParam::Volume).unwrap().points.iter().map(|p| p.at).collect();
     assert_eq!(pts, vec![750, 1300], "both points moved with the partner");
 }
+
+// ---- bug 19: Delete Unused Playlists left the comp pointing at layers that were gone -------
+
+#[test]
+fn deleting_unused_playlists_keeps_the_comps_layers_and_their_references() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1000, 0)]);
+    for _ in 0..2 {
+        run(&mut e, "track.playlist_new", json!({"track": t.0}));
+    }
+    let s = e.session_mut();
+    let tr = s.track_mut(t).unwrap();
+    tr.active_playlist = 0;
+    tr.record_layer = Some(1);
+    tr.playlists[2].clips = vec![Clip::audio(ClipId(9_000), "take", SourceId(8), 0, 0, 1000)];
+    s.find_clip_mut(c[0]).unwrap().from_layer = Some(2);
+    run(&mut e, "track.playlist_delete_unused", json!({"track": t.0}));
+    let tr = e.session().track(t).unwrap();
+    assert_eq!(tr.playlists.len(), 2, "the layer the comp came from stays");
+    assert_eq!(tr.clips()[0].from_layer, Some(1), "and the comp still points at it");
+    assert_eq!(tr.playlists[1].clips[0].name, "take");
+    assert_eq!(tr.record_layer, None, "the record target that went is cleared");
+}
+
+// ---- bug 20: processing kept fades and warp markers that no longer fit ----------------------
+
+#[test]
+fn reverse_swaps_the_fades_and_processing_drops_the_warp_markers() {
+    let mut e = engine("slip");
+    let (_, c) = track(&mut e, &[(0, 1000, 0)]);
+    let s = e.session_mut();
+    let clip = s.find_clip_mut(c[0]).unwrap();
+    clip.fade_in = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 };
+    clip.warp = vec![(0, 0), (500, 400)];
+    clip.sync_point = 200;
+    run(&mut e, "process.run", json!({"process": "reverse", "clips": [c[0].0]}));
+    let c = e.session().tracks.iter().flat_map(|t| t.clips()).find(|x| x.start == 0).unwrap().clone();
+    assert_eq!((c.fade_in.len, c.fade_out.len), (0, 100));
+    assert!(c.warp.is_empty());
+    assert_eq!(c.sync_point, 800);
+}
+
+// ---- bug 21: coalescing volume to clip gain left the other playlists behind -----------------
+
+#[test]
+fn coalescing_volume_to_clip_gain_covers_every_playlist() {
+    let mut e = engine("slip");
+    let (t, _) = track(&mut e, &[(0, 1000, 0)]);
+    run(&mut e, "track.playlist_duplicate", json!({"track": t.0}));
+    run(&mut e, "automation.set_point", json!({"track": t.0, "param": "volume", "at": 0, "value": -6.0}));
+    run(&mut e, "edit.automation_coalesce_volume_to_clip_gain", json!({"tracks": [t.0]}));
+    let tr = e.session().track(t).unwrap();
+    assert_eq!(tr.mixer.volume_db, 0.0);
+    for pl in &tr.playlists {
+        // −6 dB as clip gain, however it is written (a level or a line).
+        let db = |c: &Clip| 20.0 * c.gain_at(500).log10();
+        assert!(pl.clips.iter().all(|c| (db(c) + 6.0).abs() < 1e-2), "{}: {:?}", pl.name, pl.clips.iter().map(db).collect::<Vec<_>>());
+    }
+}

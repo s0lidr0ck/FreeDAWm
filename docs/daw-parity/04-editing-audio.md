@@ -166,7 +166,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Consolidate a selection to one new file | ● | ● | ● | ● | **Works** |
 | Bounce a clip or range in place, with or without effects | ● | ● | ● | ● | **Partial**: whole track only, always through its inserts; the new track keeps the pan, trim and fader, pan and send automation (bug 10, fixed) |
 | Export clips as files | ● | ● | ● | ● | **Works**: each clip alone, a muted one as it sounds unmuted (bug 22, fixed) |
-| Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file |
+| Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
 | Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Missing**: only the visible part is rendered |
 | Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
@@ -184,7 +184,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Copy a selection up to the main playlist | ● | ● | ● | ● | **Works**; this route adds no crossfades |
 | Automatic crossfades at comp joins | ◐ | ● | ● | ● | **Works** (10 ms equal power) |
 | Name and rate takes | ● | ● | ● | ● | **Works** |
-| Flatten a comp | ● | ● | ● | ● | **Partial**: by consolidating |
+| Flatten a comp | ● | ● | ● | ● | **Partial**: by consolidating; Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
 | Show only takes that match the selection | ● | ○ | ○ | ○ | **Missing** |
 | Comp grouped tracks together (drums) | ● | ● | ● | ● | **Missing** |
 
@@ -283,9 +283,9 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
 | 18 | **Partly fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Left: the lines still count from sample 0, not the timecode start; that needs the start passed to every grid call. Test: `time` `frame_lines_do_not_drift_over_an_hour` | `time/src/grid.rs` (`line_at_or_before`, `next_line`) |
-| 19 | "Delete Unused Playlists" removes take layers but leaves the comp's references to them; the stored target playlist is an index that goes stale | `engine/src/cmd/track.rs:159-173`; `engine/src/cmd/comp.rs:325` |
-| 20 | Processing a clip does not shorten fades to the new length, clear warp markers or swap the fades on Reverse; and it drops the handles | `engine/src/cmd/audiosuite.rs:69-121` |
-| 21 | Coalescing volume automation to clip gain changes only the active playlist, then zeroes the fader, so other playlists change level | `engine/src/cmd/edit_more.rs:812-826` |
+| 19 | **Fixed.** "Delete Unused Playlists" removed take layers but left the comp's references to them, and the record target (an index) went stale. It now keeps the layers the comp was swiped from, re-points the comp's references and the record target at the layers that stay, and clears a target that went. (`comp.layer_delete` already re-indexed them.) Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/track.rs` (`delete_unused_playlists`) |
+| 20 | **Partly fixed.** Processing a clip did not shorten fades to the new length, clear warp markers or swap the fades on Reverse, and rendered a muted clip to silence. Fades are now kept inside the new length, warp markers cleared, Reverse swaps the fades and mirrors the sync point, and a muted clip is processed as it sounds unmuted. Left: the handles are still dropped (tier 2, "processing that keeps handles"). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/audiosuite.rs` |
+| 21 | **Fixed.** Coalescing volume automation to clip gain changed only the active playlist, then zeroed the fader, so other playlists changed level. Every playlist and take layer's clips now take the level. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit_more.rs` (`coalesce_volume_to_clip_gain`) |
 | 22 | **Fixed.** Export Clips rendered the clip's time range, not the clip, so overlapping neighbours were in the file (and a muted clip was silence). Each clip now renders alone and unmuted. Test: `io::strip_tests::exported_clips_hold_only_their_own_audio` | `engine/src/io.rs` (`export_clips`) |
 | 23 | Zoom to Selection and Fit by key assume a 1200-pixel timeline | `engine/src/cmd/view.rs:32, 42` |
 | 24 | Smaller: "+" on a US keyboard changes the grid, not nudge; default marker names repeat after a delete; Enter while playing can make a marker with a stray length; a view-only location still moves the playhead; a dragged fade defaults to S-curve and a commanded one to equal power | `ui-egui/src/shortcuts.rs:478, 517`; `engine/src/cmd/event.rs:404-424, 518-521`; `ui-egui/src/edit_window.rs:3301` |
@@ -350,3 +350,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 12 and 14 fixed: Conform keeps the pitch on Elastic tracks; front/back no longer unsorts the playlist |
 | 2026-11-16 | minor | Bugs 16 and 17 fixed: partial-selection nudge, spacing at the session start, Shuffle trim automation |
 | 2026-11-16 | minor | Bug 18 partly fixed: time and frame grid lines no longer drift |
+| 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |

@@ -74,6 +74,8 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
             c.fade_out = Default::default();
             c.gain_db = 0.0;
             c.gain_env.clear();
+            // A muted clip is processed as it sounds unmuted, not rendered to silence.
+            c.muted = false;
         }
         if let Some(pl) = tmp.track_mut(track).and_then(|t| t.playlist_mut()) {
             pl.clips.retain(|c| c.id == id);
@@ -121,6 +123,20 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
         nc.length = i64::try_from(frames).unwrap_or(nc.length);
         // The render already has the clip's stretch applied; keeping it would stretch the new file again.
         nc.stretch = 1.0;
+        // Warp markers described the old render; the new file is plain audio.
+        nc.warp.clear();
+        if name == "reverse" {
+            // Played backwards, the fade-in is now at the end, and the sync point mirrors.
+            std::mem::swap(&mut nc.fade_in, &mut nc.fade_out);
+            if nc.sync_point != 0 {
+                nc.sync_point = nc.length.saturating_sub(nc.sync_point);
+            }
+        }
+        // A new length (stretch, pitch, varispeed) keeps the fades inside the clip.
+        nc.clamp_fades();
+        if !(0..nc.length).contains(&nc.sync_point) {
+            nc.sync_point = 0;
+        }
         // Invert and Duplicate are phase/copy operations. The clip's gain stays a clip gain,
         // the same way its fades stay editable. Other processes bake a new file at unity gain.
         if !matches!(name.as_str(), "invert" | "duplicate") {

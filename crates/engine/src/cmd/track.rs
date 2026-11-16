@@ -163,12 +163,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let s = e.session_mut();
             let mut n = 0;
             for t in tracks {
-                if let Some(tr) = s.track_mut(t)
-                    && let Some(active) = tr.playlists.get(tr.active_playlist).cloned()
-                {
-                    n += tr.playlists.len() - 1;
-                    tr.playlists = vec![active];
-                    tr.active_playlist = 0;
+                if let Some(tr) = s.track_mut(t) {
+                    n += delete_unused_playlists(tr);
                 }
             }
             Ok(json!({"deleted": n}))
@@ -973,6 +969,41 @@ fn move_track(e: &mut Engine, p: &Value) -> Result<Value> {
         s.tracks.splice(at..at, block);
     }
     Ok(json!({}))
+}
+
+/// Delete Unused Playlists: every playlist but the one shown and the take layers its comp was
+/// swiped from (those are in use). The comp's references to its layers, and the record target,
+/// follow the layers that stay (they are indexes); a target that went is cleared. Returns how
+/// many went.
+fn delete_unused_playlists(tr: &mut soundcraft_model::Track) -> usize {
+    let active = tr.active_playlist;
+    let used: Vec<usize> = tr.clips().iter().filter_map(|c| c.from_layer).collect();
+    let keep: Vec<bool> = (0..tr.playlists.len()).map(|i| i == active || used.contains(&i)).collect();
+    // Old index -> new index for the playlists that stay.
+    let mut map = vec![None; keep.len()];
+    let mut next = 0usize;
+    for (i, k) in keep.iter().enumerate() {
+        if *k && let Some(m) = map.get_mut(i) {
+            *m = Some(next);
+            next += 1;
+        }
+    }
+    let gone = keep.iter().filter(|k| !**k).count();
+    let mut i = 0usize;
+    tr.playlists.retain(|_| {
+        let k = keep.get(i).copied().unwrap_or(true);
+        i += 1;
+        k
+    });
+    let moved = |l: Option<usize>| l.and_then(|l| map.get(l).copied().flatten());
+    tr.active_playlist = moved(Some(active)).unwrap_or(0);
+    tr.record_layer = moved(tr.record_layer).filter(|l| *l != tr.active_playlist);
+    for pl in &mut tr.playlists {
+        for c in &mut pl.clips {
+            c.from_layer = moved(c.from_layer);
+        }
+    }
+    gone
 }
 
 fn commit(e: &mut Engine, p: &Value) -> Result<Value> {
