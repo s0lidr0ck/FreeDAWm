@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 15 fixed: routing loops are refused) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 16 fixed: Audio Units are told a render is offline) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -251,7 +251,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 13 | **Fixed:** loading a track preset kept the old modules' automation, which could drive the new; their lanes now go with them (the fader's, pan's and sends' stay) | `track.load_preset` in `crates/engine/src/cmd/track_more.rs` |
 | 14 | **Not a bug (the claim was wrong):** a mono track feeding a mono bus already takes its pan law there (−3 dB), so the stereo aux spreading that bus at unity plays it exactly as loud as the track centred to the main mix; a test now pins it | bus read in `process_strip` |
 | 15 | **Fixed:** an output, send or input that fed a track back into itself was accepted and went silent; `track.output`, `track.input` and `mix.send` now refuse it (`Session::route_loops`, `input_loops`) | `track.output`, `mix.send` |
-| 16 | Audio Units are not told a render is offline | `crates/au-host` |
+| 16 | **Fixed:** Audio Units were not told a render is offline; the unit now gets `kAudioUnitProperty_OfflineRender` before it is initialized for a bounce, freeze or commit (macOS only, not run on hardware) | `crates/au-host` |
 
 ## Suggested order of work
 
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 16 fixed: Audio Units are told a render is offline |
 | 2026-11-16 | minor | bug 15 fixed: routing loops are refused |
 | 2026-11-16 | minor | bug 14 was not one: a mono bus into a stereo aux is as loud as a centred mono track |
 | 2026-11-16 | minor | bug 13 fixed: a track preset drops the old modules' automation |
