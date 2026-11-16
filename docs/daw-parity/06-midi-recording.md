@@ -219,7 +219,7 @@ Compared in full in section 7; listed here for what matters while recording.
 | Import a standard MIDI file with its tempo map | ● | ● | ● | ● | **Works** (formats 0, 1 and 2; tempo optional) |
 | Format 0 split by channel; markers imported | ● | ● | ● | ● | **Missing** (markers are read, not placed) |
 | Imported tracks ready to record on | ● | ● | ● | ● | **Works**: they listen to every MIDI input |
-| Export a MIDI file | ● | ● | ● | ● | **Works**; ignores clip trims and exports muted clips (bug 21) |
+| Export a MIDI file | ● | ● | ● | ● | **Works**: what plays (trims kept, muted clips left out) |
 
 ## Bugs found on the way
 
@@ -247,7 +247,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip` | `ui-egui/src/musical_typing.rs` |
 | 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs` | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
-| 21 | MIDI export writes notes outside a clip's trimmed window and includes muted clips | `engine/src/io.rs:492-585` |
+| 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs` | `engine/src/io.rs` (`export_midi`) |
 | 22 | Settings stored that nothing reads: MIDI Merge, QuickPunch, TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, and a second set of device flags | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
 | 23 | The web build shows Musical Typing and MIDI Input Devices though it has no MIDI | `ui-egui/src/lib.rs:996-999` |
 
@@ -323,3 +323,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 13 fixed: module MIDI recorded in a loop prints over the loop |
 | 2026-11-16 | minor | Bug 18 fixed: Musical Typing's step mode uses the velocity and grows the clip |
 | 2026-11-16 | minor | Bug 19 fixed: MIDI Real-Time Properties shows the track's values, writes what moved and undoes |
+| 2026-11-16 | minor | Bug 21 fixed: MIDI export keeps clip trims and leaves muted clips out |

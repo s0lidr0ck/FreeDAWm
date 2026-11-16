@@ -37,6 +37,29 @@ fn new_and_imported_midi_tracks_listen_to_every_input() {
     }
 }
 
+/// Bug 21: MIDI export writes what plays: a clip's trimmed window (a note running past its end
+/// ends there) and no muted clip.
+#[test]
+fn midi_export_keeps_trims_and_leaves_muted_clips_out() {
+    let mut e = Engine::default();
+    let t = new_track(&mut e, "instrument");
+    let mut seq = Sequence::default();
+    // A quarter is 960 ticks, 24,000 samples at 120 bpm.
+    seq.notes.extend([note(60, 0, 960), note(62, 960, 1920), note(64, 2880, 960)]);
+    let id = e.session_mut().new_clip_id();
+    // Two quarters long: the second note runs past its end, the third is outside it.
+    e.session_mut().track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(id, "m", 0, 48_000, seq.clone()));
+    let id2 = e.session_mut().new_clip_id();
+    let mut muted = Clip::midi(id2, "muted", 96_000, 96_000, seq);
+    muted.muted = true;
+    e.session_mut().track_mut(t).unwrap().playlist_mut().unwrap().clips.push(muted);
+    let bytes = soundcraft_engine::io::export_midi(&e, Some(&[t])).unwrap();
+    let smf = soundcraft_midi::read_smf(&bytes).unwrap();
+    let notes: Vec<(u8, i64, i64)> = smf.tracks.iter().flat_map(|tr| tr.sequence.notes.iter().map(|n| (n.pitch, n.start, n.length))).collect();
+    let q = i64::from(soundcraft_midi::PPQ);
+    assert_eq!(notes, vec![(60, 0, q), (62, q, q)]);
+}
+
 /// Bug 19: MIDI Real-Time Properties changes are an undo step.
 #[test]
 fn midi_real_time_properties_can_be_undone() {

@@ -559,21 +559,23 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
     }
     for t in chosen {
         let mut seq = soundcraft_midi::Sequence::default();
-        for c in t.clips() {
-            if let ClipContent::Midi { sequence } = &c.content {
-                let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
-                for n in &sequence.notes {
-                    let mut n = *n;
-                    let (a, b) = (file_tick(n.start.saturating_add(base)), file_tick(n.end().saturating_add(base)));
-                    n.start = a;
-                    n.length = (b - a).max(1);
-                    seq.notes.push(n);
-                }
-                for ev in &sequence.ctrls {
-                    let mut ev = *ev;
-                    ev.tick = file_tick(ev.tick.saturating_add(base));
-                    seq.ctrls.push(ev);
-                }
+        // What plays: unmuted clips, within their trimmed window (notes cut at the clip's end).
+        for c in t.clips().iter().filter(|c| !c.muted) {
+            let Some(sequence) = c.midi_playing() else { continue };
+            let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+            let len = s.tempo.samples_to_ticks(c.end(), s.sample_rate).saturating_sub(base);
+            for n in sequence.notes.iter().filter(|n| (0..len).contains(&n.start)) {
+                let mut n = *n;
+                let end = n.end().min(len);
+                let (a, b) = (file_tick(n.start.saturating_add(base)), file_tick(end.saturating_add(base)));
+                n.start = a;
+                n.length = (b - a).max(1);
+                seq.notes.push(n);
+            }
+            for ev in sequence.ctrls.iter().filter(|x| (0..len).contains(&x.tick)) {
+                let mut ev = *ev;
+                ev.tick = file_tick(ev.tick.saturating_add(base));
+                seq.ctrls.push(ev);
             }
         }
         seq.sort();
