@@ -214,8 +214,10 @@ fn search<'a>(st: &'a PresetState, q: &str) -> Vec<&'a PresetEntry> {
     st.entries.iter().filter(|p| format!("{} {} {} {}", p.name, p.desc, p.group, p.tags).to_lowercase().contains(&q)).collect()
 }
 
-/// A preset's parameters (only ones the plugin has, finite) and its extra block.
-fn decode(host: &Host, p: &PresetEntry, extra_key: &str) -> Option<(String, Map<String, Value>, Option<Value>)> {
+/// A preset's parameters (only ones the plugin has, finite, and for a user preset only the ones
+/// the editor keeps in presets: an older file that holds the rest does not restore them) and its
+/// extra block.
+fn decode(host: &Host, st: &PresetState, p: &PresetEntry, extra_key: &str) -> Option<(String, Map<String, Value>, Option<Value>)> {
     let v: Value = serde_json::from_str(&p.json).ok()?;
     let extra = (!extra_key.is_empty()).then(|| v.get(extra_key).cloned()).flatten().filter(|e| !e.is_null());
     if p.is_user && v.get("params").is_some() {
@@ -224,7 +226,7 @@ fn decode(host: &Host, p: &PresetEntry, extra_key: &str) -> Option<(String, Map<
             .and_then(Value::as_object)
             .into_iter()
             .flatten()
-            .filter(|(k, val)| host.info.params.iter().any(|pi| pi.id == k.as_str()) && val.as_f64().is_some_and(f64::is_finite))
+            .filter(|(k, val)| host.info.params.iter().any(|pi| pi.id == k.as_str()) && in_presets(st, k) && val.as_f64().is_some_and(f64::is_finite))
             .map(|(k, val)| (k.clone(), val.clone()))
             .collect();
         return Some((p.name.clone(), params, extra));
@@ -237,7 +239,7 @@ fn decode(host: &Host, p: &PresetEntry, extra_key: &str) -> Option<(String, Map<
 /// `loadPreset`: the parameters as one undo step (left open for the extra; see
 /// [`BrowserOut::recalled`]).
 fn load(app: &mut SoundApp, host: &Host, st: &mut PresetState, p: &PresetEntry, out: &mut BrowserOut) {
-    let Some((name, params, extra)) = decode(host, p, st.extra_key) else {
+    let Some((name, params, extra)) = decode(host, st, p, st.extra_key) else {
         show_message(st, "Not a preset", 0.0);
         return;
     };
@@ -337,7 +339,7 @@ fn preset_values(host: &Host, st: &PresetState, name: &str) -> Map<String, Value
             return crate::fs_presets::factory_recall(host.info, n, js).map_or_else(defaults, |(_, m)| m);
         }
     }
-    st.entries.iter().find(|e| e.name == name).and_then(|e| decode(host, e, "")).map_or_else(defaults, |(_, m, _)| m)
+    st.entries.iter().find(|e| e.name == name).and_then(|e| decode(host, st, e, "")).map_or_else(defaults, |(_, m, _)| m)
 }
 
 /// Marks the module's preset clean (`setCurrentPreset (name, false)`: a load or save just named
@@ -673,6 +675,33 @@ fn toggle_favourite(app: &SoundApp, host: &Host, st: &mut PresetState, name: &st
     }
 }
 
+/// A user preset file, whichever view saves it (the wide editor's browser, the narrow drawer's
+/// menu): the format, plugin, name and tags, every parameter but Bypass and what the editor keeps
+/// out of presets (`skip`: a link group, a captured profile, LevelUp's reference and learn
+/// state), at `value`, and the editor's extra block (CleanQ's guides) under its key.
+pub(crate) fn user_preset_body(
+    info: &soundcraft_dsp::PluginInfo,
+    skip: &[&str],
+    value: impl Fn(&str) -> f32,
+    name: &str,
+    tags: &str,
+    extra: Option<(&str, Value)>,
+) -> Value {
+    let params: Map<String, Value> =
+        info.params.iter().filter(|p| p.id != "bypass" && !skip.contains(&p.id)).map(|p| (p.id.to_string(), json!(value(p.id)))).collect();
+    let mut body = json!({"format": "soundcraft-plugin-preset", "plugin": info.id, "name": name, "tags": tags, "params": params});
+    if let (Some((key, e)), Some(o)) = (extra, body.as_object_mut()) {
+        o.insert(key.to_string(), e);
+    }
+    body
+}
+
+/// Whether `name` is one of `info`'s factory presets (a user preset of that name would be hidden
+/// behind it in every list, so a save refuses it).
+pub(crate) fn is_factory_name(info: &soundcraft_dsp::PluginInfo, name: &str) -> bool {
+    crate::fs_presets::factory_groups(info).iter().any(|(_, list)| list.iter().any(|(n, _)| *n == name))
+}
+
 /// `savePreset`.
 fn save_user(app: &mut SoundApp, host: &Host, st: &mut PresetState, now: f64) {
     let name = st.name_box.trim().to_string();
@@ -690,11 +719,8 @@ fn save_user(app: &mut SoundApp, host: &Host, st: &mut PresetState, now: f64) {
     let Some(dir) = user_dir(app, host.info.id) else { return };
     let clean = if name.is_empty() { "Preset".to_string() } else { soundcraft_engine::io::sanitize_name(&name) };
     let existed = st.entries.iter().any(|e| e.is_user && e.name == clean);
-    let params: Map<String, Value> = host.info.params.iter().map(|p| (p.id.to_string(), json!(super::param(host, p.id)))).collect();
-    let mut body = json!({"format": "soundcraft-plugin-preset", "plugin": host.info.id, "name": clean, "tags": st.tags_out, "params": params});
-    if let (false, Some(extra), Some(o)) = (st.extra_key.is_empty(), st.extra_out.clone(), body.as_object_mut()) {
-        o.insert(st.extra_key.to_string(), extra);
-    }
+    let extra = st.extra_out.clone().filter(|_| !st.extra_key.is_empty()).map(|e| (st.extra_key, e));
+    let body = user_preset_body(host.info, st.not_in_presets, |id| super::param(host, id), &clean, &st.tags_out, extra);
     let ok = disk::write(&dir.join(format!("{clean}.json")), &body.to_string());
     if !ok {
         if !st.quiet {
@@ -733,5 +759,38 @@ fn delete_user(app: &mut SoundApp, host: &Host, st: &mut PresetState, now: f64, 
     }
     if !st.quiet {
         show_message(st, "Deleted", now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Built-in effects parity, bug 3: the narrow drawer's Save wrote no name or tags, every stored
+    /// parameter (Bypass and what the editor keeps out of presets too), no CleanQ guides, and
+    /// took a factory preset's name. Both views now write through `user_preset_body`, and the
+    /// drawer refuses a factory name (`is_factory_name`).
+    #[test]
+    fn one_body_for_every_save_path() {
+        let info = soundcraft_dsp::plugin_info("fs_levelup").unwrap();
+        let skip = crate::editors::not_in_presets(info.id);
+        assert!(skip.contains(&"reference") && skip.contains(&"learn"));
+        let extra = Some(("x", json!({"k": 1})));
+        let body = user_preset_body(info, skip, |id| info.param(id).map_or(0.0, |p| p.default), "Mine", "loud", extra);
+        assert_eq!(body["name"], "Mine");
+        assert_eq!(body["tags"], "loud");
+        assert_eq!(body["format"], "soundcraft-plugin-preset");
+        assert_eq!(body["x"], json!({"k": 1}));
+        let params = body["params"].as_object().unwrap();
+        for id in skip.iter().chain(&["bypass"]) {
+            assert!(!params.contains_key(*id), "{id}");
+        }
+        assert_eq!(params.len(), info.params.iter().filter(|p| p.id != "bypass" && !skip.contains(&p.id)).count());
+        // The drawer and the wide editor agree on what is left out.
+        assert_eq!(crate::editors::not_in_presets("fs_chamber"), &["mix", "level"]);
+        let sat = soundcraft_dsp::plugin_info("fs_sat").unwrap();
+        let factory = crate::fs_presets::factory_groups(sat)[0].1[0].0;
+        assert!(is_factory_name(sat, factory));
+        assert!(!is_factory_name(sat, "My Own Sat"));
     }
 }

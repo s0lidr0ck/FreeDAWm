@@ -94,7 +94,7 @@ pub(crate) struct Editor {
 
 /// Draws LevelUp's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (LevelUp's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 6] = ["linkGroup", "reference", "refSlot", "preview", "normalize", "learn"];
+pub(crate) const NOT_IN_PRESETS: [&str; 6] = ["linkGroup", "reference", "refSlot", "preview", "normalize", "learn"];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);

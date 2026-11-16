@@ -58,7 +58,7 @@ pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 const GUARD_COLOUR: Color32 = argb(0xFFFF_C46B);
 
 /// A/B and Undo walk every parameter.
-const FAMILY: Family = Family::new("Lull", &[]);
+pub(crate) const FAMILY: Family = Family::new("Lull", &[]);
 
 /// The widths of the first row's groups (Threshold, Shape, Time) and the second's (Detector,
 /// Output); each row fills the editor with [`GAP`] between its groups.

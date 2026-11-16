@@ -63,7 +63,7 @@ pub const SIZE: Vec2 = vec2(1040.0, K_HEIGHT);
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFFC9_9BFF));
 
 /// The preset catalogue's key. Capture and Link are not a preset's business.
-const FAMILY: Family = Family::new("CopyQ", &["capture", "link"]);
+pub(crate) const FAMILY: Family = Family::new("CopyQ", &["capture", "link"]);
 
 const FOOT_NOTE: &str = "Capture a sound and save it as a profile \u{00B7} pick profiles to match to \u{00B7} drag the display's edges and its three splits to set where, and how much";
 

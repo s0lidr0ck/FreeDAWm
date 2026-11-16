@@ -206,7 +206,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Factory presets | ● | ● | ● | ● | **Works**: 936, on 24 of the 33 listed effects |
-| Save and load your own | ● | ● | ● | ● | **Works**, with two save paths that write different things (bugs 1 and 3) |
+| Save and load your own | ● | ● | ● | ● | **Works**; both save paths write the same file |
 | Rename and delete your own | ● | ● | ● | ● | **Partial**: delete in the wide editors; no rename |
 | Browser with search, tags and favourites | ◐ | ● | ● | ● | **Works** |
 | Step to next and previous | ● | ● | ● | ● | **Works** in the wide editors |
@@ -257,9 +257,9 @@ them is the owner's decision, not a repair.
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | Saving a user preset from a wide editor stores parameters the editor deliberately keeps out of presets (LevelUp's reference, link group and learn state; CopyQ capture; others). Loading it restores them | `ui-egui/src/editor_kit/presets.rs:221-230, 693` |
+| 1 | **Fixed.** Saving a user preset from a wide editor stored the parameters the editor keeps out of presets (LevelUp's reference, link group and learn state; CopyQ capture; ChamberMade's Mix and Level; others) and loading restored them. The file now leaves them and Bypass out, and a load ignores them in older files (`editor_kit/presets.rs`: `user_preset_body`, `decode`). Test: `ui-egui/tests/editor_kit.rs` | `ui-egui/src/editor_kit/presets.rs:221-230, 693` |
 | 2 | **Fixed.** On a track wider than stereo, 24 effects (every engine, Mend, Vault) processed left and right only; centre, LFE and surrounds passed unprocessed. They now run one instance on the first two channels and a mono instance on each other channel (`dsp/src/plugins/per_channel.rs`), with the same parameters, transport, assets and state. Detection is not linked across them. Test: `per_channel.rs` (a 5.1 surround channel sounds as on a mono track) | `dsp/src/plugins/fs/*/mod.rs` (`channels.min(2)`) |
-| 3 | Saving from the narrow drawer writes no name or tags, skips the Dist knob bank and the Amp, Vault and CleanQ loaded files, and lets a user preset share a factory preset's name, after which the factory one wins | `ui-egui/src/panels.rs:971-1029` |
+| 3 | **Fixed.** Saving from the narrow drawer wrote no name or tags, every stored parameter, no CleanQ guides, and let a user preset take a factory preset's name (after which the factory one won). It now writes the wide editor's file (`user_preset_body`: name, tags, the same parameters, CleanQ's guides) and refuses a factory name; its loads skip what the editors keep out of presets (`editors::not_in_presets`). **Claim corrected:** the Dist knob bank and the Amp and Vault loaded files are not in the wide editor's presets either, so the two paths did not differ there. Test: `editor_kit/presets.rs` | `ui-egui/src/panels.rs:971-1029` |
 | 4 | **Fixed.** Bypass was an instant switch with no reset, and the track's delay compensation changed in the same block. A bypass now crossfades (the mixer's 10 ms), a bypassed insert keeps its latency (its input goes past it through a delay of that length, so no track moves), and a plugin switched back on is reset and heard once its latency has passed (`insert_step` in `mix/src/lib.rs`). Test: `mix/tests/insert_bypass.rs` | `mix/src/lib.rs:1939, 2721, 2770` |
 | 5 | *By design.* Pitch reports no latency though its shifted voices run 6–20 ms late; Sat and Vint also report none | `dsp/src/plugins/fs/pitch/mod.rs:14-16`; `fs/sat/mod.rs:16`; `fs/vint/mod.rs:40` |
 | 6 | **Partly fixed.** Delay reported an 8 s tail whatever the feedback or freeze, Mod 0.25 s, ChamberMade four tape repeats, so a bounce or freeze could cut the tail. Delay now reports at least 8 s and as long as its echoes take to fall 80 dB (60 s for Freeze or a runaway loop); Mod adds its flangers' Regen ring; ChamberMade counts tape repeats to -80 dB. Filter still reports 1 s: left for now (its file is being changed for bug 8); a resonant setting low down can ring longer. Tests: delay, mod and chamber `tests.rs` | `dsp/src/plugins/fs/delay/mod.rs:251-254`; `fs/mod_engine/mod.rs:398-401`; `fs/filter/mod.rs:303`; `fs/chamber/mod.rs:409-414` |
@@ -340,3 +340,5 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 18 fixed: Time Shift changes during a crossfade do not click |
 | 2026-11-16 | minor | Bug 14 fixed: replacing a chain removes the old modules' automation lanes |
 | 2026-11-16 | minor | Bug 10 fixed: a partial Comp preset sounds the same wherever it is loaded |
+| 2026-11-16 | minor | Bug 1 fixed: a user preset saved from a wide editor leaves out what the editor keeps out of presets |
+| 2026-11-16 | minor | Bug 3 fixed: the narrow drawer saves the wide editor's preset file and refuses factory names; the claim about the Dist bank and loaded files corrected |

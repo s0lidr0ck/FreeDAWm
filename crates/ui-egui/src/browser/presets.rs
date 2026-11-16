@@ -250,11 +250,17 @@ pub fn vstpreset_state(path: &Path, class_id: &str) -> Result<(String, Vec<u8>),
 fn params_of_json(info: &soundcraft_dsp::PluginInfo, name: &str, text: &str) -> Option<Map<String, Value>> {
     let v: Value = serde_json::from_str(text).ok()?;
     if let Some(obj) = v.get("params").and_then(Value::as_object) {
-        let params = obj
+        let mut params = obj
             .iter()
-            .filter(|(k, val)| info.params.iter().any(|pi| pi.id == k.as_str()) && val.as_f64().is_some_and(f64::is_finite))
+            .filter(|(k, val)| {
+                info.params.iter().any(|pi| pi.id == k.as_str())
+                    && k.as_str() != "bypass"
+                    && !crate::editors::not_in_presets(info.id).contains(&k.as_str())
+                    && val.as_f64().is_some_and(f64::is_finite)
+            })
             .map(|(k, val)| (k.clone(), val.clone()))
             .collect();
+        crate::fs_presets::fill_missing(info, &mut params);
         return Some(params);
     }
     crate::fs_presets::factory_recall(info, name, text).map(|(_, p)| p)

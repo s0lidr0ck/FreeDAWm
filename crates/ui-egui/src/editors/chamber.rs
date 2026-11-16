@@ -64,7 +64,7 @@ pub const PALETTE: VstPalette = VstPalette {
 };
 
 /// `PresetCatalogue`: a preset carries the room and its voicing, not Mix, Level or Bypass.
-const FAMILY: Family = Family::new("ChamberMade", &["mix", "level"]);
+pub(crate) const FAMILY: Family = Family::new("ChamberMade", &["mix", "level"]);
 
 /// The undo stack's cap (`undoStack.size() > 32`).
 const UNDO_DEPTH: usize = 32;

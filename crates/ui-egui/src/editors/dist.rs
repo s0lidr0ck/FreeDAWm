@@ -49,7 +49,7 @@ const SWITCH_ROW_PREF_H: f32 = ROW_H + 4.0 + DESC_H;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFFFF7A2F));
 
 /// `getPresetParams` (circuit, Drive, Tone and the switches); A/B and undo take the whole rig.
-const FAMILY: Family = Family {
+pub(crate) const FAMILY: Family = Family {
     whole_rig: true,
     pills_push_undo: false,
     ..Family::new(

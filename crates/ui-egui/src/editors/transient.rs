@@ -45,7 +45,7 @@ pub const SIZE: Vec2 = vec2(860.0, K_DEFAULT_H);
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFFC4E86A));
 
 /// `PresetCatalogue`: the storage key, and what `getPresetParams` leaves out besides `bypass`.
-const FAMILY: Family = Family::new("TransientEngine", &["output"]);
+pub(crate) const FAMILY: Family = Family::new("TransientEngine", &["output"]);
 
 // ============================================================================ TransientConfig.h
 

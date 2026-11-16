@@ -150,7 +150,7 @@ pub(crate) struct Editor {
 
 /// Draws Comp's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (CompEngine's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 0] = [];
+pub(crate) const NOT_IN_PRESETS: [&str; 0] = [];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);

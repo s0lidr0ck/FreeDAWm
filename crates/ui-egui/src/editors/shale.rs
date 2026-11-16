@@ -84,7 +84,7 @@ pub const PRESET_PARAMS: [&str; 19] = [
 ];
 
 /// The preset facts: `storageKey`, and what `getPresetParams` leaves out besides Bypass.
-const FAM: Family = Family::new(
+pub(crate) const FAM: Family = Family::new(
     "Shale",
     &[
         "threshold",

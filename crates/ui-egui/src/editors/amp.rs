@@ -231,7 +231,7 @@ pub(crate) struct Editor {
 
 /// Draws Amp's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (Amp's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 15] = [
+pub(crate) const NOT_IN_PRESETS: [&str; 15] = [
     "quality",
     "input",
     "jtmInput",

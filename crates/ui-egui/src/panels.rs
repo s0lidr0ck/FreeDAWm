@@ -1002,7 +1002,12 @@ pub(crate) fn preset_menu(
                     .and_then(serde_json::Value::as_object)
                     .into_iter()
                     .flatten()
-                    .filter(|(k, val)| info.params.iter().any(|pi| pi.id == k.as_str()) && val.as_f64().is_some_and(f64::is_finite))
+                    .filter(|(k, val)| {
+                        info.params.iter().any(|pi| pi.id == k.as_str())
+                            && k.as_str() != "bypass"
+                            && !crate::editors::not_in_presets(info.id).contains(&k.as_str())
+                            && val.as_f64().is_some_and(f64::is_finite)
+                    })
                     .map(|(k, val)| (k.clone(), val.clone()))
                     .collect();
                 let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": params, "preset": n}));
@@ -1017,11 +1022,21 @@ pub(crate) fn preset_menu(
         ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
         if ui.button("Save").clicked() {
             let clean = soundcraft_engine::io::sanitize_name(&name);
-            let body = json!({"format": "soundcraft-plugin-preset", "plugin": info.id, "params": ins.params});
-            let ok = std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{clean}.json")), body.to_string()).is_ok();
-            app.ui.status = if ok { format!("Saved preset {clean}") } else { "Could not save the preset".into() };
-            if ok {
-                let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": {}, "preset": clean}));
+            if crate::editor_kit::presets::is_factory_name(info, &clean) {
+                // A user preset of a factory preset's name would never load (the factory one wins).
+                app.ui.status = format!("{clean} is a factory preset: pick another name");
+            } else {
+                // The file the wide editor's Save writes: name, tags, the same parameters, the
+                // editor's extra block.
+                let skip = crate::editors::not_in_presets(info.id);
+                let value = |id: &str| ins.params.get(id).copied().or_else(|| info.param(id).map(|p| p.default)).unwrap_or(0.0);
+                let extra = if info.id == "fs_cleanq" { crate::editors::cleanq::preset_extra(ui.ctx(), tid, ins) } else { None };
+                let body = crate::editor_kit::presets::user_preset_body(info, skip, value, &clean, "", extra);
+                let ok = std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{clean}.json")), body.to_string()).is_ok();
+                app.ui.status = if ok { format!("Saved preset {clean}") } else { "Could not save the preset".into() };
+                if ok {
+                    let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": {}, "preset": clean}));
+                }
             }
         }
     });

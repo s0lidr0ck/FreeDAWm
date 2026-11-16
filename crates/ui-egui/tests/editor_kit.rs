@@ -389,3 +389,37 @@ fn chambermade_and_shale_save_whatever_the_box_says_silently() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Built-in effects parity, bug 1: Save in a wide editor wrote every parameter, the ones the
+/// editor keeps out of presets too (here ChamberMade's Mix and Level), so loading the preset
+/// later moved them. The file now leaves them out, as the editor's own recall does.
+#[test]
+fn a_saved_user_preset_leaves_out_what_the_editor_keeps_out_of_presets() {
+    let plugin = "fs_chamber";
+    let dir = std::env::temp_dir().join(format!("sc-editor-save-skips-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = app_with_tracks(&["Pad"]);
+    app.preset_dir = Some(dir.clone());
+    let (t, m) = add(&mut app, "Pad", plugin);
+    app.ui.drawers.insert(t, m);
+    let mut h = harness(app, vec2(1800.0, 1000.0), "dark");
+    h.state_mut().run("ui.mix.drawer", json!({"track": t.0, "module": m.0, "tab": "Presets"})).unwrap();
+    h.run_steps(4);
+    let name_box =
+        h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).max_by(|a, b| a.min.y.total_cmp(&b.min.y)).unwrap().center();
+    click(&mut h, name_box);
+    key(&mut h, egui::Key::A, Modifiers::COMMAND);
+    key(&mut h, egui::Key::Backspace, Modifiers::NONE);
+    type_text(&mut h, "Mine");
+    let save = h.get_by_label("Save").rect().center();
+    click(&mut h, save);
+    h.run_steps(2);
+    let file = dir.join(soundcraft_ui_egui::preset_folder_name(plugin)).join("Mine.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let params = v["params"].as_object().unwrap();
+    for skipped in ["mix", "level", "bypass"] {
+        assert!(!params.contains_key(skipped), "{skipped} is not in the preset");
+    }
+    assert!(params.contains_key("decay"), "the rest is");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -137,7 +137,7 @@ pub(crate) struct Editor {
 
 /// Draws Twine's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (Twine's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 2] = ["match", "chaff"];
+pub(crate) const NOT_IN_PRESETS: [&str; 2] = ["match", "chaff"];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);

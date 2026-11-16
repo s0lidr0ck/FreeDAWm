@@ -40,7 +40,7 @@ const DEFAULT_WIDTH: f32 = 900.0;
 /// `kAccent`: the original UI's PEDAL.accent.
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFF7BD4FF));
 
-const FAMILY: Family = Family::new("PitchEngine", &["trim", "level"]);
+pub(crate) const FAMILY: Family = Family::new("PitchEngine", &["trim", "level"]);
 
 /// The main row's dials in `resized()`'s order (Detune joins at the end on H910).
 const MAIN_ORDER: [usize; 9] = [d::P_SUB, d::P_OCT_DOWN, d::P_DRY, d::P_OCT_UP, d::P_OCT2_UP, d::P_FIFTH, d::P_VOICE, d::P_PEDAL, d::P_GLIDE];

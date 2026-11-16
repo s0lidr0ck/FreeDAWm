@@ -44,7 +44,7 @@ pub const SIZE: Vec2 = vec2(860.0, K_DEFAULT_H);
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFFF08CA8));
 
 /// `PresetCatalogue`: the storage key, and what `getPresetParams` leaves out besides `bypass`.
-const FAMILY: Family = Family::new("SatEngine", &["output", "autoGain", "quality"]);
+pub(crate) const FAMILY: Family = Family::new("SatEngine", &["output", "autoGain", "quality"]);
 
 /// The engine's parameter ids by index (`Parameters.h`).
 const IDS: [&str; NUM_PARAMS] = ["circuit", "variant", "drive", "bias", "focus", "air", "mix", "output", "autoGain", "chanMode", "quality", "bypass"];
