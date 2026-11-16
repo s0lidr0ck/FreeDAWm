@@ -1024,8 +1024,10 @@ mod tests {
         let undo = e.undo_history().len();
         e.execute("event.midi_rtp", &json!({"track": t.0, "transpose": 7})).unwrap();
         assert_eq!(e.session().edit.value(&track_key("rtp", t, "transpose"), 0.0), 7.0);
+        // Real-Time Properties change what plays: an undo step (parity section 6, bug 19).
+        assert_eq!(e.undo_history().len(), undo + 1);
         let r = e.execute("event.midi_track_offsets", &json!({"track": t.0, "offset": 480})).unwrap();
         assert_eq!(r["offsets"][0]["offset"], 480.0);
-        assert_eq!(e.undo_history().len(), undo, "settings are not undo steps");
+        assert_eq!(e.undo_history().len(), undo + 1, "the offsets are a setting, not an undo step");
     }
 }
