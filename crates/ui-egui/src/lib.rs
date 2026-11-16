@@ -1524,14 +1524,41 @@ impl SoundApp {
         self.plan_recording(takes, plan.pass, plan.loop_from);
     }
 
+    /// QuickPunch: Record pressed while a take records punches out (playback goes on, the
+    /// clips are heard again) or back in; the take keeps recording throughout, so each punch
+    /// has handles, and is placed punch by punch with crossfades when it stops.
+    fn quick_punch(&mut self) {
+        let at = self.position();
+        let Some(plan) = &mut self.take_plan else { return };
+        let start = plan.start;
+        let punched_in = soundcraft_engine::io::toggle_punch(&mut plan.punches, start, at);
+        // Live: inside an open punch the armed tracks hear their input; outside, their clips.
+        self.punch = Some(if punched_in { Range::new(at, Samples::MAX) } else { Range::point(at) });
+        if let Some(p) = &self.player {
+            p.set_punch(self.punch);
+        }
+        self.ui.status = if punched_in { "Punched in".into() } else { "Punched out: playing on (Record punches in again)".into() };
+        if let Some(root) = self.autosave_dir.clone() {
+            self.queue_autosave(root);
+        }
+    }
+
     /// Remember where the armed `takes` go (split into passes of `pass` when loop recording),
     /// placed earlier by the record offset, and autosave that plan with the session.
     fn plan_recording(&mut self, takes: Vec<soundcraft_engine::io::Take>, pass: Option<Samples>, loop_from: Option<Samples>) {
         let rate = self.recorder.as_ref().map_or(0, |r| r.sample_rate);
         self.take_reported = None;
         let latency = self.take_latency();
-        self.take_plan =
-            Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes, latency, loop_from });
+        self.take_plan = Some(soundcraft_engine::io::Recording {
+            start: self.record_start,
+            pass,
+            punch: self.punch,
+            rate,
+            takes,
+            latency,
+            loop_from,
+            punches: Vec::new(),
+        });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -2172,6 +2199,7 @@ impl SoundApp {
             takes: Vec::new(),
             latency,
             loop_from: None,
+            punches: Vec::new(),
         });
         self.punch = None;
         self.autosaved_rev = 0;
@@ -2313,7 +2341,9 @@ impl SoundApp {
                     }
                 }
                 TransportRequest::Record { countoff } => {
-                    if self.engine.transport.recording {
+                    if self.engine.transport.recording && self.is_playing() && self.engine.session().edit.quickpunch {
+                        self.quick_punch();
+                    } else if self.engine.transport.recording {
                         self.stop_play();
                     } else {
                         self.start_recording(countoff);

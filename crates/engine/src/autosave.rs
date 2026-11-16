@@ -642,6 +642,7 @@ mod tests {
             takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: None,
+            punches: Vec::new(),
         };
         let clips = |e: &Engine| e.session().track(track).unwrap().clips().iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
         let w = Autosaver::new(root.clone());
@@ -700,6 +701,7 @@ mod tests {
                 .collect(),
             latency: 0,
             loop_from: None,
+            punches: Vec::new(),
         };
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan));

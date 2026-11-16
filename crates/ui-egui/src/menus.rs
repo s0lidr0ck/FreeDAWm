@@ -800,6 +800,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
     Some(match id {
         Some("options.loop_playback") => e.loop_playback,
         Some("options.loop_record") => e.loop_record,
+        Some("options.quickpunch") => e.quickpunch,
         Some("options.pre_post_roll") => e.pre_post_roll,
         Some("options.link_timeline_edit") => e.link_timeline_edit,
         Some("options.insertion_follows_playback") => e.insertion_follows_playback,

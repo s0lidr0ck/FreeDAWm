@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (take bit depth, file type and BWF timestamp) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (QuickPunch punches out and in on the fly; crossfades at punch points) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -31,7 +31,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Arming and inputs | Arming works; inputs are mono or stereo hardware, or a bus | Medium: wrong channels with more than two (bug 10) |
 | B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly | Small: no discard-take |
-| C. Punching | Automatic punch with handles works | Medium: no punch out on the fly, no punch crossfades, four modes are labels |
+| C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
 | D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
 | E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
@@ -81,9 +81,9 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Automatic punch at a range, with pre- and post-roll | ● | ● | ● | ● | **Works**: plays in, records the range, plays out and stops |
 | Audio before and after the punch kept, so the edit can be trimmed back | ● | ● | ● | ● | **Works**: the whole pass is in the file |
 | Punch in on the fly | ● | ● | ● | ● | **Works** |
-| Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Missing**: the second Record press stops the transport |
-| Crossfades at the punch points | ● | ● | ● | ● | **Missing**: a hard cut at both ends |
-| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Flag only**: QuickPunch, TrackPunch, DestructivePunch and Destructive Record store a value nothing reads |
+| Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Works** with Options › QuickPunch: Record while recording punches out (playback goes on, the clips are heard again) and in again, any number of times; the take records throughout, so each punch has handles. Without QuickPunch Record stops, as before. MIDI takes ignore the punches |
+| Crossfades at the punch points | ● | ● | ● | ● | **Works**: 10 ms, centred on each punch point, out of the take's and the old audio's handles (at most half a short punch) |
+| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Partial**: QuickPunch works (above, back on the Options menu); TrackPunch, DestructivePunch and Destructive Record stay off the menus and store a value nothing reads |
 
 The four Pro Tools modes exist there for historical reasons; the others record non-destructively
 with handles all the time, as FreeDAWm already does. They are worth hiding or wiring, not a gap in
@@ -194,7 +194,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Record from a bus or a track's output (internal recording) | 10–16 | **Done** (bus input; a track's output via a bus); closed bug 2 |
 | Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | **Done** (the switch) |
 | Bit depth and file type for takes; BWF timestamp and originator | 5–8 | **Done** |
-| Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | QuickPunch can then mean something or go |
+| Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | **Done** (QuickPunch) |
 | Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | Replaces the unused record-mode value; closes bug 4 by design |
 | Discard take; delete files of undone takes when the session closes | 3–5 | |
 | A small buffer for live tracks and a large one for playback | 15–22 | The largest item; shared with section 1's engine work |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

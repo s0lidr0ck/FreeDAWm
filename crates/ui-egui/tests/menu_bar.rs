@@ -20,7 +20,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Event", 15),
     ("Process", 14),
     ("AI", 13),
-    ("Options", 15),
+    ("Options", 16),
     ("Setup", 9),
     ("Window", 33),
 ];
@@ -142,7 +142,6 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "event.tempo_linear",
         "event.tempo_scale",
         "automation.write_range",
-        "options.quickpunch",
         "options.trackpunch",
         "options.layered_editing",
         "options.midi_thru",

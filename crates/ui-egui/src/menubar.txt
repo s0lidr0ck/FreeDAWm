@@ -514,6 +514,7 @@ Options > ## Recording & playback
 Options > Click
 Options > Loop Playback
 Options > Loop Record
+Options > QuickPunch
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Video Track Online

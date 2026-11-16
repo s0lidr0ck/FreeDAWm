@@ -2484,6 +2484,39 @@ pub struct Recording {
     /// that loop. `None` (and plans saved before it existed): `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_from: Option<Samples>,
+    /// Punches made on the fly (QuickPunch: Record pressed while recording punches out, again
+    /// punches in), in order; the last may be open (its end `Samples::MAX`). When there are any
+    /// the takes are kept to them instead of `punch`, with crossfades at each punch point.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub punches: Vec<Range>,
+}
+
+/// QuickPunch: Record pressed at `at` while a take that started at `start` records. Punched in
+/// (no punch yet, or the last still open), it punches out; punched out, it punches in again.
+/// Returns whether the take is punched in now.
+pub fn toggle_punch(punches: &mut Vec<Range>, start: Samples, at: Samples) -> bool {
+    match punches.last_mut() {
+        None => {
+            punches.push(Range::new(start, at.max(start)));
+            false
+        }
+        Some(last) if last.end == Samples::MAX => {
+            *last = Range::new(last.start, at.max(last.start));
+            false
+        }
+        Some(_) => {
+            if punches.len() < 1_000 {
+                punches.push(Range::new(at, Samples::MAX));
+            }
+            true
+        }
+    }
+}
+
+/// The crossfade at each punch point (10 ms): the take and the audio around it overlap by this,
+/// out of their handles, instead of a hard cut.
+fn punch_crossfade(s: &Session) -> Samples {
+    s.sample_rate.samples(0.010).max(2)
 }
 
 fn is_zero(x: &Samples) -> bool {
@@ -2614,7 +2647,8 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
     for (_, p, l) in &takes {
         stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
     }
-    add_recording_in(e, start, takes, plan.pass, plan.punch)
+    let punches: Vec<Range> = if plan.punches.is_empty() { plan.punch.into_iter().collect() } else { plan.punches.clone() };
+    add_recording_in(e, start, takes, plan.pass, &punches)
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -2622,7 +2656,7 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
 /// 1000), each pass after the first on a new playlist that copies the track's playlist from
 /// before the take (so only the loop differs between them).
 pub fn add_recording(e: &mut Engine, start: Samples, takes: Vec<(TrackId, PathBuf)>, pass: Option<Samples>) -> Vec<soundcraft_model::ClipId> {
-    add_recording_in(e, start, takes.into_iter().map(|(t, p)| (t, p, 0)).collect(), pass, None)
+    add_recording_in(e, start, takes.into_iter().map(|(t, p)| (t, p, 0)).collect(), pass, &[])
 }
 
 /// [`add_recording`] limited to the `punch` range (each clip is cut to it before it's placed, so
@@ -2635,7 +2669,7 @@ fn add_recording_in(
     start: Samples,
     takes: Vec<(TrackId, PathBuf, Samples)>,
     pass: Option<Samples>,
-    punch: Option<Range>,
+    punches: &[Range],
 ) -> Vec<soundcraft_model::ClipId> {
     let before = e.session_arc();
     let mut out = Vec::new();
@@ -2658,7 +2692,7 @@ fn add_recording_in(
             if let Some(x) = s.sources.last_mut() {
                 x.unsaved = false;
             }
-            place_take(s, tid, src, name, start, pass, punch, latency, &mut out);
+            place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
             continue;
         }
         let read =
@@ -2670,7 +2704,7 @@ fn add_recording_in(
         if let Some(x) = s.sources.last_mut() {
             x.unsaved = resampled;
         }
-        place_take(s, tid, src, name, start, pass, punch, latency, &mut out);
+        place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
     }
     if !out.is_empty() {
         e.push_undo("Record", before);
@@ -2687,10 +2721,11 @@ fn place_take(
     name: &str,
     start: Samples,
     pass: Option<Samples>,
-    punch: Option<Range>,
+    punches: &[Range],
     latency: Samples,
     out: &mut Vec<soundcraft_model::ClipId>,
 ) {
+    let xf = punch_crossfade(s);
     {
         let Some(x) = s.sources.iter().find(|x| x.id == src) else { return };
         let len = i64::try_from(x.frames).unwrap_or(0);
@@ -2715,18 +2750,28 @@ fn place_take(
                 break;
             }
             let at = start.saturating_add(from.saturating_sub(origin));
-            let (clip_start, cut, clip_len) = match punch {
-                Some(p) => {
-                    let Some(kept) = Range::new(at, at.saturating_add(n)).intersect(&p) else { continue };
-                    (kept.start, kept.start.saturating_sub(at), kept.len())
-                }
-                None => (at, 0, n),
+            let pass_span = Range::new(at, at.saturating_add(n));
+            // The pieces of this pass kept: the whole pass, or what each punch holds of it, with
+            // whether each end is a punch point.
+            let pieces: Vec<(Range, bool, bool)> = if punches.is_empty() {
+                vec![(pass_span, false, false)]
+            } else {
+                punches
+                    .iter()
+                    .filter_map(|p| pass_span.intersect(p).map(|k| (k, k.start == p.start, k.end == p.end && p.end != Samples::MAX)))
+                    .collect()
             };
+            if pieces.is_empty() {
+                continue;
+            }
             // A comping track (layers open, a record target, or take layers): each pass goes on a
             // take layer and into the comp.
             if s.track(tid).is_some_and(crate::cmd::comp::comping) {
-                let cid = s.new_clip_id();
-                out.push(crate::cmd::comp::record_pass(s, tid, Clip::audio(cid, name, src, from.saturating_add(cut), clip_start, clip_len)));
+                for (kept, _, _) in &pieces {
+                    let cid = s.new_clip_id();
+                    let off = from.saturating_add(kept.start.saturating_sub(at));
+                    out.push(crate::cmd::comp::record_pass(s, tid, Clip::audio(cid, name, src, off, kept.start, kept.len())));
+                }
                 continue;
             }
             if i > 0 {
@@ -2740,9 +2785,22 @@ fn place_take(
                     t.active_playlist = t.playlists.len() - 1;
                 }
             }
-            let cid = s.new_clip_id();
-            crate::edit::place_clip(s, tid, Clip::audio(cid, name, src, from.saturating_add(cut), clip_start, clip_len));
-            out.push(cid);
+            for (kept, punch_in, punch_out) in pieces {
+                let cid = s.new_clip_id();
+                let off = from.saturating_add(kept.start.saturating_sub(at));
+                crate::edit::place_clip(s, tid, Clip::audio(cid, name, src, off, kept.start, kept.len()));
+                out.push(cid);
+                // A crossfade at each punch point, out of the take's and the old audio's handles.
+                for (edge, here) in [(kept.start, punch_in), (kept.end, punch_out)] {
+                    let abuts = s.track(tid).is_some_and(|t| t.clips().iter().any(|c| c.id != cid && (c.end() == edge || c.start == edge)));
+                    // Never past the middle of a short punch: its other punch point keeps its own.
+                    let h = (xf / 2).min(kept.len() / 2);
+                    if here && abuts && h > 0 {
+                        let r = Range::new(edge.saturating_sub(h), edge.saturating_add(h));
+                        crate::edit::create_fades(s, tid, r, soundcraft_model::FadeShape::default());
+                    }
+                }
+            }
         }
     }
 }
@@ -2965,10 +3023,12 @@ mod record_tests {
             takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: None,
+            punches: Vec::new(),
         };
         place_recording(&mut e, &plan, vec![(vox, take)]);
         let clips: Vec<_> = e.session().track(vox).unwrap().clips().iter().map(|c| (c.start, c.length, c.source_offset())).collect();
-        assert_eq!(clips, vec![(0, 1_400, 0), (1_400, 200, 400), (1_600, 1_400, 1_600)]);
+        // Crossfades at both punch points, each at most half the punch (100 of 200) on each side.
+        assert_eq!(clips, vec![(0, 1_500, 0), (1_300, 400, 300), (1_500, 1_500, 1_500)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2981,6 +3041,7 @@ mod record_tests {
             takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: rs.loop_from,
+            punches: Vec::new(),
         }
     }
 
@@ -3022,7 +3083,9 @@ mod record_tests {
         assert_eq!(rs.punch, Some(Range::new(1_500, Samples::MAX)));
         place_recording(&mut e, &plan_of(rs.start, &rs, &take, vox), vec![(vox, take.clone())]);
         // The old clip is kept up to the insertion point; the take from there, its pre-roll trimmed.
-        assert_eq!(clip_rows(&e, vox), vec![(0, 1_500, 0), (1_500, 1_000, 1_000), (2_500, 500, 2_500)]);
+        // A crossfade at the punch point (10 ms, half each side), out of the pre-roll's handle.
+        let h = punch_crossfade(e.session()) / 2;
+        assert_eq!(clip_rows(&e, vox), vec![(0, 1_500 + h, 0), (1_500 - h, 1_000 + h, 1_000 - h), (2_500, 500, 2_500)]);
         // Pre-roll off: no punch, as before.
         e.session_mut().edit.pre_post_roll = false;
         assert_eq!(record_start(&e.session().edit, None).punch, None);
@@ -3125,6 +3188,7 @@ mod record_tests {
             ],
             latency: 300,
             loop_from: None,
+            punches: Vec::new(),
         };
         place_recording(&mut e, &rec, vec![(vox, hw), (print, bus)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 700, 300)]);
@@ -3157,6 +3221,7 @@ mod record_tests {
             takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: true, from_device: true, tap_latency: 64, file: None }],
             latency: 300,
             loop_from: None,
+            punches: Vec::new(),
         };
         place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 636, 364)]);
@@ -3200,10 +3265,54 @@ mod record_tests {
             takes: vec![Take { track: vox, path: path.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 100,
             loop_from: None,
+            punches: Vec::new(),
         };
         place_recording(&mut e, &rec, vec![(vox, path.clone())]);
         let info = soundcraft_audio_io::probe(&std::fs::read(&path).unwrap(), None).unwrap();
         assert_eq!(info.bwf.unwrap().time_reference, 1_000_000 + 48_000 - 100);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quickpunch_punches_out_and_in_again_with_crossfades() {
+        let dir = test_dir("quickpunch");
+        let (base, take) = (dir.join("Audio Files/Base.wav"), dir.join("Audio Files/Vox_01.wav"));
+        write_take(&base, 10_000);
+        write_take(&take, 8_000);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        add_recording(&mut e, 0, vec![(vox, base)], None);
+        // Punched in at 1000 (Record while playing); out at 3000, in at 5000, out at 6000, in at
+        // 8000 and stopped at 9000 (the last punch is open).
+        let mut punches = Vec::new();
+        assert!(!toggle_punch(&mut punches, 1_000, 3_000));
+        assert!(toggle_punch(&mut punches, 1_000, 5_000));
+        assert!(!toggle_punch(&mut punches, 1_000, 6_000));
+        assert!(toggle_punch(&mut punches, 1_000, 8_000));
+        assert_eq!(punches, [Range::new(1_000, 3_000), Range::new(5_000, 6_000), Range::new(8_000, Samples::MAX)]);
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            latency: 0,
+            loop_from: None,
+            punches,
+        };
+        let ids = place_recording(&mut e, &rec, vec![(vox, take)]);
+        assert_eq!(ids.len(), 3, "a clip per punch");
+        let xf = punch_crossfade(e.session());
+        let t = e.session().track(vox).unwrap();
+        let takes: Vec<_> = t.clips().iter().filter(|c| ids.contains(&c.id)).map(|c| (c.start, c.end(), c.fade_in.len, c.fade_out.len)).collect();
+        // Each punch overlaps the old audio by the crossfade at its punch points (half each side),
+        // out of the handles: the first has none before the take's first frame, so it fades in
+        // over the half after. The last runs to where the take stopped (9000): no punch point.
+        let h = xf / 2;
+        assert_eq!(takes, [(1_000, 3_000 + h, h, xf), (5_000 - h, 6_000 + h, xf, xf), (8_000 - h, 9_000, xf, 0)]);
+        // The old audio stays between the punches and fades across them.
+        let old: Vec<_> = t.clips().iter().filter(|c| !ids.contains(&c.id)).map(|c| (c.start, c.end())).collect();
+        assert_eq!(old, [(0, 1_000 + h), (3_000 - h, 5_000 + h), (6_000 - h, 8_000 + h), (9_000, 10_000)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3245,7 +3354,7 @@ mod record_tests {
         write_samples(&path, &take);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, None);
+        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, &[]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 900, 100)]);
         let clip = e.session().track(vox).unwrap().clips()[0].clone();
         let buf = &e.session().pool.get(clip.source().unwrap()).unwrap().buffer();
@@ -3261,7 +3370,7 @@ mod record_tests {
         write_samples(&path, &vec![0.25; 2_550]);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 4_000, vec![(vox, path, 50)], Some(1_000), None);
+        add_recording_in(&mut e, 4_000, vec![(vox, path, 50)], Some(1_000), &[]);
         assert_eq!(clip_rows(&e, vox), vec![(4_000, 1_000, 50), (4_000, 1_000, 1_050), (4_000, 500, 2_050)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3274,7 +3383,7 @@ mod record_tests {
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
         // Frame k is at timeline 1000 + k - 100; the punch keeps 1400..1600 = frames 500..700.
-        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, Some(Range::new(1_400, 1_600)));
+        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, &[Range::new(1_400, 1_600)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_400, 200, 500)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3286,13 +3395,13 @@ mod record_tests {
         write_samples(&path, &vec![0.25; 1_000]);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), -30)], None, None);
+        add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), -30)], None, &[]);
         assert_eq!(clip_rows(&e, vox), vec![(1_030, 1_000, 0)]);
         // A hostile latency places nothing rather than overflowing.
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        assert!(add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), Samples::MAX)], None, None).is_empty());
-        add_recording_in(&mut e, 1_000, vec![(vox, path, Samples::MIN)], Some(400), None);
+        assert!(add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), Samples::MAX)], None, &[]).is_empty());
+        add_recording_in(&mut e, 1_000, vec![(vox, path, Samples::MIN)], Some(400), &[]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
