@@ -38,8 +38,9 @@ effects:
 - **21 FireStation engines** (ported from the owner's C++ suite): Comp, CleanQ, CopyQ, Vint,
   Sat, Tape, Dist, Amp, Twine, Transient, Manners, Sift, Shale, Swale, Filter, Mod, Delay,
   Reverb, ChamberMade, Pitch, LevelUp. They carry 783 factory presets between them.
-- **5 FreeDAWm designs:** Rez (resonance suppressor, 111 presets), Lull (gate, 26), Sprawl
-  (imager, 16), Vault (convolution reverb), Mend (voice cleaning).
+- **7 FreeDAWm designs:** Rez (resonance suppressor, 111 presets), Lull (gate, 26), Sprawl
+  (imager, 16), Vault (convolution reverb), Mend (voice cleaning), Keel (bass amp, 12) and Heft
+  (bass enhancer, 7).
 - **8 utilities:** Gain, Trim, Invert, DC Offset Removal, Signal Generator, Time Shift, Imprint
   (impulse-response capture), Channel Tool (swap, mono, mid/side, polarity per channel), and
   Dither, back in the menu.
@@ -62,14 +63,14 @@ from the menu, and say so where a hidden effect would have filled a gap.
 |---|---|---|
 | A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no look-ahead on Comp (upward compression dropped by the owner) |
 | B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no simple channel EQ in the menu (linear-phase CleanQ and a graphic EQ dropped by the owner) |
-| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp yet (pedalboard dropped by the owner) |
+| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets, a bass amp, a bass enhancer | Small (pedalboard dropped by the owner) |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses**, nothing beyond stereo |
 | E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small: rotary speaker, auto-pan, ring modulator and frequency shifter dropped by the owner |
 | F. Pitch and voice | Octaver, doubler, whammy; machine-learning de-noise and de-reverb on an insert | Small: real-time pitch correction and a vocoder dropped by the owner |
 | G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | Medium: no glitch or multi-effect; no mastering assistant (beat repeat and a gater dropped by the owner) |
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
-| I. Presets | 936 factory presets, a searchable browser, chain and track presets | Small: two save paths that disagree, no rename, no default preset |
-| J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
+| I. Presets | 955 factory presets, a searchable browser, chain and track presets, one save path, rename, a default per effect, A/B everywhere | Small |
+| J. Editors | Custom editors for 26 effects, live graphs on mixer tiles, sizes 75–200 %, typed values, pinned windows | Small: no follow-the-selected-track |
 | K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no controller mapping, no racks or macros |
 
 Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
@@ -128,9 +129,10 @@ Loudness Meter and Phase Meter). All three are in place.
 | Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp; Dist and Filter use a weak filter (bug 8) |
 | Bit and sample-rate reduction | ● | ● | ● | ● | **Partial**: inside Vint's Sampler circuit; the Lo-Fi effect is hidden |
 | Exciter / enhancer | ◐ | ◐ | ● | ◐ | **Works** (Vint Enhancer) |
-| Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator); a bass enhancer that adds harmonics above a chosen frequency is on the owner's build list instead |
+| Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator) |
+| Bass enhancer (harmonics so low notes are heard on small speakers) | ◐ | ○ | ◐ | ○ | **Works** (Heft): harmonics made only from the band below Frequency (40–250 Hz) and added only above it, Character from even to odd, Original Bass keeps, reduces or removes the lows; transparent at zero, no latency, no aliasing (cubic at most, from a band under 250 Hz); every channel. Tests: `heft/tests.rs` |
 | Guitar amps | ● | ● | ● | ● | **Works**: seven, solved tube by tube; mono out |
-| Bass amp | ● | ● | ● | ● | **Missing** |
+| Bass amp | ● | ● | ● | ● | **Works** (Keel): Tube (the Amp engine's 12AX7 stage), Solid State and Grind preamps at 4x through half-bands, the Amp engine's tone stack with Keel's own parts per voicing, Bright, three cabinets or none blended with a latency-matched DI, Squeeze limiter; 5 samples latency at every rate. Tests: `keel/tests.rs` (latency measured, no allocation, 44.1/48/96 kHz, aliasing at full drive) |
 | Cabinets from impulse responses | ● | ● | ● | ● | **Works** |
 | Pedalboard in one window | ◐ | ● | ● | ● | **Dropped by the owner**: pedals stay separate inserts |
 | Tuner | ● | ● | ● | ● | **Works** (Tuner) |
@@ -214,27 +216,27 @@ Loudness Meter and Phase Meter). All three are in place.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Factory presets | ● | ● | ● | ● | **Works**: 936, on 24 of the 33 listed effects |
-| Save and load your own | ● | ● | ● | ● | **Works**; both save paths write the same file |
-| Rename and delete your own | ● | ● | ● | ● | **Partial**: delete in the wide editors; no rename |
+| Save and load your own | ● | ● | ● | ● | **Works**: one save path (`preset_house::write_user`) for the wide editors, the drawers and the plug-in windows |
+| Rename and delete your own | ● | ● | ● | ● | **Works**: delete in the wide editors; rename from the Presets menu (the file, its star, a default naming it and the modules showing it follow) |
 | Browser with search, tags and favourites | ◐ | ● | ● | ● | **Works** |
 | Step to next and previous | ● | ● | ● | ● | **Works** in the wide editors |
-| Default preset for new instances | ● | ● | ● | ● | **Missing** |
-| A/B compare | ● | ● | ● | ● | **Partial**: missing in five editors and all narrow drawers |
+| Default preset for new instances | ● | ● | ● | ● | **Works**: Presets menu › Start New Inserts From (a factory or user preset), loaded when the insert menu adds the plug-in |
+| A/B compare | ● | ● | ● | ● | **Works**: the wide editors' A/B, and Compare in every narrow drawer's and plug-in window's Presets menu |
 | Copy settings to another instance | ● | ● | ● | ● | **Partial**: by clipboard, wide editors only |
 | Chain presets and track presets | ● | ● | ● | ● | **Works** |
-| Favourites and recents in the insert menu | ◐ | ● | ◐ | ● | **Partial**: in the browser panel only |
-| Hide effects you do not use | ● | ● | ● | ● | **Missing**: the hidden list is fixed in code |
+| Favourites and recents in the insert menu | ◐ | ● | ◐ | ● | **Works**: the browser's stars and the last inserted, first in the insert menu |
+| Hide effects you do not use | ● | ● | ● | ● | **Works**: insert menu › Show or Hide Effects (search still finds a hidden one) |
 
 ## J. Editors
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Purpose-built editor per effect | ● | ● | ● | ● | **Works** for 24; Vault and Mend have a drawer with a graph |
+| Purpose-built editor per effect | ● | ● | ● | ● | **Works** for 26 (Keel and Heft among them); Vault and Mend have a drawer with a graph |
 | EQ curve with draggable points; compressor curve and history | ● | ● | ● | ● | **Works** |
-| Resizable or scalable windows | ◐ | ● | ● | ● | **Missing**: fixed size, with a slim layout as the alternative |
+| Resizable or scalable windows | ◐ | ● | ● | ● | **Works**: View › Mix Window Views › Plugin Editors Larger / Smaller / at Actual Size (75–200 %; the editor drawn scaled, gestures mapped back), and the slim layout |
 | Several editors open; detach to their own windows | ● | ● | ● | ● | **Works** |
-| Pin on top; follow the selected track | ● | ● | ◐ | ● | **Missing** |
-| Type a value into any control | ● | ● | ● | ● | **Partial**: CleanQ and a few fields |
+| Pin on top; follow the selected track | ● | ● | ◐ | ● | **Partial**: a plug-in window's Pin keeps it on top (a detached one at the system's level); no follow-the-selection |
+| Type a value into any control | ● | ● | ● | ● | **Works**: Ctrl+click (Cmd+click) a knob or dial in any editor, drawer or tile and type the value as shown (with or without its unit, a choice's name, On/Off) |
 | Fine adjust; reset by double-click | ● | ● | ● | ● | **Works** |
 | Undo inside the editor | ◐ | ● | ● | ● | **Works**, and every move is also a session undo step |
 | Small views on the mixer (EQ curve, gain reduction, pinned knobs) | ◐ | ● | ● | ● | **Works** |
@@ -308,10 +310,10 @@ track. Then bug 4.
 | Bundled impulse responses for Vault, and impulse-response editing | 6–10 | Imprint can capture; licensing for any third-party set must be checked |
 | Rotary speaker, auto-pan, ring modulator and frequency shifter | 10–16 | Dropped by the owner |
 | Vocoder | 8–12 | Dropped by the owner |
-| Bass amp; a pedalboard that holds Dist, Mod and Filter in one window | 10–16 | Bass amp on the owner's build list; the pedalboard dropped by the owner |
+| Bass amp; a pedalboard that holds Dist, Mod and Filter in one window | 10–16 | **Done**: the bass amp (Keel); the pedalboard dropped by the owner. A bass enhancer (Heft) added at the owner's request |
 | Beat repeat and a drawn volume shaper / gater | 8–12 | Dropped by the owner |
-| Preset housekeeping: one save path, rename, default preset, A/B everywhere, favourites in the insert menu, hide effects | 8–12 | Fixes bugs 1, 3 and 10 properly |
-| Editor basics: scalable windows, type-in on every control, pin on top | 6–10 | |
+| Preset housekeeping: one save path, rename, default preset, A/B everywhere, favourites in the insert menu, hide effects | 8–12 | **Done** (see section I) |
+| Editor basics: scalable windows, type-in on every control, pin on top | 6–10 | **Done** (see section J) |
 
 **3. What most have (≈ 60–95 h).** Real-time pitch correction (Logic, Cubase), 10–16; linear-phase
 mode and uncramped bells in CleanQ, 8–12; upward compression, 4–6; gated reverb and a surround
@@ -366,3 +368,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 6 and the tier-2 rows above: the commits that did them noted |
 | 2026-11-16 | minor | The effects the owner dropped marked "dropped by the owner" (rotary speaker, auto-pan, ring modulator, frequency shifter, vocoder, beat repeat, volume shaper / gater, pedalboard, upward compression, linear-phase CleanQ, gated reverb, plain sub-bass generator, graphic EQ, real-time pitch correction) |
 | 2026-11-16 | minor | Comp's Link All Channels leaves the LFE out, told by the mixer from the track's channel format; the meters and Dither listed under Utilities in the insert menu |
+| 2026-11-16 | minor | Keel (bass amp) and Heft (bass enhancer) added; preset housekeeping and editor basics done |

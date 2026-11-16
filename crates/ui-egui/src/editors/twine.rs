@@ -462,7 +462,14 @@ fn knob(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, r: Rect, 
     let info = host.info.params.iter().find(|p| p.id == id)?;
     let value = param(host, id);
     let text = info.format(value);
-    let o = DialOpts { label: info.name, value_text: &text, default: info.to_normalized(info.default), tracked: true, ..DialOpts::default() };
+    let o = DialOpts {
+        label: info.name,
+        value_text: &text,
+        default: info.to_normalized(info.default),
+        tracked: true,
+        info: Some(info),
+        ..DialOpts::default()
+    };
     let out = dial(ui, r, id, &PALETTE, info.to_normalized(value), &o);
     if out.started {
         st.push_undo(snapshot(host));

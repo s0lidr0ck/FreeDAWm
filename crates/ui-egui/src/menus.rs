@@ -137,6 +137,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.imprint.save", "Save Imprint IR…", "", None),
     ("ui.mix.wide_editors", "Plugin Editors as in the VST", "View > Mix Window Views > Plugin Editors as in the VST", None),
     ("ui.mix.slim_editors", "Slim Plugin Editors", "View > Mix Window Views > Slim Plugin Editors", None),
+    ("ui.mix.editors_larger", "Plugin Editors Larger", "View > Mix Window Views > Plugin Editors Larger", None),
+    ("ui.mix.editors_smaller", "Plugin Editors Smaller", "View > Mix Window Views > Plugin Editors Smaller", None),
+    ("ui.mix.editors_actual", "Plugin Editors at Actual Size", "View > Mix Window Views > Plugin Editors at Actual Size", None),
     // Channel width for the Mix window's selected channels, or all (`channel_width`).
     ("ui.mix.width.slim", "Slim Selected Channels", "", None),
     ("ui.mix.width.wide", "Wide Selected Channels", "", None),
@@ -1524,6 +1527,17 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
                 },
             };
             json!({"on": app.ui.slim_editors})
+        }
+        "ui.mix.editors_larger" | "ui.mix.editors_smaller" | "ui.mix.editors_actual" => {
+            // `{scale?: number}` sets the size (0.75..2); without it, a step up, down or back to 1.
+            let now = app.ui.editor_scale;
+            app.ui.editor_scale = match (p.get("scale").and_then(Value::as_f64), id) {
+                (Some(s), _) => crate::editor_kit::editor_scale(s as f32),
+                (None, "ui.mix.editors_larger") => crate::editor_kit::step_editor_scale(now, true),
+                (None, "ui.mix.editors_smaller") => crate::editor_kit::step_editor_scale(now, false),
+                _ => 1.0,
+            };
+            json!({"scale": app.ui.editor_scale})
         }
         "ui.mix.ceiling_learn" => return Some(crate::cleanq_ceiling::learn_command(app, p)),
         "ui.imprint.save" => return Some(crate::imprint_ui::save_command(app, p)),

@@ -79,6 +79,7 @@ pub mod palette;
 pub mod panels;
 pub mod plugin_titles;
 pub mod preferences;
+pub mod preset_house;
 mod recent;
 pub mod record_offset;
 pub mod recovery;
@@ -109,6 +110,7 @@ pub mod timeline_link;
 pub mod toolbar;
 pub mod tour;
 pub mod user_files;
+pub mod value_entry;
 mod vault_ui;
 pub mod video_track;
 pub mod video_window;
@@ -246,6 +248,9 @@ pub struct UiState {
     /// (`module_drawer::DRAWER_W`): the same sections in the same order, stacked.
     #[serde(default)]
     pub slim_editors: bool,
+    /// The plugin editors' size in the Mix window (1 = as designed; `editor_kit::EDITOR_SCALES`).
+    #[serde(default = "one_f32")]
+    pub editor_scale: f32,
     /// Per window (viewport): the wide editor under the pointer last frame and the keys it takes
     /// from the DAW (`keyPressed`); absent when the pointer is over none.
     #[serde(skip)]
@@ -273,6 +278,9 @@ pub struct UiState {
     /// window comes back detached.
     #[serde(skip)]
     pub detached_plugins: Vec<(TrackId, SlotKey)>,
+    /// Plugin windows pinned on top of the others (the window's Pin button).
+    #[serde(skip)]
+    pub pinned_plugins: Vec<(TrackId, SlotKey)>,
     /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
     /// the next detached window of that plugin opens there.
     #[serde(default, rename = "plugin_windows.rects")]
@@ -542,6 +550,7 @@ impl Default for UiState {
             mix_width_all: false,
             wide_editors: true,
             slim_editors: false,
+            editor_scale: 1.0,
             wide_key_owner: HashMap::new(),
             mix_views: vec!["inserts_ae".into(), "sends_ae".into(), "io".into(), "color".into(), "pitch".into()],
             mix_views_offered: NEW_MIX_VIEWS.iter().map(|v| v.to_string()).collect(),
@@ -550,6 +559,7 @@ impl Default for UiState {
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),
+            pinned_plugins: Vec::new(),
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),
@@ -3047,6 +3057,11 @@ fn freeze_status(e: &Engine, v: &Value) -> String {
     } else {
         "Nothing to freeze".into()
     }
+}
+
+/// `1.0`, for a serde default.
+fn one_f32() -> f32 {
+    1.0
 }
 
 #[cfg(test)]

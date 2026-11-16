@@ -1219,7 +1219,27 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
         }
         return;
     }
-    let groups = picker_groups(false);
+    // Favourites and recents first (the browser's stars and the last inserted).
+    let effect = |id: &String| soundcraft_dsp::plugin_info(id).is_none_or(|p| !p.is_instrument);
+    for (name, ids) in [("Favourites", app.ui.browser.favourites.clone()), ("Recent", app.ui.browser.recent.clone())] {
+        let ids: Vec<String> = ids.into_iter().filter(|i| effect(i) && !app.ui.browser.hidden.contains(i)).collect();
+        if !ids.is_empty() {
+            ui.menu_button(name, |ui| {
+                for pid in &ids {
+                    let label = soundcraft_dsp::plugin_info(pid).map_or_else(|| crate::chain_view::plugin_name(pid), crate::plugin_titles::titled);
+                    if ui.button(label).clicked() {
+                        pick_module(app, ui, id, pick, pid);
+                    }
+                }
+            });
+        }
+    }
+    let hidden = app.ui.browser.hidden.clone();
+    let groups: Vec<_> = picker_groups(false)
+        .into_iter()
+        .map(|(g, l)| (g, l.into_iter().filter(|p| !hidden.iter().any(|h| h == p.id)).collect::<Vec<_>>()))
+        .filter(|(_, l)| !l.is_empty())
+        .collect();
     let fs_first = groups.first().is_some_and(|(g, _)| g == BUILT_IN_GROUP);
     for (i, (group, list)) in groups.into_iter().enumerate() {
         ui.menu_button(group, |ui| {
@@ -1238,6 +1258,22 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
     if let Some(plugin) = hosted_menus(ui, false) {
         pick_module(app, ui, id, pick, &plugin);
     }
+    ui.separator();
+    // The effects this menu shows: unticked ones are kept out of it (search still finds them).
+    ui.menu_button("Show or Hide Effects", |ui| {
+        for (_, list) in picker_groups(false) {
+            for p in list {
+                let mut shown = !app.ui.browser.hidden.iter().any(|h| h == p.id);
+                if ui.checkbox(&mut shown, crate::plugin_titles::titled(p)).changed() {
+                    if shown {
+                        app.ui.browser.hidden.retain(|h| h != p.id);
+                    } else {
+                        app.ui.browser.hidden.push(p.id.to_string());
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// Adds (or swaps in) the plugin picked and, as DAWs do, opens it once the audio engine has it
@@ -1250,6 +1286,10 @@ fn pick_module(app: &mut SoundApp, ui: &Ui, track: TrackId, pick: Pick, plugin: 
     match r {
         Ok(v) => {
             if let Some(m) = v["module"].as_u64().and_then(|m| u32::try_from(m).ok()) {
+                // A new insert starts from its plug-in's default preset, when one is chosen.
+                if matches!(pick, Pick::Add(_)) {
+                    crate::preset_house::apply_default(app, track, ModuleId(m));
+                }
                 app.pending_open = Some((track, ModuleId(m)));
             }
         }

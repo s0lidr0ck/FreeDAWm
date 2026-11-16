@@ -252,6 +252,9 @@ View > Mix Window Views > Minimal
 View > Mix Window Views > ---
 View > Mix Window Views > Plugin Editors as in the VST
 View > Mix Window Views > Slim Plugin Editors
+View > Mix Window Views > Plugin Editors Larger
+View > Mix Window Views > Plugin Editors Smaller
+View > Mix Window Views > Plugin Editors at Actual Size
 View > Narrow Mix
 View > Channel Width > Slim = @ui.mix.width.slim
 View > Channel Width > Wide = @ui.mix.width.wide

@@ -116,12 +116,16 @@ pub(crate) fn run_with<E: VstEditor>(
     });
     prep(&mut ed, app);
     let size = sane_size(ed.size(ins));
+    // The editor's size on screen (View › Plugin Editor Size): drawn at its own size in a layer
+    // of its own, scaled; the pointer is mapped back, so every gesture works as at 100 %.
+    let scale = editor_scale(app.ui.editor_scale);
+    let shown = size * scale;
 
     // The column: the editor's width, as tall as the strips (never less than a sliver).
     // What is visible of it: the Mix window may be shorter than the strips' layout height.
     let visible = ui.clip_rect().bottom() - ui.cursor().top();
     let col_h = ui.available_height().min(visible).max(MIN_SIDE);
-    let (col, _) = ui.allocate_exact_size(vec2(size.x, col_h), Sense::hover());
+    let (col, _) = ui.allocate_exact_size(vec2(shown.x, col_h), Sense::hover());
     // Top-down inside (the mixer lays its strips out left to right).
     let down = egui::Layout::top_down(egui::Align::Min);
     let mut cui = ui.new_child(egui::UiBuilder::new().id_salt(("vst-col", track.id.0, module.0)).max_rect(col).layout(down));
@@ -133,17 +137,32 @@ pub(crate) fn run_with<E: VstEditor>(
     let mut drawn = None;
     egui::ScrollArea::vertical().id_salt(("vst-scroll", track.id.0, module.0)).auto_shrink([false, false]).max_height(col_h).show(&mut cui, |sui| {
         sui.spacing_mut().item_spacing = Vec2::ZERO;
-        routing_strip(app, sui, track, ins, info, size.x);
-        let (rect, _) = sui.allocate_exact_size(size, Sense::hover());
-        let mut eui = sui.new_child(egui::UiBuilder::new().id_salt(("vst-ed", E::PLUGIN, track.id.0, module.0)).max_rect(rect).layout(down));
-        eui.set_clip_rect(rect.intersect(sui.clip_rect()));
+        routing_strip(app, sui, track, ins, info, shown.x);
+        let (outer, _) = sui.allocate_exact_size(shown, Sense::hover());
+        let builder = egui::UiBuilder::new().id_salt(("vst-ed", E::PLUGIN, track.id.0, module.0)).layout(down);
+        let (mut eui, rect) = if (scale - 1.0).abs() < 1e-3 {
+            let mut eui = sui.new_child(builder.max_rect(outer));
+            eui.set_clip_rect(outer.intersect(sui.clip_rect()));
+            (eui, outer)
+        } else {
+            // A layer drawn just over the column's, at `scale`: the editor lays out at its own size
+            // from the origin, and egui maps it (and the pointer) to `outer`.
+            let layer = egui::LayerId::new(sui.layer_id().order, sui.id().with(("vst-scaled", track.id.0, module.0)));
+            sui.ctx().set_sublayer(sui.layer_id(), layer);
+            let to_screen = egui::emath::TSTransform::new(outer.min.to_vec2(), scale);
+            let rect = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut eui = sui.new_child(builder.layer_id(layer).max_rect(rect));
+            eui.set_clip_rect(to_screen.inverse() * outer.intersect(sui.clip_rect()));
+            sui.ctx().set_transform_layer(layer, to_screen);
+            (eui, rect)
+        };
         eui.spacing_mut().item_spacing = Vec2::ZERO;
-        if eui.rect_contains_pointer(rect) {
+        if sui.rect_contains_pointer(outer) {
             app.ui.wide_key_owner.insert(eui.ctx().viewport_id(), E::owns_key);
         }
         let host = Host { track: track.id, ins, info, meters, sr, rect, session: app.engine.session_arc() };
         ed.ui(app, &mut eui, &host);
-        drawn = Some(rect);
+        drawn = Some(outer);
     });
     if let Some(rect) = drawn {
         let pass = ui.ctx().cumulative_pass_nr();
@@ -197,8 +216,26 @@ fn routing_strip(app: &mut SoundApp, ui: &mut Ui, track: &Track, ins: &Insert, i
     h
 }
 
-/// The editor's rectangle as last drawn (`None` if it was not drawn last frame, e.g. the narrow
-/// drawer is showing). For tests and scripts.
+/// The sizes View › Plugin Editor Size steps through.
+pub const EDITOR_SCALES: [f32; 6] = [0.75, 0.9, 1.0, 1.25, 1.5, 2.0];
+
+/// A plugin editor size as drawn: one of [`EDITOR_SCALES`]'s range (a hostile or unset one is 1).
+pub fn editor_scale(s: f32) -> f32 {
+    if s.is_finite() { s.clamp(EDITOR_SCALES[0], EDITOR_SCALES[EDITOR_SCALES.len() - 1]) } else { 1.0 }
+}
+
+/// The next size up (`larger`) or down from `s`, staying at the ends.
+pub fn step_editor_scale(s: f32, larger: bool) -> f32 {
+    let s = editor_scale(s);
+    if larger {
+        EDITOR_SCALES.iter().copied().find(|x| *x > s + 1e-3).unwrap_or(s)
+    } else {
+        EDITOR_SCALES.iter().rev().copied().find(|x| *x < s - 1e-3).unwrap_or(s)
+    }
+}
+
+/// The editor's rectangle as last drawn, on screen (`None` if it was not drawn last frame, e.g.
+/// the narrow drawer is showing). For tests and scripts.
 pub fn frame_rect(ctx: &egui::Context, track: TrackId, module: ModuleId) -> Option<Rect> {
     let (rect, pass) = ctx.data(|d| d.get_temp::<(Rect, u64)>(frame_key(track, module)))?;
     (pass + 1 >= ctx.cumulative_pass_nr()).then_some(rect)

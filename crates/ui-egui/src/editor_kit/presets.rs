@@ -716,12 +716,15 @@ fn save_user(app: &mut SoundApp, host: &Host, st: &mut PresetState, now: f64) {
             return show_message(st, "Factory name \u{2014} pick another", now);
         }
     }
-    let Some(dir) = user_dir(app, host.info.id) else { return };
+    if user_dir(app, host.info.id).is_none() {
+        return;
+    }
     let clean = if name.is_empty() { "Preset".to_string() } else { soundcraft_engine::io::sanitize_name(&name) };
     let existed = st.entries.iter().any(|e| e.is_user && e.name == clean);
     let extra = st.extra_out.clone().filter(|_| !st.extra_key.is_empty()).map(|e| (st.extra_key, e));
     let body = user_preset_body(host.info, st.not_in_presets, |id| super::param(host, id), &clean, &st.tags_out, extra);
-    let ok = disk::write(&dir.join(format!("{clean}.json")), &body.to_string());
+    // The one save path every view uses.
+    let ok = crate::preset_house::write_user(app, host.info.id, &clean, &body).is_ok();
     if !ok {
         if !st.quiet {
             show_message(st, "Could not write file", now);

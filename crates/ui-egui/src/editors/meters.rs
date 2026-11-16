@@ -424,7 +424,14 @@ impl VstEditor for TunerEditor {
         let a4 = param(host, "reference");
         let knob = Rect::from_min_size(body.min, vec2(70.0, 70.0));
         let text = format!("{a4:.1} Hz");
-        let o = DialOpts { label: "A4", value_text: &text, default: (440.0 - 415.0) / 51.0, small: true, ..DialOpts::default() };
+        let o = DialOpts {
+            label: "A4",
+            value_text: &text,
+            default: (440.0 - 415.0) / 51.0,
+            small: true,
+            info: host.info.param("reference"),
+            ..DialOpts::default()
+        };
         let out = dial(ui, knob, "reference", &PALETTE, (a4 - 415.0) / 51.0, &o);
         if let Some(v) = out.value {
             set_params_merged(app, host, &[("reference", 415.0 + 51.0 * v.clamp(0.0, 1.0))], "tuner-ref");

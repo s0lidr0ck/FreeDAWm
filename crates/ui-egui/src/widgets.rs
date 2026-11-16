@@ -1406,6 +1406,15 @@ fn knob_inner(
         out.changed = Some(info.default);
         out.reset = true;
     }
+    // Ctrl+click (Cmd+click): type the value.
+    if enabled && crate::value_entry::wants_entry(ui, &resp) {
+        crate::value_entry::open(ui, resp.id, &info.format(value));
+    }
+    if let Some(v) = crate::value_entry::show(ui, resp.id, r).and_then(|text| crate::value_entry::parse(info, &text))
+        && (v - value).abs() > f32::EPSILON
+    {
+        out.changed = Some(v);
+    }
 
     let shown = out.changed.unwrap_or(value);
     let hot_now = force_hot || (enabled && (resp.hovered() || out.dragging));

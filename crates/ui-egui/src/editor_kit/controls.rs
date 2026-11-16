@@ -43,6 +43,9 @@ pub struct DialOpts<'a> {
     pub cap: Option<Color32>,
     /// Uppercase letter-spaced labels (DistEngine) rather than mixed case (the family look).
     pub tracked: bool,
+    /// The parameter the dial sets: with it, Ctrl+click (Cmd+click) types a value
+    /// ([`crate::value_entry`]).
+    pub info: Option<&'a soundcraft_dsp::ParamInfo>,
 }
 
 impl Default for DialOpts<'_> {
@@ -59,6 +62,7 @@ impl Default for DialOpts<'_> {
             cal_focus: false,
             cap: None,
             tracked: false,
+            info: None,
         }
     }
 }
@@ -150,6 +154,17 @@ pub(crate) fn dial(ui: &mut Ui, rect: Rect, salt: impl Hash + std::fmt::Debug, p
                     out.ended = true;
                 }
             }
+        }
+    }
+    // Ctrl+click (Cmd+click): type the value, as one gesture.
+    if !frozen && let Some(info) = o.info {
+        if crate::value_entry::wants_entry(ui, &resp) {
+            crate::value_entry::open(ui, id, o.value_text);
+        }
+        if let Some(v) = crate::value_entry::show(ui, id, knob).and_then(|text| crate::value_entry::parse(info, &text)) {
+            out.value = Some(info.to_normalized(v));
+            out.started = true;
+            out.ended = true;
         }
     }
     let shown = out.value.unwrap_or(v01);

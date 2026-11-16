@@ -650,6 +650,7 @@ fn knob_laid(
         default: info.to_normalized(info.default),
         layout,
         small,
+        info: (model::steps(base, v.style) <= 1).then_some(info),
         ..DialOpts::default()
     };
     let out = dial(ui, r, base, &PALETTE, info.to_normalized(param(host, id)), &o);
