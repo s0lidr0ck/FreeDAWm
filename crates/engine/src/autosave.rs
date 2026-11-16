@@ -352,7 +352,7 @@ fn unfinished_takes(left: &Leftover, s: &Session, skipped: &mut Vec<String>) -> 
         if std::fs::canonicalize(&t.path).is_ok_and(|p| known.contains(&p)) {
             continue;
         }
-        match repair_take(&t.path, &folders, t.channels, plan.rate) {
+        match repair_take(&t.path, &folders, t.channels, plan.rate, t.file) {
             Ok(frames) if frames > 0 => takes.push((t.track, t.path.clone())),
             Ok(_) => {}
             Err(err) => {
@@ -375,7 +375,8 @@ fn take_folders(left: &Leftover) -> Vec<PathBuf> {
 /// Make a take file's header cover all the audio in it; returns its frames. The recorder
 /// rewrites the header only every second, so a crash leaves up to a second uncovered. Only a
 /// regular file in one of `folders` that starts with the header the recorder writes is touched.
-fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32) -> std::io::Result<u64> {
+fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32, file: Option<crate::io::TakeFile>) -> std::io::Result<u64> {
+    use soundcraft_audio_io::{BitDepth, FileFormat};
     let refuse = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, why.to_string());
     if !std::fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(refuse("not a regular file"));
@@ -384,25 +385,44 @@ fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32) -> 
     if !folder.is_some_and(|d| folders.contains(&d)) {
         return Err(refuse("not in a folder FreeDAWm records into"));
     }
-    let header = |frames| soundcraft_audio_io::wav_float_header(channels, rate, frames).map_err(std::io::Error::other);
+    let file = file.unwrap_or(crate::io::TakeFile { format: FileFormat::Wav, depth: BitDepth::Float32, bwf: false });
+    // A `bext` chunk has a fixed size: the one in the file is kept as it is.
+    let bwf = file.bwf.then(soundcraft_audio_io::BwfInfo::default);
+    let header =
+        |frames| soundcraft_audio_io::take_header(file.format, channels, rate, file.depth, bwf.as_ref(), frames).map_err(std::io::Error::other);
     let expected = header(0)?;
     let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
     let mut head = vec![0u8; expected.len()];
-    if std::io::Read::read_exact(&mut f, &mut head).is_err() || !is_take_header(&head, &expected) {
+    if std::io::Read::read_exact(&mut f, &mut head).is_err() || !is_take_header(&head, &expected, file.format) {
         return Err(refuse("not a take FreeDAWm recorded"));
     }
     let audio = f.metadata()?.len().saturating_sub(expected.len() as u64);
-    let frames = audio / (channels.max(1) as u64 * 4);
+    let frame = (channels.max(1) * soundcraft_audio_io::take_sample_bytes(file.depth)) as u64;
+    let frames = audio / frame;
+    let mut fresh = header(frames)?;
+    if let Some(at) = expected.windows(4).position(|w| w == b"bext") {
+        let len = expected.get(at + 4..at + 8).and_then(|b| b.try_into().ok()).map_or(0, |b| u32::from_le_bytes(b) as usize);
+        let end = at.saturating_add(8).saturating_add(len);
+        if let (Some(dst), Some(src)) = (fresh.get_mut(at..end), head.get(at..end)) {
+            dst.copy_from_slice(src);
+        }
+    }
     std::io::Seek::rewind(&mut f)?;
-    f.write_all(&header(frames)?)?;
+    f.write_all(&fresh)?;
     f.sync_all()?;
     Ok(frames)
 }
 
-/// `head` is a take header like `expected` (the recorder's header for no frames yet): RIFF or
-/// RF64 WAVE, the same format chunk at the same place, and the data chunk right after it all.
-/// Only the sizes and frame counts may differ.
-fn is_take_header(head: &[u8], expected: &[u8]) -> bool {
+/// `head` is a take header like `expected` (the recorder's header for no frames yet). A WAV:
+/// RIFF or RF64 WAVE, the same format chunk at the same place, and the data chunk right after it
+/// all. An AIFF: FORM AIFF or AIFC, the sound data chunk right after it all. Only the sizes and
+/// frame counts (and a `bext` chunk's text) may differ.
+fn is_take_header(head: &[u8], expected: &[u8], format: soundcraft_audio_io::FileFormat) -> bool {
+    if format == soundcraft_audio_io::FileFormat::Aiff {
+        let magic = head.get(..4) == Some(b"FORM") && head.get(8..12) == expected.get(8..12);
+        let ssnd = expected.len().checked_sub(16).and_then(|at| head.get(at..at + 4)) == Some(b"SSND");
+        return magic && ssnd;
+    }
     let magic = matches!(head.get(..4), Some(b"RIFF" | b"RF64")) && head.get(8..12) == Some(b"WAVE");
     let fmt = expected.windows(4).position(|w| w == b"fmt ");
     let fmt_len = fmt.and_then(|at| expected.get(at + 4..at + 8)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
@@ -447,6 +467,45 @@ mod tests {
     use serde_json::json;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{ChannelFormat, Clip, TrackKind};
+
+    #[test]
+    fn recovery_repairs_takes_of_every_recording_format() {
+        use soundcraft_audio_io::{BitDepth, BwfInfo, FileFormat, take_header, take_sample};
+        let dir = std::env::temp_dir().join(format!("soundcraft-repair-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("Audio Files");
+        std::fs::create_dir_all(&folder).unwrap();
+        let folders = vec![std::fs::canonicalize(&folder).unwrap()];
+        let bwf = BwfInfo { originator: "FreeDAWm".into(), description: "Vox_01".into(), ..BwfInfo::default() };
+        for (format, depth, with_bwf, name) in [
+            (FileFormat::Wav, BitDepth::Int24, true, "Vox_01.wav"),
+            (FileFormat::Wav, BitDepth::Int16, false, "Vox_02.wav"),
+            (FileFormat::Aiff, BitDepth::Int24, false, "Vox_03.aif"),
+            (FileFormat::Aiff, BitDepth::Float32, false, "Vox_04.aif"),
+        ] {
+            // A crash right after the first header: it covers no frames, 300 follow it.
+            let mut bytes = take_header(format, 2, 48_000, depth, with_bwf.then_some(&bwf), 0).unwrap();
+            for i in 0..600 {
+                take_sample(format, depth, (i as f32 / 600.0) - 0.5, &mut bytes);
+            }
+            let path = folder.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let file = crate::io::TakeFile { format, depth, bwf: with_bwf };
+            assert_eq!(repair_take(&path, &folders, 2, 48_000, Some(file)).unwrap(), 300, "{name}");
+            let fixed = std::fs::read(&path).unwrap();
+            let info = soundcraft_audio_io::probe(&fixed, None).unwrap();
+            assert_eq!((info.format, info.frames), (format, 300), "{name}");
+            if with_bwf {
+                assert_eq!(info.bwf.unwrap().originator, "FreeDAWm", "the bext chunk is kept");
+            }
+            // A take of another format is not this one.
+            let other = crate::io::TakeFile { format: FileFormat::Wav, depth: BitDepth::Float32, bwf: false };
+            if format == FileFormat::Aiff {
+                assert!(repair_take(&path, &folders, 2, 48_000, Some(other)).is_err());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_autosave_from_before_the_rename_is_still_found() {
@@ -580,7 +639,7 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0 }],
+            takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: None,
         };
@@ -635,7 +694,10 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: paths.iter().map(|p| Take { track, path: p.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0 }).collect(),
+            takes: paths
+                .iter()
+                .map(|p| Take { track, path: p.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None })
+                .collect(),
             latency: 0,
             loop_from: None,
         };

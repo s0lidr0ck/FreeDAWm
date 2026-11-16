@@ -1561,6 +1561,8 @@ impl SoundApp {
             self.recorder = Some(p.internal_recorder());
         }
         let Some(r) = &mut self.recorder else { return Err("no audio input device".into()) };
+        let (format, depth, bwf) = soundcraft_engine::io::take_format(self.engine.session());
+        let file = soundcraft_engine::io::TakeFile { format, depth, bwf: bwf.is_some() };
         let takes = plan
             .takes
             .iter()
@@ -1571,13 +1573,14 @@ impl SoundApp {
                 internal: plan.is_tap(*track),
                 from_device: plan.from_device(*track),
                 tap_latency: 0,
+                file: Some(file),
             })
             .collect();
         if let Some(p) = &self.player {
             p.set_record_taps(r.channels, &plan.taps);
         }
         let width = plan.tap_channels();
-        r.arm_with_taps(plan.takes, width)?;
+        r.arm_as(plan.takes, width, &soundcraft_playback::record::TakeFormat { format, depth, bwf })?;
         Ok(takes)
     }
 

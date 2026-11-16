@@ -27,6 +27,7 @@ pub(crate) mod event_more;
 mod file;
 pub(crate) mod freeze;
 mod module_record;
+mod record_format;
 mod record_print;
 pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
@@ -156,6 +157,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(edit::specs());
         v.extend(module_record::specs());
         v.extend(record_print::specs());
+        v.extend(record_format::specs());
         v.extend(edit_more::specs());
         v.extend(view::specs());
         v.extend(track::specs());

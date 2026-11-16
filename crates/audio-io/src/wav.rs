@@ -327,6 +327,29 @@ fn bext_chunk(bwf: &BwfInfo) -> Vec<u8> {
     c
 }
 
+/// Where in a WAV the `bext` chunk's time reference (8 bytes, little-endian) starts, read from
+/// the file's first bytes `prefix`; `None` without a `bext` chunk there.
+pub fn bext_time_reference_offset(prefix: &[u8]) -> Option<usize> {
+    if !is_wav(prefix) {
+        return None;
+    }
+    let mut at = 12usize;
+    for _ in 0..64 {
+        let (id, size) = (tag(prefix, at)?, le_u32(prefix, at.checked_add(4)?)?);
+        let body = at.checked_add(8)?;
+        if &id == b"bext" {
+            let off = body.checked_add(256 + 32 + 32 + 10 + 8)?;
+            return (off.checked_add(8)? <= prefix.len()).then_some(off);
+        }
+        if &id == b"data" {
+            return None;
+        }
+        let size = usize::try_from(size).ok()?;
+        at = body.checked_add(size)?.checked_add(size % 2)?;
+    }
+    None
+}
+
 fn push_chunk(out: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
     out.extend_from_slice(id);
     out.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_le_bytes());

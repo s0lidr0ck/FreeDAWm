@@ -44,9 +44,9 @@ pub use scout::{
     ScoutProfile, ScoutState, ScoutStrip, ScoutTurn, profile_file_stem,
 };
 pub use session::{
-    BitDepthSetting, EditMode, EditState, FEET_FRAMES_START, LEGACY_SESSION_EXTENSION, MAX_COMMENT_CHARS, MAX_NAME_CHARS, SESSION_EXTENSION,
-    SESSION_EXTENSIONS, Session, SessionError, Tool, TrackView, ZoomState, ZoomToggle, is_session_extension, is_session_path, same_name,
-    truncate_chars,
+    BitDepthSetting, EditMode, EditState, FEET_FRAMES_START, LEGACY_SESSION_EXTENSION, MAX_COMMENT_CHARS, MAX_NAME_CHARS, RecordFileType,
+    SESSION_EXTENSION, SESSION_EXTENSIONS, Session, SessionError, Tool, TrackView, ZoomState, ZoomToggle, is_session_extension, is_session_path,
+    same_name, truncate_chars,
 };
 pub use sheet::{
     Draft, LineKind, LyricPlace, LyricSheet, MAX_ALTERNATES, MAX_DRAFTS, MAX_SHEET_LINE_CHARS, MAX_SHEET_LINES, SheetLine, carry_ids, heading_name,

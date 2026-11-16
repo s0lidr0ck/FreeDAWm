@@ -315,6 +315,16 @@ impl Default for EditState {
     }
 }
 
+/// The file type takes are recorded as (at the session's bit depth).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordFileType {
+    /// Broadcast WAV: a `bext` chunk with the take's originator and time reference.
+    #[default]
+    Wav,
+    Aiff,
+}
+
 /// The document.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Session {
@@ -322,6 +332,9 @@ pub struct Session {
     pub name: String,
     pub sample_rate: SampleRate,
     pub bit_depth: BitDepthSetting,
+    /// What takes are recorded as. Sessions saved before it existed record (BWF) WAV.
+    #[serde(default)]
+    pub record_file_type: RecordFileType,
     pub frame_rate: FrameRate,
     /// Timecode of sample 0 (session start), as a sample count.
     pub timecode_start: Samples,
@@ -393,6 +406,7 @@ impl Session {
             name: name.into(),
             sample_rate,
             bit_depth: BitDepthSetting::Int24,
+            record_file_type: RecordFileType::Wav,
             frame_rate: FrameRate::Fps30,
             timecode_start: 0,
             tempo: TempoMap::default(),

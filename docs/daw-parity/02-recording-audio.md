@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (record with inserts) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (take bit depth, file type and BWF timestamp) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -35,7 +35,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
 | E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
-| G. Capture and files | Lock-free capture to disk, crash recovery, RF64 | Medium: 32-bit float WAV only, no timestamp |
+| G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float | Small: no per-track record folders |
 | H. Safety and feedback | Device and disk trouble keep the take | Small: no pre-record, no remaining-time display |
 | I. Remote recording | LAN and internet recorders with clock alignment | **Ahead**: none of the four has it built in |
 
@@ -137,9 +137,9 @@ what a user can do, apart from punch out on the fly.
 |---|:-:|:-:|:-:|:-:|---|
 | Record straight to disk without blocking the audio thread | ● | ● | ● | ● | **Works**: lock-free ring, one writer thread, lost samples counted and reported |
 | No length limit, files over 4 GB | ● | ● | ● | ● | **Works**: switches to RF64 in place |
-| Choose bit depth (16, 24, 32 float) | ● | ● | ● | ● | **Flag only**: always 32-bit float; the session's bit depth applies only to remote takes |
-| Choose file type (WAV/BWF, AIFF, others) | ● | ● | ● | ● | **Missing**: WAV only |
-| Timestamp in the file (BWF time reference) | ● | ● | ● | ● | **Missing**: the position lives only in the session |
+| Choose bit depth (16, 24, 32 float) | ● | ● | ● | ● | **Works**: the session's bit depth (`setup.record_format`), for local and remote takes |
+| Choose file type (WAV/BWF, AIFF, others) | ● | ● | ● | ● | **Works** for WAV (BWF) and AIFF; an AIFF take loads into memory instead of streaming |
+| Timestamp in the file (BWF time reference) | ● | ● | ● | ● | **Works**: a `bext` chunk with FreeDAWm as originator, the date and time, and the time reference of the take's first frame from the timecode start |
 | Stereo as one interleaved file | ● | ● | ● | ● | **Works** |
 | Choose where each track records | ● | ◐ | ◐ | ◐ | **Flag only**: Disk Allocation stores paths nothing reads |
 | Recover a take after a crash | ● | ◐ | ◐ | ◐ | **Works**: header rewritten every second, the take placed on recovery; no fsync, so a power loss can lose the last second |
@@ -193,7 +193,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 |---|---:|---|
 | Record from a bus or a track's output (internal recording) | 10–16 | **Done** (bus input; a track's output via a bus); closed bug 2 |
 | Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | **Done** (the switch) |
-| Bit depth and file type for takes; BWF timestamp and originator | 5–8 | The remote path already honours bit depth |
+| Bit depth and file type for takes; BWF timestamp and originator | 5–8 | **Done** |
 | Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | QuickPunch can then mean something or go |
 | Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | Replaces the unused record-mode value; closes bug 4 by design |
 | Discard take; delete files of undone takes when the session closes | 3–5 | |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

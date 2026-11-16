@@ -22,6 +22,23 @@ use soundcraft_time::Samples;
 
 use crate::feed::{InputFeed, SampleRing};
 
+/// How take files are written: WAV (BWF with `bwf`) or AIFF, at a bit depth. The default is a
+/// plain 32-bit float WAV.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TakeFormat {
+    pub format: soundcraft_audio_io::FileFormat,
+    pub depth: soundcraft_audio_io::BitDepth,
+    /// The `bext` chunk of a WAV take (its description becomes the file's name); its time
+    /// reference is set once the take is placed.
+    pub bwf: Option<soundcraft_audio_io::BwfInfo>,
+}
+
+impl Default for TakeFormat {
+    fn default() -> Self {
+        TakeFormat { format: soundcraft_audio_io::FileFormat::Wav, depth: soundcraft_audio_io::BitDepth::Float32, bwf: None }
+    }
+}
+
 /// What [`Recorder::finish`] returns: the takes that hold audio and the first problem met.
 pub type Takes = (Vec<(TrackId, PathBuf)>, Option<String>);
 
@@ -444,11 +461,18 @@ impl Recorder {
     /// [`Recorder::arm`] with `taps` channels of recorded busses after the device's in each frame
     /// (the player told the same with [`crate::Player::set_record_taps`]).
     pub fn arm_with_taps(&mut self, takes: Vec<(TrackId, Vec<usize>, PathBuf)>, taps: usize) -> Result<(), String> {
+        self.arm_as(takes, taps, &TakeFormat::default())
+    }
+
+    /// [`Recorder::arm_with_taps`] writing the take files as `format` says.
+    pub fn arm_as(&mut self, takes: Vec<(TrackId, Vec<usize>, PathBuf)>, taps: usize, format: &TakeFormat) -> Result<(), String> {
         if self.writer.is_some() {
             return Err("already recording".into());
         }
-        let takes =
-            takes.into_iter().map(|(id, inputs, path)| TakeWriter::create(id, inputs, path, self.sample_rate)).collect::<Result<Vec<_>, _>>()?;
+        let takes = takes
+            .into_iter()
+            .map(|(id, inputs, path)| TakeWriter::create_as(id, inputs, path, self.sample_rate, format))
+            .collect::<Result<Vec<_>, _>>()?;
         let live = takes.iter().map(|t| (t.id, Arc::clone(&t.live))).collect();
         self.capture.ring.clear();
         *self.capture.failed.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -588,17 +612,27 @@ struct TakeWriter {
     path: PathBuf,
     file: File,
     rate: u32,
+    format: TakeFormat,
     frames: u64,
     error: Option<String>,
     live: Arc<Mutex<LiveTake>>,
 }
 
 impl TakeWriter {
+    #[cfg(test)]
     fn create(id: TrackId, inputs: Vec<usize>, path: PathBuf, rate: u32) -> Result<TakeWriter, String> {
+        TakeWriter::create_as(id, inputs, path, rate, &TakeFormat::default())
+    }
+
+    fn create_as(id: TrackId, inputs: Vec<usize>, path: PathBuf, rate: u32, format: &TakeFormat) -> Result<TakeWriter, String> {
         let file = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| File::create_new(&path));
         let file = file.map_err(|e| format!("{}: {e}", path.display()))?;
         let live = Arc::new(Mutex::new(vec![Vec::new(); inputs.len()]));
-        let mut take = TakeWriter { id, inputs, path, file, rate, frames: 0, error: None, live };
+        let mut format = format.clone();
+        if let Some(b) = &mut format.bwf {
+            b.description = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        }
+        let mut take = TakeWriter { id, inputs, path, file, rate, format, frames: 0, error: None, live };
         take.write_header();
         take.error.take().map_or(Ok(take), Err)
     }
@@ -609,10 +643,14 @@ impl TakeWriter {
         if self.error.is_some() {
             return;
         }
-        let bytes: Vec<u8> = block
-            .chunks_exact(channels)
-            .flat_map(|f| self.inputs.iter().flat_map(move |&i| f.get(i).copied().unwrap_or(0.0).to_le_bytes()))
-            .collect();
+        let (fmt, depth) = (self.format.format, self.format.depth);
+        let per = soundcraft_audio_io::take_sample_bytes(depth);
+        let mut bytes = Vec::with_capacity((block.len() / channels).saturating_mul(self.inputs.len()).saturating_mul(per));
+        for f in block.chunks_exact(channels) {
+            for &i in &self.inputs {
+                soundcraft_audio_io::take_sample(fmt, depth, f.get(i).copied().unwrap_or(0.0), &mut bytes);
+            }
+        }
         match self.file.write_all(&bytes) {
             Ok(()) => {
                 self.summarize(block, channels);
@@ -639,7 +677,8 @@ impl TakeWriter {
     }
 
     fn write_header(&mut self) {
-        let header = match soundcraft_audio_io::wav_float_header(self.inputs.len(), self.rate, self.frames) {
+        let f = &self.format;
+        let header = match soundcraft_audio_io::take_header(f.format, self.inputs.len(), self.rate, f.depth, f.bwf.as_ref(), self.frames) {
             Ok(h) => h,
             Err(e) => return self.fail(e),
         };
@@ -759,6 +798,44 @@ mod tests {
         assert_eq!((done.len(), problem), (2, None));
         assert_eq!(decode(&done[0].1), vec![channel(1), channel(2)]);
         assert_eq!(decode(&done[1].1), vec![[vec![0.5; 100], vec![0.25; 50], channel(0)].concat()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn takes_are_written_at_the_bit_depth_and_file_type_asked_for() {
+        use soundcraft_audio_io::{BitDepth, BwfInfo, FileFormat, SampleFormat};
+        let dir = std::env::temp_dir().join(format!("soundcraft-take-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let input: Vec<f32> = (0..2 * 480).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect();
+        let bwf = BwfInfo { originator: "FreeDAWm".into(), ..BwfInfo::default() };
+        for (fmt, depth, name, want, tol) in [
+            (FileFormat::Wav, BitDepth::Int16, "Vox_16.wav", SampleFormat::Int16, 1.0 / 16_000.0),
+            (FileFormat::Wav, BitDepth::Int24, "Vox_24.wav", SampleFormat::Int24, 1e-6),
+            (FileFormat::Wav, BitDepth::Float32, "Vox_32.wav", SampleFormat::Float32, 0.0),
+            (FileFormat::Aiff, BitDepth::Int24, "Vox_24.aif", SampleFormat::Int24, 1e-6),
+            (FileFormat::Aiff, BitDepth::Float32, "Vox_32.aif", SampleFormat::Float32, 0.0),
+        ] {
+            let format = TakeFormat { format: fmt, depth, bwf: (fmt == FileFormat::Wav).then(|| bwf.clone()) };
+            let path = dir.join(name);
+            let mut t = TakeWriter::create_as(TrackId(1), vec![1], path.clone(), 48_000, &format).unwrap();
+            t.write(&input[..2 * 240], 2);
+            // A header written mid-take covers what is there; the file stays readable.
+            t.write_header();
+            t.write(&input[2 * 240..], 2);
+            t.write_header();
+            assert_eq!(t.error, None);
+            let bytes = std::fs::read(&path).unwrap();
+            let info = soundcraft_audio_io::probe(&bytes, None).unwrap();
+            assert_eq!((info.format, info.sample_format, info.frames), (fmt, want, 480), "{name}");
+            if fmt == FileFormat::Wav {
+                let b = info.bwf.unwrap_or_else(|| panic!("{name}: no bext"));
+                assert_eq!((b.originator.as_str(), b.description.as_str()), ("FreeDAWm", path.file_stem().unwrap().to_str().unwrap()));
+                assert!(soundcraft_audio_io::bext_time_reference_offset(&bytes).is_some());
+            }
+            let got = decode(&path);
+            let channel: Vec<f32> = input.iter().skip(1).step_by(2).copied().collect();
+            assert!(got[0].iter().zip(&channel).all(|(a, b)| (a - b).abs() <= tol), "{name}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2281,7 +2281,11 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
             _ => (0..t.channels()).map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels)).collect(),
         };
         let stem = sanitize_name(&t.name);
-        let file = |n: usize| dir.join("Audio Files").join(format!("{stem}_{n:02}.wav"));
+        let ext = match s.record_file_type {
+            soundcraft_model::RecordFileType::Wav => "wav",
+            soundcraft_model::RecordFileType::Aiff => "aif",
+        };
+        let file = |n: usize| dir.join("Audio Files").join(format!("{stem}_{n:02}.{ext}"));
         // Numbered per track: one past the track's highest take in the session, skipping files
         // already there (and another armed track's of the same name).
         let take_no = s.sources.iter().filter_map(|x| take_number(&x.name, &stem)).max().map_or(1, |n| n.saturating_add(1));
@@ -2296,6 +2300,63 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
 
 /// Tracks that can record busses at once (the player's limit, `soundcraft_playback::record::MAX_TAPS`).
 pub const MAX_BUS_TAKES: usize = 32;
+
+/// How the session records its takes: the file type, the bit depth (16, 24 or 32-bit float, as
+/// the session says) and, for a WAV, a `bext` chunk naming FreeDAWm as originator, stamped with
+/// now (UTC; its time reference is set when the take is placed, [`place_recording`]).
+pub fn take_format(s: &Session) -> (FileFormat, soundcraft_audio_io::BitDepth, Option<soundcraft_audio_io::BwfInfo>) {
+    let depth = match s.bit_depth {
+        soundcraft_model::BitDepthSetting::Int16 => soundcraft_audio_io::BitDepth::Int16,
+        soundcraft_model::BitDepthSetting::Int24 => soundcraft_audio_io::BitDepth::Int24,
+        soundcraft_model::BitDepthSetting::Float32 => soundcraft_audio_io::BitDepth::Float32,
+    };
+    match s.record_file_type {
+        soundcraft_model::RecordFileType::Aiff => (FileFormat::Aiff, depth, None),
+        soundcraft_model::RecordFileType::Wav => {
+            let (date, time) = utc_now();
+            let bwf = soundcraft_audio_io::BwfInfo {
+                originator: "FreeDAWm".into(),
+                originator_reference: format!("FreeDAWm {}", env!("CARGO_PKG_VERSION")),
+                origination_date: date,
+                origination_time: time,
+                ..Default::default()
+            };
+            (FileFormat::Wav, depth, Some(bwf))
+        }
+    }
+}
+
+/// The date (`yyyy-mm-dd`) and time (`hh:mm:ss`) now, UTC.
+fn utc_now() -> (String, String) {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (days, rest) = (i64::try_from(secs / 86_400).unwrap_or(0), secs % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (format!("{y:04}-{m:02}-{d:02}"), format!("{:02}:{:02}:{:02}", rest / 3_600, rest / 60 % 60, rest % 60))
+}
+
+/// Writes the BWF time reference of the WAV at `path` (its `bext` chunk's), when it has one:
+/// the samples since the session's timecode start of its first frame, `at`. Errors are ignored
+/// (a take without the stamp still plays).
+fn stamp_time_reference(path: &Path, at: Samples) {
+    use std::io::{Read as _, Seek as _, Write as _};
+    let Ok(mut f) = std::fs::OpenOptions::new().read(true).write(true).open(path) else { return };
+    let mut head = Vec::with_capacity(4_096);
+    if (&mut f).take(4_096).read_to_end(&mut head).is_err() {
+        return;
+    }
+    let Some(off) = soundcraft_audio_io::bext_time_reference_offset(&head) else { return };
+    let v = u64::try_from(at.max(0)).unwrap_or(0);
+    let _ = f.seek(std::io::SeekFrom::Start(off as u64)).and_then(|_| f.write_all(&v.to_le_bytes()));
+}
 
 /// The number of take `name` (a source's name, `<stem>_<NN>`) of a track whose takes are named
 /// `<stem>_…`.
@@ -2438,6 +2499,18 @@ pub struct Take {
     /// inserts' latency (frames).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tap_latency: Samples,
+    /// How the file is written (crash recovery repairs its header by it). `None` (and plans
+    /// saved before it existed): a plain 32-bit float WAV.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<TakeFile>,
+}
+
+/// A take file's type and bit depth, and whether it has a `bext` chunk.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TakeFile {
+    pub format: FileFormat,
+    pub depth: soundcraft_audio_io::BitDepth,
+    pub bwf: bool,
 }
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
@@ -2452,7 +2525,12 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
             };
             (t, p, l)
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // Each take's BWF time reference: where its first frame belongs, from the timecode start.
+    let tc = e.session().timecode_start;
+    for (_, p, l) in &takes {
+        stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
+    }
     add_recording_in(e, start, takes, plan.pass, plan.punch)
 }
 
@@ -2801,7 +2879,7 @@ mod record_tests {
             pass: None,
             punch: Some(Range::new(1_400, 1_600)),
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0 }],
+            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: None,
         };
@@ -2817,7 +2895,7 @@ mod record_tests {
             pass: rs.pass,
             punch: rs.punch,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false, from_device: false, tap_latency: 0 }],
+            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
             latency: 0,
             loop_from: rs.loop_from,
         }
@@ -2959,8 +3037,8 @@ mod record_tests {
             punch: None,
             rate: 48_000,
             takes: vec![
-                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0 },
-                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20 },
+                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None },
+                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20, file: None },
             ],
             latency: 300,
             loop_from: None,
@@ -2993,12 +3071,56 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: true, from_device: true, tap_latency: 64 }],
+            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: true, from_device: true, tap_latency: 64, file: None }],
             latency: 300,
             loop_from: None,
         };
         place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 636, 364)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn takes_follow_the_sessions_file_type_and_bit_depth_and_carry_a_timestamp() {
+        let dir = test_dir("take-format");
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let (fmt, depth, bwf) = take_format(e.session());
+        assert_eq!((fmt, depth), (FileFormat::Wav, soundcraft_audio_io::BitDepth::Int24));
+        let bwf = bwf.unwrap();
+        assert_eq!(bwf.originator, "FreeDAWm");
+        assert!(bwf.origination_date.len() == 10 && bwf.origination_time.len() == 8, "{bwf:?}");
+        e.execute("setup.record_format", &json!({"bit_depth": "32f", "file_type": "aiff"})).unwrap();
+        assert_eq!(take_format(e.session()).0, FileFormat::Aiff);
+        assert_eq!(take_format(e.session()).1, soundcraft_audio_io::BitDepth::Float32);
+        assert_eq!(plan_takes(&e, &dir, 2).unwrap()[0].2, dir.join("Audio Files/Vox_01.aif"));
+        e.execute("setup.record_format", &json!({"bit_depth": 16, "file_type": "wav"})).unwrap();
+        assert_eq!(take_format(e.session()).1, soundcraft_audio_io::BitDepth::Int16);
+        // A placed take is stamped with where its first frame belongs (after the timecode start).
+        e.session_mut().timecode_start = 1_000_000;
+        let path = dir.join("Audio Files/Vox_01.wav");
+        let opts = EncodeOptions {
+            format: FileFormat::Wav,
+            bit_depth: soundcraft_audio_io::BitDepth::Int24,
+            dither: false,
+            bwf: take_format(e.session()).2,
+            bitrate_kbps: 0,
+        };
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 2_000]] };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        let rec = Recording {
+            start: 48_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![Take { track: vox, path: path.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            latency: 100,
+            loop_from: None,
+        };
+        place_recording(&mut e, &rec, vec![(vox, path.clone())]);
+        let info = soundcraft_audio_io::probe(&std::fs::read(&path).unwrap(), None).unwrap();
+        assert_eq!(info.bwf.unwrap().time_reference, 1_000_000 + 48_000 - 100);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
