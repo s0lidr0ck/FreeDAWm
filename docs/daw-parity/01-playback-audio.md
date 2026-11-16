@@ -152,7 +152,7 @@ Varispeed is the only whole-project speed control among the four.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed with linear interpolation |
-| Audio follows tempo changes | ● | ● | ● | ● | **Missing**: clips stay at their sample positions; the tick timebase is a flag for audio |
+| Audio follows tempo changes | ● | ● | ● | ● | **Partial**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, renders them to the new length (offline, not in real time) |
 | Choice of stretch algorithm | ● | ● | ● | ● | **Flag only**: polyphonic, rhythmic, monophonic and X-Form all run the same render |
 | Warp markers you can drag | ● | ● | ● | ● | **Missing**: markers are written by Straighten and never edited or read |
 | Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
@@ -237,6 +237,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | audio on tick tracks follows tempo edits (offline renders) |
 | 2026-11-16 | minor | tier 3: varispeed |
 | 2026-11-16 | minor | tier 2: scrub audio with the Scrubber |
 | 2026-11-16 | minor | tier 2: auditioning files in the Workspace and clips in the Clip List |

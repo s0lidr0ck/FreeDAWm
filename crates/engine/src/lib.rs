@@ -741,7 +741,14 @@ impl Engine {
                     && !matches!(id, "edit.undo" | "edit.redo")
                     && before.tempo != self.doc.tempo
                 {
-                    tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc));
+                    let followed = tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc));
+                    // Pitch-preserving Elastic clips render to their new length, from their
+                    // original material (a clip that cannot keeps its place and its old length).
+                    for (clip, ratio) in followed.renders {
+                        let key = format!("elastic.{}.ratio", clip.0);
+                        let was = self.doc.edit.values.get(&key).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(1.0);
+                        let _ = cmd::clip::elastic(self, &serde_json::json!({"clips": [clip.0], "ratio": was * ratio}));
+                    }
                 }
                 // A frozen track's frozen parts and edit-locked clips are not edited: the command
                 // is undone.

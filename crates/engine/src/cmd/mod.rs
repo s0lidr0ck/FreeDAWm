@@ -14,7 +14,7 @@ mod automation_edit;
 mod band;
 pub mod chord_lane;
 mod clap;
-mod clip;
+pub(crate) mod clip;
 mod clip_clean;
 mod clip_list;
 mod clip_more;

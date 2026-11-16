@@ -9,32 +9,81 @@
 //! starts between two ticks keeps its place, and a tempo change undone by another returns it to
 //! the sample it started on.
 //!
-//! What does not move: clips on sample-timebase tracks; audio clips (their length is their audio);
-//! clips the command moved itself (Insert Time, Cut Time and Move Song Start place the clips
+//! Audio clips on a tick-timebase track follow too. On a track that is not Elastic only the start
+//! follows (the audio keeps its own speed, as a sample does). On an Elastic track the clip also
+//! takes its new length: with Varispeed by its stretch ratio (the pitch moves with the speed), with
+//! a pitch-preserving algorithm by a render from its original material at the new ratio
+//! ([`follow_tempo`] returns those for the engine to render, as Elastic Properties does).
+//! Edit- or time-locked audio clips stay where they are.
+//!
+//! What does not move: clips on sample-timebase tracks; clips the command moved itself (Insert Time, Cut Time and Move Song Start place the clips
 //! after the edit point as they shift the map). Undo and redo restore whole documents and a
 //! loaded session is taken as saved, so neither moves anything: an old session opens and sounds
 //! as it was saved, and its clips start to follow the tempo at the first tempo edit. A frozen MIDI
 //! track refuses tempo edits (its render played the old tempo), so a frozen clip is never moved.
 
-use soundcraft_model::{ClipContent, Session};
+use soundcraft_model::{ClipContent, ClipId, Session};
 use soundcraft_time::TempoMap;
 
-/// Moves the MIDI clips of tick-timebase tracks in `after` that sit where they sat in `before`
-/// from their ticks in `before`'s tempo map to the same ticks in `after`'s. Returns how many moved.
-pub fn follow_tempo(before: &Session, after: &mut Session) -> usize {
+/// What [`follow_tempo`] did: clips moved, and the audio clips of pitch-preserving Elastic tracks
+/// that need their material rendered to a new length (clip, length now ÷ length before).
+#[derive(Debug, Default, PartialEq)]
+pub struct Followed {
+    pub moved: usize,
+    pub renders: Vec<(ClipId, f64)>,
+}
+
+/// Moves the clips of tick-timebase tracks in `after` that sit where they sat in `before` from
+/// their ticks in `before`'s tempo map to the same ticks in `after`'s (audio as the module says).
+pub fn follow_tempo(before: &Session, after: &mut Session) -> Followed {
+    let mut out = Followed::default();
     if before.tempo == after.tempo || before.sample_rate != after.sample_rate {
-        return 0;
+        return out;
     }
     let (old, new): (&TempoMap, TempoMap) = (&before.tempo, after.tempo.clone());
     let sr = after.sample_rate;
     let place = |s: i64| new.ticks_f_to_samples_f(old.samples_to_ticks_f(s, sr), sr).round();
-    let mut moved = 0;
     for tr in after.tracks.iter_mut().filter(|t| t.ticks_timebase) {
         let Some(was) = before.track(tr.id) else { continue };
+        let elastic = tr.elastic.clone();
         for (i, pl) in tr.playlists.iter_mut().enumerate() {
             let Some(old_pl) = was.playlists.get(i) else { continue };
             let mut any = false;
-            for c in pl.clips.iter_mut().filter(|c| matches!(c.content, ClipContent::Midi { .. })) {
+            for c in pl.clips.iter_mut() {
+                if matches!(c.content, ClipContent::Audio { .. }) {
+                    if c.edit_locked || c.time_locked || !old_pl.clips.iter().any(|o| o.id == c.id && o.start == c.start && o.length == c.length) {
+                        continue;
+                    }
+                    let (a, b) = (place(c.start), place(c.end()));
+                    if !a.is_finite() || !b.is_finite() || a > i64::MAX as f64 / 2.0 || b > i64::MAX as f64 / 2.0 {
+                        continue;
+                    }
+                    let start = (a as i64).max(0);
+                    let len = ((b - a).round() as i64).max(1);
+                    let was_len = c.length;
+                    if start != c.start {
+                        c.start = start;
+                        any = true;
+                        out.moved += 1;
+                    }
+                    match elastic.as_deref() {
+                        Some(_) if len == was_len => {}
+                        Some("varispeed") => {
+                            let r = len as f64 / was_len.max(1) as f64;
+                            let st = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
+                            c.stretch = st * r;
+                            c.length = len;
+                            c.clamp_fades();
+                            any = true;
+                        }
+                        Some(_) => out.renders.push((c.id, len as f64 / was_len.max(1) as f64)),
+                        None => {}
+                    }
+                    continue;
+                }
+                if !matches!(c.content, ClipContent::Midi { .. }) {
+                    continue;
+                }
                 // Only a clip the command left in place: one it moved or trimmed is where it put it.
                 if !old_pl.clips.iter().any(|o| o.id == c.id && o.start == c.start && o.length == c.length) {
                     continue;
@@ -49,7 +98,7 @@ pub fn follow_tempo(before: &Session, after: &mut Session) -> usize {
                     c.start = start;
                     c.length = end - start;
                     any = true;
-                    moved += 1;
+                    out.moved += 1;
                 }
             }
             if any {
@@ -57,7 +106,7 @@ pub fn follow_tempo(before: &Session, after: &mut Session) -> usize {
             }
         }
     }
-    moved
+    out
 }
 
 #[cfg(test)]
@@ -100,6 +149,48 @@ mod tests {
         // Back to 120 bpm: back to the sample it started on.
         e.execute("event.tempo_remove", &json!({"at": 96_000})).unwrap();
         assert_eq!(clip_at(&e, clip), (192_000, 96_000));
+    }
+
+    /// An audio track kept in bars and beats: a plain track's clip moves to its bar and keeps its
+    /// length; on a Varispeed track it also takes the new length by its stretch; on a
+    /// pitch-preserving Elastic track it is rendered to the new length; a sample track's stays.
+    #[test]
+    fn audio_clips_on_tick_tracks_follow_the_tempo() {
+        use soundcraft_audio_io::{AudioBuffer, FileFormat};
+        use soundcraft_model::Clip;
+        let mut e = Engine::default();
+        let src = crate::io::add_source(
+            e.session_mut(),
+            "tone",
+            AudioBuffer { sample_rate: 48_000, channels: vec![(0..96_000).map(|i| (i as f32 * 0.05).sin() * 0.5).collect()] },
+            None,
+            FileFormat::Wav,
+        );
+        let mut clips = Vec::new();
+        for (name, ticks, elastic) in
+            [("Plain", true, None), ("Vari", true, Some("varispeed")), ("Poly", true, Some("polyphonic")), ("Fixed", false, None)]
+        {
+            let t = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some(name));
+            let s = e.session_mut();
+            let id = s.new_clip_id();
+            let tr = s.track_mut(t).unwrap();
+            tr.ticks_timebase = ticks;
+            tr.elastic = elastic.map(str::to_string);
+            tr.playlist_mut().unwrap().clips = vec![Clip::audio(id, name, src, 0, 192_000, 96_000)];
+            clips.push(id.0);
+        }
+        // 60 bpm from bar 2: bar 3 moves from 192 000 to 288 000 and a bar is twice as long.
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        assert_eq!(clip_at(&e, clips[0]), (288_000, 96_000), "plain: the start follows, the audio keeps its speed");
+        assert_eq!(clip_at(&e, clips[1]), (288_000, 192_000), "varispeed: the length follows");
+        assert!((e.session().find_clip(ClipId(clips[1])).unwrap().1.stretch - 2.0).abs() < 1e-9);
+        let poly = e.session().find_clip(ClipId(clips[2])).unwrap().1.clone();
+        assert_eq!((poly.start, poly.length), (288_000, 192_000), "elastic: rendered to the new length");
+        assert_eq!(poly.stretch, 1.0, "rendered, not varispeed");
+        assert_eq!(clip_at(&e, clips[3]), (192_000, 96_000), "a sample track's clip stays");
+        // Undo puts everything back in one step.
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(clip_at(&e, clips[2]), (192_000, 96_000));
     }
 
     /// A clip that starts between two ticks keeps its offset through a tempo change and back.

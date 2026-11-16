@@ -200,7 +200,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Slice, conform and smooth (Beat Detective style) | ● | ◐ | ◐ | ● | **Partial**: detect and separate; no conform, no gap filling |
 | Extract a groove and apply it | ● | ● | ● | ● | **Missing** |
 | Detect tempo from audio and build a tempo map | ◐ | ● | ● | ● | **Works**: constant, follow and smooth modes |
-| Audio on a musical-time track follows tempo edits | ● | ● | ● | ● | **Flag only**: the track setting exists; nothing moves or stretches |
+| Audio on a musical-time track follows tempo edits | ● | ● | ● | ● | **Works**: on a tick track a clip moves to its bar; on an Elastic one it also takes the new length (Varispeed by its stretch, the others by a pitch-preserving render from the original) |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving render on an Elastic one (bug 12, fixed) |
 | Re-stretch after trimming | ● | ● | ● | ● | **Partial**: a second stretch rebuilds from the first-stretch length and discards later trims |
 
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: audio on tick tracks follows tempo-map edits |
 | 2026-11-16 | minor | Tier 2: processing keeps handles |
 | 2026-11-16 | minor | Tier 2: Commit Selection (bounce a range in place with effects) |
 | 2026-11-16 | minor | Tier 2: fade dialog with a shape for each side, presets and batch fades |
