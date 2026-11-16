@@ -215,6 +215,8 @@ struct Shared {
     direct: AtomicBool,
     /// A take records (set by [`Player::set_recording`]): half speed waits.
     recording: AtomicBool,
+    /// Loop recording: the pass under way, as the last block left it ([`Player::loop_pass`]).
+    midi_pass: AtomicU32,
     /// Reported latencies, read live for [`Player::reported_latency`]: the output callback's
     /// (playback − callback) and the input callback's (callback − capture), in ns; the input
     /// feed's own and the mix's compensation after the last render, in frames.
@@ -254,6 +256,7 @@ impl Shared {
             load_permille: AtomicU32::new(0),
             direct: AtomicBool::new(false),
             recording: AtomicBool::new(false),
+            midi_pass: AtomicU32::new(0),
             out_latency_ns: AtomicU64::new(0),
             in_latency_ns: AtomicU64::new(0),
             feed_latency: AtomicU32::new(0),
@@ -685,6 +688,7 @@ impl AudioState {
                     self.recording = r;
                     self.punch = None;
                     self.midi_pass = 0;
+                    self.shared.midi_pass.store(0, Ordering::Relaxed);
                     self.midi_take_fresh = r;
                 }
                 Cmd::Punch(p) => self.punch = p,
@@ -955,6 +959,7 @@ impl AudioState {
                 self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
                 self.shared.play_pending.store(false, Ordering::Release);
                 self.midi_pass = 0;
+                self.shared.midi_pass.store(0, Ordering::Relaxed);
                 self.pos = from;
                 self.shared.position.store(from, Ordering::Relaxed);
                 (self.looped, self.end) = loop_or_end(looped, end);
@@ -1183,6 +1188,7 @@ impl AudioState {
             self.pos = l.start;
             self.midi_pass = self.midi_pass.saturating_add(1);
         }
+        self.shared.midi_pass.store(u32::from(self.midi_pass), Ordering::Relaxed);
         if let Some(c) = &self.countoff {
             // The count-off ends on a block edge: the take's first block starts at the record point.
             n = n.min(usize::try_from((c.len() - self.countoff_at).max(1)).unwrap_or(mb));
@@ -3010,6 +3016,12 @@ impl Player {
 
     pub fn position(&self) -> Samples {
         self.shared.position.load(Ordering::Relaxed)
+    }
+
+    /// Loop recording: the pass under way (0 for the first; each wrap of the loop starts the
+    /// next), as the last block rendered left it.
+    pub fn loop_pass(&self) -> u16 {
+        u16::try_from(self.shared.midi_pass.load(Ordering::Relaxed)).unwrap_or(u16::MAX)
     }
 
     /// A handle other threads (the LAN remote's network threads) read the transport through,

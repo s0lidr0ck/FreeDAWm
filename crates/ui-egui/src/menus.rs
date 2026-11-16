@@ -10,6 +10,7 @@ use soundcraft_engine::catalog;
 pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", "", None),
     ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
+    ("ui.midi_undo_pass", "Undo Last Pass", "Event > More MIDI > Undo Last Pass", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
@@ -1164,6 +1165,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
+    }
+    if id == "ui.midi_undo_pass" {
+        return Some(crate::midi_devices::undo_last_pass(app));
     }
     if id == "ui.quantize_audio" {
         app.dialogs.open = Some(crate::dialogs::Dialog::QuantizeAudio { strength: 100.0, swing: 0.0 });

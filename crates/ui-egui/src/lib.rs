@@ -877,6 +877,9 @@ pub struct SoundApp {
     pub(crate) learn_switches: std::collections::HashMap<(String, u8, u8, bool), bool>,
     /// The live MIDI the audio thread heard since recording started (`midi_devices::collect`).
     pub(crate) midi_rec: Vec<soundcraft_playback::midi_in::RecordedMidi>,
+    /// Loop recording MIDI: the finished passes on the armed tracks while the loop runs
+    /// (`midi_devices::preview_loop`).
+    pub(crate) midi_loop_preview: Option<soundcraft_engine::midi_record::LoopPreview>,
     /// The hub's count of recorded events lost (the window did not collect them in time) when
     /// the take started: what it counts beyond is this take's loss, reported at Stop.
     pub(crate) midi_rec_lost_at: u64,
@@ -1123,6 +1126,7 @@ impl SoundApp {
             learn_menu: None,
             learn_switches: std::collections::HashMap::new(),
             midi_rec: Vec::new(),
+            midi_loop_preview: None,
             midi_rec_lost_at: 0,
             midi_capture: Vec::new(),
             last_midi_take: None,
@@ -1270,6 +1274,10 @@ impl SoundApp {
             if x1 - x0 >= 100.0 {
                 o.insert("width_px".into(), serde_json::json!(x1 - x0));
             }
+        }
+        // Loop recording MIDI with a pass finished: Undo takes the last pass back.
+        if id == "edit.undo" && midi_devices::loop_undo_applies(self) {
+            return midi_devices::undo_last_pass(self);
         }
         let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject");
         // (a running render refuses the session commands below, through `render::blocked`)
@@ -2346,6 +2354,8 @@ impl SoundApp {
             }
         }
         self.midi_rec.clear();
+        midi_devices::lift_preview(self);
+        self.midi_loop_preview = None;
         self.take_plan = None;
         self.punch = None;
         // The autosave forgets the plan (nothing to recover).
@@ -2361,6 +2371,9 @@ impl SoundApp {
         }
         let end = self.position();
         self.refine_take_plan();
+        // The loop passes heard while recording come off: the take is placed for good below.
+        midi_devices::collect(self);
+        midi_devices::lift_preview(self);
         let plan = self.take_plan.take();
         let latency = self.take_latency();
         let (takes, problem, start) = match &mut self.recorder {
@@ -2744,6 +2757,7 @@ impl SoundApp {
         if self.engine.transport.recording {
             self.refine_take_plan();
             midi_devices::collect(self);
+            midi_devices::preview_loop(self);
         } else {
             midi_devices::collect_capture(self);
         }

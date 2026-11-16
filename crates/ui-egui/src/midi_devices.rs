@@ -45,6 +45,9 @@ pub fn tick(app: &mut SoundApp) {
 /// Recording starts: what the audio thread heard before is not part of the take.
 pub(crate) fn start_take(app: &mut SoundApp) {
     app.midi_rec.clear();
+    // The armed tracks as they are now: what a loop's finished passes are shown over.
+    let s = app.engine.session();
+    app.midi_loop_preview = Some(soundcraft_engine::midi_record::LoopPreview::new(s, &soundcraft_engine::midi_record::armed_midi_tracks(s)));
     if let Some(h) = &app.midi_hub {
         let mut stale = Vec::new();
         h.take_recorded(&mut stale);
@@ -151,17 +154,60 @@ pub(crate) fn recorded_events(
     heard.iter().map(|r| soundcraft_engine::midi_record::RecordedEvent { at: r.at, port: name(r.port), msg: r.msg, pass: r.pass }).collect()
 }
 
-/// Recording stopped at `end`: the take's live MIDI becomes clips on the armed MIDI tracks
-/// (`soundcraft_engine::midi_record`), placed with the take's start, loop and punch.
-pub(crate) fn finish_take(
-    app: &mut SoundApp,
-    plan: &soundcraft_engine::io::Recording,
-    end: soundcraft_time::Samples,
-) -> Vec<soundcraft_model::ClipId> {
-    collect(app);
-    let heard = std::mem::take(&mut app.midi_rec);
-    let events = recorded_events(app, &heard);
-    let take = soundcraft_engine::midi_record::MidiTake {
+/// Loop recording (each frame while recording, after [`collect`]): once the loop has wrapped
+/// since the last showing, the passes finished so far go on the armed tracks, so the next pass
+/// plays them (`soundcraft_engine::midi_record::LoopPreview`).
+pub(crate) fn preview_loop(app: &mut SoundApp) {
+    let pass = app.player.as_ref().map_or(0, soundcraft_playback::Player::loop_pass);
+    if app.midi_loop_preview.as_ref().is_some_and(|p| pass > p.shown()) {
+        show_passes(app, pass);
+    }
+}
+
+/// Shows the passes before `upto` of the take so far.
+fn show_passes(app: &mut SoundApp, upto: u16) {
+    let Some(plan) = app.take_plan.clone() else { return };
+    let take = take_for(app, &plan, app.position());
+    let events = recorded_events(app, &app.midi_rec);
+    let Some(mut p) = app.midi_loop_preview.take() else { return };
+    if take.looped.is_some() {
+        p.show(app.engine.session_mut(), &take, &events, upto);
+    }
+    app.midi_loop_preview = Some(p);
+}
+
+/// The loop passes shown while recording come off the tracks (Stop or Discard): the tracks are
+/// as they were when the take began. What Undo Last Pass left out is still known to
+/// [`finish_take`].
+pub(crate) fn lift_preview(app: &mut SoundApp) {
+    if let Some(mut p) = app.midi_loop_preview.take() {
+        p.restore(app.engine.session_mut());
+        app.midi_loop_preview = Some(p);
+    }
+}
+
+/// Undo (Cmd+Z) while loop recording MIDI with a pass finished takes that pass back.
+pub(crate) fn loop_undo_applies(app: &SoundApp) -> bool {
+    app.engine.transport.recording && app.midi_loop_preview.as_ref().is_some_and(|p| p.shown() > 0)
+}
+
+/// Event › More MIDI › Undo Last Pass (and Undo while loop recording): the last finished loop
+/// pass still in is left out of what plays and of the take; the loop runs on.
+pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    if !app.engine.transport.recording {
+        return Err("Undo Last Pass works while loop recording MIDI: it takes back the pass just played.".into());
+    }
+    let Some(p) = &mut app.midi_loop_preview else { return Err("No MIDI is being loop recorded.".into()) };
+    let Some(pass) = p.undo_last_pass() else { return Err("No finished loop pass to undo yet.".into()) };
+    let upto = p.shown();
+    show_passes(app, upto);
+    app.ui.status = format!("Loop pass {} undone", u32::from(pass) + 1);
+    Ok(serde_json::json!({"pass": pass}))
+}
+
+/// The take as recorded so far (to `end`), with the plan's start, loop and punch.
+fn take_for(app: &SoundApp, plan: &soundcraft_engine::io::Recording, end: soundcraft_time::Samples) -> soundcraft_engine::midi_record::MidiTake {
+    soundcraft_engine::midi_record::MidiTake {
         start: plan.start,
         end,
         // Record pressed before a playing loop: the transport wraps there, and each pass after
@@ -175,7 +221,25 @@ pub(crate) fn finish_take(
             .or_else(|| app.play_loop.filter(|l| plan.start < l.start)),
         punch: plan.punch,
         latency: take_latency(app),
-    };
+    }
+}
+
+/// Recording stopped at `end`: the take's live MIDI becomes clips on the armed MIDI tracks
+/// (`soundcraft_engine::midi_record`), placed with the take's start, loop and punch. Loop passes
+/// Undo Last Pass took back are left out.
+pub(crate) fn finish_take(
+    app: &mut SoundApp,
+    plan: &soundcraft_engine::io::Recording,
+    end: soundcraft_time::Samples,
+) -> Vec<soundcraft_model::ClipId> {
+    collect(app);
+    let heard = std::mem::take(&mut app.midi_rec);
+    let mut events = recorded_events(app, &heard);
+    if let Some(p) = app.midi_loop_preview.take() {
+        // (Off the tracks already: `lift_preview`.)
+        events = p.keep(&events);
+    }
+    let take = take_for(app, plan, end);
     // A remote recorder sends this take to the booth (`net_ui`), even an empty one.
     app.last_midi_take = Some((take, events.clone()));
     if events.is_empty() {
@@ -599,6 +663,53 @@ pub(crate) mod tests {
             })
             .collect();
         assert_eq!(spans, vec![(0, 20_000, vec![60]), (30_000, 48_000, vec![64])], "what was played punched out is left out");
+    }
+
+    #[test]
+    fn loop_passes_are_heard_while_recording_and_undo_takes_the_last_back() {
+        use soundcraft_playback::midi_in::{RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        start_take(&mut app);
+        app.engine.transport.recording = true;
+        // Loop recording over the first bar (96,000 samples at 120 bpm).
+        let plan = soundcraft_engine::io::Recording {
+            start: 0,
+            pass: Some(96_000),
+            punch: None,
+            rate: 0,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: Some(0),
+            punches: Vec::new(),
+        };
+        app.take_plan = Some(plan.clone());
+        let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass };
+        app.midi_rec = vec![note(1_000, 36, 0), note(30_000, 38, 1)];
+        let pitches = |app: &SoundApp| -> Vec<u8> {
+            let tr = app.engine.session().track(TrackId(t)).unwrap();
+            tr.clips().iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| n.pitch)).collect()
+        };
+        assert!(pitches(&app).is_empty());
+        // The loop wrapped into pass 2: passes 1 and 2 play (merged, the default).
+        show_passes(&mut app, 2);
+        assert_eq!(pitches(&app), vec![36, 38]);
+        // Cmd+Z while loop recording: the last pass goes; the session's undo is untouched.
+        let undo = app.engine.undo_label().map(str::to_string);
+        assert_eq!(app.run("edit.undo", json!({})).unwrap()["pass"], 1);
+        assert_eq!(pitches(&app), vec![36]);
+        assert_eq!(app.engine.undo_label().map(str::to_string), undo);
+        // Stop: what was undone stays out of the take, which is one undo step.
+        lift_preview(&mut app);
+        app.engine.transport.recording = false;
+        let ids = finish_take(&mut app, &plan, 150_000);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(pitches(&app), vec![36]);
+        assert!(app.run("ui.midi_undo_pass", json!({})).is_err(), "not while stopped");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(pitches(&app).is_empty());
     }
 
     #[test]

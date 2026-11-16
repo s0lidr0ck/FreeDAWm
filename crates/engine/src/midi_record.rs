@@ -112,18 +112,37 @@ pub fn tracks_on_port(s: &Session, device: &str) -> Vec<TrackId> {
 /// [`record_live_midi`] on the given `tracks` (each still takes only what its input lets
 /// through). One undo step, "Record", when anything was placed.
 pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, events: &[RecordedEvent]) -> Vec<ClipId> {
-    let tracks = tracks.to_vec();
     if tracks.is_empty() || events.is_empty() {
         return Vec::new();
     }
     let before = e.session_arc();
-    let mode = record_mode(e.session());
-    let quantize = e.session().edit.flag("midi.input_quantize");
-    let opts = crate::cmd::event_more::quantize_opts(e.session());
-    let passes = events.iter().map(|x| x.pass).max().unwrap_or(0);
+    let out = place_take(e.session_mut(), tracks, take, events);
+    if !out.is_empty() {
+        e.push_undo("Record", before);
+    }
+    out
+}
+
+/// [`record_midi_on`] without the undo step, on a session: what the loop-recording preview puts
+/// on the tracks while the loop still runs (see [`LoopPreview`]).
+pub fn place_take(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[RecordedEvent]) -> Vec<ClipId> {
+    place_passes(s, tracks, take, events, None)
+}
+
+/// [`place_take`], placing only the passes before `upto` when it is given (the loop is still in
+/// pass `upto`: the passes are counted to it, so the early notes at a finished pass's end start
+/// the next as they will at Stop).
+fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[RecordedEvent], upto: Option<u16>) -> Vec<ClipId> {
+    let tracks = tracks.to_vec();
+    if tracks.is_empty() || events.is_empty() {
+        return Vec::new();
+    }
+    let mode = record_mode(s);
+    let quantize = s.edit.flag("midi.input_quantize");
+    let opts = crate::cmd::event_more::quantize_opts(s);
+    let passes = events.iter().map(|x| x.pass).max().unwrap_or(0).max(upto.unwrap_or(0));
     let mut out = Vec::new();
     for tid in tracks {
-        let s = e.session_mut();
         let Some(Route::Midi(input)) = s.track(tid).map(|t| t.mixer.input.clone()) else { continue };
         let filter = |x: &&RecordedEvent| {
             input.device.as_ref().is_none_or(|d| *d == x.port) && (input.channel == 0 || x.msg[0] >= 0xF0 || (x.msg[0] & 0x0F) + 1 == input.channel)
@@ -158,6 +177,9 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         let window = (TICKS_PER_QUARTER / 8).max(if quantize { opts.grid_ticks / 2 } else { 0 });
         let mine = settle_early_notes(s, take, passes, mine, window, quantize);
         for pass in 0..=passes {
+            if upto.is_some_and(|u| pass >= u) {
+                break;
+            }
             let Some(range) = pass_range(take, pass, passes) else { continue };
             // A pedal down when the range starts (pressed before the punch point or the take, or
             // held over a loop wrap) is down from its start.
@@ -219,9 +241,6 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
             out.push(id);
         }
     }
-    if !out.is_empty() {
-        e.push_undo("Record", before);
-    }
     out
 }
 
@@ -270,6 +289,89 @@ pub fn set_record_mode(s: &mut Session, mode: RecordMode) {
         RecordMode::Replace => 0.0,
     };
     s.edit.values.insert("midi.record_mode".into(), v);
+}
+
+/// Loop recording while the loop still runs: the passes finished so far are put on the armed
+/// tracks as they will be at Stop, so the next pass plays them (Merge: they add up in one clip;
+/// otherwise the last finished pass is on top). Nothing here is an undo step: before each showing,
+/// and before the take is placed for good, the tracks get back the playlists they had when the
+/// take began ([`LoopPreview::restore`]); only those tracks' playlists are touched, so mixing,
+/// automation written meanwhile and other tracks stay. Undo Last Pass while looping leaves a
+/// finished pass out of the preview and of the take ([`LoopPreview::undo_last_pass`]).
+#[derive(Debug, Clone, Default)]
+pub struct LoopPreview {
+    /// Each armed track's playlists and active playlist before the take.
+    saved: Vec<(TrackId, Vec<Playlist>, usize)>,
+    /// Clips the preview made (their kept performances go with them).
+    made: Vec<ClipId>,
+    /// The passes before this one are shown.
+    shown: u16,
+    /// Passes left out (Undo Last Pass).
+    dropped: Vec<u16>,
+    /// What is on the tracks now is the preview's.
+    applied: bool,
+}
+
+impl LoopPreview {
+    /// For a take on `tracks` of `s` as it is now (before anything was placed).
+    pub fn new(s: &Session, tracks: &[TrackId]) -> LoopPreview {
+        let saved = tracks.iter().filter_map(|t| s.track(*t).map(|tr| (*t, tr.playlists.clone(), tr.active_playlist))).collect();
+        LoopPreview { saved, ..LoopPreview::default() }
+    }
+
+    /// The passes before this one are on the tracks.
+    pub fn shown(&self) -> u16 {
+        self.shown
+    }
+
+    /// The passes Undo Last Pass left out.
+    pub fn dropped(&self) -> &[u16] {
+        &self.dropped
+    }
+
+    /// `events` without the passes left out.
+    pub fn keep(&self, events: &[RecordedEvent]) -> Vec<RecordedEvent> {
+        events.iter().filter(|x| !self.dropped.contains(&x.pass)).cloned().collect()
+    }
+
+    /// Puts the passes before `upto` of `events` (the loop runs in pass `upto`) on the tracks,
+    /// as `take` would at Stop, the dropped ones left out. Returns whether the tracks changed.
+    pub fn show(&mut self, s: &mut Session, take: &MidiTake, events: &[RecordedEvent], upto: u16) -> bool {
+        if upto == 0 || take.looped.is_none() {
+            return false;
+        }
+        self.restore(s);
+        self.shown = upto;
+        let tracks: Vec<TrackId> = self.saved.iter().map(|x| x.0).collect();
+        let kept = self.keep(events);
+        self.made = place_passes(s, &tracks, take, &kept, Some(upto));
+        self.applied = true;
+        true
+    }
+
+    /// Takes the preview off: the tracks as they were before the take.
+    pub fn restore(&mut self, s: &mut Session) {
+        if !std::mem::take(&mut self.applied) {
+            return;
+        }
+        for (tid, playlists, active) in &self.saved {
+            if let Some(t) = s.track_mut(*tid) {
+                t.playlists = playlists.clone();
+                t.active_playlist = *active;
+            }
+        }
+        for id in self.made.drain(..) {
+            s.midi_originals.remove(&id.0);
+        }
+    }
+
+    /// Leaves the last finished pass still in (one before [`LoopPreview::shown`]) out of the
+    /// preview and the take. Returns it; `None` when no finished pass is left.
+    pub fn undo_last_pass(&mut self) -> Option<u16> {
+        let pass = (0..self.shown).rev().find(|p| !self.dropped.contains(p))?;
+        self.dropped.push(pass);
+        Some(pass)
+    }
 }
 
 /// Merge mode: `take` (a sequence over `range`, its channels kept) joins the unmuted MIDI clips
@@ -845,6 +947,64 @@ mod tests {
         let n = clip(&e, ids[0]).midi_playing().unwrap().notes[0];
         let at = e.session().tempo.samples_to_ticks(Q - 2_400, e.session().sample_rate);
         assert_eq!((n.start, n.length), (at, TICKS_PER_QUARTER));
+    }
+
+    #[test]
+    fn finished_loop_passes_are_on_the_track_while_the_loop_runs_and_the_last_can_be_undone() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        set_record_mode(e.session_mut(), RecordMode::Merge);
+        let old = old_clip(&mut e, t, 0, 4 * Q, 40, 0);
+        let undo_before = e.undo_label().map(str::to_string);
+        let lp = Range::new(0, 4 * Q);
+        let mut preview = LoopPreview::new(e.session(), &armed_midi_tracks(e.session()));
+        let pitches = |e: &Engine| -> Vec<u8> {
+            let tr = e.session().track(t).unwrap();
+            let mut v: Vec<u8> = tr.clips().iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| n.pitch)).collect();
+            v.sort();
+            v
+        };
+        // In pass 1, pass 0's kick is heard; pass 1's snare, still being played, is not yet.
+        let mut events = vec![ev(0, "K", [0x90, 36, 100]), RecordedEvent { pass: 1, ..ev(Q, "K", [0x90, 38, 100]) }];
+        let take = MidiTake { start: 0, end: 5 * Q, looped: Some(lp), punch: None, latency: 0 };
+        assert!(preview.show(e.session_mut(), &take, &events, 1));
+        assert_eq!(pitches(&e), vec![36, 40], "the old part and the first pass, merged");
+        // In pass 2: both passes.
+        events.push(RecordedEvent { pass: 2, ..ev(2 * Q, "K", [0x90, 42, 100]) });
+        preview.show(e.session_mut(), &MidiTake { end: 9 * Q, ..take }, &events, 2);
+        assert_eq!(pitches(&e), vec![36, 38, 40]);
+        // Undo Last Pass: the snare's pass goes, from what plays and from the take.
+        assert_eq!(preview.undo_last_pass(), Some(1));
+        preview.show(e.session_mut(), &MidiTake { end: 9 * Q, ..take }, &events, 2);
+        assert_eq!(pitches(&e), vec![36, 40]);
+        assert_eq!(e.undo_label().map(str::to_string), undo_before, "the preview is no undo step");
+        // Stop: the preview comes off, the take goes down once, one undo brings the old part back.
+        preview.restore(e.session_mut());
+        assert!(e.session().find_clip(old).is_some());
+        let kept = preview.keep(&events);
+        record_live_midi(&mut e, &MidiTake { end: 10 * Q, ..take }, &kept);
+        assert_eq!(pitches(&e), vec![36, 40, 42]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(pitches(&e), vec![40]);
+        // Undo goes back no further than the passes still in.
+        let mut p = LoopPreview::new(e.session(), &[t]);
+        p.show(e.session_mut(), &take, &events, 1);
+        assert_eq!((p.undo_last_pass(), p.undo_last_pass()), (Some(0), None));
+    }
+
+    #[test]
+    fn a_previewed_pass_on_its_own_playlist_comes_off_with_its_playlist() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let take = MidiTake { start: 0, end: 9 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        let events = vec![ev(0, "K", [0x90, 36, 100]), RecordedEvent { pass: 1, ..ev(Q, "K", [0x90, 38, 100]) }];
+        let mut p = LoopPreview::new(e.session(), &[t]);
+        p.show(e.session_mut(), &take, &events, 2);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.playlists.len(), tr.active_playlist), (2, 1), "the last finished pass is on top");
+        p.restore(e.session_mut());
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.playlists.len(), tr.clips().len()), (1, 0));
     }
 
     #[test]

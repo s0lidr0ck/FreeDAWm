@@ -44,7 +44,7 @@ revision history:
 
 1. **Record modes.** Settled: Merge (the MIDI Merge switch: overdub, loop passes adding up in
    one clip; the default for new sessions), Replace and New Playlist. Loop passes after the first keep the rest of the
-   song. Still missing: MIDI takes to comp, and hearing earlier passes while the loop runs.
+   song. Loop passes are heard while the loop runs, and the last can be undone while it does. Still missing: MIDI takes to comp.
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
    Offsets, count-off set-up and capture of what was just played now work. Still stored and
    unread: the input filter, MIDI Thru in the Options menu and the other settings bug 22 lists.
@@ -139,8 +139,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Each loop pass kept as a take | ● | ● | ● | ● | **Works**: each pass after the first on a new playlist that starts as a copy of the track's |
 | Passes add up into one clip (drum-machine style) | ● | ● | ● | ● | **Works** with MIDI Merge on; the passes appear at Stop |
-| Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Missing**: clips appear only after Stop |
-| Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Missing** |
+| Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Works**: at each wrap the finished passes go on the armed tracks as Stop will place them (merged, they add up; otherwise the last is on top), and the next pass plays them; no undo step until Stop |
+| Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take; erasing held notes is missing |
 | Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Missing**: comping is for audio tracks only |
 | Note repeat | ○ | ● | ● | ◐ | **Missing** |
 | Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Missing**: recording over a pattern clip erases it; the drum machine's pads are not recorded |
@@ -266,7 +266,7 @@ either wire the control or take it off the menu.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Done (`68d0dc0`): Replace, Merge, New Playlist; settles bug 3 |
-| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Partly: passes add up with MIDI Merge (`68d0dc0`). Earlier passes heard and undo of the last pass are not done: they need clips to exist while the loop runs |
+| Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Done: passes add up with MIDI Merge (`68d0dc0`); finished passes are on the tracks while the loop runs and Undo takes the last back (`midi_record::LoopPreview`) |
 | MIDI takes: lanes, pick a take, comp between takes | 12–18 | Not started (large: the audio comping model would have to take MIDI clips) |
 | Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; not with it stopped |
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in not done |
@@ -357,3 +357,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI output to hardware ports (External MIDI), enabled in Setup › MIDI Input Devices |
 | 2026-11-16 | minor | Control surfaces: Mackie Control (with extenders) and HUI, Setup › Control Surfaces |
 | 2026-11-16 | minor | MIDI learn, the MIDI Mappings window, MMC and learnt transport keys; mapped messages kept out of takes |
+| 2026-11-16 | minor | Loop recording: earlier passes are heard while later ones record, and Undo takes back the last pass while looping |
