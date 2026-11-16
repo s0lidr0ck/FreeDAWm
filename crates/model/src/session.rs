@@ -222,6 +222,7 @@ pub struct EditState {
     pub click: bool,
     pub countoff: bool,
     pub countoff_bars: u32,
+    /// MIDI Merge: a MIDI take overdubs into the clips under it. On for new sessions.
     pub midi_merge: bool,
     /// What a take does to the audio it records over (`options.record_mode`): `replace` (the
     /// default; `normal` in older sessions), `lanes` (each take a take lane, comped) or
@@ -299,7 +300,8 @@ impl Default for EditState {
             click: false,
             countoff: false,
             countoff_bars: 2,
-            midi_merge: false,
+            // New sessions overdub (Merge); a saved session keeps the switch it stored.
+            midi_merge: true,
             record_mode: "normal".into(),
             loop_record: false,
             quickpunch: false,

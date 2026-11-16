@@ -229,10 +229,10 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
 /// switch turns Merge on and off).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordMode {
-    /// The take's range is cleared and the take put there (the default).
+    /// The take's range is cleared and the take put there.
     Replace,
     /// The take joins the MIDI clips it overlaps into one clip with both: overdub. Loop passes
-    /// add up in it, drum-machine style.
+    /// add up in it, drum-machine style. The default for new sessions.
     Merge,
     /// The take goes on a new playlist that starts as a copy of the track's; the playlist it
     /// replaced keeps what was there.
@@ -445,7 +445,10 @@ mod tests {
     use soundcraft_time::TICKS_PER_QUARTER;
 
     /// An armed instrument track on `input` (default 120 bpm, 48 kHz: a quarter is 24000 samples).
+    /// A new armed instrument track on `input`. The tests record in Replace unless they set
+    /// another mode (new sessions start in Merge).
     fn armed(e: &mut Engine, input: &str, channel: u8) -> TrackId {
+        set_record_mode(e.session_mut(), RecordMode::Replace);
         let id = e.execute("track.new", &json!({"kind": "instrument", "name": "Keys"})).unwrap()["tracks"][0].as_u64().unwrap();
         e.execute("track.input", &json!({"tracks": [id], "input": input, "channel": channel})).unwrap();
         e.execute("mix.record_arm", &json!({"tracks": [id], "value": true})).unwrap();
@@ -755,6 +758,23 @@ mod tests {
     }
 
     #[test]
+    fn new_sessions_record_midi_in_merge_mode_and_saved_ones_keep_theirs() {
+        let e = Engine::default();
+        assert_eq!(record_mode(e.session()), RecordMode::Merge, "a new session overdubs");
+        // A session saved with MIDI Merge off (Replace) opens with it off.
+        let mut saved = soundcraft_model::Session::default();
+        set_record_mode(&mut saved, RecordMode::Replace);
+        let json = serde_json::to_string(&saved).unwrap();
+        let back: soundcraft_model::Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(record_mode(&back), RecordMode::Replace);
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v["edit"]["midi_merge"] = json!(false);
+        v["edit"]["values"] = json!({});
+        let older: soundcraft_model::Session = serde_json::from_value(v).unwrap();
+        assert_eq!(record_mode(&older), RecordMode::Replace, "an older session's stored switch is kept");
+    }
+
+    #[test]
     fn merge_mode_overdubs_into_the_clip_under_the_take() {
         let mut e = Engine::default();
         let t = armed(&mut e, "midi:all", 0);
@@ -808,7 +828,7 @@ mod tests {
         assert_eq!((tr.playlists.len(), tr.active_playlist), (2, 1));
         assert!(tr.playlists[0].clips.iter().any(|c| c.id == old && c.length == 4 * Q), "the old part, whole");
         assert_eq!(tr.playlists[1].clips.len(), 3, "the copy cut around the take, and the take");
-        // Replace (the default) clears what the take covers.
+        // Replace clears what the take covers.
         e.execute("options.midi_record_mode", &json!({"mode": "replace"})).unwrap();
         assert_eq!(record_mode(e.session()), RecordMode::Replace);
         assert!(e.execute("options.midi_record_mode", &json!({"mode": "overdub"})).is_err());

@@ -42,8 +42,8 @@ cases. Several tracks can record different ports and channels in one pass, with 
 Around that middle there were three kinds of gap; where they stand after the work listed in the
 revision history:
 
-1. **Record modes.** Settled: Replace (the default), Merge (the MIDI Merge switch: overdub, loop
-   passes adding up in one clip) and New Playlist. Loop passes after the first keep the rest of the
+1. **Record modes.** Settled: Merge (the MIDI Merge switch: overdub, loop passes adding up in
+   one clip; the default for new sessions), Replace and New Playlist. Loop passes after the first keep the rest of the
    song. Still missing: MIDI takes to comp, and hearing earlier passes while the loop runs.
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
    Offsets, count-off set-up and capture of what was just played now work. Still stored and
@@ -123,8 +123,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Replace what is under the take | ● | ● | ● | ● | **Works** (the default) |
-| Merge into the existing clip (overdub) | ● | ● | ● | ● | **Works**: MIDI Merge joins the take and the MIDI clips it overlaps into one clip |
+| Replace what is under the take | ● | ● | ● | ● | **Works** (Replace in the MIDI Merge switch's menu; the default before 2026-11-16, and sessions saved with it keep it) |
+| Merge into the existing clip (overdub) | ● | ● | ● | ● | **Works**: MIDI Merge joins the take and the MIDI clips it overlaps into one clip. The default for new sessions (owner's decision); a saved session keeps the switch it stored |
 | New clip on top, old one kept | ◐ | ● | ● | ● | **Partial**: New Playlist puts the take on a copy of the track's playlist and keeps the old one; clips do not overlap on one playlist |
 | Choose the mode | ● | ● | ● | ● | **Works**: the MIDI Merge switch, its right-click menu (Replace, Merge, New Playlist), `options.midi_record_mode` |
 | The existing part is heard while you record over it | ● | ● | ● | ● | **Works**, which makes replace surprising: you hear the old part, then lose it under the whole take |
@@ -331,3 +331,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI Track Offsets apply to what is recorded |
 | 2026-11-16 | minor | Capture MIDI: what was just played without Record becomes a take |
 | 2026-11-16 | minor | Status of the work list, commits on the fixed bugs, summary brought up to date |
+| 2026-11-16 | minor | Merge is the default MIDI record mode for new sessions; saved sessions keep theirs |
