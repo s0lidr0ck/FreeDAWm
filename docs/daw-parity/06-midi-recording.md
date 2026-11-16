@@ -244,7 +244,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
 | 16 | Menu items that run their command with no values and so change nothing: Input Quantize, MIDI Track Offsets. Step Input always enters the same eighth note | `ui-egui/src/menus.rs:949-965, 1075-1076`; `ui-egui/src/menubar.txt:435-440` |
 | 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes` | `ui-egui/src/live_midi.rs` |
-| 18 | Musical Typing's step mode ignores the velocity setting, does not lengthen the clip (later notes do not play), and a position before the clip collapses to its start | `ui-egui/src/musical_typing.rs:138-151` |
+| 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip` | `ui-egui/src/musical_typing.rs` |
 | 19 | The MIDI Real-Time Properties window never loads the selected track's values, writes all four on any change, and its changes cannot be undone | `ui-egui/src/ops_windows.rs:29-57, 283`; `engine/src/cmd/event_more.rs:116` |
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs` | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | MIDI export writes notes outside a clip's trimmed window and includes muted clips | `engine/src/io.rs:492-585` |
@@ -321,3 +321,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 20 fixed: new MIDI tracks and imported tracks listen to every MIDI input |
 | 2026-11-16 | minor | Bug 9 fixed: MIDI events lost during a take are reported at Stop |
 | 2026-11-16 | minor | Bug 13 fixed: module MIDI recorded in a loop prints over the loop |
+| 2026-11-16 | minor | Bug 18 fixed: Musical Typing's step mode uses the velocity and grows the clip |
