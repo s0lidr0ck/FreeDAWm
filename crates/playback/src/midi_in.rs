@@ -188,6 +188,11 @@ pub struct MidiHub {
     thru: AtomicBool,
     /// Setup › MIDI Input Filter ([`FILTER_KINDS`] bits).
     filter: AtomicU32,
+    /// Slots whose port was plugged back in (bit per slot), for the next block's
+    /// [`LiveMidi::reset`].
+    reset: AtomicU64,
+    /// Each slot's timing offset: its messages arrive this many µs after they were played.
+    offsets: [AtomicU32; MAX_MIDI_PORTS],
     record: MidiRing,
     /// What the mix heard while playing and not recording, for Capture MIDI (`capture_block`).
     capture: MidiRing,
@@ -245,6 +250,8 @@ impl MidiHub {
             activity: std::array::from_fn(|_| AtomicU64::new(0)),
             thru: AtomicBool::new(true),
             filter: AtomicU32::new(0),
+            reset: AtomicU64::new(0),
+            offsets: std::array::from_fn(|_| AtomicU32::new(0)),
             record: MidiRing::new(RECORD_RING),
             capture: MidiRing::new(RECORD_RING),
             held: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -315,6 +322,25 @@ impl MidiHub {
 
     pub fn thru(&self) -> bool {
         self.thru.load(Ordering::Relaxed)
+    }
+
+    /// Slot `slot`'s port went away and came back (or was reopened): the notes and pedals it
+    /// held are let go on the next block.
+    fn reset_slot(&self, slot: usize) {
+        if slot < MAX_MIDI_PORTS {
+            self.reset.fetch_or(1u64 << slot, Ordering::Relaxed);
+        }
+        if let Some(p) = self.pedals.get(slot) {
+            p.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Slot `slot`'s messages arrive `us` µs after they were played (a device's own delay):
+    /// they are placed that much earlier.
+    pub fn set_offset(&self, slot: usize, us: u32) {
+        if let Some(o) = self.offsets.get(slot) {
+            o.store(us, Ordering::Relaxed);
+        }
     }
 
     /// A port slot holds the port named `name` (`None`: closed).
@@ -418,6 +444,7 @@ impl MidiHub {
     pub fn drain_into(&self, live: &mut LiveMidi, now: u64, frames: usize, rate: f64) {
         live.clear();
         live.thru = self.thru();
+        live.reset = self.reset.swap(0, Ordering::Relaxed);
         for (slot, ring) in self.rings.iter().enumerate() {
             let id = self.ids.get(slot).map_or(0, |i| i.load(Ordering::Acquire));
             if let Some(p) = live.ports.get_mut(slot) {
@@ -515,13 +542,21 @@ pub struct PortSink {
 }
 
 impl PortSink {
+    /// The hub's clock now (µs since it was made).
+    pub fn now_us(&self) -> u64 {
+        self.hub.now_us()
+    }
+
     /// One raw message from the port, stamped now. What the mix doesn't play is ignored.
     pub fn send(&self, bytes: &[u8]) {
         self.send_at(self.hub.now_us(), bytes);
     }
 
-    /// [`PortSink::send`] stamped `stamp` (µs since the hub was made).
+    /// [`PortSink::send`] stamped `stamp` (µs since the hub was made), less the port's timing
+    /// offset ([`MidiHub::set_offset`]).
     pub fn send_at(&self, stamp: u64, bytes: &[u8]) {
+        let late = self.hub.offsets.get(self.slot).map_or(0, |o| o.load(Ordering::Relaxed));
+        let stamp = stamp.saturating_sub(u64::from(late)).max(1);
         // MIDI Machine Control: the transport, for the UI thread.
         if let [0xF0, 0x7F, device, 0x06, command, ..] = bytes {
             let (a, b) = ((self.slot as u64 & 0xFF) | (1 << 9), u64::from_le_bytes([*device, *command, 0, 0, 0, 0, 0, 0]));
@@ -570,6 +605,28 @@ pub trait MidiBackend: Send {
     fn ports(&mut self) -> Vec<String>;
     /// Opens the port named `name`, its messages going to `sink`.
     fn open(&mut self, name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String>;
+    /// Each port's system identity by name, where the system gives one that changes when a
+    /// device is plugged in again (ALSA's client and port; CoreMIDI and WinMM keep theirs, so
+    /// there a quick unplug and replug cannot be told). Empty: no identities.
+    fn ids(&mut self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}
+
+/// Port names made unique: a second port with a name already listed (two identical
+/// keyboards) is `<name> #2`, a third `<name> #3`, in the system's order.
+pub fn unique_names(raw: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for n in raw {
+        let mut name = n.clone();
+        let mut k = 1;
+        while out.contains(&name) {
+            k += 1;
+            name = format!("{n} #{k}");
+        }
+        out.push(name);
+    }
+    out
 }
 
 /// One port as the MIDI Input Devices window lists it.
@@ -590,6 +647,8 @@ pub struct PortInfo {
 struct Port {
     info: PortInfo,
     conn: Option<Box<dyn MidiConnection>>,
+    /// The system's identity of the port when it was opened (see [`MidiBackend::ids`]).
+    id: Option<String>,
 }
 
 /// The UI thread's MIDI input ports (see the module docs).
@@ -599,6 +658,8 @@ pub struct MidiInputs {
     ports: Vec<Port>,
     /// Enabled (true) or disabled by port name, as saved; a port not named is enabled.
     choices: BTreeMap<String, bool>,
+    /// Timing offsets by port name, in ms (`set_offset`).
+    offsets: BTreeMap<String, f32>,
     /// Ports control surfaces use: closed here (a surface's messages are not notes).
     reserved: Vec<String>,
     last_scan: Option<Instant>,
@@ -606,7 +667,7 @@ pub struct MidiInputs {
 
 impl MidiInputs {
     pub fn new(backend: Box<dyn MidiBackend>, hub: Arc<MidiHub>, choices: BTreeMap<String, bool>) -> MidiInputs {
-        MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), last_scan: None }
+        MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), offsets: BTreeMap::new(), last_scan: None }
     }
 
     /// The system's ports (`None` where there is no MIDI backend: the web build).
@@ -658,6 +719,16 @@ impl MidiInputs {
         self.reserved.iter().any(|r| r == name)
     }
 
+    /// Each port's timing offset by name, in ms: its messages arrive that late (0..100).
+    pub fn set_offsets(&mut self, offsets: BTreeMap<String, f32>) {
+        if offsets != self.offsets {
+            self.offsets = offsets;
+            for p in &self.ports {
+                self.hub.set_offset(p.info.slot, offset_us(&self.offsets, &p.info.name));
+            }
+        }
+    }
+
     /// When the port named `name` last received a message, if it is open.
     pub fn since_activity(&self, name: &str) -> Option<Duration> {
         let p = self.ports.iter().find(|p| p.info.name == name && p.info.open)?;
@@ -680,8 +751,17 @@ impl MidiInputs {
     fn rescan_at(&mut self, now: Instant) {
         self.last_scan = Some(now);
         let names = self.backend.ports();
+        let ids = self.backend.ids();
         for p in &mut self.ports {
             p.info.present = names.contains(&p.info.name);
+            // Plugged in again since the last scan (its identity changed): what it held is
+            // let go, and it is opened afresh.
+            let id = ids.iter().find(|(n, _)| *n == p.info.name).map(|(_, i)| i.clone());
+            if p.conn.is_some() && p.info.present && id.is_some() && p.id.is_some() && id != p.id {
+                p.conn = None;
+                self.hub.set_slot(p.info.slot, None);
+                self.hub.reset_slot(p.info.slot);
+            }
         }
         for n in names {
             if self.ports.iter().any(|p| p.info.name == n) {
@@ -696,9 +776,14 @@ impl MidiInputs {
                     None => continue,
                 },
             };
-            self.ports.push(Port { info: PortInfo { name: n, enabled: true, present: true, open: false, error: None, slot }, conn: None });
+            self.ports.push(Port { info: PortInfo { name: n, enabled: true, present: true, open: false, error: None, slot }, conn: None, id: None });
         }
         self.apply();
+        for p in self.ports.iter_mut().filter(|p| p.conn.is_some()) {
+            if p.id.is_none() {
+                p.id = ids.iter().find(|(n, _)| *n == p.info.name).map(|(_, i)| i.clone());
+            }
+        }
     }
 
     /// Opens what should be open and closes the rest.
@@ -712,6 +797,7 @@ impl MidiInputs {
             if want && !has {
                 // The slot starts empty: whatever an old port left in it is not this port's.
                 self.hub.set_slot(slot, Some(&name));
+                self.hub.set_offset(slot, offset_us(&self.offsets, &name));
                 result = Some(self.backend.open(&name, self.hub.sink(slot)));
             }
             let Some(p) = self.ports.get_mut(i) else { continue };
@@ -719,6 +805,7 @@ impl MidiInputs {
             match result {
                 Some(Ok(c)) => {
                     p.conn = Some(c);
+                    p.id = None;
                     p.info.error = None;
                 }
                 Some(Err(err)) => {
@@ -728,13 +815,53 @@ impl MidiInputs {
                 }
                 None if !want => {
                     // Closing drops the connection: the driver stops calling back.
-                    p.conn = None;
+                    if p.conn.take().is_some() {
+                        self.hub.reset_slot(slot);
+                    }
+                    p.id = None;
                     self.hub.set_slot(slot, None);
                 }
                 None => {}
             }
             p.info.open = p.conn.is_some();
         }
+    }
+}
+
+/// `name`'s timing offset in µs (0..100 ms).
+fn offset_us(offsets: &BTreeMap<String, f32>, name: &str) -> u32 {
+    offsets.get(name).filter(|v| v.is_finite()).map_or(0, |ms| (ms.clamp(0.0, 100.0) * 1000.0) as u32)
+}
+
+/// Turns a driver's timestamps (µs on its own clock) into the hub's: the smallest gap seen
+/// between the hub's clock and the driver's is the delivery delay, so a message keeps the time
+/// the driver gave it however late its callback ran. The gap may grow by 100 ppm of the time
+/// since (the two clocks drift), and a stamp is never after now.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DriverClock {
+    /// (hub − driver, at hub time).
+    gap: Option<(i64, u64)>,
+}
+
+impl DriverClock {
+    pub fn to_hub(&mut self, driver: u64, now: u64) -> u64 {
+        // No stamp from the driver: now.
+        if driver == 0 {
+            return now;
+        }
+        let seen = now as i64 - driver as i64;
+        let gap = match self.gap {
+            Some((g, at)) => seen.min(g.saturating_add((now.saturating_sub(at) / 10_000) as i64)),
+            None => seen,
+        };
+        let at = (driver as i64).saturating_add(gap).clamp(1, now.max(1) as i64) as u64;
+        // More than a second behind: the driver's clock jumped; start over from this message.
+        if now.saturating_sub(at) > 1_000_000 {
+            self.gap = Some((seen, now));
+            return now;
+        }
+        self.gap = Some((gap, now));
+        at
     }
 }
 
@@ -777,18 +904,33 @@ mod system {
         Ok(Box::new(RawConn(conn)))
     }
 
+    /// The system's ports with their names made unique (two identical keyboards: `Keys` and
+    /// `Keys #2`).
+    fn listed(m: &midir::MidiInput) -> Vec<(String, midir::MidiInputPort)> {
+        let ports = m.ports();
+        let names = super::unique_names(ports.iter().map(|p| m.port_name(p).unwrap_or_default()).collect());
+        names.into_iter().zip(ports).filter(|(n, _)| !n.is_empty()).collect()
+    }
+
     impl MidiBackend for Midir {
         fn ports(&mut self) -> Vec<String> {
             let Ok(m) = client() else { return Vec::new() };
-            let mut out: Vec<String> = m.ports().iter().filter_map(|p| m.port_name(p).ok()).collect();
-            out.dedup();
-            out
+            listed(&m).into_iter().map(|(n, _)| n).collect()
+        }
+
+        fn ids(&mut self) -> Vec<(String, String)> {
+            let Ok(m) = client() else { return Vec::new() };
+            listed(&m).into_iter().map(|(n, p)| (n, p.id())).collect()
         }
 
         fn open(&mut self, name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String> {
             let m = client()?;
-            let port = m.ports().into_iter().find(|p| m.port_name(p).ok().as_deref() == Some(name)).ok_or_else(|| "not found".to_string())?;
-            let conn = m.connect(&port, "FreeDAWm input", move |_stamp, bytes, _| sink.send(bytes), ()).map_err(|e| e.to_string())?;
+            let port = listed(&m).into_iter().find(|(n, _)| n == name).map(|(_, p)| p).ok_or_else(|| "not found".to_string())?;
+            // The driver's own timestamp, where it gives one, on the hub's clock.
+            let mut clock = super::DriverClock::default();
+            let conn = m
+                .connect(&port, "FreeDAWm input", move |stamp, bytes, _| sink.send_at(clock.to_hub(stamp, sink.now_us()), bytes), ())
+                .map_err(|e| e.to_string())?;
             Ok(Box::new(Conn(conn)))
         }
     }
@@ -836,6 +978,8 @@ pub struct FakeBackend {
 #[derive(Default)]
 struct FakeState {
     ports: Vec<String>,
+    /// How often each port was plugged in again (its identity).
+    plugged: Vec<(String, u32)>,
     sinks: Vec<(String, Arc<PortSink>)>,
     refuse: Vec<String>,
 }
@@ -880,6 +1024,17 @@ impl FakeBackend {
         }
     }
 
+    /// Unplugs `name` and plugs it in again between two scans: the port's system identity
+    /// changes (as ALSA's does).
+    pub fn replug(&self, name: &str) {
+        if let Ok(mut s) = self.state.lock() {
+            match s.plugged.iter_mut().find(|(n, _)| n == name) {
+                Some((_, k)) => *k += 1,
+                None => s.plugged.push((name.to_string(), 1)),
+            }
+        }
+    }
+
     /// Opening `name` fails from now on.
     pub fn refuse(&self, name: &str) {
         if let Ok(mut s) = self.state.lock() {
@@ -906,7 +1061,18 @@ impl FakeBackend {
 
 impl MidiBackend for FakeBackend {
     fn ports(&mut self) -> Vec<String> {
-        self.state.lock().map(|s| s.ports.clone()).unwrap_or_default()
+        self.state.lock().map(|s| unique_names(s.ports.clone())).unwrap_or_default()
+    }
+
+    fn ids(&mut self) -> Vec<(String, String)> {
+        let Ok(s) = self.state.lock() else { return Vec::new() };
+        unique_names(s.ports.clone())
+            .into_iter()
+            .map(|n| {
+                let k = s.plugged.iter().find(|(p, _)| *p == n).map_or(0, |(_, k)| *k);
+                (n.clone(), format!("{n}/{k}"))
+            })
+            .collect()
     }
 
     fn open(&mut self, name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String> {
@@ -914,7 +1080,7 @@ impl MidiBackend for FakeBackend {
         if s.refuse.iter().any(|r| r == name) {
             return Err("in use by another program".into());
         }
-        if !s.ports.iter().any(|p| p == name) {
+        if !unique_names(s.ports.clone()).iter().any(|p| p == name) {
             return Err("not found".into());
         }
         s.sinks.push((name.to_string(), Arc::new(sink)));
@@ -1200,6 +1366,54 @@ mod tests {
         }
         m.rescan();
         assert!(m.ports().iter().all(|p| p.slot < TYPING_SLOT));
+    }
+
+    #[test]
+    fn identical_devices_more_than_fifteen_ports_and_a_quick_replug() {
+        let fake = FakeBackend::with_ports(&["Keys", "Keys"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        m.rescan();
+        // Two identical keyboards: both usable, the second as `Keys #2`.
+        assert!(fake.is_open("Keys") && fake.is_open("Keys #2"));
+        assert!(fake.send("Keys #2", &[0x90, 60, 100]));
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert_eq!(live.ports[1], port_id("Keys #2"));
+        // Plugged out and in between two scans: the next block lets go of what it held.
+        fake.replug("Keys #2");
+        m.rescan();
+        assert!(fake.is_open("Keys #2"), "open again");
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert_eq!(live.reset, 1 << 1);
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert_eq!(live.reset, 0, "once");
+        // Forty ports all open (hardware never takes Musical Typing's slot).
+        for i in 0..40 {
+            fake.plug(&format!("Port {i}"));
+        }
+        m.rescan();
+        assert!((0..40).all(|i| fake.is_open(&format!("Port {i}"))));
+    }
+
+    #[test]
+    fn a_device_offset_places_its_messages_earlier_and_the_driver_clock_keeps_their_spacing() {
+        let fake = FakeBackend::with_ports(&["Slow Keys"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        m.rescan();
+        m.set_offsets(BTreeMap::from([("Slow Keys".to_string(), 5.0)]));
+        let now = hub.now_us() + 20_000;
+        hub.sink(0).send_at(now, &[0x90, 60, 100]);
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, now, 480, 48_000.0);
+        // 5 ms early: 240 samples before the block's end.
+        assert_eq!(live.events()[0].offset, 480 - 240);
+        // The driver's stamps 1 ms apart, delivered together late: kept 1 ms apart.
+        let mut c = DriverClock::default();
+        assert_eq!(c.to_hub(1_000, 50_000), 50_000);
+        assert_eq!(c.to_hub(2_000, 52_000), 51_000);
+        assert_eq!(c.to_hub(3_000, 52_000), 52_000);
     }
 
     #[test]

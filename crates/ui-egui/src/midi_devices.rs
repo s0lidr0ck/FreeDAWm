@@ -35,6 +35,7 @@ pub fn tick(app: &mut SoundApp) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_inputs {
+        m.set_offsets(app.ui.midi_offsets.clone());
         m.tick(std::time::Instant::now());
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -397,6 +398,11 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
     }
 }
 
+/// What the input port `name` is called here: its alias, else its name.
+pub fn alias<'a>(app: &'a SoundApp, name: &'a str) -> &'a str {
+    app.ui.midi_aliases.get(name).map(String::as_str).filter(|a| !a.trim().is_empty()).unwrap_or(name)
+}
+
 /// The MIDI inputs a track's input menu offers: All Inputs, then each enabled port present now
 /// (and the track's own port when it is unplugged or disabled, marked so), as `(label, device,
 /// available)`; `device` is `None` for All Inputs.
@@ -404,7 +410,7 @@ pub fn input_choices(app: &SoundApp, current: Option<&MidiIn>) -> Vec<(String, O
     let mut out = vec![("MIDI: All Inputs".to_string(), None, true)];
     let ports: Vec<String> = app.midi_inputs.as_ref().map(|m| m.ports().into_iter().filter(|p| p.open).map(|p| p.name).collect()).unwrap_or_default();
     for p in &ports {
-        out.push((format!("MIDI: {p}"), Some(p.clone()), true));
+        out.push((format!("MIDI: {}", alias(app, p)), Some(p.clone()), true));
     }
     // Musical Typing's on-screen keys and the computer keys (Window › Musical Typing).
     let typing = soundcraft_playback::midi_in::TYPING_NAME.to_string();
@@ -569,7 +575,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             );
         }
         let mut toggles = Vec::new();
-        egui::Grid::new("midi-inputs").num_columns(3).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
+        egui::Grid::new("midi-inputs").num_columns(5).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
             for p in &ports {
                 let mut on = p.enabled;
                 if ui.checkbox(&mut on, "").on_hover_text("Enable this input").changed() {
@@ -589,6 +595,28 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     (None, true, false) => "Disabled".into(),
                 };
                 ui.label(egui::RichText::new(state).small().color(t.text_dim));
+                // What it is called in the track input menus, and how late its messages arrive.
+                let mut name = app.ui.midi_aliases.get(&p.name).cloned().unwrap_or_default();
+                if ui.add(egui::TextEdit::singleline(&mut name).hint_text("Alias").desired_width(110.0)).changed() {
+                    let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
+                    if name.trim().is_empty() {
+                        app.ui.midi_aliases.remove(&p.name);
+                    } else {
+                        app.ui.midi_aliases.insert(p.name.clone(), name);
+                    }
+                }
+                let mut ms = app.ui.midi_offsets.get(&p.name).copied().unwrap_or(0.0);
+                if ui
+                    .add(egui::DragValue::new(&mut ms).range(0.0..=100.0).speed(0.1).suffix(" ms"))
+                    .on_hover_text("This device's messages arrive this late: they are placed that much earlier")
+                    .changed()
+                {
+                    if ms > 0.0 {
+                        app.ui.midi_offsets.insert(p.name.clone(), ms);
+                    } else {
+                        app.ui.midi_offsets.remove(&p.name);
+                    }
+                }
                 ui.end_row();
             }
         });
@@ -701,6 +729,23 @@ pub(crate) mod tests {
         set_enabled(&mut app, "Focusrite USB MIDI", true);
         assert!(fake.is_open("Focusrite USB MIDI"));
         assert_eq!(present_ports(&app), vec!["USB Keys".to_string(), "Focusrite USB MIDI".to_string()]);
+    }
+
+    #[test]
+    fn an_alias_names_a_port_in_the_input_menu_and_an_offset_reaches_it() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let fake = with_fake(&mut app, &["USB MIDI Device", "USB MIDI Device"]);
+        app.ui.midi_aliases.insert("USB MIDI Device #2".into(), "Drum Pads".into());
+        app.ui.midi_offsets.insert("USB MIDI Device #2".into(), 3.0);
+        let labels: Vec<(String, Option<String>)> = input_choices(&app, None).into_iter().map(|c| (c.0, c.1)).collect();
+        assert!(labels.contains(&("MIDI: USB MIDI Device".to_string(), Some("USB MIDI Device".to_string()))));
+        assert!(labels.contains(&("MIDI: Drum Pads".to_string(), Some("USB MIDI Device #2".to_string()))), "{labels:?}");
+        tick(&mut app);
+        // Saved per computer by port name.
+        let json = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(json["midi.aliases"]["USB MIDI Device #2"], "Drum Pads");
+        assert_eq!(json["midi.offsets"]["USB MIDI Device #2"], 3.0);
+        assert!(fake.is_open("USB MIDI Device #2"));
     }
 
     #[test]

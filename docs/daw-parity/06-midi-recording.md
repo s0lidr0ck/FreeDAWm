@@ -62,10 +62,10 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | USB and class-compliant MIDI inputs (macOS, Windows, Linux as applicable) | ● | ● | ● | ● | **Works** (CoreMIDI, WinMM, ALSA) |
 | Device list with enable and disable, activity lights | ● | ● | ● | ● | **Works** (Setup › MIDI Input Devices) |
 | Devices found when plugged in while running | ● | ● | ● | ● | **Works**, within 2 s |
-| Two identical devices used at once | ● | ● | ● | ● | **Missing**: ports are told apart by name only |
-| More than 15 input ports | ● | ● | ● | ● | **Missing**: later ports are skipped |
-| Device names and aliases, a studio setup of what is connected | ● | ● | ● | ● | **Flag only** |
-| Per-device timing offset | ● | ◐ | ● | ● | **Missing** |
+| Two identical devices used at once | ● | ● | ● | ● | **Works**: the second is `<name> #2` (in the system's order, so which is which can swap after a restart) |
+| More than 15 input ports | ● | ● | ● | ● | **Works**: 63 hardware ports at once (64 slots, one for Musical Typing) |
+| Device names and aliases, a studio setup of what is connected | ● | ● | ● | ● | **Partial**: an alias per port (Setup › MIDI Input Devices, per computer) names it in the track input menus; no studio setup |
+| Per-device timing offset | ● | ◐ | ● | ● | **Works**: 0–100 ms per input port in Setup › MIDI Input Devices (per computer): its messages are placed that much earlier, heard and recorded |
 | Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port; FreeDAWm opens no virtual port of its own |
 | MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Missing** |
 | MIDI in the browser | ○ | ○ | ○ | ○ | **Missing**: the web build has no live MIDI (its menus leave the MIDI windows out) |
@@ -83,7 +83,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | The selected track is armed and heard automatically | ○ | ● | ● | ● | **Missing** |
 | Global MIDI thru switch | ● | ● | ● | ● | **Works** in the devices window; the Options menu item is **Flag only** |
 | A played note is heard through the track's instrument with the transport stopped | ● | ● | ● | ● | **Works** |
-| Stuck-note protection on stop, disarm, input change, device unplugged | ● | ● | ● | ● | **Works**, except a quick unplug and replug |
+| Stuck-note protection on stop, disarm, input change, device unplugged | ● | ● | ● | ● | **Works**; a quick unplug and replug (within a rescan) is caught where the system gives the port a new identity (Linux/ALSA), not on macOS or Windows (bug 10) |
 | Panic (all notes off) | ● | ● | ● | ● | **Works** (Event › All MIDI Notes Off, Cmd+Shift+.) |
 | Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Missing**: Low Latency Monitoring covers audio tracks only |
 | MIDI activity or velocity meter on the track | ● | ● | ● | ● | **Partial**: only on the take being recorded |
@@ -96,7 +96,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Notes placed where they were played, corrected for output latency | ● | ● | ● | ● | **Works** (output plus delay-compensation latency) |
 | Timing kept inside an audio buffer, not snapped to its start | ● | ● | ● | ● | **Works** for recording; for what you hear, **Partial**: one buffer late by design, and timing flattens when a buffer is split |
-| The driver's own timestamp used | ● | ● | ● | ● | **Missing**: events are stamped when FreeDAWm's callback runs |
+| The driver's own timestamp used | ● | ● | ● | ● | **Works** where midir passes one: put on FreeDAWm's clock by the smallest delivery delay seen (drift allowed), so messages delivered together keep their spacing; not measured on hardware |
 | Follows the tempo map, including ramps | ● | ● | ● | ● | **Works** |
 | Resolution | 960 | 960+ | 960 | 480+ | 960 ticks per quarter note |
 | Per-track playback offset also applied to what is recorded | ● | ● | ● | ● | **Works**: a take on a track with a MIDI Track Offset is placed that much earlier, so it plays back where it was played |
@@ -236,8 +236,8 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 7 | **Claim wrong.** Checked in midir 0.11.1's source: its CoreMIDI backend walks each packet and calls back once per message (`backend/coremidi/mod.rs`, `handle_input`); ALSA decodes one sequencer event per call and WinMM delivers one short message per call. So `parse` never sees two messages in one buffer and nothing is lost there; no code was changed. (midir itself stops reading a CoreMIDI packet at a data byte with no status byte, i.e. running status inside a packet; that is the library's, not FreeDAWm's.). Commit `47d0223`. | `playback/src/midi_in.rs:110-122` |
 | 8 | **Fixed.** A sustain or sostenuto pedal still down when a clip ends comes up on its last tick; one pressed before the take, before the punch point or held over a loop wrap is down from the clip's start (the hub keeps each port's pedals and puts them into the take's first block, `MidiHub::record_pedals`). Tests: `midi_record::tests::a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start`, `a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass`; `midi_in::tests::a_pedal_down_before_the_take_is_down_in_it`. Commit `1372c52`. | `engine/src/midi_record.rs` (`pedals_down_at`, `lift_pedals`); `playback/src/midi_in.rs` |
 | 9 | **Fixed.** Recorded events the window did not collect in time are now reported at Stop, in the status line and the log, with what a lost note-off does (`midi_devices::lost_in_take`). The loss itself is not prevented: the record ring holds 16,384 events between frames. Commit `9046321`. | `ui-egui/src/midi_devices.rs`; `ui-egui/src/lib.rs` |
-| 10 | **Not started** (part of the tier-2 devices item; midir's port ids are stable on macOS and Windows, so a quick replug cannot be told from a port that stayed). Unplug and replug within two seconds: the port keeps its slot, so notes held at the unplug are never released | `playback/src/midi_in.rs:437-470` |
-| 11 | **Not started** (part of the tier-2 devices item (ports would be told apart by midir's port id, not their name)). Two devices with the same name collapse into one; the second cannot be used | `playback/src/midi_in.rs:526-535` |
+| 10 | **Partly fixed.** A port whose system identity changed between two scans (ALSA gives a replugged device a new client and port) is closed and opened afresh, and the notes and pedals it held are let go on the next block (`LiveMidi::reset`). midir's port ids are stable on macOS and Windows, so there a replug within two seconds is still not seen. Test: `midi_in::tests::identical_devices_more_than_fifteen_ports_and_a_quick_replug`. | `playback/src/midi_in.rs:437-470` |
+| 11 | **Fixed.** Ports with the same name are listed as `<name>`, `<name> #2`, … (`midi_in::unique_names`) and each opens on its own. Test: as bug 10's. | `playback/src/midi_in.rs:526-535` |
 | 12 | **Not started** (part of the tier-2 low-latency item: the player would keep the callback's later events for its later parts; needs a loopback measurement to confirm). What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
 | 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs`. Commit `ac4252a`. | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it`. Commit `120c0de`. | `engine/src/midi_record.rs` (`pass_range`) |
@@ -278,9 +278,9 @@ either wire the control or take it off the menu.
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Done: the Step Input window and the editor's Step button (Musical Typing's step mode fixed: bug 18) |
-| Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Not started; bug 12 open |
+| Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Partly: driver timestamps and per-device offsets done; bug 12 and the low-latency path open |
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
-| Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
+| Devices: identical names, more than 15 ports, aliases | 4–6 | Done: bug 11 fixed, 63 ports, aliases; bug 10 fixed where the system gives a new identity |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
 | MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery (`397e268`) |
 
@@ -320,6 +320,49 @@ input, which none of the four offers.
 end to end; several ports and channels record to several tracks in one pass; stuck-note handling
 covers disarm, input change and unplugging; a drum gate's triggers can be recorded as MIDI; and a
 take played on another computer can land on a track here.
+
+## Designs for the open tier-2 and tier-3 work (second round)
+
+Written before code, as the work list asks for the large items; none of these is built yet.
+
+**MIDI take lanes and comping (tier 2).** The audio comp model (`engine/src/cmd/comp.rs`) is
+playlist based: each take layer is a playlist, the comp is the active one, a swipe copies a
+range of a layer into it (`edit::copy_range`, which already cuts MIDI clips) and remembers the
+layer (`Clip::from_layer`). MIDI takes already land on playlists (loop passes without MIDI Merge,
+New Playlist mode), so the model needs no new storage. The work: (1) a MIDI record mode *Keep
+Takes as Lanes* that puts each take or pass on a new layer and leaves the comp playlist as it was
+(`midi_record::place_take` choosing the layer); (2) `comp.swipe` and `comp.cycle` checks that say
+"audio" read "a clip" (`layer_has_audio` is already any clip), and the join crossfades skipped
+for MIDI clips (a note across a join is cut at the join and its note-off kept); (3) the take
+lanes drawn under instrument and MIDI tracks as they are under audio tracks (the lane painter
+reads clips only, so MIDI clips need their note thumbnails there); (4) picking a whole take
+(`comp.cycle` over the take's range). Merge mode keeps passes in one clip and stays as it is.
+
+**Low-latency monitoring of the instrument being played (tier 2).** Today a live note waits one
+render block (`midi_in::block_offset`) plus the mix's delay compensation. The path: while an
+armed or input-monitored instrument track hears live MIDI, its strip is rendered outside delay
+compensation (as Low Latency Monitoring does for audio tracks: the latent inserts after the
+instrument bypassed, the strip not delayed to line up), switched by the same Options item. Bug 12
+(timing flattened when a callback is rendered in several blocks) is a separate fix in the
+player: `drain_into` would keep the events whose stamp falls after the current block's share of
+the callback for the next block, which needs a small fixed holding buffer in `LiveMidi`; both
+need a loopback measurement on hardware to confirm and touch the transport code another agent
+owns.
+
+**MIDI effects before the instrument (tier 2/3).** A per-track MIDI effects slot list ahead of
+the instrument, run on the audio thread each block on the strip's merged live and clip events
+(fixed-capacity buffers, no allocation): arpeggiator (rate, pattern, octaves, gate, latch;
+follows the tempo map), chord (one key plays a stored chord shape), scale (snap or drop notes
+outside the session's key) and note repeat (rate from the grid, velocity from pressure). Each
+keeps the notes it started so a stop, a bypass or a change of setting sends their note-offs. A
+switch per track, *Record: as played / as processed*: processed, the take is printed from the
+effect's output the way module MIDI is recorded today (`module_record`), raw keeps
+`midi_record` as it is. Then: recording into a step pattern (a take over a pattern clip writes
+its steps by grid position instead of replacing the clip) and recording the drum machine's pads
+(the pads already raise note events; they would go through the hub's Musical Typing slot so a
+take keeps them). SysEx would need a variable-length side ring next to the 3-byte rings, and a
+`CtrlKind::SysEx` in clips; bank select, RPN and NRPN would be paired into 14-bit controller
+events when a take is placed (the raw controllers kept as they are).
 
 ## Sources
 
@@ -363,3 +406,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI output ports start disabled; a port a track sends to still opens |
 | 2026-11-16 | minor | MIDI input filter wired; per-track input transforms (transpose, velocity, curve, fixed velocity, key range, channel) for thru and take |
 | 2026-11-16 | minor | Step input from a MIDI keyboard with lengths, rests, ties and chords; the MIDI editor's Step button |
+| 2026-11-16 | minor | Identical devices, 63 input ports, aliases, per-device offsets, the driver's timestamps; bug 11 fixed, bug 10 partly |

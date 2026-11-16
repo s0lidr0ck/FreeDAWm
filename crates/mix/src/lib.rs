@@ -799,7 +799,7 @@ pub struct MixEngine {
     /// The live MIDI port identities of the last block, and the slots whose port is gone this
     /// block (bit per slot): the notes held from them never get a note-off.
     last_ports: [u64; MAX_MIDI_PORTS],
-    ports_gone: u16,
+    ports_gone: u64,
     /// Snapshot key of the session the strips/order were synced to.
     synced: (usize, usize, usize),
     order: Vec<usize>,
@@ -1389,7 +1389,7 @@ impl MixEngine {
     pub fn all_notes_off(&mut self) {
         for strip in self.strips.values_mut() {
             if let Some(inst) = strip.instrument.as_mut() {
-                strip.live_held.release_ports(u16::MAX, |m| inst.plugin.midi_raw(0, m));
+                strip.live_held.release_ports(u64::MAX, |m| inst.plugin.midi_raw(0, m));
                 for ch in 0..16u8 {
                     for (cc, v) in [(64, 0), (66, 0), (123, 0), (120, 0)] {
                         inst.plugin.midi_raw(0, [0xB0 | ch, cc, v]);
@@ -1968,10 +1968,11 @@ impl MixEngine {
         self.last_end = pos.saturating_add(frames as i64);
         self.last_start = pos;
         self.last_stopped = stopped;
-        self.ports_gone = 0;
+        // (A port unplugged and back within a rescan keeps its identity: the hub says so.)
+        self.ports_gone = self.live_midi.reset;
         for (k, (old, now)) in self.last_ports.iter().zip(self.live_midi.ports).enumerate() {
             if *old != 0 && *old != now {
-                self.ports_gone |= 1 << k;
+                self.ports_gone |= 1u64 << k;
             }
         }
         self.last_ports = self.live_midi.ports;
@@ -2839,7 +2840,7 @@ struct LiveInput<'a> {
     /// Hardware MIDI input of this block.
     midi: &'a LiveMidi,
     /// The MIDI input port slots whose port is gone since the last block (bit per slot).
-    ports_gone: u16,
+    ports_gone: u64,
     /// The loop being played ([`MixEngine::looping`]).
     looping: Option<Range>,
 }
@@ -2909,7 +2910,7 @@ fn process_strip(
     // Notes (and pedals) the input held are let go when the track stops hearing it or hears
     // another port or channel (their note-offs would not come through), and those from a port
     // slot whose port closed (or changed) when it goes.
-    let gone = if live_filter != strip.live_filter { u16::MAX } else { live.ports_gone };
+    let gone = if live_filter != strip.live_filter { u64::MAX } else { live.ports_gone };
     let was_live = strip.live_filter.is_some();
     strip.live_filter = live_filter;
     strip.hears_live = live_filter.is_some();

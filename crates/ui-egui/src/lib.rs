@@ -389,9 +389,16 @@ pub struct UiState {
     #[serde(default, rename = "midi.inputs")]
     pub midi_inputs: std::collections::BTreeMap<String, bool>,
     /// MIDI output ports enabled (true) or not, by port name (`midi.outputs`): per machine. A
-    /// port not named is enabled.
+    /// port not named is disabled unless a track sends to it.
     #[serde(default, rename = "midi.outputs")]
     pub midi_outputs: std::collections::BTreeMap<String, bool>,
+    /// What each MIDI input port is called here, by port name (`midi.aliases`): per machine.
+    #[serde(default, rename = "midi.aliases")]
+    pub midi_aliases: std::collections::BTreeMap<String, String>,
+    /// Each MIDI input port's timing offset in ms, by port name (`midi.offsets`): its messages
+    /// arrive that late and are placed that much earlier. Per machine.
+    #[serde(default, rename = "midi.offsets")]
+    pub midi_offsets: std::collections::BTreeMap<String, f32>,
     /// MIDI Thru (`midi.thru`): record-enabled instrument and MIDI tracks play their live MIDI.
     #[serde(default = "default_true", rename = "midi.thru")]
     pub midi_thru: bool,
@@ -606,6 +613,8 @@ impl Default for UiState {
             show_network: false,
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
+            midi_aliases: std::collections::BTreeMap::new(),
+            midi_offsets: std::collections::BTreeMap::new(),
             midi_thru: true,
             show_shortcuts: false,
             show_preferences: false,
