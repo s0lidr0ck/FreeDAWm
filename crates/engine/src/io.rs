@@ -2266,7 +2266,8 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
 /// source of its clips. With `pass` (loop recording), a take becomes one clip per pass (at most
-/// 1000), each pass after the first on a new playlist.
+/// 1000), each pass after the first on a new playlist that copies the track's playlist from
+/// before the take (so only the loop differs between them).
 pub fn add_recording(e: &mut Engine, start: Samples, takes: Vec<(TrackId, PathBuf)>, pass: Option<Samples>) -> Vec<soundcraft_model::ClipId> {
     add_recording_in(e, start, takes, pass, None, 0)
 }
@@ -2336,6 +2337,9 @@ fn place_take(
     {
         let Some(x) = s.sources.iter().find(|x| x.id == src) else { return };
         let len = i64::try_from(x.frames).unwrap_or(0);
+        // A plain track's playlist as it was before this take: each loop pass after the first goes
+        // on a copy of it, so the rest of the song stays on the track whichever pass is active.
+        let base: Vec<Clip> = if pass.is_some() { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
         // Without loop recording the whole take is one pass.
         let step = pass.map_or(Samples::MAX, |p| p.max(1));
         for i in 0..1_000i64 {
@@ -2368,11 +2372,16 @@ fn place_take(
                 out.push(crate::cmd::comp::record_pass(s, tid, Clip::audio(cid, name, src, from.saturating_add(cut), clip_start, clip_len)));
                 continue;
             }
-            if i > 0
-                && let Some(t) = s.track_mut(tid)
-            {
-                t.playlists.push(soundcraft_model::Playlist::new(format!("{}.{:02}", t.name, t.playlists.len() + 1)));
-                t.active_playlist = t.playlists.len() - 1;
+            if i > 0 {
+                let mut clips = base.clone();
+                for c in &mut clips {
+                    c.id = s.new_clip_id();
+                }
+                if let Some(t) = s.track_mut(tid) {
+                    let name = format!("{}.{:02}", t.name, t.playlists.len() + 1);
+                    t.playlists.push(soundcraft_model::Playlist { name, clips, take_color: None });
+                    t.active_playlist = t.playlists.len() - 1;
+                }
             }
             let cid = s.new_clip_id();
             crate::edit::place_clip(s, tid, Clip::audio(cid, name, src, from.saturating_add(cut), clip_start, clip_len));
@@ -2465,6 +2474,37 @@ mod record_tests {
         assert_eq!((t.active_playlist, t.playlists[2].name.as_str()), (2, "Vox.03"));
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().track(vox).unwrap().playlists.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loop_passes_on_a_plain_track_keep_the_rest_of_the_song() {
+        // Bug: each pass after the first went to a new playlist holding only that pass.
+        let dir = test_dir("loop-plain");
+        let (base, take) = (dir.join("Audio Files/Base.wav"), dir.join("Audio Files/Vox_01.wav"));
+        write_take(&base, 3_000);
+        write_take(&take, 1_050);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        add_recording(&mut e, 0, vec![(vox, base)], None);
+        add_recording(&mut e, 1_000, vec![(vox, take)], Some(400));
+        let t = e.session().track(vox).unwrap();
+        assert_eq!(t.playlists.len(), 3);
+        for (k, pl) in t.playlists.iter().enumerate() {
+            let rows: Vec<_> = pl.clips.iter().map(|c| (c.start, c.length, c.source_offset())).collect();
+            let off = [0, 400, 800][k];
+            let len = [400, 400, 250][k];
+            // The song around the loop, and that pass in it.
+            let mut want = vec![(0, 1_000, 0), (1_000, len, off), (1_000 + len, 3_000 - 1_000 - len, 1_000 + len)];
+            want.retain(|r| r.1 > 0);
+            assert_eq!(rows, want, "playlist {k}");
+        }
+        // Every clip id is unique.
+        let mut ids: Vec<_> = t.playlists.iter().flat_map(|p| p.clips.iter().map(|c| c.id)).collect();
+        let n = ids.len();
+        ids.sort_by_key(|c| c.0);
+        ids.dedup();
+        assert_eq!(ids.len(), n);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
