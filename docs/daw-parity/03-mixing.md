@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: RMS and K scales, a master loudness meter) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: width, balance and track delay) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -31,7 +31,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
-| B. Panning | Four pan laws, dual pan for stereo | Medium: no balance or width |
+| B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
@@ -39,7 +39,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
-| J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
+| J. Mixer state and window | Undo for every move, track and chain presets, per-track delay | Small to medium: no snapshots |
 
 Two things every one of the four does and FreeDAWm does not yet: **plug-in automation that is
 sample-accurate and delay-compensated** (the fader section's now is, and the faders follow it); and **a key input on the stock
@@ -56,7 +56,7 @@ K-system scales, and the master a loudness meter.
 | Change a track's format later | ◐ | ● | ● | ◐ | **Works** |
 | Input trim and polarity on the strip | ● | ● | ● | ● | **Partial**: trim works; polarity is one switch for all channels and has no button |
 | Fader to +12 dB | ● | ◐ | ◐ | ◐ | **Works** |
-| Per-track delay in samples or ms | ● | ● | ● | ● | **Missing** for audio tracks |
+| Per-track delay in samples or ms | ● | ● | ● | ● | **Works**: Track › Strip › Delay (`mix.track_delay`, samples or ms, up to 192 000 samples), before the inserts, left in by delay compensation |
 | Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Missing**: everything is an insert |
 | Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded |
 
@@ -66,7 +66,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Options › More › Pan Law, `mix.pan_law`) |
 | Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
-| Balance, and width or combined panner | ○ | ● | ● | ● | **Missing** |
+| Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; not automatable |
 | Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
 | Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height; centre % and LFE have no control; mono and stereo tracks only |
 | Binaural pan | ● | ● | ● | ● | **Missing** |
@@ -270,7 +270,7 @@ one a mix engineer would not forgive.
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
-| Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
+| Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done** (width and balance are not automatable yet) |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Return, default level and loop refusal done**; sends to tracks and hardware outputs remain |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: width, balance and track delay |
 | 2026-11-16 | minor | tier 2: RMS and K scales, a master loudness meter |
 | 2026-11-16 | minor | tier 2: CLAP plug-ins take a key |
 | 2026-11-16 | minor | tier 2: a Touch control let go glides back |

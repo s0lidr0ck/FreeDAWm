@@ -496,6 +496,8 @@ struct Strip {
     align: DelayLine,
     align_pre: DelayLine,
     out_extra: DelayLine,
+    /// The track's own delay (`Mixer::delay`), before its inserts; sized in `sync`.
+    track_delay: DelayLine,
     outbuf: Vec<Vec<f32>>,
     failures: PluginFailures,
     /// Per-module meter values of the last block, parallel to the chain (sized in `sync`).
@@ -690,6 +692,7 @@ impl Strip {
             align: DelayLine::default(),
             align_pre: DelayLine::default(),
             out_extra: DelayLine::default(),
+            track_delay: DelayLine::default(),
             outbuf: Vec::new(),
             failures: PluginFailures::default(),
             mods: Vec::new(),
@@ -1799,6 +1802,9 @@ impl MixEngine {
                 continue;
             }
             st.align.reserve(cap(&st.align), ch);
+            if t.mixer.delay > 0 || st.track_delay.active() {
+                st.track_delay.reserve((t.mixer.delay as usize).max(st.track_delay.need()), ch);
+            }
             for k in &mut st.keys {
                 k.delay.reserve(cap(&k.delay), ch);
                 k.main_delay.reserve(cap(&k.main_delay), ch);
@@ -2446,7 +2452,10 @@ impl MixEngine {
         while start < frames {
             let (at, end) = pan_segment(t, apos, start, frames);
             let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: t.mixer.surround.as_ref() };
-            let m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
+            let mut m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
+            if src.len() == 2 {
+                shape_stereo(&mut m, t.mixer.width, t.mixer.balance);
+            }
             apply_matrix_span(src, start..end, dst, &m, 1.0);
             start = end;
         }
@@ -3022,6 +3031,13 @@ fn process_strip(
         for c in strip.buf.iter_mut() {
             c.iter_mut().take(frames).for_each(|x| *x *= trim);
         }
+    }
+    // The track's own delay (Pro Tools' and Cubase's channel delay): before the inserts, left out
+    // of the latency delay compensation lines up. A change crossfades.
+    if t.mixer.delay > 0 || strip.track_delay.active() {
+        let ch = strip.buf.len();
+        strip.key_regrow |= !strip.track_delay.set(t.mixer.delay as usize, ch, live.xf);
+        strip.track_delay.process(&mut strip.buf, frames);
     }
     // Scout PRE: after the source, trim and phase, immediately before the first insert. Like POST
     // it is ahead of delay compensation (`align`), so not PDC-aligned across strips.
@@ -4893,6 +4909,25 @@ struct PanSpec<'a> {
     surround: Option<&'a SurroundPan>,
 }
 
+/// A stereo strip's width and balance on its routing matrix (rows are the source's left and
+/// right): the width mixes the sides before the pans (1 as it comes, 0 mono, -1 swapped), the
+/// balance then turns down the side it leans away from. Neutral settings leave `m` as it is.
+fn shape_stereo(m: &mut Matrix, width: f32, balance: f32) {
+    let w = if width.is_finite() { width.clamp(-1.0, 1.0) } else { 1.0 };
+    let b = if balance.is_finite() { balance.clamp(-1.0, 1.0) } else { 0.0 };
+    if w == 1.0 && b == 0.0 {
+        return;
+    }
+    let (a, x) = ((1.0 + w) * 0.5, (1.0 - w) * 0.5);
+    let (gl, gr) = ((1.0 - b).min(1.0), (1.0 + b).min(1.0));
+    let [l, r, ..] = m;
+    for (pl, pr) in l.iter_mut().zip(r.iter_mut()) {
+        let (ol, or) = (*pl, *pr);
+        *pl = (a * ol + x * or) * gl;
+        *pr = (x * ol + a * or) * gr;
+    }
+}
+
 fn identity_matrix(n: usize) -> Matrix {
     let mut m = [[0.0; MAX_CHANNELS]; MAX_CHANNELS];
     for (i, row) in m.iter_mut().enumerate().take(n) {
@@ -6330,6 +6365,44 @@ mod tests {
         let mut off = MixEngine::new(48_000.0, 512);
         off.render(&s, 0, 512, &mut buf);
         assert!(off.main_meter.loudness.is_none());
+    }
+
+    /// A stereo track's width narrows or swaps its sides before the pans, its balance turns one
+    /// side down after them, and its delay moves its sound later; neutral, nothing changes.
+    #[test]
+    fn width_balance_and_track_delay_shape_the_strip() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        // A stereo source: left 0.5, right 0.
+        let id = s.new_clip_id();
+        s.pool
+            .insert(SourceId(91), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4800], vec![0.0; 4800]] })));
+        let st = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        s.track_mut(st).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "lr", SourceId(91), 0, 0, 4800));
+        s.track_mut(t).unwrap().mixer.mute = true;
+        let at = |s: &Session| {
+            let o = render_range(s, Range::new(0, 4800), 512);
+            (o[0][1000], o[1][1000])
+        };
+        let (l, r) = at(&s);
+        assert!((l - 0.5).abs() < 1e-4 && r.abs() < 1e-4, "as it comes: {l} {r}");
+        s.track_mut(st).unwrap().mixer.width = 0.0;
+        let (l, r) = at(&s);
+        assert!((l - 0.25).abs() < 1e-4 && (r - 0.25).abs() < 1e-4, "mono: {l} {r}");
+        s.track_mut(st).unwrap().mixer.width = -1.0;
+        let (l, r) = at(&s);
+        assert!(l.abs() < 1e-4 && (r - 0.5).abs() < 1e-4, "swapped: {l} {r}");
+        s.track_mut(st).unwrap().mixer.width = 1.0;
+        s.track_mut(st).unwrap().mixer.balance = 0.5;
+        let (l, r) = at(&s);
+        assert!((l - 0.25).abs() < 1e-4 && r.abs() < 1e-4, "balanced right: {l} {r}");
+        s.track_mut(st).unwrap().mixer.balance = -0.5;
+        assert!((at(&s).0 - 0.5).abs() < 1e-4, "the side it leans to stays at full level");
+        s.track_mut(st).unwrap().mixer.balance = 0.0;
+        // Delay: the clip's first sample comes 100 samples later.
+        let first = |s: &Session| render_range(s, Range::new(0, 1024), 256)[0].iter().position(|x| x.abs() > 1e-3);
+        assert_eq!(first(&s), Some(0));
+        s.track_mut(st).unwrap().mixer.delay = 100;
+        assert_eq!(first(&s), Some(100));
     }
 
     /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).

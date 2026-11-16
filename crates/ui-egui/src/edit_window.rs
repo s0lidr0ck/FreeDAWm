@@ -1918,6 +1918,47 @@ pub(crate) fn track_preset_items(app: &mut SoundApp, ui: &mut Ui, id: TrackId, s
 /// for the selection the menu acts on, track by track: one that can't take the action is skipped
 /// and named in the status line, the rest are frozen or thawed). The current freeze point is
 /// checked. Greyed, saying why, on a track that can't be frozen.
+/// Track › Strip: the track's delay, and a stereo track's width and balance (`mix.track_delay`,
+/// `mix.width`, `mix.balance`), for the clicked track and the rest of the selection. A drag is
+/// one undo step.
+fn strip_shape_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
+    let Some(m) = app.engine.session().track(id).map(|t| t.mixer.clone()) else { return };
+    let sr = app.engine.session().sample_rate.as_f64();
+    ui.menu_button("Strip", |ui| {
+        let mut ms = f64::from(m.delay) * 1000.0 / sr;
+        let max_ms = f64::from(soundcraft_model::MAX_TRACK_DELAY) * 1000.0 / sr;
+        let resp = ui.add(egui::Slider::new(&mut ms, 0.0..=max_ms.min(250.0)).text("Delay (ms)").max_decimals(2)).on_hover_text(
+            "Delays the track before its inserts; delay compensation leaves it in. Type a value for longer delays (up to a second at 192 kHz)",
+        );
+        if resp.changed() {
+            let _ = app.engine.execute_merged("mix.track_delay", &json!({"tracks": selection, "ms": ms}), &format!("track_delay:{}", id.0));
+        }
+        if resp.drag_stopped() || resp.lost_focus() {
+            app.engine.end_merge();
+        }
+        if m.pan.len() == 2 {
+            let mut w = m.width;
+            let resp =
+                ui.add(egui::Slider::new(&mut w, -1.0..=1.0).text("Width")).on_hover_text("1: as it comes · 0: mono · -1: left and right swapped");
+            if resp.changed() {
+                let _ = app.engine.execute_merged("mix.width", &json!({"tracks": selection, "width": w}), &format!("width:{}", id.0));
+            }
+            if resp.drag_stopped() || resp.lost_focus() {
+                app.engine.end_merge();
+            }
+            let mut b = m.balance;
+            let resp =
+                ui.add(egui::Slider::new(&mut b, -1.0..=1.0).text("Balance")).on_hover_text("After the pans: turns down the side it leans away from");
+            if resp.changed() {
+                let _ = app.engine.execute_merged("mix.balance", &json!({"tracks": selection, "balance": b}), &format!("balance:{}", id.0));
+            }
+            if resp.drag_stopped() || resp.lost_focus() {
+                app.engine.end_merge();
+            }
+        }
+    });
+}
+
 fn freeze_submenu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
     let Some(track) = app.engine.session().track(id).cloned() else { return };
     let why = soundcraft_engine::cmd::cannot_freeze(&track);
@@ -2089,6 +2130,7 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             }
         });
     }
+    strip_shape_menu(app, ui, id, &selection);
     if app.engine.session().track(id).is_some_and(|track| track.folder.is_some()) && ui.button("Remove from Folder").clicked() {
         let _ = app.run("track.remove_from_folder", json!({"tracks": selection}));
     }

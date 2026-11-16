@@ -777,6 +777,25 @@ fn yes() -> bool {
     true
 }
 
+fn unity() -> f32 {
+    1.0
+}
+
+fn is_unity(v: &f32) -> bool {
+    *v == 1.0
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// The longest per-track delay, samples (a second at 192 kHz).
+pub const MAX_TRACK_DELAY: u32 = 192_000;
+
 /// A drum family: a pad's colour in the kit view and the step grid.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -980,11 +999,14 @@ pub struct SendSlot {
     /// Surround position into a multichannel bus (None = follow the track / stereo pan).
     #[serde(default)]
     pub surround: Option<SurroundPan>,
+    /// The send's pan follows the track's main pan (and its automation) instead of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pan_follows_main: bool,
 }
 
 impl SendSlot {
     pub fn new(target: Route) -> Self {
-        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None }
+        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None, pan_follows_main: false }
     }
 }
 
@@ -1030,6 +1052,18 @@ pub struct Mixer {
     pub next_module: u32,
     #[serde(default)]
     pub strip_size: StripSize,
+    /// Stereo width of a stereo strip, applied before its pans: 1 as it comes, 0 mono, −1 the
+    /// sides swapped (−1..=1). Other formats ignore it.
+    #[serde(default = "unity", skip_serializing_if = "is_unity")]
+    pub width: f32,
+    /// Balance of a stereo strip's output, after its pans: −1 only the left side, +1 only the
+    /// right, 0 both at full level. Other formats ignore it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub balance: f32,
+    /// Delay of the strip's signal, samples (0..=[`MAX_TRACK_DELAY`]), before its inserts. Delay
+    /// compensation leaves it in: it moves the track against the others on purpose.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub delay: u32,
 }
 
 impl Mixer {
@@ -1059,6 +1093,9 @@ impl Mixer {
             surround: None,
             next_module: 1,
             strip_size: StripSize::Auto,
+            width: 1.0,
+            balance: 0.0,
+            delay: 0,
         }
     }
 
