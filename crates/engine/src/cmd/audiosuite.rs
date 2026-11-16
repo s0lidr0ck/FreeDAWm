@@ -127,6 +127,15 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
             nc.gain_db = 0.0;
             nc.gain_env.clear();
         }
+        // The render went through the clip's effects unless they were bypassed: baked into the
+        // new file, they come off the clip (else they would be heard twice). Bypassed, they
+        // stay as they were.
+        let bypass = format!("clip_fx.bypass.{}", id.0);
+        if !s.edit.flag(&bypass) {
+            let pre = format!("clip_fx.{}.", id.0);
+            s.edit.values.retain(|k, _| !k.starts_with(&pre));
+            s.edit.set_flag(&bypass, false);
+        }
         if let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) {
             pl.clips.retain(|c| c.id != id);
         }
@@ -218,6 +227,28 @@ mod tests {
         assert_eq!(c.gain_env, vec![(0, 0.0), (32, -12.0)]);
         let sample = e.session().pool.get(c.source().unwrap()).unwrap().buffer().channels[0][0];
         assert!((sample - 0.5).abs() < 1e-3, "duplicate keeps the file level and the clip gain, got {sample}");
+    }
+
+    #[test]
+    fn process_takes_off_the_clip_effects_it_baked() {
+        // Bug: the effects were rendered into the new file and still active, so heard twice.
+        let (mut e, id) = gained_clip();
+        e.execute("clip.effects_set", &json!({"clips": [id.0], "params": {"gain": -12.0}})).unwrap();
+        let before = soundcraft_mix::render_clips(e.session(), e.session().tracks[0].id, Range::new(0, 64));
+        e.execute("process.run", &json!({"process": "duplicate", "clips": [id.0]})).unwrap();
+        let c = e.session().tracks[0].clips()[0].clone();
+        assert!(!e.session().edit.values.keys().any(|k| k.starts_with(&format!("clip_fx.{}.", c.id.0))), "no effects left on the clip");
+        let after = soundcraft_mix::render_clips(e.session(), e.session().tracks[0].id, Range::new(0, 64));
+        assert!((after[0][40] - before[0][40]).abs() < 1e-3, "heard once, as before: {} vs {}", after[0][40], before[0][40]);
+
+        // Bypassed effects are not in the render, so they stay on the clip, still bypassed.
+        let (mut e, id) = gained_clip();
+        e.execute("clip.effects_set", &json!({"clips": [id.0], "params": {"gain": -12.0}})).unwrap();
+        e.execute("clip.effects_bypass", &json!({"clips": [id.0], "value": true})).unwrap();
+        e.execute("process.run", &json!({"process": "duplicate", "clips": [id.0]})).unwrap();
+        let c = e.session().tracks[0].clips()[0].clone();
+        assert_eq!(e.session().edit.values.get(&format!("clip_fx.{}.gain", c.id.0)), Some(&-12.0));
+        assert!(e.session().edit.flag(&format!("clip_fx.bypass.{}", c.id.0)));
     }
 
     #[test]
