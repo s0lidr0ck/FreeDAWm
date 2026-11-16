@@ -158,7 +158,13 @@ jobs:
   release:
     name: GitHub Release
     needs: [version, linux, macos, windows]
-    if: github.event_name != 'pull_request'
+    # Linux and Windows must have built. A macOS build that never got a runner (the job is
+    # cancelled unstarted when none is available) does not hold the release back: it goes out
+    # without a macOS package and its notes say so. A macOS build that ran and failed still does.
+    if: >-
+      ${{ always() && github.event_name != 'pull_request' && needs.version.result == 'success'
+      && needs.linux.result == 'success' && needs.windows.result == 'success'
+      && needs.macos.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -185,7 +191,12 @@ jobs:
           case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           notes="$RUNNER_TEMP/notes.md"
           # What's new (docs/releases/<tag>.md, when written) and the Downloads section.
-          bash packaging/release-notes.sh "$tag" "$GITHUB_SHA" >"$notes"
+          macos=()
+          if ! ls release-assets/*macos* >/dev/null 2>&1; then
+            macos=(no-macos)
+            echo "::warning::no macOS package was built: the release goes out without one"
+          fi
+          bash packaging/release-notes.sh "$tag" "$GITHUB_SHA" "${macos[@]}" >"$notes"
           if gh release view "$tag" --json isDraft --jq .isDraft >"$RUNNER_TEMP/draft" 2>/dev/null; then
             if [ "$(cat "$RUNNER_TEMP/draft")" != true ] ; then
               echo "::error::release $tag is already published; bump the version first"
