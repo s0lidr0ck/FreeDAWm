@@ -769,11 +769,14 @@ pub enum Gesture {
         to: Samples,
         stretch: bool,
     },
+    /// A trim of a clip's end (`stretch` as for the start; `looped`: Shift held at the press, the
+    /// loop trim: the clip's material repeats to the new end, [`soundcraft_model::Clip::loop_len`]).
     TrimEnd {
         clip: soundcraft_model::ClipId,
         track: TrackId,
         to: Samples,
         stretch: bool,
+        looped: bool,
     },
     Fade {
         clip: soundcraft_model::ClipId,

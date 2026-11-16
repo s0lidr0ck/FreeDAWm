@@ -29,7 +29,7 @@ pub mod vocal;
 
 pub use automation::{AutoParam, AutomationLane, AutomationMode, AutomationPoint, CURVE_EPSILON, curve_shape, letter_slot};
 pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
-pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MidiCleanup, PatternClip};
+pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MAX_TRANSPOSE_CENTS, MidiCleanup, PatternClip};
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use lyrics::{

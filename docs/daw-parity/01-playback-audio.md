@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | C. Speed, scrub, shuttle | Half speed only; no scrub audio at all | **Large**: all four scrub |
 | D. Audio engine | Device choice, wide delay compensation, disk cache, declicked transport | Medium: sound quality at mismatched rates, realtime safety |
 | E. Media and formats | Reads everything; streams only WAV | Small to medium |
-| F. Clip rendering | Gain, envelopes, fades, automatic edge fades, clip EQ/comp, comping | Medium: no per-clip pitch |
+| F. Clip rendering | Gain, envelopes, fades, automatic edge fades, clip EQ/comp, comping, real-time transpose, reverse and loop | Small to medium |
 | G. Tempo and time-stretch | Offline WSOLA only; "Elastic" is a label | **Large**: all four stretch in real time and follow tempo |
 | H. Auditioning | None for files or clips | **Large**: all four preview before placing |
 
@@ -136,9 +136,9 @@ Varispeed is the only whole-project speed control among the four.
 | Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
 | Mute a clip | ● | ● | ● | ● | **Works** |
-| Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Missing** (Process › Reverse writes a file) |
-| Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Missing** |
-| Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Partial**: pastes linked copies |
+| Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
+| Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, in real time (section 4, E) |
+| Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Works**: the loop trim (Shift at the end trim) repeats the material in real time |
 | Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Partial**: an overlap is cut away at edit time; there is no layered editing |
 | Takes and swipe comping | ● | ● | ● | ● | **Works**; a take cannot be auditioned without making it active |
 | Stereo clip on a mono track | ● | ● | ● | ● | **Works**: folded to mono at equal level |
@@ -266,6 +266,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 | 2026-11-16 | minor | warp markers you drag (section 4) |
 | 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |
 | 2026-11-16 | minor | tier 3: varispeed that keeps the pitch; shuttle forwards and backwards |
+| 2026-11-16 | minor | tier 3: per-clip transpose and reverse, real-time clip loop |
 | 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |

@@ -622,6 +622,8 @@ fn heals(prev: &Clip, next: &Clip) -> bool {
         && prev.tune == next.tune
         && prev.warp.is_empty()
         && next.warp.is_empty()
+        && prev.plays_plain()
+        && next.plays_plain()
         && prev.fade_out.len == 0
         && next.fade_in.len == 0
 }

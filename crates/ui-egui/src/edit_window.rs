@@ -3323,9 +3323,9 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
                     })
                 }),
             Tool::Trim => hit.as_ref().map(|c| match near_edge(c) {
-                Some(false) => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt },
+                Some(false) => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt, looped: mods.shift && c.is_audio() },
                 _ if at_origin - c.start < c.end() - at_origin => Gesture::TrimStart { clip: c.id, track: track.id, to: c.start, stretch: mods.alt },
-                _ => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt },
+                _ => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt, looped: mods.shift && c.is_audio() },
             }),
             Tool::Scrubber => {
                 // The track pressed, or every selected track when it is one of them.
@@ -3851,6 +3851,13 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         }
         // Alt at the press: a stretch trim, the material stretched to the new edge.
         Some(Gesture::TrimStart { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, true),
+        // Shift at the press: the loop trim, the material repeating to the new end.
+        Some(Gesture::TrimEnd { clip, to, looped: true, .. }) => {
+            let unchanged = app.engine.session().find_clip(clip).is_some_and(|(_, c)| c.end() == to);
+            if !unchanged && let Err(e) = app.run("clip.loop_in_place", json!({"clip": clip.0, "end": to})) {
+                app.ui.status = e;
+            }
+        }
         Some(Gesture::TrimEnd { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, false),
         Some(Gesture::WarpMarker { clip, index, to }) => {
             let _ = app.run("clip.warp_marker", json!({"clip": clip.0, "op": "move", "index": index, "to": to}));

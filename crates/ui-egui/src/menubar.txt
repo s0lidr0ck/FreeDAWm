@@ -413,6 +413,9 @@ Clip > Quantize Audio... = @ui.quantize_audio
 Clip > Conform to Tempo
 Clip > Identify Sync Point
 Clip > Elastic Properties
+Clip > Real-Time > Transpose... = @clip.transpose
+Clip > Real-Time > Reverse in Place = @clip.play_reversed
+Clip > Real-Time > Loop in Place... = @clip.loop_in_place
 Clip > Remove > Sync Point = Clip > Remove Sync Point
 Clip > Remove > Warp = Clip > Remove Warp
 Clip > Remove > Pitch Shift = Clip > Remove Pitch Shift

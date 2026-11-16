@@ -38,7 +38,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups only select together; no clip transpose |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor, real-time transpose, reverse and loop | Small: clip notes |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
@@ -62,7 +62,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Missing** |
 | Trim tool | ● | ● | ● | ● | **Works**; stops at file ends and neighbours |
 | Stretch by dragging a clip edge | ● | ● | ● | ● | **Works**: Alt held as a trim starts (Trim tool or the Smart Tool's edge) stretches the material to the new edge, by the track's Elastic algorithm (pitch-preserving on a plain track, speed on Varispeed) |
-| Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Missing** |
+| Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Works**: Shift held as an end trim starts makes it a loop trim, the clip's material repeating to the new end in real time (no copies) |
 | Smart / combined tool | ● | ● | ● | ● | **Works**: trim, select, grab, fades, fade curve, clip gain by zone |
 | Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Missing** |
 | Scissors / split tool | ◐ | ● | ● | ● | **Missing** as a tool; Separate is a key (B, Cmd+E) |
@@ -137,10 +137,10 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
 | Clip groups that select and move as one | ● | ● | ● | ● | **Works**: selecting a grouped clip selects its group; a drag from an unselected member takes the group; a trim moves the same edge of every member as far, and a fade drawn on one goes on all (`alone` for one) |
-| Loop a clip without making copies | ● | ◐ | ● | ◐ | **Partial**: makes real copies, N times or to a length |
-| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
+| Loop a clip without making copies | ● | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Loop in Place… (N times, or by the loop trim) repeats the material as the clip plays; a start trim keeps each repeat where it was; `off` ends it. Clip › Loop… still makes copies |
+| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose… (semitones, fractions as cents, ±24) plays the clip transposed in real time at its length, by a two-grain shifter reading the file (no state, so locates and loops are exact); grainier than an offline Pitch Shift |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
-| Reverse a clip without a new file | ○ | ● | ● | ◐ | **Missing**: offline only |
+| Reverse a clip without a new file | ○ | ● | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place plays the clip's window backwards in real time; trims take audio off the matching end. The waveform is still drawn forwards |
 | Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made off the audio thread when the session changes, not when a clip first plays (bug 13, fixed) |
 | Sync point | ● | ● | ● | ● | **Works** |
 | Clip notes | ○ | ● | ● | ● | **Missing** |
@@ -330,7 +330,7 @@ edits; quantize audio with strength and swing; an editable clip gain line; the f
 shape and bend per side, presets and batch fades; Commit Selection (bounce a range in place
 through the inserts); processing keeps handles; the Clip List auditions, renames, scrolls to
 clips and finds unused files; the Scrubber plays audio; warp markers drawn and editable (third
-round). Not done: clip transpose; real-time clip loop and reverse; overlap modes with a front/back order;
+round); clip transpose, real-time clip loop and reverse (third round). Not done: overlap modes with a front/back order;
 edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; bug 18's timecode origin; every tier-3 item; ARA 2 hosting.
@@ -380,3 +380,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |
 | 2026-11-16 | minor | Bug 13 fixed: Clip Effects modules are made off the audio thread |
 | 2026-11-16 | minor | Tier 2: warp markers drawn on the clip, added, dragged and deleted |
+| 2026-11-16 | minor | Tier 2: clip transpose, reverse and loop in place, in real time; the loop trim |

@@ -4190,7 +4190,11 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let alt = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
     let edges = alt.map(|(_, origin, a)| CleanEdges::new(s, clip, origin, a.frames()));
     // Vocal tuning's render replaces the heard audio inside its spans (looked up once per block).
-    let unstretched = (stretch - 1.0).abs() < 1e-9;
+    // A plain clip reads its window in runs; a stretched, reversed, looped or transposed one
+    // sample by sample through `Clip::material_at`.
+    let unstretched = (stretch - 1.0).abs() < 1e-9 && clip.plays_plain();
+    let pitch = clip.pitch_ratio();
+    let grain = (s.sample_rate.as_f64() * TRANSPOSE_GRAIN_SECS).max(64.0);
     let tuned = tuned_spans(s, clip);
     // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
     let (taps, tap) = clip.channel_taps(nsrc, buf.len());
@@ -4251,9 +4255,10 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                 } else {
                     // A varispeed clip reads its file at `1 / stretch` file samples a sample,
                     // band-limited (the sampler's reader): a sped-up clip no longer aliases.
-                    let f = offset as f64 + rel as f64 / stretch;
-                    let v = band_limited_at(&mut src, f, 1.0 / stretch).unwrap_or(0.0);
-                    match cleaned.as_mut().and_then(|(w, origin, c)| band_limited_at(c, f - *origin as f64, 1.0 / stretch).map(|cv| (*w, cv))) {
+                    let f = clip.material_at(rel);
+                    let v = shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0);
+                    match cleaned.as_mut().and_then(|(w, origin, c)| shifted_at(c, f - *origin as f64, rel, stretch, pitch, grain).map(|cv| (*w, cv)))
+                    {
                         Some((w, cv)) => blend(v, cv, edges.map_or(w, |e| e.weight(w, f))),
                         None => v,
                     }
@@ -4384,6 +4389,35 @@ fn blend(dry: f32, wet: f32, w: f32) -> f32 {
 /// counts as silence, as the plain read does). Never allocates.
 fn band_limited_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64, step: f64) -> Option<f32> {
     soundcraft_dsp::read_band_limited(|i| src.get(i), f, step)
+}
+
+/// A transposed clip's grain, in seconds.
+const TRANSPOSE_GRAIN_SECS: f64 = 0.03;
+
+/// `src` read for timeline sample `rel` of a clip at file position `f` (stretch `stretch`),
+/// transposed by `pitch` without moving in time: two grains half a grain apart read the file
+/// `pitch` times as fast as the clip moves, each centred on `f` as it sweeps and faded in and
+/// out (sin², summing to one), the delay-line pitch shifter with the file as its line. Every
+/// sample depends only on `rel`, so a locate or loop wrap plays exactly what playing through
+/// would. Not transposed, the band-limited read of `f`. Never allocates.
+fn shifted_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64, rel: Samples, stretch: f64, pitch: f64, grain: f64) -> Option<f32> {
+    let step = pitch / stretch;
+    if (pitch - 1.0).abs() < 1e-9 {
+        return band_limited_at(src, f, step);
+    }
+    // Each grain's offset from `f` moves by `pitch − 1` file samples a sample (in the clip's
+    // time), from −grain/2 to +grain/2.
+    let sweep = rel as f64 * (pitch - 1.0) / stretch / grain;
+    let mut out = None;
+    for k in [0.0, 0.5] {
+        let phase = (sweep + k).rem_euclid(1.0);
+        let g = (std::f64::consts::PI * phase).sin().powi(2) as f32;
+        let at = f + (phase - 0.5) * grain;
+        if let Some(v) = band_limited_at(src, at, step) {
+            out = Some(out.unwrap_or(0.0) + g * v);
+        }
+    }
+    out
 }
 
 /// The track's MIDI Track Offset (`midi.offset.<id>` in the edit values), in samples. Looked up

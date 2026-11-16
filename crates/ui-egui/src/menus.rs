@@ -256,6 +256,8 @@ pub const AUDIOSUITE: &[(&str, &str)] = &[
 const DIALOG_COMMANDS: &[&str] = &[
     "clip.clear",
     "transport.varispeed",
+    "clip.transpose",
+    "clip.loop_in_place",
     "lyrics.find",
     "track.new",
     "file.bounce_mix",

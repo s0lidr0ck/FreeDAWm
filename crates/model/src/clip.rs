@@ -303,7 +303,33 @@ pub struct Clip {
     /// A MIDI clip's own velocity offset, applied as it plays (with its track's).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub midi_velocity: i8,
+    /// An audio clip played backwards, in real time (no new file): its window's last sample
+    /// first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reversed: bool,
+    /// An audio clip looped in real time: the first `loop_len` timeline samples of its material
+    /// repeat to fill the clip (dragging its edge with the loop trim repeats it). 0: no loop.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub loop_len: Samples,
+    /// Where in the loop the clip starts (a looped clip trimmed at its start keeps its beat).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub loop_phase: Samples,
+    /// An audio clip's transpose in cents (100 a semitone), heard in real time without changing
+    /// its length.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub transpose_cents: i32,
 }
+
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+
+fn is_zero_i32(v: &i32) -> bool {
+    *v == 0
+}
+
+/// The widest clip transpose, in cents (two octaves each way).
+pub const MAX_TRANSPOSE_CENTS: i32 = 2400;
 
 fn is_zero(v: &i8) -> bool {
     *v == 0
@@ -353,6 +379,10 @@ impl Clip {
             follow_chords: None,
             midi_transpose: 0,
             midi_velocity: 0,
+            reversed: false,
+            loop_len: 0,
+            loop_phase: 0,
+            transpose_cents: 0,
         }
     }
 
@@ -545,12 +575,44 @@ impl Clip {
         if (r - 1.0).abs() < 1e-9 { file } else { soundcraft_time::to_samples(file as f64 * r) }
     }
 
+    /// Whether the clip reads its window straight through: not reversed, looped or transposed
+    /// (those read sample by sample: [`Clip::material_at`]).
+    pub fn plays_plain(&self) -> bool {
+        !self.reversed && self.loop_len <= 0 && self.transpose_cents == 0
+    }
+
+    /// The file position (fractional for a stretched clip) timeline sample `rel` of the clip
+    /// reads, through its loop and reverse.
+    pub fn material_at(&self, rel: Samples) -> f64 {
+        let looped = self.loop_len > 0 && self.is_audio();
+        let span = if looped { self.loop_len } else { self.length };
+        let mut m = if looped { rel.saturating_add(self.loop_phase).rem_euclid(self.loop_len) } else { rel };
+        if self.reversed && self.is_audio() {
+            m = span.saturating_sub(1).saturating_sub(m);
+        }
+        self.source_offset() as f64 + m as f64 / self.stretch_ratio()
+    }
+
+    /// The clip's transpose as a pitch ratio (1: none).
+    pub fn pitch_ratio(&self) -> f64 {
+        if !self.is_audio() || self.transpose_cents == 0 {
+            return 1.0;
+        }
+        2f64.powf(f64::from(self.transpose_cents.clamp(-MAX_TRANSPOSE_CENTS, MAX_TRANSPOSE_CENTS)) / 1200.0)
+    }
+
     /// Move the start edge to `new_start` keeping material anchored (trim start).
     pub fn trim_start_to(&mut self, new_start: Samples) {
         let new_start = new_start.min(self.end() - 1);
         let delta = new_start - self.start;
         let file_delta = self.source_span(delta);
-        if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
+        if self.loop_len > 0 {
+            // A loop keeps its material: the clip starts further into it.
+            self.loop_phase = self.loop_phase.saturating_add(delta).rem_euclid(self.loop_len);
+        } else if self.reversed {
+            // Reversed, the clip's start plays the window's end: the window loses its end, its
+            // start (the offset) stays.
+        } else if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
             *offset = offset.saturating_add(file_delta);
         }
         // MIDI note ticks are re-anchored by the engine, which knows the tempo map; a MIDI clip's
@@ -583,6 +645,14 @@ impl Clip {
     /// Move the end edge to `new_end`.
     pub fn trim_end_to(&mut self, new_end: Samples) {
         let new_end = new_end.max(self.start + 1);
+        if self.reversed
+            && self.loop_len <= 0
+            && let ClipContent::Audio { offset, .. } = &mut self.content
+        {
+            // Reversed, the clip's end plays the window's start: it moves with the end.
+            let file_delta = soundcraft_time::to_samples((self.length - (new_end - self.start)) as f64 / self.stretch.max(1e-6));
+            *offset = offset.saturating_add(file_delta);
+        }
         self.length = new_end - self.start;
         self.drop_stray_sync();
         self.clamp_fades();
@@ -638,6 +708,12 @@ impl Clip {
         }
         if !self.stretch.is_finite() || self.stretch <= 0.0 {
             self.stretch = 1.0;
+        }
+        self.loop_len = self.loop_len.clamp(0, MAX_POSITION);
+        self.loop_phase = if self.loop_len > 0 { self.loop_phase.rem_euclid(self.loop_len) } else { 0 };
+        self.transpose_cents = self.transpose_cents.clamp(-MAX_TRANSPOSE_CENTS, MAX_TRANSPOSE_CENTS);
+        if !self.is_audio() {
+            (self.reversed, self.loop_len, self.loop_phase, self.transpose_cents) = (false, 0, 0, 0);
         }
         // Clip Effects: finite values, sorted, one per key, a bounded number of short keys.
         self.effects.retain(|(k, v)| v.is_finite() && !k.is_empty() && k.len() <= 64);
