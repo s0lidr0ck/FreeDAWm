@@ -3,7 +3,7 @@
 use crate::SoundApp;
 use crate::theme::{Tokens, bold, regular, rgb};
 use crate::widgets::{
-    PannerEdit, PannerSpeaker, db_text, fader, fader_slot, groove, input_monitor_key, inset, meter, meter_scale, multi_meter, pan_knob, pan_text,
+    PannerEdit, PannerSpeaker, db_text, fader, fader_slot, groove, input_monitor_key, inset, meter_scale, multi_meter, pan_knob, pan_text,
     raised_key, rec_toggle, selector_box, selector_box_with_tooltip, shade, surround_panner, text_toggle, vgradient,
 };
 use egui::{Align2, Color32, CornerRadius, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
@@ -740,10 +740,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         multi_meter(ui, mr, &lv, &labels, md.clip);
     } else if chans >= 2 {
         let mw = mr.width() / 2.0 - 1.0;
-        meter(ui, Rect::from_min_size(mr.min, vec2(mw, mr.height())), md.level[0], md.hold[0], md.clip);
-        meter(ui, Rect::from_min_size(pos2(mr.min.x + mw + 2.0, mr.min.y), vec2(mw, mr.height())), md.level[1], md.hold[1], md.clip);
+        crate::widgets::meter_of(ui, Rect::from_min_size(mr.min, vec2(mw, mr.height())), &md, 0);
+        crate::widgets::meter_of(ui, Rect::from_min_size(pos2(mr.min.x + mw + 2.0, mr.min.y), vec2(mw, mr.height())), &md, 1);
     } else {
-        meter(ui, mr, md.level[0], md.hold[0], md.clip);
+        crate::widgets::meter_of(ui, mr, &md, 0);
     }
     if md.gr > 0.1 {
         ui.painter().text(pos2(mr.center().x, mr.min.y - 3.0), Align2::CENTER_BOTTOM, format!("-{:.0}", md.gr), regular(8.0), t.meter_yellow);

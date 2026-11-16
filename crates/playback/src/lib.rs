@@ -136,6 +136,8 @@ enum Cmd {
     Audition(TrackId, u8, u8),
     /// All MIDI Notes Off: every instrument lets go of every note and pedal now.
     AllNotesOff,
+    /// Start the master loudness meter's integrated value and maxima afresh.
+    LoudnessReset,
     /// Audio played straight to the output now, over the mix (`None` stops it): a preview of
     /// audio that is not in the session, as Juke's hit picker's. The UI keeps a clone of each, so
     /// the audio thread never frees one.
@@ -582,6 +584,8 @@ fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
     m.metronome = true;
+    // The master's loudness meter (Window › Loudness Meter) reads the live mix.
+    m.set_loudness_metering(true);
     m
 }
 
@@ -744,6 +748,7 @@ impl AudioState {
                     // (no allocation: a lookup and the plugin's event queue)
                     self.mix.audition(track, note, velocity);
                 }
+                Cmd::LoudnessReset => self.mix.reset_loudness(),
                 Cmd::AllNotesOff => {
                     // (no allocation: fixed arrays and the plugins' event queues)
                     self.mix.all_notes_off();
@@ -2947,6 +2952,12 @@ impl Player {
     /// thought held.
     pub fn all_notes_off(&self) {
         let _ = self.tx.send(Cmd::AllNotesOff);
+    }
+
+    /// Starts the master loudness meter afresh: integrated loudness, maximum momentary and
+    /// true peak (`StripMeter::loudness` of the main meter).
+    pub fn reset_loudness(&self) {
+        let _ = self.tx.send(Cmd::LoudnessReset);
     }
 
     /// Plays `audio` (planar, at `rate`) straight to the output now, over the mix, whether or not

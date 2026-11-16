@@ -28,6 +28,51 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::net_ui::show(app, ctx);
     shortcuts_window(app, ctx);
     clip_effects(app, ctx);
+    loudness(app, ctx);
+}
+
+/// Window › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport
+/// rolls: momentary (400 ms), short-term (3 s), integrated and the highest true peak since the
+/// last reset.
+fn loudness(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_loudness;
+    let reading = app.meter_snapshot.main.loudness;
+    let has_output = app.player.is_some();
+    let mut reset = false;
+    let fmt = |v: f32, floor: f32| if v.is_finite() && v > floor { format!("{v:.1}") } else { "-".into() };
+    win(ctx, &mut open, "Loudness Meter", vec2(240.0, 170.0), |ui| {
+        let rows: [(&str, f32, f32, &str); 5] = match reading {
+            Some(r) => [
+                ("Momentary", r.momentary, -70.0, "LUFS"),
+                ("Short-term", r.short_term, -70.0, "LUFS"),
+                ("Integrated", r.integrated, -70.0, "LUFS"),
+                ("Max momentary", r.max_momentary, -70.0, "LUFS"),
+                ("True peak", r.true_peak_db, -100.0, "dBTP"),
+            ],
+            None => [
+                ("Momentary", f32::NAN, 0.0, "LUFS"),
+                ("Short-term", f32::NAN, 0.0, "LUFS"),
+                ("Integrated", f32::NAN, 0.0, "LUFS"),
+                ("Max momentary", f32::NAN, 0.0, "LUFS"),
+                ("True peak", f32::NAN, 0.0, "dBTP"),
+            ],
+        };
+        egui::Grid::new("loudness_grid").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+            for (label, v, floor, unit) in rows {
+                ui.label(label);
+                ui.label(egui::RichText::new(format!("{} {unit}", fmt(v, floor))).monospace());
+                ui.end_row();
+            }
+        });
+        if !has_output {
+            ui.label(egui::RichText::new("No audio output: nothing is measured.").weak());
+        }
+        reset = ui.button("Reset").on_hover_text("Start the integrated loudness, maximum and true peak afresh").clicked();
+    });
+    app.ui.show_loudness = open;
+    if reset {
+        let _ = app.run("ui.loudness_reset", json!({}));
+    }
 }
 
 fn audio_health(app: &mut SoundApp, ctx: &egui::Context) {

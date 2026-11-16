@@ -27,6 +27,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.memory_locations", "Memory Locations", "Window > Memory Locations", Some("Cmd+5")),
     ("window.undo_history", "Undo History", "Window > Undo History", None),
     ("window.notes", "Notes", "", None),
+    ("window.loudness", "Loudness Meter", "", None),
+    ("ui.loudness_reset", "Reset Loudness Meter", "", None),
     ("window.lyrics", "Lyrics", "", None),
     ("window.teleprompter", "Teleprompter", "", None),
     ("window.teleprompter_separate", "Teleprompter in Separate Window", "", None),
@@ -702,6 +704,7 @@ fn hover_text(id: &str) -> Option<&'static str> {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
+        "window.loudness" => Some("The master's loudness (momentary, short-term, integrated LUFS) and true peak while it plays"),
         "window.teleprompter" => Some("Big lyrics that follow the playhead through the lines on the Lyrics ruler"),
         "window.teleprompter_separate" => Some("The Teleprompter in its own window (e.g. on the singer's screen); closing it docks it back"),
         "window.lyrics" => Some("Write the lyrics: line numbers, syllable counts, rhymes; place lines on the Lyrics ruler"),
@@ -861,6 +864,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.automation") => app.ui.show_automation,
         Some("window.undo_history") => app.ui.show_undo_history,
         Some("window.notes") => app.ui.show_notes,
+        Some("window.loudness") => app.ui.show_loudness,
         Some("window.lyrics") => app.ui.show_lyrics,
         Some("window.teleprompter") => app.ui.show_teleprompter,
         Some("window.teleprompter_separate") => app.ui.teleprompter_separate,
@@ -1300,6 +1304,14 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.memory_locations" => toggle(&mut app.ui.show_memory_locations),
         "window.undo_history" => toggle(&mut app.ui.show_undo_history),
         "window.notes" => toggle(&mut app.ui.show_notes),
+        "window.loudness" => toggle(&mut app.ui.show_loudness),
+        "ui.loudness_reset" => {
+            if let Some(p) = &app.player {
+                p.reset_loudness();
+            }
+            app.meter_snapshot.main.loudness = None;
+            json!({"reset": app.player.is_some()})
+        }
         "window.lyrics" => toggle(&mut app.ui.show_lyrics),
         "window.tour" => {
             crate::tour::open(app);

@@ -202,6 +202,13 @@ pub struct StripMeter {
     pub peak: [f32; 2],
     /// Every channel of the strip (or of the main mix).
     pub peaks: Vec<f32>,
+    /// Sum of squares of the first two channels (as `peak`) over `frames` frames: the blocks
+    /// since the reader last took the peaks. Their mean is what an RMS meter averages.
+    pub energy: [f32; 2],
+    pub frames: u32,
+    /// The main mix's loudness (master meter only, while the playback engine measures it: see
+    /// [`MixEngine::set_loudness_metering`]); `None` elsewhere.
+    pub loudness: Option<LoudnessReading>,
     /// Gain reduction of the first dynamics insert, dB.
     pub gain_reduction_db: f32,
     pub plugin_failures: PluginFailures,
@@ -278,6 +285,9 @@ impl StripMeter {
     pub fn copy_from(&mut self, o: &StripMeter) {
         self.peak = o.peak;
         self.peaks.clone_from(&o.peaks);
+        self.energy = o.energy;
+        self.frames = o.frames;
+        self.loudness = o.loudness;
         self.gain_reduction_db = o.gain_reduction_db;
         self.plugin_failures = o.plugin_failures;
         self.modules.clone_from(&o.modules);
@@ -301,6 +311,29 @@ impl StripMeter {
         let last = self.peaks.len().saturating_sub(1);
         self.peak = [self.peaks.first().copied().unwrap_or(0.0), self.peaks.get(1.min(last)).copied().unwrap_or(0.0)];
         self.gain_reduction_db = if hold { self.gain_reduction_db.max(gr) } else { gr };
+        let n = u32::try_from(frames).unwrap_or(u32::MAX);
+        if !hold {
+            self.energy = [0.0; 2];
+            self.frames = 0;
+        }
+        for (c, e) in self.energy.iter_mut().enumerate() {
+            let b = bufs.get(c.min(last)).map_or(&[][..], |b| b.get(..frames).unwrap_or(b));
+            let sum: f32 = b.iter().map(|x| x * x).sum();
+            if sum.is_finite() {
+                *e += sum;
+            }
+        }
+        self.frames = self.frames.saturating_add(n);
+    }
+
+    /// Mean square of each of the first two channels over the measured frames (NaN when none):
+    /// what an RMS meter averages.
+    pub fn mean_square(&self) -> [f32; 2] {
+        if self.frames == 0 {
+            return [f32::NAN; 2];
+        }
+        let n = self.frames as f32;
+        [self.energy[0] / n, self.energy[1] / n]
     }
 
     /// Folds `o`'s peaks and gain reduction into this one's (the maximum of each), and takes the
@@ -315,6 +348,9 @@ impl StripMeter {
             *p = p.max(*n);
         }
         self.peak = [self.peak[0].max(o.peak[0]), self.peak[1].max(o.peak[1])];
+        self.energy = [self.energy[0] + o.energy[0], self.energy[1] + o.energy[1]];
+        self.frames = self.frames.saturating_add(o.frames);
+        self.loudness = o.loudness;
         self.gain_reduction_db = self.gain_reduction_db.max(o.gain_reduction_db);
         self.plugin_failures = o.plugin_failures;
         self.modules.clone_from(&o.modules);
@@ -327,8 +363,25 @@ impl StripMeter {
     pub fn clear_peaks(&mut self) {
         self.peaks.iter_mut().for_each(|p| *p = 0.0);
         self.peak = [0.0; 2];
+        self.energy = [0.0; 2];
+        self.frames = 0;
         self.gain_reduction_db = 0.0;
     }
+}
+
+/// The master's loudness as a loudness meter reads it (EBU R128 / BS.1770), LUFS and dBTP.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoudnessReading {
+    /// 400 ms window.
+    pub momentary: f32,
+    /// 3 s window.
+    pub short_term: f32,
+    /// Gated, since the meter was last reset.
+    pub integrated: f32,
+    /// Highest momentary since the reset.
+    pub max_momentary: f32,
+    /// Highest true peak (4× oversampled) since the reset, dBTP.
+    pub true_peak_db: f32,
 }
 
 /// A bus: its format and one buffer per channel.
@@ -715,6 +768,12 @@ pub struct MixEngine {
     offline: bool,
     pub meters: HashMap<TrackId, StripMeter>,
     pub main_meter: StripMeter,
+    /// The master loudness meter ([`MixEngine::set_loudness_metering`]): made in `sync` for the
+    /// main mix's format, fed while the transport rolls, read into `main_meter.loudness`.
+    loudness: Option<soundcraft_dsp::meter::LoudnessMeter>,
+    loudness_on: bool,
+    /// The main format the loudness meter was made for.
+    loudness_fmt: Option<(ChannelFormat, u32)>,
     /// The meters of the blocks rendered so far were not taken (the realtime side could not
     /// publish them): the next block's peaks are folded into them instead of replacing them.
     pub meters_held: bool,
@@ -973,6 +1032,9 @@ impl MixEngine {
             offline: false,
             meters: HashMap::new(),
             main_meter: StripMeter::default(),
+            loudness: None,
+            loudness_on: false,
+            loudness_fmt: None,
             meters_held: false,
             pan_law: PanLaw::Minus3,
             last_end: 0,
@@ -1106,6 +1168,28 @@ impl MixEngine {
     /// [`MixEngine::adopt`] instead of being created in `sync` (see the crate docs).
     pub fn set_external_instances(&mut self, on: bool) {
         self.external = on;
+    }
+
+    /// Measures the main mix's loudness and true peak (EBU R128) into `main_meter.loudness`
+    /// while the transport rolls: the playback engine's master meter. Off by default (offline
+    /// renders measure their own way). The meter is made at the next `sync`.
+    pub fn set_loudness_metering(&mut self, on: bool) {
+        self.loudness_on = on;
+        if !on {
+            self.loudness = None;
+            self.loudness_fmt = None;
+            self.main_meter.loudness = None;
+        }
+    }
+
+    /// Starts the loudness meter's integrated value, maxima and true peak afresh. Never
+    /// allocates.
+    pub fn reset_loudness(&mut self) {
+        if let Some(l) = &mut self.loudness {
+            l.reset();
+        }
+        // The next block reads the fresh meter.
+        self.main_meter.loudness = None;
     }
 
     /// Takes instances created off the audio thread; the next render's `sync` places them.
@@ -1448,6 +1532,15 @@ impl MixEngine {
         self.main_fmt = s.main_format();
         if self.main.len() != main_ch {
             self.main = vec![vec![0.0; mb]; main_ch];
+        }
+        let want = (self.main_fmt, self.sample_rate.to_bits());
+        if self.loudness_on && self.loudness_fmt != Some(want) {
+            let mut m = soundcraft_dsp::meter::LoudnessMeter::new(self.sample_rate, main_ch);
+            for (c, w) in self.main_fmt.loudness_weights().into_iter().enumerate() {
+                m.set_channel_weight(c, w);
+            }
+            self.loudness = Some(m);
+            self.loudness_fmt = Some(want);
         }
         self.hw.resize_with(s.outputs.len(), Vec::new);
         self.hw_delay.resize_with(s.outputs.len(), DelayLine::default);
@@ -2154,6 +2247,18 @@ impl MixEngine {
         // Before the clicks: they are not the mix's tail, nor what the output meter shows.
         self.track_tail(s, frames);
         self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
+        if let Some(l) = &mut self.loudness {
+            if !self.monitor_only {
+                l.process(&self.main, frames);
+            }
+            self.main_meter.loudness = Some(LoudnessReading {
+                momentary: l.momentary_lufs(),
+                short_term: l.short_term_lufs(),
+                integrated: l.integrated_lufs(),
+                max_momentary: l.max_momentary_lufs(),
+                true_peak_db: l.true_peak_db(),
+            });
+        }
         // Metronome: summed after the master fader, so it reaches the speakers without passing
         // through any track, send or insert. Only the playback engine sets `metronome`.
         // Not while monitoring only (transport stopped): the position does not advance there, so the
@@ -6182,6 +6287,49 @@ mod tests {
         eng.render(&s, 512, 512, &mut buf);
         assert!((eng.meters[&t].peak[0] - 0.5).abs() < 1e-3, "pre-fader: {}", eng.meters[&t].peak[0]);
         assert!((buf[0][100] - 0.5 * std::f32::consts::FRAC_1_SQRT_2 * db_to_gain(-20.0)).abs() < 1e-3, "what plays is unchanged");
+    }
+
+    /// A meter carries the energy behind an RMS reading, summed over the blocks a reader has not
+    /// taken, and the master's loudness meter reads the main mix while the transport rolls.
+    #[test]
+    fn meters_carry_rms_energy_and_the_master_its_loudness() {
+        let (s, t) = session_with_dc(0.5, 48_000);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_loudness_metering(true);
+        let mut buf = vec![vec![0.0; 512]; 2];
+        eng.render(&s, 0, 512, &mut buf);
+        let ms = eng.meters[&t].mean_square();
+        assert!((ms[0] - 0.25).abs() < 1e-4 && (ms[1] - 0.25).abs() < 1e-4, "{ms:?}");
+        // Held: the next block adds its energy and frames, so the mean stays the block's mean.
+        eng.meters_held = true;
+        eng.render(&s, 512, 512, &mut buf);
+        assert_eq!(eng.meters[&t].frames, 1024);
+        let mut merged = eng.meters[&t].clone();
+        merged.merge_from(&eng.meters[&t]);
+        assert_eq!(merged.frames, 2048);
+        assert!((merged.mean_square()[0] - 0.25).abs() < 1e-4);
+        merged.clear_peaks();
+        assert!(merged.mean_square()[0].is_nan());
+        // Loudness: a second of DC at the master (0.354 on both sides after the pan law). DC is
+        // filtered out by the K-weighting, so the integrated level is far below the sample level,
+        // but the true peak reads the samples.
+        for b in 2..90 {
+            eng.render(&s, b * 512, 512, &mut buf);
+        }
+        let l = eng.main_meter.loudness.expect("the master is metered");
+        let peak_db = 20.0 * (0.5 * std::f32::consts::FRAC_1_SQRT_2).log10();
+        // (The step at the start overshoots between samples: a true peak a little above.)
+        assert!(l.true_peak_db >= peak_db - 0.1 && l.true_peak_db < peak_db + 1.5, "{l:?}");
+        assert!(l.momentary.is_finite());
+        eng.reset_loudness();
+        assert!(eng.main_meter.loudness.is_none());
+        eng.render(&s, 90 * 512, 512, &mut buf);
+        let fresh = eng.main_meter.loudness.unwrap();
+        assert!(fresh.max_momentary < -100.0 && fresh.integrated < -100.0, "{fresh:?}");
+        // Off by default (offline renders).
+        let mut off = MixEngine::new(48_000.0, 512);
+        off.render(&s, 0, 512, &mut buf);
+        assert!(off.main_meter.loudness.is_none());
     }
 
     /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).

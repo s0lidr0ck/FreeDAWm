@@ -167,6 +167,9 @@ pub struct UiState {
     pub show_transport: bool,
     pub show_memory_locations: bool,
     pub show_big_counter: bool,
+    /// Window › Loudness Meter: the master's loudness and true peak.
+    #[serde(default)]
+    pub show_loudness: bool,
     pub show_undo_history: bool,
     /// The Notes tab (Window › Notes).
     pub show_notes: bool,
@@ -359,6 +362,9 @@ pub struct UiState {
     pub meter_release_db_s: f32,
     #[serde(default = "default_meter_hold")]
     pub meter_hold_secs: f32,
+    /// Preferences › Metering › Scale (`widgets::MeterScale` id).
+    #[serde(default)]
+    pub meter_scale: String,
     /// Preferences › Operation: imported audio is copied into the project's `Audio Files` when
     /// the session is saved (on by default); off, the project refers to the original file.
     #[serde(default = "default_true")]
@@ -463,6 +469,7 @@ impl Default for UiState {
             show_transport: false,
             show_memory_locations: false,
             show_big_counter: false,
+            show_loudness: false,
             show_undo_history: false,
             show_notes: false,
             notes_show: "open".into(),
@@ -544,6 +551,7 @@ impl Default for UiState {
             preferences_tab: String::new(),
             meter_release_db_s: preferences::DEFAULT_RELEASE,
             meter_hold_secs: preferences::DEFAULT_HOLD,
+            meter_scale: String::new(),
             copy_imported_audio: true,
             shortcuts: shortcuts::Overrides::new(),
             shortcut_editor: shortcut_editor::EditorState::default(),
@@ -647,8 +655,13 @@ pub struct DragSource(pub u64);
 /// Ballistic meter display state per strip.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MeterDisplay {
+    /// What the bar shows: the peak, or the RMS level on an RMS scale (`widgets::MeterScale`).
     pub level: [f32; 2],
     pub hold: [f32; 2],
+    /// The RMS level (linear), averaged over 300 ms.
+    pub rms: [f32; 2],
+    /// The mean square behind `rms`, smoothed.
+    pub ms: [f32; 2],
     pub hold_age: f32,
     pub clip: bool,
     /// The highest peak (linear) since the last reset: the strip's peak-hold readout.
@@ -2377,6 +2390,7 @@ impl SoundApp {
 
     fn handle_transport(&mut self, dt: f32) {
         let ballistics = preferences::Ballistics::of(&self.ui);
+        widgets::set_meter_scale(ballistics.scale);
         let reqs: Vec<TransportRequest> = std::mem::take(&mut self.engine.transport_requests);
         for r in reqs {
             match r {
@@ -2491,7 +2505,7 @@ impl SoundApp {
             let snap = &self.meter_snapshot;
             for (id, m) in &snap.tracks {
                 let d = self.meters.entry(*id).or_default();
-                feed_meter(d, m.peak, m.gain_reduction_db, dt, ballistics);
+                feed_meter(d, m.peak, m.mean_square(), m.gain_reduction_db, dt, ballistics);
                 if m.plugin_failures.count != d.plugin_failures {
                     d.plugin_failures = m.plugin_failures.count;
                     if let Some(msg) = failed_plugin_status(self.engine.session(), *id, m.plugin_failures.last) {
@@ -2500,7 +2514,7 @@ impl SoundApp {
                 }
             }
             let main = snap.main.peak;
-            feed_meter(&mut self.main_meter, main, 0.0, dt, ballistics);
+            feed_meter(&mut self.main_meter, main, snap.main.mean_square(), 0.0, dt, ballistics);
             if ended {
                 self.stop_play();
             }
@@ -2520,9 +2534,9 @@ impl SoundApp {
         }
         if !self.meters_live() {
             for d in self.meters.values_mut() {
-                feed_meter(d, [0.0, 0.0], 0.0, dt, ballistics);
+                feed_meter(d, [0.0, 0.0], [0.0, 0.0], 0.0, dt, ballistics);
             }
-            feed_meter(&mut self.main_meter, [0.0, 0.0], 0.0, dt, ballistics);
+            feed_meter(&mut self.main_meter, [0.0, 0.0], [0.0, 0.0], 0.0, dt, ballistics);
         }
     }
 
@@ -2764,16 +2778,33 @@ impl SoundApp {
     }
 }
 
-fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32, b: preferences::Ballistics) {
+/// Time constant of the RMS (and VU) average, seconds: a steady tone reaches 99 % of its level
+/// in 300 ms, the VU's integration time.
+const RMS_TAU: f32 = 0.065;
+
+/// One display frame of a strip's meter: `peak` and `ms` (mean square over the blocks since the
+/// last poll; NaN when the engine gave none) per channel, `dt` seconds since the last frame.
+fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], ms: [f32; 2], gr: f32, dt: f32, b: preferences::Ballistics) {
     // Instant attack; release and peak hold from Preferences › Metering (26 dB/s, 2 s).
     let fall = 10f32.powf(-b.release_db_s * dt / 20.0);
+    let k = if dt.is_finite() && dt > 0.0 { 1.0 - (-dt / RMS_TAU).exp() } else { 0.0 };
     for c in 0..2 {
-        let v = peak.get(c).copied().unwrap_or(0.0);
+        let target = ms.get(c).copied().filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+        if let (Some(m), Some(r)) = (d.ms.get_mut(c), d.rms.get_mut(c)) {
+            *m += (target - *m) * k;
+            *r = if *m < 1e-10 { 0.0 } else { m.sqrt() };
+        }
+    }
+    let rms_bar = b.scale.rms_bar();
+    for c in 0..2 {
+        let v = if rms_bar { d.rms.get(c).copied().unwrap_or(0.0) } else { peak.get(c).copied().unwrap_or(0.0) };
         let lvl = d.level.get(c).copied().unwrap_or(0.0);
-        let nv = if v >= lvl { v } else { (lvl * fall).max(v) };
+        let nv = if rms_bar || v >= lvl { v } else { (lvl * fall).max(v) };
         if let Some(x) = d.level.get_mut(c) {
             *x = if nv < 1e-5 { 0.0 } else { nv };
         }
+        // The hold line, the clip light and the peak readout follow the peak on every scale.
+        let v = peak.get(c).copied().unwrap_or(0.0);
         if v >= d.hold.get(c).copied().unwrap_or(0.0) {
             if let Some(h) = d.hold.get_mut(c) {
                 *h = v;
@@ -2851,22 +2882,33 @@ mod tests {
         };
         let run = |b: Ballistics, secs: f32| {
             let mut d = MeterDisplay::default();
-            feed_meter(&mut d, [0.5, 0.5], 0.0, 1.0 / 60.0, b);
+            feed_meter(&mut d, [0.5, 0.5], [0.25, 0.25], 0.0, 1.0 / 60.0, b);
             for _ in 0..(secs * 60.0) as usize {
-                feed_meter(&mut d, [0.0, 0.0], 0.0, 1.0 / 60.0, b);
+                feed_meter(&mut d, [0.0, 0.0], [0.0, 0.0], 0.0, 1.0 / 60.0, b);
             }
             d
         };
         // No hold: the hold line falls with the level at once.
-        let none = run(Ballistics { release_db_s: 26.0, hold_secs: 0.0 }, 0.5);
+        let none = run(Ballistics { release_db_s: 26.0, hold_secs: 0.0, scale: Default::default() }, 0.5);
         assert!(none.hold[0] < 0.5 && (none.hold[0] - none.level[0]).abs() < 1e-6);
         // Until cleared: still there after ten seconds.
-        let held = run(Ballistics { release_db_s: 26.0, hold_secs: HOLD_UNTIL_CLEARED }, 10.0);
+        let held = run(Ballistics { release_db_s: 26.0, hold_secs: HOLD_UNTIL_CLEARED, scale: Default::default() }, 10.0);
         assert_eq!(held.hold[0], 0.5);
         // A faster release falls further in the same time.
-        let slow = run(Ballistics { release_db_s: 12.0, hold_secs: 2.0 }, 0.5);
-        let fast = run(Ballistics { release_db_s: 96.0, hold_secs: 2.0 }, 0.5);
+        let slow = run(Ballistics { release_db_s: 12.0, hold_secs: 2.0, scale: Default::default() }, 0.5);
+        let fast = run(Ballistics { release_db_s: 96.0, hold_secs: 2.0, scale: Default::default() }, 0.5);
         assert!(fast.level[0] < slow.level[0]);
+        // An RMS scale: a steady 0.5 sine-like input (mean square 0.125) settles at its RMS within
+        // 300 ms, while the hold line and the peak readout keep the peak.
+        let rms = Ballistics { release_db_s: 26.0, hold_secs: HOLD_UNTIL_CLEARED, scale: crate::widgets::MeterScale::K20 };
+        let mut d = MeterDisplay::default();
+        for _ in 0..18 {
+            feed_meter(&mut d, [0.5, 0.5], [0.125, 0.125], 0.0, 1.0 / 60.0, rms);
+        }
+        let want = 0.125f32.sqrt();
+        assert!((d.level[0] - want).abs() < 0.02 * want, "{} vs {want}", d.level[0]);
+        assert_eq!((d.hold[0], d.peak), (0.5, 0.5));
+        assert!(!d.clip);
     }
 
     #[test]

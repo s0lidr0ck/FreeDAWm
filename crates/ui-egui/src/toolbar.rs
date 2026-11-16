@@ -614,7 +614,7 @@ fn output_meter(app: &mut SoundApp, ui: &mut Ui) {
     let w = (r.width() - 6.0) / 2.0;
     for c in 0..2 {
         let rr = Rect::from_min_size(pos2(r.min.x + 2.0 + c as f32 * (w + 2.0), r.min.y), vec2(w, r.height()));
-        crate::widgets::meter(ui, rr, m.level[c], m.hold[c], m.clip);
+        crate::widgets::meter_of(ui, rr, &m, c);
     }
 }
 
