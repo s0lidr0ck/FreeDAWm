@@ -532,17 +532,38 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, mut out: Out) {
         }
     }
     if let Some(press) = out.audition {
-        if let Some((_, note)) = view.held.take()
-            && let Some(p) = &app.player
-        {
-            p.audition(tid, note, 0);
+        if let Some((_, note)) = view.held.take() {
+            play_pad(app, tid, note, 0);
         }
-        if let Some((pad, note)) = press
-            && let Some(p) = &app.player
-        {
-            p.audition(tid, note, 110);
+        if let Some((pad, note)) = press {
+            play_pad(app, tid, note, 110);
             view.held = Some((pad, note));
         }
+    }
+}
+
+/// Whether pad presses on track `tid` are recorded: it is armed and its MIDI input hears the
+/// Musical Typing port (that port or all inputs, on Omni or channel 1).
+pub fn records_pads(s: &soundcraft_model::Session, tid: TrackId) -> bool {
+    s.track(tid).is_some_and(|t| {
+        t.mixer.record_arm
+            && matches!(&t.mixer.input, soundcraft_model::Route::Midi(m)
+                if m.device.as_deref().is_none_or(|d| d == soundcraft_playback::midi_in::TYPING_NAME) && m.channel <= 1)
+    })
+}
+
+/// A pad pressed (`velocity` > 0) or let go (0). On a track that records pads
+/// ([`records_pads`]) it goes in through the Musical Typing port, so it is heard as live input
+/// (input transform and MIDI effects included) and a take keeps it; otherwise it is auditioned
+/// straight on the instrument, as before.
+fn play_pad(app: &SoundApp, tid: TrackId, note: u8, velocity: u8) {
+    if records_pads(app.engine.session(), tid)
+        && let Some(h) = &app.midi_hub
+    {
+        let msg = if velocity > 0 { [0x90, note & 0x7F, velocity.min(127)] } else { [0x80, note & 0x7F, 0] };
+        h.typing().send(&msg);
+    } else if let Some(p) = &app.player {
+        p.audition(tid, note, velocity);
     }
 }
 
@@ -2087,6 +2108,24 @@ pub(crate) fn kit_import_status(r: Result<Value, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pads_are_recorded_on_an_armed_track_that_hears_musical_typing() {
+        use soundcraft_model::{ChannelFormat, MidiIn, Route, Session, TrackKind};
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Kit"));
+        let input = |device: Option<&str>, channel: u8| Route::Midi(MidiIn { device: device.map(str::to_string), channel, ..MidiIn::default() });
+        s.track_mut(t).unwrap().mixer.input = input(None, 0);
+        assert!(!records_pads(&s, t), "not armed: auditioned");
+        s.track_mut(t).unwrap().mixer.record_arm = true;
+        assert!(records_pads(&s, t), "armed, all inputs");
+        s.track_mut(t).unwrap().mixer.input = input(Some(soundcraft_playback::midi_in::TYPING_NAME), 1);
+        assert!(records_pads(&s, t), "armed, Musical Typing on channel 1");
+        s.track_mut(t).unwrap().mixer.input = input(Some("Keys"), 0);
+        assert!(!records_pads(&s, t), "armed on another port: the pads would not reach it");
+        s.track_mut(t).unwrap().mixer.input = input(None, 10);
+        assert!(!records_pads(&s, t), "on channel 10 it would not hear channel 1");
+    }
 
     #[test]
     fn every_param_the_window_names_exists() {

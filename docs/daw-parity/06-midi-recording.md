@@ -144,7 +144,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take (`c458cdf`); erasing held notes is missing |
 | Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Works** (`2af9eae`): with Keep Takes as Lanes (or on a MIDI or instrument track whose lanes are open, in any mode but Merge) each take and each loop pass goes on a take lane, drawn under the track with its notes; a click on a lane picks the whole take, a drag swipes a range of it into the comp, Up/Down cycle a comp segment through the takes, as on audio tracks. MIDI joins get no crossfade: the outgoing piece's notes end at the join, a note the incoming take held over it sounds from there. Merge keeps passes in one clip as before |
 | Note repeat | ○ | ● | ● | ◐ | **Works** as a MIDI effect (the track's input menu › MIDI Effects › Add › Note Repeat): each key held plays again at the rate (1/4 to 1/32T), on the song's grid while the transport plays, a step after the key when stopped; channel or poly pressure sets the repeats' velocity. What is recorded is the keys as played |
-| Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Missing**: recording over a pattern clip erases it; the drum machine's pads are not recorded |
+| Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Partial**: the drum machine's pads are recorded: on a Juke track that is armed and listens to Musical Typing (that port or all inputs, Omni or channel 1) a pad's play button goes in through the Musical Typing port, heard and kept by the take like a key; recording over a pattern clip still replaces it rather than writing its steps |
 
 ## G. Punch, count-in and capture
 
@@ -429,3 +429,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Commits noted on the third round's MIDI rows |
 | 2026-11-16 | minor | MIDI effects before the instrument: Arpeggiator, Chord, Scale and Note Repeat (input menu › MIDI Effects); takes keep the keys as played |
 | 2026-11-16 | minor | MIDI to Track: changing one route lets go only of that track's notes on the target, not every routed note |
+| 2026-11-16 | minor | Juke's pads are recorded on an armed track that listens to Musical Typing |
