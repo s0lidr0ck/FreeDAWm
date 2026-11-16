@@ -481,9 +481,10 @@ struct Strip {
     /// Notes the module sources started that still sound: (source index, channel, pitch), so a
     /// source taken out of the set closes only its own. Capacity reserved in `Strip::new`.
     midi_held: Vec<(u8, u8, u8)>,
-    /// Which MIDI tracks play this strip's instrument, as last heard (a change lets go of the
-    /// notes the ones that left held).
-    routed_sig: u64,
+    /// Which MIDI tracks play this strip's instrument, as last heard: (source index, track). A
+    /// change lets go of the notes only of the tracks that left; the others' held notes follow
+    /// their new index. Capacity reserved in `sync`.
+    routed_src: Vec<(u8, TrackId)>,
     /// The instrument's next block starts somewhere new: send it the controllers in effect there.
     chase: bool,
     /// Counts the passes the clips have played from somewhere new (each start, locate or loop
@@ -696,7 +697,7 @@ impl Strip {
             midi_src: Vec::new(),
             midi_in: Box::new(StripMidi::new()),
             midi_held: Vec::with_capacity(MIDI_HELD),
-            routed_sig: 0,
+            routed_src: Vec::new(),
             chase: true,
             pass: 0,
             muted: false,
@@ -1729,6 +1730,7 @@ impl MixEngine {
                     .enumerate()
                     .filter_map(|(j, (si, _))| Some((u8::try_from(ROUTED_MIDI + j).ok()?, si, sidechain::INSTRUMENT_OUT))),
             );
+            strip.routed_src.reserve(strip.midi_src.len());
             strip.module_in.reserve(sources.len());
             strip.pre_key = false;
             let mut old_keys = std::mem::take(&mut strip.keys);
@@ -3172,21 +3174,30 @@ fn process_strip(
                     // A muted source lets go of what it holds on the target and starts nothing.
                     inst.plugin.set_param("muted", if t.mixer.mute || solo_muted || strip.muted { 1.0 } else { 0.0 });
                 }
-                // Sources that stopped playing into this instrument let go of the notes they held.
-                let sig = strip
-                    .midi_src
-                    .iter()
-                    .filter(|x| usize::from(x.0) >= ROUTED_MIDI)
-                    .fold(0u64, |h, x| h.wrapping_mul(1_000_003).wrapping_add(u64::from(x.0) << 32 | (x.1 as u64).wrapping_add(1)));
-                if sig != strip.routed_sig {
-                    strip.routed_sig = sig;
-                    strip.midi_held.retain(|(k, ch, pitch)| {
-                        let gone = usize::from(*k) >= ROUTED_MIDI;
-                        if gone {
-                            inst.plugin.midi_raw(0, [0x80 | (*ch & 0x0F), *pitch & 0x7F, 0]);
+                // Tracks that stopped playing into this instrument let go of the notes they held;
+                // the others play on, their held notes following their (maybe new) index.
+                let is_routed = |x: &&(u8, usize, ModuleId)| usize::from(x.0) >= ROUTED_MIDI;
+                let now = strip.midi_src.iter().filter(is_routed).map(|x| (x.0, s.tracks.get(x.1).map(|t| t.id)));
+                if !now.eq(strip.routed_src.iter().map(|x| (x.0, Some(x.1)))) {
+                    let (src, was) = (&strip.midi_src, &strip.routed_src);
+                    strip.midi_held.retain_mut(|(k, ch, pitch)| {
+                        if usize::from(*k) < ROUTED_MIDI {
+                            return true;
                         }
-                        !gone
+                        let track = was.iter().find(|x| x.0 == *k).map(|x| x.1);
+                        match src.iter().filter(is_routed).find(|x| track.is_some() && s.tracks.get(x.1).map(|t| t.id) == track) {
+                            Some(x) => {
+                                *k = x.0;
+                                true
+                            }
+                            None => {
+                                inst.plugin.midi_raw(0, [0x80 | (*ch & 0x0F), *pitch & 0x7F, 0]);
+                                false
+                            }
+                        }
                     });
+                    strip.routed_src.clear();
+                    strip.routed_src.extend(strip.midi_src.iter().filter(is_routed).filter_map(|x| Some((x.0, s.tracks.get(x.1)?.id))));
                 }
                 // A musician or module input has no clip controllers to chase (and while only live
                 // MIDI is heard, stopped, the clips wait for the transport).

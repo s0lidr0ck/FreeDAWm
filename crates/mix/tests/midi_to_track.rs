@@ -163,6 +163,37 @@ fn a_muted_source_lets_go_and_a_route_taken_off_too() {
     assert!(log.lock().unwrap().iter().any(|(_, m)| *m == [0x80, 60, 0]), "A's note lets go: {:?}", log.lock().unwrap());
 }
 
+/// A route taken off (or a new one added) lets go only of the notes of the track whose route
+/// changed: another source's held note sounds on, and its note-off still arrives when it ends.
+#[test]
+fn changing_one_route_lets_go_only_of_that_tracks_notes() {
+    let (mut s, synth, a, _) = rig();
+    // A's note lasts as long as B's, so both sound when A's route goes.
+    s.track_mut(a).unwrap().playlist_mut().unwrap().clips.clear();
+    clip_with(&mut s, a, 60, 40, 4_000, false);
+    let (inst, log) = tape(synth);
+    let mut eng = engine(vec![inst]);
+    render(&mut eng, &s, 0..6);
+    let sounding = |m: [u8; 3]| log.lock().unwrap().iter().any(|(_, x)| *x == m);
+    assert!(sounding([0x90, 60, 100]) && sounding([0x91, 64, 100]));
+    log.lock().unwrap().clear();
+    // A third MIDI track routed in first in track order (its route takes an index before A's and
+    // B's), then A's route taken off.
+    let c = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("C"));
+    s.tracks.rotate_right(1);
+    s.track_mut(c).unwrap().instrument = Some(to_track(synth, 3.0));
+    render(&mut eng, &s, 6..8);
+    let offs = |log: &Log| log.lock().unwrap().iter().filter(|(_, m)| m[0] & 0xF0 == 0x80).map(|(_, m)| *m).collect::<Vec<_>>();
+    assert!(offs(&log).is_empty(), "a route added lets go of nothing: {:?}", log.lock().unwrap());
+    let mut off = s.clone();
+    off.track_mut(a).unwrap().instrument = None;
+    render(&mut eng, &off, 8..10);
+    assert_eq!(offs(&log), vec![[0x80, 60, 0]], "only A's note lets go");
+    // B's note ends where its clip ends it, once.
+    render(&mut eng, &off, 10..200);
+    assert_eq!(offs(&log).iter().filter(|m| **m == [0x81, 64, 0]).count(), 1, "{:?}", offs(&log));
+}
+
 #[test]
 fn a_loop_is_refused_and_plays_nothing() {
     let (mut s, synth, a, _) = rig();
