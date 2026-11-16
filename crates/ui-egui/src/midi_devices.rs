@@ -556,6 +556,7 @@ pub(crate) fn input_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
             ui.close();
         }
     }
+    crate::midi_fx_menu::menu(app, ui, id);
     let Some(m) = current else { return };
     transform_menu(app, ui, id, &m.transform);
     ui.menu_button(if m.channel == 0 { "Channel: Omni".to_string() } else { format!("Channel: {}", m.channel) }, |ui| {

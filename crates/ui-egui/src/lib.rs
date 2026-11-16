@@ -55,6 +55,7 @@ pub mod midi_editor;
 pub mod midi_editor_link;
 pub mod midi_editor_window;
 pub mod midi_event_list;
+mod midi_fx_menu;
 pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;

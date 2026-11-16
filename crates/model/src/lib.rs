@@ -14,6 +14,7 @@ pub mod disk;
 mod ids;
 mod lyrics;
 mod markers;
+mod midi_fx;
 mod midi_map;
 pub mod migrate;
 mod mixer;
@@ -37,6 +38,7 @@ pub use lyrics::{
     track_has_lyrics, track_lines,
 };
 pub use markers::{Group, MarkerKind, MemoryLocation};
+pub use midi_fx::{ARP_PATTERNS, CHORD_SHAPES, MAX_MIDI_FX, MIDI_FX_RATES, MidiFx, MidiFxKind, ROOT_NAMES, SCALES};
 pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAction};
 pub use mixer::{
     Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx, KitLayout, KitPad,

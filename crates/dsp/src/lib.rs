@@ -526,6 +526,11 @@ pub trait Plugin: Send {
     fn state_reader(&mut self) -> Option<Box<dyn PluginStateReader>> {
         None
     }
+    /// A host's own wrapper around a plugin (the mix's MIDI effects ahead of an instrument) as
+    /// `Any`, so the host can find and configure it again. Plugins leave the default (`None`).
+    fn host_wrapper(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
 }
 
 /// A plugin editor window `[left, top, right, bottom]` (screen pixels) moved, and when larger

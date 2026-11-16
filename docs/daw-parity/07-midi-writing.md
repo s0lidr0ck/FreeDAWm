@@ -201,7 +201,7 @@ The gaps are of four kinds:
 | Two overlapping notes of one pitch each get their own end | ● | ● | ● | ● | **Works**: the later note retriggers the voice and the sound lasts to the later end (bug 19, fixed) |
 | Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
 | Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties), undoable; a negative delay plays early notes before the clip (bug 10, fixed) |
-| MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Missing** |
+| MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Partial**: on a track (arpeggiator, chord, scale, note repeat; section 6, H), played live; not on a clip, and not rendered to notes |
 | Dense clips play without cost growing | ● | ● | ● | ● | **Partial**: every block scans every note of each clip under the playhead and walks the tempo map for each. Design (not built): beside each MIDI clip's notes the engine keeps a derived index, made off the audio thread whenever they change (where MIDI Cleanup previews are refreshed), of the notes in start order and the longest note's length; the scheduler binary-searches the first note that can sound in the block (start at least the block's first tick less the longest length, less the largest playback-quantize move) and stops at the first start past the block's end. It is checked by playing random clips (overlaps, mutes, channels, delays, playback quantize, start trims) block by block through the current scheduler and the indexed one and comparing every message and offset |
 
 ## J. Tempo and arrangement
@@ -395,3 +395,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Controller ramps in the model: Line, Curve and Ramp Between Points write a point with a ramp to the next, played as a value every 32 samples, drawn as a line, written to MIDI files as steps |
 | 2026-11-16 | minor | Shared MIDI clip copies that change together (Make Independent ends it); an Alt-trim stretches a MIDI clip, its notes scaling; a design for indexing dense clips |
 | 2026-11-16 | minor | Per-note probability, rolled each pass with a seeded generator; Export Clip as MIDI (a clip cannot be dragged out to the desktop) |
+| 2026-11-16 | minor | MIDI effects on a track (section 6): the row on MIDI effects is Partial |

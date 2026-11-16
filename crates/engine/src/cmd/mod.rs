@@ -55,6 +55,7 @@ mod lyrics;
 mod midi;
 mod midi_cleanup;
 pub mod midi_ctrl;
+pub mod midi_fx;
 pub mod midi_input;
 pub mod midi_learn;
 mod midi_ops;
@@ -255,6 +256,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(module_preset::specs());
         v.extend(instrument::specs());
         v.extend(midi_input::specs());
+        v.extend(midi_fx::specs());
         v.extend(midi_out::specs());
         v.extend(midi_learn::specs());
         v.extend(sampler::specs());

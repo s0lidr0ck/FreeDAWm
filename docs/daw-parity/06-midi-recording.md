@@ -143,7 +143,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Works**: at each wrap the finished passes go on the armed tracks as Stop will place them (merged, they add up; otherwise the last is on top), and the next pass plays them; no undo step until Stop (`c458cdf`) |
 | Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take (`c458cdf`); erasing held notes is missing |
 | Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Works** (`2af9eae`): with Keep Takes as Lanes (or on a MIDI or instrument track whose lanes are open, in any mode but Merge) each take and each loop pass goes on a take lane, drawn under the track with its notes; a click on a lane picks the whole take, a drag swipes a range of it into the comp, Up/Down cycle a comp segment through the takes, as on audio tracks. MIDI joins get no crossfade: the outgoing piece's notes end at the join, a note the incoming take held over it sounds from there. Merge keeps passes in one clip as before |
-| Note repeat | ○ | ● | ● | ◐ | **Missing** |
+| Note repeat | ○ | ● | ● | ◐ | **Works** as a MIDI effect (the track's input menu › MIDI Effects › Add › Note Repeat): each key held plays again at the rate (1/4 to 1/32T), on the song's grid while the transport plays, a step after the key when stopped; channel or poly pressure sets the repeats' velocity. What is recorded is the keys as played |
 | Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Missing**: recording over a pattern clip erases it; the drum machine's pads are not recorded |
 
 ## G. Punch, count-in and capture
@@ -169,9 +169,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Input quantize with strength and swing, the played timing kept | ● | ● | ● | ● | **Works** (Event › More MIDI › Input Quantize). Notes only |
 | Input filter (leave out aftertouch, SysEx and so on) | ● | ◐ | ● | ● | **Works**: Setup › MIDI Input Devices › Leave out (notes, pitch bend, aftertouch, poly aftertouch, program, controllers; `setup.midi_input_filter`, the session's), for every port, from what is heard, recorded and captured; SysEx and real-time bytes are never taken |
 | Transpose, velocity scale or curve, fixed velocity, key range on input | ● | ● | ● | ● | **Works**: per track, the input menu › Input Transform (`track.midi_input_transform`), applied to what the instrument hears and to the take, kept when the port or channel changes; Real-Time Properties still change clip playback only |
-| Live MIDI effects before the instrument (arpeggiator, chord, scale) | ● | ● | ● | ● | **Missing** |
-| Record the effect's output, not the raw keys | ● | ● | ● | ● | **Missing** |
-| Scale or key lock on what you play | ○ | ◐ | ◐ | ● | **Missing** |
+| Live MIDI effects before the instrument (arpeggiator, chord, scale) | ● | ● | ● | ● | **Works**: up to four per instrument or MIDI track (input menu › MIDI Effects; `track.midi_fx_add`, `_set`, `_remove`, undoable, saved with the session): Arpeggiator (rate, Up, Down, Up/Down, As Played, Random, 1-4 octaves, gate, latch; on the song's grid while playing), Chord (twelve shapes), Scale (root and twelve scales; move to the nearest note or leave out) and Note Repeat, in list order, each with a bypass. They run on the audio thread without allocating, on everything the instrument is given (clips, live input, routed MIDI tracks, the Band); a MIDI track routed to another instrument passes on what they made. A change of setting lets go of the notes they made and plays the held keys through the new list |
+| Record the effect's output, not the raw keys | ● | ● | ● | ● | **Missing**: a take keeps the keys as played (the effects play them again on playback) |
+| Scale or key lock on what you play | ○ | ◐ | ◐ | ● | **Works** with the Scale MIDI effect (its own root and scale; it does not follow the Key ruler) |
 | The chord track follows or shapes live input | ○ | ● | ◐ | ● | **Partial**: the chord picker names the chord you hold |
 | Programmable input transformer | ○ | ○ | ● | ● | **Missing** |
 
@@ -273,7 +273,7 @@ either wire the control or take it off the menu.
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in kept as an option (`e5635d1`) |
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take (`036f22e`) |
-| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
+| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Done for the effects (`mix::midi_fx`: a host plugin around the instrument, see Designs); recording the processed output remains (takes keep the keys) |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly (`f7169c2`): a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, left for the mixing work |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI); clock and MTC out (`mix::midi_sync`, `c1ae613`). The external instrument's latency remains |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
@@ -355,7 +355,15 @@ the callback for the next block, which needs a small fixed holding buffer in `Li
 need a loopback measurement on hardware to confirm and touch the transport code another agent
 owns.
 
-**MIDI effects before the instrument (tier 2/3).** A per-track MIDI effects slot list ahead of
+**MIDI effects before the instrument (tier 2/3).** *Built (arpeggiator, chord, scale, note
+repeat) as a host plugin, not a strip stage: once a track has a MIDI effect, `mix::midi_fx::sync`
+wraps its instrument in a `MidiFxHost` that forwards every plugin call except the notes and
+controllers, which it collects through the block and runs through the effects before the
+instrument processes (fixed arrays, nothing allocated after the wrap). Every route into an
+instrument already arrives through those calls, so clips, live input, routed MIDI tracks, the
+Band and preview notes are all processed with no change at their call sites, and a track that
+never had an effect is not wrapped at all. The record switch (as played / as processed) is not
+built: takes keep the keys.* A per-track MIDI effects slot list ahead of
 the instrument, run on the audio thread each block on the strip's merged live and clip events
 (fixed-capacity buffers, no allocation): arpeggiator (rate, pattern, octaves, gate, latch;
 follows the tempo map), chord (one key plays a stored chord shape), scale (snap or drop notes
@@ -419,3 +427,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | A MIDI track plays an instrument on another track (Play Instrument On, MIDI to Track), several on their channels into one multi-timbral instrument; multi-output instruments still open |
 | 2026-11-16 | minor | MIDI clock and MTC out to a chosen port (Sync out in the MIDI devices window), the stored beat-clock setting wired |
 | 2026-11-16 | minor | Commits noted on the third round's MIDI rows |
+| 2026-11-16 | minor | MIDI effects before the instrument: Arpeggiator, Chord, Scale and Note Repeat (input menu › MIDI Effects); takes keep the keys as played |

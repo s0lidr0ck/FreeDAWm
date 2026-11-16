@@ -78,6 +78,7 @@ pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
+pub mod midi_fx;
 pub mod midi_sync;
 mod monitor;
 mod prepare;
@@ -1814,6 +1815,10 @@ impl MixEngine {
             if let (Some(slot), Some(ins)) = (strip.instrument.as_mut(), want) {
                 sync_kit_samples(slot, ins, s, cx.retired_assets);
                 sync_kit_fx(slot, ins, cx.sr, cx.mb, cx.offline, cx.retired);
+            }
+            // MIDI effects ahead of the instrument (a host around it once the track has one).
+            if let Some(slot) = strip.instrument.as_mut() {
+                midi_fx::sync(&mut slot.plugin, &t.midi_fx, cx.sr);
             }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
@@ -3854,6 +3859,8 @@ fn structure_fingerprint(s: &Session) -> usize {
             snd.pre_fader.hash(&mut h);
         }
         t.instrument.as_ref().map(|x| x.plugin.as_str()).hash(&mut h);
+        // MIDI effects ahead of it (`sync` configures them).
+        t.midi_fx.hash(&mut h);
         let sample = t.instrument.as_ref().and_then(|x| x.sample);
         sample.hash(&mut h);
         // Which decoded audio it is, so new audio under the same id (another session) re-syncs.
