@@ -158,9 +158,8 @@ pub enum Dialog {
     /// The Chords ruler's chord picker (add or edit a chord).
     ChordPicker(crate::band::chord_picker::ChordPicker),
     Spot(crate::spot::Spot),
-    Fades {
-        shape: String,
-    },
+    /// Edit › Fades › Create… (`fade_dialog`).
+    Fades(crate::fade_dialog::FadeDialog),
     /// Event › More MIDI › Change Velocity…: the selected notes in the MIDI Editor, else the
     /// selected MIDI clips.
     ChangeVelocity(VelocityDialog),
@@ -303,7 +302,7 @@ impl Dialogs {
             Dialog::KeyPicker { .. } => "key_picker",
             Dialog::ChordPicker(_) => "chord_picker",
             Dialog::Spot(_) => "spot",
-            Dialog::Fades { .. } => "fades",
+            Dialog::Fades(_) => "fades",
             Dialog::StripSilence { .. } => "strip_silence",
             Dialog::QuantizeAudio { .. } => "quantize_audio",
             Dialog::ChangeVelocity(_) => "change_velocity",
@@ -459,7 +458,7 @@ impl Dialogs {
             "event.transpose" => {
                 Dialog::Number { cmd: id.into(), title: "Transpose".into(), key: "semitones".into(), value: 12.0, suffix: "semitones".into() }
             }
-            "edit.fades_create" => Dialog::Fades { shape: "equal power".into() },
+            "edit.fades_create" => Dialog::Fades(Default::default()),
             "event.change_velocity" => Dialog::ChangeVelocity(VelocityDialog::default()),
             "edit.strip_silence" => Dialog::StripSilence { threshold: -48.0, min_ms: 50.0, pre_ms: 5.0, post_ms: 20.0 },
             "track.group" => {
@@ -713,7 +712,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::ChordPicker(p) if p.chord.is_some() => "Edit Chord",
         Dialog::ChordPicker(_) => "Add Chord",
         Dialog::Spot(_) => "Spot",
-        Dialog::Fades { .. } => "Fades",
+        Dialog::Fades(_) => "Fades",
         Dialog::StripSilence { .. } => "Strip Silence",
         Dialog::QuantizeAudio { .. } => "Quantize Audio",
         Dialog::ChangeVelocity(_) => "Change Velocity",
@@ -1088,12 +1087,10 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = d.command(app.engine.session());
                     }
                 }
-                Dialog::Fades { shape } => {
-                    for s in soundcraft_model::FadeShape::ALL {
-                        ui.radio_value(shape, s.label().to_lowercase(), s.label());
-                    }
-                    if buttons(ui, "OK", enter) {
-                        action = Some(("edit.fades_create".into(), json!({"shape": shape})));
+                Dialog::Fades(f) => {
+                    let sr = app.engine.session().sample_rate.as_f64();
+                    if crate::fade_dialog::body(ui, f, &mut app.ui.fade_presets, |ui| buttons(ui, "OK", enter)) {
+                        action = Some(("edit.fades_create".into(), f.params(sr)));
                     }
                 }
                 Dialog::ChangeVelocity(d) => {

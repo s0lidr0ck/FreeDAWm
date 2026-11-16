@@ -638,6 +638,32 @@ fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     assert!(e.session().edit.flag(soundcraft_engine::edit::SNAP_TO_ZERO));
 }
 
+// ---- tier 2: fades with a shape for each side, and batch fades ---------------------------------
+
+#[test]
+fn fades_take_a_shape_for_each_side_and_batch_fades_reach_clips_inside() {
+    let mut e = engine("slip");
+    // A butted pair (crossfaded at 2000) and a clip standing apart inside the range.
+    let (t, c) = track(&mut e, &[(1000, 1000, 1000), (2000, 1000, 2000), (5000, 1000, 9000)]);
+    run(
+        &mut e,
+        "edit.fades_create",
+        json!({"tracks": [t.0], "start": 1900, "end": 6500, "in_shape": "s-curve", "out_shape": "exponential", "out_curvature": 0.5, "batch_length": 100}),
+    );
+    let s = e.session();
+    let (a, b, d) = (s.find_clip(c[0]).unwrap().1, s.find_clip(c[1]).unwrap().1, s.find_clip(c[2]).unwrap().1);
+    assert_eq!((a.fade_out.shape, a.fade_out.curvature), (FadeShape::Exponential, 0.5), "the outgoing side");
+    assert_eq!(b.fade_in.shape, FadeShape::SCurve, "the incoming side");
+    assert_eq!((d.fade_in.len, d.fade_out.len), (100, 100), "the clip standing inside gets both");
+    assert_eq!((d.fade_in.shape, d.fade_out.shape), (FadeShape::SCurve, FadeShape::Exponential));
+    // Without a batch length, a clip standing apart gets none (as before).
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "edit.fades_create", json!({"tracks": [t.0], "start": 1900, "end": 6500}));
+    let d = e.session().find_clip(c[2]).unwrap().1;
+    assert_eq!((d.fade_in.len, d.fade_out.len), (0, 0));
+    assert!(e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 1900, "end": 2100, "in_shape": "wobbly"})).is_err());
+}
+
 // ---- tier 2: quantize audio with strength and swing -------------------------------------------
 
 #[test]

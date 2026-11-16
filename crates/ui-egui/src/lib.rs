@@ -25,6 +25,7 @@ pub mod editor_kit;
 pub mod editors;
 pub mod engine_ui;
 pub mod extra_windows;
+pub mod fade_dialog;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
@@ -409,6 +410,8 @@ pub struct UiState {
     pub workspace_dir: String,
     /// The level files and clips are auditioned at (Workspace, Clip List), in dB.
     pub preview_db: f32,
+    /// The user's fade presets (Edit › Fades › Create…).
+    pub fade_presets: Vec<fade_dialog::FadePreset>,
     pub configurations: Vec<(String, Value)>,
     /// Appearance (`ui.theme`): dark by default, light or follow the system on request.
     pub theme: theme::ThemeMode,
@@ -593,6 +596,7 @@ impl Default for UiState {
             video_burn_in: false,
             workspace_dir: String::new(),
             preview_db: 0.0,
+            fade_presets: Vec::new(),
             configurations: Vec::new(),
             theme: theme::ThemeMode::Dark,
             window_size: [1600.0, 1000.0],

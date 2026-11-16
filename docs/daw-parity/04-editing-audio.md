@@ -152,8 +152,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Fade in, fade out, crossfade, calculated in real time | ● | ● | ● | ● | **Works** |
 | Shapes: linear, equal power, S-curve, adjustable slope | ● | ● | ● | ● | **Works**, plus exponential and logarithmic |
 | Drag fade handles on the clip | ● | ● | ● | ● | **Works** for one clip; no crossfade by dragging |
-| Fade dialog with preview, length and separate in and out shapes | ● | ◐ | ◐ | ● | **Partial**: a shape picker |
-| Batch fades over many clips | ● | ● | ● | ● | **Partial**: only at boundaries that touch; clips standing apart inside the range get none |
+| Fade dialog with preview, length and separate in and out shapes | ● | ◐ | ◐ | ● | **Works**: a shape and bend for each side (a crossfade's two sides too), a drawn preview, presets (built-in and saved); the length is the selection's |
+| Batch fades over many clips | ● | ● | ● | ● | **Works**: the fade dialog's batch option fades both ends of every clip inside the selection, at a length in ms |
 | Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
 | Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Missing**: the fade lengths silently differ |
 | Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback (1 ms default); not applied when consolidating or exporting |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: fade dialog with a shape for each side, presets and batch fades |
 | 2026-11-16 | minor | Tier 2: audio quantize with strength and swing |
 | 2026-11-16 | minor | Tier 2: the clip gain line is edited on the clip |
 | 2026-11-16 | minor | Tier 2: snap to clip edges, markers and zero crossings; rubber-band clip selection; clip groups trim, fade and drag as one |

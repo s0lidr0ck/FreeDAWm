@@ -126,7 +126,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create...",
             ["Edit", "Fades"],
             Some("Cmd+F"),
-            "{shape?: linear|equal power|s-curve|exponential|logarithmic, tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1}",
+            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
             has_range,
             fades_create
         ),
@@ -1006,8 +1006,36 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let tracks = tracks_required(e, "edit.fades_create", p)?;
     let r = range_param(e, "edit.fades_create", p)?;
+    // Each side may have its own shape and bend; `batch_length` fades clips inside the range.
+    let side_shape = |key: &str| -> Result<FadeShape> {
+        match str_param(p, key) {
+            None => Ok(shape),
+            Some(v) => FadeShape::from_id(v).ok_or_else(|| bad("edit.fades_create", format!("unknown fade shape `{v}`"))),
+        }
+    };
+    let bend = |key: &str| -> Result<f32> {
+        match p.get(key) {
+            None => Ok(0.0),
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && (-1.0..=1.0).contains(x))
+                .map(|x| x as f32)
+                .ok_or_else(|| bad("edit.fades_create", format!("`{key}` must be a number from -1 to 1"))),
+        }
+    };
+    let batch = match p.get("batch_length") {
+        None => None,
+        Some(v) => Some(v.as_i64().filter(|l| *l >= 0).ok_or_else(|| bad("edit.fades_create", "`batch_length` must be a sample count"))?),
+    };
+    let spec = ops::FadeSpec {
+        in_shape: side_shape("in_shape")?,
+        in_curvature: bend("in_curvature")?,
+        out_shape: side_shape("out_shape")?,
+        out_curvature: bend("out_curvature")?,
+        batch,
+    };
     let s = e.session_mut();
-    let n: usize = tracks.iter().map(|t| ops::create_fades(s, *t, r, shape)).sum();
+    let n: usize = tracks.iter().map(|t| ops::create_fades_with(s, *t, r, &spec)).sum();
     if n == 0 {
         return Err(bad("edit.fades_create", "the selection must cover a clip start, end or the boundary between two clips"));
     }

@@ -1028,6 +1028,36 @@ fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
 /// Create fades from a selection (the incumbent's Edit › Fades › Create semantics):
 /// a range across a clip boundary makes a crossfade; at a clip start a fade-in; at its end a fade-out.
 pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeShape) -> usize {
+    create_fades_with(s, track, range, &FadeSpec::of(shape))
+}
+
+/// The fades [`create_fades_with`] makes: the shape and bend of fade-ins (and a crossfade's
+/// incoming side), of fade-outs (and its outgoing side), and, with `batch` set, a fade of that
+/// length at both ends of every clip that lies wholly inside the range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FadeSpec {
+    pub in_shape: FadeShape,
+    pub in_curvature: f32,
+    pub out_shape: FadeShape,
+    pub out_curvature: f32,
+    pub batch: Option<Samples>,
+}
+
+impl FadeSpec {
+    /// One shape for every fade, unbent, no batch fades.
+    pub fn of(shape: FadeShape) -> FadeSpec {
+        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None }
+    }
+    fn fade_in(&self, len: Samples) -> Fade {
+        Fade { len, shape: self.in_shape, curvature: self.in_curvature }
+    }
+    fn fade_out(&self, len: Samples) -> Fade {
+        Fade { len, shape: self.out_shape, curvature: self.out_curvature }
+    }
+}
+
+/// [`create_fades`] with a shape and bend for each side, and batch fades on clips inside the range.
+pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &FadeSpec) -> usize {
     if range.is_empty() {
         return 0;
     }
@@ -1057,24 +1087,44 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
             let ext_b = before.min(b_handle).max(0);
             if let Some(ca) = pl.clips.get_mut(i) {
                 ca.length += ext_a;
-                ca.fade_out = Fade { len: (ext_a + before).min(ca.length), shape, curvature: 0.0 };
+                ca.fade_out = spec.fade_out((ext_a + before).min(ca.length));
             }
             if let Some(cb) = pl.clips.get_mut(i + 1) {
                 let old = cb.start;
                 cb.trim_start_to(old - ext_b);
-                cb.fade_in = Fade { len: (ext_b + after).min(cb.length), shape, curvature: 0.0 };
+                cb.fade_in = spec.fade_in((ext_b + after).min(cb.length));
             }
             made += 1;
             xfaded.push(a.id);
             xfaded.push(b.id);
         }
     }
-    for c in pl.clips.iter_mut().filter(|c| !xfaded.contains(&c.id)) {
+    for c in pl.clips.iter_mut() {
+        let inside = range.start <= c.start && range.end >= c.end();
+        if let Some(len) = spec.batch.filter(|l| *l > 0 && inside) {
+            // Batch fades: both ends of a clip standing inside the range, where no crossfade is.
+            let len = len.min(c.length / 2).max(0);
+            if len > 0 {
+                let (into, out_of) = (xfaded.contains(&c.id) && c.fade_in.len > 0, xfaded.contains(&c.id) && c.fade_out.len > 0);
+                if !into {
+                    c.fade_in = spec.fade_in(len);
+                    made += 1;
+                }
+                if !out_of {
+                    c.fade_out = spec.fade_out(len);
+                    made += 1;
+                }
+            }
+            continue;
+        }
+        if xfaded.contains(&c.id) {
+            continue;
+        }
         if range.start <= c.start && range.end > c.start && range.end < c.end() {
-            c.fade_in = Fade { len: range.end - c.start, shape, curvature: 0.0 };
+            c.fade_in = spec.fade_in(range.end - c.start);
             made += 1;
         } else if range.end >= c.end() && range.start > c.start && range.start < c.end() {
-            c.fade_out = Fade { len: c.end() - range.start, shape, curvature: 0.0 };
+            c.fade_out = spec.fade_out(c.end() - range.start);
             made += 1;
         }
     }
