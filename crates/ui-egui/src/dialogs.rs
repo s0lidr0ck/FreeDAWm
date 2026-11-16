@@ -1100,10 +1100,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             ui.selectable_value(bit_depth, b.to_string(), b);
                         }
                     });
-                    egui::ComboBox::from_label("Record Takes As").selected_text(if file_type == "aiff" { "AIFF" } else { "WAV (BWF)" }).show_ui(ui, |ui| {
-                        ui.selectable_value(file_type, "wav".to_string(), "WAV (BWF)");
-                        ui.selectable_value(file_type, "aiff".to_string(), "AIFF");
-                    });
+                    egui::ComboBox::from_label("Record Takes As").selected_text(if file_type == "aiff" { "AIFF" } else { "WAV (BWF)" }).show_ui(
+                        ui,
+                        |ui| {
+                            ui.selectable_value(file_type, "wav".to_string(), "WAV (BWF)");
+                            ui.selectable_value(file_type, "aiff".to_string(), "AIFF");
+                        },
+                    );
                     if buttons(ui, "OK", enter) {
                         action = Some(("setup.session".into(), json!({"frame_rate": frame_rate, "bit_depth": bit_depth})));
                         take_file_type = Some(file_type.clone());
