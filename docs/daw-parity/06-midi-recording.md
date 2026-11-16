@@ -151,7 +151,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Punch over a selected range | ● | ● | ● | ● | **Works** |
 | Punch in by pressing Record while playing | ● | ● | ● | ● | **Works** |
-| Punch out and keep playing | ● | ● | ● | ● | **Missing**: Record again stops the transport |
+| Punch out and keep playing | ● | ● | ● | ● | **Works** (QuickPunch: Record while recording punches out, again punches in); a MIDI take is kept to each punch |
 | Pre-roll and post-roll | ● | ● | ● | ● | **Works** |
 | Count-in | ● | ● | ● | ● | **Works**: Setup › Click/Countoff… sets the bars and the click |
 | Notes played during the count-in are kept as a pickup | ● | ● | ● | ● | **Missing**: deliberately not taken |
@@ -270,7 +270,7 @@ either wire the control or take it off the menu.
 | MIDI takes: lanes, pick a take, comp between takes | 12–18 | Extend the audio comping model to MIDI tracks |
 | Capture what was just played (a listening buffer behind the existing command) | 5–8 | |
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | |
-| Punch out and keep playing | 2–4 | |
+| Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Touches the mixer; coordinate with section 3 work |
@@ -326,3 +326,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 21 fixed: MIDI export keeps clip trims and leaves muted clips out |
 | 2026-11-16 | minor | Bug 23 fixed: the web build's menus leave out the live MIDI windows |
 | 2026-11-16 | minor | Bug 16 partly fixed: Input Quantize, MIDI Track Offsets and Click/Countoff have windows |
+| 2026-11-16 | minor | MIDI takes follow QuickPunch's punches: punch out and keep playing works for MIDI |

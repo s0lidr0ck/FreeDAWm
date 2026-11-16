@@ -112,7 +112,20 @@ pub(crate) fn finish_take(
     if events.is_empty() {
         return Vec::new();
     }
-    soundcraft_engine::midi_record::record_live_midi(&mut app.engine, &take, &events)
+    // QuickPunch: punched out and in again while recording, the take is kept to each punch (as
+    // the audio takes are), what was played between them left out.
+    if plan.punches.is_empty() {
+        return soundcraft_engine::midi_record::record_live_midi(&mut app.engine, &take, &events);
+    }
+    let mut ids = Vec::new();
+    for p in &plan.punches {
+        let Some(r) = soundcraft_time::Range::new(p.start, p.end.min(end)).intersect(&take.punch.unwrap_or(*p)).filter(|r| !r.is_empty()) else {
+            continue;
+        };
+        let t = soundcraft_engine::midi_record::MidiTake { punch: Some(r), ..take };
+        ids.extend(soundcraft_engine::midi_record::record_live_midi(&mut app.engine, &t, &events));
+    }
+    ids
 }
 
 /// The names of the input ports present now (for the track input menus).
@@ -357,6 +370,39 @@ mod tests {
         };
         assert_eq!((pitch(keys), pitch(typed)), (Some(60), Some(72)));
         assert!(app.midi_rec.is_empty());
+    }
+
+    #[test]
+    fn a_take_punched_out_and_in_on_the_fly_keeps_only_the_punches() {
+        use soundcraft_playback::midi_in::{RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        start_take(&mut app);
+        let note = |at: i64, pitch: u8| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass: 0 };
+        // Punched out at 20,000, in again at 30,000, stopped at 48,000.
+        app.midi_rec = vec![note(1_000, 60), note(25_000, 62), note(31_000, 64)];
+        let plan = soundcraft_engine::io::Recording {
+            start: 0,
+            pass: None,
+            punch: None,
+            rate: 0,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: None,
+            punches: vec![soundcraft_time::Range::new(0, 20_000), soundcraft_time::Range::new(30_000, soundcraft_time::Samples::MAX)],
+        };
+        let ids = finish_take(&mut app, &plan, 48_000);
+        assert_eq!(ids.len(), 2, "a clip per punch");
+        let spans: Vec<(i64, i64, Vec<u8>)> = ids
+            .iter()
+            .map(|id| {
+                let (_, c) = app.engine.session().find_clip(*id).unwrap();
+                (c.start, c.end(), c.midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect())
+            })
+            .collect();
+        assert_eq!(spans, vec![(0, 20_000, vec![60]), (30_000, 48_000, vec![64])], "what was played punched out is left out");
     }
 
     #[test]

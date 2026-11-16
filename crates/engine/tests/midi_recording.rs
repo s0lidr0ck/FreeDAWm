@@ -78,7 +78,8 @@ fn module_midi_in_a_loop_prints_over_the_loop() {
     use soundcraft_engine::io::Recording;
     use soundcraft_engine::module_record::print_range;
     use soundcraft_time::Range;
-    let plan = |start, pass, loop_from, punch| Recording { start, pass, punch, rate: 0, takes: Vec::new(), latency: 0, loop_from };
+    let plan =
+        |start, pass, loop_from, punch| Recording { start, pass, punch, rate: 0, takes: Vec::new(), latency: 0, loop_from, punches: Vec::new() };
     // Loop record over 0..4000, stopped at 500 in a later pass.
     assert_eq!(print_range(&plan(0, Some(4_000), Some(0), None), 500), Some(Range::new(0, 4_000)));
     // Punched in at 1000 inside the playing loop.
