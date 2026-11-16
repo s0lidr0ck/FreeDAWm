@@ -174,7 +174,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
-| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (COMMIT3). No recording yet (design below), no hardware MIDI, third-party plug-ins, models or networking |
+| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). No recording yet (design below), no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
@@ -226,12 +226,12 @@ public documentation; DAWproject covers the modern case); a live-show page and f
 workflow (specialist; revisit if users ask); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
-sessions kept between visits (12–18): sessions kept **done** (COMMIT3), recording not started
+sessions kept between visits (12–18): sessions kept **done** (270aee2), recording not started
 (design below); talkback and encrypted local links for remote recording
 (10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
-and the scan helper is a start; not started, design below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+and the scan helper is a start; not started, design refined below: begun only after browser recording); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
 
-**Designs for the larger items, not built yet.** Each was judged too big to finish well in the
+**Designs for the larger items** (some since built, as each says). Each was judged too big to finish well in the
 same pass as the items above; these are the starting points.
 
 - *Mastering page (24–36 h).* A release file of its own (`.fdrel`, JSON) beside sessions: an
@@ -241,7 +241,7 @@ same pass as the items above; these are the starting points.
   `RangeRender`. A `release.*` command family (add, move, remove, set, render) and a page that
   shows the songs in a row with their integrated loudness, true peak and the album's. Export:
   one file per song plus one continuous file with a cue sheet; DDP later.
-- *Sessions kept in the browser build (built, COMMIT3).* The origin-private file system (OPFS),
+- *Sessions kept in the browser build (built, 270aee2).* The origin-private file system (OPFS),
   through a small script in the page (`window.freedawmStore`): `session.json`, `meta.json` and
   `Audio Files/<source>-<fingerprint>.wav`, each audio file written once
   (`io::session_store_parts`), the session 3 s after a change and never while the transport
@@ -289,12 +289,42 @@ same pass as the items above; these are the starting points.
   talkback alone, on its own clock, and the performer hears it stopped too; the next roll starts
   a new epoch. It is never in the booth's main mix or a bounce, and the performer's take records
   his own inputs, never the stream.
-- *Plug-ins in their own process (16–28 h).* One helper process per hosted plug-in (the scan
-  helper's launcher is the start), audio through shared memory, one block of added latency so
-  the audio callback never waits: it hands block *n* over and takes block *n − 1*'s result; a
-  block not back in time is silence and a counted overrun. Parameters, state and the editor
-  window over a pipe. A helper that dies bypasses its slot, says so, and is restarted from the
-  last stored state on request.
+- *Plug-ins in their own process (16–28 h; not started, design refined 2026-11-16).* Behind an
+  option (Setup › Plug-ins › Run plug-ins in their own process, off by default; per insert too),
+  CLAP first, VST3 and AU after on the same bridge.
+  - *Where it sits.* A new crate `plugin-bridge` with `BridgedPlugin`, which implements
+    `soundcraft_dsp::Plugin` (the trait `clap-host`'s `ClapPlugin` implements now), so the mixer,
+    automation, presets and Freeze see no difference. The helper is a new binary,
+    `freedawm-plugin-host`, next to `freedawm-scan`; it loads one plug-in with `clap-host` as
+    the app does now and serves it. `plugin-scan`'s `helper_exe` finds it and its process
+    handling (spawn, kill, a timeout) is reused. The unsafe code stays in the FFI crates.
+  - *Audio.* One shared-memory file per instance (`memmap2`, already in the dependency tree;
+    a file in the temp folder, removed when the slot goes): a header (block size, channels,
+    sample rate, a sequence number each way, the overrun count) and two blocks of planar
+    `f32` audio in and out, plus a fixed event area (notes, MIDI, parameter changes with their
+    sample offsets, up to the existing `EVENT_CAP`). The audio thread writes block *n* and its
+    events, bumps its sequence number, and reads block *n − 1*'s output, never waiting:
+    `latency()` reports one block more than the plug-in's own, so delay compensation lines it up.
+    The helper waits on the sequence number (a futex on Linux, a named event on Windows, a
+    short spin then a sleep elsewhere), runs `process`, bumps its own. An output not back in time
+    is silence, counted and shown on the insert (an overrun), never a stall. Offline renders
+    (bounce, freeze) run the helper synchronously, block by block, with no added latency.
+  - *Control.* A pipe (the child's stdin/stdout, JSON lines like the scan helper's) for
+    everything off the audio thread: load, activate, parameter info and values, state save and
+    restore, latency and tail changes, presets, and the editor window. The editor opens in the
+    helper as its own top-level window (a CLAP floating window; embedding across processes is
+    platform work for later), which the app raises and closes.
+  - *A crash.* A helper that exits or stops answering the pipe for 5 s is dead: its slot passes
+    the audio through (an effect) or is silent (an instrument), the insert says "crashed", and
+    the session is untouched. Restart (on the insert, or automatically once per minute at most)
+    starts a new helper from the state last fetched, which is fetched after every edit gesture
+    and before every save, so at most the last gesture is lost.
+  - *Tests.* A test plug-in that crashes on a parameter value and one that hangs: the session
+    keeps playing, the slot reports it, Restart brings it back with its state; a bridged
+    plug-in's output equals the in-process one's delayed by one block; an offline bounce through
+    a bridge equals the in-process bounce sample for sample.
+  - *First step when picked up.* The shared-memory block exchange and its test (two threads of
+    one process standing in for the two processes), then the helper binary, then the option.
 
 ## Sources
 
@@ -313,6 +343,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Plug-ins in their own process: the design refined (not built) |
 | 2026-11-16 | minor | Browser build: the session kept between visits, with a notice, Export and Clear; a design for recording |
 | 2026-11-16 | minor | Remote recording: the encrypted local link and talkback |
 | 2026-11-16 | minor | Timing alignment of stacked vocals built (Align timing in the Vocal Studio) |
