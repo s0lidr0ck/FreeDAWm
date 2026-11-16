@@ -165,6 +165,8 @@ pub enum Dialog {
     Session {
         frame_rate: String,
         bit_depth: String,
+        /// What takes are recorded as: `wav` (BWF) or `aiff` (`setup.record_format`).
+        file_type: String,
     },
     ScoreSetup {
         title: String,
@@ -435,7 +437,16 @@ impl Dialogs {
                 self.open_new_group(e, &e.session().edit.selected_tracks.clone());
                 return true;
             }
-            "setup.session" => Dialog::Session { frame_rate: e.session().frame_rate.label().into(), bit_depth: "24".into() },
+            "setup.session" => {
+                let s = e.session();
+                let bit_depth = match s.bit_depth {
+                    soundcraft_model::BitDepthSetting::Int16 => "16",
+                    soundcraft_model::BitDepthSetting::Int24 => "24",
+                    soundcraft_model::BitDepthSetting::Float32 => "32f",
+                };
+                let file_type = if s.record_file_type == soundcraft_model::RecordFileType::Aiff { "aiff" } else { "wav" };
+                Dialog::Session { frame_rate: s.frame_rate.label().into(), bit_depth: bit_depth.into(), file_type: file_type.into() }
+            }
             "file.score_setup" => {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
                 Dialog::ScoreSetup { title: s.title, composer: s.composer, bars_per_system: s.bars_per_system, show_track_names: s.show_track_names }
@@ -647,6 +658,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     let mut keep = true;
     // The Chords ruler's picker goes on at this tick after adding a chord played in.
     let mut chord_next: Option<i64> = None;
+    // Setup › Session's take file type, set once the session settings are.
+    let mut take_file_type: Option<String> = None;
     let mut action: Option<(String, Value)> = None;
     let mut save_first: Option<(String, Value)> = None;
     let confirmed = matches!(d, Dialog::SaveChanges { .. });
@@ -1076,7 +1089,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), params));
                     }
                 }
-                Dialog::Session { frame_rate, bit_depth } => {
+                Dialog::Session { frame_rate, bit_depth, file_type } => {
                     egui::ComboBox::from_label("Timecode Rate").selected_text(frame_rate.as_str()).show_ui(ui, |ui| {
                         for r in soundcraft_time::FrameRate::ALL {
                             ui.selectable_value(frame_rate, r.label().to_string(), r.label());
@@ -1087,8 +1100,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             ui.selectable_value(bit_depth, b.to_string(), b);
                         }
                     });
+                    egui::ComboBox::from_label("Record Takes As").selected_text(if file_type == "aiff" { "AIFF" } else { "WAV (BWF)" }).show_ui(ui, |ui| {
+                        ui.selectable_value(file_type, "wav".to_string(), "WAV (BWF)");
+                        ui.selectable_value(file_type, "aiff".to_string(), "AIFF");
+                    });
                     if buttons(ui, "OK", enter) {
                         action = Some(("setup.session".into(), json!({"frame_rate": frame_rate, "bit_depth": bit_depth})));
+                        take_file_type = Some(file_type.clone());
                     }
                 }
                 Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names } => {
@@ -1199,6 +1217,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         next.from_midi = true;
                         next.held = app.midi_hub.as_ref().map(|h| h.held_notes()).unwrap_or_default();
                     }
+                }
+            }
+            Ok(_) if cmd == "setup.session" => {
+                if let Some(ft) = take_file_type
+                    && let Err(e) = app.run("setup.record_format", json!({"file_type": ft}))
+                {
+                    app.ui.status = e;
                 }
             }
             Ok(v) if cmd == "file.export_clips" => {
