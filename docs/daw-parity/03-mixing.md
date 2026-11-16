@@ -1,0 +1,299 @@
+# Four-DAW parity, section 3: mixing
+
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+
+> Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
+> Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
+> affiliated with or endorsed by any of them. See [NOTICE](../../NOTICE).
+
+The third of seven sections ([1: playing audio](01-playback-audio.md),
+[2: recording audio](02-recording-audio.md)).
+
+**Scope of this section:** the mixer: channel types and the strip, panning, inserts and sidechains
+as the mixer hosts them, sends and routing, groups and solo, automation, metering, mixdown and
+export, surround, and how mixer state is managed. The effects themselves are section 4. Control
+surfaces are named here where automation depends on them and belong to the hardware work
+([`hardware-parity.md`](../hardware-parity.md)).
+
+## How this was measured
+
+- **FreeDAWm:** read from the code on the working branch (0.9.11 plus sections 1 and 2), not from
+  the docs. Options that store a value nothing reads are marked **flag only**. The headline claims
+  were re-read by hand. Nothing was listened to or measured.
+- **The four DAWs:** from their published manuals and release notes, as known up to the versions
+  above, for each product's top edition. Nothing was run side by side.
+
+**Legend.** Other DAWs: ● has it · ◐ partly or by another route · ○ does not.
+FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
+
+## Summary
+
+| Area | FreeDAWm today | Distance from the four |
+|---|---|---|
+| A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
+| B. Panning | One fixed pan law, dual pan for stereo | Medium: no law choice, no balance or width |
+| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
+| D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only; a stereo send ignores its pan |
+| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
+| F. Automation | All modes write; trim lane; wide editing set | **Large**: block-rate, not delay-compensated, faders do not follow, no controller input |
+| G. Metering | Peak with hold and clip lights | **Large**: peaks are missed between screen updates; one scale; post-fader only |
+| H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata, stems freeze the window |
+| I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
+| J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
+
+Three things every one of the four does and FreeDAWm does not: **automation that is
+sample-accurate, delay-compensated and shown on the faders**; **a key input on the stock
+compressor and on third-party plug-ins**; and **meters that cannot miss a peak, with a pre-fader
+option**.
+
+## A. Channels and the strip
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Audio, aux, instrument, MIDI, master, VCA, folder channels | ● | ● | ● | ● | **Works** |
+| Folder that only organises (no audio path) | ● | ● | ● | ● | **Missing**: every folder is a routing folder |
+| Formats from mono to 7.1.4 and wider | ● | ● | ● | ● | **Works** up to 16 channels; Ambisonics orders 4–7 are offered and silently truncated |
+| Change a track's format later | ◐ | ● | ● | ◐ | **Works** |
+| Input trim and polarity on the strip | ● | ● | ● | ● | **Partial**: trim works; polarity is one switch for all channels and has no button |
+| Fader to +12 dB | ● | ◐ | ◐ | ◐ | **Works** |
+| Per-track delay in samples or ms | ● | ● | ● | ● | **Missing** for audio tracks |
+| Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Missing**: everything is an insert |
+| Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded |
+
+## B. Panning
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Choice of pan law | ● | ● | ● | ● | **Missing**: fixed at −3 dB; the other laws exist in code, unused |
+| Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
+| Balance, and width or combined panner | ○ | ● | ● | ● | **Missing** |
+| Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
+| Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height; centre % and LFE have no control; mono and stereo tracks only |
+| Binaural pan | ● | ● | ● | ● | **Missing** |
+
+## C. Inserts and sidechains
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Ten or more inserts per channel | ● | ● | ● | ● | **Works**: up to 32 modules |
+| Reorder, copy and move by dragging | ● | ● | ● | ● | **Works** |
+| Bypass | ● | ● | ● | ● | **Works** |
+| Deactivate a plug-in to free CPU | ● | ● | ◐ | ● | **Flag only**: the engine honours it, nothing can set it |
+| Post-fader inserts | ◐ | ◐ | ○ | ● | **Missing**; the master's inserts run before its fader, where Pro Tools runs them after |
+| Chain presets | ● | ● | ● | ● | **Works** |
+| Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
+| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Missing**: only Lull, Rez and Shale take a key |
+| Key input on third-party plug-ins | ● | ● | ● | ● | **Missing** for CLAP, VST3 and Audio Units |
+| Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
+| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
+| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** |
+
+## D. Sends and routing
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Eight or more sends, pre or post fader | ● | ● | ● | ● | **Works**: ten |
+| Send level, pan and mute, automatable | ● | ● | ● | ● | **Partial**: on a stereo track the send pan knob does nothing |
+| Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Partial**: busses only |
+| A new send comes with its return | ● | ● | ● | ● | **Missing**: a send to a new bus is silent until an aux is made for it |
+| Default send level setting | ● | ◐ | ● | ◐ | **Missing**: a new send starts at −∞ |
+| Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Missing**: mute silences every send |
+| Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Partial**: copies volume only and ignores the selected range |
+| Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
+| Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** |
+| Refuse or warn about a feedback loop | ● | ● | ● | ● | **Missing** for outputs and sends: a loop goes silent |
+| Routing folders, nested | ● | ● | ● | ● | **Works** |
+
+## E. Groups, VCAs and solo
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
+| Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Missing**: the four attributes are fixed |
+| Suspend all groups | ● | ● | ● | ● | **Missing** (one group at a time can be switched off) |
+| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned by command only, no control in the mixer |
+| Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
+| Solo safe | ● | ● | ● | ● | **Works** |
+| Exclusive solo | ● | ● | ● | ● | **Works** |
+| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Flag only** |
+| Momentary solo | ● | ○ | ○ | ○ | **Missing**: the menu entry behaves as latch |
+
+## F. Automation
+
+### What can be automated
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Volume, pan, mute, send level, pan and mute | ● | ● | ● | ● | **Works** |
+| Plug-in parameters, stock and third-party | ● | ● | ● | ● | **Works** for inserts |
+| Instrument parameters | ● | ● | ● | ● | **Missing** |
+| Plug-in bypass | ● | ● | ● | ● | **Missing** |
+| Surround pan | ● | ● | ● | ● | **Missing** |
+| VCA and master fader | ● | ● | ● | ● | **Works** |
+
+### Writing and playing it
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Read, Touch, Latch, Write | ● | ● | ● | ● | **Works**, one undo step per pass |
+| Trim automation | ● | ○ | ● | ● | **Works** for volume; the trim lane also plays when automation is Off |
+| Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Missing**: the fader shows its resting value; only the lane shows the automated one |
+| You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written 20 ms earlier |
+| Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume skips breakpoints inside a block; sends, mute and plug-in values change once per block; a bounce (1,024 samples) can differ from playback |
+| Automation delay-compensated | ● | ● | ● | ● | **Missing**: moves play early by the track's plug-in delay, and are written early by the output latency |
+| Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Missing** |
+| Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
+| Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
+| Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Flag only**: the Automation window's switches are read by nothing |
+| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Missing**: no controller mapping, no HUI or Mackie Control |
+| Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
+
+### Editing it
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Add, move, delete, nudge points | ● | ● | ● | ● | **Works** |
+| Curved segments | ○ | ● | ● | ● | **Works**: one bend per segment |
+| Pencil shapes (line, triangle, square, random) | ● | ● | ◐ | ● | **Partial**: freehand and line |
+| Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Partial**: plain paste and duplicate lose curves and overlay the old points |
+| Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Partial**: by command; Write mode leaves 50 points a second |
+| Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** |
+| Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
+| Show the parameter last touched | ◐ | ● | ● | ● | **Missing** |
+| Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
+
+## G. Metering
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Peak meters that catch every peak | ● | ● | ● | ● | **Partial**: the meter shows the latest audio block only; peaks and clips between screen updates are lost |
+| Peak hold and clip lights | ● | ● | ● | ● | **Works** (with the limit above); one bar per channel on surround tracks |
+| Pre-fader metering | ● | ● | ● | ● | **Flag only** |
+| RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Missing**: one scale that stops at 0 dBFS |
+| Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
+| Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Partial**: only inside the LevelUp module, or as two numbers after a bounce |
+| Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Partial**: inside the Sprawl and CleanQ modules and Scout; no meter module of its own |
+| Output meter free of the click | ● | ● | ● | ● | **Missing**: the click is measured with the mix |
+| Meters while stopped | ● | ● | ● | ● | **Partial**: only for armed or monitored tracks |
+
+## H. Mixdown and export
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
+| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** |
+| Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: by command; the dialog always bounces the main mix |
+| Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**, except the selection |
+| Keep the reverb tail | ◐ | ● | ● | ● | **Missing**: a whole-session bounce ends at the last clip |
+| WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus; the dialog offers FLAC settings that then fail |
+| Convert sample rate on export | ● | ● | ● | ● | **Missing** for WAV, AIFF and FLAC |
+| Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Partial**: TPDF, always on, no control in the dialog |
+| Mono, and one file per channel | ● | ● | ● | ● | **Missing** |
+| Normalize on export | ○ | ◐ | ● | ◐ | **Partial**: to sample peak, by rendering twice |
+| Tags and broadcast metadata in the file | ● | ● | ● | ● | **Missing** |
+| Add the bounce back to the session | ● | ● | ● | ● | **Missing** |
+| Several formats in one pass | ● | ◐ | ● | ● | **Missing** |
+| Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Partial**: every unmuted track, always through the master; it runs in the window's own thread with no progress or cancel |
+| Commit, freeze, bounce in place | ● | ● | ● | ● | **Partial**: commit drops pan and automation and reduces surround to stereo |
+| AAF or OMF | ● | ● | ● | ● | **Missing** |
+| DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
+
+## I. Surround and immersive
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Surround tracks, busses and bounce | ● | ● | ● | ● | **Works** up to 16 channels, correct channel order |
+| Fold-down to stereo | ● | ● | ● | ● | **Works**: fixed ITU gains |
+| Dolby Atmos objects with a built-in renderer | ● | ● | ● | ● | **Flag only**: the object switch is a label |
+| Binaural monitoring | ● | ● | ● | ● | **Missing** |
+| ADM BWF export | ● | ● | ● | ● | **Missing** |
+| Surround pan automation | ● | ● | ● | ● | **Missing** |
+| Ambisonics | ● | ○ | ○ | ● | **Partial**: first order only |
+| Correct loudness for 7.1 and wider | ● | ● | ● | ● | **Missing**: channel weights are applied for 5.1 only |
+
+Immersive delivery is gap G-12 in [`gaps.md`](../gaps.md). Since Studio One 6.5 all four ship an
+Atmos renderer, so this has moved from a post-production extra to common ground.
+
+## J. Mixer state and window
+
+| Feature | PT | SP | Logic | Cubase | FreeDAWm |
+|---|:-:|:-:|:-:|:-:|---|
+| Undo for mixer moves | ◐ | ● | ● | ● | **Works**: every move, one step per gesture |
+| Track presets | ● | ● | ● | ● | **Works** |
+| Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Missing** |
+| Copy one channel's settings onto others | ● | ● | ● | ● | **Partial**: duplicate a track or apply a preset |
+| Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped |
+| Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
+| Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
+| Find and filter tracks in the mixer | ● | ● | ● | ● | **Missing** |
+| Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Missing** |
+| Several mixer windows | ○ | ● | ● | ● | **Partial**: one, detachable |
+
+## Bugs found on the way
+
+Lines move while the earlier sections' work is in progress, so functions are named.
+
+| # | Bug | Where |
+|---|---|---|
+| 1 | Meters and clip lights show only the latest block; anything between screen updates is lost | `StripMeter::measure` in `crates/mix/src/lib.rs`; the meter copy in `crates/playback/src/lib.rs` |
+| 2 | On a stereo track the send pan does nothing, though the knob is shown | `route_strip` in `crates/mix/src/lib.rs` |
+| 3 | Soloing a VCA mutes everything | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
+| 4 | The trim automation lane plays with automation Off | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
+| 5 | Mute automation switches with no ramp and can click | the same place |
+| 6 | Group members stop writing automation after half a second while the dragged fader is held still | `mix.volume` grouping in `crates/engine/src/cmd/mix.rs`; `auto_write.rs` |
+| 7 | Paste and duplicate drop automation curves and leave the old points under the new ones | `edit.paste`, `edit.duplicate`, `automation.paste` |
+| 8 | Commit puts a surround track on a stereo track and drops pan and all automation | `commit_track` in `crates/engine/src/io.rs` |
+| 9 | Loudness is wrong for 7.1 and wider bounces | `LoudnessMeter::new` in `crates/dsp/src/meter.rs` |
+| 10 | Export › Stems runs in the window's thread without stopping playback, with no progress or cancel | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
+| 11 | The bounce dialog offers FLAC at 32-bit float and beyond 8 channels, which the writer refuses | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
+| 12 | The output meter includes the click | master stage of `MixEngine::render` |
+| 13 | Loading a track preset keeps the old plug-in automation, which can drive the new modules | `track.load_preset` in `crates/engine/src/cmd/track_more.rs` |
+| 14 | A mono bus into a stereo aux is 3 dB louder than a centred mono track | bus read in `process_strip` |
+| 15 | An output or send loop is accepted and goes silent | `track.output`, `mix.send` |
+| 16 | Audio Units are not told a render is offline | `crates/au-host` |
+
+## Suggested order of work
+
+Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../target-app-parity.md)); all are judgements.
+
+**1. Fix what is wrong (≈ 14–22 h).** Bugs 1–16. Bug 1 first: a meter that can miss a clip is the
+one a mix engineer would not forgive.
+
+**2. What all four have (≈ 110–170 h).**
+
+| Work | Est. (h) | Notes |
+|---|---:|---|
+| Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04 |
+| Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | |
+| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | |
+| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
+| Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
+| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | |
+| Pan law choice; balance and width for stereo; per-track delay | 6–10 | The laws are already in `crates/dsp` |
+| Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes |
+| Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
+| Real-time bounce | 4–6 | |
+| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | |
+| Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
+
+**3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
+AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation, 5–8; hardware
+inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
+preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
+
+**Where FreeDAWm is already level or ahead:** solo that follows the signal path, the breadth of
+delay compensation including sidechain keys, undo for every mixer move, freeze up to a chosen
+module, live graphs on module tiles, curved automation segments (Pro Tools has none), conversion
+between clip gain and automation, and DAWproject in both directions.
+
+## Sources
+
+Versions as in [section 1](01-playback-audio.md#sources). Feature entries for the four come from
+their manuals as known, not from a side-by-side run; treat a ◐ as "check before relying on it".
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-16 | major | First version: mixing against Pro Tools, Studio Pro, Logic Pro and Cubase |
