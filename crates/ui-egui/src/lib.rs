@@ -798,6 +798,9 @@ pub struct SoundApp {
     /// Where the transport last started, and the loop it plays (the take clock's zero).
     pub(crate) play_from: Samples,
     pub(crate) play_loop: Option<Range>,
+    /// Loop Playback and the loop range as they were when the loop playing was last decided (at
+    /// Play, or the last change while playing): a change while playing moves the loop.
+    loop_basis: (bool, Option<Range>),
     /// The count-off the last Record started with (Options › Count Off): the transport counts
     /// it off before it rolls from `play_from` (`SoundApp::countoff_status`).
     pub(crate) countoff: Option<soundcraft_playback::CountOff>,
@@ -1003,6 +1006,7 @@ impl SoundApp {
             last_audio_take: None,
             play_from: 0,
             play_loop: None,
+            loop_basis: (false, None),
             countoff: None,
             #[cfg(not(target_arch = "wasm32"))]
             net: None,
@@ -1358,6 +1362,8 @@ impl SoundApp {
 
     /// The UI side of playback starting at `from` (the player already told).
     fn note_play_started(&mut self, from: Samples) {
+        let e = &self.engine.session().edit;
+        self.loop_basis = (e.loop_playback, e.loop_range);
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
         self.engine.automation_jump();
@@ -2196,6 +2202,32 @@ impl SoundApp {
         self.engine.automation_pass(playing);
     }
 
+    /// While playing (not recording: loop passes are takes), Loop Playback turned on or off or
+    /// the loop moved or resized changes the loop under way, without a jump
+    /// (`Player::set_loop`). Turned on, the loop is the loop range.
+    fn follow_loop_changes(&mut self) {
+        if !self.is_playing() || self.engine.transport.recording {
+            return;
+        }
+        let e = &self.engine.session().edit;
+        let now = (e.loop_playback, e.loop_range.filter(|r| !r.is_empty()));
+        if now == self.loop_basis {
+            return;
+        }
+        self.loop_basis = now;
+        let want = if now.0 { now.1 } else { None };
+        if want == self.play_loop {
+            return;
+        }
+        self.play_loop = want;
+        if let Some(p) = &self.player {
+            p.set_loop(want);
+        }
+        if let Some(sim) = &mut self.sim {
+            sim.2 = want;
+        }
+    }
+
     /// Play from the selection, honouring loop playback and selection end.
     pub fn play_from_selection(&mut self) {
         let s = self.engine.session();
@@ -2302,6 +2334,7 @@ impl SoundApp {
                 TransportRequest::ScoutStop => scout::stop(self),
             }
         }
+        self.follow_loop_changes();
         // Read back the position.
         if let Some(p) = &self.player {
             let playing = p.is_playing();
@@ -2767,6 +2800,26 @@ mod tests {
             Dev(l.clone(), "new")
         });
         assert_eq!(*log.borrow(), ["close old", "open new"]);
+    }
+
+    #[test]
+    fn loop_changes_take_effect_while_playing() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("edit.select", json!({"start": 48_000, "end": 96_000})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim.map(|s| s.2), Some(None), "plays the selection straight");
+        app.run("options.loop_playback", json!({"value": true})).unwrap();
+        app.handle_transport(0.0);
+        let r = soundcraft_time::Range::new(48_000, 96_000);
+        assert_eq!(app.sim.map(|s| s.2), Some(Some(r)), "Loop Playback on: the loop range loops");
+        app.run("loop.set", json!({"start": 48_000, "end": 72_000})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim.map(|s| s.2), Some(Some(soundcraft_time::Range::new(48_000, 72_000))), "resized while playing");
+        app.run("options.loop_playback", json!({"value": false})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim.map(|s| s.2), Some(None), "off: plays on");
+        assert!(app.is_playing());
     }
 
     #[test]

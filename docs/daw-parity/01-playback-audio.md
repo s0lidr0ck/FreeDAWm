@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (declick: transport ramps, loop-edge ramps and automatic edge fades) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (the loop changes while playing) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -33,7 +33,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Transport and locating | Solid core; several play commands are wrong | Small: bugs and small features |
-| B. Looping | Gapless and sample-accurate, but fixed at Play | Small |
+| B. Looping | Gapless, sample-accurate, declicked, changes while playing | Small: no skip range |
 | C. Speed, scrub, shuttle | Half speed only; no scrub audio at all | **Large**: all four scrub |
 | D. Audio engine | Device choice, wide delay compensation, disk cache, declicked transport | Medium: sound quality at mismatched rates, realtime safety |
 | E. Media and formats | Reads everything; streams only WAV | Small to medium |
@@ -72,8 +72,8 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 |---|:-:|:-:|:-:|:-:|---|
 | Gapless loop | ● | ● | ● | ● | **Works**: wraps inside the audio callback on the exact sample, disk cache pre-reads the loop start |
 | Loop range separate from the selection | ● | ● | ● | ● | **Partial**: a sticky loop range exists, used when the insertion point is inside it |
-| Move or resize the loop while playing | ● | ● | ● | ● | **Missing**: the loop is fixed at Play |
-| Turn looping on or off while playing | ● | ● | ● | ● | **Missing**: takes effect at the next Play |
+| Move or resize the loop while playing | ● | ● | ● | ● | **Works**: a new range selection or loop-end drag moves the loop under way, without a jump |
+| Turn looping on or off while playing | ● | ● | ● | ● | **Works**: off plays on; on loops the loop range (a loop behind the playhead waits for the next Play or locate); not while recording |
 | Loop follows the selection | ● | ● | ● | ● | **Works** (it is the default behaviour) |
 | Skip a range during playback | ○ | ○ | ● | ● | **Missing** |
 | Smooth loop join (no click at the wrap) | ● | ● | ● | ● | **Works**: clips running across the loop's edges ramp out and back in over 1 ms (a short dip, no crossfade); plug-in tails run on |
@@ -204,7 +204,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
-| Loop range and loop on/off change while playing | 3–5 | A new player command; the loop logic exists |
+| Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
 | Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | The player's speed path can carry it once it has a better resampler |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | The offline sinc exists; this needs a realtime form |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | Builds on `Player::preview` |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | the loop changes while playing |
 | 2026-11-16 | minor | declick: transport ramps, loop-edge ramps and automatic edge fades |
 | 2026-11-16 | minor | bug 11 fixed: a missing chosen device is told to the user |
 | 2026-11-16 | minor | bug 9 fixed: Reconnect closes the old device first |

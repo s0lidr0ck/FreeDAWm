@@ -127,6 +127,9 @@ enum Cmd {
     },
     Stop,
     Locate(Samples),
+    /// The loop of the playback under way changed (moved, resized, or Loop Playback turned on
+    /// or off): see [`Player::set_loop`].
+    Loop(Option<Range>),
     /// A one-off action for a module's live plugin ([`Plugin::action`]).
     Action(TrackId, ModuleId, &'static str),
     /// A note played on a track's instrument now (note-off at velocity 0): auditions.
@@ -438,6 +441,9 @@ struct AudioState {
     playing: bool,
     end: Option<Samples>,
     looped: Option<Range>,
+    /// The loop wraps: false only when a loop set while playing ([`Cmd::Loop`]) begins behind
+    /// the playhead, until the next Play or locate.
+    loop_armed: bool,
     /// The count-off under way before the transport rolls from `pos`, and the frames of it
     /// rendered so far.
     countoff: Option<CountOff>,
@@ -592,6 +598,7 @@ impl AudioState {
             playing: false,
             end: None,
             looped: None,
+            loop_armed: true,
             countoff: None,
             countoff_at: 0,
             pending: vec![vec![0.0; max_block]; nch],
@@ -705,6 +712,12 @@ impl AudioState {
                         reset = true;
                     }
                 }
+                Cmd::Loop(l) => {
+                    // No jump: the playhead plays on, and wraps at the new end if it is still
+                    // before it (a loop it is already past waits for the next Play or locate).
+                    self.looped = l.filter(|r| r.len() > MIN_LOOP);
+                    self.loop_armed = self.looped.is_some_and(|r| self.pos < r.end);
+                }
                 Cmd::Locate(at) => {
                     if !self.defer(Deferred::Locate(at)) {
                         self.apply(Deferred::Locate(at));
@@ -749,6 +762,7 @@ impl AudioState {
                         None => {
                             self.pos = range.start;
                             (self.looped, self.end) = loop_or_end(Some(range), None);
+                            self.loop_armed = true;
                             self.ramp_in();
                             self.playing = true;
                             self.pending_len = 0;
@@ -912,6 +926,7 @@ impl AudioState {
                 self.pos = from;
                 self.shared.position.store(from, Ordering::Relaxed);
                 (self.looped, self.end) = loop_or_end(looped, end);
+                self.loop_armed = true;
                 // With a count-off the transport rolls once it is over (`render_next`).
                 self.countoff = countoff.filter(|c| !c.is_empty());
                 self.countoff_at = 0;
@@ -941,6 +956,7 @@ impl AudioState {
             }
             Deferred::Locate(at) => {
                 self.pos = at;
+                self.loop_armed = true;
                 self.pending_len = 0;
                 self.read = 0.0;
                 // A jump keeps the Scout capture: it records a new played range.
@@ -1129,7 +1145,7 @@ impl AudioState {
                 n = n.min(left.max(1));
             }
         }
-        if let Some(l) = self.looped
+        if let Some(l) = self.looped.filter(|_| self.loop_armed)
             && self.pos >= l.end
         {
             self.pos = l.start;
@@ -1138,7 +1154,7 @@ impl AudioState {
         if let Some(c) = &self.countoff {
             // The count-off ends on a block edge: the take's first block starts at the record point.
             n = n.min(usize::try_from((c.len() - self.countoff_at).max(1)).unwrap_or(mb));
-        } else if let Some(l) = self.looped {
+        } else if let Some(l) = self.looped.filter(|_| self.loop_armed) {
             n = n.min(usize::try_from((l.end - self.pos).max(1)).unwrap_or(mb));
         } else if let Some(e) = self.end {
             if self.pos >= e {
@@ -1168,7 +1184,7 @@ impl AudioState {
         }
         self.mix.monitor_only = !self.playing;
         // Clips running across the loop's edges ramp there (`MixEngine::looping`).
-        self.mix.looping = if self.declick { self.looped } else { None };
+        self.mix.looping = if self.declick && self.loop_armed { self.looped } else { None };
         self.mix.recording = self.recording;
         self.mix.punch = self.punch;
         self.mix.countoff = self.countoff.map(|c| (c, self.countoff_at));
@@ -2925,6 +2941,13 @@ impl Player {
         soundcraft_model::disk::set_playhead(at, self.shared.playing.load(Ordering::Relaxed));
         self.shared.position.store(at, Ordering::Relaxed);
         let _ = self.tx.send(Cmd::Locate(at));
+    }
+
+    /// Changes the loop of the playback under way, without a jump: moved or resized, or `None`
+    /// to play on (Loop Playback turned off). A loop the playhead is already past does not pull
+    /// it back; it takes from the next Play or locate into it.
+    pub fn set_loop(&self, looped: Option<Range>) {
+        let _ = self.tx.send(Cmd::Loop(looped));
     }
 
     /// Sets the playback rate. While a take records only full speed is taken (see
@@ -5065,6 +5088,30 @@ mod tests {
         for w in got[0][200..2500].windows(2) {
             assert!((w[1] - w[0]).abs() < step, "a step of {}", (w[1] - w[0]).abs());
         }
+    }
+
+    #[test]
+    fn the_loop_changes_while_playing_without_a_jump() {
+        let s = const_clip_session(0.5, 48_000);
+        let (st, shared, tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: None, looped: Some(Range::new(0, 4000)), countoff: None });
+        let mut st = exact(st);
+        callbacks(&mut st, &[1000]);
+        // Moved and shortened while playing: wraps at the new end, to the new start.
+        tx.send(Cmd::Loop(Some(Range::new(500, 2000)))).unwrap();
+        callbacks(&mut st, &[1000, 10]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 510, "wrapped at 2000 to 500");
+        // Turned off: plays on past the old end.
+        tx.send(Cmd::Loop(None)).unwrap();
+        callbacks(&mut st, &[3000]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 3510);
+        // A loop behind the playhead does not pull it back; one ahead of it wraps.
+        tx.send(Cmd::Loop(Some(Range::new(0, 1000)))).unwrap();
+        callbacks(&mut st, &[500]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 4010);
+        tx.send(Cmd::Loop(Some(Range::new(4200, 4400)))).unwrap();
+        callbacks(&mut st, &[500]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 4310, "wrapped at 4400 to 4200");
+        assert!(shared.playing.load(Ordering::Relaxed));
     }
 
     #[test]
