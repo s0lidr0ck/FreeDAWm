@@ -86,21 +86,42 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
         let mut audio = soundcraft_mix::render_clips(e.session(), track, clip.range());
         // Render without the clip's own fades: re-render a copy without fades so they stay editable.
         let mut tmp = e.session().clone();
+        // The clip as it plays, without its fades and gain, before the handles are added.
+        let mut unextended = None;
         if let Some(c) = tmp.find_clip_mut(id) {
-            if before > 0 {
-                c.trim_start_to(clip.start - before);
-            }
-            c.length = c.length.saturating_add(after);
             c.fade_in = Default::default();
             c.fade_out = Default::default();
             c.gain_db = 0.0;
             c.gain_env.clear();
             // A muted clip is processed as it sounds unmuted, not rendered to silence.
             c.muted = false;
+            if before > 0 || after > 0 {
+                unextended = Some(c.clone());
+            }
+            if before > 0 {
+                c.trim_start_to(clip.start - before);
+            }
+            c.length = c.length.saturating_add(after);
         }
         if let Some(pl) = tmp.track_mut(track).and_then(|t| t.playlist_mut()) {
             pl.clips.retain(|c| c.id == id);
             audio = soundcraft_mix::render_clips(&tmp, track, span);
+        }
+        // Lengthening a clip can change how it sounds inside its old edges (Clean's alternate
+        // crossfades over 5 ms where its cleaned audio ends inside the clip, so a clip that ended
+        // with it would fade back to the original there). The handles are only what lies beyond:
+        // the clip's own window is rendered as it played and written over the middle.
+        if let Some(c0) = unextended {
+            if let Some(c) = tmp.find_clip_mut(id) {
+                *c = c0;
+            }
+            let window = soundcraft_mix::render_clips(&tmp, track, clip.range());
+            let at = usize::try_from(before).unwrap_or(0);
+            for (dst, src) in audio.iter_mut().zip(&window) {
+                if let Some(dst) = dst.get_mut(at..) {
+                    dst.iter_mut().zip(src).for_each(|(d, s)| *d = *s);
+                }
+            }
         }
         let srf = sr.as_f64() as f32;
         let out: Vec<Vec<f32>> = match name.as_str() {

@@ -168,7 +168,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Export clips as files | ● | ● | ● | ● | **Works**: each clip alone, a muted one as it sounds unmuted (bug 22, fixed) |
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
-| Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too; stretch, pitch and varispeed render the clip only |
+| Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too, the clip's own window rendered as it played (a Clean alternate's edges are not faded by the longer render); stretch, pitch and varispeed render the clip only |
 | Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
 | Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
 | Strip silence preview before committing | ● | ● | ● | ● | **Missing** |
@@ -383,3 +383,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Tier 2: clip transpose, reverse and loop in place, in real time; the loop trim |
 | 2026-11-16 | minor | Bug 18 fixed: grid lines count from the timecode start |
 | 2026-11-16 | minor | The Scrubber is heard through the strip, and scrubs on the ruler |
+| 2026-11-16 | minor | Processing with handles keeps the clip's sound inside its edges (a Clean Vocal mix is no longer faded back to the original at the old edges) |
