@@ -10,6 +10,7 @@ pub mod juke;
 pub mod lull;
 pub mod mend;
 pub mod modulation;
+mod per_channel;
 pub mod pitch;
 pub mod reverb;
 pub mod rez;
@@ -89,8 +90,15 @@ pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[&test_link::TEST_LINK_INFO, 
 #[cfg(not(feature = "test-plugins"))]
 pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[];
 
-/// Constructs an (unprepared) plugin by id.
+/// Constructs an (unprepared) plugin by id. A stereo-only plugin comes wrapped so it processes
+/// every channel of a wider track ([`per_channel::PerChannel`]).
 pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
+    let p = instantiate_one(id)?;
+    Some(if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p })
+}
+
+/// One instance of a plugin by id, never wrapped.
+fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {
         "eq_1band" => Box::new(eq::Eq1::new()),
         "eq_7band" => Box::new(eq::Eq7::new()),

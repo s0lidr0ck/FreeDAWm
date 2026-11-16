@@ -1,6 +1,6 @@
 # Four-DAW parity, section 5: built-in effects
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Hardware named below (1176, LA-2A, Pultec and so on) belongs
@@ -63,7 +63,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager | Medium: **no meter plug-ins** (spectrum, loudness, phase), no dither in the menu, no tuner |
 | I. Presets | 936 factory presets, a searchable browser, chain and track presets | Small: two save paths that disagree, no rename, no default preset |
 | J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
-| K. Common behaviour | Latency and tails reported, every parameter automatable | **Large**: effects process two channels at most, bypass is a hard switch, no controller mapping, no racks or macros |
+| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: bypass is a hard switch, no controller mapping, no racks or macros |
 
 Three things every one of the four does and FreeDAWm does not: **a compressor you can key from
 another track**; **effects that process every channel of a surround track**; and **meter
@@ -241,7 +241,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Tails included in bounce and freeze | ● | ● | ● | ● | **Partial**: Delay, Mod and Filter report fixed tails (bug 6) |
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
 | Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Partial**: missing on eight engines; no mix on the insert slot |
-| Process every channel of a surround track | ● | ● | ● | ● | **Missing**: 24 effects process the first two channels and pass the rest dry (bug 2) |
+| Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; dynamics are not linked across them |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Missing** (section 3) |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
@@ -258,7 +258,7 @@ them is the owner's decision, not a repair.
 | # | Bug | Where |
 |---|---|---|
 | 1 | Saving a user preset from a wide editor stores parameters the editor deliberately keeps out of presets (LevelUp's reference, link group and learn state; CopyQ capture; others). Loading it restores them | `ui-egui/src/editor_kit/presets.rs:221-230, 693` |
-| 2 | On a track wider than stereo, 24 effects (every engine, Mend, Vault) process left and right only; centre, LFE and surrounds pass unprocessed with no warning | `dsp/src/plugins/fs/*/mod.rs` (`channels.min(2)`) |
+| 2 | **Fixed.** On a track wider than stereo, 24 effects (every engine, Mend, Vault) processed left and right only; centre, LFE and surrounds passed unprocessed. They now run one instance on the first two channels and a mono instance on each other channel (`dsp/src/plugins/per_channel.rs`), with the same parameters, transport, assets and state. Detection is not linked across them. Test: `per_channel.rs` (a 5.1 surround channel sounds as on a mono track) | `dsp/src/plugins/fs/*/mod.rs` (`channels.min(2)`) |
 | 3 | Saving from the narrow drawer writes no name or tags, skips the Dist knob bank and the Amp, Vault and CleanQ loaded files, and lets a user preset share a factory preset's name, after which the factory one wins | `ui-egui/src/panels.rs:971-1029` |
 | 4 | Bypass is an instant switch: no crossfade, no reset when switched back on, and the track's delay compensation changes in the same block | `mix/src/lib.rs:1939, 2721, 2770` |
 | 5 | *By design.* Pitch reports no latency though its shifted voices run 6–20 ms late; Sat and Vint also report none | `dsp/src/plugins/fs/pitch/mod.rs:14-16`; `fs/sat/mod.rs:16`; `fs/vint/mod.rs:40` |
@@ -291,7 +291,7 @@ track. Then bug 4.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Key input on Comp, with a ducking preset | 4–8 | The routing side is in section 3's list; this is the engine side |
-| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | Proper fix for bug 2 |
+| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Partly done** with bug 2: per channel (front pair stereo); linked detection for dynamics remains |
 | Click-free bypass that keeps delay compensation steady | 4–6 | |
 | A simple channel EQ and compressor in the menu (unhide and tidy the stock ones, or presets of CleanQ and Comp) | 3–6 | Owner's call which |
 | Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | The measuring code exists |
@@ -327,3 +327,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | major | First version: built-in effects against Pro Tools, Studio Pro, Logic Pro and Cubase |
+| 2026-11-16 | minor | Bug 2 fixed: stereo-only effects process every channel of a surround track |
