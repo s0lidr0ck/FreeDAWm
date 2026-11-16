@@ -369,7 +369,7 @@ fn clean_vocal_refuses_a_clip_changed_while_it_ran_and_keeps_clip_effects_live()
     let (mut e, _) = session();
     let clip = e.session().tracks[0].clips()[0].clone();
     // A clip effect (gain) on the clip: Clean renders without it, and it stays on the clip.
-    e.session_mut().edit.values.insert(format!("clip_fx.{}.gain", clip.id.0), -12.0);
+    e.session_mut().find_clip_mut(clip.id).unwrap().set_effect("gain", -12.0);
     let p = json!({"clip": clip.id.0, "dereverb": false, "amount_db": 0.0});
     let mut job = ml::prepare(&e, "ml.clean", &p).unwrap();
     let result = job.run(&Ctx::default()).unwrap();
@@ -388,5 +388,5 @@ fn clean_vocal_refuses_a_clip_changed_while_it_ran_and_keeps_clip_effects_live()
     let old = &e.session().pool.get(clip.source().unwrap()).unwrap().buffer().channels;
     let err = new.iter().zip(old).flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
     assert!(err < 1e-6, "{err}");
-    assert_eq!(e.session().edit.values.get(&format!("clip_fx.{}.gain", clip.id.0)), Some(&-12.0));
+    assert_eq!(c.effect("gain"), Some(-12.0));
 }

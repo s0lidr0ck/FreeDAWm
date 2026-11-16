@@ -1247,7 +1247,7 @@ pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     crate::preferences::window(app, ctx);
 }
 
-/// Clip Effects: per-clip EQ, dynamics and gain (stored as `clip_fx.<clip>.*` values).
+/// Clip Effects: per-clip EQ, dynamics and gain (stored on the clip, `Clip::effects`).
 pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_clip_effects;
     win(ctx, &mut open, "Clip Effects", vec2(560.0, 420.0), |ui| {
@@ -1265,7 +1265,7 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
             return;
         };
         let name = app.engine.session().find_clip(cid).map(|(_, c)| c.name.clone()).unwrap_or_default();
-        let bypass = app.engine.session().edit.flag(&format!("clip_fx.bypass.{}", cid.0));
+        let bypass = app.engine.session().find_clip(cid).is_some_and(|(_, c)| c.effects_bypass);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&name).strong());
             if ui.selectable_label(bypass, "Bypass").clicked() {
@@ -1278,7 +1278,7 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
                 let _ = app.run("edit.clear_clip_effects", json!({"clips": [cid.0]}));
             }
         });
-        let get = |app: &SoundApp, k: &str, d: f32| app.engine.session().edit.values.get(&format!("clip_fx.{}.{k}", cid.0)).map_or(d, |v| *v as f32);
+        let get = |app: &SoundApp, k: &str, d: f32| app.engine.session().find_clip(cid).and_then(|(_, c)| c.effect(k)).map_or(d, |v| v as f32);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.columns(2, |cols| {
                 for (col, (title, plugin, prefix)) in cols.iter_mut().zip([("EQ", "eq_7band", "eq."), ("Dynamics", "compressor", "comp.")]) {

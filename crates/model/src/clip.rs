@@ -281,7 +281,19 @@ pub struct Clip {
     /// Clip Gain › Bypass: the gain and its envelope are kept but not heard (fades still are).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gain_bypass: bool,
+    /// Clip Effects: the real-time EQ, compressor and gain settings (`eq.<param>`,
+    /// `comp.<param>`, `gain` → value), sorted by key. They belong to the clip, so a split's
+    /// pieces and every copy keep them. Sessions that kept them as `clip_fx.<clip>.*` edit
+    /// values are moved here by [`crate::Session::sanitize`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<(String, f64)>,
+    /// Clip Effects bypassed: kept but not heard.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub effects_bypass: bool,
 }
+
+/// The most Clip Effects settings a clip keeps (a hostile file is cut down to these).
+pub const MAX_CLIP_EFFECTS: usize = 256;
 
 fn one() -> f64 {
     1.0
@@ -318,7 +330,36 @@ impl Clip {
             warp: Vec::new(),
             source_channel: None,
             gain_bypass: false,
+            effects: Vec::new(),
+            effects_bypass: false,
         }
+    }
+
+    /// The Clip Effects setting `key` (`eq.<param>`, `comp.<param>` or `gain`).
+    pub fn effect(&self, key: &str) -> Option<f64> {
+        self.effects.binary_search_by(|(k, _)| k.as_str().cmp(key)).ok().and_then(|i| self.effects.get(i)).map(|(_, v)| *v)
+    }
+
+    /// Set Clip Effects setting `key`, keeping them sorted; a non-finite value, or an empty or
+    /// overlong key, is ignored.
+    pub fn set_effect(&mut self, key: &str, value: f64) {
+        if !value.is_finite() || key.is_empty() || key.len() > 64 {
+            return;
+        }
+        match self.effects.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
+            Ok(i) => {
+                if let Some(e) = self.effects.get_mut(i) {
+                    e.1 = value;
+                }
+            }
+            Err(i) if self.effects.len() < MAX_CLIP_EFFECTS => self.effects.insert(i, (key.to_string(), value)),
+            Err(_) => {}
+        }
+    }
+
+    /// The Clip Effects to hear: none when bypassed or not set.
+    pub fn live_effects(&self) -> Option<&[(String, f64)]> {
+        (!self.effects_bypass && !self.effects.is_empty()).then_some(self.effects.as_slice())
     }
 
     /// How an audio clip's `nsrc`-channel source feeds a track of `ndst` channels: the number of
@@ -558,6 +599,11 @@ impl Clip {
         if !self.stretch.is_finite() || self.stretch <= 0.0 {
             self.stretch = 1.0;
         }
+        // Clip Effects: finite values, sorted, one per key, a bounded number of short keys.
+        self.effects.retain(|(k, v)| v.is_finite() && !k.is_empty() && k.len() <= 64);
+        self.effects.sort_by(|a, b| a.0.cmp(&b.0));
+        self.effects.dedup_by(|a, b| a.0 == b.0);
+        self.effects.truncate(MAX_CLIP_EFFECTS);
     }
 }
 

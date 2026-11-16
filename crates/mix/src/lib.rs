@@ -61,7 +61,6 @@ use soundcraft_model::{
 };
 use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER};
 use std::collections::HashMap;
-use std::ops::Bound;
 use std::sync::Arc;
 
 pub mod band;
@@ -551,8 +550,8 @@ const CROSSFADE_MS: f32 = 10.0;
 /// module whose latency grows while playing is re-aligned without allocating.
 const HEADROOM_S: f32 = 0.25;
 
-/// Clip Effects: an EQ and a compressor per clip, configured from `edit.values`
-/// (`clip_fx.<clip>.eq.<param>`, `clip_fx.<clip>.comp.<param>`, `clip_fx.<clip>.gain`).
+/// Clip Effects: an EQ and a compressor per clip, configured from [`Clip::effects`]
+/// (`eq.<param>`, `comp.<param>`, `gain`).
 struct ClipFx {
     eq: Option<Box<dyn Plugin>>,
     comp: Option<Box<dyn Plugin>>,
@@ -1425,6 +1424,7 @@ impl MixEngine {
             if strip.buf.len() != ch || strip.buf.first().map_or(0, Vec::len) != mb {
                 strip.buf = vec![vec![0.0; mb]; ch];
             }
+            sync_clip_fx(strip, t, cx.sr, mb, cx.retired);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
             // Module MIDI inputs: the accepted sources, and room for the list (`process_strip`
@@ -2630,19 +2630,22 @@ fn process_strip(
                     continue;
                 }
                 let edges = Edges::of(s, t.clips(), clip, block, live.looping);
-                match clip_fx_params(s, clip.id.0) {
+                // The effects and the buffer were made by `sync` when the session changed: here
+                // nothing is allocated. Effects not prepared yet (never the case after a sync)
+                // are skipped for this block rather than made on the audio thread.
+                let ready = strip.clipbuf.len() == strip.buf.len() && strip.clipbuf.iter().all(|c| c.len() >= frames);
+                let fx = clip_fx_params(clip).filter(|_| ready).and_then(|params| {
+                    let fx = strip.clip_fx.get_mut(&clip.id.0).filter(|fx| fx.ready(params.clone()))?;
+                    fx.configure(params);
+                    Some(fx)
+                });
+                match fx {
                     None => render_clip(s, clip, pos, frames, &mut strip.buf, edges),
-                    Some(params) => {
-                        let nch = strip.buf.len();
-                        if strip.clipbuf.len() != nch || strip.clipbuf.first().map_or(0, Vec::len) < frames {
-                            strip.clipbuf = vec![vec![0.0; frames.max(strip.scratch.len())]; nch];
-                        }
+                    Some(fx) => {
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
                         render_clip(s, clip, pos, frames, &mut strip.clipbuf, edges);
-                        let fx = strip.clip_fx.entry(clip.id.0).or_insert_with(|| ClipFx::new(s.sample_rate.as_f64() as f32, nch));
-                        fx.configure(params);
                         fx.process(&mut strip.clipbuf, frames);
                         for (d, c) in strip.buf.iter_mut().zip(strip.clipbuf.iter()) {
                             for (x, y) in d.iter_mut().zip(c.iter()).take(frames) {
@@ -2944,21 +2947,10 @@ fn contain_failure(slot: &mut PluginSlot, buf: &mut [Vec<f32>], frames: usize) -
     true
 }
 
-/// Clip-effect parameters of a clip, or None when it has none or they are bypassed.
-fn clip_fx_params(s: &Session, clip: u64) -> Option<impl Iterator<Item = (&str, f32)> + Clone> {
-    if s.edit.values.is_empty() || Key::new(format_args!("clip_fx.bypass.{clip}")).is_none_or(|k| s.edit.flag(k.as_str())) {
-        return None;
-    }
-    let pre = Key::new(format_args!("clip_fx.{clip}."))?;
-    let mut params = s
-        .edit
-        .values
-        .range::<str, _>((Bound::Included(pre.as_str()), Bound::Unbounded))
-        .take_while(move |(k, _)| k.starts_with(pre.as_str()))
-        .map(move |(k, v)| (k.get(pre.len..).unwrap_or(""), *v as f32))
-        .peekable();
-    params.peek()?;
-    Some(params)
+/// Clip-effect parameters of a clip ([`Clip::effects`]), or None when it has none or they are
+/// bypassed. Reads only: safe on the audio thread.
+fn clip_fx_params(clip: &Clip) -> Option<impl Iterator<Item = (&str, f32)> + Clone> {
+    clip.live_effects().map(|fx| fx.iter().map(|(k, v)| (k.as_str(), *v as f32)))
 }
 
 /// A short key formatted on the stack: lookups made on the audio thread must not allocate.
@@ -3006,21 +2998,33 @@ impl ClipFx {
             p
         })
     }
-    /// Modules exist only when one of their parameters is set.
-    fn configure<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone) {
-        self.gain_db = 0.0;
-        let has_eq = params.clone().any(|(k, _)| k.starts_with("eq."));
-        let has_comp = params.clone().any(|(k, _)| k.starts_with("comp."));
+    /// Which modules `params` need: the EQ, the compressor.
+    fn needs<'a>(params: impl Iterator<Item = (&'a str, f32)> + Clone) -> (bool, bool) {
+        (params.clone().any(|(k, _)| k.starts_with("eq.")), params.clone().any(|(k, _)| k.starts_with("comp.")))
+    }
+    /// Make or retire the modules `params` need or no longer need (each exists only when one of
+    /// its parameters is set). Allocates: `MixEngine::sync` calls it when the session changes, never
+    /// `render`; a retired module goes to `retired`, not dropped here.
+    fn prepare_modules<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone, retired: &mut Vec<Box<dyn Plugin>>) {
+        let (has_eq, has_comp) = Self::needs(params);
         if has_eq && self.eq.is_none() {
             self.eq = self.make("eq_7band");
         } else if !has_eq {
-            self.eq = None;
+            retired.extend(self.eq.take());
         }
         if has_comp && self.comp.is_none() {
             self.comp = self.make("compressor");
         } else if !has_comp {
-            self.comp = None;
+            retired.extend(self.comp.take());
         }
+    }
+    /// Whether the modules match what `params` need (`prepare_modules` has run since they changed).
+    fn ready<'a>(&self, params: impl Iterator<Item = (&'a str, f32)> + Clone) -> bool {
+        Self::needs(params) == (self.eq.is_some(), self.comp.is_some())
+    }
+    /// Set the modules' parameters and the gain. Allocates nothing: safe on the audio thread.
+    fn configure<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone) {
+        self.gain_db = 0.0;
         for (k, v) in params {
             if let Some(p) = k.strip_prefix("eq.") {
                 if let Some(eq) = &mut self.eq
@@ -3055,6 +3059,30 @@ impl ClipFx {
     }
 }
 
+/// Clip Effects of a track's clips, made here (the session changed) rather than the first time a
+/// clip plays: an effect chain for each clip with live effects and the modules its settings
+/// need, and a buffer to render clips into. Chains of clips that lost their effects, and modules
+/// no longer needed, go to `retired`.
+fn sync_clip_fx(strip: &mut Strip, t: &Track, sr: f32, mb: usize, retired: &mut Vec<Box<dyn Plugin>>) {
+    let ch = strip.buf.len();
+    let live = || t.clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p)));
+    strip.clip_fx.retain(|id, fx| {
+        let keep = fx.ch == ch && live().any(|(c, _)| c == *id);
+        if !keep {
+            retired.extend(fx.eq.take().into_iter().chain(fx.comp.take()));
+        }
+        keep
+    });
+    let mut any = false;
+    for (id, params) in live() {
+        any = true;
+        strip.clip_fx.entry(id).or_insert_with(|| ClipFx::new(sr, ch)).prepare_modules(params, retired);
+    }
+    if any && (strip.clipbuf.len() != ch || strip.clipbuf.iter().any(|c| c.len() < mb)) {
+        strip.clipbuf = vec![vec![0.0; mb]; ch];
+    }
+}
+
 /// Hash of everything `sync`/`processing_order` depend on (tracks, kinds, routing, plugins, sends).
 fn structure_fingerprint(s: &Session) -> usize {
     use std::hash::{Hash, Hasher};
@@ -3079,6 +3107,12 @@ fn structure_fingerprint(s: &Session) -> usize {
             for (k, r) in &i.assets {
                 (k, r).hash(&mut h);
                 s.assets.get_for(k, r, s.sample_rate.hz()).map(|a| Arc::as_ptr(&a.0) as *const () as usize).hash(&mut h);
+            }
+        }
+        // Which clips have Clip Effects and which modules they need (`sync` makes them).
+        for c in t.clips() {
+            if let Some(p) = clip_fx_params(c) {
+                (c.id.0, ClipFx::needs(p)).hash(&mut h);
             }
         }
         for snd in t.mixer.sends.iter().flatten() {
@@ -4992,12 +5026,13 @@ pub fn render_clips(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> 
     let mut out = vec![vec![0.0f32; len]; t.channels().max(1)];
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
         let edges = Edges::default();
-        match clip_fx_params(s, c.id.0) {
+        match clip_fx_params(c) {
             None => render_clip(s, c, range.start, len, &mut out, edges),
             Some(params) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
                 render_clip(s, c, range.start, len, &mut tmp, edges);
                 let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, tmp.len());
+                fx.prepare_modules(params.clone(), &mut Vec::new());
                 fx.configure(params);
                 let mut done = 0;
                 while done < len {
@@ -7278,12 +7313,12 @@ mod tests {
     #[test]
     fn clip_effects_gain_and_trim_automation_apply() {
         let (mut s, t) = session_with_dc(0.5, 4800);
-        let cid = s.track(t).unwrap().clips()[0].id.0;
-        s.edit.values.insert(format!("clip_fx.{cid}.gain"), -6.0);
+        let cid = s.track(t).unwrap().clips()[0].id;
+        s.find_clip_mut(cid).unwrap().set_effect("gain", -6.0);
         let out = render_range(&s, Range::new(0, 4800), 512);
         let expect = 0.5 * std::f32::consts::FRAC_1_SQRT_2 * db_to_gain(-6.0);
         assert!((out[0][2000] - expect).abs() < 0.01, "{}", out[0][2000]);
-        s.edit.set_flag(&format!("clip_fx.bypass.{cid}"), true);
+        s.find_clip_mut(cid).unwrap().effects_bypass = true;
         let out = render_range(&s, Range::new(0, 4800), 512);
         assert!((out[0][2000] - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01);
         s.track_mut(t).unwrap().lane_mut(&AutoParam::Trim).set_point(0, -12.0);
@@ -7347,8 +7382,8 @@ mod tests {
         for (param, value) in [("comp.lookahead", 5.0), ("eq.hpf_on", 1.0)] {
             let (mut s, t) = session_with_dc(0.5, 9600);
             s.edit.click = false;
-            let cid = s.track(t).unwrap().clips()[0].id.0;
-            s.edit.values.insert(format!("clip_fx.{cid}.{param}"), value);
+            let cid = s.track(t).unwrap().clips()[0].id;
+            s.find_clip_mut(cid).unwrap().set_effect(param, value);
             let mut out = vec![vec![0.0f32; 512]; 2];
             let mut eng = MixEngine::new(48_000.0, 512);
             for b in 0..4 {
@@ -7361,6 +7396,41 @@ mod tests {
             fresh.render(&s, 4096, 512, &mut expect);
             assert_eq!(out, expect, "{param}: clip effect state survived the reset");
         }
+    }
+
+    /// Clip Effects are made when the session changes (`sync`), never by the first block a clip
+    /// with effects plays: rendering then creates no module and grows no buffer.
+    #[test]
+    fn clip_effects_are_prepared_before_the_clip_plays() {
+        let (mut s, t) = session_with_dc(0.5, 9600);
+        s.edit.click = false;
+        let cid = s.track(t).unwrap().clips()[0].id;
+        s.find_clip_mut(cid).unwrap().set_effect("eq.hpf_on", 1.0);
+        s.find_clip_mut(cid).unwrap().set_effect("comp.lookahead", 5.0);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        // Realtime mode: what is retired is handed back for dropping elsewhere.
+        eng.set_external_instances(true);
+        eng.ensure_synced(&s);
+        // What the audio thread will use, taken before anything plays.
+        let seat = |eng: &MixEngine| {
+            let st = &eng.strips[&t];
+            let fx = st.clip_fx.get(&cid.0).expect("prepared by sync");
+            let plug = |p: &Option<Box<dyn Plugin>>| p.as_ref().map(|b| &**b as *const dyn Plugin as *const () as usize);
+            (plug(&fx.eq), plug(&fx.comp), st.clipbuf.iter().map(|c| (c.as_ptr() as usize, c.capacity())).collect::<Vec<_>>())
+        };
+        let before = seat(&eng);
+        assert!(before.0.is_some() && before.1.is_some(), "both modules exist before the first block");
+        assert!(before.2.iter().all(|(_, cap)| *cap >= 512), "the clip buffer is sized for a block");
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        for b in 0..8 {
+            eng.render(&s, b * 512, 512, &mut out);
+        }
+        assert_eq!(seat(&eng), before, "playing made or moved nothing");
+        // Taking the EQ off is a session change: `sync` retires the module, not the audio thread.
+        s.find_clip_mut(cid).unwrap().effects.retain(|(k, _)| !k.starts_with("eq."));
+        eng.ensure_synced(&s);
+        assert!(seat(&eng).0.is_none());
+        assert!(!eng.retired.is_empty(), "the EQ was retired for dropping off the audio thread");
     }
 
     fn impulse_at(ch: &[f32]) -> Vec<usize> {

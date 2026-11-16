@@ -258,10 +258,8 @@ fn render_clip(e: &Engine, track: TrackId, clip: &Clip, bare: bool) -> Vec<Vec<f
         c.gain_db = 0.0;
         c.gain_env.clear();
         c.muted = false;
-    }
-    if bare {
         // ... and without its clip effects, which stay on the clip and keep playing live.
-        tmp.edit.set_flag(&format!("clip_fx.bypass.{}", clip.id.0), true);
+        c.effects_bypass = true;
     }
     soundcraft_mix::render_clips(&tmp, track, clip.range())
 }

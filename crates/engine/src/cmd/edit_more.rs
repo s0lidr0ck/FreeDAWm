@@ -402,17 +402,11 @@ fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": n}))
 }
 
-fn fx_prefix(c: ClipId) -> String {
-    format!("clip_fx.{}.", c.0)
-}
-
 fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let first = *ids.first().ok_or_else(|| bad(id, "select a clip"))?;
     if copy {
-        let pre = fx_prefix(first);
-        let fx: Vec<(String, f64)> =
-            e.session().edit.values.iter().filter_map(|(k, v)| k.strip_prefix(&pre).map(|name| (name.to_string(), *v))).collect();
+        let fx: Vec<(String, f64)> = e.session().find_clip(first).map(|(_, c)| c.effects.clone()).unwrap_or_default();
         if fx.is_empty() {
             return Err(bad(id, "the clip has no clip effects"));
         }
@@ -421,12 +415,11 @@ fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -
     let mut removed = 0;
     if remove {
         let s = e.session_mut();
-        for c in &ids {
-            let pre = fx_prefix(*c);
-            let before = s.edit.values.len();
-            s.edit.values.retain(|k, _| !k.starts_with(&pre));
-            removed += before - s.edit.values.len();
-            s.edit.set_flag(&format!("clip_fx.bypass.{}", c.0), false);
+        for id in &ids {
+            let Some(c) = s.find_clip_mut(*id) else { continue };
+            removed += c.effects.len();
+            c.effects.clear();
+            c.effects_bypass = false;
         }
     }
     Ok(json!({"clips": ids.len(), "copied": e.clipboard.clip_effects.len(), "removed": removed}))
@@ -439,11 +432,11 @@ fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let fx = e.clipboard.clip_effects.clone();
     let s = e.session_mut();
-    for c in &ids {
-        let pre = fx_prefix(*c);
-        s.edit.values.retain(|k, _| !k.starts_with(&pre));
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        c.effects.clear();
         for (k, v) in &fx {
-            s.edit.values.insert(format!("{pre}{k}"), *v);
+            c.set_effect(k, *v);
         }
     }
     Ok(json!({"clips": ids.len()}))

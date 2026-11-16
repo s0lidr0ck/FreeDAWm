@@ -189,9 +189,10 @@ fn effects_set(e: &mut Engine, p: &Value) -> Result<Value> {
     let vals: Vec<(String, f64)> =
         params.iter().filter_map(|(k, v)| v.as_f64().filter(|x| x.is_finite()).map(|x| (k.chars().take(64).collect(), x))).collect();
     let s = e.session_mut();
-    for c in &ids {
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
         for (k, v) in &vals {
-            s.edit.values.insert(format!("clip_fx.{}.{k}", c.0), *v);
+            c.set_effect(k, *v);
         }
     }
     Ok(json!({"clips": ids.len(), "params": vals.len()}))
@@ -203,10 +204,10 @@ fn effects_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("clip.effects_bypass", "select a clip"));
     }
     let s = e.session_mut();
-    let key = |c: &ClipId| format!("clip_fx.bypass.{}", c.0);
-    let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|c| s.edit.flag(&key(c))));
-    for c in &ids {
-        s.edit.set_flag(&key(c), on);
+    let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|c| s.find_clip(*c).is_some_and(|(_, c)| c.effects_bypass)));
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        c.effects_bypass = on;
     }
     Ok(json!({"bypass": on, "clips": ids.len()}))
 }
@@ -219,10 +220,9 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
             n += 1;
         }
         let s = e.session_mut();
-        let pre = format!("clip_fx.{}.", id.0);
-        s.edit.values.retain(|k, _| !k.starts_with(&pre));
-        s.edit.set_flag(&format!("clip_fx.bypass.{}", id.0), false);
         if let Some(c) = s.find_clip_mut(*id) {
+            c.effects.clear();
+            c.effects_bypass = false;
             c.fade_in.len = c.fade_in.len.min(c.length);
             c.fade_out.len = c.fade_out.len.min(c.length);
         }
@@ -438,13 +438,13 @@ mod tests {
         let (mut e, _, ids) = engine_with(&[(0, 100, 0)]);
         e.execute("clip.effects_set", &json!({"clip": ids[0].0, "params": {"eq_gain_db": 3.0}})).unwrap();
         e.execute("clip.effects_bypass", &json!({"clip": ids[0].0})).unwrap();
-        assert!(e.session().edit.flag(&format!("clip_fx.bypass.{}", ids[0].0)));
+        assert!(e.session().find_clip(ids[0]).unwrap().1.effects_bypass);
         e.execute("edit.copy_clip_effects", &json!({"clip": ids[0].0})).unwrap();
         assert_eq!(e.clipboard.clip_effects, vec![("eq_gain_db".to_string(), 3.0)]);
         e.execute("edit.clear_clip_effects", &json!({"clip": ids[0].0})).unwrap();
-        assert!(e.session().edit.values.is_empty());
+        assert!(e.session().find_clip(ids[0]).unwrap().1.effects.is_empty());
         e.execute("edit.paste_clip_effects", &json!({"clip": ids[0].0})).unwrap();
-        assert_eq!(e.session().edit.values.len(), 1);
+        assert_eq!(e.session().find_clip(ids[0]).unwrap().1.effects.len(), 1);
     }
 
     #[test]

@@ -230,3 +230,44 @@ fn a_locked_clip_can_be_renamed_unlocked_moved_by_insert_time_and_deleted_with_i
     run(&mut e, "track.delete", json!({"tracks": [t.0]}));
     assert!(e.session().track(t).is_none());
 }
+
+// ---- bug 5: clip effects were stored by clip id, so a split's right half and copies lost them
+
+fn effects(e: &Engine, t: TrackId) -> Vec<Option<f64>> {
+    e.session().track(t).unwrap().clips().iter().map(|c| c.live_effects().and_then(|_| c.effect("gain"))).collect()
+}
+
+#[test]
+fn a_split_and_copies_keep_the_clip_effects() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 2000, 0)]);
+    run(&mut e, "clip.effects_set", json!({"clips": [c[0].0], "params": {"gain": -6.0}}));
+    run(&mut e, "edit.separate", json!({"tracks": [t.0], "at": 1000}));
+    assert_eq!(effects(&e, t), vec![Some(-6.0), Some(-6.0)], "both halves");
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    run(&mut e, "edit.duplicate", json!({}));
+    assert_eq!(effects(&e, t), vec![Some(-6.0); 4], "the copies too");
+    let u = new_track(&mut e);
+    let first = e.session().track(t).unwrap().clips()[0].id;
+    run(&mut e, "clip.copy_to", json!({"clips": [first.0], "track": u.0}));
+    assert_eq!(effects(&e, u), vec![Some(-6.0)]);
+    run(&mut e, "clip.effects_bypass", json!({"clips": [first.0], "value": true}));
+    assert_eq!(effects(&e, t)[0], None, "bypassed: not heard");
+}
+
+#[test]
+fn sessions_with_effects_kept_by_clip_id_load_them_onto_the_clips() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 2000, 0), (3000, 500, 0)]);
+    let mut s = e.session().clone();
+    s.edit.values.insert(format!("clip_fx.{}.gain", c[0].0), -3.0);
+    s.edit.values.insert(format!("clip_fx.{}.eq.hpf_on", c[1].0), 1.0);
+    s.edit.values.insert("clip_fx.999999.gain".into(), 1.0);
+    s.edit.values.insert("other.value".into(), 2.0);
+    s.edit.set_flag(&format!("clip_fx.bypass.{}", c[1].0), true);
+    s.sanitize();
+    let got: Vec<_> = s.track(t).unwrap().clips().iter().map(|c| (c.effects.clone(), c.effects_bypass)).collect();
+    assert_eq!(got, vec![(vec![("gain".into(), -3.0)], false), (vec![("eq.hpf_on".into(), 1.0)], true)]);
+    assert!(!s.edit.values.keys().chain(s.edit.flags.iter()).any(|k| k.starts_with("clip_fx.")), "the old keys are gone");
+    assert_eq!(s.edit.values.get("other.value"), Some(&2.0));
+}

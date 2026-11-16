@@ -291,6 +291,7 @@ fn locked_material(c: &Clip) -> impl PartialEq + '_ {
     (
         (c.length, &c.content, c.gain_db.to_bits(), &c.gain_env, c.gain_bypass),
         (c.fade_in, c.fade_out, c.muted, c.stretch.to_bits(), c.source_channel, &c.warp, c.sync_point),
+        (&c.effects, c.effects_bypass),
     )
 }
 

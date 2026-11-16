@@ -22,7 +22,6 @@ struct Analysed {
     rate: SampleRate,
     clips: Vec<Clip>,
     audio: Vec<Weak<SourceAudio>>,
-    fx: Vec<(String, f64)>,
     hits: Vec<Samples>,
 }
 
@@ -144,19 +143,11 @@ fn analysed(s: &Session, t: TrackId, around: Range) -> Vec<Samples> {
         .iter()
         .filter_map(|c| if let ClipContent::Audio { source, .. } = c.content { s.pool.get(source).map(Arc::downgrade) } else { None })
         .collect();
-    let fx: Vec<(String, f64)> = clips
-        .iter()
-        .flat_map(|c| {
-            let pre = format!("clip_fx.{}.", c.id.0);
-            s.edit.values.range(pre.clone()..).take_while(move |(k, _)| k.starts_with(&pre)).map(|(k, v)| (k.clone(), *v))
-        })
-        .collect();
     let same = |a: &Analysed| {
         a.track == t
             && a.around == around
             && a.rate == s.sample_rate
             && a.clips == clips
-            && a.fx == fx
             && a.audio.len() == audio.len()
             && a.audio.iter().zip(&audio).all(|(x, y)| x.ptr_eq(y))
     };
@@ -168,7 +159,7 @@ fn analysed(s: &Session, t: TrackId, around: Range) -> Vec<Samples> {
     if kept.len() >= CACHE_LIMIT {
         kept.remove(0);
     }
-    kept.push(Analysed { track: t, around, rate: s.sample_rate, clips, audio, fx, hits: hits.clone() });
+    kept.push(Analysed { track: t, around, rate: s.sample_rate, clips, audio, hits: hits.clone() });
     hits
 }
 

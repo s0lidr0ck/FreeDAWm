@@ -38,7 +38,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups are not honoured; no clip transpose; clip effects are lost on a split |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups are not honoured; no clip transpose |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
@@ -141,7 +141,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
 | Reverse a clip without a new file | ○ | ● | ● | ◐ | **Missing**: offline only |
-| Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), but lost on split or copy (bug 5) and allocated on the audio thread (bug 13) |
+| Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made when the session changes, not when a clip first plays (bug 13, partly) |
 | Sync point | ● | ● | ● | ● | **Works** |
 | Clip notes | ○ | ● | ● | ● | **Missing** |
 
@@ -269,7 +269,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 2 | **Fixed.** Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy placed clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cut the first off. They now place their clips together (`edit::put_clips`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`paste`, `put_clips`); `engine/src/cmd/clip.rs` (`loop_clips`); `engine/src/cmd/clip_more.rs` (`copy_to`) |
 | 3 | **Fixed.** Trimming or splitting a stretched clip advanced the file position by timeline samples, not source samples, so the remaining piece played from the wrong place. `Clip::trim_start_to` now moves the offset by `source_span` (timeline ÷ ratio, as playback reads it), and the Trim tool, Trim to File, Trim to Fill and crossfade handles measure the file at the clip's ratio. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs` (`trim_start_to`, `source_span`, `timeline_span`); `engine/src/edit.rs` (`trim_clip`, `create_fades`) |
 | 4 | **Fixed.** An edit-locked clip could still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped. One check after every command (`edit::locked_edit_refused`, next to the frozen-track check in `Engine::execute`) refuses and undoes any command that changed or removed a clip it left edit-locked; renaming, colouring, unlocking, deleting the track or playlist, and Insert/Cut Time moving it are allowed. Recording does not run through commands and still overwrites. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`locked_edit_refused`); `engine/src/lib.rs` (`execute`) |
-| 5 | Per-clip effects are stored under the clip's id, so a split's right half and every copy play without them | `engine/src/cmd/clip_more.rs:194`; `mix/src/lib.rs:2882` |
+| 5 | **Fixed.** Per-clip effects were stored under the clip's id (`clip_fx.<clip>.*` edit values), so a split's right half and every copy played without them. They are now carried on the clip (`Clip::effects`, `Clip::effects_bypass`), which the mixer reads; older sessions are moved over on load (`Session::sanitize`). Edit Lock protects them too. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs`; `model/src/session.rs` (`migrate_clip_effects`); `mix/src/lib.rs` (`clip_fx_params`) |
 | 6 | Heal joins two pieces when only their clip gain matches; the second piece's gain line, mute, stretch and channel are dropped | `engine/src/edit.rs:432-455` |
 | 7 | Insert Time and Cut Time move the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures | `engine/src/cmd/event.rs:244-293` |
 | 8 | Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end | `engine/src/cmd/event_more.rs:702, 723` |
@@ -277,7 +277,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 10 | Commit / Bounce copies volume, output and sends to the new track but not pan or automation, then hides the original | `engine/src/io.rs:1191-1202` |
 | 11 | Strip Silence treats muted clips as silence and deletes them | `engine/src/io.rs:979-992` |
 | 12 | Conform to Tempo sets a varispeed ratio, so pitch changes even on a pitch-preserving (Elastic) track | `engine/src/cmd/clip_more.rs:255-260` |
-| 13 | The first time a clip with effects plays, its buffer and processors are created on the audio thread | `mix/src/lib.rs:2570-2577, 2937-2941` |
+| 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
 | 14 | Send to Back / Bring to Front reorder the playlist without re-sorting; code that assumes time order can misbehave until the next edit | `engine/src/cmd/clip.rs:305-315` |
 | 15 | Dragging a folder track moves the folder without its members | `ui-egui/src/edit_window.rs:1301` |
 | 16 | Nudge with a partial selection moves whole clips; clips nudged past zero are each clamped, closing the gaps between them | `engine/src/cmd/edit.rs:907-921`; `engine/src/edit.rs:481` |
@@ -342,3 +342,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 2 fixed: pasted, duplicated, repeated, looped and copied crossfaded pairs keep their crossfade |
 | 2026-11-16 | minor | Bug 3 fixed: trimming or splitting a stretched clip keeps each piece on its audio |
 | 2026-11-16 | minor | Bug 4 fixed: edits that would change an edit-locked clip are refused |
+| 2026-11-16 | minor | Bug 5 fixed: clip effects live on the clip, so splits and copies keep them. Bug 13 partly: clip effects are made at sync, not in render |

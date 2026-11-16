@@ -654,6 +654,29 @@ impl Session {
         Ok(s)
     }
 
+    /// Clip Effects used to be kept as `clip_fx.<clip>.<key>` edit values and a
+    /// `clip_fx.bypass.<clip>` flag, which a split's pieces and copies (new ids) lost; they now
+    /// live on the clip ([`Clip::effects`]). Moves them there; those of clips that are gone go.
+    fn migrate_clip_effects(&mut self) {
+        const PRE: &str = "clip_fx.";
+        if !self.edit.values.keys().chain(self.edit.flags.iter()).any(|k| k.starts_with(PRE)) {
+            return;
+        }
+        let (fx, rest): (std::collections::BTreeMap<String, f64>, _) =
+            std::mem::take(&mut self.edit.values).into_iter().partition(|(k, _)| k.starts_with(PRE));
+        self.edit.values = rest;
+        let bypassed: std::collections::BTreeSet<u64> =
+            self.edit.flags.iter().filter_map(|k| k.strip_prefix("clip_fx.bypass.")).filter_map(|id| id.parse().ok()).collect();
+        self.edit.flags.retain(|k| !k.starts_with(PRE));
+        for c in self.tracks.iter_mut().flat_map(|t| t.playlists.iter_mut()).flat_map(|p| p.clips.iter_mut()) {
+            let pre = format!("{PRE}{}.", c.id.0);
+            for (k, v) in fx.range(pre.clone()..).take_while(|(k, _)| k.starts_with(&pre)) {
+                c.set_effect(k.get(pre.len()..).unwrap_or(""), *v);
+            }
+            c.effects_bypass |= bypassed.contains(&c.id.0);
+        }
+    }
+
     /// Repair invariants after loading untrusted data.
     pub fn sanitize(&mut self) {
         let max_id = self
@@ -723,6 +746,7 @@ impl Session {
                 l.points.sort_by_key(|p| p.at);
             }
         }
+        self.migrate_clip_effects();
         for m in &mut self.markers {
             bound(&mut m.start);
             bound(&mut m.end);
