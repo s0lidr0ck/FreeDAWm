@@ -87,19 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false, dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo)}", always, bounce),
         cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo}", has_tracks, |e, p| {
-            let dir = str_param(p, "dir").ok_or_else(|| bad("file.bounce_stems", "`dir` required"))?.to_string();
-            let r = range_param(e, "file.bounce_stems", p)?;
-            let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
-            let format = format_param("file.bounce_stems", str_param(p, "format").unwrap_or("wav"))?;
-            let opts = soundcraft_audio_io::EncodeOptions {
-                format,
-                bit_depth: bit_depth_param(p),
-                dither: true,
-                bwf: None,
-                bitrate_kbps: bitrate_param("file.bounce_stems", p, format)?,
-            };
-            let fold = fold_down_param(p, "file.bounce_stems")?;
-            let files = crate::io::bounce_stems_with(e, &dir, r, &opts, fold)?;
+            let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
         }),
         cmd!(noundo "file.export_midi", "MIDI...", ["File", "Export"], None, "{path, tracks?}", always, |e, p| {
@@ -365,6 +353,24 @@ fn bitrate_param(id: &str, p: &Value, format: soundcraft_audio_io::FileFormat) -
 }
 
 /// The bounce `file.bounce_mix` runs for `p`, not rendered yet.
+/// The export `file.bounce_stems` runs for `p`, as a job a host steps behind a progress window
+/// ([`crate::io::StemsJob`]); the command itself runs it to the end.
+pub fn stems_job(e: &Engine, p: &Value) -> Result<crate::io::StemsJob> {
+    let dir = str_param(p, "dir").ok_or_else(|| bad("file.bounce_stems", "`dir` required"))?.to_string();
+    let r = range_param(e, "file.bounce_stems", p)?;
+    let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
+    let format = format_param("file.bounce_stems", str_param(p, "format").unwrap_or("wav"))?;
+    let opts = soundcraft_audio_io::EncodeOptions {
+        format,
+        bit_depth: bit_depth_param(p),
+        dither: true,
+        bwf: None,
+        bitrate_kbps: bitrate_param("file.bounce_stems", p, format)?,
+    };
+    let fold = fold_down_param(p, "file.bounce_stems")?;
+    crate::io::StemsJob::new(e, &dir, r, &opts, fold)
+}
+
 pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.bounce_mix", "`path` required"))?.to_string();
     // The range given; else the loop when there is one; else the whole session. The edit

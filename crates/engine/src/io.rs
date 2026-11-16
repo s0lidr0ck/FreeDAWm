@@ -914,29 +914,101 @@ pub fn bounce_stems(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions) -> Re
 
 /// [`bounce_stems`] in the main format, or folded down to stereo when `fold_stereo`.
 pub fn bounce_stems_with(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, fold_stereo: bool) -> Result<Vec<String>> {
-    let s = e.session();
-    if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
-        return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
-    }
-    make_dir(dir)?;
-    let ext = soundcraft_audio_io::encode_extension(opts.format);
-    let mut out = Vec::new();
-    let stems: Vec<(TrackId, String)> = s
-        .tracks
-        .iter()
-        .filter(|t| matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute)
-        .map(|t| (t.id, t.name.clone()))
-        .collect();
-    for (id, name) in stems {
-        let mut solo = s.clone();
-        for t in &mut solo.tracks {
-            t.mixer.solo = t.id == id;
+    StemsJob::new(e, dir, r, opts, fold_stereo)?.run()
+}
+
+/// Export › Stems as a job a host steps a slice at a time ([`StemsJob::step`]), with progress, so
+/// its window keeps drawing and the export can be cancelled (dropping the job stops it; the file
+/// being written is left unfinished as its `.part`). One file per unmuted audio, instrument or
+/// MIDI track, each its track soloed through the master.
+pub struct StemsJob {
+    /// The stems still to render: the file and the session with its track soloed.
+    todo: std::collections::VecDeque<(PathBuf, Arc<Session>)>,
+    total: usize,
+    current: Option<Bounce>,
+    done: Vec<String>,
+    range: Range,
+    opts: EncodeOptions,
+    fold: bool,
+    band: Arc<soundcraft_band::library::LibraryData>,
+}
+
+impl StemsJob {
+    /// Checks the range and makes the folder; renders nothing yet.
+    pub fn new(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, fold_stereo: bool) -> Result<StemsJob> {
+        let s = e.session();
+        if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
+            return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
         }
-        let path = Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&name)));
-        Bounce::new(Arc::new(solo), &path, r, opts, None, false, fold_stereo)?.with_band(e.band_library()).run()?;
-        out.push(path.to_string_lossy().into_owned());
+        make_dir(dir)?;
+        let ext = soundcraft_audio_io::encode_extension(opts.format);
+        let todo: std::collections::VecDeque<(PathBuf, Arc<Session>)> = s
+            .tracks
+            .iter()
+            .filter(|t| matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute)
+            .map(|t| {
+                let mut solo = s.clone();
+                for x in &mut solo.tracks {
+                    x.mixer.solo = x.id == t.id;
+                }
+                (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo))
+            })
+            .collect();
+        Ok(StemsJob {
+            total: todo.len(),
+            todo,
+            current: None,
+            done: Vec::new(),
+            range: r,
+            opts: opts.clone(),
+            fold: fold_stereo,
+            band: e.band_library(),
+        })
     }
-    Ok(out)
+
+    /// How many stems, and how far along the whole export is (0 to 1).
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    pub fn progress(&self) -> f32 {
+        let cur = self.current.as_ref().map_or(0.0, Bounce::progress);
+        ((self.done.len() as f32 + cur) / self.total.max(1) as f32).min(1.0)
+    }
+
+    /// The file being written now.
+    pub fn current(&self) -> Option<&Path> {
+        self.current.as_ref().map(Bounce::path)
+    }
+
+    /// Renders until `more` returns false (at least one block). Returns every file written once
+    /// the last stem is complete.
+    pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<Option<Vec<String>>> {
+        loop {
+            if self.current.is_none() {
+                let Some((path, session)) = self.todo.pop_front() else { return Ok(Some(std::mem::take(&mut self.done))) };
+                self.current = Some(Bounce::new(session, &path, self.range, &self.opts, None, false, self.fold)?.with_band(Arc::clone(&self.band)));
+            }
+            let Some(b) = self.current.as_mut() else { continue };
+            let finished = b.step(&mut more)?.is_some();
+            if finished {
+                if let Some(b) = self.current.take() {
+                    self.done.push(b.path().to_string_lossy().into_owned());
+                }
+                continue;
+            }
+            return Ok(None);
+        }
+    }
+
+    /// Renders every stem.
+    pub fn run(mut self) -> Result<Vec<String>> {
+        loop {
+            if let Some(files) = self.step(|| true)? {
+                return Ok(files);
+            }
+        }
+    }
 }
 
 /// Limit a range used for rendering to the track's material (plus a second), so a huge

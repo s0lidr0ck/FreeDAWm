@@ -926,6 +926,8 @@ pub struct SoundApp {
     pub video: video_track::VideoPool,
     /// The Bounce Mix in progress, rendered a slice per frame.
     pub bounce: Option<soundcraft_engine::io::Bounce>,
+    /// Export › Stems in progress, rendered a slice per frame (see [`bounce::start_stems`]).
+    pub stems: Option<soundcraft_engine::io::StemsJob>,
     /// The Freeze / Commit / Bounce render running (see [`render`]).
     pub(crate) track_render: Option<soundcraft_engine::render_job::RenderJob>,
     /// Edit › Split into Files copying behind its progress window (see [`split_progress`]).
@@ -1081,6 +1083,7 @@ impl SoundApp {
             last_meter_poll: f64::NEG_INFINITY,
             video: video_track::VideoPool::default(),
             bounce: None,
+            stems: None,
             track_render: None,
             split: None,
             lending: None,
@@ -1170,6 +1173,10 @@ impl SoundApp {
         {
             return r;
         }
+        // Export › Stems from the menu renders behind a progress window, a slice per frame.
+        if id == "file.bounce_stems" && open_behind_window {
+            return bounce::start_stems(self, &params);
+        }
         // Split into Files from the menu copies its pieces behind a progress window first.
         if id == soundcraft_engine::split_files::ID
             && open_behind_window
@@ -1201,7 +1208,7 @@ impl SoundApp {
     /// A render (Bounce Mix, Freeze, Commit) is running: the transport cannot start, and the
     /// audio device cannot change ([`SoundApp::apply_audio_config`], [`SoundApp::reconnect_audio`]).
     pub fn rendering(&self) -> bool {
-        self.bounce.is_some() || self.track_render.is_some()
+        self.bounce.is_some() || self.stems.is_some() || self.track_render.is_some()
     }
 
     /// The second half of [`SoundApp::run`]: the command itself and what the UI does after it.

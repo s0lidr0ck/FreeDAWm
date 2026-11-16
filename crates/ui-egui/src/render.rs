@@ -31,6 +31,7 @@ pub fn blocked(id: &str) -> bool {
             | "track.commit"
             | "track.bounce"
             | "file.bounce_mix"
+            | "file.bounce_stems"
             | "session.new"
             | "session.open"
             | "session.close"

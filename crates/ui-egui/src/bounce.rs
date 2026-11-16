@@ -28,9 +28,51 @@ pub fn start(app: &mut SoundApp, params: &Value) {
     }
 }
 
+/// Starts Export › Stems (`file.bounce_stems` for `params`) behind a progress window: the
+/// transport stops and [`step`] renders it a slice per frame, so the window keeps drawing and
+/// Cancel works. It renders through instances of its own (a stem solos one track).
+pub fn start_stems(app: &mut SoundApp, params: &Value) -> Result<Value, String> {
+    if app.rendering() {
+        app.ui.status = "A render is already running".into();
+        return Err(app.ui.status.clone());
+    }
+    if crate::open_progress::refuses(app) {
+        return Err(app.ui.status.clone());
+    }
+    app.stop_play();
+    app.capture_plugin_states();
+    match soundcraft_engine::cmd::stems_job(&app.engine, params) {
+        Ok(job) => {
+            let n = job.total();
+            app.stems = Some(job);
+            app.ui.status = crate::render::RENDERING.into();
+            Ok(serde_json::json!({"stems": n, "rendering": true}))
+        }
+        Err(e) => {
+            app.ui.status = e.to_string();
+            Err(app.ui.status.clone())
+        }
+    }
+}
+
+/// Renders the running stems export for a moment (see [`step`]).
+fn step_stems(app: &mut SoundApp, ctx: &egui::Context) {
+    let Some(job) = &mut app.stems else { return };
+    app.ui.status = match job.step(slice()) {
+        Ok(None) => {
+            ctx.request_repaint();
+            return;
+        }
+        Ok(Some(files)) => format!("Exported {} stem(s)", files.len()),
+        Err(e) => e.to_string(),
+    };
+    app.stems = None;
+}
+
 /// Renders the running bounce for a moment. Called from `logic`, which eframe keeps calling while
 /// the window is hidden as long as a repaint is requested, so a bounce doesn't pause then.
 pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
+    step_stems(app, ctx);
     if app.bounce.is_none() || !crate::render::instances_ready(app, ctx) {
         return;
     }
@@ -77,8 +119,31 @@ pub(crate) fn slice() -> impl FnMut() -> bool {
     }
 }
 
+/// Shows how far the running stems export got, with Cancel (or Esc).
+fn show_stems(app: &mut SoundApp, ctx: &egui::Context) {
+    let Some(job) = &app.stems else { return };
+    let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    egui::Modal::new(egui::Id::new("stems_progress")).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        ui.set_width(320.0);
+        let name = job.current().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        ui.label(egui::RichText::new(format!("Exporting {} stems", job.total())).font(bold(13.0)));
+        ui.label(egui::RichText::new(name).color(Tokens::current().text_dim));
+        ui.add(egui::ProgressBar::new(job.progress()));
+        ui.horizontal(|ui| {
+            cancel |= ui.button("Cancel").clicked();
+            ui.label(egui::RichText::new(format!("{:.0}%", job.progress() * 100.0)).color(Tokens::current().text_dim));
+        });
+    });
+    if cancel {
+        app.stems = None;
+        app.ui.status = "Stems export cancelled".into();
+    }
+}
+
 /// Shows how far the running bounce got, with Cancel (or Esc).
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+    show_stems(app, ctx);
     let Some(job) = &app.bounce else { return };
     let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     egui::Modal::new(egui::Id::new("bounce_progress")).show(ctx, |ui| {

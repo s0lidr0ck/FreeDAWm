@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 9 fixed: loudness is weighted by speaker for every layout) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 10 fixed: stems export behind a progress window with Cancel) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
 | F. Automation | All modes write; trim lane; wide editing set | **Large**: block-rate, not delay-compensated, faders do not follow, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed | **Large**: one scale; post-fader only |
-| H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata, stems freeze the window |
+| H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
 
@@ -194,7 +194,7 @@ scale** (meters no longer miss a peak).
 | Tags and broadcast metadata in the file | ● | ● | ● | ● | **Missing** |
 | Add the bounce back to the session | ● | ● | ● | ● | **Missing** |
 | Several formats in one pass | ● | ◐ | ● | ● | **Missing** |
-| Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Partial**: every unmuted track, always through the master; it runs in the window's own thread with no progress or cancel |
+| Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Partial**: every unmuted track, always through the master, behind a progress window with Cancel |
 | Commit, freeze, bounce in place | ● | ● | ● | ● | **Works**: commit keeps the format, the pan and the fader automation |
 | AAF or OMF | ● | ● | ● | ● | **Missing** |
 | DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
@@ -245,7 +245,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 7 | **Fixed:** paste and duplicate dropped curves and left the old points under the new; a copy now carries its curves and its edges (`AutomationLane::slice`), and a paste replaces what was under it with anchors either side (`paste_slice`); Paste Automation Points replaces the points between the first and the last. A copy that starts or ends inside a bent segment keeps that segment's bend, which only approximates its cut-off part | `edit.paste`, `edit.duplicate`, `automation.paste` |
 | 8 | **Fixed:** Commit put a surround track on a stereo track and dropped pan and automation; the committed track now has the source's format, pan, surround panner, mute, VCA and fader, pan, mute and send automation (the trim and the modules' lanes are in the audio) | `commit_track` in `crates/engine/src/io.rs` |
 | 9 | **Fixed:** loudness weighted any 6-channel bounce as 5.1 and every wider one flat; each channel is now weighted by its speaker as BS.1770-4 says (`ChannelFormat::loudness_weights`: 0 for the LFE, 1.41 for speakers between 60° and 120°) | `LoudnessMeter::new` in `crates/dsp/src/meter.rs` |
-| 10 | Export › Stems runs in the window's thread without stopping playback, with no progress or cancel | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
+| 10 | **Fixed:** Export › Stems ran in the window's thread with no progress or cancel; from the menu it now stops the transport and renders behind a progress window a slice per frame, with Cancel (`StemsJob`, `bounce::start_stems`); agents and the CLI still run it to the end | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
 | 11 | The bounce dialog offers FLAC at 32-bit float and beyond 8 channels, which the writer refuses | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
 | 12 | The output meter includes the click | master stage of `MixEngine::render` |
 | 13 | Loading a track preset keeps the old plug-in automation, which can drive the new modules | `track.load_preset` in `crates/engine/src/cmd/track_more.rs` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 10 fixed: stems export behind a progress window with Cancel |
 | 2026-11-16 | minor | bug 9 fixed: loudness is weighted by speaker for every layout |
 | 2026-11-16 | minor | bug 8 fixed: commit keeps the format, pan and automation |
 | 2026-11-16 | minor | bug 7 fixed: paste and duplicate keep curves and replace the old points |
