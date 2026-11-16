@@ -15,7 +15,7 @@ rules, and how commands, menus and tests fit together all apply to agents too. T
   (UI-only ones in `crates/ui-egui/src/menus.rs`); the menu bar as shown is
   `crates/ui-egui/src/menubar.txt`.
 - **Assets:** original or permissively licensed only, each with an `ATTRIBUTION.md` row in the same
-  commit. Never copy resources out of another product.
+  commit.
 - **Names:** the crates keep their `soundcraft-*` names; the programs, settings folders and
   `FREEDAWM_*` environment variables are FreeDAWm's.
 - **Look at UI changes:** `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png [script.jsonl]`

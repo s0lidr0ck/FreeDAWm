@@ -7,7 +7,9 @@
 //! - `Chains/<name>.json`: plug-in chains (`track.save_chain`);
 //! - `Track Presets/<name>.json`: whole channel strips (`track.save_preset`);
 //! - `Juke Presets/<name>.json`: Juke kits with their sounds (`mix.kit_preset_save`);
-//! - `Templates/<name>.fdawm`: session templates (`session.save_template`).
+//! - `Templates/<name>.fdawm`: session templates (`session.save_template`);
+//! - `Monitor Profiles/Hearing|Devices/<name>.json`: the monitor stage's hearing profiles and
+//!   simulated outputs (`monitor_ui`).
 //!
 //! A preset that plays audio keeps it in `<name>_samples/` beside its file, so the folder can be
 //! copied or synced whole. The desktop app sets [`UserDirs`]; the web build has none, and the

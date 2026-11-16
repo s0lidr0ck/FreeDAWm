@@ -15,6 +15,7 @@ mod lyrics;
 mod markers;
 pub mod migrate;
 mod mixer;
+pub mod monitor;
 mod notes;
 mod scout;
 mod session;

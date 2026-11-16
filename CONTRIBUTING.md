@@ -55,8 +55,7 @@ One topic per pull request, with tests for the behaviour you add or fix.
 
 **Assets.** Every bundled image, icon, sound, font or preset must be original, public domain or
 under a permissive licence, and gets a row in [`ATTRIBUTION.md`](ATTRIBUTION.md) (path, author,
-source, licence) in the same commit; `cargo xtask assets` enforces it. Never copy resources out of
-another product (icons, artwork, presets, sounds, text). No GPL/AGPL/LGPL code.
+source, licence) in the same commit; `cargo xtask assets` enforces it. No GPL/AGPL/LGPL code.
 
 **Trademarks.** Other products are named only to describe compatibility or comparison, as
 [`NOTICE`](NOTICE) explains. Modes and presets named after hardware carry a credit line

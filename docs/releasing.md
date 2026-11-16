@@ -42,6 +42,10 @@ User-facing names say **FreeDAWm**. Files, binaries and ids stay lowercase
    is not on `main`, and a tag that is already published.
 
 Once a version is published the workflow refuses to touch it again, so bump the version first.
+
+If no macOS runner picks the macOS job up (GitHub cancels it unstarted), the release is still
+made from the Linux and Windows packages, and its Downloads section says it has no macOS package.
+A macOS build that ran and failed holds the release back as before.
 Pull requests that change `packaging/`, the app icons or `release.yml` run the build and packaging
 jobs as a check, without making a release.
 

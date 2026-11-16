@@ -516,6 +516,10 @@ Options > Loop Playback
 Options > Loop Record
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
+Options > Monitoring > Ear Correction = @monitor.ear
+Options > Monitoring > Simulated Output = @monitor.sim
+Options > Monitoring > Hearing Test... = @window.hearing_test
+Options > Monitoring > Ear Profile... = @window.ear_profile
 Options > Video Track Online
 Options > ---
 Options > ## Following & linking
