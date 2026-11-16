@@ -16,10 +16,40 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             new_track
         ),
-        cmd!("track.group", "Group...", ["Track"], Some("Cmd+G"), "{name?, tracks?, edit?: true, mix?: true}", has_selection, group),
+        cmd!(
+            "track.group",
+            "Group...",
+            ["Track"],
+            Some("Cmd+G"),
+            "{name?, tracks?, edit?: true, mix?: true, attributes?: [volume|mute|solo|record|pan|sends|automation] (default: the first four)}",
+            has_selection,
+            group
+        ),
+        cmd!(
+            "track.suspend_groups",
+            "Suspend All Groups",
+            ["Track"],
+            None,
+            "{value?: bool} — every group stops linking (toggles when omitted)",
+            always,
+            |e, p| {
+                let flag = super::mix::GROUPS_SUSPENDED;
+                let v = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !e.session().edit.flag(flag));
+                e.session_mut().edit.set_flag(flag, v);
+                Ok(json!({"value": v}))
+            }
+        ),
         cmd!("track.ungroup", "Delete Group", [], None, "{group: id|name}", always, delete_group),
         cmd!("track.group_toggle", "Toggle Group Active", [], None, "{group: id|name}", always, toggle_group),
-        cmd!("track.group_modify", "Modify Group", [], None, "{group: id|name, name?, tracks?, edit?, mix?}", always, modify_group),
+        cmd!(
+            "track.group_modify",
+            "Modify Group",
+            [],
+            None,
+            "{group: id|name, name?, tracks?, edit?, mix?, attributes?: [volume|mute|solo|record|pan|sends|automation]}",
+            always,
+            modify_group
+        ),
         cmd!(
             "track.duplicate",
             "Duplicate...",
@@ -324,6 +354,8 @@ fn group(e: &mut Engine, p: &Value) -> Result<Value> {
     let letter = (b'a'..=b'z').map(char::from).find(|c| !s.groups.iter().any(|g| g.letter == *c)).unwrap_or('z');
     let name = str_param(p, "name").map_or_else(|| format!("Group {}", s.groups.len() + 1), str::to_string);
     let color = s.next_track_color();
+    let attributes = group_attributes(p, "track.group")?.unwrap_or_else(|| vec!["volume".into(), "mute".into(), "solo".into(), "record".into()]);
+    let s = e.session_mut();
     s.groups.push(Group {
         id,
         name,
@@ -333,9 +365,27 @@ fn group(e: &mut Engine, p: &Value) -> Result<Value> {
         mix: bool_or(p, "mix", true),
         active: true,
         color,
-        attributes: vec!["volume".into(), "mute".into(), "solo".into(), "record".into()],
+        attributes,
     });
     Ok(json!({"group": id}))
+}
+
+/// A group's `attributes` param: what its members share (see [`super::mix::GROUP_ATTRIBUTES`]).
+/// `None` when not given.
+fn group_attributes(p: &Value, cmd: &str) -> Result<Option<Vec<String>>> {
+    let Some(v) = p.get("attributes") else { return Ok(None) };
+    let list = v.as_array().ok_or_else(|| bad(cmd, "`attributes` is a list"))?;
+    let mut out: Vec<String> = Vec::new();
+    for a in list {
+        let a = a.as_str().map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
+        if !super::mix::GROUP_ATTRIBUTES.contains(&a.as_str()) {
+            return Err(bad(cmd, format!("unknown attribute `{a}` (one of {})", super::mix::GROUP_ATTRIBUTES.join(", "))));
+        }
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    Ok(Some(out))
 }
 
 fn find_group(e: &Engine, p: &Value, cmd: &str) -> Result<GroupId> {
@@ -401,8 +451,12 @@ fn modify_group(e: &mut Engine, p: &Value) -> Result<Value> {
             Some(n)
         }
     };
+    let attributes = group_attributes(p, CMD)?;
     let s = e.session_mut();
     let Some(gr) = s.groups.iter_mut().find(|x| x.id == g) else { return Err(bad(CMD, "unknown `group`")) };
+    if let Some(a) = attributes {
+        gr.attributes = a;
+    }
     if let Some(n) = name {
         gr.name = n;
     }
@@ -411,7 +465,7 @@ fn modify_group(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     gr.edit = bool_or(p, "edit", gr.edit);
     gr.mix = bool_or(p, "mix", gr.mix);
-    Ok(json!({"group": g, "name": gr.name, "tracks": gr.members, "edit": gr.edit, "mix": gr.mix}))
+    Ok(json!({"group": g, "name": gr.name, "tracks": gr.members, "edit": gr.edit, "mix": gr.mix, "attributes": gr.attributes}))
 }
 
 fn duplicate(e: &mut Engine, p: &Value) -> Result<Value> {

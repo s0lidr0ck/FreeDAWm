@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: fader-section automation sample-accurate and delay-compensated) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: group attributes and Suspend All Groups) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -34,7 +34,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Panning | Four pan laws, dual pan for stereo | Medium: no balance or width |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
-| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
+| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated | **Large**: plug-in values block-rate, faders do not follow, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader | **Large**: one scale, no RMS |
 | H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata |
@@ -109,8 +109,8 @@ miss a peak, and can read pre-fader).
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
-| Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Missing**: the four attributes are fixed |
-| Suspend all groups | ● | ● | ● | ● | **Missing** (one group at a time can be switched off) |
+| Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Partial**: volume, mute, solo, record, pan, sends and automation mode, by command (`track.group`, `track.group_modify` `attributes`); the Group dialog does not offer them yet; inserts are not linked |
+| Suspend all groups | ● | ● | ● | ● | **Works**: Options › More › Suspend All Groups |
 | VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned by command only, no control in the mixer; its solo solos its members |
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
@@ -274,7 +274,7 @@ one a mix engineer would not forgive.
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
 | Real-time bounce | 4–6 | |
-| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | |
+| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command) and suspend all done**; attributes in the Group dialog, VCA assignment in the mixer and nested VCAs remain |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: group attributes and Suspend All Groups |
 | 2026-11-16 | minor | tier 2: fader-section automation sample-accurate and delay-compensated |
 | 2026-11-16 | minor | tier 2: pre-fader metering |
 | 2026-11-16 | minor | tier 2: a choice of pan law |

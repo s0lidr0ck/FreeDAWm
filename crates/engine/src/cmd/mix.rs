@@ -214,9 +214,19 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// `t` plus the members of its active mix groups that share `attr`.
+/// The `s.edit` flag that suspends every group (Track › Suspend All Groups).
+pub const GROUPS_SUSPENDED: &str = "groups.suspended";
+
+/// What a mix group can link (`track.group`'s `attributes`): the first four by default.
+pub const GROUP_ATTRIBUTES: [&str; 7] = ["volume", "mute", "solo", "record", "pan", "sends", "automation"];
+
+/// `t` plus the members of its active mix groups that share `attr` (just `t` while every group
+/// is suspended).
 pub(super) fn grouped_ids(s: &Session, t: TrackId, attr: &str) -> Vec<TrackId> {
     let mut ids = vec![t];
+    if s.edit.flag(GROUPS_SUSPENDED) {
+        return ids;
+    }
     for g in &s.groups {
         if g.active && g.mix && g.members.contains(&t) && g.attributes.iter().any(|a| a == attr) {
             for m in &g.members {
@@ -308,14 +318,26 @@ fn pan(e: &mut Engine, p: &Value) -> Result<Value> {
         .clamp(-1.0, 1.0);
     let idx = i64_or(p, "index", 0).clamp(0, 1) as usize;
     let s = e.session_mut();
+    // A group linking pan moves its members by as much, keeping their offsets.
+    let mut moved: Vec<TrackId> = Vec::new();
     for t in &tracks {
-        if let Some(tr) = s.track_mut(*t)
-            && let Some(slot) = tr.mixer.pan.get_mut(idx)
-        {
-            *slot = v;
+        if moved.contains(t) {
+            continue;
+        }
+        let d = s.track(*t).and_then(|tr| tr.mixer.pan.get(idx).copied()).map_or(0.0, |cur| v - cur);
+        for id in grouped_ids(s, *t, "pan") {
+            if moved.contains(&id) {
+                continue;
+            }
+            moved.push(id);
+            if let Some(tr) = s.track_mut(id)
+                && let Some(slot) = tr.mixer.pan.get_mut(idx)
+            {
+                *slot = if id == *t { v } else { (*slot + d).clamp(-1.0, 1.0) };
+            }
         }
     }
-    for t in &tracks {
+    for t in &moved {
         e.automation_changed(*t, AutoParam::Pan(idx as u8));
     }
     Ok(json!({"pan": v}))
@@ -342,9 +364,7 @@ fn automation_mode(e: &mut Engine, p: &Value) -> Result<Value> {
     let m = str_param(p, "mode").and_then(AutomationMode::from_id).ok_or_else(|| bad("mix.automation_mode", "unknown mode"))?;
     let s = e.session_mut();
     for t in &tracks {
-        if let Some(tr) = s.track_mut(*t) {
-            tr.mixer.automation_mode = m;
-        }
+        set_grouped(s, *t, "automation", |tr| tr.mixer.automation_mode = m);
     }
     Ok(json!({"mode": m}))
 }
@@ -478,6 +498,26 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
 fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
     let (t, slot) = track_slot(e, p, "mix.send_level", SEND_SLOTS)?;
     let s = e.session_mut();
+    let before = s.track(t).and_then(|tr| tr.mixer.sends.get(slot).cloned().flatten());
+    // A group linking sends moves the same send of its members: the level by as much (offsets
+    // kept), the pan, mute and pre/post to the same.
+    if let Some(b) = &before {
+        for id in grouped_ids(s, t, "sends").into_iter().filter(|id| *id != t) {
+            let Some(o) = s.track_mut(id).and_then(|tr| tr.mixer.sends.get_mut(slot)).and_then(Option::as_mut) else { continue };
+            if let Some(db) = p.get("db").and_then(Value::as_f64) {
+                o.level_db = (o.level_db + (db as f32 - b.level_db)).clamp(-144.0, 12.0);
+            }
+            if let Some(v) = p.get("pan").and_then(Value::as_f64) {
+                o.pan = (v as f32).clamp(-1.0, 1.0);
+            }
+            if let Some(m) = p.get("mute").and_then(Value::as_bool) {
+                o.mute = m;
+            }
+            if let Some(m) = p.get("pre_fader").and_then(Value::as_bool) {
+                o.pre_fader = m;
+            }
+        }
+    }
     let sl = s
         .track_mut(t)
         .and_then(|tr| tr.mixer.sends.get_mut(slot))
@@ -1080,6 +1120,38 @@ mod tests {
 
     fn volumes(e: &Engine) -> Vec<f32> {
         [3, 6].iter().map(|id| e.session().track(TrackId(*id)).unwrap().mixer.volume_db).collect()
+    }
+
+    /// Tier 2: a group links what it is told to (pan, sends, automation mode), and Suspend All
+    /// Groups unlinks every group at once.
+    #[test]
+    fn groups_link_their_attributes_and_can_all_be_suspended() {
+        let mut e = Engine::default();
+        let ids = e.execute("track.new", &json!({"count": 2, "format": "mono"})).unwrap()["tracks"].clone();
+        let (a, b) = (TrackId(ids[0].as_u64().unwrap()), TrackId(ids[1].as_u64().unwrap()));
+        e.execute("mix.pan", &json!({"tracks": [b.0], "pan": 0.2})).unwrap();
+        e.execute("track.group", &json!({"tracks": [a.0, b.0], "attributes": ["volume", "pan", "automation", "sends"]})).unwrap();
+        let pan = |e: &Engine, t: TrackId| e.session().track(t).unwrap().mixer.pan[0];
+        e.execute("mix.pan", &json!({"tracks": [a.0], "pan": -0.5})).unwrap();
+        assert!((pan(&e, a) + 0.5).abs() < 1e-6 && (pan(&e, b) + 0.3).abs() < 1e-6, "relative: {}", pan(&e, b));
+        e.execute("mix.automation_mode", &json!({"tracks": [a.0], "mode": "latch"})).unwrap();
+        assert_eq!(e.session().track(b).unwrap().mixer.automation_mode, AutomationMode::Latch);
+        for t in [a, b] {
+            e.execute("mix.send", &json!({"tracks": [t.0], "bus": "FX", "slot": 0, "level_db": -10.0})).unwrap();
+        }
+        e.execute("mix.send_level", &json!({"track": a.0, "slot": 0, "db": -4.0})).unwrap();
+        assert_eq!(e.session().track(b).unwrap().mixer.sends[0].as_ref().unwrap().level_db, -4.0);
+        // Mute is not linked by this group.
+        e.execute("mix.mute", &json!({"tracks": [a.0], "value": true})).unwrap();
+        assert!(!e.session().track(b).unwrap().mixer.mute);
+        // Suspended, nothing links; resumed, it does again.
+        e.execute("track.suspend_groups", &json!({"value": true})).unwrap();
+        e.execute("mix.volume", &json!({"tracks": [a.0], "db": -12.0})).unwrap();
+        assert_eq!(e.session().track(b).unwrap().mixer.volume_db, 0.0);
+        e.execute("track.suspend_groups", &json!({})).unwrap();
+        e.execute("mix.volume", &json!({"tracks": [a.0], "db": -6.0})).unwrap();
+        assert_eq!(e.session().track(b).unwrap().mixer.volume_db, 6.0);
+        assert!(e.execute("track.group", &json!({"tracks": [a.0], "attributes": ["colour"]})).is_err());
     }
 
     /// Mix bug 15: an output or a send that fed a track back into itself was accepted and went
