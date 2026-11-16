@@ -326,6 +326,52 @@ impl AutomationLane {
         }
     }
 
+    /// The automation over `[start, end)` as points from `start` (a clipboard copy): the value at
+    /// `start` and at `end - 1`, and every point between, each with its segment's curve (a
+    /// boundary inside a bent segment takes that segment's bend). Empty when the lane has no
+    /// points or the range is empty: there is nothing to copy.
+    pub fn slice(&self, start: Samples, end: Samples) -> Vec<AutomationPoint> {
+        if self.points.is_empty() || end <= start {
+            return Vec::new();
+        }
+        let last = end.saturating_sub(1);
+        // The curve of the segment `at` lies in.
+        let curve_at = |at: Samples| self.points.iter().rev().find(|p| p.at <= at).map_or(0.0, |p| p.curve);
+        let mut out = vec![AutomationPoint { at: 0, value: self.value_at(start, 0.0), curve: curve_at(start) }];
+        out.extend(self.points.iter().filter(|p| p.at > start && p.at < last).map(|p| AutomationPoint { at: p.at - start, ..*p }));
+        if last > start {
+            out.push(AutomationPoint { at: last - start, value: self.value_at(last, 0.0), curve: curve_at(last) });
+        }
+        out
+    }
+
+    /// Pastes `pts` (from [`AutomationLane::slice`], times from 0) at `at` over `len` samples:
+    /// what the lane had in `[at, at + len)` goes, and anchors keep the curve outside unchanged
+    /// (the value just before `at` and at `at + len`). Pasting nothing changes nothing.
+    pub fn paste_slice(&mut self, at: Samples, len: Samples, pts: &[AutomationPoint]) {
+        if pts.is_empty() {
+            return;
+        }
+        let at = at.max(0);
+        let end = at.saturating_add(len.max(0));
+        let had = !self.points.is_empty();
+        let before = self.value_at(at.saturating_sub(1), 0.0);
+        let after = self.value_at(end, 0.0);
+        self.clear_range(at, end);
+        if had {
+            if at > 0 {
+                self.set_point(at - 1, before);
+            }
+            self.set_point(end, after);
+        }
+        for p in pts {
+            if p.at < 0 || p.at >= len.max(1) {
+                continue;
+            }
+            self.set_point_curved(at.saturating_add(p.at), p.value, Some(p.curve));
+        }
+    }
+
     /// Remove points in `[start, end)`.
     pub fn clear_range(&mut self, start: Samples, end: Samples) -> usize {
         let before = self.points.len();
@@ -418,6 +464,43 @@ mod tests {
         m.set_point(100, 1.0);
         assert_eq!(m.value_at(99, 0.0), 0.0);
         assert_eq!(m.value_at(100, 0.0), 1.0);
+    }
+
+    /// Mix bug 7: a slice keeps its curves and its edges, and pasting it replaces what was under it.
+    #[test]
+    fn a_pasted_slice_keeps_curves_and_replaces_what_was_there() {
+        let mut l = AutomationLane::new(AutoParam::Volume);
+        l.set_point_curved(0, 0.0, Some(0.5));
+        l.set_point(100, -20.0);
+        l.set_point(200, -10.0);
+        let sl = l.slice(0, 150);
+        assert_eq!(sl.first().map(|p| (p.at, p.value, p.curve)), Some((0, 0.0, 0.5)), "the curve comes along");
+        assert_eq!(sl.last().map(|p| p.at), Some(149), "an edge point at the end");
+        assert!((sl.last().unwrap().value - l.value_at(149, 0.0)).abs() < 1e-6);
+        let mut dst = AutomationLane::new(AutoParam::Volume);
+        for at in [0, 1000, 1050, 1100, 2000] {
+            dst.set_point(at, -3.0);
+        }
+        dst.paste_slice(1000, 150, &sl);
+        // The old points in the span are gone; the curve plays as copied.
+        assert!(!dst.points.iter().any(|p| p.at == 1050 || p.at == 1100 && p.value == -3.0));
+        for k in [0, 30, 60, 100, 149] {
+            assert!(
+                (dst.value_at(1000 + k, 0.0) - l.value_at(k, 0.0)).abs() < 1e-4,
+                "at {k}: {} vs {}",
+                dst.value_at(1000 + k, 0.0),
+                l.value_at(k, 0.0)
+            );
+        }
+        // Outside, the old curve is kept.
+        assert_eq!(dst.value_at(999, 0.0), -3.0);
+        assert_eq!(dst.value_at(1150, 0.0), -3.0);
+        assert_eq!(dst.value_at(1500, 0.0), -3.0);
+        // An empty lane slices to nothing, and pasting nothing changes nothing.
+        assert!(AutomationLane::new(AutoParam::Volume).slice(0, 100).is_empty());
+        let before = dst.clone();
+        dst.paste_slice(0, 100, &[]);
+        assert_eq!(dst, before);
     }
 
     #[test]

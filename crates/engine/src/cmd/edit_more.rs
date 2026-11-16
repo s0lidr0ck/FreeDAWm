@@ -307,12 +307,7 @@ fn auto_copy(e: &mut Engine, p: &Value, which: Lanes, cut: bool, id: &str) -> Re
                     .map(|l| {
                         let mut out = AutomationLane::new(l.param.clone());
                         out.enabled = l.enabled;
-                        let (_, _, def) = l.param.range();
-                        out.set_point(0, l.value_at(r.start, def));
-                        for pt in l.points.iter().filter(|pt| pt.at > r.start && pt.at < r.end) {
-                            out.set_point(pt.at - r.start, pt.value);
-                        }
-                        out.set_point(r.len() - 1, l.value_at(r.end - 1, def));
+                        out.points = l.slice(r.start, r.end);
                         out
                     })
                     .collect()
@@ -542,12 +537,10 @@ fn paste_to_current_automation(e: &mut Engine, p: &Value) -> Result<Value> {
             .as_ref()
             .and_then(|f| f.iter().find(|(x, _)| x == t).map(|(_, a)| a.clone()))
             .unwrap_or_else(|| AutoParam::parse(&tr.view).unwrap_or(AutoParam::Volume));
-        let lane = tr.lane_mut(&dst);
-        lane.clear_range(at, at.saturating_add(cb.length));
-        for pt in &src.points {
-            lane.set_point(at.saturating_add(pt.at), map_value(pt.value, &src.param, &dst));
-            written += 1;
-        }
+        let pts: Vec<_> =
+            src.points.iter().map(|pt| soundcraft_model::AutomationPoint { value: map_value(pt.value, &src.param, &dst), ..*pt }).collect();
+        tr.lane_mut(&dst).paste_slice(at, cb.length, &pts);
+        written += pts.len();
     }
     Ok(json!({"points": written}))
 }
@@ -564,10 +557,8 @@ fn duplicate_extend(e: &mut Engine, p: &Value) -> Result<Value> {
         n += ops::paste(s, *t, r.end, &clips, r.len(), sh).map_err(|why| bad(id, why))?.len();
         if follow && let Some(tr) = s.track_mut(*t) {
             for l in &mut tr.automation {
-                let pts: Vec<_> = l.points.iter().filter(|pt| r.contains(pt.at)).copied().collect();
-                for pt in pts {
-                    l.set_point(pt.at.saturating_add(r.len()), pt.value);
-                }
+                let pts = l.slice(r.start, r.end);
+                l.paste_slice(r.end, r.len(), &pts);
             }
         }
     }

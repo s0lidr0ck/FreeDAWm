@@ -284,13 +284,10 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
                 tr.automation
                     .iter()
                     .map(|l| {
-                        let mut l2 = l.clone();
-                        l2.points = l
-                            .points
-                            .iter()
-                            .filter(|p| range.contains(p.at))
-                            .map(|p| soundcraft_model::AutomationPoint { at: p.at - range.start, ..*p })
-                            .collect();
+                        let mut l2 = soundcraft_model::AutomationLane::new(l.param.clone());
+                        l2.enabled = l.enabled;
+                        // The curve as it runs through the range, its edges included.
+                        l2.points = l.slice(range.start, range.end);
                         l2
                     })
                     .collect()
@@ -445,14 +442,8 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         pasted += ops::paste(s, *t, at, clips, cb.length, sh).map_err(|why| bad("edit.paste", why))?.len();
         if follow && let (Some(lanes), Some(tr)) = (cb.automation.get(i % cb.automation.len().max(1)), s.track_mut(*t)) {
-            for l in lanes {
-                let dst = tr.lane_mut(&l.param);
-                if !l.points.is_empty() {
-                    dst.clear_range(at, at + cb.length);
-                }
-                for pt in &l.points {
-                    dst.set_point(pt.at + at, pt.value);
-                }
+            for l in lanes.iter().filter(|l| !l.points.is_empty()) {
+                tr.lane_mut(&l.param).paste_slice(at, cb.length, &l.points);
             }
         }
     }
@@ -688,10 +679,8 @@ fn duplicate(e: &mut Engine, p: &Value) -> Result<Value> {
         n += ops::paste(s, *t, range.end, &clips, range.len(), sh).map_err(|why| bad("edit.duplicate", why))?.len();
         if follow && let Some(tr) = s.track_mut(*t) {
             for l in &mut tr.automation {
-                let pts: Vec<_> = l.points.iter().filter(|p| range.contains(p.at)).copied().collect();
-                for pt in pts {
-                    l.set_point(pt.at + range.len(), pt.value);
-                }
+                let pts = l.slice(range.start, range.end);
+                l.paste_slice(range.end, range.len(), &pts);
             }
         }
     }
@@ -1217,6 +1206,44 @@ mod tests {
             let clip = e.session().find_clip(id).unwrap().1;
             assert_eq!(if side == "in" { clip.fade_in.len } else { clip.fade_out.len }, 1);
         }
+    }
+
+    /// Mix bug 7: paste and duplicate dropped automation curves and left the old points under
+    /// the new ones.
+    #[test]
+    fn paste_and_duplicate_carry_curves_and_replace_the_old_points() {
+        use soundcraft_model::AutoParam;
+        let mut e = Engine::default();
+        let t = TrackId(e.execute("track.new", &json!({"count": 1})).unwrap()["tracks"][0].as_u64().unwrap());
+        let set = |e: &mut Engine, at: i64, v: f32| {
+            e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": at, "value": v})).unwrap();
+        };
+        set(&mut e, 0, 0.0);
+        set(&mut e, 100, -20.0);
+        set(&mut e, 300, -6.0);
+        e.execute("automation.set_curve", &json!({"track": t.0, "param": "volume", "at": 0, "curve": 0.6})).unwrap();
+        for at in [1000, 1050, 1150] {
+            set(&mut e, at, 6.0);
+        }
+        let lane = |e: &Engine| e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        let src = lane(&e);
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 200})).unwrap();
+        e.execute("edit.paste", &json!({"tracks": [t.0], "at": 1000})).unwrap();
+        let l = lane(&e);
+        assert!(!l.points.iter().any(|p| p.at == 1050 || p.at == 1150), "the old points went: {:?}", l.points);
+        assert!(l.points.iter().any(|p| p.at == 1000 && p.curve == 0.6), "the curve came along: {:?}", l.points);
+        for k in [20, 50, 100, 150, 199] {
+            assert!((l.value_at(1000 + k, 0.0) - src.value_at(k, 0.0)).abs() < 1e-3, "pasted at {k}");
+        }
+        // Duplicate: the same, right after the range.
+        let before = lane(&e);
+        e.execute("edit.duplicate", &json!({"tracks": [t.0], "start": 0, "end": 200})).unwrap();
+        let l = lane(&e);
+        assert!(l.points.iter().any(|p| p.at == 200 && p.curve == 0.6), "{:?}", l.points);
+        for k in [20, 50, 100, 199] {
+            assert!((l.value_at(200 + k, 0.0) - src.value_at(k, 0.0)).abs() < 1e-3, "duplicated at {k}");
+        }
+        assert!((l.value_at(400, 0.0) - before.value_at(400, 0.0)).abs() < 1e-3, "after the copy the old curve resumes");
     }
 
     #[test]

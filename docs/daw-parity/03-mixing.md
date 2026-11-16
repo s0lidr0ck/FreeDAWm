@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 6 fixed: a held grouped fader holds its group) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 7 fixed: paste and duplicate keep curves and replace the old points) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -155,7 +155,7 @@ scale** (meters no longer miss a peak).
 | Add, move, delete, nudge points | ● | ● | ● | ● | **Works** |
 | Curved segments | ○ | ● | ● | ● | **Works**: one bend per segment |
 | Pencil shapes (line, triangle, square, random) | ● | ● | ◐ | ● | **Partial**: freehand and line |
-| Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Partial**: plain paste and duplicate lose curves and overlay the old points |
+| Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Partial**: by command; Write mode leaves 50 points a second |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
 | Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** |
@@ -242,7 +242,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 4 | **Fixed:** the trim lane played with automation Off; it now reads like every other lane | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
 | 5 | **Fixed:** a mute switched in one sample and could click; it now ramps over 5 ms (240 samples), from where the last block left it | the same place |
 | 6 | **Fixed:** group members stopped writing half a second after the dragged fader stood still; holding a grouped fader or mute now holds the group's (`with_group` in `auto_write.rs`) | `mix.volume` grouping in `crates/engine/src/cmd/mix.rs`; `auto_write.rs` |
-| 7 | Paste and duplicate drop automation curves and leave the old points under the new ones | `edit.paste`, `edit.duplicate`, `automation.paste` |
+| 7 | **Fixed:** paste and duplicate dropped curves and left the old points under the new; a copy now carries its curves and its edges (`AutomationLane::slice`), and a paste replaces what was under it with anchors either side (`paste_slice`); Paste Automation Points replaces the points between the first and the last. A copy that starts or ends inside a bent segment keeps that segment's bend, which only approximates its cut-off part | `edit.paste`, `edit.duplicate`, `automation.paste` |
 | 8 | Commit puts a surround track on a stereo track and drops pan and all automation | `commit_track` in `crates/engine/src/io.rs` |
 | 9 | Loudness is wrong for 7.1 and wider bounces | `LoudnessMeter::new` in `crates/dsp/src/meter.rs` |
 | 10 | Export › Stems runs in the window's thread without stopping playback, with no progress or cancel | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 7 fixed: paste and duplicate keep curves and replace the old points |
 | 2026-11-16 | minor | bug 6 fixed: a held grouped fader holds its group |
 | 2026-11-16 | minor | bug 5 fixed: mutes ramp instead of clicking |
 | 2026-11-16 | minor | bug 4 fixed: the trim lane is silent with automation Off |
