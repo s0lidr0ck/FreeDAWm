@@ -934,6 +934,35 @@ pub fn grid_delta(s: &Session, clip: &Clip, raw: Samples, relative: bool) -> Sam
     g.snap(from.saturating_add(raw), sr, map, rate).saturating_sub(from)
 }
 
+/// How far quantizing moves `clip` (its sync point, else its start) towards the grid:
+/// `strength` 0..1 of the way to the nearest line, with `swing` 0..1 delaying every second line
+/// of a note grid (counted from the bar) by up to a third of a step, as MIDI quantize does.
+pub fn quantize_delta(s: &Session, clip: &Clip, strength: f64, swing: f64) -> Samples {
+    let (g, sr, map) = (&s.edit.grid, s.sample_rate, &s.tempo);
+    let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 1.0 };
+    let swing = if swing.is_finite() { swing.clamp(0.0, 1.0) } else { 0.0 };
+    let full = match *g {
+        soundcraft_time::GridValue::Note { value, dotted, triplet } if swing > 0.0 => {
+            let sync = if (0..clip.length).contains(&clip.sync_point) { clip.sync_point } else { 0 };
+            let anchor = clip.start.saturating_add(sync);
+            let t = map.samples_to_ticks_f(anchor, sr);
+            if !t.is_finite() {
+                return 0;
+            }
+            let bar_tick = map.bar_start_tick(map.bar_beat_at_tick(t.floor() as i64).bar);
+            let step = soundcraft_time::GridValue::note_ticks(value, dotted, triplet, map, bar_tick).max(1);
+            let off = swing * step as f64 / 3.0;
+            let k0 = ((t - bar_tick as f64) / step as f64).floor() as i64;
+            let line = |k: i64| bar_tick as f64 + (k * step) as f64 + if k.rem_euclid(2) == 1 { off } else { 0.0 };
+            let best = (k0 - 1..=k0 + 2).map(line).min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs())).unwrap_or(t);
+            let target = map.tick_to_samples(best.round() as i64, sr);
+            target.saturating_sub(anchor)
+        }
+        _ => grid_delta(s, clip, 0, false),
+    };
+    soundcraft_time::to_samples(full as f64 * strength)
+}
+
 /// Trim a clip's edges to `start` and/or `end` like the Trim tool, never past its file. In
 /// Shuffle mode the start stays put (the material slides under it) and later clips follow the
 /// change, up to a locked clip; otherwise a trim stops at the neighbouring clips.

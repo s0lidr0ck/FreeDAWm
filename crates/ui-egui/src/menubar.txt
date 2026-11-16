@@ -406,6 +406,7 @@ Clip > Clip Effects > Render
 Clip > ---
 Clip > ## Timing & pitch
 Clip > Quantize to Grid
+Clip > Quantize Audio... = @ui.quantize_audio
 Clip > Conform to Tempo
 Clip > Identify Sync Point
 Clip > Elastic Properties

@@ -164,6 +164,11 @@ pub enum Dialog {
     /// Event › More MIDI › Change Velocity…: the selected notes in the MIDI Editor, else the
     /// selected MIDI clips.
     ChangeVelocity(VelocityDialog),
+    /// Clip › Quantize Audio…: how far towards the grid, and the swing.
+    QuantizeAudio {
+        strength: f64,
+        swing: f64,
+    },
     StripSilence {
         threshold: f64,
         min_ms: f64,
@@ -300,6 +305,7 @@ impl Dialogs {
             Dialog::Spot(_) => "spot",
             Dialog::Fades { .. } => "fades",
             Dialog::StripSilence { .. } => "strip_silence",
+            Dialog::QuantizeAudio { .. } => "quantize_audio",
             Dialog::ChangeVelocity(_) => "change_velocity",
             Dialog::Group { id: None, .. } => "group",
             Dialog::Group { id: Some(_), .. } => "modify_group",
@@ -709,6 +715,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::Spot(_) => "Spot",
         Dialog::Fades { .. } => "Fades",
         Dialog::StripSilence { .. } => "Strip Silence",
+        Dialog::QuantizeAudio { .. } => "Quantize Audio",
         Dialog::ChangeVelocity(_) => "Change Velocity",
         Dialog::Group { id: None, .. } => "Create Group",
         Dialog::Group { id: Some(_), .. } => "Modify Group",
@@ -1093,6 +1100,14 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     velocity_fields(ui, d);
                     if buttons(ui, "OK", enter) {
                         action = Some(velocity_action(app, d));
+                    }
+                }
+                Dialog::QuantizeAudio { strength, swing } => {
+                    ui.label("Moves each selected clip's sync point (else its start) towards the nearest grid line.");
+                    ui.add(egui::Slider::new(strength, 0.0..=100.0).text("Strength %"));
+                    ui.add(egui::Slider::new(swing, 0.0..=100.0).text("Swing %"));
+                    if buttons(ui, "Quantize", enter) {
+                        action = Some(("clip.quantize_to_grid".into(), json!({"strength": strength, "swing": swing})));
                     }
                 }
                 Dialog::StripSilence { threshold, min_ms, pre_ms, post_ms } => {

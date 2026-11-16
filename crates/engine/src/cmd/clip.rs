@@ -114,7 +114,15 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({}))
         }),
         cmd!("clip.remove_sync_point", "Remove Sync Point", ["Clip"], None, "{clips?}", has_sync_point, remove_sync_point),
-        cmd!("clip.quantize_to_grid", "Quantize to Grid", ["Clip"], Some("Cmd+0"), "{clips?}", has_selection, quantize_to_grid),
+        cmd!(
+            "clip.quantize_to_grid",
+            "Quantize to Grid",
+            ["Clip"],
+            Some("Cmd+0"),
+            "{clips?, strength?: 0..100 (100), swing?: 0..100 (0)} — moves each clip's sync point (else its start) that share of the way to the nearest grid line; swing delays every second line of a note grid",
+            has_selection,
+            quantize_to_grid
+        ),
         cmd!("clip.color", "Clip Color", [], None, "{clips?, color: [r,g,b] | null}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let col = p.get("color").and_then(Value::as_array).map(|a| {
@@ -460,8 +468,10 @@ fn remove_sync_point(e: &mut Engine, p: &Value) -> Result<Value> {
 fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session();
+    let strength = f64_or(p, "strength", 100.0) / 100.0;
+    let swing = f64_or(p, "swing", 0.0) / 100.0;
     let moves: Vec<(soundcraft_model::ClipId, i64)> =
-        ids.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| (*id, crate::edit::grid_delta(s, c, 0, false)))).collect();
+        ids.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| (*id, crate::edit::quantize_delta(s, c, strength, swing)))).collect();
     let s = e.session_mut();
     for (id, d) in &moves {
         crate::edit::move_clips(s, &[*id], *d, &[]);

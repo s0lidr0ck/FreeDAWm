@@ -104,7 +104,8 @@ impl GridValue {
         }
     }
 
-    fn note_ticks(value: NoteValue, dotted: bool, triplet: bool, map: &TempoMap, at_tick: i64) -> i64 {
+    /// The step in ticks of a note grid at `at_tick` (a bar is the meter's bar there).
+    pub fn note_ticks(value: NoteValue, dotted: bool, triplet: bool, map: &TempoMap, at_tick: i64) -> i64 {
         let base = if value == NoteValue::Bar { map.meter_at_tick(at_tick).ticks_per_bar() } else { value.ticks() };
         let mut t = base;
         if dotted {

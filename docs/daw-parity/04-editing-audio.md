@@ -195,7 +195,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Warp markers you drag to move a hit | ● | ● | ● | ● | **Flag only**: markers are stored by Straighten, never drawn or editable |
 | Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Partial**: every choice but varispeed runs the same offline stretch; varispeed plays with a simple resampler that aliases |
 | Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
-| Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Partial**: moves whole clips by their sync point; no strength or swing |
+| Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
 | Quantize multitrack drums keeping phase | ● | ● | ● | ● | **Works** as Straighten, to a steady tempo only |
 | Slice, conform and smooth (Beat Detective style) | ● | ◐ | ◐ | ● | **Partial**: detect and separate; no conform, no gap filling |
 | Extract a groove and apply it | ● | ● | ● | ● | **Missing** |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: audio quantize with strength and swing |
 | 2026-11-16 | minor | Tier 2: the clip gain line is edited on the clip |
 | 2026-11-16 | minor | Tier 2: snap to clip edges, markers and zero crossings; rubber-band clip selection; clip groups trim, fade and drag as one |
 | 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |

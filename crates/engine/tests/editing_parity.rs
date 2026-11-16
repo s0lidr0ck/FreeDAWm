@@ -637,3 +637,23 @@ fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     run(&mut e, "edit.undo", json!({}));
     assert!(e.session().edit.flag(soundcraft_engine::edit::SNAP_TO_ZERO));
 }
+
+// ---- tier 2: quantize audio with strength and swing -------------------------------------------
+
+#[test]
+fn audio_quantize_takes_a_strength_and_a_swing() {
+    // 120 bpm at 48 kHz, a 1/16 grid: lines every 6000 samples.
+    let mut e = engine("slip");
+    run(&mut e, "view.grid", json!({"value": "1/16"}));
+    let (t, c) = track(&mut e, &[(6_900, 500, 0), (19_600, 500, 0)]);
+    run(&mut e, "clip.quantize_to_grid", json!({"clips": [c[0].0], "strength": 50}));
+    assert_eq!(clips(&e, t)[0].0, 6_450, "half way to the line at 6000");
+    run(&mut e, "clip.quantize_to_grid", json!({"clips": [c[0].0]}));
+    assert_eq!(clips(&e, t)[0].0, 6_000, "full strength by default");
+    // Swing 100 %: every second sixteenth is a third of a step (2000) late, 20 000 not 18 000.
+    run(&mut e, "clip.quantize_to_grid", json!({"clips": [c[1].0], "swing": 100}));
+    assert_eq!(clips(&e, t)[1].0, 20_000);
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "clip.quantize_to_grid", json!({"clips": [c[1].0]}));
+    assert_eq!(clips(&e, t)[1].0, 18_000, "no swing: the plain line");
+}
