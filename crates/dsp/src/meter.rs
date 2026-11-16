@@ -272,9 +272,14 @@ impl LoudnessMeter {
 
     /// Feeds planar audio. Channels beyond the meter's channel count are ignored.
     pub fn process(&mut self, io: &[Vec<f32>], frames: usize) {
+        self.process_range(io, 0, frames);
+    }
+
+    /// Feeds `frames` frames of planar audio starting at frame `start` of each channel.
+    pub fn process_range(&mut self, io: &[Vec<f32>], start: usize, frames: usize) {
         let ch = self.filters.len().min(io.len());
-        let frames = io.iter().take(ch).map(Vec::len).fold(frames, usize::min);
-        for n in 0..frames {
+        let end = io.iter().take(ch).map(Vec::len).fold(start.saturating_add(frames), usize::min);
+        for n in start..end {
             for c in 0..ch {
                 let x = io.get(c).and_then(|b| b.get(n)).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
                 if let Some([f1, f2]) = self.filters.get_mut(c) {
@@ -387,5 +392,76 @@ impl LoudnessMeter {
     /// Maximum true peak (4× oversampled) in dBTP.
     pub fn true_peak_db(&self) -> f32 {
         gain_to_db(self.true_peak)
+    }
+}
+/// EBU Tech 3342 loudness range (LRA): the spread between the 10th and the 95th percentile of
+/// the short-term loudness, over the values above -70 LUFS and within 20 LU of their power
+/// mean. Fed one short-term value at a time (every 100 ms is customary); a fixed histogram of
+/// 0.1 LU bins, so adding never allocates.
+#[derive(Debug, Clone)]
+pub struct LoudnessRange {
+    counts: Vec<u32>,
+    total: u64,
+    energy: f64,
+}
+
+const LRA_MIN: f32 = -70.0;
+const LRA_STEP: f32 = 0.1;
+const LRA_BINS: usize = 900; // -70 .. +20 LUFS
+
+impl Default for LoudnessRange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoudnessRange {
+    pub fn new() -> Self {
+        Self { counts: vec![0; LRA_BINS], total: 0, energy: 0.0 }
+    }
+
+    pub fn reset(&mut self) {
+        self.counts.iter_mut().for_each(|c| *c = 0);
+        self.total = 0;
+        self.energy = 0.0;
+    }
+
+    /// Adds a short-term loudness in LUFS (ignored below -70 LUFS or when not finite).
+    pub fn add(&mut self, lufs: f32) {
+        if !lufs.is_finite() || lufs <= LRA_MIN {
+            return;
+        }
+        let bin = (((lufs - LRA_MIN) / LRA_STEP) as usize).min(LRA_BINS - 1);
+        if let Some(c) = self.counts.get_mut(bin) {
+            *c = c.saturating_add(1);
+            self.total += 1;
+            self.energy += 10f64.powf(f64::from(lufs) / 10.0);
+        }
+    }
+
+    /// The loudness range in LU (0 until there are values).
+    pub fn range_lu(&self) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        let gate = (10.0 * (self.energy / self.total as f64).log10()) as f32 - 20.0;
+        let first = (((gate - LRA_MIN) / LRA_STEP).max(0.0) as usize).min(LRA_BINS);
+        let gated = self.counts.get(first..).unwrap_or(&[]);
+        let n: u64 = gated.iter().map(|&c| u64::from(c)).sum();
+        if n == 0 {
+            return 0.0;
+        }
+        let at = |q: f64| {
+            let want = (q * n as f64).ceil().max(1.0) as u64;
+            let mut seen = 0u64;
+            for (i, &c) in gated.iter().enumerate() {
+                seen += u64::from(c);
+                if seen >= want {
+                    return LRA_MIN + (first + i) as f32 * LRA_STEP;
+                }
+            }
+            LRA_MIN + (first + gated.len()) as f32 * LRA_STEP
+        };
+        (at(0.95) - at(0.10)).max(0.0)
     }
 }

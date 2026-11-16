@@ -15,6 +15,7 @@ pub mod filter;
 pub mod levelup;
 pub mod lull;
 pub mod manners;
+pub mod meters;
 pub mod mod_engine;
 pub mod pitch;
 pub mod reverb;

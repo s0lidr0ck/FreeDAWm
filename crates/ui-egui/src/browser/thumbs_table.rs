@@ -2,6 +2,7 @@
 // by id.
 static THUMBS: &[(&str, &[u8])] = &[
     ("channel_strip", include_bytes!("../../assets/browser-thumbs/channel_strip.png")),
+    ("channel_tool", include_bytes!("../../assets/browser-thumbs/channel_tool.png")),
     ("chorus", include_bytes!("../../assets/browser-thumbs/chorus.png")),
     ("compressor", include_bytes!("../../assets/browser-thumbs/compressor.png")),
     ("dc_offset_removal", include_bytes!("../../assets/browser-thumbs/dc_offset_removal.png")),
@@ -38,10 +39,12 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("invert", include_bytes!("../../assets/browser-thumbs/invert.png")),
     ("juke", include_bytes!("../../assets/browser-thumbs/juke.png")),
     ("lofi", include_bytes!("../../assets/browser-thumbs/lofi.png")),
+    ("loudness", include_bytes!("../../assets/browser-thumbs/loudness.png")),
     ("lull", include_bytes!("../../assets/browser-thumbs/lull.png")),
     ("maximizer", include_bytes!("../../assets/browser-thumbs/maximizer.png")),
     ("mend", include_bytes!("../../assets/browser-thumbs/mend.png")),
     ("mod_delay", include_bytes!("../../assets/browser-thumbs/mod_delay.png")),
+    ("phase_meter", include_bytes!("../../assets/browser-thumbs/phase_meter.png")),
     ("phaser", include_bytes!("../../assets/browser-thumbs/phaser.png")),
     ("pitch_shifter", include_bytes!("../../assets/browser-thumbs/pitch_shifter.png")),
     ("plate_reverb", include_bytes!("../../assets/browser-thumbs/plate_reverb.png")),
@@ -51,9 +54,11 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("sampler", include_bytes!("../../assets/browser-thumbs/sampler.png")),
     ("saturator", include_bytes!("../../assets/browser-thumbs/saturator.png")),
     ("signal_generator", include_bytes!("../../assets/browser-thumbs/signal_generator.png")),
+    ("spectrum", include_bytes!("../../assets/browser-thumbs/spectrum.png")),
     ("sprawl", include_bytes!("../../assets/browser-thumbs/sprawl.png")),
     ("subtractive_synth", include_bytes!("../../assets/browser-thumbs/subtractive_synth.png")),
     ("time_shift", include_bytes!("../../assets/browser-thumbs/time_shift.png")),
     ("trim", include_bytes!("../../assets/browser-thumbs/trim.png")),
+    ("tuner", include_bytes!("../../assets/browser-thumbs/tuner.png")),
     ("vault", include_bytes!("../../assets/browser-thumbs/vault.png")),
 ];

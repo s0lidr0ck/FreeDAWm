@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 ## What is in the box
 
-FreeDAWm registers 55 processors: 51 effects and 4 instruments. The insert menu shows 33 of the
+FreeDAWm registers 60 processors: 56 effects and 4 instruments. The insert menu shows 39 of the
 effects:
 
 - **21 FireStation engines** (ported from the owner's C++ suite): Comp, CleanQ, CopyQ, Vint,
@@ -40,13 +40,16 @@ effects:
   Reverb, ChamberMade, Pitch, LevelUp. They carry 783 factory presets between them.
 - **5 FreeDAWm designs:** Rez (resonance suppressor, 111 presets), Lull (gate, 26), Sprawl
   (imager, 16), Vault (convolution reverb), Mend (voice cleaning).
-- **7 utilities:** Gain, Trim, Invert, DC Offset Removal, Signal Generator, Time Shift, Imprint
-  (impulse-response capture).
+- **8 utilities:** Gain, Trim, Invert, DC Offset Removal, Signal Generator, Time Shift, Imprint
+  (impulse-response capture), Channel Tool (swap, mono, mid/side, polarity per channel), and
+  Dither, back in the menu.
+- **4 meters:** Spectrum, Loudness Meter (with true peak, range and a ten-minute history), Phase
+  Meter (correlation and goniometer), Tuner.
 
-**18 older stock effects are hidden from the menu on purpose**, because an engine covers each
+**17 older stock effects are hidden from the menu on purpose**, because an engine covers each
 one: EQ 1-Band, EQ 7-Band, Compressor/Limiter, Expander/Gate, De-Esser, Maximizer, Channel Strip,
 Room and Plate Reverb, Mod Delay, Chorus, Flanger, Phaser, Saturator, Lo-Fi, Rectifier, Pitch
-Shifter, Dither. They still load from old sessions. The tables below judge what a user can reach
+Shifter. They still load from old sessions. The tables below judge what a user can reach
 from the menu, and say so where a hidden effect would have filled a gap.
 
 ## Summary
@@ -55,20 +58,20 @@ from the menu, and say so where a hidden effect would have filled a gap.
 |---|---|---|
 | A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no upward compression, no look-ahead on Comp |
 | B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no linear-phase mode on the main EQ, no simple channel EQ in the menu |
-| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp, no tuner, no pedalboard |
+| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp, no pedalboard |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses**, nothing beyond stereo |
 | E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small to medium: no rotary speaker, auto-pan, ring modulator or frequency shifter |
 | F. Pitch and voice | Octaver, doubler, whammy; machine-learning de-noise and de-reverb on an insert | Medium: no real-time pitch correction, no vocoder |
 | G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | **Large**: no beat repeat, gater, glitch or multi-effect; no mastering assistant |
-| H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager | Medium: **no meter plug-ins** (spectrum, loudness, phase), no dither in the menu, no tuner |
+| H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 936 factory presets, a searchable browser, chain and track presets | Small: two save paths that disagree, no rename, no default preset |
 | J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
 | K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no controller mapping, no racks or macros |
 
 Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
 you can key from another track (now Comp); effects that process every channel of a surround
-track (now done, bug 2); and **meter plug-ins** (spectrum, loudness, phase) you can put anywhere
-in a chain.
+track (now done, bug 2); and meter plug-ins you can put anywhere in a chain (now Spectrum,
+Loudness Meter and Phase Meter). All three are in place.
 
 ## A. Dynamics
 
@@ -126,7 +129,7 @@ in a chain.
 | Bass amp | ● | ● | ● | ● | **Missing** |
 | Cabinets from impulse responses | ● | ● | ● | ● | **Works** |
 | Pedalboard in one window | ◐ | ● | ● | ● | **Missing**: pedals are separate inserts |
-| Tuner | ● | ● | ● | ● | **Missing** |
+| Tuner | ● | ● | ● | ● | **Works** (Tuner) |
 
 ## D. Reverb
 
@@ -192,15 +195,15 @@ in a chain.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Gain, trim, polarity | ● | ● | ● | ● | **Works**; polarity flips all channels together |
-| Swap channels, mono switch, mid/side encode | ◐ | ● | ● | ● | **Missing** as a utility |
+| Swap channels, mono switch, mid/side encode | ◐ | ● | ● | ● | **Works** (Channel Tool: swap, mono, left or right only, mid/side encode and decode, polarity per channel, gain, DC filter) |
 | Stereo width and imaging | ◐ | ● | ● | ● | **Works** (Sprawl: four bands, mono-safe) |
 | DC removal, tone generator, sample delay | ● | ● | ● | ● | **Works**; no sweep in the generator |
-| Dither with noise shaping | ● | ● | ● | ● | **Partial**: inside LevelUp only; the Dither effect is hidden |
-| Spectrum analyser plug-in | ◐ | ● | ● | ● | **Missing**: spectra appear inside editors only |
-| Loudness and true-peak meter plug-in | ◐ | ● | ● | ● | **Partial**: inside LevelUp; the meter code is also used at bounce |
-| Phase / correlation meter plug-in | ● | ● | ● | ● | **Partial**: inside Sprawl |
+| Dither with noise shaping | ● | ● | ● | ● | **Works**: Dither is in the menu again (16, 20, 24 bits, first-order shaping), and inside LevelUp |
+| Spectrum analyser plug-in | ◐ | ● | ● | ● | **Works** (Spectrum: sum, left, right, mid, side or both sides; slope, speed, peak hold) |
+| Loudness and true-peak meter plug-in | ◐ | ● | ● | ● | **Works** (Loudness Meter: the bounce's BS.1770 meter, with loudness range and a short-term history) |
+| Phase / correlation meter plug-in | ● | ● | ● | ● | **Works** (Phase Meter: correlation with its lowest held, balance, Lissajous or polar scope) |
 | Phase alignment between microphones | ◐ | ◐ | ◐ | ◐ | **Partial**: inside Shale, for drums |
-| Tuner | ● | ● | ● | ● | **Missing** |
+| Tuner | ● | ● | ● | ● | **Works** (Tuner: A4 415–466 Hz, mute while tuning) |
 
 ## I. Presets
 
@@ -296,8 +299,8 @@ track. Then bug 4.
 | Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Done**: per channel with bug 2; Comp's Link All Channels keys every channel from the loudest one (the LFE included; off by default). The other dynamics engines (Twine, Transient, Sift, LevelUp) still detect per channel |
 | Click-free bypass that keeps delay compensation steady | 4–6 | **Done** with bug 4 |
 | A simple channel EQ and compressor in the menu (unhide and tidy the stock ones, or presets of CleanQ and Comp) | 3–6 | Owner's call which |
-| Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | The measuring code exists |
-| Tuner; channel utility (swap, mono, mid/side, per-channel polarity); dither in the menu | 6–10 | |
+| Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | **Done**: Spectrum, Loudness Meter, Phase Meter |
+| Tuner; channel utility (swap, mono, mid/side, per-channel polarity); dither in the menu | 6–10 | **Done** |
 | Bundled impulse responses for Vault, and impulse-response editing | 6–10 | Imprint can capture; licensing for any third-party set must be checked |
 | Rotary speaker, auto-pan, ring modulator and frequency shifter | 10–16 | |
 | Vocoder | 8–12 | Needs a key input |
@@ -350,3 +353,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bugs 5, 8 and 9: the commits that fixed them noted in their rows |
 | 2026-11-16 | minor | Bug 6 fixed: Filter's tail follows its circuit, Reso and lowest corner |
 | 2026-11-16 | minor | Tier 2: Comp takes a key (Listen, "Duck Under Voice") and can link detection across a surround track |
+| 2026-11-16 | minor | Tier 2: Spectrum, Loudness Meter, Phase Meter, Tuner and Channel Tool added; Dither back in the menu |

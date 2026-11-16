@@ -205,22 +205,15 @@ pub const REFERENCE_KEYS: [&str; 4] = ["ref0", "ref1", "ref2", "ref3"];
 /// The stock effect categories kept out of every plugin list (the picker, its search, the
 /// plugin browser): the FireStation engines cover them. Their plugins still load from sessions,
 /// open from the chain and can be added by id (`mix.module_add`).
-pub const HIDDEN_STOCK: &[Category] = &[
-    Category::Eq,
-    Category::Dynamics,
-    Category::PitchShift,
-    Category::Reverb,
-    Category::Delay,
-    Category::Modulation,
-    Category::Harmonic,
-    Category::Dither,
-];
+pub const HIDDEN_STOCK: &[Category] =
+    &[Category::Eq, Category::Dynamics, Category::PitchShift, Category::Reverb, Category::Delay, Category::Modulation, Category::Harmonic];
 
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
-/// drawer with its response picker, for now, and Mend's the drawer with its model's status.)
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend"];
+/// drawer with its response picker, for now, and Mend's the drawer with its model's status.) The
+/// meter plug-ins (Spectrum, Loudness Meter, Phase Meter, Tuner) are among them.
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "spectrum", "loudness", "phase_meter", "tuner"];
 
 /// Plugins kept out of every plugin list by id, whatever their category: Drum Synth, which Juke
 /// has taken over from. Like the [`HIDDEN_STOCK`] ones they still load from sessions, play (a
@@ -663,7 +656,10 @@ pub fn prepare_state(id: &str, state: &[u8]) -> Option<Vec<f64>> {
 /// The actions a built-in plugin takes through [`Plugin::action`], by plugin id (empty for every
 /// other plugin): the names the host may send it.
 pub fn plugin_actions(id: &str) -> &'static [&'static str] {
-    plugins::fs::engine(id).map_or(&[], |e| e.actions)
+    match id {
+        "loudness" | "phase_meter" => &["reset"],
+        _ => plugins::fs::engine(id).map_or(&[], |e| e.actions),
+    }
 }
 
 /// Looks up a plugin description by id.
@@ -708,11 +704,11 @@ mod trait_default_tests {
     #[test]
     fn stock_effects_are_hidden_but_still_load() {
         let listed = |id: &str| plugin_info(id).map(PluginInfo::listed);
-        for id in ["eq_7band", "compressor", "room_reverb", "mod_delay", "chorus", "saturator", "pitch_shifter", "channel_strip", "dither"] {
+        for id in ["eq_7band", "compressor", "room_reverb", "mod_delay", "chorus", "saturator", "pitch_shifter", "channel_strip"] {
             assert_eq!(listed(id), Some(false), "{id}");
             assert!(create(id).is_some(), "{id} still runs");
         }
-        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
+        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "dither", "channel_tool", "spectrum", "tuner"] {
             assert_eq!(listed(id), Some(true), "{id}");
         }
         // Every engine and every instrument is listed, but Drum Synth (Juke took over from it),

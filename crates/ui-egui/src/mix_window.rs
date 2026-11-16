@@ -2245,7 +2245,7 @@ mod tests {
         assert!(fs.contains(&"Manners") && fs.contains(&"Rez") && fs.contains(&"Sprawl"), "Rez and Sprawl are offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
-        assert_eq!(names, ["Built-In", "Utilities"]);
+        assert_eq!(names, ["Built-In", "Utilities", "Dither"]);
         let ids: Vec<&str> = groups[1].1.iter().map(|p| p.id).collect();
         for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
             assert!(ids.contains(&id), "{id}");

@@ -9,6 +9,7 @@ pub mod imprint;
 pub mod juke;
 pub mod lull;
 pub mod mend;
+pub mod meters;
 pub mod modulation;
 mod per_channel;
 pub mod pitch;
@@ -26,7 +27,7 @@ pub mod vault;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 34] = [
+const BUILTINS: [&PluginInfo; 39] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -57,6 +58,11 @@ const BUILTINS: [&PluginInfo; 34] = [
     &utility::DC_INFO,
     &utility::GEN_INFO,
     &utility::DITHER_INFO,
+    &meters::TOOL_INFO,
+    &meters::SPECTRUM_INFO,
+    &meters::LOUDNESS_INFO,
+    &meters::PHASE_INFO,
+    &meters::TUNER_INFO,
     &synth::SYNTH_INFO,
     &drums::DRUM_INFO,
     &sampler::SAMPLER_INFO,
@@ -130,6 +136,11 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "dc_offset_removal" => Box::new(utility::DcRemoval::new()),
         "signal_generator" => Box::new(utility::SignalGenerator::new()),
         "dither" => Box::new(utility::Dither::new()),
+        "channel_tool" => Box::new(meters::ChannelTool::new()),
+        "spectrum" => Box::new(meters::Spectrum::new()),
+        "loudness" => Box::new(meters::Loudness::new()),
+        "phase_meter" => Box::new(meters::PhaseMeter::new()),
+        "tuner" => Box::new(meters::Tuner::new()),
         "subtractive_synth" => Box::new(synth::SubtractiveSynth::new()),
         "drum_synth" => Box::new(drums::DrumSynth::new()),
         "sampler" => Box::new(sampler::Sampler::new()),
@@ -177,6 +188,11 @@ mod tests {
         "dc_offset_removal",
         "signal_generator",
         "dither",
+        "channel_tool",
+        "spectrum",
+        "loudness",
+        "phase_meter",
+        "tuner",
         "subtractive_synth",
         "drum_synth",
         "sampler",
