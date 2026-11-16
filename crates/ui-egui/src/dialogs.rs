@@ -85,6 +85,10 @@ pub enum Dialog {
         bitrate: u32,
         normalize: bool,
         range: BounceRange,
+        /// What is bounced: "main" or a bus name.
+        source: String,
+        /// Seconds rendered past the range, for a reverb or delay to ring out.
+        tail: f32,
     },
     RenameTrack {
         id: TrackId,
@@ -395,6 +399,8 @@ impl Dialogs {
                     bitrate: 0,
                     normalize: false,
                     range: BounceRange::default_for(e.session()),
+                    source: "main".into(),
+                    tail: 0.0,
                 }
             }
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
@@ -776,7 +782,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range, source, tail } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -831,7 +837,28 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
                         ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
                     }
-                    let refused = bounce_refusal(format, app.engine.session().main_format().channels());
+                    // The source: the main mix or any bus.
+                    let busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    if source != "main" && !busses.iter().any(|(n, _)| n == source) {
+                        *source = "main".into();
+                    }
+                    ui.horizontal(|ui| {
+                        let shown = if source == "main" { "Main Mix".to_string() } else { source.clone() };
+                        egui::ComboBox::from_label("Source").selected_text(shown).show_ui(ui, |ui| {
+                            ui.selectable_value(source, "main".to_string(), "Main Mix");
+                            for (n, _) in &busses {
+                                ui.selectable_value(source, n.clone(), n.as_str());
+                            }
+                        });
+                        ui.add(egui::DragValue::new(tail).range(0.0..=soundcraft_engine::cmd::MAX_BOUNCE_TAIL_SECS as f32).speed(0.1).suffix(" s"));
+                        ui.label("tail");
+                    });
+                    let width = if source == "main" {
+                        app.engine.session().main_format().channels()
+                    } else {
+                        busses.iter().find(|(n, _)| n == source).map_or(2, |(_, c)| *c)
+                    };
+                    let refused = bounce_refusal(format, width);
                     if let Some(why) = refused {
                         ui.label(egui::RichText::new(why).color(Tokens::current().text_dim));
                     }
@@ -842,11 +869,11 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && let Some(r) = chosen
                     {
                         let p = std::path::Path::new(path.as_str()).with_extension(if format == "aiff" { "aif" } else { format.as_str() });
-                        let mut params =
-                            json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize, "start": r.start, "end": r.end});
+                        let mut params = json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize,
+                            "start": r.start, "end": r.end, "source": source, "tail": tail});
                         if matches!(format.as_str(), "mp3" | "opus") {
                             params["bitrate"] = json!(bitrate);
-                            if app.engine.session().main_format().channels() > 2 {
+                            if width > 2 {
                                 params["fold_down"] = json!("stereo");
                             }
                         }

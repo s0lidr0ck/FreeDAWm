@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: Mix faders and pan knobs follow their automation) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: bounce a bus, with a tail) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader | **Large**: one scale, no RMS |
-| H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata |
+| H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
 
@@ -183,9 +183,9 @@ miss a peak, and can read pre-fader).
 |---|:-:|:-:|:-:|:-:|---|
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
 | Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** |
-| Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: by command; the dialog always bounces the main mix |
+| Choose the source: any bus or output | ● | ● | ● | ● | **Works** for the main mix and busses, in the dialog; hardware outputs are not offered |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**, except the selection |
-| Keep the reverb tail | ◐ | ● | ● | ● | **Missing**: a whole-session bounce ends at the last clip |
+| Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
 | WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
 | Convert sample rate on export | ● | ● | ● | ● | **Missing** for WAV, AIFF and FLAC |
 | Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Partial**: TPDF, always on, no control in the dialog |
@@ -272,7 +272,7 @@ one a mix engineer would not forgive.
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Pre-fader option and click-free output meter done**; RMS, scales and a master loudness meter remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Return, default level and loop refusal done**; sends to tracks and hardware outputs remain |
-| Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
+| Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command) and suspend all done**; attributes in the Group dialog, VCA assignment in the mixer and nested VCAs remain |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: bounce a bus, with a tail |
 | 2026-11-16 | minor | tier 2: Mix faders and pan knobs follow their automation |
 | 2026-11-16 | minor | tier 2: automation is thinned after a writing pass |
 | 2026-11-16 | minor | tier 3: a module can be made inactive |

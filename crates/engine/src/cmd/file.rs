@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
-        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false, dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo)}", always, bounce),
+        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false, dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30)}", always, bounce),
         cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo}", has_tracks, |e, p| {
             let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
@@ -371,6 +371,9 @@ pub fn stems_job(e: &Engine, p: &Value) -> Result<crate::io::StemsJob> {
     crate::io::StemsJob::new(e, &dir, r, &opts, fold)
 }
 
+/// The longest tail a bounce takes past its range (`file.bounce_mix`'s `tail`), seconds.
+pub const MAX_TAIL_SECS: f64 = 30.0;
+
 pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.bounce_mix", "`path` required"))?.to_string();
     // The range given; else the loop when there is one; else the whole session. The edit
@@ -381,6 +384,9 @@ pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
         (false, None) => soundcraft_time::Range::default(),
     };
     let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
+    // `tail` seconds more (up to 30), so a reverb or delay rings out past the range.
+    let tail = p.get("tail").and_then(Value::as_f64).filter(|t| t.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_TAIL_SECS);
+    let r = soundcraft_time::Range::new(r.start, r.end.saturating_add(e.session().sample_rate.samples(tail)));
     let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
     let format = format_param("file.bounce_mix", str_param(p, "format").unwrap_or(ext.as_str()))?;
     let opts = soundcraft_audio_io::EncodeOptions {
@@ -428,6 +434,23 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// Tier 2: a bounce can take a tail past its range (a reverb rings out), at most 30 s.
+    #[test]
+    fn a_bounce_takes_its_tail() {
+        let e = crate::demo::demo_engine();
+        let dir = std::env::temp_dir().join(format!("sc-bounce-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.wav").to_string_lossy().into_owned();
+        let job = bounce_job(&e, &json!({"path": path, "start": 0, "end": 48_000, "tail": 2.0})).unwrap();
+        assert_eq!(job.range().end, 48_000 + e.session().sample_rate.samples(2.0));
+        let job = bounce_job(&e, &json!({"path": path, "start": 0, "end": 48_000, "tail": 1e9})).unwrap();
+        assert_eq!(job.range().end, 48_000 + e.session().sample_rate.samples(MAX_TAIL_SECS));
+        let job = bounce_job(&e, &json!({"path": path, "start": 0, "end": 48_000})).unwrap();
+        assert_eq!(job.range().end, 48_000, "no tail unless asked");
+        drop(job);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -82,7 +82,7 @@ mod vst3;
 mod zoom_toggle;
 
 pub use clap::plugin_info;
-pub use file::{bounce_job, stems_job};
+pub use file::{MAX_TAIL_SECS as MAX_BOUNCE_TAIL_SECS, bounce_job, stems_job};
 pub use mix::default_send_db;
 /// What the UI needs of Scout: the store refusal for a capture no longer pending, and "same section".
 pub use scout::{NOT_PENDING as SCOUT_NOT_PENDING, same_as as scout_same_as};
