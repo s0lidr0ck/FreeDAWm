@@ -128,8 +128,11 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.play_timeline", "Play Timeline", ["Edit", "Selection"], None, "{} — plays the timeline selection", always, |e, _| {
             let s = e.session();
             let r = if s.edit.timeline_selection.is_empty() { s.edit.selection } else { s.edit.timeline_selection };
-            e.transport_requests.push(TransportRequest::Locate(r.start));
-            e.transport_requests.push(TransportRequest::Play);
+            // The timeline range itself, never the edit selection (they differ when unlinked);
+            // looped with Loop Playback on, else once to its end.
+            let looped = (s.edit.loop_playback && !r.is_empty()).then_some(r);
+            let end = (looped.is_none() && !r.is_empty()).then_some(r.end);
+            e.transport_requests.push(TransportRequest::PlayRange { from: r.start.max(0), end, looped });
             Ok(json!({"start": r.start, "end": r.end}))
         }),
         cmd!(

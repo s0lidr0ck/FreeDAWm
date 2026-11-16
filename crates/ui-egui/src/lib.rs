@@ -2238,6 +2238,7 @@ impl SoundApp {
                     }
                     self.engine.transport.position = at;
                 }
+                TransportRequest::PlayRange { from, end, looped } => self.start_play(from, end, looped),
                 TransportRequest::PlaySelection => {
                     let sel = self.engine.session().edit.selection;
                     self.start_play(sel.start, Some(sel.end.max(sel.start + 1)), None);
@@ -2669,6 +2670,31 @@ mod tests {
             assert!(app.is_playing());
             assert_eq!(app.position(), insertion + i64::from(app.engine.session().sample_rate.hz()) / 4);
         }
+    }
+
+    #[test]
+    fn play_from_and_play_timeline_start_where_they_say() {
+        // Bug: `transport.play {from}` played from the selection when stopped, and Play Timeline
+        // played the edit selection.
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("edit.select", json!({"start": 0, "end": 0})).unwrap();
+        app.run("transport.play", json!({"from": 96_000})).unwrap();
+        app.handle_transport(0.0);
+        assert!(app.is_playing());
+        assert_eq!(app.position(), 96_000);
+        app.stop_play();
+        app.run("options.link_timeline_edit", json!({"value": false})).unwrap();
+        app.run("edit.select", json!({"start": 0, "end": 1000})).unwrap();
+        app.engine.session_mut().edit.timeline_selection = soundcraft_time::Range::new(120_000, 132_000);
+        app.run("edit.play_timeline", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((120_000, Some(132_000), None)), "the timeline range, once");
+        app.stop_play();
+        app.run("options.loop_playback", json!({"value": true})).unwrap();
+        app.run("edit.play_timeline", json!({})).unwrap();
+        app.handle_transport(0.0);
+        let r = soundcraft_time::Range::new(120_000, 132_000);
+        assert_eq!(app.sim, Some((120_000, None, Some(r))), "looped with Loop Playback");
     }
 
     #[test]

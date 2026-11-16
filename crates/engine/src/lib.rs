@@ -112,6 +112,12 @@ pub enum TransportRequest {
         countoff: bool,
     },
     Locate(Samples),
+    /// Play from `from` (whatever the selection), stopping at `end` or looping `looped`.
+    PlayRange {
+        from: Samples,
+        end: Option<Samples>,
+        looped: Option<soundcraft_time::Range>,
+    },
     PlaySelection,
     Pause,
     HalfSpeed,

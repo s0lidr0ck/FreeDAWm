@@ -86,7 +86,7 @@ fn commands_focus_nudges_matches_the_selections_plays_and_redoes() {
         press(&ctx, &mut app, Key::CloseBracket, Modifiers::NONE);
         assert_eq!(
             app.engine.transport_requests,
-            [TransportRequest::PlaySelection, TransportRequest::Locate(48_000), TransportRequest::Play],
+            [TransportRequest::PlaySelection, TransportRequest::PlayRange { from: 48_000, end: Some(96_000), looped: None }],
             "{os:?}"
         );
     }
