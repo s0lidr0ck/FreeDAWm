@@ -929,11 +929,11 @@ pub fn shuffle_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(T
 /// start when it has none inside the clip) on the nearest grid line; Relative moves it by whole
 /// grid steps, keeping its offset from the grid.
 pub fn grid_delta(s: &Session, clip: &Clip, raw: Samples, relative: bool) -> Samples {
-    let (g, sr, map, rate) = (&s.edit.grid, s.sample_rate, &s.tempo, s.frame_rate);
+    let (g, ctx) = (&s.edit.grid, s.grid_ctx());
     let sync = if (0..clip.length).contains(&clip.sync_point) { clip.sync_point } else { 0 };
     let anchor = clip.start.saturating_add(sync);
-    let from = if relative { g.line_at_or_before(anchor, sr, map, rate) } else { anchor };
-    g.snap(from.saturating_add(raw), sr, map, rate).saturating_sub(from)
+    let from = if relative { g.line_at_or_before(anchor, &ctx) } else { anchor };
+    g.snap(from.saturating_add(raw), &ctx).saturating_sub(from)
 }
 
 /// How far quantizing moves `clip` (its sync point, else its start) towards the grid:
@@ -1467,7 +1467,7 @@ mod tests {
     #[test]
     fn grid_moves_snap_the_clip_start_or_keep_its_offset() {
         let (s, t) = session_with_clip();
-        let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+        let step = s.edit.grid.step_samples(0, &s.grid_ctx());
         let c = s.track(t).unwrap().clips()[0].clone();
         assert_eq!(c.start + grid_delta(&s, &c, step + 200, false), step);
         assert_eq!(c.start + grid_delta(&s, &c, step + 200, true), step + 1000);

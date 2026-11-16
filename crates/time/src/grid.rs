@@ -48,6 +48,31 @@ impl NoteValue {
     }
 }
 
+/// What grid lines are counted against: the session's sample rate, tempo map and timecode rate,
+/// and its timecode start (the timecode of sample 0, as a sample count). Bars and beats count from
+/// the tempo map; time, frame and sample grids count from the timecode start, so a frame line
+/// falls on a whole timecode frame whatever the session starts at. One value every grid call
+/// takes ([`crate::GridValue::snap`] and the rest); a session makes it with `Session::grid_ctx`.
+#[derive(Debug, Clone, Copy)]
+pub struct GridCtx<'a> {
+    pub sr: SampleRate,
+    pub map: &'a TempoMap,
+    pub rate: FrameRate,
+    pub tc_start: Samples,
+}
+
+impl<'a> GridCtx<'a> {
+    /// A context whose timecode starts at sample 0.
+    pub fn new(sr: SampleRate, map: &'a TempoMap, rate: FrameRate) -> GridCtx<'a> {
+        GridCtx { sr, map, rate, tc_start: 0 }
+    }
+
+    /// The same, with the timecode of sample 0 at `tc_start` samples.
+    pub fn with_timecode_start(self, tc_start: Samples) -> GridCtx<'a> {
+        GridCtx { tc_start, ..self }
+    }
+}
+
 /// A grid or nudge step.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GridValue {
@@ -118,7 +143,8 @@ impl GridValue {
     }
 
     /// The step in samples at position `at` (musical steps depend on tempo).
-    pub fn step_samples(&self, at: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
+    pub fn step_samples(&self, at: Samples, ctx: &GridCtx) -> Samples {
+        let (sr, map, rate) = (ctx.sr, ctx.map, ctx.rate);
         match *self {
             GridValue::Note { value, dotted, triplet } => {
                 let t0 = map.samples_to_ticks(at, sr);
@@ -132,14 +158,18 @@ impl GridValue {
     }
 
     /// Nearest grid line to `pos`.
-    pub fn snap(&self, pos: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
-        let lo = self.line_at_or_before(pos, sr, map, rate);
-        let hi = self.next_line(lo, sr, map, rate);
+    pub fn snap(&self, pos: Samples, ctx: &GridCtx) -> Samples {
+        let lo = self.line_at_or_before(pos, ctx);
+        let hi = self.next_line(lo, ctx);
         if (pos - lo) <= (hi - pos) { lo } else { hi }
     }
 
     /// The grid line at or before `pos`.
-    pub fn line_at_or_before(&self, pos: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
+    pub fn line_at_or_before(&self, pos: Samples, ctx: &GridCtx) -> Samples {
+        let (sr, map, rate) = (ctx.sr, ctx.map, ctx.rate);
+        // Time, frame and sample lines count from the timecode start: worked out in timecode
+        // samples (`q`), then back.
+        let o = ctx.tc_start;
         match *self {
             GridValue::Note { value, dotted, triplet } => {
                 // Float ticks can land a hair either side of a line's own tick.
@@ -160,18 +190,19 @@ impl GridValue {
                 // Line `k` is at `k × step` rounded, so a step that is not a whole number of
                 // samples (a frame at 29.97 fps) does not drift.
                 Some(step) => {
+                    let q = pos.saturating_add(o);
                     let line = |k: f64| to_samples(k * step);
-                    let mut k = (pos as f64 / step).floor();
-                    if line(k) > pos {
+                    let mut k = (q as f64 / step).floor();
+                    if line(k) > q {
                         k -= 1.0;
-                    } else if line(k + 1.0) <= pos {
+                    } else if line(k + 1.0) <= q {
                         k += 1.0;
                     }
-                    line(k)
+                    line(k).saturating_sub(o)
                 }
                 None => {
-                    let step = self.step_samples(pos, sr, map, rate);
-                    pos.div_euclid(step).saturating_mul(step)
+                    let step = self.step_samples(pos, ctx);
+                    pos.saturating_add(o).div_euclid(step).saturating_mul(step).saturating_sub(o)
                 }
             },
         }
@@ -188,26 +219,27 @@ impl GridValue {
     }
 
     /// The first grid line strictly after `line`.
-    pub fn next_line(&self, line: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
-        if let Some(step) = self.exact_step(sr, rate) {
-            let at = self.line_at_or_before(line, sr, map, rate);
-            let next = to_samples((at as f64 / step).round() * step + step);
-            return if next > line { next } else { to_samples(((line as f64 / step).floor() + 1.0) * step) };
+    pub fn next_line(&self, line: Samples, ctx: &GridCtx) -> Samples {
+        if let Some(step) = self.exact_step(ctx.sr, ctx.rate) {
+            let o = ctx.tc_start;
+            let at = self.line_at_or_before(line, ctx).saturating_add(o);
+            let next = to_samples((at as f64 / step).round() * step + step).saturating_sub(o);
+            return if next > line { next } else { to_samples(((line.saturating_add(o) as f64 / step).floor() + 1.0) * step).saturating_sub(o) };
         }
-        let step = self.step_samples(line, sr, map, rate);
-        let candidate = self.line_at_or_before(line.saturating_add(step), sr, map, rate);
+        let step = self.step_samples(line, ctx);
+        let candidate = self.line_at_or_before(line.saturating_add(step), ctx);
         if candidate > line { candidate } else { line.saturating_add(step) }
     }
 
     /// All grid lines within `[start, end)`, capped at `max` lines.
-    pub fn lines(&self, start: Samples, end: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate, max: usize) -> Vec<Samples> {
+    pub fn lines(&self, start: Samples, end: Samples, ctx: &GridCtx, max: usize) -> Vec<Samples> {
         let mut out = Vec::new();
-        let mut p = self.line_at_or_before(start, sr, map, rate);
+        let mut p = self.line_at_or_before(start, ctx);
         while p < end && out.len() < max {
             if p >= start {
                 out.push(p);
             }
-            let n = self.next_line(p, sr, map, rate);
+            let n = self.next_line(p, ctx);
             if n <= p {
                 break;
             }
@@ -221,6 +253,23 @@ impl GridValue {
 mod tests {
     use super::*;
 
+    /// Parity bug 18: time, frame and sample lines count from the session's timecode start, not
+    /// sample 0; bars and beats do not move.
+    #[test]
+    fn absolute_lines_count_from_the_timecode_start() {
+        let (sr, map) = (SampleRate::HZ_48000, TempoMap::default());
+        let ctx = GridCtx::new(sr, &map, FrameRate::Fps29_97).with_timecode_start(1000);
+        // Frame k is at round(k × 1601.6) timecode samples: frame 3 at 4805, 1000 before that here.
+        assert_eq!(GridValue::Frames(1).line_at_or_before(5000, &ctx), 3805);
+        assert_eq!(GridValue::Frames(1).next_line(3805, &ctx), 6406 - 1000);
+        assert_eq!(GridValue::Seconds(1.0).snap(70_000, &ctx), 47_000);
+        assert_eq!(GridValue::Samples(300).line_at_or_before(5100, &ctx), 5000);
+        assert_eq!(GridValue::Samples(300).next_line(5000, &ctx), 5300);
+        assert_eq!(GridValue::Seconds(1.0).lines(0, 100_000, &ctx, 10), vec![47_000, 95_000]);
+        let bars = GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false };
+        assert_eq!(bars.line_at_or_before(100_000, &ctx), bars.line_at_or_before(100_000, &GridCtx::new(sr, &map, FrameRate::Fps29_97)));
+    }
+
     /// Parity bug 18: a frame grid at 29.97 fps (1601.6 samples a frame at 48 kHz) does not drift.
     #[test]
     fn frame_lines_do_not_drift_over_an_hour() {
@@ -229,10 +278,10 @@ mod tests {
         let g = GridValue::Frames(1);
         let frames_in_hour = (3600.0 * 30_000.0 / 1001.0) as i64;
         let exact = (frames_in_hour as f64 * 48_000.0 * 1001.0 / 30_000.0).round() as Samples;
-        assert_eq!(g.line_at_or_before(exact + 3, sr, &map, rate), exact);
-        assert_eq!(g.snap(exact + 3, sr, &map, rate), exact);
-        let prev = g.line_at_or_before(exact - 1, sr, &map, rate);
-        assert_eq!(g.next_line(prev, sr, &map, rate), exact);
+        assert_eq!(g.line_at_or_before(exact + 3, &GridCtx::new(sr, &map, rate)), exact);
+        assert_eq!(g.snap(exact + 3, &GridCtx::new(sr, &map, rate)), exact);
+        let prev = g.line_at_or_before(exact - 1, &GridCtx::new(sr, &map, rate));
+        assert_eq!(g.next_line(prev, &GridCtx::new(sr, &map, rate)), exact);
     }
 
     #[test]
@@ -242,8 +291,8 @@ mod tests {
             let map = TempoMap::new(bpm, 4, 4).unwrap();
             let mut line = 0;
             for _ in 0..64 {
-                assert_eq!(g.line_at_or_before(line, sr, &map, rate), line, "{bpm} bpm");
-                line = g.next_line(line, sr, &map, rate);
+                assert_eq!(g.line_at_or_before(line, &GridCtx::new(sr, &map, rate)), line, "{bpm} bpm");
+                line = g.next_line(line, &GridCtx::new(sr, &map, rate));
             }
         }
     }
@@ -252,33 +301,33 @@ mod tests {
     fn sixteenth_grid_at_120() {
         let g = GridValue::default();
         let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps30);
-        assert_eq!(g.step_samples(0, sr, &map, rate), 6000);
-        assert_eq!(g.snap(2900, sr, &map, rate), 0);
-        assert_eq!(g.snap(3100, sr, &map, rate), 6000);
-        assert_eq!(g.lines(0, 24_000, sr, &map, rate, 100), vec![0, 6000, 12000, 18000]);
+        assert_eq!(g.step_samples(0, &GridCtx::new(sr, &map, rate)), 6000);
+        assert_eq!(g.snap(2900, &GridCtx::new(sr, &map, rate)), 0);
+        assert_eq!(g.snap(3100, &GridCtx::new(sr, &map, rate)), 6000);
+        assert_eq!(g.lines(0, 24_000, &GridCtx::new(sr, &map, rate), 100), vec![0, 6000, 12000, 18000]);
     }
 
     #[test]
     fn absolute_grids() {
         let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps25);
-        assert_eq!(GridValue::Seconds(1.0).snap(70_000, sr, &map, rate), 48_000);
-        assert_eq!(GridValue::Frames(1).step_samples(0, sr, &map, rate), 1920);
-        assert_eq!(GridValue::Samples(0).step_samples(0, sr, &map, rate), 1);
+        assert_eq!(GridValue::Seconds(1.0).snap(70_000, &GridCtx::new(sr, &map, rate)), 48_000);
+        assert_eq!(GridValue::Frames(1).step_samples(0, &GridCtx::new(sr, &map, rate)), 1920);
+        assert_eq!(GridValue::Samples(0).step_samples(0, &GridCtx::new(sr, &map, rate)), 1);
     }
 
     #[test]
     fn lines_are_capped() {
         let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps25);
-        assert_eq!(GridValue::Samples(1).lines(0, 1_000_000, sr, &map, rate, 50).len(), 50);
+        assert_eq!(GridValue::Samples(1).lines(0, 1_000_000, &GridCtx::new(sr, &map, rate), 50).len(), 50);
     }
 
     #[test]
     fn triplets_and_dots() {
         let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps25);
         let t = GridValue::Note { value: NoteValue::Quarter, dotted: false, triplet: true };
-        assert_eq!(t.step_samples(0, sr, &map, rate), 16_000);
+        assert_eq!(t.step_samples(0, &GridCtx::new(sr, &map, rate)), 16_000);
         let d = GridValue::Note { value: NoteValue::Quarter, dotted: true, triplet: false };
-        assert_eq!(d.step_samples(0, sr, &map, rate), 36_000);
+        assert_eq!(d.step_samples(0, &GridCtx::new(sr, &map, rate)), 36_000);
     }
 
     #[test]

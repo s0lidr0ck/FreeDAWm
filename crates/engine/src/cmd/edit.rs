@@ -453,7 +453,7 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
     let at = match given {
         Some(at) => at,
         None if s.edit.edit_mode == EditMode::GridRelative => {
-            s.edit.grid.line_at_or_before(s.edit.selection.start, s.sample_rate, &s.tempo, s.frame_rate).saturating_add(cb.grid_offset)
+            s.edit.grid.line_at_or_before(s.edit.selection.start, &s.grid_ctx()).saturating_add(cb.grid_offset)
         }
         None => s.edit.selection.start,
     };
@@ -837,7 +837,7 @@ fn separate_on_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "edit.separate_on_grid", p)?;
     let r = range_param(e, "edit.separate_on_grid", p)?;
     let s = e.session_mut();
-    let lines = s.edit.grid.lines(r.start, r.end, s.sample_rate, &s.tempo, s.frame_rate, 10_000);
+    let lines = s.edit.grid.lines(r.start, r.end, &s.grid_ctx(), 10_000);
     let mut n = 0;
     for t in &tracks {
         for at in &lines {
@@ -1115,7 +1115,7 @@ fn nudge(e: &mut Engine, p: &Value) -> Result<Value> {
     let count = i64_or(p, "count", 1).clamp(1, 1000);
     let s = e.session();
     let value = if bool_or(p, "next", false) { s.edit.nudge.stepped(true) } else { s.edit.nudge };
-    let step = value.step_samples(s.edit.selection.start, s.sample_rate, &s.tempo, s.frame_rate) * count * if dir == 0 { 1 } else { dir };
+    let step = value.step_samples(s.edit.selection.start, &s.grid_ctx()) * count * if dir == 0 { 1 } else { dir };
     let ids = nudge_clips(e, p);
     let s = e.session_mut();
     let n = if ids.is_empty() { 0 } else { ops::move_clips(s, &ids, step, &[]) };

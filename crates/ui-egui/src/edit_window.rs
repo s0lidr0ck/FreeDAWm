@@ -2177,22 +2177,21 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
 fn grid_lines(painter: &egui::Painter, s: &Session, tl: Rect, lane: Rect) {
     let t = Tokens::current();
     let view = Range::new(sample_at(s, tl, tl.min.x).max(0), sample_at(s, tl, tl.max.x));
-    let sr = s.sample_rate;
     // Bar lines always; grid lines when enabled and dense enough.
     let bar = GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false };
-    let bar_px = bar.step_samples(view.start, sr, &s.tempo, s.frame_rate) as f64 / s.edit.zoom.samples_per_px;
+    let bar_px = bar.step_samples(view.start, &s.grid_ctx()) as f64 / s.edit.zoom.samples_per_px;
     if bar_px > 6.0 {
         let col = grid_veil(t.bar_line, t.playlist_bg);
-        for at in bar.lines(view.start, view.end, sr, &s.tempo, s.frame_rate, 600) {
+        for at in bar.lines(view.start, view.end, &s.grid_ctx(), 600) {
             let x = x_of(s, tl, at);
             painter.line_segment([pos2(x, lane.min.y), pos2(x, lane.max.y)], Stroke::new(1.0, col));
         }
     }
     if s.edit.grid_lines {
-        let step_px = s.edit.grid.step_samples(view.start, sr, &s.tempo, s.frame_rate) as f64 / s.edit.zoom.samples_per_px;
+        let step_px = s.edit.grid.step_samples(view.start, &s.grid_ctx()) as f64 / s.edit.zoom.samples_per_px;
         if step_px > 7.0 {
             let col = grid_veil(t.grid_line, t.playlist_bg);
-            for at in s.edit.grid.lines(view.start, view.end, sr, &s.tempo, s.frame_rate, 2000) {
+            for at in s.edit.grid.lines(view.start, view.end, &s.grid_ctx(), 2000) {
                 let x = x_of(s, tl, at);
                 painter.line_segment([pos2(x, lane.min.y), pos2(x, lane.max.y)], Stroke::new(1.0, col));
             }
@@ -2732,14 +2731,14 @@ fn plugin_range(track: &Track, p: &AutoParam) -> (f32, f32) {
 /// `at` on the grid when the edit mode or Snap to Grid asks for it.
 pub fn snap(s: &Session, at: Samples) -> Samples {
     let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
-    let gridded = if on { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    let gridded = if on { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
     ops::snap_point(s, at, gridded, magnet_reach(s), None, &[])
 }
 
 /// [`snap`] for an edit point on `track`: also to the zero crossing of its audio when asked.
 pub fn snap_on(s: &Session, at: Samples, track: TrackId) -> Samples {
     let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
-    let gridded = if on { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    let gridded = if on { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
     ops::snap_point(s, at, gridded, magnet_reach(s), Some(track), &[])
 }
 
@@ -3895,7 +3894,7 @@ fn automation_id(p: &AutoParam) -> String {
 
 /// Grid snapping while dragging; holding Cmd/Ctrl swaps Grid and Slip.
 fn drag_snap(s: &Session, at: Samples, flip: bool) -> Samples {
-    let gridded = if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    let gridded = if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
     // The suspend modifier lets go of clip edges and markers too.
     if flip { gridded } else { ops::snap_point(s, at, gridded, magnet_reach(s), None, &[]) }
 }
@@ -4001,11 +4000,11 @@ fn spot_or_run(app: &mut SoundApp, spot: Option<Spot>) {
 fn midi_clip_span(s: &Session, track: TrackId, from: Samples, to: Samples) -> Option<Range> {
     let clips = s.track(track)?.clips();
     let bar = GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false };
-    let start = bar.line_at_or_before(from.min(to), s.sample_rate, &s.tempo, s.frame_rate);
+    let start = bar.line_at_or_before(from.min(to), &s.grid_ctx());
     let last = from.max(to);
-    let mut end = bar.line_at_or_before(last, s.sample_rate, &s.tempo, s.frame_rate);
+    let mut end = bar.line_at_or_before(last, &s.grid_ctx());
     if end < last || end <= start {
-        end = bar.next_line(end, s.sample_rate, &s.tempo, s.frame_rate);
+        end = bar.next_line(end, &s.grid_ctx());
     }
     let prev = clips.iter().map(Clip::end).filter(|&e| e <= from).max().unwrap_or(start);
     let next = clips.iter().map(|c| c.start).filter(|&b| b > from).min().unwrap_or(end);

@@ -215,7 +215,7 @@ pub fn marks(s: &Session, view: Range, spp: f64, f: TimeFormat, rate: FrameRate)
             // Bars every n so labels are ≥ 60 px apart.
             let bar_px = {
                 let b = GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false };
-                b.step_samples(view.start.max(0), sr, &s.tempo, rate) as f64 / spp
+                b.step_samples(view.start.max(0), &soundcraft_time::GridCtx { rate, ..s.grid_ctx() }) as f64 / spp
             };
             let every = [1i64, 2, 4, 8, 16, 32, 64, 128].into_iter().find(|n| bar_px * *n as f64 >= 60.0).unwrap_or(256);
             let first = s.tempo.bar_beat_at(view.start.max(0), sr).bar;

@@ -593,6 +593,12 @@ impl Session {
         self.edit.value(FEET_FRAMES_START, 0.0) as i64
     }
 
+    /// What this session's grid lines count against: its rate, tempo map, timecode rate and
+    /// timecode start ([`soundcraft_time::GridCtx`]).
+    pub fn grid_ctx(&self) -> soundcraft_time::GridCtx<'_> {
+        soundcraft_time::GridCtx::new(self.sample_rate, &self.tempo, self.frame_rate).with_timecode_start(self.timecode_start)
+    }
+
     /// Format a position against this session's timecode and feet+frames references.
     pub fn format_position(&self, at: Samples, fmt: TimeFormat) -> String {
         soundcraft_time::format_position(at, fmt, self.sample_rate, &self.tempo, self.frame_rate, self.timecode_start, self.feet_frames_start())

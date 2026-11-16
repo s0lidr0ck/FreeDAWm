@@ -118,7 +118,7 @@ fn shuffle_drags_swap_clips() {
 fn grid_drags_snap_the_dragged_clip_not_the_one_under_the_pointer() {
     let (mut app, ctx, t, ids) = app("grid", "grabber", &[(1000, SEC), (3 * SEC + 777, SEC)]);
     let s = app.engine.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     drag(&ctx, &mut app, t, SEC / 2, 3 * SEC + SEC / 2);
     assert_eq!(starts(&app, &ids[..1])[0] % step, 0);
 }
@@ -177,7 +177,7 @@ fn snap_to_grid_snaps_the_edit_cursor_while_slip_moves_stay_free() {
     let (mut app, ctx, t, ids) = app("slip", "grabber", &[(1000, SEC)]);
     app.engine.execute("edit.snap_to_grid", &json!({})).unwrap();
     let s = app.engine.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     drag(&ctx, &mut app, t, SEC / 2, SEC / 2 + 10_000);
     let moved = starts(&app, &ids)[0];
     assert!(moved > 1000 && moved % step != 0, "{moved}");

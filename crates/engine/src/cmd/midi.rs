@@ -132,8 +132,8 @@ fn new_clip(e: &mut Engine, p: &Value) -> Result<Value> {
     if r.is_empty() {
         let s = e.session();
         let bar = soundcraft_time::GridValue::Note { value: soundcraft_time::NoteValue::Bar, dotted: false, triplet: false };
-        let start = bar.line_at_or_before(r.start, s.sample_rate, &s.tempo, s.frame_rate);
-        r = soundcraft_time::Range::new(start, bar.next_line(start, s.sample_rate, &s.tempo, s.frame_rate));
+        let start = bar.line_at_or_before(r.start, &s.grid_ctx());
+        r = soundcraft_time::Range::new(start, bar.next_line(start, &s.grid_ctx()));
     }
     let s = e.session_mut();
     let id = s.new_clip_id();

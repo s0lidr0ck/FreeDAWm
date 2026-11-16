@@ -82,7 +82,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
 | Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
 | Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; "1/4 dotted" typed as a command fails to parse |
-| Grid in time, frames and samples | ● | ● | ● | ● | **Partial**: lines no longer drift (bug 18, partly fixed); time and frame lines still count from zero, not the timecode start |
+| Grid in time, frames and samples | ● | ● | ● | ● | **Works**: lines do not drift and count from the session's timecode start (bug 18, fixed) |
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
 | Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
@@ -282,7 +282,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 15 | **Fixed.** Dragging a folder track moved the folder without its members. `track.move` now moves a folder with the tracks inside it at any level unless a count is given (`edit::folder_block`), and the drag passes that count and refuses a drop inside the folder itself. Test: `engine/tests/editing_parity.rs` (the drag itself not checked in a GUI) | `engine/src/cmd/track.rs` (`move_track`); `ui-egui/src/edit_window.rs` |
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
-| 18 | **Partly fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Left: the lines still count from sample 0, not the timecode start; that needs the start passed to every grid call. Test: `time` `frame_lines_do_not_drift_over_an_hour` | `time/src/grid.rs` (`line_at_or_before`, `next_line`) |
+| 18 | **Fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Time, frame and sample lines now count from the session's timecode start: every grid call takes one `GridCtx` (rate, tempo map, timecode rate, timecode start; `Session::grid_ctx`) instead of three loose values. Tests: `time` `frame_lines_do_not_drift_over_an_hour`, `absolute_lines_count_from_the_timecode_start` | `time/src/grid.rs` (`GridCtx`, `line_at_or_before`, `next_line`) |
 | 19 | **Fixed.** "Delete Unused Playlists" removed take layers but left the comp's references to them, and the record target (an index) went stale. It now keeps the layers the comp was swiped from, re-points the comp's references and the record target at the layers that stay, and clears a target that went. (`comp.layer_delete` already re-indexed them.) Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/track.rs` (`delete_unused_playlists`) |
 | 20 | **Fixed.** Processing a clip did not shorten fades to the new length, clear warp markers or swap the fades on Reverse, and rendered a muted clip to silence. Fades are now kept inside the new length, warp markers cleared, Reverse swaps the fades and mirrors the sync point, and a muted clip is processed as it sounds unmuted. The handles are kept now too (tier 2). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/audiosuite.rs` |
 | 21 | **Fixed.** Coalescing volume automation to clip gain changed only the active playlist, then zeroed the fader, so other playlists changed level. Every playlist and take layer's clips now take the level. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit_more.rs` (`coalesce_volume_to_clip_gain`) |
@@ -333,7 +333,7 @@ clips and finds unused files; the Scrubber plays audio; warp markers drawn and e
 round); clip transpose, real-time clip loop and reverse (third round). Not done: overlap modes with a front/back order;
 edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
-dragging; bug 18's timecode origin; every tier-3 item; ARA 2 hosting.
+dragging; every tier-3 item; ARA 2 hosting.
 
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
@@ -381,3 +381,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 13 fixed: Clip Effects modules are made off the audio thread |
 | 2026-11-16 | minor | Tier 2: warp markers drawn on the clip, added, dragged and deleted |
 | 2026-11-16 | minor | Tier 2: clip transpose, reverse and loop in place, in real time; the loop trim |
+| 2026-11-16 | minor | Bug 18 fixed: grid lines count from the timecode start |
