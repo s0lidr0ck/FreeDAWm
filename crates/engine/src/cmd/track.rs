@@ -218,6 +218,18 @@ pub fn specs() -> Vec<CommandSpec> {
             {
                 return Err(bad("track.vca", "`vca` must be a VCA Master track"));
             }
+            // A VCA may follow another VCA, but never itself, through any chain.
+            if let Some(v) = vca {
+                let s = e.session();
+                let mut at = Some(v);
+                for _ in 0..=soundcraft_mix::MAX_VCA_DEPTH {
+                    let Some(cur) = at else { break };
+                    if tracks.contains(&cur) {
+                        return Err(bad("track.vca", "a VCA can't follow itself (through the VCAs it controls)"));
+                    }
+                    at = s.track(cur).and_then(|t| t.mixer.vca).map(soundcraft_model::TrackId);
+                }
+            }
             let s = e.session_mut();
             for t in &tracks {
                 if let Some(tr) = s.track_mut(*t) {
@@ -1636,6 +1648,19 @@ mod tests {
         assert_eq!(vca(&e), None);
         assert!(e.undo());
         assert_eq!(vca(&e), Some(master.0));
+    }
+
+    /// A VCA can follow another VCA (nested VCAs), but never itself through the chain.
+    #[test]
+    fn vcas_nest_without_loops() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "vca", "name": "Inner"})).unwrap();
+        e.execute("track.new", &json!({"kind": "vca", "name": "Outer"})).unwrap();
+        let (inner, outer) = (e.session().tracks[0].id, e.session().tracks[1].id);
+        e.execute("track.vca", &json!({"tracks": [inner.0], "vca": outer.0})).unwrap();
+        assert_eq!(e.session().track(inner).unwrap().mixer.vca, Some(outer.0));
+        assert!(e.execute("track.vca", &json!({"tracks": [outer.0], "vca": inner.0})).is_err(), "a loop");
+        assert!(e.execute("track.vca", &json!({"tracks": [outer.0], "vca": outer.0})).is_err(), "itself");
     }
 
     #[test]

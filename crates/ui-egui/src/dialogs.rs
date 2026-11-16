@@ -49,6 +49,20 @@ impl BounceRange {
     }
 }
 
+/// What a mix group can link, as `track.group` names it, with the Group dialog's labels.
+pub const GROUP_ATTRIBUTES: [(&str, &str); 7] = [
+    ("volume", "Volume"),
+    ("mute", "Mute"),
+    ("solo", "Solo"),
+    ("record", "Record"),
+    ("pan", "Pan"),
+    ("sends", "Sends"),
+    ("automation", "Automation mode"),
+];
+
+/// What a new group links (as `track.group` without `attributes`).
+const DEFAULT_GROUP_ATTRIBUTES: [&str; 4] = ["volume", "mute", "solo", "record"];
+
 #[derive(Debug, Clone)]
 pub enum Dialog {
     NewTracks {
@@ -163,6 +177,8 @@ pub enum Dialog {
         edit: bool,
         mix: bool,
         members: Vec<(u64, String, bool)>,
+        /// What the members share, one switch per `GROUP_ATTRIBUTES` entry.
+        attributes: Vec<(&'static str, &'static str, bool)>,
     },
     Session {
         frame_rate: String,
@@ -315,7 +331,8 @@ impl Dialogs {
             n += 1;
         }
         let members = s.tracks.iter().map(|t| (t.id.0, t.name.clone(), members.contains(&t.id))).collect();
-        self.open = Some(Dialog::Group { id: None, name: format!("Group {n}"), edit: true, mix: true, members });
+        let attributes = GROUP_ATTRIBUTES.iter().map(|&(a, l)| (a, l, DEFAULT_GROUP_ATTRIBUTES.contains(&a))).collect();
+        self.open = Some(Dialog::Group { id: None, name: format!("Group {n}"), edit: true, mix: true, members, attributes });
     }
 
     /// Groups list › Modify Group…: the creation dialog, pre-filled from an existing group. False
@@ -324,7 +341,8 @@ impl Dialogs {
         let s = e.session();
         let Some(g) = s.group(id) else { return false };
         let members = s.tracks.iter().map(|t| (t.id.0, t.name.clone(), g.members.contains(&t.id))).collect();
-        self.open = Some(Dialog::Group { id: Some(id), name: g.name.clone(), edit: g.edit, mix: g.mix, members });
+        let attributes = GROUP_ATTRIBUTES.iter().map(|&(a, l)| (a, l, g.attributes.iter().any(|x| x == a))).collect();
+        self.open = Some(Dialog::Group { id: Some(id), name: g.name.clone(), edit: g.edit, mix: g.mix, members, attributes });
         true
     }
 
@@ -1086,7 +1104,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ));
                     }
                 }
-                Dialog::Group { id, name, edit, mix, members } => {
+                Dialog::Group { id, name, edit, mix, members, attributes } => {
                     ui.horizontal(|ui| {
                         ui.label("Name");
                         ui.text_edit_singleline(name);
@@ -1094,6 +1112,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.horizontal(|ui| {
                         crate::widgets::checkbox(ui, edit, "Edit group");
                         crate::widgets::checkbox(ui, mix, "Mix group");
+                    });
+                    ui.label("Linked in the mix");
+                    ui.horizontal_wrapped(|ui| {
+                        for (_, label, on) in attributes.iter_mut() {
+                            crate::widgets::checkbox(ui, on, *label);
+                        }
                     });
                     ui.label("Tracks");
                     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
@@ -1104,7 +1128,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     let ids: Vec<u64> = members.iter().filter(|m| m.2).map(|m| m.0).collect();
                     // Both commands reject an empty group, so don't offer an OK that can only fail.
                     if buttons_enabled(ui, "OK", enter, !ids.is_empty()) {
-                        let mut params = json!({"name": name, "edit": edit, "mix": mix, "tracks": ids});
+                        let linked: Vec<&str> = attributes.iter().filter(|a| a.2).map(|a| a.0).collect();
+                        let mut params = json!({"name": name, "edit": edit, "mix": mix, "tracks": ids, "attributes": linked});
                         let cmd = match id {
                             Some(g) => {
                                 params["group"] = json!(g.0);

@@ -3197,11 +3197,12 @@ fn process_strip(
             d.extend_from_slice(src.get(..frames).unwrap_or(&[]));
         }
     }
-    let vca = t.mixer.vca.and_then(|vid| s.tracks.iter().find(|x| x.id.0 == vid && x.kind == TrackKind::Vca));
-    // VCA master: its mute mutes the member (its fader offsets the member's, below).
-    let held_mute = t.mixer.mute || solo_muted || vca.is_some_and(|v| v.mixer.mute);
+    let vcas = vca_chain(s, t);
+    // VCA masters (a VCA can follow another): each one's mute mutes the member (their faders
+    // offset the member's, below).
+    let held_mute = t.mixer.mute || solo_muted || vcas.iter().flatten().any(|v| v.mixer.mute);
     strip.muted = strip.muted || held_mute;
-    fader_gains(t, vca, apos, frames, &mut strip.fader_gain);
+    fader_gains(t, &vcas, apos, frames, &mut strip.fader_gain);
     // The mute: from where the last block left it, ramping (never switching) to what the mute,
     // the solo, the VCA and the mute lane ask, sample by sample.
     if !strip.mute_settled {
@@ -3238,27 +3239,49 @@ fn process_strip(
 /// +12 dB. A block whose lanes bend or have a breakpoint inside it is read sample by sample, so a
 /// breakpoint is honoured wherever it falls and any block size plays the same; otherwise it ramps
 /// linearly between its first and last samples. `out` has room for `frames` (reserved in `sync`).
-fn fader_gains(t: &Track, vca: Option<&Track>, at: Samples, frames: usize, out: &mut Vec<f32>) {
+/// How deep VCA masters may follow one another (a VCA on a VCA on …).
+pub const MAX_VCA_DEPTH: usize = 8;
+
+/// The VCA masters over `t`: its own, then the one that VCA follows, and so on (at most
+/// [`MAX_VCA_DEPTH`], stopping at a loop). Doesn't allocate.
+fn vca_chain<'a>(s: &'a Session, t: &Track) -> [Option<&'a Track>; MAX_VCA_DEPTH] {
+    let mut out: [Option<&'a Track>; MAX_VCA_DEPTH] = [None; MAX_VCA_DEPTH];
+    let mut next = t.mixer.vca;
+    for i in 0..MAX_VCA_DEPTH {
+        let Some(v) = next.and_then(|vid| s.tracks.iter().find(|x| x.id.0 == vid && x.kind == TrackKind::Vca)) else { break };
+        if v.id == t.id || out.iter().take(i).flatten().any(|o| o.id == v.id) {
+            break;
+        }
+        if let Some(slot) = out.get_mut(i) {
+            *slot = Some(v);
+        }
+        next = v.mixer.vca;
+    }
+    out
+}
+
+fn fader_gains(t: &Track, vcas: &[Option<&Track>], at: Samples, frames: usize, out: &mut Vec<f32>) {
     out.clear();
     let last = at.saturating_add(frames.saturating_sub(1) as i64);
     let reads = |tr: &Track| tr.mixer.automation_mode.reads();
     let trim = t.lane(&AutoParam::Trim).filter(|l| reads(t) && !l.points.is_empty());
     let vol =
         t.lane(&AutoParam::Volume).filter(|l| reads(t) && t.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty());
-    let vca_vol = vca.and_then(|v| {
-        v.lane(&AutoParam::Volume).filter(|l| reads(v) && v.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty())
-    });
+    fn vca_vol(v: &Track) -> Option<&soundcraft_model::AutomationLane> {
+        let m = v.mixer.automation_mode;
+        v.lane(&AutoParam::Volume).filter(|l| m.reads() && m != soundcraft_model::AutomationMode::Write && !l.points.is_empty())
+    }
     let db = |p: Samples| {
         let mut d = volume_db_at(t, p);
         if let Some(l) = trim {
             d += l.value_at(p, 0.0);
         }
-        if let Some(v) = vca {
+        for v in vcas.iter().flatten() {
             d += volume_db_at(v, p);
         }
         d.min(12.0)
     };
-    let exact = [vol, trim, vca_vol].into_iter().flatten().any(|l| bends_within(l, at, last));
+    let exact = [vol, trim].into_iter().flatten().chain(vcas.iter().flatten().filter_map(|v| vca_vol(v))).any(|l| bends_within(l, at, last));
     if exact {
         out.extend((0..frames).map(|i| db_to_gain(db(at.saturating_add(i as i64)))));
     } else {
@@ -6465,6 +6488,29 @@ mod tests {
         assert!(cue(&mut eng, &s, 6 * 512).0.abs() < 1e-6, "muted");
         s.edit.set_flag(PRE_SENDS_IGNORE_MUTE, true);
         assert!((cue(&mut eng, &s, 7 * 512).0 - 0.5).abs() < 1e-3, "the pre-fader send ignores the mute");
+    }
+
+    /// A VCA can follow another VCA: the outer one's fader and mute reach the inner one's
+    /// members too; a loop of VCAs stops where it closes.
+    #[test]
+    fn nested_vcas_add_their_faders() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        let inner = s.add_track(TrackKind::Vca, ChannelFormat::Stereo, None);
+        let outer = s.add_track(TrackKind::Vca, ChannelFormat::Stereo, None);
+        s.track_mut(t).unwrap().mixer.vca = Some(inner.0);
+        s.track_mut(inner).unwrap().mixer.vca = Some(outer.0);
+        s.track_mut(inner).unwrap().mixer.volume_db = -6.0;
+        s.track_mut(outer).unwrap().mixer.volume_db = -6.0;
+        let level = |s: &Session| render_range(s, Range::new(0, 4800), 512)[0][2000];
+        let c = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((level(&s) - c * db_to_gain(-12.0)).abs() < 5e-4, "{}", level(&s));
+        // A loop (outer follows inner) counts each VCA once.
+        s.track_mut(outer).unwrap().mixer.vca = Some(inner.0);
+        assert!((level(&s) - c * db_to_gain(-12.0)).abs() < 5e-4);
+        s.track_mut(outer).unwrap().mixer.vca = None;
+        s.track_mut(outer).unwrap().mixer.mute = true;
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!(out[0][4000].abs() < 1e-6, "the outer VCA's mute mutes the member");
     }
 
     /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).

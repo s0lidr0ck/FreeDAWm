@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: sends to outputs and tracks) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: group attributes in the dialog, nested VCAs) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -34,7 +34,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
-| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
+| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes, nested VCAs | Medium: no listen bus |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
@@ -109,9 +109,9 @@ K-system scales, and the master a loudness meter.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
-| Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Partial**: volume, mute, solo, record, pan, sends and automation mode, by command (`track.group`, `track.group_modify` `attributes`); the Group dialog does not offer them yet; inserts are not linked |
+| Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Works** for volume, mute, solo, record, pan, sends and automation mode, in the Group dialog (Create and Modify) and by command; inserts are not linked |
 | Suspend all groups | ● | ● | ● | ● | **Works**: Options › More › Suspend All Groups |
-| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned from the track menu (VCA ▸, in the Edit and Mix windows); its solo solos its members |
+| VCA masters | ● | ● | ● | ● | **Works**: assigned from the track menu (VCA ▸, in the Edit and Mix windows), nested up to eight deep (a VCA follows another; loops refused), each one's fader, mute and solo reaching the members below |
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
@@ -274,7 +274,7 @@ one a mix engineer would not forgive.
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
-| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command), suspend all and VCA assignment done**; attributes in the Group dialog and nested VCAs remain |
+| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Done** |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: group attributes in the dialog, nested VCAs |
 | 2026-11-16 | minor | tier 2: sends to outputs and tracks |
 | 2026-11-16 | minor | tier 2: width, balance and track delay |
 | 2026-11-16 | minor | tier 2: RMS and K scales, a master loudness meter |

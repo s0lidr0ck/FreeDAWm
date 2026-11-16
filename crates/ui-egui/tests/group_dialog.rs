@@ -55,11 +55,13 @@ fn modify_group_dialog_edits_the_existing_group() {
     assert!(app.dialogs.open_modify_group(&app.engine, soundcraft_model::GroupId(g)));
     assert_eq!(app.dialogs.open_name(), Some("modify_group"));
     // Pre-filled from the group, not from the track selection.
-    let Some(soundcraft_ui_egui::dialogs::Dialog::Group { id, name, edit, mix, members }) = &app.dialogs.open else {
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Group { id, name, edit, mix, members, attributes }) = &app.dialogs.open else {
         panic!("Modify Group… did not open the group dialog");
     };
     assert_eq!((id.map(|i| i.0), name.as_str(), *edit, *mix), (Some(g), "Drums", true, true));
     assert_eq!(members.iter().filter(|m| m.2).map(|m| m.0).collect::<Vec<_>>(), vec![tracks[0].0]);
+    let linked: Vec<&str> = attributes.iter().filter(|a| a.2).map(|a| a.0).collect();
+    assert_eq!(linked, ["volume", "mute", "solo", "record"], "the group's attributes, ticked");
 
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut SoundApp| {
@@ -70,8 +72,10 @@ fn modify_group_dialog_edits_the_existing_group() {
         app,
     );
     h.run_steps(3);
-    // Add a second track and submit.
+    // Add a second track, link the pan as well, and submit.
     h.get_by_role_and_label(Role::CheckBox, &tracks[1].1).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Pan").click();
     h.run_steps(2);
     h.get_by_role_and_label(Role::Button, "OK").click();
     h.run_steps(2);
@@ -82,4 +86,5 @@ fn modify_group_dialog_edits_the_existing_group() {
     assert_eq!(gr.id.0, g);
     assert_eq!(gr.name, "Drums");
     assert_eq!(gr.members.iter().map(|m| m.0).collect::<Vec<_>>(), vec![tracks[0].0, tracks[1].0]);
+    assert_eq!(gr.attributes, ["volume", "mute", "solo", "record", "pan"], "the dialog's attribute switches reach the group");
 }

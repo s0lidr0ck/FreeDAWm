@@ -88,9 +88,18 @@ impl SoloScope {
         // A soloed VCA master solos its members (it has no audio path of its own). Looked up only
         // while one is soloed.
         let vca_solo = s.tracks.iter().any(|t| t.kind == TrackKind::Vca && soloed(t));
+        // A VCA can follow another: the nearest soloed one over the track (at most eight deep).
         let master_of = |t: &Track| -> Option<usize> {
-            let v = t.mixer.vca.filter(|_| vca_solo && !t.inactive)?;
-            s.tracks.iter().position(|m| m.id.0 == v && m.kind == TrackKind::Vca && soloed(m))
+            let mut v = t.mixer.vca.filter(|_| vca_solo && !t.inactive)?;
+            for _ in 0..8 {
+                let i = s.tracks.iter().position(|m| m.id.0 == v && m.kind == TrackKind::Vca)?;
+                let m = s.tracks.get(i)?;
+                if soloed(m) {
+                    return Some(i);
+                }
+                v = m.mixer.vca?;
+            }
+            None
         };
         cause.extend(s.tracks.iter().enumerate().map(|(i, t)| {
             if soloed(t) { u32::try_from(i).unwrap_or(NONE) } else { master_of(t).and_then(|m| u32::try_from(m).ok()).unwrap_or(NONE) }
@@ -275,6 +284,18 @@ mod tests {
         let out = at(k.kick_out);
         k.s.track_mut(k.kick_out).unwrap().inactive = true;
         assert!(SoloScope::of(&k.s).muted(out));
+    }
+
+    /// Nested VCAs: soloing the outer VCA solos the members of the VCA that follows it.
+    #[test]
+    fn soloing_an_outer_vca_solos_the_inner_ones_members() {
+        let mut k = kit();
+        let inner = k.s.add_track(TrackKind::Vca, ChannelFormat::Mono, Some("Kicks"));
+        let outer = k.s.add_track(TrackKind::Vca, ChannelFormat::Mono, Some("Drums"));
+        k.s.track_mut(k.kick_in).unwrap().mixer.vca = Some(inner.0);
+        k.s.track_mut(inner).unwrap().mixer.vca = Some(outer.0);
+        solo(&mut k.s, outer);
+        assert_eq!(muted(&k.s, &[k.kick_in, k.snare]), vec![false, true]);
     }
 
     #[test]
