@@ -106,6 +106,8 @@ pub fn cpp_reference(plugin_id: &str) -> Option<Box<dyn Plugin>> {
         // half-band oversampling with a reported latency, not the C++'s Butterworth
         "fs_dist" => Box::new(dist::Dist::cpp_reference()),
         "fs_filter" => Box::new(filter::Filter::cpp_reference()),
+        // the output cuts redesigned at the prepared rate
+        "fs_reverb" => Box::new(reverb::ReverbEngine::cpp_reference()),
         _ => return None,
     };
     p.prepare(48_000.0, 1024, 2);
