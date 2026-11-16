@@ -726,15 +726,18 @@ pub enum Gesture {
         copy: bool,
         keep_time: bool,
     },
+    /// A trim of a clip's start (`stretch`: Alt held at the press, the material stretches to fill).
     TrimStart {
         clip: soundcraft_model::ClipId,
         track: TrackId,
         to: Samples,
+        stretch: bool,
     },
     TrimEnd {
         clip: soundcraft_model::ClipId,
         track: TrackId,
         to: Samples,
+        stretch: bool,
     },
     Fade {
         clip: soundcraft_model::ClipId,

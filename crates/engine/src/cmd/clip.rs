@@ -148,6 +148,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("clip.remove_warp", "Remove Warp", ["Clip"], None, "{clips?}", has_selection, remove_warp),
         cmd!(
+            "clip.stretch_to",
+            "Stretch Clip",
+            [],
+            None,
+            "{clip, start?: position, end?: position} — stretches an audio clip so its edges reach these points (the other edge stays): by its track's Elastic algorithm, by speed on a Varispeed track, pitch-preserving (polyphonic) on a plain one",
+            always,
+            stretch_to
+        ),
+        cmd!(
             "clip.place_source",
             "Place Audio File",
             [],
@@ -203,11 +212,17 @@ pub fn specs() -> Vec<CommandSpec> {
 pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let ratio = f64_or(p, "ratio", 1.0).clamp(0.05, 20.0);
+    // `render`: a plain (not Elastic) track renders pitch-preserving too, as a stretch trim does.
+    let render = bool_or(p, "render", false);
     let s = e.session_mut();
     let mut rendered = 0;
     for id in &ids {
         let Some((t, c)) = s.find_clip(*id).map(|(t, c)| (t, c.clone())) else { continue };
-        let elastic = s.track(t).and_then(|x| x.elastic.clone()).filter(|a| a != "varispeed");
+        let elastic = match s.track(t).and_then(|x| x.elastic.clone()) {
+            Some(a) if a == "varispeed" => None,
+            Some(a) => Some(a),
+            None => render.then(|| "polyphonic".to_string()),
+        };
         // Start from the unwarped original if this clip was warped before.
         let key = |k: &str| format!("elastic.{}.{k}", id.0);
         let orig = warp_original(s, *id);
@@ -258,6 +273,40 @@ pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
         rendered += 1;
     }
     Ok(json!({"ratio": ratio, "rendered": rendered}))
+}
+
+/// The stretch trim: `clip`'s start or end moves to the point given, the material stretched to
+/// fill it, the other edge staying where it is. The ratio counts from the clip's original
+/// material when it was stretched before, so stretching again does not stretch a stretch.
+fn stretch_to(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.stretch_to";
+    let id = clip_id(p, C)?;
+    let start = position_param(e, C, p, "start")?;
+    let end = position_param(e, C, p, "end")?;
+    let (track, c) = e.session().find_clip(id).map(|(t, c)| (t, c.clone())).ok_or_else(|| bad(C, "no such clip"))?;
+    if !c.is_audio() {
+        return Err(bad(C, "only audio clips stretch"));
+    }
+    if c.edit_locked {
+        return Err(bad(C, "the clip is edit-locked"));
+    }
+    let (a, b) = (start.unwrap_or(c.start).max(0), end.unwrap_or(c.end()));
+    if b <= a || (start.is_none() && end.is_none()) {
+        return Err(bad(C, "give a start or an end that leaves the clip some length"));
+    }
+    let rel = (b - a) as f64 / c.length.max(1) as f64;
+    let was = e.session().edit.values.get(&format!("elastic.{}.ratio", id.0)).copied().filter(|r| r.is_finite() && *r > 0.0);
+    let varispeed = e.session().track(track).is_some_and(|t| t.elastic.as_deref() == Some("varispeed"));
+    // Varispeed counts from the clip's stretch; a render from its original material's length.
+    let ratio = if varispeed { c.stretch_ratio() * rel } else { was.unwrap_or(1.0) * rel };
+    // The start edge dragged: the clip moves to its new start first, then grows or shrinks to
+    // the end that stays (so it never runs over the clip after it on the way).
+    if a != c.start {
+        crate::edit::move_clips(e.session_mut(), &[id], a - c.start, &[]);
+    }
+    elastic(e, &json!({"clips": [id.0], "ratio": ratio, "render": true}))?;
+    let c = e.session().find_clip(id).map(|(_, x)| (x.start, x.length)).unwrap_or_default();
+    Ok(json!({"start": c.0, "end": c.0 + c.1}))
 }
 
 fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -519,6 +568,35 @@ mod tests {
         e.execute("edit.repeat", &json!({"count": 2})).unwrap();
         let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
         assert_eq!(spans, vec![(0, 96_000), (96_000, 96_000), (192_000, 96_000)]);
+    }
+
+    /// The stretch trim: the end edge dragged stretches the material to it (pitch-preserving on a
+    /// plain track, rendered); the start edge keeps the end; on a Varispeed track it is the speed.
+    #[test]
+    fn a_stretch_trim_fills_the_new_edges() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
+        let c = e.session().track(pad).unwrap().clips()[0].clone();
+        let (start, len) = (c.start, c.length);
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 3 / 2})).unwrap();
+        let now = e.session().find_clip(c.id).unwrap().1.clone();
+        assert_eq!((now.start, now.stretch), (start, 1.0));
+        assert!((now.length - len * 3 / 2).abs() <= 1, "{} vs {}", now.length, len * 3 / 2);
+        assert_ne!(now.source(), c.source(), "rendered to a new file, pitch kept");
+        // Back to the original length by the start edge: the end stays, it counts from the original.
+        let end = now.end();
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "start": end - len})).unwrap();
+        let back = e.session().find_clip(c.id).unwrap().1.clone();
+        assert_eq!(back.end(), end);
+        assert!((back.length - len).abs() <= 1);
+        // On a Varispeed track it is the speed.
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("track.elastic", &json!({"track": pad.0, "algorithm": "varispeed"})).unwrap();
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 2})).unwrap();
+        let vari = e.session().find_clip(c.id).unwrap().1.clone();
+        assert!((vari.stretch - 2.0).abs() < 1e-6 && vari.length == len * 2 && vari.source() == c.source());
+        assert!(e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start})).is_err(), "no length left");
     }
 
     #[test]

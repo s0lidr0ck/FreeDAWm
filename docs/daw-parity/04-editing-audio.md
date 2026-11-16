@@ -61,7 +61,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Object grabber, drag between tracks, modifier to copy | ● | ● | ● | ● | **Works** |
 | Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Missing** |
 | Trim tool | ● | ● | ● | ● | **Works**; stops at file ends and neighbours |
-| Stretch by dragging a clip edge | ● | ● | ● | ● | **Missing** as a tool; a command stretches a clip to the selection |
+| Stretch by dragging a clip edge | ● | ● | ● | ● | **Works**: Alt held as a trim starts (Trim tool or the Smart Tool's edge) stretches the material to the new edge, by the track's Elastic algorithm (pitch-preserving on a plain track, speed on Varispeed) |
 | Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Missing** |
 | Smart / combined tool | ● | ● | ● | ● | **Works**: trim, select, grab, fades, fade curve, clip gain by zone |
 | Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Missing** |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: stretch by dragging a clip edge (Alt-trim) |
 | 2026-11-16 | minor | Tier 2: the Elastic algorithm menu chooses a different stretch |
 | 2026-11-16 | minor | Tier 2: audio on tick tracks follows tempo-map edits |
 | 2026-11-16 | minor | Tier 2: processing keeps handles |

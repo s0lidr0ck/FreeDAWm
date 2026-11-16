@@ -3272,9 +3272,9 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
                     })
                 }),
             Tool::Trim => hit.as_ref().map(|c| match near_edge(c) {
-                Some(false) => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end() },
-                _ if at_origin - c.start < c.end() - at_origin => Gesture::TrimStart { clip: c.id, track: track.id, to: c.start },
-                _ => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end() },
+                Some(false) => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt },
+                _ if at_origin - c.start < c.end() - at_origin => Gesture::TrimStart { clip: c.id, track: track.id, to: c.start, stretch: mods.alt },
+                _ => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end(), stretch: mods.alt },
             }),
             Tool::Scrubber => {
                 // The track pressed, or every selected track when it is one of them.
@@ -3785,6 +3785,9 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
                 }
             }
         }
+        // Alt at the press: a stretch trim, the material stretched to the new edge.
+        Some(Gesture::TrimStart { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, true),
+        Some(Gesture::TrimEnd { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, false),
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, .. }) => trim_clip(app, clip, to, false),
         Some(Gesture::MidiClip { track, from, to }) => new_midi_clip(app, s, track, from, to),
@@ -3893,6 +3896,16 @@ fn drop_clips(app: &mut SoundApp, clips: Vec<ClipId>, delta: Samples, from: Trac
     let s = app.engine.session();
     let spot = Spot::clips(s, grabbed_first(s, &clips, from), (to != from).then_some(to), delta);
     spot_or_run(app, spot);
+}
+
+fn stretch_clip(app: &mut SoundApp, clip: ClipId, to: Samples, start: bool) {
+    let unchanged = app.engine.session().find_clip(clip).is_some_and(|(_, c)| if start { c.start == to } else { c.end() == to });
+    if !unchanged {
+        let edge = if start { "start" } else { "end" };
+        if let Err(e) = app.run("clip.stretch_to", json!({"clip": clip.0, edge: to})) {
+            app.ui.status = e;
+        }
+    }
 }
 
 fn trim_clip(app: &mut SoundApp, clip: ClipId, to: Samples, start: bool) {
@@ -4340,6 +4353,25 @@ mod tests {
         click_with(&mut h, second, egui::Modifiers::ALT);
         h.run_steps(2);
         assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.gain_env.len(), 1);
+    }
+
+    /// Alt held as a trim starts makes it a stretch trim: the clip takes the new length by
+    /// stretching its material rather than showing more or less of it.
+    #[test]
+    fn an_alt_trim_stretches_the_clip() {
+        let mut h = smart_demo();
+        let tl = timeline(&h);
+        let (clip, lane) = clip_on_screen(&h, |a, b| b - a > 120.0 && a > tl.min.x + 10.0 && b < tl.max.x - 200.0);
+        let s = h.state().engine.session().clone();
+        let edge = pos2(x_of(&s, tl, clip.end()) - 2.0, lane.center().y + lane.height() / 4.0);
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        drag(&mut h, edge, edge + vec2(80.0, 0.0));
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.step();
+        let now = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert_eq!(now.start, clip.start);
+        assert!(now.length > clip.length, "{} → {}", clip.length, now.length);
+        assert!(now.source() != clip.source() || (now.stretch - 1.0).abs() > 1e-9, "the material is stretched, not uncovered");
     }
 
     /// A Grabber drag from empty space boxes clips across tracks; Shift adds to what was selected.
