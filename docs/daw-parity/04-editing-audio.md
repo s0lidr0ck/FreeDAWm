@@ -82,7 +82,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
 | Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
 | Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; "1/4 dotted" typed as a command fails to parse |
-| Grid in time, frames and samples | ● | ● | ● | ● | **Partial**: steps round to whole samples, so a frame grid at 29.97 fps drifts |
+| Grid in time, frames and samples | ● | ● | ● | ● | **Partial**: lines no longer drift (bug 18, partly fixed); time and frame lines still count from zero, not the timecode start |
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
 | Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Missing**: only the grid is ever snapped to |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Missing** |
@@ -282,7 +282,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 15 | Dragging a folder track moves the folder without its members | `ui-egui/src/edit_window.rs:1301` |
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
-| 18 | Time and frame grids round the step to whole samples: 29.97 fps at 48 kHz drifts about 0.9 s an hour, and both ignore the timecode start | `time/src/grid.rs:127-128, 159-160` |
+| 18 | **Partly fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Left: the lines still count from sample 0, not the timecode start; that needs the start passed to every grid call. Test: `time` `frame_lines_do_not_drift_over_an_hour` | `time/src/grid.rs` (`line_at_or_before`, `next_line`) |
 | 19 | "Delete Unused Playlists" removes take layers but leaves the comp's references to them; the stored target playlist is an index that goes stale | `engine/src/cmd/track.rs:159-173`; `engine/src/cmd/comp.rs:325` |
 | 20 | Processing a clip does not shorten fades to the new length, clear warp markers or swap the fades on Reverse; and it drops the handles | `engine/src/cmd/audiosuite.rs:69-121` |
 | 21 | Coalescing volume automation to clip gain changes only the active playlist, then zeroes the fader, so other playlists change level | `engine/src/cmd/edit_more.rs:812-826` |
@@ -349,3 +349,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 10, 11 and 22 fixed: Commit keeps pan and automation, Strip Silence keeps muted clips, Export Clips writes each clip alone |
 | 2026-11-16 | minor | Bugs 12 and 14 fixed: Conform keeps the pitch on Elastic tracks; front/back no longer unsorts the playlist |
 | 2026-11-16 | minor | Bugs 16 and 17 fixed: partial-selection nudge, spacing at the session start, Shuffle trim automation |
+| 2026-11-16 | minor | Bug 18 partly fixed: time and frame grid lines no longer drift |

@@ -155,15 +155,44 @@ impl GridValue {
                 let k = (t - bar_tick).div_euclid(step);
                 map.tick_to_samples(bar_tick + k * step, sr)
             }
-            _ => {
-                let step = self.step_samples(pos, sr, map, rate);
-                pos.div_euclid(step).saturating_mul(step)
-            }
+            _ => match self.exact_step(sr, rate) {
+                // Line `k` is at `k × step` rounded, so a step that is not a whole number of
+                // samples (a frame at 29.97 fps) does not drift.
+                Some(step) => {
+                    let line = |k: f64| to_samples(k * step);
+                    let mut k = (pos as f64 / step).floor();
+                    if line(k) > pos {
+                        k -= 1.0;
+                    } else if line(k + 1.0) <= pos {
+                        k += 1.0;
+                    }
+                    line(k)
+                }
+                None => {
+                    let step = self.step_samples(pos, sr, map, rate);
+                    pos.div_euclid(step).saturating_mul(step)
+                }
+            },
         }
+    }
+
+    /// The exact step of a time or frame grid in samples, when it is not a whole number of them.
+    fn exact_step(&self, sr: SampleRate, rate: FrameRate) -> Option<f64> {
+        let step = match *self {
+            GridValue::Seconds(s) => sr.as_f64() * s.clamp(0.000_01, 3600.0),
+            GridValue::Frames(f) => rate.samples_per_frame(sr) * f.clamp(1, 1_000_000) as f64,
+            GridValue::Note { .. } | GridValue::Samples(_) => return None,
+        };
+        (step.is_finite() && step >= 1.0 && step.fract() != 0.0).then_some(step)
     }
 
     /// The first grid line strictly after `line`.
     pub fn next_line(&self, line: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
+        if let Some(step) = self.exact_step(sr, rate) {
+            let at = self.line_at_or_before(line, sr, map, rate);
+            let next = to_samples((at as f64 / step).round() * step + step);
+            return if next > line { next } else { to_samples(((line as f64 / step).floor() + 1.0) * step) };
+        }
         let step = self.step_samples(line, sr, map, rate);
         let candidate = self.line_at_or_before(line.saturating_add(step), sr, map, rate);
         if candidate > line { candidate } else { line.saturating_add(step) }
@@ -190,6 +219,20 @@ impl GridValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parity bug 18: a frame grid at 29.97 fps (1601.6 samples a frame at 48 kHz) does not drift.
+    #[test]
+    fn frame_lines_do_not_drift_over_an_hour() {
+        let (sr, map) = (SampleRate::HZ_48000, TempoMap::default());
+        let rate = FrameRate::Fps29_97;
+        let g = GridValue::Frames(1);
+        let frames_in_hour = (3600.0 * 30_000.0 / 1001.0) as i64;
+        let exact = (frames_in_hour as f64 * 48_000.0 * 1001.0 / 30_000.0).round() as Samples;
+        assert_eq!(g.line_at_or_before(exact + 3, sr, &map, rate), exact);
+        assert_eq!(g.snap(exact + 3, sr, &map, rate), exact);
+        let prev = g.line_at_or_before(exact - 1, sr, &map, rate);
+        assert_eq!(g.next_line(prev, sr, &map, rate), exact);
+    }
 
     #[test]
     fn grid_lines_are_their_own_line_at_odd_tempos() {
