@@ -89,7 +89,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Missing**: Low Latency Monitoring covers audio tracks only |
 | MIDI activity or velocity meter on the track | ● | ● | ● | ● | **Partial**: only on the take being recorded |
 | MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Works** (`f7169c2`): the track's output menu › Play Instrument On picks an instrument or MIDI track and a channel (`mix.midi_to_track`); the track's instrument becomes MIDI to Track, which passes what it plays (clips, live input, chase, the panic) to the target's instrument in the same block, each event on its channel, merged with the target's own notes. The source renders first, so its notes land at the same sample offsets as the target's own and share its delay compensation; a route that would feed a track into itself is refused. Mute or solo of the source lets go of its notes; a route added, changed or taken off lets go only of the notes of that track (another source's held notes sound on). Multi-output instruments (one instrument's outputs on several mixer channels) remain |
-| Instrument with several audio outputs to separate mixer channels | ● | ● | ● | ● | **Missing** |
+| Instrument with several audio outputs to separate mixer channels | ● | ● | ● | ● | **Missing**: designed, not built (Designs, *Instruments with several outputs*) |
 
 ## C. Timing
 
@@ -237,7 +237,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 7 | **Claim wrong.** Checked in midir 0.11.1's source: its CoreMIDI backend walks each packet and calls back once per message (`backend/coremidi/mod.rs`, `handle_input`); ALSA decodes one sequencer event per call and WinMM delivers one short message per call. So `parse` never sees two messages in one buffer and nothing is lost there; no code was changed. (midir itself stops reading a CoreMIDI packet at a data byte with no status byte, i.e. running status inside a packet; that is the library's, not FreeDAWm's.). Commit `47d0223`. | `playback/src/midi_in.rs:110-122` |
 | 8 | **Fixed.** A sustain or sostenuto pedal still down when a clip ends comes up on its last tick; one pressed before the take, before the punch point or held over a loop wrap is down from the clip's start (the hub keeps each port's pedals and puts them into the take's first block, `MidiHub::record_pedals`). Tests: `midi_record::tests::a_pedal_down_at_stop_comes_up_at_the_clip_end_and_one_pressed_before_is_down_from_the_start`, `a_pedal_held_over_a_loop_wrap_is_down_in_the_next_pass`; `midi_in::tests::a_pedal_down_before_the_take_is_down_in_it`. Commit `1372c52`. | `engine/src/midi_record.rs` (`pedals_down_at`, `lift_pedals`); `playback/src/midi_in.rs` |
 | 9 | **Fixed.** Recorded events the window did not collect in time are now reported at Stop, in the status line and the log, with what a lost note-off does (`midi_devices::lost_in_take`). The loss itself is not prevented: the record ring holds 16,384 events between frames. Commit `9046321`. | `ui-egui/src/midi_devices.rs`; `ui-egui/src/lib.rs` |
-| 10 | **Partly fixed** (`2a34aa9`). A port whose system identity changed between two scans (ALSA gives a replugged device a new client and port) is closed and opened afresh, and the notes and pedals it held are let go on the next block (`LiveMidi::reset`). midir's port ids are stable on macOS and Windows, so there a replug within two seconds is still not seen. Test: `midi_in::tests::identical_devices_more_than_fifteen_ports_and_a_quick_replug`. | `playback/src/midi_in.rs:437-470` |
+| 10 | **Partly fixed** (`2a34aa9`). A port whose system identity changed between two scans (ALSA gives a replugged device a new client and port) is closed and opened afresh, and the notes and pedals it held are let go on the next block (`LiveMidi::reset`). midir's port ids are stable on macOS and Windows, so there a replug within two seconds is still not seen. Checked again in the fourth round: midir offers no setup-changed notification, so the rest needs CoreMIDI's object-added/removed notifications (a CoreMIDI binding beside midir) and, on Windows, the device-change notifications of the Windows MIDI API; neither can be built or tested without a Mac or a Windows machine with a device to replug, so it is left open. Test: `midi_in::tests::identical_devices_more_than_fifteen_ports_and_a_quick_replug`. | `playback/src/midi_in.rs:437-470` |
 | 11 | **Fixed** (`2a34aa9`). Ports with the same name are listed as `<name>`, `<name> #2`, … (`midi_in::unique_names`) and each opens on its own. Test: as bug 10's. | `playback/src/midi_in.rs:526-535` |
 | 12 | **Not started** (part of the tier-2 low-latency item: the player would keep the callback's later events for its later parts; needs a loopback measurement to confirm). What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
 | 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs`. Commit `ac4252a`. | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
@@ -274,7 +274,7 @@ either wire the control or take it off the menu.
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take (`036f22e`) |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Done for the effects (`mix::midi_fx`: a host plugin around the instrument, see Designs); recording the processed output remains (takes keep the keys) |
-| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly (`f7169c2`): a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, left for the mixing work |
+| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly (`f7169c2`): a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, designed (Designs, *Instruments with several outputs*) and not built |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI); clock and MTC out (`mix::midi_sync`, `c1ae613`). The external instrument's latency remains |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
@@ -378,6 +378,45 @@ take keeps them). SysEx would need a variable-length side ring next to the 3-byt
 `CtrlKind::SysEx` in clips; bank select, RPN and NRPN would be paired into 14-bit controller
 events when a take is placed (the raw controllers kept as they are).
 
+**Instruments with several outputs on separate mixer channels (not built; design).** Today an
+instrument hands the mixer one buffer: the strip's (`Strip::buf`, the track's width), which
+`process` fills. What each layer would need:
+
+- *Plug-in trait (`soundcraft_dsp::Plugin`).* A declaration and a call, both with defaults so no
+  existing plug-in changes: `fn output_buses(&self) -> &[OutputBus]` (name and channel count of
+  each output after the main one, empty by default; read off the audio thread when the instance is
+  made), and `fn process_outputs(&mut self, main: &mut [Vec<f32>], extra: &mut [&mut [Vec<f32>]],
+  frames)` whose default calls `process(main, frames)` and leaves `extra` silent. Juke would be the
+  first built-in to fill it (a pad's or a pad group's own output), the per-pad outputs section 7
+  counts with this work.
+- *CLAP host (`crates/clap-host`).* It already gives the plug-in a buffer per output port in
+  `process` but reads back only the main one (`out_main`). It would report the ports past the main
+  one from `clap_plugin_audio_ports` (name, channel count, `CLAP_PORT_IS_MAIN`) and copy each into
+  the matching `extra` buffer; a port-configuration change (`clap_host_audio_ports::rescan`) re-makes
+  the instance off the audio thread as a parameter-layout change does.
+- *VST3 host (`crates/vst3-host`).* It would activate the auxiliary output buses
+  (`IComponent::getBusCount(kAudio, kOutput)`, `activateBus`) with speaker arrangements from
+  `getBusInfo`, give `ProcessData::outputs` one `AudioBusBuffers` per active bus and copy them out
+  the same way; inactive buses stay inactive so a plug-in that renders less when they are off
+  keeps doing so. (AU: the element count of the output scope, the same pattern.)
+- *Model and mixer.* A new track kind is not needed: an **instrument output** is an aux-like strip
+  whose input is `Route::InstrumentOut { track, output }` (stored on an Aux track the user makes from
+  the instrument track's output menu, *New Track for Output…*). The source strip keeps one fixed
+  buffer per declared output, sized in `sync`; `sidechain`'s planner orders every such aux after
+  its source (the source renders in an earlier level, as a key or a MIDI to Track source does, so
+  no block of latency is added) and refuses cycles. The aux reads the buffer as a key reads a
+  source, delayed by the difference between the source's delay compensation and its own, and then
+  runs its own inserts, fader, sends and output. Freeze and bounce follow the main output only
+  (as now); a track frozen with outputs in use is refused with a message. Mute and solo of the
+  source mute its extra outputs too (a solo of an output aux solos only that aux).
+- *Tests.* A test instrument that writes a different constant to each output: each output aux
+  receives its own, at the same sample as the main output, with its own fader; removing the aux
+  silences nothing on the main strip; a CLAP and a VST3 build of the test instrument (the
+  hosts' existing test plug-ins) declare two stereo outputs and are heard on two strips.
+
+Estimate: 14-22 h with tests (host work 4-6 each, mixer 6-10), plus hardware-free checks only;
+whether a given third-party plug-in sends audio to its aux outputs can only be checked with it.
+
 ## Sources
 
 Versions as in [section 1](01-playback-audio.md#sources). Feature entries for the four come from
@@ -431,3 +470,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI to Track: changing one route lets go only of that track's notes on the target, not every routed note |
 | 2026-11-16 | minor | Juke's pads are recorded on an armed track that listens to Musical Typing |
 | 2026-11-16 | minor | Chase after a locate follows RPN and NRPN (select, then value) and sends the bank before the program |
+| 2026-11-16 | minor | Design for instruments with several outputs on their own mixer channels (not built); bug 10's remaining part re-checked |
