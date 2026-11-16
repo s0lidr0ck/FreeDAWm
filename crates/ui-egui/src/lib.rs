@@ -99,6 +99,7 @@ pub mod tempo_ui;
 pub mod theme;
 pub mod timeline_link;
 pub mod toolbar;
+pub mod tour;
 pub mod user_files;
 mod vault_ui;
 pub mod video_track;
@@ -173,6 +174,9 @@ pub struct UiState {
     pub notes_show: String,
     /// The Lyrics tab (Window › Lyrics).
     pub show_lyrics: bool,
+    /// The first-run tour's open card (see [`tour`]); not saved.
+    #[serde(skip)]
+    pub tour_step: Option<usize>,
     /// The Lyrics tab shows each line's syllable count.
     pub lyrics_syllables: bool,
     /// The Lyrics tab letters and underlines rhyming end words.
@@ -463,6 +467,7 @@ impl Default for UiState {
             show_notes: false,
             notes_show: "open".into(),
             show_lyrics: false,
+            tour_step: None,
             lyrics_syllables: true,
             lyrics_rhymes: true,
             lyrics_rhyme_kinds: default_rhyme_kinds(),
@@ -2724,6 +2729,7 @@ impl SoundApp {
         recovery::show(self, &ctx);
         score_editor::show(self, &ctx);
         scout::panel::show(self, &ctx);
+        tour::show(self, &ctx);
         band::studio::show(self, &ctx);
         palette::show(self, &ctx);
         window_sync::settle(self);

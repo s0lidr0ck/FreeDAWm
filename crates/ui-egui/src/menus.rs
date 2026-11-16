@@ -67,6 +67,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.config_update", "Update Active Configuration", "Window > Configurations > Update Active Configuration", None),
     ("window.config_auto_update", "Auto-Update Active Configuration", "Window > Configurations > Auto-Update Active Configuration", None),
     ("window.renderer", "Renderer", "Window > Renderer", None),
+    ("window.tour", "Tour of FreeDAWm", "Window > Tour of FreeDAWm", None),
     ("window.ui_customization", "UI Customization", "Window > UI Customization", None),
     ("window.arrange_tile", "Tile", "Window > Arrange > Tile", None),
     ("window.arrange_tile_h", "Tile Horizontal", "Window > Arrange > Tile Horizontal", None),
@@ -1294,6 +1295,10 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.undo_history" => toggle(&mut app.ui.show_undo_history),
         "window.notes" => toggle(&mut app.ui.show_notes),
         "window.lyrics" => toggle(&mut app.ui.show_lyrics),
+        "window.tour" => {
+            crate::tour::open(app);
+            json!({"step": 0})
+        }
         "window.teleprompter" => toggle(&mut app.ui.show_teleprompter),
         "window.teleprompter_separate" => {
             let v = toggle(&mut app.ui.teleprompter_separate);

@@ -632,4 +632,5 @@ Window > More > ---
 Window > More > Task Manager = Window > Task Manager
 Window > More > Disk Usage = Window > Disk Usage
 Window > More > System Usage = Window > System Usage
+Window > More > Tour of FreeDAWm = Window > Tour of FreeDAWm
 Window > More > Close All Workspaces = Window > Workspaces > Close All Workspaces
