@@ -131,7 +131,7 @@ Varispeed is the only whole-project speed control among the four.
 | Gain envelope inside the clip | ● | ● | ○ | ● | **Works**, with render and conversion to and from volume automation |
 | Fades drawn in real time, several shapes | ● | ● | ● | ● | **Works**: five shapes plus a continuous curve |
 | Crossfades | ● | ● | ● | ● | **Partial**: both sides always share one shape |
-| Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Missing** |
+| Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
 | Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
 | Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
@@ -139,7 +139,7 @@ Varispeed is the only whole-project speed control among the four.
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
 | Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, in real time (section 4, E) |
 | Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Works**: the loop trim (Shift at the end trim) repeats the material in real time |
-| Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Partial**: an overlap is cut away at edit time; there is no layered editing |
+| Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Works** with Options › Overlap › Layer: the clip read gives way under a higher layer (the top clip's fades cross over to it); Overwrite, the default, still cuts the overlap away |
 | Takes and swipe comping | ● | ● | ● | ● | **Works**; a take cannot be auditioned without making it active |
 | Stereo clip on a mono track | ● | ● | ● | ● | **Works**: folded to mono at equal level |
 | Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
@@ -263,6 +263,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | layered overlapping clips and crossfade on overlap (section 4, D) |
 | 2026-11-16 | minor | warp markers you drag (section 4) |
 | 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |
 | 2026-11-16 | minor | tier 3: varispeed that keeps the pitch; shuttle forwards and backwards |

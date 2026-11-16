@@ -3107,7 +3107,8 @@ fn place_take(
             for (kept, punch_in, punch_out) in pieces {
                 let cid = s.new_clip_id();
                 let off = from.saturating_add(kept.start.saturating_sub(at));
-                crate::edit::place_clip(s, tid, Clip::audio(cid, name, src, off, kept.start, kept.len()));
+                // As Options › Overlap says: over the old audio, beside it on a layer, or crossfaded.
+                crate::edit::place_clip_overlapping(s, tid, Clip::audio(cid, name, src, off, kept.start, kept.len()));
                 out.push(cid);
                 // A crossfade at each punch point, out of the take's and the old audio's handles.
                 for (edge, here) in [(kept.start, punch_in), (kept.end, punch_out)] {

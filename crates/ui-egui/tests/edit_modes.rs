@@ -252,6 +252,34 @@ fn toolbar_clicks_add_snap_to_grid_lock_shuffle_and_switch_grid_modes_despite_th
 }
 
 #[test]
+fn options_overlap_layer_keeps_the_clip_a_drag_lands_on_and_the_top_one_takes_clicks() {
+    let (mut app, ctx, t, ids) = app("slip", "grabber", &[(0, 4 * SEC), (6 * SEC, SEC)]);
+    let path = "Options > Overlap > Layer";
+    let id = soundcraft_ui_egui::menus::command_for_path(path, &soundcraft_ui_egui::menus::ui_aliases()).unwrap();
+    soundcraft_ui_egui::menus::invoke_menu(&mut app, &id, path);
+    assert!(soundcraft_ui_egui::menus::item_state(&app, path, Some(&id)).1, "Layer is checked");
+    assert!(!soundcraft_ui_egui::menus::item_state(&app, "Options > Overlap > Overwrite", Some(&id)).1);
+    // The second clip dragged onto the middle of the first: both stay whole.
+    drag(&ctx, &mut app, t, 6 * SEC + SEC / 2, 2 * SEC);
+    let s = app.engine.session();
+    let (a, b) = (s.find_clip(ids[0]).unwrap().1.clone(), s.find_clip(ids[1]).unwrap().1.clone());
+    assert_eq!((a.start, a.length), (0, 4 * SEC), "the clip underneath is not cut");
+    assert_eq!(b.layer, a.layer + 1, "the dropped clip is on top");
+    assert!((b.start - (1.5 * SEC as f64) as i64).abs() < SEC / 10, "{}", b.start);
+    // One undo puts the drag back.
+    let moved = starts(&app, &ids);
+    app.engine.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), vec![0, 6 * SEC]);
+    app.engine.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), moved);
+    // A click where they overlap picks the top clip.
+    frame(&ctx, &mut app, vec![]);
+    let at = point(&app, t, 2 * SEC);
+    click(&ctx, &mut app, at);
+    assert_eq!(app.engine.session().edit.selected_clips, vec![ids[1]]);
+}
+
+#[test]
 fn dragging_clips_on_two_tracks_moves_both_down_a_track() {
     let (mut app, ctx, t, ids) = tracks("slip", "grabber", &[&[(0, SEC)], &[(2 * SEC, SEC)], &[]]);
     app.engine.execute("edit.select", &json!({"clips": [ids[0].0, ids[1].0]})).unwrap();

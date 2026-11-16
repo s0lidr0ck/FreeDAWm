@@ -845,6 +845,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         // Only Solo in Place and X-OR are offered: X-OR is on or it isn't.
         Some("options.solo_mode") => e.solo_mode.contains("xor") == leaf.starts_with("X-OR"),
         Some("mix.pan_law") => Some(soundcraft_engine::cmd::pan_law::current(app.engine.session())) == pan_law_db(leaf),
+        Some("edit.overlap_mode") => soundcraft_engine::cmd::overlap::current(app.engine.session()).id() == leaf.to_ascii_lowercase(),
         Some("mix.default_send_level") => soundcraft_engine::cmd::default_send_db(app.engine.session()) == default_send_db(leaf),
         Some(i) if i.starts_with("view.edit_") && !matches!(i, "view.edit_all" | "view.edit_minimal") => {
             e.flag("edit_view.all") || i.strip_prefix("view.edit_").is_some_and(|v| e.flag(&format!("edit_view.{v}")))
@@ -1010,6 +1011,7 @@ fn params_for(path: &str, id: &str) -> Value {
         "options.scrolling" => json!({"mode": scrolling_mode(leaf)}),
         "options.record_mode" => json!({"mode": record_mode(leaf)}),
         "mix.pan_law" => json!({"law": pan_law_db(leaf)}),
+        "edit.overlap_mode" => json!({"mode": leaf.to_ascii_lowercase()}),
         "mix.default_send_level" => json!({"db": default_send_db(leaf)}),
         "options.solo_mode" => {
             json!({"mode": if leaf.starts_with("AFL") { "afl" } else if leaf.starts_with("PFL") { "pfl" } else { "sip" }, "xor": leaf.starts_with("X-OR")})

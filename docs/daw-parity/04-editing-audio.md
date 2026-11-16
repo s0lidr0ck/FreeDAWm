@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
-| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
+| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients; overwrite, layer or crossfade on overlap | Small: no trim to close gaps |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor, real-time transpose, reverse and loop | Small: clip notes |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
@@ -123,8 +123,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
 | Trim clips to close gaps | ◐ | ● | ● | ● | **Missing** |
-| Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Partial**: always overwrite |
-| Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Missing**: overlapping clips are mixed together; Send to Back and Bring to Front say so and change nothing (bug 14, fixed) |
+| Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Works**: Options › Overlap › Overwrite (the default), Layer (audio clips stay whole underneath; the newest is on top and heard, the lower one plays again where uncovered, crossing over through the top clip's fades or a 1 ms ramp) or Crossfade (overwrite with a 10 ms crossfade at each join, out of the handles). Moves, pastes, duplicates and recorded takes follow it; MIDI and video clips always overwrite; kept by undo like the Edit mode (`edit.overlap_mode`) |
+| Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Works**: each audio clip has a layer; Send to Back and Bring to Front put it below or above the clips it overlaps, which changes what is heard there; the Edit window draws the top one last and a click picks it |
 | Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**; whole files only, not a clip from the list |
 
 ## E. Clip properties
@@ -278,7 +278,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 11 | **Fixed.** Strip Silence treated muted clips as silence and deleted them. Muted clips are now set aside before stripping and put back whole. Test: `io::strip_tests::muted_clips_are_left_whole` | `engine/src/io.rs` (`strip_silence`) |
 | 12 | **Fixed.** Conform to Tempo set a varispeed ratio, so pitch changed even on a pitch-preserving (Elastic) track. On an Elastic track (any algorithm but Varispeed) it now renders the clip with the pitch-preserving stretch from its original, as Elastic Properties does. Test: `cmd::clip::tests::conform_on_an_elastic_track_keeps_the_pitch` | `engine/src/cmd/clip_more.rs` (`conform`) |
 | 13 | **Fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are made when the session changes (`sync_clip_fx`), and for playback on the UI thread: the player's `BuiltinPrep` makes the modules a session newly needs and sends them with it (`PreparedClipFx`), so `sync` on the audio thread only seats them; modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. The clip buffer of a track that gets its first clip effect is still sized in `sync`. Tests: `mix` `clip_effects_are_prepared_before_the_clip_plays`, `sync_on_the_render_path_makes_no_builtin_module` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
-| 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips are mixed together, so there is no order to keep: the commands now leave the playlist alone and say so. A real front/back order belongs with the overlap modes (tier 2). Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
+| 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips were mixed together, so there was no order to keep: the commands left the playlist alone. Since the overlap modes (tier 2) they change the clip's layer, never the playlist's order. Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
 | 15 | **Fixed.** Dragging a folder track moved the folder without its members. `track.move` now moves a folder with the tracks inside it at any level unless a count is given (`edit::folder_block`), and the drag passes that count and refuses a drop inside the folder itself. Test: `engine/tests/editing_parity.rs` (the drag itself not checked in a GUI) | `engine/src/cmd/track.rs` (`move_track`); `ui-egui/src/edit_window.rs` |
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
@@ -330,7 +330,7 @@ edits; quantize audio with strength and swing; an editable clip gain line; the f
 shape and bend per side, presets and batch fades; Commit Selection (bounce a range in place
 through the inserts); processing keeps handles; the Clip List auditions, renames, scrolls to
 clips and finds unused files; the Scrubber plays audio; warp markers drawn and editable (third
-round); clip transpose, real-time clip loop and reverse (third round). Not done: overlap modes with a front/back order;
+round); clip transpose, real-time clip loop and reverse (third round). Overlap modes with a front/back order are done (fourth round). Not done:
 edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; every tier-3 item; ARA 2 hosting.
@@ -384,3 +384,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 18 fixed: grid lines count from the timecode start |
 | 2026-11-16 | minor | The Scrubber is heard through the strip, and scrubs on the ruler |
 | 2026-11-16 | minor | Processing with handles keeps the clip's sound inside its edges (a Clean Vocal mix is no longer faded back to the original at the old edges) |
+| 2026-11-16 | minor | Tier 2: overlap modes (overwrite, layer, crossfade) with a front/back order |

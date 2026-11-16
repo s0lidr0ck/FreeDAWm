@@ -640,6 +640,17 @@ impl Engine {
             ed.zoom = from.edit.zoom;
             ed.tool = from.edit.tool;
         }
+        // The overlap mode (Options › Overlap) is a setting like the Edit mode.
+        for key in [edit::OVERLAP_KEY, edit::OVERLAP_XFADE_KEY] {
+            let (now, then) = (self.doc.edit.values.get(key).copied(), from.edit.values.get(key).copied());
+            if now != then {
+                let vals = &mut Arc::make_mut(&mut self.doc).edit.values;
+                match then {
+                    Some(v) => vals.insert(key.into(), v),
+                    None => vals.remove(key),
+                };
+            }
+        }
     }
 
     /// Undo and Redo keep the derived vocal analyses and renders (`Session::vocal`): history

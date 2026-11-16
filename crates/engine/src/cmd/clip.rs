@@ -368,13 +368,36 @@ fn flag(e: &mut Engine, p: &Value, get: fn(&soundcraft_model::Clip) -> bool, set
     Ok(json!({"value": v, "clips": ids.len()}))
 }
 
-/// Send to Back / Bring to Front. Overlapping clips (crossfades) are mixed together, and a
-/// playlist is kept in time order (code relies on it), so there is no front or back to keep:
-/// the commands change nothing and say so. They used to reorder the playlist out of time order
-/// until the next edit re-sorted it.
-fn layer(e: &mut Engine, p: &Value, _front: bool) -> Result<Value> {
+/// Send to Back / Bring to Front: an audio clip goes above (or below) every clip it overlaps
+/// on its track, by its [`soundcraft_model::Clip::layer`] (Options › Overlap › Layer keeps
+/// clips whole under others). The playlist stays in time order. A clip that overlaps nothing,
+/// or is already in front (at the back), is left as it is.
+fn layer(e: &mut Engine, p: &Value, front: bool) -> Result<Value> {
     let ids = clip_ids_param(e, p);
-    Ok(json!({"clips": ids.len(), "changed": false, "note": "overlapping clips are mixed together; there is no front or back order"}))
+    let s = e.session_mut();
+    let mut changed = 0;
+    for id in &ids {
+        let Some((tid, c)) = s.find_clip(*id).map(|(t, c)| (t, c.clone())) else { continue };
+        if !c.is_audio() {
+            continue;
+        }
+        let others: Vec<i32> = s
+            .track(tid)
+            .map(|t| t.clips().iter().filter(|x| x.id != c.id && x.is_audio() && x.range().overlaps(&c.range())).map(|x| x.layer).collect())
+            .unwrap_or_default();
+        let to = if front {
+            others.iter().max().map(|l| l.saturating_add(1).max(c.layer))
+        } else {
+            others.iter().min().map(|l| l.saturating_sub(1).min(c.layer))
+        };
+        if let Some(to) = to.filter(|l| *l != c.layer)
+            && let Some(x) = s.find_clip_mut(*id)
+        {
+            x.layer = to;
+            changed += 1;
+        }
+    }
+    Ok(json!({"clips": ids.len(), "changed": changed}))
 }
 
 fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -622,7 +645,8 @@ mod tests {
         assert_eq!(e.session().find_clip(ClipId(cid)).unwrap().1.length, len0);
     }
 
-    /// Parity bug 14: Send to Back / Bring to Front leave the playlist in time order.
+    /// Parity bug 14: Send to Back / Bring to Front leave the playlist in time order (they
+    /// change only the clips' layers).
     #[test]
     fn layer_commands_keep_the_playlist_in_time_order() {
         let mut e = crate::demo::demo_engine();
@@ -631,7 +655,8 @@ mod tests {
         let last = before.last().unwrap().id.0;
         e.execute("clip.send_to_back", &json!({"clips": [last]})).unwrap();
         e.execute("clip.bring_to_front", &json!({"clips": [before[0].id.0]})).unwrap();
-        assert_eq!(e.session().track(t).unwrap().clips(), before.as_slice());
+        let order = |c: &[soundcraft_model::Clip]| c.iter().map(|c| (c.id, c.start, c.length)).collect::<Vec<_>>();
+        assert_eq!(order(e.session().track(t).unwrap().clips()), order(&before));
     }
 
     /// Parity bug 12: Conform to Tempo on an Elastic track keeps the pitch (a rendered,

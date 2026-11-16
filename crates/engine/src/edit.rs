@@ -1,9 +1,10 @@
 //! Editing algorithms on playlists, independent of the command layer.
 //!
 //! Model rules: clips on a playlist are sorted and do not overlap, except where two clips
-//! overlap exactly over a crossfade (the earlier clip fades out while the later fades in).
-//! Placing a clip overwrites whatever is under it (like the incumbent's Slip mode); Shuffle
-//! mode also ripples later clips.
+//! overlap exactly over a crossfade (the earlier clip fades out while the later fades in), or
+//! where a clip of a higher layer covers others (the Layer overlap mode, [`Overlap`]).
+//! Placing a clip overwrites whatever is under it (like the incumbent's Slip mode) unless the
+//! session's overlap mode says otherwise; Shuffle mode also ripples later clips.
 
 use soundcraft_model::{AutoParam, AutomationPoint, Clip, ClipContent, ClipId, Fade, FadeShape, Session, Track, TrackId};
 use soundcraft_time::{Range, SampleRate, Samples, TempoMap};
@@ -626,6 +627,7 @@ fn heals(prev: &Clip, next: &Clip) -> bool {
         && next.plays_plain()
         && prev.fade_out.len == 0
         && next.fade_in.len == 0
+        && prev.layer == next.layer
 }
 
 /// Move clips by `delta`, overwriting what they land on; `dest` sends whole tracks of them
@@ -676,18 +678,139 @@ pub fn move_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(Trac
     n
 }
 
-/// Place clips together (moved, pasted or copied), overwriting what they cover but not each
-/// other, so a crossfaded pair placed together stays a crossfade.
+/// Place clips together (moved, pasted or copied), as the session's [`Overlap`] mode says, never
+/// cutting each other, so a crossfaded pair placed together stays a crossfade.
 pub fn put_clips(s: &mut Session, placed: Vec<(TrackId, Clip)>) {
+    let mode = Overlap::of(s);
+    // Layer keeps audio under audio; MIDI and video clips still overwrite.
+    let (layered, placed): (Vec<(TrackId, Clip)>, Vec<(TrackId, Clip)>) =
+        placed.into_iter().partition(|(t, c)| mode == Overlap::Layer && c.is_audio() && s.track(*t).is_some_and(|t| !t.kind.is_midi()));
+    let joins = if mode == Overlap::Crossfade { landing_edges(s, &placed) } else { Vec::new() };
     for (t, c) in &placed {
         clear_range(s, *t, c.range(), false);
     }
-    for (t, c) in placed {
+    let mut tracks: Vec<TrackId> = layered.iter().map(|(t, _)| *t).collect();
+    tracks.dedup();
+    // Clips placed together on a track share one layer, just above every clip they land on.
+    let tops: Vec<(TrackId, i32)> = tracks
+        .iter()
+        .map(|t| {
+            let top = s
+                .track(*t)
+                .into_iter()
+                .flat_map(|tr| tr.clips())
+                .filter(|x| layered.iter().any(|(lt, c)| lt == t && c.range().overlaps(&x.range())))
+                .map(|x| x.layer)
+                .max();
+            (*t, top.map_or(0, |l| l.saturating_add(1)))
+        })
+        .collect();
+    let layered = layered.into_iter().map(|(t, mut c)| {
+        c.layer = tops.iter().find(|(x, _)| *x == t).map_or(0, |(_, l)| *l);
+        (t, c)
+    });
+    for (t, c) in placed.into_iter().chain(layered) {
         if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
             pl.clips.push(c);
             pl.sort();
         }
     }
+    for (t, edge, room) in joins {
+        crossfade_join(s, t, edge, room);
+    }
+}
+
+/// Session value (`s.edit.values`): what a clip moved, pasted, duplicated or recorded onto other
+/// clips does to them (Options › Overlap): see [`Overlap`].
+pub const OVERLAP_KEY: &str = "edit.overlap_mode";
+/// Session value: the crossfade the Crossfade overlap mode makes at each join, ms.
+pub const OVERLAP_XFADE_KEY: &str = "edit.overlap_xfade_ms";
+/// The Crossfade overlap mode's crossfade when none is set, ms.
+pub const OVERLAP_XFADE_MS: f64 = 10.0;
+
+/// What a clip placed over others does to them (Options › Overlap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlap {
+    /// What it covers is cut away (the default, and how sessions always worked).
+    Overwrite,
+    /// Audio clips stay whole underneath: the new clip goes on a higher [`Clip::layer`] and is
+    /// heard where it covers them; a lower clip plays again where it is uncovered.
+    Layer,
+    /// Overwrite, then a crossfade at each edge where the clip landed on other audio, out of the
+    /// clips' handles.
+    Crossfade,
+}
+
+impl Overlap {
+    pub const ALL: [Overlap; 3] = [Overlap::Overwrite, Overlap::Layer, Overlap::Crossfade];
+
+    /// The session's mode.
+    pub fn of(s: &Session) -> Overlap {
+        match s.edit.value(OVERLAP_KEY, 0.0) as i64 {
+            1 => Overlap::Layer,
+            2 => Overlap::Crossfade,
+            _ => Overlap::Overwrite,
+        }
+    }
+
+    /// The value stored under [`OVERLAP_KEY`].
+    pub fn value(self) -> f64 {
+        match self {
+            Overlap::Overwrite => 0.0,
+            Overlap::Layer => 1.0,
+            Overlap::Crossfade => 2.0,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Overlap::Overwrite => "overwrite",
+            Overlap::Layer => "layer",
+            Overlap::Crossfade => "crossfade",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Overlap> {
+        Overlap::ALL.into_iter().find(|o| o.id() == id.trim().to_ascii_lowercase())
+    }
+}
+
+/// Where audio clips about to be placed land on other audio: `(track, edge, room)` for each clip
+/// edge that falls inside an audio clip already there (and not inside another clip placed with
+/// it, as a crossfaded pair's inner edges do), `room` being how far the crossfade may reach into
+/// the placed clip (half its length).
+fn landing_edges(s: &Session, placed: &[(TrackId, Clip)]) -> Vec<(TrackId, Samples, Samples)> {
+    let mut out = Vec::new();
+    for (t, c) in placed.iter().filter(|(_, c)| c.is_audio()) {
+        let Some(tr) = s.track(*t) else { continue };
+        let inside = |x: &Clip, at: Samples| x.start < at && x.end() > at;
+        for edge in [c.start, c.end()] {
+            let lands = tr.clips().iter().any(|x| x.is_audio() && !placed.iter().any(|(_, p)| p.id == x.id) && inside(x, edge));
+            let partner = placed.iter().any(|(pt, p)| {
+                pt == t && p.id != c.id && (inside(p, edge) || p.end() == edge && edge == c.start || p.start == edge && edge == c.end())
+            });
+            if lands && !partner {
+                out.push((*t, edge, c.length / 2));
+            }
+        }
+    }
+    out
+}
+
+/// The Crossfade overlap mode's crossfade at `edge` on track `t`, no further into either side
+/// than `room`.
+fn crossfade_join(s: &mut Session, t: TrackId, edge: Samples, room: Samples) {
+    let ms = s.edit.value(OVERLAP_XFADE_KEY, OVERLAP_XFADE_MS).clamp(0.0, 1000.0);
+    let h = ((s.sample_rate.as_f64() * ms / 1000.0 / 2.0).round() as Samples).min(room).max(0);
+    if h > 0 {
+        create_fades(s, t, Range::new(edge.saturating_sub(h), edge.saturating_add(h)), FadeShape::default());
+    }
+}
+
+/// Place one recorded or created clip as the session's [`Overlap`] mode says (see
+/// [`put_clips`]). [`place_clip`] always overwrites.
+pub fn place_clip_overlapping(s: &mut Session, track: TrackId, clip: Clip) {
+    put_clips(s, vec![(track, clip)]);
 }
 
 /// Whether the Edit window shows track `t`: not hidden, and not inside a closed folder at any level.

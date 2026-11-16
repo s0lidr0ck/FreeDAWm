@@ -552,6 +552,9 @@ Options > ## Timing & keys
 Options > Snap > Clip Edges = @edit.snap_to_clips
 Options > Snap > Markers = @edit.snap_to_markers
 Options > Snap > Zero Crossings = @edit.snap_to_zero_crossings
+Options > Overlap > Overwrite = @edit.overlap_mode
+Options > Overlap > Layer = @edit.overlap_mode
+Options > Overlap > Crossfade = @edit.overlap_mode
 Options > Delay Compensation
 Options > Edit/Tool Mode Keyboard Lock
 Options > ---

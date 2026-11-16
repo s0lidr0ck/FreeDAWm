@@ -979,10 +979,10 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
     }
     let view = Range::new(sample_at(&s, tl, tl.min.x), sample_at(&s, tl, tl.max.x));
     let auto_view = AutoParam::parse(&track.view);
-    for clip in track.clips() {
-        if !clip.range().overlaps(&view) {
-            continue;
-        }
+    // Lower layers first (Options › Overlap › Layer), so the clip heard is the one on top.
+    let mut shown: Vec<&Clip> = track.clips().iter().filter(|c| c.range().overlaps(&view)).collect();
+    shown.sort_by_key(|c| c.layer);
+    for clip in shown {
         draw_clip(app, &painter, &s, track, clip, tl, lane, auto_view.is_some());
     }
     // The pitch view: the lines over the clips, the TUNED badges over the lines; a double-click
@@ -2843,7 +2843,8 @@ fn warp_marker_at(s: &Session, tl: Rect, clip: &Clip, x: f32) -> Option<usize> {
 }
 
 fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
-    track.clips().iter().rev().find(|c| c.range().contains(at))
+    // The top layer wins where clips overlap; among equals, the later one.
+    track.clips().iter().filter(|c| c.range().contains(at)).max_by_key(|c| c.layer)
 }
 
 /// The unity-gain end of each existing fade, at the top of the clip body.

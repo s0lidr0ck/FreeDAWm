@@ -20,7 +20,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Event", 15),
     ("Process", 14),
     ("AI", 14),
-    ("Options", 18),
+    ("Options", 19),
     ("Setup", 11),
     ("Window", 36),
 ];
@@ -99,8 +99,9 @@ fn greyed_out_items_say_why() {
 }
 
 /// Ids whose menu item names its parameter in the label (a ruler, a width, a rating…).
-const PARAMETERISED: [&str; 11] = [
+const PARAMETERISED: [&str; 12] = [
     "options.record_mode",
+    "edit.overlap_mode",
     "view.ruler",
     "mix.default_send_level",
     "mix.pan_law",
@@ -291,6 +292,7 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
             | "options.scrolling"
             | "options.solo_mode"
             | "mix.pan_law"
+            | "edit.overlap_mode"
             | "mix.default_send_level"
             | "view.main_counter"
     ) || id.starts_with("view.waveform_p")

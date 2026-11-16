@@ -3118,6 +3118,7 @@ fn process_strip(
                     continue;
                 }
                 let edges = Edges::of(s, t.clips(), clip, block, live.looping);
+                let cover = Cover::of(t.clips(), clip, block, auto_fade_frames(s));
                 // The effects and the buffer were made by `sync` when the session changed: here
                 // nothing is allocated. Effects not prepared yet (never the case after a sync)
                 // are skipped for this block rather than made on the audio thread.
@@ -3128,12 +3129,12 @@ fn process_strip(
                     Some(fx)
                 });
                 match fx {
-                    None => render_clip(s, clip, pos, frames, &mut strip.buf, edges),
+                    None => render_clip(s, clip, pos, frames, &mut strip.buf, edges, cover),
                     Some(fx) => {
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
-                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, edges);
+                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, edges, cover);
                         fx.process(&mut strip.clipbuf, frames);
                         for (d, c) in strip.buf.iter_mut().zip(strip.clipbuf.iter()) {
                             for (x, y) in d.iter_mut().zip(c.iter()).take(frames) {
@@ -4175,7 +4176,56 @@ fn continues(a: &Clip, b: &Clip) -> bool {
     a.id != b.id && !a.muted && !b.muted && a.is_audio() && b.is_audio() && a.end() == b.start
 }
 
-fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut [Vec<f32>], auto: Edges) {
+/// Where clips of a higher [`Clip::layer`] cover a clip (Options › Overlap › Layer): the lower
+/// clip gives way under them, crossing over through the upper clip's own fades, or through the
+/// automatic edge ramp (`len` frames) where an upper edge has no fade and nothing butts against
+/// it, the same ramp the upper clip fades in on, so the two sum to one. Reads only (no
+/// allocation): safe on the audio thread.
+#[derive(Debug, Clone, Copy)]
+struct Cover<'a> {
+    clips: &'a [Clip],
+    layer: i32,
+    len: i64,
+}
+
+impl<'a> Cover<'a> {
+    /// The cover over `clip` (one of `clips`) in `block`, or `None` where nothing above it
+    /// overlaps there: every session whose clips all sit on one layer.
+    fn of(clips: &'a [Clip], clip: &Clip, block: Range, len: i64) -> Option<Cover<'a>> {
+        let above = |u: &Clip| u.layer > clip.layer && !u.muted && u.is_audio() && u.range().overlaps(&block) && u.range().overlaps(&clip.range());
+        clips.iter().any(above).then_some(Cover { clips, layer: clip.layer, len: len.max(0) })
+    }
+
+    /// How much of the lower clip is heard at timeline position `p`, 0 to 1.
+    fn gain(&self, p: Samples) -> f32 {
+        let mut keep = 1.0f32;
+        for u in self.clips.iter().filter(|u| u.layer > self.layer && !u.muted && u.is_audio() && p >= u.start && p < u.end()) {
+            let rel = p - u.start;
+            let to_end = u.end() - 1 - p;
+            let ramp = |n: i64| if self.len <= 0 { 1.0 } else { (n as f32 / self.len as f32).min(1.0) };
+            let mut c = 1.0f32;
+            if u.fade_in.len > 0 {
+                if rel < u.fade_in.len {
+                    c = c.min(u.fade_in.gain(rel as f32 / u.fade_in.len as f32));
+                }
+            } else if !self.clips.iter().any(|x| continues(x, u)) {
+                c = c.min(ramp(rel));
+            }
+            let from_end = u.length.saturating_sub(rel);
+            if u.fade_out.len > 0 {
+                if from_end <= u.fade_out.len {
+                    c = c.min(u.fade_out.gain(from_end as f32 / u.fade_out.len as f32));
+                }
+            } else if !self.clips.iter().any(|x| continues(u, x)) {
+                c = c.min(ramp(to_end));
+            }
+            keep = keep.min(1.0 - c.clamp(0.0, 1.0));
+        }
+        keep
+    }
+}
+
+fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut [Vec<f32>], auto: Edges, cover: Option<Cover<'_>>) {
     let ClipContent::Audio { source, offset } = clip.content else { return };
     let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
     let Some(isect) = clip.range().intersect(&block) else { return };
@@ -4230,6 +4280,10 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
             if !auto.is_none() {
                 g0 *= auto.gain(clip.start.saturating_add(rel0));
                 g1 *= auto.gain(clip.start.saturating_add(rel1));
+            }
+            if let Some(c) = cover {
+                g0 *= c.gain(clip.start.saturating_add(rel0));
+                g1 *= c.gain(clip.start.saturating_add(rel1));
             }
             let n = (seg_end - i).saturating_sub(1).max(1) as f32;
             if unstretched && (i < run_at || seg_end > run_at.saturating_add(RUN)) {
@@ -6050,11 +6104,13 @@ pub fn render_clips(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> 
     let mut out = vec![vec![0.0f32; len]; t.channels().max(1)];
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
         let edges = Edges::default();
+        // Layered clips give way as they do in playback, without the automatic edge ramps.
+        let cover = Cover::of(t.clips(), c, range, 0);
         match clip_fx_params(c) {
-            None => render_clip(s, c, range.start, len, &mut out, edges),
+            None => render_clip(s, c, range.start, len, &mut out, edges, cover),
             Some(params) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
-                render_clip(s, c, range.start, len, &mut tmp, edges);
+                render_clip(s, c, range.start, len, &mut tmp, edges, cover);
                 let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, tmp.len());
                 fx.prepare_modules(params.clone(), &mut Vec::new());
                 fx.configure(params);
@@ -6385,8 +6441,35 @@ mod audio_thread_tests {
 mod tests {
     use super::*;
     use soundcraft_audio_io::AudioBuffer;
-    use soundcraft_model::{Insert, SourceAudio, SourceId};
+    use soundcraft_model::{ClipId, Insert, SourceAudio, SourceId};
     use std::sync::Arc;
+
+    /// Options › Overlap › Layer: the lower clip gives way under a higher one exactly as the
+    /// higher one comes in (its automatic ramp, or its own fade), so the two sum to one; clips on
+    /// one layer (every session before layers) get no cover at all.
+    #[test]
+    fn a_layered_clip_crosses_over_to_the_one_under_it() {
+        let lower = Clip::audio(ClipId(1), "low", SourceId(1), 0, 0, 10_000);
+        let mut upper = Clip::audio(ClipId(2), "up", SourceId(1), 0, 4_000, 2_000);
+        let clips = vec![lower.clone(), upper.clone()];
+        assert!(Cover::of(&clips, &lower, Range::new(0, 10_000), 48).is_none(), "one layer: nothing covers");
+        upper.layer = 1;
+        let clips = vec![lower.clone(), upper.clone()];
+        let c = Cover::of(&clips, &lower, Range::new(3_000, 3_500), 48);
+        assert!(c.is_none(), "not in this block");
+        let c = Cover::of(&clips, &lower, Range::new(3_990, 4_100), 48).unwrap();
+        let up = Edges { len: 48, start: Some(4_000), end: Some(6_000), ..Edges::default() };
+        for p in [3_999, 4_000, 4_010, 4_024, 4_047, 4_048, 5_000, 5_960, 5_999, 6_000] {
+            let heard_up = if (4_000..6_000).contains(&p) { up.gain(p) } else { 0.0 };
+            assert!((c.gain(p) + heard_up - 1.0).abs() < 1e-6, "at {p}: {} + {heard_up}", c.gain(p));
+        }
+        assert_eq!(c.gain(5_000), 0.0);
+        // With a fade of its own, the cover follows the fade.
+        upper.fade_in = soundcraft_model::Fade { len: 1_000, shape: soundcraft_model::FadeShape::Linear, curvature: 0.0 };
+        let clips = vec![lower.clone(), upper];
+        let c = Cover::of(&clips, &lower, Range::new(3_990, 4_100), 48).unwrap();
+        assert!((c.gain(4_500) - 0.5).abs() < 1e-3, "{}", c.gain(4_500));
+    }
 
     fn synth_session(level_db: f32) -> Session {
         use soundcraft_midi::{Note, Sequence};

@@ -322,6 +322,12 @@ pub struct Clip {
     /// controllers, and a note edit in one is made in all. `None`: an independent clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<u64>,
+    /// Where an audio clip sits among overlapping clips (Options › Overlap › Layer): where a
+    /// clip of a higher layer covers it, only the higher one is heard (its fades cross over to
+    /// this one), and this one is heard again where it is uncovered. Clips of the same layer
+    /// overlapping (a crossfade) play together. 0 for every clip placed in the Overwrite mode.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub layer: i32,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -388,6 +394,7 @@ impl Clip {
             loop_phase: 0,
             transpose_cents: 0,
             shared: None,
+            layer: 0,
         }
     }
 

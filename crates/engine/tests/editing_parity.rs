@@ -705,3 +705,75 @@ fn audio_quantize_takes_a_strength_and_a_swing() {
     run(&mut e, "clip.quantize_to_grid", json!({"clips": [c[1].0]}));
     assert_eq!(clips(&e, t)[1].0, 18_000, "no swing: the plain line");
 }
+
+// ---- tier 2: overlap modes (Options › Overlap) ---------------------------------------------
+
+/// File 8 reads 0.5 up to sample 40 000 and −0.25 after: a clip from offset 0 plays 0.5, one
+/// from offset 50 000 plays −0.25.
+fn two_level_audio(e: &mut Engine) {
+    let wave: Vec<f32> = (0..100_000).map(|i| if i < 40_000 { 0.5 } else { -0.25 }).collect();
+    let audio = soundcraft_model::SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![wave] });
+    e.session_mut().pool.insert(SourceId(8), std::sync::Arc::new(audio));
+}
+
+fn heard(e: &Engine, t: TrackId, at: i64) -> f32 {
+    soundcraft_mix::render_clips(e.session(), t, soundcraft_time::Range::new(at, at + 1))[0][0]
+}
+
+#[test]
+fn overlap_modes_overwrite_layer_or_crossfade_what_a_clip_lands_on() {
+    // Overwrite (the default): what the moved clip covers is cut away, as always.
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 10_000, 0), (20_000, 2_000, 50_000)]);
+    run(&mut e, "edit.move_clips", json!({"clips": [c[1].0], "to": 4_000}));
+    assert_eq!(clips(&e, t), vec![(0, 4_000, 0), (4_000, 2_000, 50_000), (6_000, 4_000, 6_000)]);
+    assert!(e.session().track(t).unwrap().clips().iter().all(|c| c.layer == 0));
+
+    // Layer: the clip underneath stays whole; the moved one is heard where it covers it, the
+    // lower one again after it.
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 10_000, 0), (20_000, 2_000, 50_000)]);
+    two_level_audio(&mut e);
+    run(&mut e, "edit.overlap_mode", json!({"mode": "layer"}));
+    run(&mut e, "edit.move_clips", json!({"clips": [c[1].0], "to": 4_000}));
+    assert_eq!(clips(&e, t), vec![(0, 10_000, 0), (4_000, 2_000, 50_000)], "both whole");
+    assert_eq!(e.session().find_clip(c[1]).unwrap().1.layer, 1);
+    assert_eq!(heard(&e, t, 3_000), 0.5);
+    assert_eq!(heard(&e, t, 5_000), -0.25, "only the top clip is heard where it covers");
+    assert_eq!(heard(&e, t, 7_000), 0.5, "the lower clip returns where it is uncovered");
+    // Send to Back puts it under; Bring to Front back on top.
+    run(&mut e, "clip.send_to_back", json!({"clips": [c[1].0]}));
+    assert_eq!(heard(&e, t, 5_000), 0.5);
+    run(&mut e, "clip.bring_to_front", json!({"clips": [c[1].0]}));
+    assert_eq!(heard(&e, t, 5_000), -0.25);
+    // A move is one undo step; the mode itself is kept by undo, like the Edit mode.
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "edit.undo", json!({}));
+    assert_eq!(clips(&e, t), vec![(0, 10_000, 0), (20_000, 2_000, 50_000)]);
+    assert_eq!(soundcraft_engine::edit::Overlap::of(e.session()), soundcraft_engine::edit::Overlap::Layer);
+    // Moving it clear of everything brings it back to layer 0.
+    run(&mut e, "edit.move_clips", json!({"clips": [c[1].0], "to": 4_000}));
+    run(&mut e, "edit.move_clips", json!({"clips": [c[1].0], "to": 30_000}));
+    assert_eq!(e.session().find_clip(c[1]).unwrap().1.layer, 0);
+    assert_eq!(heard(&e, t, 5_000), 0.5);
+
+    // Crossfade: overwrite, then a crossfade at each join out of the handles.
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 10_000, 0), (20_000, 2_000, 50_000)]);
+    run(&mut e, "edit.overlap_mode", json!({"mode": "crossfade", "crossfade_ms": 10}));
+    run(&mut e, "edit.move_clips", json!({"clips": [c[1].0], "to": 4_000}));
+    let cl = e.session().track(t).unwrap().clips().to_vec();
+    assert_eq!(cl.len(), 3);
+    let (left, mid, right) = (&cl[0], &cl[1], &cl[2]);
+    assert_eq!(mid.id, c[1]);
+    // 10 ms at 48 kHz: 240 samples each side of each join.
+    assert_eq!((left.end(), left.fade_out.len), (4_240, 480), "the old audio runs under the new clip's start");
+    assert_eq!((mid.start, mid.fade_in.len, mid.end(), mid.fade_out.len), (3_760, 480, 6_240, 480));
+    assert_eq!((right.start, right.fade_in.len), (5_760, 480));
+    assert_eq!(left.fade_out.shape, FadeShape::default());
+    // One undo step takes the move and its crossfades back.
+    run(&mut e, "edit.undo", json!({}));
+    assert_eq!(clips(&e, t), vec![(0, 10_000, 0), (20_000, 2_000, 50_000)]);
+    assert!(e.execute("edit.overlap_mode", &json!({"mode": "stack"})).is_err());
+}
