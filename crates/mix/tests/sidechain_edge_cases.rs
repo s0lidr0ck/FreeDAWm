@@ -368,14 +368,101 @@ fn an_aux_takes_a_key_from_a_track_and_from_an_earlier_aux() {
     s.track_mut(x).unwrap().mixer.inserts[0].sidechain = Some(SidechainSource { track: kick, pre_fader: false });
     let mut eng = engine(&s, vec![probe(x, mx, 1)]);
     assert!((last(&render(&mut eng, &s, 3)[0]) - 0.5).abs() < 1e-5);
-    // A track can't wait for an aux (auxes render after it): unsupported, silent.
-    let a = track(&mut s, "A", ChannelFormat::Mono, &dc(0.5), Route::Main);
+    // An ordinary track keyed from an aux renders after it: its probe puts out X's 0.5 too.
+    let a = track(&mut s, "A", ChannelFormat::Mono, &dc(0.25), Route::Main);
     let ma = module(&mut s, a, PROBE_ID, Some((x, false)));
     let r = sidechain_routes(&s);
-    assert!(matches!(r.last().unwrap().result, Err(SidechainProblem::Unsupported(_))), "{r:?}");
+    assert_eq!(r.last().unwrap().result, Ok(()), "{r:?}");
     let mut eng = engine(&s, vec![probe(x, mx, 1), probe(a, ma, 1)]);
     let out = render(&mut eng, &s, 3);
-    assert!((last(&out[0]) - 0.5).abs() < 1e-5, "only X's key on the left: {}", last(&out[0]));
+    assert!((last(&out[0]) - 1.0).abs() < 1e-5, "X's key and A's (X's output) on the left: {}", last(&out[0]));
+}
+
+#[test]
+fn an_ordinary_track_keyed_from_an_aux_lines_up_with_the_mix() {
+    const AT: usize = 1000;
+    for (d, pre) in [(0, false), (300, false), (300, true)] {
+        let mut s = session();
+        reference(&mut s, AT);
+        let b = BusId(951);
+        s.busses.push(soundcraft_model::Bus { id: b, name: "1".into(), format: ChannelFormat::Mono });
+        // Listed first: an audio track keyed from Y, an aux (with latency or not) reading the
+        // source's bus and going nowhere: the left of the main mix is the key alone.
+        let a = track(&mut s, "A", ChannelFormat::Mono, &[], Route::Main);
+        track(&mut s, "Source", ChannelFormat::Mono, &step(AT), Route::Bus(b));
+        let y = aux(&mut s, "Y", Route::Bus(b));
+        s.track_mut(y).unwrap().mixer.output = Route::None;
+        let mut inst = Vec::new();
+        if d > 0 {
+            stub_on(&mut s, y, d, &mut inst);
+        }
+        let m = module(&mut s, a, PROBE_ID, Some((y, pre)));
+        inst.push(probe(a, m, 1));
+        assert_eq!(sidechain_routes(&s)[0].result, Ok(()));
+        let mut eng = engine(&s, inst);
+        let out = render(&mut eng, &s, 8);
+        let (l, r) = (onset(&out[0]), onset(&out[1]));
+        assert!(l < 8 * BLOCK, "latency {d}, pre {pre}: the key is heard");
+        assert_eq!(l, r, "latency {d}, pre {pre}: key at {l}, reference at {r}");
+    }
+}
+
+#[test]
+fn a_key_from_an_aux_the_track_feeds_is_a_loop() {
+    // A → bus → Y, and A keyed from Y: A would wait for itself.
+    let mut s = session();
+    let b = BusId(961);
+    s.busses.push(soundcraft_model::Bus { id: b, name: "1".into(), format: ChannelFormat::Mono });
+    let a = track(&mut s, "A", ChannelFormat::Mono, &dc(0.5), Route::Bus(b));
+    let y = aux(&mut s, "Y", Route::Bus(b));
+    let m = module(&mut s, a, PROBE_ID, Some((y, false)));
+    assert_eq!(sidechain_routes(&s)[0].result, Err(SidechainProblem::Cycle));
+    assert!(soundcraft_mix::sidechain_refusal(&s, a, m, Some(SidechainSource { track: y, pre_fader: false })).is_some());
+    let mut eng = engine(&s, vec![probe(a, m, 1)]);
+    assert!(render(&mut eng, &s, 3).iter().flatten().all(|x| x.is_finite()));
+}
+
+/// The stock compressor on an audio track, keyed from an aux carrying a voice through a bus,
+/// ducks the track while the voice speaks, from where it starts.
+#[test]
+fn the_stock_compressor_ducks_a_track_from_an_aux() {
+    use soundcraft_dsp::plugins::fs::{FsPreset, factory_presets};
+    let len = 168_000;
+    let tone = |hz: f32, amp: f32| -> Vec<f32> { (0..len).map(|i| amp * (std::f32::consts::TAU * hz * i as f32 / SR as f32).sin()).collect() };
+    let voice: Vec<f32> = tone(700.0, 0.5).iter().enumerate().map(|(i, v)| if (24_000..72_000).contains(&i) { *v } else { 0.0 }).collect();
+    let mut s = session();
+    let b = BusId(971);
+    s.busses.push(soundcraft_model::Bus { id: b, name: "Voice".into(), format: ChannelFormat::Mono });
+    let bed = track(&mut s, "Bed", ChannelFormat::Mono, &tone(200.0, 0.05), Route::Main);
+    track(&mut s, "Voice", ChannelFormat::Mono, &voice, Route::Bus(b));
+    let y = aux(&mut s, "Voice Aux", Route::Bus(b));
+    s.track_mut(y).unwrap().mixer.output = Route::None;
+    let mut ins = Insert::new("fs_comp");
+    let (_, json) = factory_presets("fs_comp").iter().find(|(n, _)| *n == "Duck Under Voice").unwrap();
+    let info = soundcraft_dsp::plugin_info("fs_comp").unwrap();
+    for (id, v) in FsPreset::parse(json, info).unwrap().values {
+        ins.params.insert(id, v);
+    }
+    ins.sidechain = Some(SidechainSource { track: y, pre_fader: false });
+    s.track_mut(bed).unwrap().mixer.add_module(ins, None).unwrap();
+    assert_eq!(sidechain_routes(&s)[0].result, Ok(()));
+    let mut eng = MixEngine::new(SR as f32, BLOCK);
+    eng.ensure_synced(&s);
+    let mut out = Vec::new();
+    let mut buf = vec![vec![0.0f32; BLOCK]; 2];
+    for k in 0..len / BLOCK {
+        eng.render(&s, (k * BLOCK) as i64, BLOCK, &mut buf);
+        out.extend_from_slice(&buf[0]);
+    }
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt();
+    let db = |x: f32| 20.0 * x.log10();
+    let before = db(rms(&out[12_000..24_000]));
+    let during = db(rms(&out[48_000..72_000]));
+    let after = db(rms(&out[156_000..len / BLOCK * BLOCK]));
+    assert!(before - during > 10.0, "ducked {:.1} dB", before - during);
+    assert!((after - before).abs() < 1.5, "comes back: {after:.1} vs {before:.1} dB");
+    // Nothing is ducked before the voice starts (the key is not early).
+    assert!((db(rms(&out[20_000..24_000])) - before).abs() < 0.5, "not ducked before the voice");
 }
 
 #[test]

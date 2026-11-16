@@ -824,6 +824,8 @@ pub struct MixEngine {
     /// Snapshot key of the session the strips/order were synced to.
     synced: (usize, usize, usize),
     order: Vec<usize>,
+    /// Track index → a non-aux track that renders with the auxes (keyed from one, `Plan::late`).
+    late: Vec<bool>,
     /// Current total compensation delay (samples) of the main mix: the slowest track and aux
     /// returns, and the master faders' inserts.
     pub latency: usize,
@@ -1104,6 +1106,7 @@ impl MixEngine {
             ports_gone: 0,
             synced: (0, 0, 0),
             order: Vec::new(),
+            late: Vec::new(),
             latency: 0,
             track_latency: 0,
             aux_fed: Vec::new(),
@@ -1886,6 +1889,7 @@ impl MixEngine {
         }
         self.busses.retain(|id, _| s.bus(*id).is_some());
         self.order = plan.order;
+        self.late = plan.late;
         self.reserve_delays(s);
     }
 
@@ -2056,13 +2060,15 @@ impl MixEngine {
         let mut solo = std::mem::take(&mut self.solo);
         solo.fill(s);
         let order = std::mem::take(&mut self.order);
+        let late_set = std::mem::take(&mut self.late);
+        let late = |i: usize| late_set.get(i).copied().unwrap_or(false);
         let live = |t: &Track| !(t.kind == TrackKind::Master || t.inactive || t.kind == TrackKind::Vca);
         let is_aux = sidechain::is_aux;
         // Phase 1: independent strips (audio, instrument, MIDI) in parallel.
         let mut work = std::mem::take(&mut self.work);
         work.clear();
         for &i in &order {
-            let Some(t) = s.tracks.get(i).filter(|t| live(t) && !is_aux(t)) else { continue };
+            let Some(t) = s.tracks.get(i).filter(|t| live(t) && !is_aux(t) && !late(i)) else { continue };
             if let Some(mut st) = self.strips.remove(&t.id) {
                 st.llm = on_path(i);
                 work.push((i, st));
@@ -2229,8 +2235,8 @@ impl MixEngine {
         }
         self.work = work;
         let is_aux = sidechain::is_aux;
-        // Phase 2: auxes in dependency order (they read busses).
-        for (i, t) in order.iter().filter_map(|&i| Some((i, s.tracks.get(i)?))).filter(|(_, t)| live(t) && is_aux(t)) {
+        // Phase 2: auxes in dependency order (they read busses), and the tracks keyed from them.
+        for (i, t) in order.iter().filter_map(|&i| Some((i, s.tracks.get(i)?))).filter(|(i, t)| live(t) && (is_aux(t) || late(*i))) {
             let Some(mut st) = self.strips.remove(&t.id) else { continue };
             st.llm = on_path(i);
             if st.scratch.len() < self.max_block {
@@ -2254,6 +2260,7 @@ impl MixEngine {
             // input were the tracks' (it returns alongside the other auxes), so its main input
             // counts as `track_latency` too (test `an_aux_consumer_lines_its_key_up_with_the_mix`).
             st.base = match &t.mixer.input {
+                _ if late(i) => 0,
                 Route::Bus(b) if pdc => self.bus_latency(*b),
                 _ if pdc => self.track_latency,
                 _ => 0,
@@ -2262,9 +2269,23 @@ impl MixEngine {
                 let src = k.source.and_then(|(_, id)| self.strips.get(&id)).map(Strip::key_source);
                 fill_key(k, src, block, frames);
             }
+            if late(i) {
+                late_midi_in(&mut st, s, &self.strips, block);
+            }
             process_strip(s, t, &mut st, &self.busses, &live_in, pos, frames, solo.muted(i) && !listening);
             st.stamp = block;
             fits &= !std::mem::take(&mut st.key_regrow);
+            if late(i) {
+                // Keyed from an aux, it lines up where the main mix is (the tracks and the aux
+                // returns). Its latency is left out of `track_latency`: the busses feeding the aux
+                // would otherwise wait for the key that waits for them.
+                let lmax = if pdc && !st.llm { lmax_t.saturating_add(lmax_a) } else { 0 };
+                fits &= align_late(t, &mut st, lmax, xf, frames);
+                self.route_strip(s, t, &mut st, pos, frames);
+                self.listen_strip(t, &st, pos, frames);
+                self.strips.insert(t.id, st);
+                continue;
+            }
             let ch = st.buf.len();
             let lmax = if pdc && !st.llm { lmax_a } else { 0 };
             fits &= st.align.set(lmax.saturating_sub(st.latency), ch, xf);
@@ -2276,6 +2297,7 @@ impl MixEngine {
             self.strips.insert(t.id, st);
         }
         self.order = order;
+        self.late = late_set;
         self.solo = solo;
         // Master faders process the main mix.
         let transport = transport_at(s, pos, !self.monitor_only, self.recording);
@@ -5217,6 +5239,36 @@ fn sync_kit_fx(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, sr: f32, m
 }
 
 /// Record insert latency without processing audio, so this block can compensate for it.
+/// A late strip's module MIDI inputs (`Plan::late`): this block's events of each source, rendered
+/// earlier in the block (nothing from one that did not render in `block`), merged.
+fn late_midi_in(st: &mut Strip, s: &Session, strips: &HashMap<TrackId, Strip>, block: u64) {
+    st.midi_in.clear();
+    for &(k, si, m) in &st.midi_src {
+        if let Some(src) = s.tracks.get(si).and_then(|x| strips.get(&x.id)).filter(|x| x.stamp == block)
+            && let Some(out) = src.module_midi(m)
+        {
+            st.midi_in.add(k, out);
+        }
+    }
+    st.midi_in.sort();
+}
+
+/// Aligns a late strip (`Plan::late`) to `lmax` (its pre-fader copy too) with no extra output
+/// delay. False when a delay line needs more room than it has.
+fn align_late(t: &Track, st: &mut Strip, lmax: usize, xf: usize, frames: usize) -> bool {
+    let ch = st.buf.len();
+    let mut fits = st.align.set(lmax.saturating_sub(st.latency), ch, xf);
+    st.align.process(&mut st.buf, frames);
+    st.post_at = st.latency.max(lmax);
+    if t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
+        let pre_lat = st.latency.saturating_sub(st.post_lat);
+        fits &= st.align_pre.set(lmax.saturating_sub(pre_lat), ch, xf);
+        st.align_pre.process(&mut st.pre, frames);
+        st.pre_at = pre_lat.max(lmax);
+    }
+    fits & st.out_extra.set(0, ch, xf)
+}
+
 fn note_insert_latency(t: &Track, strip: &mut Strip, pos: Samples) {
     let mut latency = 0usize;
     for (i, ins) in t.mixer.inserts.iter().enumerate() {

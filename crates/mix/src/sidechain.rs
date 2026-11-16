@@ -4,8 +4,9 @@
 //! - **Order.** A source renders before its consumer. Non-aux tracks render in levels: a track
 //!   keyed by another non-aux track renders in a later level (each level in parallel). Auxes,
 //!   folders and audio tracks recording a bus render after every other track, in an order where bus producers and sidechain sources
-//!   come first. So an aux can be keyed from any track, but a non-aux track cannot be keyed from an
-//!   aux (that is reported as unsupported).
+//!   come first. A non-aux track keyed from an aux (or depending on one through other keys,
+//!   module MIDI or links) is *late*: it renders among the auxes, after the aux, and before the
+//!   auxes reading the busses it feeds ([`Plan::late`]).
 //! - **Cycles.** Sidechains are resolved in session order (tracks, then chain order). One whose
 //!   source is the consumer's own track, or whose source already depends on the consumer through
 //!   bus routing or earlier sidechains, would close a loop: it is refused with
@@ -143,8 +144,12 @@ pub(crate) struct Plan {
     pub midi: Vec<ModuleInputRoute>,
     /// Track index → the level its strip renders in (non-aux tracks), or its rank (auxes).
     pub level: Vec<u32>,
-    /// Track indices in rendering order: non-aux tracks by level, then auxes by rank.
+    /// Track indices in rendering order: non-aux tracks by level, then auxes and late tracks by
+    /// rank.
     pub order: Vec<usize>,
+    /// Track index → a non-aux track that depends on an aux (keyed from one): it renders with the
+    /// auxes, after what it depends on.
+    pub late: Vec<bool>,
     /// Every linked module, resolved after the sidechains (`link.rs`).
     pub links: Vec<crate::link::LinkRoute>,
 }
@@ -358,8 +363,12 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
         _ => None,
     };
     let links = crate::link::resolve(s, &mut adj, link_over);
-    let plain: Vec<bool> = s.tracks.iter().map(|t| !is_aux(t)).collect();
-    let auxes: Vec<bool> = s.tracks.iter().map(is_aux).collect();
+    // A non-aux track an aux reaches renders with the auxes (a session without a key from an aux
+    // has none, and renders as before).
+    let aux_at: Vec<usize> = (0..n).filter(|&a| s.tracks.get(a).is_some_and(|t| is_aux(t) && renders(t))).collect();
+    let late: Vec<bool> = s.tracks.iter().enumerate().map(|(i, t)| !is_aux(t) && aux_at.iter().any(|&a| reaches(&adj, a, i))).collect();
+    let plain: Vec<bool> = s.tracks.iter().enumerate().map(|(i, t)| !is_aux(t) && !late.get(i).copied().unwrap_or(false)).collect();
+    let auxes: Vec<bool> = plain.iter().map(|p| !p).collect();
     let (rp, ra) = (ranks(&adj, &plain), ranks(&adj, &auxes));
     let level: Vec<u32> = (0..n).map(|i| if auxes.get(i).copied().unwrap_or(false) { ra.get(i) } else { rp.get(i) }.copied().unwrap_or(0)).collect();
     let mut order: Vec<usize> = (0..n).filter(|&i| plain.get(i).copied().unwrap_or(false)).collect();
@@ -367,7 +376,7 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
     let mut aux_order: Vec<usize> = (0..n).filter(|&i| auxes.get(i).copied().unwrap_or(false)).collect();
     aux_order.sort_by_key(|&i| level.get(i).copied().unwrap_or(0));
     order.extend(aux_order);
-    Plan { routes, midi, level, order, links }
+    Plan { routes, midi, level, order, late, links }
 }
 
 /// Whether track `ci` (an instrument or MIDI track) may play module `module` of track `si` given
@@ -423,11 +432,6 @@ fn check(s: &Session, adj: &[Vec<usize>], ci: usize, si: Option<usize>) -> Resul
     }
     if si == ci || reaches(adj, ci, si) {
         return Err(SidechainProblem::Cycle);
-    }
-    if !is_aux(ct) && is_aux(st) {
-        return Err(SidechainProblem::Unsupported(
-            "an audio, instrument or MIDI track can't take a sidechain from an aux or folder track (auxes render after it)",
-        ));
     }
     if st.inactive {
         return Err(SidechainProblem::Inactive);

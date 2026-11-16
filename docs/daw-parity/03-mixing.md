@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (stems ignore an AFL or PFL solo) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (an ordinary track can be keyed from an aux) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -82,7 +82,7 @@ K-system scales, and the master a loudness meter.
 | Post-fader inserts | ◐ | ◐ | ○ | ● | **Works**: Post-Fader in an insert's menu (`mix.module_post_fader`): the module runs after the fader and mute, on any track and on the master (after the master fader, where Pro Tools runs the master's inserts); it is not in the pre-fader copy (pre-fader sends, keys, meters), delay compensation counts it and holds the pre-fader sends back for it, a freeze leaves it live and a commit moves it, with its lanes, onto the new track |
 | Chain presets | ● | ● | ● | ● | **Works** |
 | Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
-| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Partial**: Lull, Rez and Shale take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track), so Comp is keyed as soon as its detector takes one (the effects work) |
+| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Partial**: Lull, Rez and Shale take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track), so Comp is keyed as soon as its detector takes one (the effects work); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port are keyed (from the insert header, delay-compensated); VST3 aux buses and Audio Units are not |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
@@ -267,7 +267,7 @@ one a mix engineer would not forgive.
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values are delay-compensated (2026-11-16) but still change once per block: reading them sub-block needs the plug-in interface to take a block in pieces (or timed parameter events), which the built-in `Plugin::process` does not |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
-| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain (owner: wanted; designed below, not built) |
+| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), remain; a key taken from an aux by an ordinary track is done (built from the design below) |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
@@ -328,7 +328,7 @@ pre-fader sends that can ignore mute, and the solo scope (`SoloScope`).
   does not; dim and mono act on the monitor output only; a bounce is identical with the control
   room on and off; talkback reaches a cue and never the main mix.
 
-### Design: an ordinary track keyed from an aux or bus (owner decision 5, not built yet)
+### Design: an ordinary track keyed from an aux or bus (owner decision 5, built)
 
 Today strips render in two phases: the non-aux tracks in levels (a key source renders in an earlier
 level, `sidechain::resolve`), then the auxes and folders, serially, each after the busses feeding it
@@ -354,6 +354,21 @@ rendered when the track does.
 - **Tests.** An ordinary track keyed from an aux is ducked by it, sample-aligned with and without
   latency on the aux; a loop is refused; bounce and playback agree.
 
+**As built.** The two phases stay, so today's sessions render exactly as before: a track that an
+aux reaches (keyed from it, or keyed or fed MIDI by a track that is) is *late* (`Plan::late` in
+`mix/src/sidechain.rs`) and renders in the second phase, ordered with the auxes by the same ranks,
+after its key source and before the auxes reading the busses it feeds. A loop is the existing
+`Cycle` refusal (`mix.module_sidechain` and the picker grey it out). Delay compensation: a late
+track's latency is left out of `track_latency`, or the busses feeding its aux would wait for a key
+that waits for them; it lines up at the main mix's position (the tracks' compensation plus the
+slowest aux return) with no extra output delay. Not covered: a keyed track's own plug-in latency
+(a look-ahead) beyond that key wait is not compensated against the rest of the mix (the stock
+compressor has none), and its output onto a bus no aux returns onto is late by the slowest aux
+return when an aux has latency. Tests: `an_ordinary_track_keyed_from_an_aux_lines_up_with_the_mix`,
+`a_key_from_an_aux_the_track_feeds_is_a_loop`, `the_stock_compressor_ducks_a_track_from_an_aux`
+(`mix/tests/sidechain_edge_cases.rs`). Bounce and playback run the same render, so they were not
+compared separately.
+
 **Where FreeDAWm is already level or ahead:** solo that follows the signal path, the breadth of
 delay compensation including sidechain keys, undo for every mixer move, freeze up to a chosen
 module, live graphs on module tiles, curved automation segments (Pro Tools has none), conversion
@@ -368,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | an ordinary track can be keyed from an aux or bus return (owner decision 5), built from the design |
 | 2026-11-16 | minor | stems ignore an AFL or PFL solo, as a bounce does (owner's decision) |
 | 2026-11-16 | minor | width and balance lanes; a design for keying an ordinary track from an aux |
 | 2026-11-16 | minor | plug-in automation is read where the module's audio is (delay-compensated) |
