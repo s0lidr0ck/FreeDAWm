@@ -608,6 +608,20 @@ impl ModEngineDsp {
         self.host_bpm
     }
 
+    /// Rust addition (built-in effects parity, bug 15): with Sync on and a host tempo, puts the
+    /// LFO where the song position `quarters` (quarter notes from the start) says, a cycle
+    /// starting on every multiple of the Division, so the sweep sits on the grid instead of
+    /// starting wherever Play left it. A running LFO is already there (it runs at the tempo):
+    /// this only takes out the drift and the start. Nothing changes without Sync, a host tempo or
+    /// a usable position.
+    pub fn lock_lfo(&mut self, quarters: f64) {
+        let len = f64::from(division_beats(self.div_idx));
+        if self.sync_idx != 1 || self.host_bpm < 20.0 || !quarters.is_finite() || len <= 0.0 {
+            return;
+        }
+        self.lfo_phase = (quarters / len).rem_euclid(1.0) as f32;
+    }
+
     // ------------------------------------------------------------------ events
     pub fn set_parameter(&mut self, index: usize, v: f32) {
         match index {

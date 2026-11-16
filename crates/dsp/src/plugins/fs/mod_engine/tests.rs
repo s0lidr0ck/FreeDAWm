@@ -243,6 +243,37 @@ fn tempo_sync_follows_transport() {
     assert_eq!(engine_ptr, s.engine() as *const ModEngineDsp);
 }
 
+/// Built-in effects parity, bug 15: Sync took the LFO's rate from the tempo but not its phase from
+/// the song position, so the sweep sat wherever Play happened to start it.
+#[test]
+fn a_synced_lfo_locks_to_the_song_position() {
+    let phase_after_play_at = |quarters: f64| {
+        let mut s = prepared();
+        s.set_param("circuit", 11.0);
+        s.set_param("sync", 1.0);
+        s.set_param("division", 5.0); // 1/4: a cycle a beat
+        let mut io = vec![sine(256, 0.5), sine(256, 0.5)];
+        let mut t = Transport { tempo: 120.0, playing: true, quarters, ..Transport::default() };
+        // Prime a block stopped (the parameters reach the engine), then play from `quarters`.
+        t.playing = false;
+        s.set_transport(&t);
+        s.process(&mut io, 256);
+        t.playing = true;
+        s.set_transport(&t);
+        s.process(&mut io, 256);
+        let mut r = [f32::NAN; 8];
+        s.readouts(&mut r);
+        r[0]
+    };
+    // 256 samples at 120 BPM is 0.0107 of a beat.
+    let step = 256.0 / 48_000.0 * 2.0;
+    for q in [0.0, 0.25, 3.5, 17.75] {
+        let want = ((q + step) % 1.0) as f32;
+        let got = phase_after_play_at(q);
+        assert!((got - want).abs() < 1e-3, "from quarter {q}: {got} vs {want}");
+    }
+}
+
 #[test]
 fn no_transport_is_the_cpp_path() {
     // The render tool gives no transport: a module that never sees one renders bit-identically to

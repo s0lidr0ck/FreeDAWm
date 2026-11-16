@@ -42,8 +42,9 @@
 //! - The host transport (plan A3): `set_transport` hands the session tempo to the engine as the
 //!   FireStation Delay engine takes its host's (`setHostTransport`; 20..999 BPM, else none), and
 //!   while Sync is on a valid host tempo stands in for the Tempo knob. With no transport (the
-//!   render tool has none) the C++ path is unchanged. The LFO free-runs as in the C++ (no phase
-//!   lock to the song position); a seek resets it with the rest of the engine.
+//!   render tool has none) the C++ path is unchanged. While the host plays with Sync on, each
+//!   block's LFO phase comes from the song position (`ModEngineDsp::lock_lfo`), so the
+//!   sweep sits on the grid; the C++ free-runs. Stopped, it free-runs as in the C++.
 //! - Never-crash: a non-finite output sample is written as 0 (the C++ would pass it on).
 
 // The C++ literals (6.2831853f, 0.7071f) are kept as written, not swapped for the constants.
@@ -263,6 +264,9 @@ pub struct ModEngine {
     /// Which parameters an automation lane drives (`set_param_automated`): Link leaves a laned
     /// Level alone, and a full push re-evaluates Link only when a listened one is laned.
     automated: [bool; NUM_PARAMS],
+    /// The song position in quarter notes at the start of the next block, while the host plays
+    /// (the LFO locks to it, see `ModEngineDsp::lock_lfo`).
+    lock_at: Option<f64>,
 }
 
 impl Default for ModEngine {
@@ -280,6 +284,7 @@ impl ModEngine {
             force_push: true,
             channels: 2,
             processed: false,
+            lock_at: None,
             level_from_host: false,
             automated: [false; NUM_PARAMS],
         }
@@ -417,12 +422,18 @@ impl Plugin for ModEngine {
 
     fn set_transport(&mut self, transport: &Transport) {
         self.dsp.set_host_transport(transport.playing, transport.tempo as f32);
+        if transport.playing {
+            self.lock_at = Some(transport.quarters);
+        }
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         self.processed = true;
         self.follow_link();
         self.push_params();
+        if let Some(at) = self.lock_at.take() {
+            self.dsp.lock_lfo(at);
+        }
         let nc = self.channels.min(io.len());
         if nc == 0 {
             return;
