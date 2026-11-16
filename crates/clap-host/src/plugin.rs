@@ -32,6 +32,9 @@ pub struct ClapPlugin {
     outputs: PortBuffers,
     in_main: Option<usize>,
     out_main: Option<usize>,
+    /// The sidechain input: the first input port after the main one with channels (see
+    /// [`key_port`]); fed by `process_with_sidechain`, silent otherwise.
+    in_key: Option<usize>,
     notes: NoteMode,
     /// The note port takes raw MIDI (controllers, pitch bend, program changes).
     midi_in: bool,
@@ -67,6 +70,7 @@ impl ClapPlugin {
             outputs: PortBuffers::new(&[], 0),
             in_main: None,
             out_main: None,
+            in_key: None,
             notes: NoteMode::None,
             midi_in: false,
             held: [0; 128],
@@ -135,10 +139,87 @@ impl ClapPlugin {
             *h &= !(1 << ch);
         }
     }
+
+    /// One `process` call (split into `max_block` pieces): the main input from `io`, the key (when
+    /// the plugin has a key port) from `key`, silent without one; the main output back to `io`.
+    fn run(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
+        if !self.inst.is_active() || self.max_block == 0 {
+            return;
+        }
+        let ch = self.channels.min(io.len());
+        let frames = io.iter().take(ch).map(Vec::len).fold(frames, usize::min);
+        if frames == 0 || ch == 0 {
+            return;
+        }
+        let last = u32::try_from(frames - 1).unwrap_or(u32::MAX);
+        for e in &mut self.queue {
+            if e.time() > last {
+                e.set_time(last);
+            }
+        }
+        let mut start = 0usize;
+        while start < frames {
+            let n = (frames - start).min(self.max_block);
+            let end = u32::try_from(start + n).unwrap_or(u32::MAX);
+            // Feed the main input port (mono sources fill every port channel).
+            if let Some(p) = self.in_main {
+                for c in 0..self.inputs.channels(p) {
+                    let src = io.get(c.min(ch - 1)).and_then(|s| s.get(start..start + n));
+                    if let (Some(src), Some(dst)) = (src, self.inputs.channel_mut(p, c).and_then(|d| d.get_mut(..n))) {
+                        dst.copy_from_slice(src);
+                    }
+                }
+            }
+            // Feed the key port: key channel `c mod n`, silence without a key.
+            if let Some(p) = self.in_key {
+                for c in 0..self.inputs.channels(p) {
+                    let Some(dst) = self.inputs.channel_mut(p, c).and_then(|d| d.get_mut(..n)) else { continue };
+                    let kn = key.map_or(0, <[Vec<f32>]>::len);
+                    match key.and_then(|k| k.get(c % kn.max(1))).and_then(|s| s.get(start..start + n)) {
+                        Some(src) => dst.copy_from_slice(src),
+                        None => dst.fill(0.0),
+                    }
+                }
+            }
+            let k = self.queue.iter().position(|e| e.time() >= end).unwrap_or(self.queue.len());
+            let offset = u32::try_from(start).unwrap_or(u32::MAX);
+            let events = self.queue.get(..k).unwrap_or(&[]);
+            let r = self.inst.process(n, self.steady, &mut self.inputs, &mut self.outputs, events, offset, self.transport.as_ref());
+            self.queue.drain(..k);
+            self.steady = self.steady.saturating_add(i64::try_from(n).unwrap_or(0));
+            match (r, self.out_main) {
+                (Ok(_), Some(p)) => {
+                    let oc = self.outputs.channels(p);
+                    for (c, dst) in io.iter_mut().take(ch).enumerate() {
+                        let Some(dst) = dst.get_mut(start..start + n) else { continue };
+                        if ch == 1 && oc >= 2 {
+                            if let (Some(l), Some(r)) = (self.outputs.channel(p, 0), self.outputs.channel(p, 1)) {
+                                for ((d, a), b) in dst.iter_mut().zip(l).zip(r) {
+                                    *d = 0.5 * (a + b);
+                                }
+                            }
+                        } else if let Some(src) = self.outputs.channel(p, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n)) {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+                (Err(e), _) => log::debug!("{}: {e}", self.info.id),
+                _ => {}
+            }
+            start += n;
+        }
+    }
 }
 
 fn pick_main(ports: &[crate::ffi::PortInfo]) -> Option<usize> {
     ports.iter().position(|p| p.main && p.channels > 0).or_else(|| ports.iter().position(|p| p.channels > 0))
+}
+
+/// The input port a sidechain key goes to: the first port with channels that is not the main
+/// one (CLAP plugins declare their sidechain as a second, non-main input port).
+pub(crate) fn key_port(ports: &[crate::ffi::PortInfo]) -> Option<usize> {
+    let main = pick_main(ports)?;
+    ports.iter().enumerate().position(|(i, p)| i != main && p.channels > 0)
 }
 
 fn note_mode(p: Option<NotePort>) -> NoteMode {
@@ -171,6 +252,7 @@ impl Plugin for ClapPlugin {
                 self.outputs = PortBuffers::new(&[], 0);
                 self.in_main = None;
                 self.out_main = None;
+                self.in_key = None;
                 self.max_block = 0;
                 self.latency = 0;
                 return;
@@ -178,6 +260,7 @@ impl Plugin for ClapPlugin {
         };
         self.in_main = pick_main(&ins);
         self.out_main = pick_main(&outs);
+        self.in_key = key_port(&ins);
         self.inputs = PortBuffers::new(&ins.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
         self.outputs = PortBuffers::new(&outs.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
         let port = self.inst.note_port();
@@ -229,60 +312,11 @@ impl Plugin for ClapPlugin {
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
-        if !self.inst.is_active() || self.max_block == 0 {
-            return;
-        }
-        let ch = self.channels.min(io.len());
-        let frames = io.iter().take(ch).map(Vec::len).fold(frames, usize::min);
-        if frames == 0 || ch == 0 {
-            return;
-        }
-        let last = u32::try_from(frames - 1).unwrap_or(u32::MAX);
-        for e in &mut self.queue {
-            if e.time() > last {
-                e.set_time(last);
-            }
-        }
-        let mut start = 0usize;
-        while start < frames {
-            let n = (frames - start).min(self.max_block);
-            let end = u32::try_from(start + n).unwrap_or(u32::MAX);
-            // Feed the main input port (mono sources fill every port channel).
-            if let Some(p) = self.in_main {
-                for c in 0..self.inputs.channels(p) {
-                    let src = io.get(c.min(ch - 1)).and_then(|s| s.get(start..start + n));
-                    if let (Some(src), Some(dst)) = (src, self.inputs.channel_mut(p, c).and_then(|d| d.get_mut(..n))) {
-                        dst.copy_from_slice(src);
-                    }
-                }
-            }
-            let k = self.queue.iter().position(|e| e.time() >= end).unwrap_or(self.queue.len());
-            let offset = u32::try_from(start).unwrap_or(u32::MAX);
-            let events = self.queue.get(..k).unwrap_or(&[]);
-            let r = self.inst.process(n, self.steady, &mut self.inputs, &mut self.outputs, events, offset, self.transport.as_ref());
-            self.queue.drain(..k);
-            self.steady = self.steady.saturating_add(i64::try_from(n).unwrap_or(0));
-            match (r, self.out_main) {
-                (Ok(_), Some(p)) => {
-                    let oc = self.outputs.channels(p);
-                    for (c, dst) in io.iter_mut().take(ch).enumerate() {
-                        let Some(dst) = dst.get_mut(start..start + n) else { continue };
-                        if ch == 1 && oc >= 2 {
-                            if let (Some(l), Some(r)) = (self.outputs.channel(p, 0), self.outputs.channel(p, 1)) {
-                                for ((d, a), b) in dst.iter_mut().zip(l).zip(r) {
-                                    *d = 0.5 * (a + b);
-                                }
-                            }
-                        } else if let Some(src) = self.outputs.channel(p, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n)) {
-                            dst.copy_from_slice(src);
-                        }
-                    }
-                }
-                (Err(e), _) => log::debug!("{}: {e}", self.info.id),
-                _ => {}
-            }
-            start += n;
-        }
+        self.run(io, frames, None);
+    }
+
+    fn process_with_sidechain(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
+        self.run(io, frames, key);
     }
 
     fn latency(&self) -> usize {

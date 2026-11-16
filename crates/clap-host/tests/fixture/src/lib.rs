@@ -87,6 +87,8 @@ static GAIN_DESC: clap_plugin_descriptor = clap_plugin_descriptor {
     features: GAIN_FEATURES.0.as_ptr(),
 };
 
+static KEYED_DESC: clap_plugin_descriptor = wide_desc(c"org.soundcraft.test.keyed", c"Fixture Keyed");
+
 static SYNTH_DESC: clap_plugin_descriptor = clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
     id: c"org.soundcraft.test.synth".as_ptr(),
@@ -106,6 +108,8 @@ struct Fx {
     synth: bool,
     /// `(ports per direction, channels per port)` for the wide fixtures.
     wide: Option<(u32, u32)>,
+    /// A second (sidechain) input port: the output is `main * gain + key`.
+    keyed: bool,
     gain: f64,
     mode: f64,
     level: f64,
@@ -254,6 +258,21 @@ unsafe extern "C" fn process(p: *const clap_plugin, pr: *const clap_process) -> 
         return CLAP_PROCESS_ERROR;
     }
     let out: &clap_audio_buffer = unsafe { &*pr.audio_outputs };
+    if f.keyed {
+        if pr.audio_inputs_count != 2 {
+            return CLAP_PROCESS_ERROR;
+        }
+        let (main, key) = unsafe { (&*pr.audio_inputs, &*pr.audio_inputs.add(1)) };
+        for c in 0..out.channel_count as usize {
+            let o = unsafe { *out.data32.add(c) };
+            let m = unsafe { *main.data32.add(c.min(main.channel_count as usize - 1)) };
+            let k = unsafe { *key.data32.add(c.min(key.channel_count as usize - 1)) };
+            for i in 0..n {
+                unsafe { *o.add(i) = *m.add(i) * f.gain as f32 + *k.add(i) };
+            }
+        }
+        return CLAP_PROCESS_CONTINUE;
+    }
     let input: Option<&clap_audio_buffer> = if f.synth {
         if pr.audio_inputs_count != 0 {
             return CLAP_PROCESS_ERROR;
@@ -411,6 +430,9 @@ unsafe extern "C" fn ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
     if let Some((ports, _)) = unsafe { fx(p) }.wide {
         return ports;
     }
+    if is_input && unsafe { fx(p) }.keyed {
+        return 2;
+    }
     if is_input && unsafe { fx(p) }.synth { 0 } else { 1 }
 }
 
@@ -425,6 +447,16 @@ unsafe extern "C" fn ports_get(p: *const clap_plugin, index: u32, is_input: bool
         info.flags = if index == 0 { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
         info.channel_count = channels;
         info.port_type = std::ptr::null();
+        info.in_place_pair = clap_sys::id::CLAP_INVALID_ID;
+        return true;
+    }
+    if is_input && index == 1 && unsafe { fx(p) }.keyed {
+        let info = unsafe { &mut *info };
+        info.id = 4;
+        write_name(&mut info.name, c"sidechain");
+        info.flags = 0;
+        info.channel_count = 2;
+        info.port_type = CLAP_PORT_STEREO.as_ptr();
         info.in_place_pair = clap_sys::id::CLAP_INVALID_ID;
         return true;
     }
@@ -706,7 +738,7 @@ static DISCOVERY: clap_preset_discovery_factory =
 // ---- factory + entry ----
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    5
+    6
 }
 
 unsafe extern "C" fn factory_desc(_f: *const clap_plugin_factory, i: u32) -> *const clap_plugin_descriptor {
@@ -716,13 +748,17 @@ unsafe extern "C" fn factory_desc(_f: *const clap_plugin_factory, i: u32) -> *co
         2 => &WIDE16_DESC,
         3 => &WIDE17_DESC,
         4 => &WIDE65_DESC,
+        5 => &KEYED_DESC,
         _ => std::ptr::null(),
     }
 }
 
 unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     let id = unsafe { CStr::from_ptr(id) };
-    let (desc, synth, wide) = if id == c"org.soundcraft.test.gain" {
+    let keyed = id == c"org.soundcraft.test.keyed";
+    let (desc, synth, wide) = if keyed {
+        (&KEYED_DESC as *const _, false, None)
+    } else if id == c"org.soundcraft.test.gain" {
         (&GAIN_DESC as *const _, false, None)
     } else if id == c"org.soundcraft.test.synth" {
         (&SYNTH_DESC as *const _, true, None)
@@ -753,6 +789,7 @@ unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const
         host,
         synth,
         wide,
+        keyed,
         gain: 1.0,
         mode: 0.0,
         level: 0.0,

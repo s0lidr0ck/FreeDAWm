@@ -103,7 +103,7 @@ Transient, Amp, ChamberMade, Swale; then Shale, LevelUp, Scout2).
 | Editors: AU | — | ❌ | Cocoa view hosting missing |
 | Multiple editor pages | ✅ | 🟡 | #6 |
 | macOS hardened-runtime entitlement for third-party code | ✅ | ❌ | #153, #149 — signed builds refuse third-party VST3 |
-| Sidechain / key input | ✅ | ❌ | All three hosts |
+| Sidechain / key input | ✅ | 🟡 CLAP: a plugin with a second (non-main) audio input port is offered a key in its insert header (Sidechain row), fed from any track with delay compensation like the built-in keyed modules | VST3 (aux input bus) and Audio Units |
 | ARA 2 (pitch/time editors in the timeline) | ✅ | ❌ | Menu leaves Track/Clip/Window ▸ ARA still missing |
 | Crash isolation | in-process (DSP on HDX) | 🟡 VST3 scanning out of process (`freedawm-scan`, cached; a crashing plugin is skipped); hosting still in-process | Out-of-process hosting would beat Pro Tools |
 | Plugin browser | ✅ | ✅ docked panel: thumbnail grid, tabs, search, favourites, categories, drag/double-click to place, presets tab | `window.plugin_browser` |

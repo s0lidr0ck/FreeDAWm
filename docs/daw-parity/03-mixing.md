@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a Touch control let go glides back) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: CLAP plug-ins take a key) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
 | B. Panning | Four pan laws, dual pan for stereo | Medium: no balance or width |
-| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
+| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
@@ -82,8 +82,8 @@ miss a peak, and can read pre-fader).
 | Post-fader inserts | ◐ | ◐ | ○ | ● | **Missing**; the master's inserts run before its fader, where Pro Tools runs them after |
 | Chain presets | ● | ● | ● | ● | **Works** |
 | Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
-| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Missing**: only Lull, Rez and Shale take a key |
-| Key input on third-party plug-ins | ● | ● | ● | ● | **Missing** for CLAP, VST3 and Audio Units |
+| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Partial**: Lull, Rez and Shale take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track), so Comp is keyed as soon as its detector takes one (the effects work) |
+| Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port are keyed (from the insert header, delay-compensated); VST3 aux buses and Audio Units are not |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
 | Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** |
@@ -267,7 +267,7 @@ one a mix engineer would not forgive.
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values remain once per block, not delay-compensated |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
-| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
+| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Pre-fader option and click-free output meter done**; RMS, scales and a master loudness meter remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: CLAP plug-ins take a key |
 | 2026-11-16 | minor | tier 2: a Touch control let go glides back |
 | 2026-11-16 | minor | tier 2: moves are written where they were heard |
 | 2026-11-16 | minor | tier 2: VCA assignment from the track menu |
