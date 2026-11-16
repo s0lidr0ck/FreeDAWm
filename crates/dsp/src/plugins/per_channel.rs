@@ -1,6 +1,7 @@
 //! Runs a stereo-only plugin on every channel of a wider track.
 //!
-//! The FireStation engines, Vault and Mend process two channels at most. On a track with more
+//! The FireStation engines, Vault and Mend process two channels at most (and the stock compressor
+//! and gate linked every channel's detection). On a track with more
 //! (LCR, quad, 5.1, 7.1.4, Ambisonics) [`PerChannel`] runs one instance on the first two channels
 //! (left and right, as before) and one mono instance on every further channel, so the centre, the
 //! LFE and the surrounds are processed too instead of passing dry. On a mono or stereo track it is
@@ -17,8 +18,12 @@ use std::sync::Arc;
 /// The ids that [`super::instantiate`] wraps: every plugin whose `prepare` caps the channel count
 /// at two.
 pub(crate) fn wraps(id: &str) -> bool {
-    id == super::vault::VAULT_INFO.id || id == super::mend::MEND_INFO.id || super::fs::engine(id).is_some()
+    id == super::vault::VAULT_INFO.id || id == super::mend::MEND_INFO.id || super::fs::engine(id).is_some() || LINKED_ON_ALL.contains(&id)
 }
+
+/// Stock dynamics that linked their detection across every channel, so a loud LFE ducked the
+/// whole surround mix: wrapped, they link the front pair and treat each other channel alone.
+const LINKED_ON_ALL: [&str; 2] = ["compressor", "expander_gate"];
 
 /// A stereo-only plugin run on every channel (see the module docs).
 pub(crate) struct PerChannel {
