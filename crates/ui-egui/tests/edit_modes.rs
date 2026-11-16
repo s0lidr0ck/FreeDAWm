@@ -280,6 +280,28 @@ fn options_overlap_layer_keeps_the_clip_a_drag_lands_on_and_the_top_one_takes_cl
 }
 
 #[test]
+fn a_grabber_drag_on_an_edit_grouped_track_moves_the_group_and_trims_follow() {
+    let (mut app, ctx, t, ids) = tracks("slip", "grabber", &[&[(SEC, 2 * SEC)], &[(SEC, 2 * SEC)], &[(SEC, 2 * SEC)]]);
+    app.engine.execute("track.group", &json!({"tracks": [t[0].0, t[1].0], "name": "Drums"})).unwrap();
+    drag(&ctx, &mut app, t[0], 2 * SEC, 3 * SEC);
+    let moved = starts(&app, &ids);
+    assert!((moved[0] - 2 * SEC).abs() < SEC / 10, "{moved:?}");
+    assert_eq!(moved[1], moved[0], "the grouped track's clip moves as far");
+    assert_eq!(moved[2], SEC, "the track outside the group stays");
+    // One undo step for both.
+    app.engine.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), vec![SEC, SEC, SEC]);
+    // The Trim tool on one grouped clip's end trims the other's too.
+    app.engine.execute("edit.tool", &json!({"tool": "trim"})).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    drag(&ctx, &mut app, t[1], 3 * SEC - 200, 2 * SEC);
+    let len = |i: usize| app.engine.session().find_clip(ids[i]).unwrap().1.length;
+    assert!(len(1) < 2 * SEC - SEC / 2, "{}", len(1));
+    assert_eq!(len(0), len(1));
+    assert_eq!(len(2), 2 * SEC);
+}
+
+#[test]
 fn dragging_clips_on_two_tracks_moves_both_down_a_track() {
     let (mut app, ctx, t, ids) = tracks("slip", "grabber", &[&[(0, SEC)], &[(2 * SEC, SEC)], &[]]);
     app.engine.execute("edit.select", &json!({"clips": [ids[0].0, ids[1].0]})).unwrap();

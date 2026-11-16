@@ -198,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Clips",
             [],
             None,
-            "{clips?: [id], by?: samples, to?: position for the first clip that can move (Grid modes snap its sync point), track?: where the first clip's track goes; the others keep their distance}",
+            "{clips?: [id], by?: samples, to?: position for the first clip that can move (Grid modes snap its sync point), track?: where the first clip's track goes; the others keep their distance, alone?: bool (an active edit group's other tracks stay)}",
             has_selection,
             move_clips
         ),
@@ -207,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Trim Clip",
             [],
             None,
-            "{clip: id, start?: position, end?: position, alone?: bool} — moves the clip's edges like the Trim tool, in the current Edit mode; the rest of its clip group moves the same edge as far unless `alone`",
+            "{clip: id, start?: position, end?: position, alone?: bool} — moves the clip's edges like the Trim tool, in the current Edit mode; the rest of its clip group, and the clips an active edit group's other tracks hold there, move the same edge as far unless `alone`",
             always,
             trim_clip
         ),
@@ -617,7 +617,8 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     if let Some(mut c) = clips {
         // A clip in a clip group brings the whole group (unless `exact`), so it selects, moves,
-        // copies and deletes as one.
+        // copies and deletes as one; so does an active edit group the clip's track is in, with
+        // the clips its other tracks hold at that time.
         if !exact {
             let groups: Vec<u64> = c.iter().filter_map(|id| s.find_clip(*id)).filter_map(|(_, x)| x.group).collect();
             for x in s.tracks.iter().flat_map(|t| t.clips()).filter(|x| x.group.is_some_and(|g| groups.contains(&g))) {
@@ -625,6 +626,7 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
                     c.push(x.id);
                 }
             }
+            c = ops::with_edit_groups(s, &c);
         }
         // Selecting clips also selects their range and tracks (Grabber click).
         let mut range: Option<soundcraft_time::Range> = None;
@@ -1143,7 +1145,9 @@ fn nudge_clips(e: &Engine, p: &Value) -> Vec<soundcraft_model::ClipId> {
 }
 
 fn move_clips(e: &mut Engine, p: &Value) -> Result<Value> {
+    // An active edit group moves the clips its other tracks hold there too, unless `alone`.
     let ids = clip_ids_param(e, p);
+    let ids = if bool_or(p, "alone", false) { ids } else { ops::with_edit_groups(e.session(), &ids) };
     if ids.is_empty() {
         return Err(bad("edit.move_clips", "no clips"));
     }

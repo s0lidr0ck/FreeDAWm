@@ -813,6 +813,38 @@ pub fn place_clip_overlapping(s: &mut Session, track: TrackId, clip: Clip) {
     put_clips(s, vec![(track, clip)]);
 }
 
+/// `ids` and the clips an active edit group brings along with them (Track › Group… with Edit
+/// on, unless every group is suspended): on the group's other tracks, each clip that overlaps one
+/// of `ids` in time. `ids` first, then the others in track order; no repeats.
+pub fn with_edit_groups(s: &Session, ids: &[ClipId]) -> Vec<ClipId> {
+    let mut out: Vec<ClipId> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    if s.edit.flag(crate::cmd::GROUPS_SUSPENDED) {
+        return out;
+    }
+    let found: Vec<(TrackId, Range)> = ids.iter().filter_map(|id| s.find_clip(*id).map(|(t, c)| (t, c.range()))).collect();
+    for tr in &s.tracks {
+        let spans: Vec<Range> = found
+            .iter()
+            .filter(|(t, _)| *t != tr.id && s.groups.iter().any(|g| g.active && g.edit && g.members.contains(t) && g.members.contains(&tr.id)))
+            .map(|(_, r)| *r)
+            .collect();
+        if spans.is_empty() {
+            continue;
+        }
+        for c in tr.clips().iter().filter(|c| spans.iter().any(|r| r.overlaps(&c.range()))) {
+            if !out.contains(&c.id) {
+                out.push(c.id);
+            }
+        }
+    }
+    out
+}
+
 /// Whether the Edit window shows track `t`: not hidden, and not inside a closed folder at any level.
 pub fn shown(s: &Session, t: &Track) -> bool {
     !t.hidden && !folder_collapsed(s, t)
@@ -1305,14 +1337,15 @@ pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
 }
 
 /// `id` and the other clips of its clip group on every track's active playlist (`id` alone when
-/// it is not grouped), `id` first.
+/// it is not grouped), `id` first, and the clips an active edit group brings along with them
+/// ([`with_edit_groups`]): what a grab, a trim or a fade drawn on `id` acts on.
 pub fn group_members(s: &Session, id: ClipId) -> Vec<ClipId> {
     let group = s.find_clip(id).and_then(|(_, c)| c.group);
     let mut out = vec![id];
     if let Some(g) = group {
         out.extend(s.tracks.iter().flat_map(|t| t.clips()).filter(|c| c.group == Some(g) && c.id != id).map(|c| c.id));
     }
-    out
+    with_edit_groups(s, &out)
 }
 
 /// Edit-state flag: edit points snap to clip edges near them (Options › Snap to Clip Edges).

@@ -36,7 +36,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
-| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
+| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups | Small: no typed selection numbers |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients; overwrite, layer or crossfade on overlap | Small: no trim to close gaps |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor, real-time transpose, reverse and loop | Small: clip notes |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
@@ -104,7 +104,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Tab to clip boundaries, Tab to Transient | ● | ● | ● | ● | **Works** |
 | Link timeline and edit selection | ● | — | — | — | **Works** |
 | Link track and edit selection | ● | ◐ | ● | ● | **Flag only** |
-| Edit groups: an edit on one grouped track applies to all | ● | ● | ● | ● | **Partial**: selecting a track selects its group; clip grabs, moves and trims do not follow |
+| Edit groups: an edit on one grouped track applies to all | ● | ● | ● | ● | **Works**: in an active group with Edit on (Track › Group…; not while groups are suspended) a clip grabbed, moved, nudged, trimmed or faded on one track brings the clips the other members hold at that time, as a clip group does (`alone` for one); a range selected on one track spreads to the group, so separate, cut, copy, paste and fades over it apply to all. One undo step |
 | Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; zoom-to-selection and fit size to the timeline on screen (bug 23, fixed) |
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
 | Markers on several rulers, a marker list | ● | ● | ● | ● | **Works** |
@@ -330,8 +330,8 @@ edits; quantize audio with strength and swing; an editable clip gain line; the f
 shape and bend per side, presets and batch fades; Commit Selection (bounce a range in place
 through the inserts); processing keeps handles; the Clip List auditions, renames, scrolls to
 clips and finds unused files; the Scrubber plays audio; warp markers drawn and editable (third
-round); clip transpose, real-time clip loop and reverse (third round). Overlap modes with a front/back order are done (fourth round). Not done:
-edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
+round); clip transpose, real-time clip loop and reverse (third round). Overlap modes with a front/back order and edit groups editing together are done (fourth round).
+Not done: slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; every tier-3 item; ARA 2 hosting.
 
@@ -385,3 +385,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | The Scrubber is heard through the strip, and scrubs on the ruler |
 | 2026-11-16 | minor | Processing with handles keeps the clip's sound inside its edges (a Clean Vocal mix is no longer faded back to the original at the old edges) |
 | 2026-11-16 | minor | Tier 2: overlap modes (overwrite, layer, crossfade) with a front/back order |
+| 2026-11-16 | minor | Tier 2: edit groups move, trim, fade, separate and cut together |

@@ -777,3 +777,69 @@ fn overlap_modes_overwrite_layer_or_crossfade_what_a_clip_lands_on() {
     assert_eq!(clips(&e, t), vec![(0, 10_000, 0), (20_000, 2_000, 50_000)]);
     assert!(e.execute("edit.overlap_mode", &json!({"mode": "stack"})).is_err());
 }
+
+// ---- tier 2: edit groups edit together ----------------------------------------------------
+
+#[test]
+fn an_edit_on_one_track_of_an_edit_group_applies_to_the_others() {
+    let mut e = engine("slip");
+    // Kick and snare in an edit group; room outside it.
+    let (k, kc) = track(&mut e, &[(10_000, 5_000, 0), (30_000, 5_000, 20_000)]);
+    let (n, nc) = track(&mut e, &[(10_200, 4_000, 100_000), (30_000, 5_000, 120_000)]);
+    let (r, rc) = track(&mut e, &[(10_000, 5_000, 200_000)]);
+    run(&mut e, "track.group", json!({"tracks": [k.0, n.0], "name": "Drums"}));
+
+    // Move: grabbing the kick's clip takes the snare's clip under it, one undo step.
+    run(&mut e, "edit.select", json!({"clips": [kc[0].0]}));
+    let mut sel: Vec<u64> = e.session().edit.selected_clips.iter().map(|c| c.0).collect();
+    sel.sort_unstable();
+    assert_eq!(sel, vec![kc[0].0, nc[0].0], "the grouped track's clip comes along");
+    run(&mut e, "edit.move_clips", json!({"clips": [kc[0].0], "by": 1_000}));
+    assert_eq!(clips(&e, k)[0], (11_000, 5_000, 0));
+    assert_eq!(clips(&e, n)[0], (11_200, 4_000, 100_000));
+    assert_eq!(clips(&e, r), vec![(10_000, 5_000, 200_000)], "a track outside the group stays");
+    run(&mut e, "edit.undo", json!({}));
+    assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000), "one undo step for both");
+    // `alone` moves one.
+    run(&mut e, "edit.move_clips", json!({"clips": [kc[0].0], "by": 1_000, "alone": true}));
+    assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000));
+    run(&mut e, "edit.undo", json!({}));
+
+    // Trim: the same edge of the grouped clip moves as far.
+    run(&mut e, "edit.trim_clip", json!({"clip": kc[0].0, "end": 14_000}));
+    assert_eq!(clips(&e, k)[0], (10_000, 4_000, 0));
+    assert_eq!(clips(&e, n)[0], (10_200, 3_000, 100_000));
+    assert_eq!(clips(&e, r)[0], (10_000, 5_000, 200_000));
+    run(&mut e, "edit.undo", json!({}));
+
+    // Fade: drawn on one, on both.
+    run(&mut e, "edit.fades_create", json!({"clip": nc[1].0, "side": "out", "length": 500}));
+    let s = e.session();
+    assert_eq!(s.find_clip(kc[1]).unwrap().1.fade_out.len, 500);
+    assert_eq!(s.find_clip(nc[1]).unwrap().1.fade_out.len, 500);
+    run(&mut e, "edit.undo", json!({}));
+
+    // Split and cut through the selection a grouped track's selection spreads to.
+    run(&mut e, "edit.select", json!({"tracks": [k.0], "start": 32_000, "end": 33_000}));
+    assert_eq!(e.session().edit.selected_tracks, vec![k, n]);
+    run(&mut e, "edit.separate", json!({}));
+    assert_eq!(clips(&e, k).len(), 4);
+    assert_eq!(clips(&e, n).len(), 4);
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "edit.select", json!({"tracks": [k.0], "start": 32_000, "end": 33_000}));
+    run(&mut e, "edit.cut", json!({}));
+    assert_eq!(clips(&e, n), vec![(10_200, 4_000, 100_000), (30_000, 2_000, 120_000), (33_000, 2_000, 123_000)]);
+    run(&mut e, "edit.undo", json!({}));
+
+    // A group with Edit off, inactive, or every group suspended: the clip moves alone.
+    let g = e.session().groups[0].id;
+    run(&mut e, "track.group_modify", json!({"group": g.0, "edit": false}));
+    run(&mut e, "edit.move_clips", json!({"clips": [kc[0].0], "by": 1_000}));
+    assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000));
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "track.group_modify", json!({"group": g.0, "edit": true}));
+    run(&mut e, "track.suspend_groups", json!({"value": true}));
+    run(&mut e, "edit.move_clips", json!({"clips": [kc[0].0], "by": 1_000}));
+    assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000));
+    let _ = rc;
+}
