@@ -54,6 +54,10 @@ pub fn filter_bits(s: &soundcraft_model::Session) -> u32 {
 /// The output ports the session's External MIDI instruments send to.
 pub fn wanted_outputs(s: &soundcraft_model::Session) -> Vec<String> {
     let mut v: Vec<String> = s.tracks.iter().filter_map(|t| t.instrument.as_ref().and_then(soundcraft_engine::cmd::midi_out::output_port)).collect();
+    // The port MIDI clock or timecode goes to, while either is on.
+    if s.edit.flag("midi.beat_clock") || s.edit.flag("midi.beat_clock.mtc") {
+        v.extend(sync_destination(s));
+    }
     v.sort();
     v.dedup();
     v
@@ -392,6 +396,48 @@ fn to_track_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
     });
 }
 
+/// The output port MIDI clock and timecode go to (`setup.midi_beat_clock`'s destination).
+fn sync_destination(s: &soundcraft_model::Session) -> Option<String> {
+    s.edit.flags.iter().find_map(|f| f.strip_prefix("midi.beat_clock.destination=")).map(str::to_string)
+}
+
+/// Setup › MIDI Beat Clock, in the window's Outputs part: MIDI clock and MIDI timecode out, and
+/// the port they go to (`setup.midi_beat_clock`).
+fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::midi_out::OutPortInfo]) {
+    let s = app.engine.session();
+    let (mut clock, mut mtc) = (s.edit.flag("midi.beat_clock"), s.edit.flag("midi.beat_clock.mtc"));
+    let dest = sync_destination(s).unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Sync out:");
+        let mut changed = false;
+        changed |=
+            ui.checkbox(&mut clock, "MIDI clock").on_hover_text("24 clocks a quarter note with Start, Stop, Continue and Song Position").changed();
+        changed |= ui.checkbox(&mut mtc, "MIDI timecode").on_hover_text("MTC quarter frames at the session's frame rate").changed();
+        let mut to = dest.clone();
+        egui::ComboBox::from_id_salt("midi-sync-dest").selected_text(if to.is_empty() { "Choose a port".to_string() } else { to.clone() }).show_ui(
+            ui,
+            |ui| {
+                for p in outs {
+                    ui.selectable_value(&mut to, p.name.clone(), &p.name);
+                }
+            },
+        );
+        if changed || to != dest {
+            let mut p = json!({"enabled": clock, "mtc": mtc});
+            if !to.is_empty() {
+                p["destination"] = json!(to);
+            }
+            if let Err(e) = app.run("setup.midi_beat_clock", p) {
+                app.ui.status = e;
+            }
+            // Chosen for sync: the port is enabled, as one chosen for a track is.
+            if (clock || mtc) && !to.is_empty() && app.ui.midi_outputs.get(&to) == Some(&false) {
+                set_output_enabled(app, &to, true);
+            }
+        }
+    });
+}
+
 /// The output menu's MIDI section (instrument and MIDI tracks): send what the track plays to a
 /// hardware MIDI output port (its instrument becomes External MIDI), and the channel.
 pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
@@ -704,6 +750,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         for (name, on) in out_toggles {
             set_output_enabled(app, &name, on);
         }
+        sync_row(app, ui, &outs);
         ui.separator();
         // Setup › MIDI Input Filter: the session's, for every port.
         ui.horizontal_wrapped(|ui| {

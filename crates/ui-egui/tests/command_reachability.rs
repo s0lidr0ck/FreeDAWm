@@ -56,7 +56,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("setup.current_timecode", "needs a position and has no dialog"),
     ("setup.disk_allocation", "a stored setting with no window"),
     ("setup.external_timecode_offset", "a stored setting with no window; nothing reads it"),
-    ("setup.midi_beat_clock", "a stored setting with no window; no clock output reads it"),
     ("setup.midi_input_devices", "shown greyed out (coming soon): needs its own window"),
     ("setup.midi_studio", "a stored setting with no window"),
     ("setup.peripherals", "a stored setting with no window"),

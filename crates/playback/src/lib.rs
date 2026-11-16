@@ -530,6 +530,8 @@ struct AudioState {
     midi_lead: i64,
     /// MIDI output's clock at the callback's start (`soundcraft_mix::external_midi`).
     out_now: u64,
+    /// MIDI clock and timecode out (Setup › MIDI Beat Clock).
+    sync_out: soundcraft_mix::midi_sync::SyncOut,
     /// Where the take starts, until the first block after a Play (without a count-off) has
     /// rolled: MIDI recorded in that block never lands before it (a note played between the
     /// Record press and the transport rolling is the take's first, not lost before it).
@@ -665,6 +667,7 @@ impl AudioState {
             midi_now: 0,
             midi_lead: 0,
             out_now: 0,
+            sync_out: soundcraft_mix::midi_sync::SyncOut::new(),
             midi_floor: None,
             lent: false,
             measure: None,
@@ -1279,7 +1282,18 @@ impl AudioState {
             let rate = self.session.sample_rate.as_f64().max(1.0);
             let frames_ahead = self.midi_lead.saturating_add(i64::try_from(self.mix.latency).unwrap_or(0)).max(0) as f64;
             let ahead_us = frames_ahead * 1e6 / rate + self.shared.out_latency_ns.load(Ordering::Relaxed) as f64 / 1e3;
-            out_hub.begin_block(self.out_now.saturating_add(ahead_us as u64).max(1));
+            let base = self.out_now.saturating_add(ahead_us as u64).max(1);
+            out_hub.begin_block(base);
+            // MIDI clock and timecode out (Setup › MIDI Beat Clock), stamped as the instruments' are.
+            let cfg = soundcraft_mix::midi_sync::SyncCfg::of(&self.session);
+            if !cfg.is_off() {
+                let us = |frames: i64| (frames as f64 * 1e6 / rate) as i64;
+                self.sync_out.block(&self.session, cfg, self.pos, n, self.playing, |k, at, m| {
+                    let port = if k == soundcraft_mix::midi_sync::Stream::Clock { cfg.clock } else { cfg.mtc };
+                    let stamp = (base as i64).saturating_add(us(at as i64 + cfg.offset)).max(1) as u64;
+                    out_hub.send(port, stamp, m);
+                });
+            }
         }
         let width = self.main_width.min(self.main.len());
         let main = self.main.get_mut(..width).unwrap_or_default();

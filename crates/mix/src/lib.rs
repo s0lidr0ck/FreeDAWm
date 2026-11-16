@@ -78,6 +78,7 @@ pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
+pub mod midi_sync;
 mod monitor;
 mod prepare;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};

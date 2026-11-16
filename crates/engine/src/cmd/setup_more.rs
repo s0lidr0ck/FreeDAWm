@@ -92,16 +92,19 @@ pub fn specs() -> Vec<CommandSpec> {
             let devices: Vec<String> = text(&s.edit, "midi.studio.devices").map(|t| t.split('|').map(str::to_string).collect()).unwrap_or_default();
             Ok(json!({"devices": devices}))
         }),
-        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool, offset?: samples, destination?: name}", always, |e, p| {
+        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), offset?: samples (later; negative earlier), destination?: output port name} — sync out to that port (`soundcraft_mix::midi_sync`)", always, |e, p| {
             let s = e.session_mut();
             if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock", v);
+            }
+            if let Some(v) = p.get("mtc").and_then(Value::as_bool) {
+                s.edit.set_flag("midi.beat_clock.mtc", v);
             }
             store_value(&mut s.edit, p, "offset", "midi.beat_clock.offset", -1e7, 1e7);
             if let Some(d) = str_param(p, "destination") {
                 set_text(&mut s.edit, "midi.beat_clock.destination", Some(d));
             }
-            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
+            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
         }),
         cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...]} — filtered kinds are not recorded", always, midi_filter),
         cmd!(noundo "setup.midi_input_devices", "MIDI Input Devices...", ["Setup", "MIDI"], None, "{enable?: [names], disable?: [names]}", always, midi_inputs),

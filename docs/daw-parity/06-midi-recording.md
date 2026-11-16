@@ -50,7 +50,8 @@ revision history:
    unread: MIDI Thru in the Options menu and the other settings bug 22 lists.
 3. **Going out and mapping.** MIDI output to hardware ports works (External MIDI), and Mackie
    Control and HUI surfaces drive the mixer and transport, MIDI learn maps controllers, and a MIDI
-   track can play an instrument on another track. Still missing: clock and timecode out.
+   track can play an instrument on another track, and MIDI clock and timecode go out. Still
+   missing: clock and timecode in.
 
 The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
 synth). There is no piano, and only the synth answers the sustain pedal and pitch bend.
@@ -205,8 +206,8 @@ Compared in full in section 7; listed here for what matters while recording.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | MIDI output to hardware | ● | ● | ● | ● | **Works**: an instrument or MIDI track's output menu › MIDI Output sends what it plays (clips, live input, chased controllers) to a hardware port, on its own channels or one; output ports start disabled (on Windows a port is open in one program at a time) and are enabled in Setup › MIDI Input Devices › Outputs, except that a port a track sends to opens unless it was disabled there (the window then says a track wants it), and choosing one for a track enables it (`34e755e`); each message leaves when the audio beside it is heard (output latency and delay compensation included); a stop, a locate, All MIDI Notes Off and closing the port let go of every note left on. The audio thread only pushes into a lock-free ring; a sender thread per port talks to the driver |
-| MIDI clock out and in | ● | ● | ● | ● | **Flag only** (out), **Missing** (in) |
-| MIDI timecode and machine control | ● | ◐ | ● | ● | **Missing** |
+| MIDI clock out and in | ● | ● | ● | ● | **Works** (out): Setup › MIDI Input Devices › Outputs › Sync out › MIDI clock and a port (`setup.midi_beat_clock`, the session's): 24 clocks a quarter on the tempo map's samples, Song Position Pointer then Start (Continue away from the start) on Play, Stop on Stop, Stop + position + Continue on a loop wrap or locate while playing; stamped to leave with the audio beside it, plus the setting's offset. **Missing** (in) |
+| MIDI timecode and machine control | ● | ◐ | ● | ● | **Partial**: MTC out (Sync out › MIDI timecode: quarter frames at the session's frame rate from its timecode start; no full-frame message on a locate, the receiver locks within two frames); MMC in (the transport row). MTC in and MMC out missing |
 | MIDI learn: move a knob, it is mapped to a parameter | ◐ | ● | ● | ● | **Works**: right-click a fader, pan knob, expanded send level or a plug-in's knob on the chain › Learn MIDI Controller, then move a CC or press a key; Setup › MIDI Mappings lists them (range, invert, delete). Parameter mappings are saved with the session (they name its tracks and plug-ins); transport keys with the app (the controller on this desk). A move is the control's own command: one undo step per gesture, written to automation as the on-screen control is |
 | Mapped controller moves kept out of the recording | ● | ● | ● | ● | **Works**: the MIDI hub claims mapped CCs and notes before they reach a port's ring, so they are never heard, recorded or played through; a surface's whole ports are kept out |
 | Control surfaces (Mackie Control, HUI and maker scripts) | ● | ● | ● | ● | **Partial**: Setup › Control Surfaces adds Mackie Control (with extenders) and HUI on chosen input and output ports. Faders with touch (touch is the on-screen fader held, for Touch and Latch), V-Pots as pan, mute, solo, rec and select, transport, bank and channel shift, automation-mode keys, scribble strips, meters, motor faders and LEDs following the mix, the jog wheel, the MCU handshake and HUI's ping. Tested against simulated devices (documented bytes in, bytes out), not yet against hardware. No maker scripts, no plug-in or send pages on the V-Pots, no flip; Avid EUCON is not possible (proprietary, licensed SDK) |
@@ -248,7 +249,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading. Commits `149f728`, `f2ecfd9`. | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs`. Commit `91059d3`. | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs`. Commit `b34b914`. | `engine/src/io.rs` (`export_midi`) |
-| 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. The input filter is read now (Setup › MIDI Input Devices). Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, beat clock, MIDI studio, the second set of device flags. Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
+| 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. The input filter is read now (Setup › MIDI Input Devices). Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, MIDI studio, the second set of device flags (beat clock is read now: clock and timecode out). Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
 | 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`). Commit `352090a`. | `ui-egui/src/menubar.txt` |
 
 ## Suggested order of work
@@ -274,7 +275,7 @@ either wire the control or take it off the menu.
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take (`036f22e`) |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly: a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, left for the mixing work |
-| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
+| MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI); clock and MTC out (`mix::midi_sync`). The external instrument's latency remains |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Done: the Step Input window and the editor's Step button (`fa832ab`, `486cf93`; Musical Typing's step mode fixed: bug 18) |
@@ -286,7 +287,9 @@ either wire the control or take it off the menu.
 
 **Designs for what remains of K (not built).**
 
-- *MIDI clock and timecode out.* A per-machine list of output ports that carry sync (Setup › MIDI
+- *MIDI clock and timecode out.* *Built with one destination port per session (the stored
+  `setup.midi_beat_clock`, now read) rather than a per-port Sync column, and without MTC's
+  full-frame SysEx (the output ring carries 3-byte messages).* A per-machine list of output ports that carry sync (Setup › MIDI
   Input Devices › Outputs, a Sync column: off, clock, MTC). The audio thread knows the transport
   and tempo map per block; at a block start it works out the clock ticks (24 per quarter, from the
   tempo map at the block's position) and MTC quarter frames (four per frame at the session's frame
@@ -414,3 +417,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Synth and sampler rows brought up to date (Bend Range, sustain, mod wheel; Mod Wheel Vibrato 0 by default) |
 | 2026-11-16 | minor | MIDI take lanes: Keep Takes as Lanes record mode, lanes with notes under MIDI and instrument tracks, pick, swipe and cycle between MIDI takes |
 | 2026-11-16 | minor | A MIDI track plays an instrument on another track (Play Instrument On, MIDI to Track), several on their channels into one multi-timbral instrument; multi-output instruments still open |
+| 2026-11-16 | minor | MIDI clock and MTC out to a chosen port (Sync out in the MIDI devices window), the stored beat-clock setting wired |

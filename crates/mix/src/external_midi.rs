@@ -125,7 +125,13 @@ pub fn unpack(v: u64) -> [u8; 3] {
 
 /// How many bytes a channel message has (2 for program change and channel pressure).
 pub fn message_len(status: u8) -> usize {
-    if matches!(status & 0xF0, 0xC0 | 0xD0) { 2 } else { 3 }
+    match status {
+        0xF1 | 0xF3 => 2,
+        0xF2 => 3,
+        0xF4..=0xFF => 1,
+        _ if matches!(status & 0xF0, 0xC0 | 0xD0) => 2,
+        _ => 3,
+    }
 }
 
 /// The identity of an output port by name (never 0, which means "no port").
