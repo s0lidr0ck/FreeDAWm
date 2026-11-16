@@ -74,7 +74,7 @@ The gaps are of four kinds:
 | Marquee, shift-click, select all | ● | ● | ● | ● | **Works** |
 | Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Works**: a click on a piano key selects that pitch's notes (Shift adds, a drag along the keys adds each key's); Invert Selection, Select Same Pitch and Select by Rule… (pitch, velocity, length and beat-of-the-bar ranges, in the MIDI Operations window) in the editor's More menu |
 | Split a note, join notes | ● | ● | ● | ● | **Works** |
-| Mute notes | ● | ● | ● | ● | **Works**: Mute Notes / Unmute Notes in the editor's More menu (`midi.notes_set` with `muted`); a muted note is drawn faint, does not play and is left out of MIDI export; sessions saved before load unmuted, and unmuted notes save as before |
+| Mute notes | ● | ● | ● | ● | **Works**: Mute Notes / Unmute Notes in the editor's More menu (`midi.notes_set` with `muted`); a muted note is drawn faint, does not play and is left out of MIDI and DAWproject export; sessions saved before load unmuted, and unmuted notes save as before |
 | Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
@@ -272,7 +272,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 |---|:-:|:-:|:-:|:-:|---|
 | Import and export standard MIDI files | ● | ● | ● | ● | **Works**; see [section 6](06-midi-recording.md#l-files) and bugs 16 and 17 |
 | Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file, at their place in the song |
-| DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways |
+| DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways; muted notes are left out of an export (the format cannot mark a note muted, so they would come back sounding; owner's decision), and the export report says so |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
 
 ## Bugs found on the way
@@ -397,3 +397,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Per-note probability, rolled each pass with a seeded generator; Export Clip as MIDI (a clip cannot be dragged out to the desktop) |
 | 2026-11-16 | minor | MIDI effects on a track (section 6): the row on MIDI effects is Partial |
 | 2026-11-16 | minor | Reverse Clip mirrors controller ramps (a ramp runs the other way, its curve bent the other way) |
+| 2026-11-16 | minor | Owner's decision: DAWproject export leaves muted notes out (the format cannot mark them) |

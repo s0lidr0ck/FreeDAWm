@@ -686,7 +686,12 @@ impl Ex<'_> {
                 el.set("playStart", "0.0");
                 el.set("playStop", fmt_num(end - start));
                 let mut notes = Element::new("Notes").with("id", self.id());
-                for n in &sequence.notes {
+                // DAWproject cannot mark a note muted: a muted note is left out, or it would come
+                // back sounding.
+                if sequence.notes.iter().any(|n| n.muted) {
+                    self.note("Muted notes are left out (DAWproject cannot mark a note muted)");
+                }
+                for n in sequence.notes.iter().filter(|n| !n.muted) {
                     notes.push(
                         Element::new("Note")
                             .with("time", fmt_num(n.start as f64 / TPQ))
