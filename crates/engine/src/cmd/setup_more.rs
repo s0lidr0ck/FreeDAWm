@@ -276,7 +276,9 @@ fn io_setup(e: &mut Engine, p: &Value) -> Result<Value> {
         .map(|n| n.chars().take(soundcraft_model::MAX_NAME_CHARS).collect::<String>());
     // Busses and outputs: any format, stereo by default. Inputs check theirs below.
     let format_or_stereo = match str_param(p, "format") {
-        Some(f) if !action.ends_with("_input") => ChannelFormat::from_id(f).ok_or_else(|| bad(id, format!("unknown format `{f}`")))?,
+        Some(f) if !action.ends_with("_input") => {
+            mixable_format(id, ChannelFormat::from_id(f).ok_or_else(|| bad(id, format!("unknown format `{f}`")))?)?
+        }
         _ => ChannelFormat::Stereo,
     };
     let has_channel = p.get("first_channel").is_some_and(Value::is_number);

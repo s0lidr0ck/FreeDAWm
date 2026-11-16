@@ -41,6 +41,8 @@ pub enum ChannelFormat {
 }
 
 impl ChannelFormat {
+    /// Most channels one track, bus or output carries through the mixer.
+    pub const MAX_MIX_CHANNELS: usize = 16;
     pub const ALL: [ChannelFormat; 34] = [
         ChannelFormat::Mono,
         ChannelFormat::Stereo,
@@ -184,6 +186,11 @@ impl ChannelFormat {
     }
     pub fn is_ambisonic(self) -> bool {
         matches!(self, ChannelFormat::Ambisonics(_))
+    }
+    /// Whether the mixer can carry this format: at most [`ChannelFormat::MAX_MIX_CHANNELS`]
+    /// channels (Ambisonics up to 3rd order; 4th to 7th order are stored but not offered).
+    pub fn mixable(self) -> bool {
+        self.channels() <= Self::MAX_MIX_CHANNELS
     }
     pub fn has_lfe(self) -> bool {
         self.speakers().contains(&Speaker::Lfe)

@@ -285,6 +285,23 @@ pub fn has_clipboard(e: &Engine) -> std::result::Result<(), String> {
 
 // ---- params ------------------------------------------------------------------------------
 
+/// `f` if the mixer can carry it, else why not (4th- to 7th-order Ambisonics).
+pub fn mixable_format(cmd: &str, f: soundcraft_model::ChannelFormat) -> Result<soundcraft_model::ChannelFormat> {
+    if f.mixable() {
+        Ok(f)
+    } else {
+        Err(bad(
+            cmd,
+            format!(
+                "{} needs {} channels; the mixer carries at most {} (Ambisonics up to 3rd order)",
+                f.label(),
+                f.channels(),
+                soundcraft_model::ChannelFormat::MAX_MIX_CHANNELS
+            ),
+        ))
+    }
+}
+
 pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams(cmd.to_string(), msg.into())
 }

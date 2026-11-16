@@ -328,10 +328,6 @@ Track > Change Track Width > More > ---
 Track > Change Track Width > More > 1st Order Ambisonics = Track > Change Track Width > 1st Order Ambisonics
 Track > Change Track Width > More > 2nd Order Ambisonics = Track > Change Track Width > 2nd Order Ambisonics
 Track > Change Track Width > More > 3rd Order Ambisonics = Track > Change Track Width > 3rd Order Ambisonics
-Track > Change Track Width > More > 4th Order Ambisonics = Track > Change Track Width > 4th Order Ambisonics
-Track > Change Track Width > More > 5th Order Ambisonics = Track > Change Track Width > 5th Order Ambisonics
-Track > Change Track Width > More > 6th Order Ambisonics = Track > Change Track Width > 6th Order Ambisonics
-Track > Change Track Width > More > 7th Order Ambisonics = Track > Change Track Width > 7th Order Ambisonics
 Track > Split into Mono
 Track > Instrument = !instrument
 Track > ---

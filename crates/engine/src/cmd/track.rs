@@ -313,7 +313,7 @@ fn new_track(e: &mut Engine, p: &Value) -> Result<Value> {
         ChannelFormat::Mono
     };
     let format = match str_param(p, "format") {
-        Some(f) => ChannelFormat::from_id(f).ok_or_else(|| bad("track.new", format!("unknown format `{f}`")))?,
+        Some(f) => mixable_format("track.new", ChannelFormat::from_id(f).ok_or_else(|| bad("track.new", format!("unknown format `{f}`")))?)?,
         None => default_fmt,
     };
     let name = str_param(p, "name").map(str::to_string);
@@ -731,6 +731,7 @@ fn remove_from_folder(e: &mut Engine, p: &Value) -> Result<Value> {
 fn change_width(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.change_width", p)?;
     let f = str_param(p, "format").and_then(ChannelFormat::from_id).ok_or_else(|| bad("track.change_width", "`format` required"))?;
+    let f = mixable_format("track.change_width", f)?;
     let s = e.session_mut();
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
@@ -1378,6 +1379,35 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambisonics_above_third_order_is_refused_and_third_order_is_filled() {
+        let mut e = Engine::default();
+        for f in ["4th Order Ambisonics", "7th Order Ambisonics"] {
+            let err = e.execute("track.new", &json!({"format": f})).unwrap_err().to_string();
+            assert!(err.contains("at most 16"), "{err}");
+        }
+        let t = e.execute("track.new", &json!({"format": "Mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+        assert!(e.execute("track.change_width", &json!({"tracks": [t], "format": "5th Order Ambisonics"})).is_err());
+        assert!(e.execute("setup.io", &json!({"action": "create_bus", "name": "Amb", "format": "6th Order Ambisonics"})).is_err());
+        // A mono clip panned into a 3rd-order main output reaches all 16 channels, not only W Y Z X.
+        e.execute("setup.main_format", &json!({"format": "3rd Order Ambisonics"})).unwrap();
+        use soundcraft_model::{Clip, SourceAudio, SourceId};
+        let s = e.session_mut();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4000]] };
+        s.pool.insert(SourceId(9), std::sync::Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        let tr = s.track_mut(TrackId(t)).unwrap();
+        tr.mixer.pan = vec![-0.6];
+        tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "a", SourceId(9), 0, 0, 4000));
+        let out = soundcraft_mix::render_range(e.session(), soundcraft_time::Range::new(0, 2048), 512);
+        assert_eq!(out.len(), 16);
+        let silent: Vec<usize> = (4..16).filter(|c| out[*c].iter().all(|v| v.abs() < 1e-6)).collect();
+        // On the horizon, off centre: the 2nd- and 3rd-order horizontal components must sound.
+        for c in [4usize, 8, 9, 15] {
+            assert!(!silent.contains(&c), "ACN {c} silent; silent: {silent:?}");
+        }
+    }
 
     #[test]
     fn split_into_mono_gives_each_track_its_own_channel() {

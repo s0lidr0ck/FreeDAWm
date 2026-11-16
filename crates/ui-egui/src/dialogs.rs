@@ -711,7 +711,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.add(egui::DragValue::new(count).range(1..=128));
                         ui.label("new");
                         egui::ComboBox::from_id_salt("nt_fmt").selected_text(format.as_str()).show_ui(ui, |ui| {
-                            for f in soundcraft_model::ChannelFormat::ALL {
+                            for f in soundcraft_model::ChannelFormat::ALL.into_iter().filter(|f| f.mixable()) {
                                 ui.selectable_value(format, f.label().to_string(), f.label());
                             }
                         });
