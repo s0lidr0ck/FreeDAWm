@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use crate::{BusId, Route, Session, Track};
+use crate::{BusId, Route, Session, Track, TrackKind};
 
 /// Which tracks a solo leaves audible. Make it with [`SoloScope::reserve`] (allocates, off the
 /// audio thread); [`SoloScope::fill`] then doesn't allocate for the same session shape.
@@ -85,9 +85,18 @@ impl SoloScope {
         if !*any {
             return;
         }
-        down.extend(s.tracks.iter().map(soloed));
+        // A soloed VCA master solos its members (it has no audio path of its own). Looked up only
+        // while one is soloed.
+        let vca_solo = s.tracks.iter().any(|t| t.kind == TrackKind::Vca && soloed(t));
+        let master_of = |t: &Track| -> Option<usize> {
+            let v = t.mixer.vca.filter(|_| vca_solo && !t.inactive)?;
+            s.tracks.iter().position(|m| m.id.0 == v && m.kind == TrackKind::Vca && soloed(m))
+        };
+        cause.extend(s.tracks.iter().enumerate().map(|(i, t)| {
+            if soloed(t) { u32::try_from(i).unwrap_or(NONE) } else { master_of(t).and_then(|m| u32::try_from(m).ok()).unwrap_or(NONE) }
+        }));
+        down.extend(cause.iter().map(|c| *c != NONE));
         up.extend(down.iter().copied());
-        cause.extend(down.iter().enumerate().map(|(i, on)| if *on { u32::try_from(i).unwrap_or(NONE) } else { NONE }));
         let bus = |r: &Route| match r {
             Route::Bus(b) => bus_at.get(b).copied(),
             _ => None,
@@ -244,6 +253,28 @@ mod tests {
 
     fn solo(s: &mut Session, t: TrackId) {
         s.track_mut(t).unwrap().mixer.solo = true;
+    }
+
+    /// Mix bug 3: soloing a VCA master muted everything (it has no audio path); it solos its
+    /// members, and what their paths reach.
+    #[test]
+    fn soloing_a_vca_solos_its_members() {
+        let mut k = kit();
+        let vca = k.s.add_track(TrackKind::Vca, ChannelFormat::Mono, Some("Kicks"));
+        for t in [k.kick_in, k.kick_out] {
+            k.s.track_mut(t).unwrap().mixer.vca = Some(vca.0);
+        }
+        solo(&mut k.s, vca);
+        let all = [k.kick_in, k.kick_out, k.snare, k.kick_bus, k.drum_bus, k.verb, vca];
+        assert_eq!(muted(&k.s, &all), vec![false, false, true, false, false, true, false]);
+        let scope = SoloScope::of(&k.s);
+        let at = |t| k.s.track_index(t).unwrap();
+        assert!(scope.implied(at(k.kick_in)) && scope.cause(at(k.kick_in)) == Some(at(vca)), "a member plays because of its master");
+        assert!(scope.soloed(at(vca)));
+        // An inactive member stays out.
+        let out = at(k.kick_out);
+        k.s.track_mut(k.kick_out).unwrap().inactive = true;
+        assert!(SoloScope::of(&k.s).muted(out));
     }
 
     #[test]

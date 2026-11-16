@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 2 fixed: a stereo send follows its pan) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 3 fixed: soloing a VCA solos its members) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -111,7 +111,7 @@ scale** (meters no longer miss a peak).
 | Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
 | Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Missing**: the four attributes are fixed |
 | Suspend all groups | ● | ● | ● | ● | **Missing** (one group at a time can be switched off) |
-| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned by command only, no control in the mixer |
+| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned by command only, no control in the mixer; its solo solos its members |
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
@@ -238,7 +238,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 |---|---|---|
 | 1 | **Fixed:** meters and clip lights showed only the latest block. The engine and the player now keep the loudest block until the UI takes it (`StripMeter::merge_from`, `Player::copy_meters`), and a block the audio thread could not publish is folded into the next | `StripMeter::measure` in `crates/mix/src/lib.rs`; the meter copy in `crates/playback/src/lib.rs` |
 | 2 | **Fixed:** on a stereo track the send pan did nothing; it now balances the send (turned left, the right side moves left until both are hard left) | `route_strip` in `crates/mix/src/lib.rs` |
-| 3 | Soloing a VCA mutes everything | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
+| 3 | **Fixed:** soloing a VCA muted everything; a soloed VCA master now solos its members and what their paths reach (`SoloScope::fill`, which the engine and the S keys share) | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
 | 4 | The trim automation lane plays with automation Off | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
 | 5 | Mute automation switches with no ramp and can click | the same place |
 | 6 | Group members stop writing automation after half a second while the dragged fader is held still | `mix.volume` grouping in `crates/engine/src/cmd/mix.rs`; `auto_write.rs` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 3 fixed: soloing a VCA solos its members |
 | 2026-11-16 | minor | bug 2 fixed: a stereo send follows its pan |
 | 2026-11-16 | minor | bug 1 fixed: meters keep every peak between screen updates |
 | 2026-11-16 | major | First version: mixing against Pro Tools, Studio Pro, Logic Pro and Cubase |
