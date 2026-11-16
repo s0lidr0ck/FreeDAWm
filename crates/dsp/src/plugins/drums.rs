@@ -373,7 +373,12 @@ impl Plugin for DrumSynth {
     }
 
     fn tail_samples(&self) -> usize {
-        ms_to_samples(self.p.v(10).max(self.p.v(2)), self.sr) as usize
+        // The longest decay of any drum (each is "to -60 dB"), carried on to where a voice stops
+        // (`OFF`, -80 dB): a long open hat or tom outlasted the kick and crash it used to report.
+        let v = |i| self.p.v(i);
+        let longest = [v(2), v(5) * 0.6, v(6), v(7), v(9), v(10), 25.0].into_iter().fold(0.0f32, f32::max);
+        let to_off = OFF.ln() / 0.001f32.ln();
+        ms_to_samples(longest * to_off, self.sr) as usize
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {

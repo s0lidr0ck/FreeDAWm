@@ -274,6 +274,13 @@ pub struct SubtractiveSynth {
     counter: u64,
     level: Smoother,
     cutoff: Smoother,
+    /// Oscillator 2's tuning in semitones (with its detune), the oscillator mix, the filter's
+    /// damping (from the resonance) and the filter envelope's amount in octaves: smoothed, so
+    /// moving them does not step.
+    tune2: Smoother,
+    mix: Smoother,
+    damping: Smoother,
+    env_oct: Smoother,
     sustain: bool,
     bend: f32,
 }
@@ -303,6 +310,10 @@ impl SubtractiveSynth {
             counter: 0,
             level: Smoother::new(0.5),
             cutoff: Smoother::new(2000.0),
+            tune2: Smoother::new(0.0),
+            mix: Smoother::new(0.0),
+            damping: Smoother::new(2.0),
+            env_oct: Smoother::new(0.0),
             sustain: false,
             bend: 1.0,
         };
@@ -319,6 +330,10 @@ impl SubtractiveSynth {
         self.glide_coef = if glide < 0.5 { 0.0 } else { crate::util::time_coef(glide / 3.0, sr) };
         self.level.set(db_to_gain(v(18)));
         self.cutoff.set(v(5));
+        self.tune2.set(v(2) + v(3) / 100.0);
+        self.mix.set(v(4) / 100.0);
+        self.damping.set(2.0 - 1.95 * (v(6) / 100.0));
+        self.env_oct.set(v(7) / 100.0 * 6.0);
     }
 
     fn start_note(&mut self, note: u8, vel: u8) {
@@ -420,10 +435,10 @@ impl SubtractiveSynth {
         let sr = self.sr;
         let w1 = wave(self.p.choice(0));
         let w2 = wave(self.p.choice(1));
-        let ratio2 = 2f32.powf((self.p.v(2) + self.p.v(3) / 100.0) / 12.0);
-        let mix = self.p.v(4) / 100.0;
-        let k = 2.0 - 1.95 * (self.p.v(6) / 100.0);
-        let env_oct = self.p.v(7) / 100.0 * 6.0;
+        let ratio2 = 2f32.powf(self.tune2.next() / 12.0);
+        let mix = self.mix.next();
+        let k = self.damping.next();
+        let env_oct = self.env_oct.next();
         let cutoff = self.cutoff.next();
         let nyq = sr * 0.45;
         let bend = self.bend;
@@ -459,6 +474,9 @@ impl Plugin for SubtractiveSynth {
         self.ch = sane_channels(channels);
         self.level.set_time(20.0, self.sr);
         self.cutoff.set_time(20.0, self.sr);
+        for s in [&mut self.tune2, &mut self.mix, &mut self.damping, &mut self.env_oct] {
+            s.set_time(20.0, self.sr);
+        }
         self.update();
         self.reset();
     }
@@ -471,6 +489,9 @@ impl Plugin for SubtractiveSynth {
         self.last_freq = None;
         self.level.snap();
         self.cutoff.snap();
+        for s in [&mut self.tune2, &mut self.mix, &mut self.damping, &mut self.env_oct] {
+            s.snap();
+        }
         self.sustain = false;
         self.bend = 1.0;
     }
@@ -511,7 +532,8 @@ impl Plugin for SubtractiveSynth {
     }
 
     fn tail_samples(&self) -> usize {
-        ms_to_samples(self.p.v(11), self.sr) as usize
+        // The release is "to -60 dB"; a voice rings on to `SILENT` (-100 dB).
+        ms_to_samples(self.p.v(11) * (SILENT.ln() / 0.001f32.ln()), self.sr) as usize
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -555,5 +577,46 @@ mod tests {
         }
         assert_eq!((q.ev.len(), q.dropped()), (MAX_EVENTS, 7));
         assert_eq!(q.ev.capacity(), cap, "never reallocated");
+    }
+
+    /// Bug 28: the oscillator mix, resonance, detune and envelope amount glide to a new value
+    /// instead of stepping; once settled they are exactly the parameter's value.
+    #[test]
+    fn mix_resonance_detune_and_envelope_amount_are_smoothed() {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 2);
+        assert_eq!(s.mix.value(), 0.5);
+        assert!(s.set_param("osc_mix", 100.0) && s.set_param("resonance", 100.0));
+        s.note_on(0, 60, 100);
+        let mut io = vec![vec![0.0f32; 64]; 2];
+        s.process(&mut io, 64);
+        assert!(s.mix.value() > 0.5 && s.mix.value() < 0.95, "{}", s.mix.value());
+        for _ in 0..2_000 {
+            s.process(&mut io, 64);
+        }
+        assert_eq!((s.mix.value(), s.damping.value()), (1.0, 2.0 - 1.95));
+    }
+
+    /// Bug 30: the synth's and the drum synth's reported tails cover the sound after the last
+    /// note-off (a freeze or a bounce stops there).
+    #[test]
+    fn reported_tails_cover_the_release() {
+        for (id, note) in [("subtractive_synth", 60u8), ("drum_synth", 46)] {
+            let Some(mut p) = crate::create(id) else { panic!("{id}") };
+            p.prepare(48_000.0, 512, 2);
+            p.note_on(0, note, 127);
+            let mut io = vec![vec![0.0f32; 512]; 2];
+            p.process(&mut io, 512);
+            p.note_off(0, note);
+            let tail = p.tail_samples();
+            let mut last = 0usize;
+            for b in 0..(tail / 512 + 400) {
+                p.process(&mut io, 512);
+                if io.iter().any(|c| c.iter().any(|x| x.abs() > 1.0e-6)) {
+                    last = (b + 1) * 512;
+                }
+            }
+            assert!(last <= tail + 512, "{id}: sound until {last}, tail {tail}");
+        }
     }
 }

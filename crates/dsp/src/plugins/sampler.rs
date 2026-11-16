@@ -769,7 +769,21 @@ impl Sampler {
         let from = if d.glide > 0.0 { self.last_pitch.unwrap_or(pitch) } else { pitch };
         let step = if from == pitch { step } else { self.step_for(from) };
         if let Some(v) = self.voices.get_mut(idx) {
-            *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, end, pitch: from, target: pitch, ..Voice::new() };
+            // A one-shot plays through and ignores its note-off, unless it loops: a loop has no end
+            // to play to, so the note-off releases it (it used to ring until all notes off).
+            *v = Voice {
+                note,
+                held: !d.one_shot || looping,
+                gain,
+                pos: start,
+                step,
+                forward: true,
+                looping,
+                end,
+                pitch: from,
+                target: pitch,
+                ..Voice::new()
+            };
             v.grain_pos = [start; 2];
             v.env.gate_on();
             v.fenv.trigger();
@@ -1414,6 +1428,22 @@ mod tests {
         run(&mut s, 512);
         s.all_notes_off();
         assert_eq!(peak(&run(&mut s, 4800)[0][2400..]), 0.0);
+    }
+
+    /// Bug 25: a looping one-shot stops at its note-off (with the release) instead of ringing
+    /// until all notes off.
+    #[test]
+    fn a_looping_one_shot_is_released_by_its_note_off() {
+        let mut s = sampler(mono(SR, vec![0.5; 24_000]));
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 1.0);
+        s.set_param("loop_mode", 1.0);
+        s.note_on(0, 60, 127);
+        let held = run(&mut s, 30_000);
+        assert!(peak(&held[0][24_000..29_000]) > 0.1, "it loops past the sample's end while held");
+        s.note_off(0, 60);
+        let after = run(&mut s, 18_000);
+        assert_eq!(peak(&after[0][1_000..]), 0.0, "and stops at the note-off");
     }
 
     #[test]

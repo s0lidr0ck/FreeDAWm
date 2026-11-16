@@ -40,7 +40,9 @@ pub const ROBINS: usize = 4;
 /// Parameters per pad (see [`PadParam`]).
 const K: usize = 38;
 const VOICES: usize = 64;
-const MAX_PENDING: usize = 64;
+/// Hits waiting for their delay (humanise, flams, ratchets, swing): room for a dense fill of
+/// ratchets on many pads at once, so none is dropped (it was 64).
+const MAX_PENDING: usize = 512;
 /// Envelopes below this are silent.
 const OFF: f32 = 1.0e-4;
 /// Effect slots per bus, and every bus's: bus A's four, bus B's, then the output's

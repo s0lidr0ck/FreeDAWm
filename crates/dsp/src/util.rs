@@ -81,10 +81,10 @@ impl Smoother {
     #[inline]
     pub(crate) fn next(&mut self) -> f32 {
         if self.cur != self.target {
-            self.cur = self.target + (self.cur - self.target) * self.coef;
-            if (self.cur - self.target).abs() <= 1.0e-6 * (1.0 + self.target.abs()) {
-                self.cur = self.target;
-            }
+            let next = self.target + (self.cur - self.target) * self.coef;
+            // Close enough, or stuck a few ulps away (with a slow coefficient the step rounds
+            // to nothing in f32): settle on the target.
+            self.cur = if next == self.cur || (next - self.target).abs() <= 1.0e-6 * (1.0 + self.target.abs()) { self.target } else { next };
         }
         self.cur
     }
