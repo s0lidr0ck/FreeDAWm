@@ -31,6 +31,7 @@ pub mod midi_record;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
+pub mod monitor_capture;
 pub mod monitor_profiles;
 pub mod open_job;
 pub mod pattern;

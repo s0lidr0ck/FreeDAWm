@@ -58,7 +58,10 @@ a simulated output (SIM: a curve, high/low-pass and stereo width) and then a hea
 (EAR: one curve per ear), both minimum-phase biquad cascades, so it adds no latency. `RangeRender`
 has no such stage, so bounces, exports, freezes and commits cannot contain it. What is on, and with
 which profile, is in `ui.json`, not the session; the profiles are JSON files in the Library folder's
-`Monitor Profiles` (`soundcraft_engine::monitor_profiles`).
+`Monitor Profiles` (`soundcraft_engine::monitor_profiles`). A simulated output is measured, not
+drawn: `freedawm-cli monitor-test-file` writes a test signal, and `freedawm-cli monitor-profile`
+reads a bounce of it through a device into a profile (`soundcraft_engine::monitor_capture`:
+frequency response and stereo width, nothing level-dependent).
 
 Device I/O today is the system's *default* output and *default* input device, opened as two
 separate cpal streams; the mix renders 512-sample blocks and resamples to the device rate when

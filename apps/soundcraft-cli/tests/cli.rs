@@ -174,3 +174,22 @@ fn the_settings_folder_is_copied_only_when_a_subcommand_needs_it() {
     assert!(!String::from_utf8_lossy(&o.stderr).contains("settings:"), "{}", String::from_utf8_lossy(&o.stderr));
     let _ = std::fs::remove_dir_all(home);
 }
+
+/// `monitor-test-file` writes the capture test file, and `monitor-profile` refuses it as it went
+/// in (no device shaped it) and anything that is not a capture, with a reason.
+#[test]
+fn the_monitor_commands_write_the_test_file_and_refuse_what_is_not_a_capture() {
+    let dir = tmpdir("monitor");
+    let file = dir.join("test.wav");
+    let out = run(&["monitor-test-file", file.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::metadata(&file).unwrap().len() / 1_000_000, 27);
+    let out = run(&["monitor-profile", file.to_str().unwrap(), "--library", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("the device was not in the path"));
+    assert!(!dir.join("Monitor Profiles").exists());
+    let out = run(&["monitor-profile", dir.join("missing.wav").to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(!run(&["monitor-profile"]).status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
