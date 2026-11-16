@@ -691,6 +691,98 @@ pub fn release_key(app: &mut SoundApp) {
     }
 }
 
+/// A chord the Pencil can stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chord {
+    Major,
+    Minor,
+    Seventh,
+    MajorSeventh,
+    MinorSeventh,
+    Sus4,
+    Diminished,
+    Augmented,
+    /// The triad the key's scale builds on the root (every other scale tone).
+    InKey,
+}
+
+impl Chord {
+    pub const ALL: [Chord; 9] = [
+        Chord::Major,
+        Chord::Minor,
+        Chord::Seventh,
+        Chord::MajorSeventh,
+        Chord::MinorSeventh,
+        Chord::Sus4,
+        Chord::Diminished,
+        Chord::Augmented,
+        Chord::InKey,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Chord::Major => "Major",
+            Chord::Minor => "Minor",
+            Chord::Seventh => "7",
+            Chord::MajorSeventh => "Maj7",
+            Chord::MinorSeventh => "m7",
+            Chord::Sus4 => "Sus4",
+            Chord::Diminished => "Dim",
+            Chord::Augmented => "Aug",
+            Chord::InKey => "Triad in Key",
+        }
+    }
+
+    /// The semitones above the root; `key` (pitch class, scale) for the triad in key.
+    pub fn intervals(self, root: i32, key: Option<(u8, u8)>) -> Vec<i32> {
+        match self {
+            Chord::Major => vec![0, 4, 7],
+            Chord::Minor => vec![0, 3, 7],
+            Chord::Seventh => vec![0, 4, 7, 10],
+            Chord::MajorSeventh => vec![0, 4, 7, 11],
+            Chord::MinorSeventh => vec![0, 3, 7, 10],
+            Chord::Sus4 => vec![0, 5, 7],
+            Chord::Diminished => vec![0, 3, 6],
+            Chord::Augmented => vec![0, 4, 8],
+            Chord::InKey => {
+                let (k, sc) = key.unwrap_or((0, 0));
+                let deg_pitch = |d: i32| i32::from(k) + soundcraft_band::chord_theory::scale_offset(i32::from(sc), d);
+                // The scale degree at or just below the root, then two thirds up.
+                let d0 = (-14..=140).rev().find(|d| deg_pitch(*d) <= root).unwrap_or(0);
+                let base = deg_pitch(d0);
+                vec![0, deg_pitch(d0 + 2) - base, deg_pitch(d0 + 4) - base]
+            }
+        }
+    }
+}
+
+/// The notes the Pencil writes for `note`: it alone, or `chord` built on it (notes off the
+/// keyboard dropped).
+pub fn stamp(chord: Option<Chord>, key: Option<(u8, u8)>, note: Note) -> Vec<Note> {
+    let Some(c) = chord else { return vec![note] };
+    let root = i32::from(note.pitch);
+    c.intervals(root, key).into_iter().filter_map(|i| u8::try_from(root + i).ok().filter(|p| *p <= 127)).map(|pitch| Note { pitch, ..note }).collect()
+}
+
+/// The pitch nearest `p` whose class is in `set` (the lower one on a tie), within the keyboard.
+pub fn nearest_in(set: soundcraft_vocal::PitchClassSet, p: i32) -> i32 {
+    (0..12).flat_map(|d| [p - d, p + d]).find(|q| (0..=127).contains(q) && set.contains(q.rem_euclid(12) as u8)).unwrap_or(p)
+}
+
+/// The rows a roll folded to `set` keeps: the scale's pitches and every pitch a note has.
+pub fn fold_mask(set: soundcraft_vocal::PitchClassSet, seq: &soundcraft_midi::Sequence) -> u128 {
+    let mut m: u128 = 0;
+    for p in 0..=127u32 {
+        if set.contains((p % 12) as u8) {
+            m |= 1u128 << p;
+        }
+    }
+    for n in &seq.notes {
+        m |= 1u128 << u32::from(n.pitch.min(127));
+    }
+    m
+}
+
 /// The selection after a press on the piano key `pitch`: the notes of that pitch (in the clip's
 /// window); added to `selected` with Shift held, or while a press glides on from key to key.
 pub fn key_selection(seq: &soundcraft_midi::Sequence, selected: &[usize], pitch: u8, add: bool) -> Vec<usize> {

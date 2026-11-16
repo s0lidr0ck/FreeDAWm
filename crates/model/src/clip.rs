@@ -293,6 +293,10 @@ pub struct Clip {
     /// A MIDI clip's playback quantize: its notes play quantized and stay where they are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub play_quantize: Option<soundcraft_midi::ops::PlayQuantize>,
+    /// A MIDI clip following the chord lane: the chords its notes were last set against (ticks
+    /// from its start). `None`: it does not follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_chords: Option<Vec<soundcraft_midi::ops::FollowChord>>,
 }
 
 /// The most Clip Effects settings a clip keeps (a hostile file is cut down to these).
@@ -336,6 +340,7 @@ impl Clip {
             effects: Vec::new(),
             effects_bypass: false,
             play_quantize: None,
+            follow_chords: None,
         }
     }
 

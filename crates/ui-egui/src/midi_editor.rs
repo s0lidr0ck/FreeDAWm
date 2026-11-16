@@ -60,9 +60,30 @@ pub struct RollGeometry {
     pub left: f64,
     pub row_h: f32,
     pub scroll: f32,
+    /// Folded to the scale: the pitches that have a row (bit `p` for pitch `p`); 0, every pitch.
+    pub fold: u128,
 }
 
 impl RollGeometry {
+    /// Rows above `pitch`'s row (fractional for a pitch with no row when folded: it sits on the
+    /// line under the row above it).
+    fn row_of(&self, pitch: i32) -> f32 {
+        if self.fold == 0 {
+            return (127 - pitch) as f32;
+        }
+        if pitch > 127 {
+            return -((pitch - 127) as f32);
+        }
+        let above = if pitch >= 127 { 0 } else { (self.fold >> ((pitch.max(-1) + 1) as u32)).count_ones() };
+        let below0 = if pitch < 0 { (-pitch) as u32 - 1 } else { 0 };
+        (above + below0) as f32
+    }
+
+    /// How many rows the roll has.
+    pub fn rows(&self) -> i32 {
+        if self.fold == 0 { 128 } else { self.fold.count_ones() as i32 }
+    }
+
     pub fn x_of(&self, tick: i64) -> f32 {
         self.roll.min.x + ((tick as f64 - self.left) * f64::from(self.px_per_tick)) as f32
     }
@@ -73,11 +94,29 @@ impl RollGeometry {
     }
 
     pub fn y_of(&self, pitch: i32) -> f32 {
-        self.roll.min.y + (127 - pitch) as f32 * self.row_h - self.scroll
+        self.roll.min.y + self.row_of(pitch) * self.row_h - self.scroll
     }
 
     pub fn pitch_at(&self, y: f32) -> i32 {
-        127 - ((y - self.roll.min.y + self.scroll) / self.row_h.max(1.0)).floor() as i32
+        let row = ((y - self.roll.min.y + self.scroll) / self.row_h.max(1.0)).floor() as i32;
+        if self.fold == 0 {
+            return 127 - row;
+        }
+        if row < 0 {
+            return 127 - row;
+        }
+        let mut seen = 0;
+        let mut lowest = 127;
+        for p in (0..=127).rev() {
+            if self.fold >> p & 1 == 1 {
+                if seen == row {
+                    return p;
+                }
+                seen += 1;
+                lowest = p;
+            }
+        }
+        lowest - (row - seen + 1)
     }
 }
 
@@ -191,6 +230,15 @@ pub struct MidiEditorState {
     /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
     /// its own line, new points on the clip's main channel.
     pub ctrl_channel: Option<u8>,
+    /// With a key on the Key ruler: only the scale's rows (and those of pitches with notes).
+    pub fold_scale: bool,
+    /// The rows the roll was last folded to (0: none), to centre the notes when folding turns
+    /// on or off.
+    pub fold_seen: u128,
+    /// Drawn and dragged notes land on the scale.
+    pub keep_scale: bool,
+    /// The Pencil stamps this chord (`None`: one note).
+    pub chord: Option<crate::midi_edit_tools::Chord>,
     /// Of several selected MIDI clips, the one being edited (the others' notes show in their
     /// track's colour; a click on one makes its clip this one).
     pub active: Option<ClipId>,
@@ -246,6 +294,10 @@ impl Default for MidiEditorState {
             lanes: Vec::new(),
             ctrl_sel: None,
             ctrl_channel: None,
+            fold_scale: false,
+            fold_seen: 0,
+            keep_scale: false,
+            chord: None,
             active: None,
             ctrl_tool: crate::midi_lanes::LaneTool::Select,
             ctrl_scale_pct: 100.0,
@@ -516,6 +568,52 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
             .on_hover_text("Show CC, pitch bend, aftertouch, poly pressure and program lanes under the velocity lane");
+        // Scale and chords.
+        let keyed = !app.engine.session().key_signatures.is_empty();
+        let mut fold = app.midi.fold_scale;
+        if ui
+            .add_enabled(keyed, egui::Checkbox::new(&mut fold, "Fold to Scale"))
+            .on_hover_text("Only the rows of the scale (and of pitches with notes)")
+            .on_disabled_hover_text("Set a key on the Key ruler first")
+            .changed()
+        {
+            app.midi.fold_scale = fold;
+        }
+        let mut keep = app.midi.keep_scale;
+        if ui
+            .add_enabled(keyed, egui::Checkbox::new(&mut keep, "Keep to Scale"))
+            .on_hover_text("Notes drawn or dragged land on the scale")
+            .on_disabled_hover_text("Set a key on the Key ruler first")
+            .changed()
+        {
+            app.midi.keep_scale = keep;
+        }
+        let chord_text = match app.midi.chord {
+            Some(c) => format!("Chord Stamp: {}", c.name()),
+            None => "Chord Stamp".to_string(),
+        };
+        ui.menu_button(chord_text, |ui| {
+            if ui.radio(app.midi.chord.is_none(), "Off (one note)").clicked() {
+                app.midi.chord = None;
+                ui.close();
+            }
+            for c in tools::Chord::ALL {
+                if ui.radio(app.midi.chord == Some(c), c.name()).clicked() {
+                    app.midi.chord = Some(c);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("The Pencil draws a chord on the note clicked (its root)");
+        let mut follows = clip.follow_chords.is_some();
+        if ui
+            .checkbox(&mut follows, "Follow Chord Lane")
+            .on_hover_text("When the chord lane changes, this clip's notes move with it (chord tones to the new chord's, others with its root)")
+            .changed()
+        {
+            let _ = app.run("clip.follow_chords", json!({"clips": [cid.0], "on": follows}));
+        }
         let mut follow = app.midi.ctrls_follow;
         if ui
             .checkbox(&mut follow, "Controllers Follow Notes")
@@ -709,13 +807,28 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         view = MidiView { zoom: None, left: 0.0, ..view };
     }
     view = clamp_left(view, width, len_ticks);
-    view.scroll = view.scroll.clamp(0.0, (128.0 * view.row_h - roll.height()).max(0.0));
+    // The key at the clip's start (with one on the Key ruler) and, folded, the rows kept.
+    let clip_key = (!s.key_signatures.is_empty()).then(|| soundcraft_engine::vocal::key_pc_at(&s, clip.start));
+    let fold = match clip_key.filter(|_| app.midi.fold_scale) {
+        Some((k, sc)) => tools::fold_mask(soundcraft_engine::vocal::key_set(k, sc), sequence),
+        None => 0,
+    };
+    let n_rows = if fold == 0 { 128.0 } else { fold.count_ones() as f32 };
+    // Folding or unfolding changes what a scroll means: the notes are centred again.
+    if (fold != 0) != (app.midi.fold_seen != 0) {
+        let probe = RollGeometry { clip: cid, roll, px_per_tick: 1.0, fit: 1.0, left: 0.0, row_h: view.row_h, scroll: 0.0, fold };
+        let (lo, hi) = sequence.notes.iter().fold((127, 0), |(lo, hi), n| (lo.min(i32::from(n.pitch)), hi.max(i32::from(n.pitch))));
+        let mid = if lo <= hi { (lo + hi) / 2 } else { 60 };
+        view.scroll = probe.y_of(mid) - roll.min.y - roll.height() / 2.0;
+    }
+    app.midi.fold_seen = fold;
+    view.scroll = view.scroll.clamp(0.0, (n_rows * view.row_h - roll.height()).max(0.0));
     scrollbar(ui, hbar, &mut view, width, len_ticks, cid);
     crate::midi_editor_link::follow(app, ui.ctx(), &mut view, view_before, width, base_tick);
     view = clamp_left(view, width, len_ticks);
     let fit = width / len_ticks as f32;
     let px_per_tick = view.zoom.unwrap_or(fit).max(fit);
-    let geo = RollGeometry { clip: cid, roll, px_per_tick, fit, left: view.left, row_h: view.row_h, scroll: view.scroll };
+    let geo = RollGeometry { clip: cid, roll, px_per_tick, fit, left: view.left, row_h: view.row_h, scroll: view.scroll, fold };
     app.midi.zoom_factor = tools::factor_of(view.zoom, fit, edit_ppt);
     app.midi.views.insert(cid, view);
     app.midi.drawn = Some(geo);
@@ -728,13 +841,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let painter = ui.painter().with_clip_rect(roll.union(keys));
     // Background rows and keys. With a key on the Key ruler, the rows out of the key at the clip's
     // start are shaded darker, so the scale shows.
-    let scale = (!s.key_signatures.is_empty()).then(|| {
-        let (k, sc) = soundcraft_engine::vocal::key_pc_at(&s, clip.start);
-        soundcraft_engine::vocal::key_set(k, sc)
-    });
-    let top = pitch_at(roll.min.y);
+    let scale = clip_key.map(|(k, sc)| soundcraft_engine::vocal::key_set(k, sc));
+    // Keep to Scale: a pitch drawn or dragged to goes to the nearest one in the scale.
+    let keep_scale = app.midi.keep_scale;
+    let to_scale = |p: i32| match scale.filter(|_| keep_scale) {
+        Some(set) => tools::nearest_in(set, p),
+        None => p,
+    };
     for r in 0..=rows + 1 {
-        let pitch = top - r;
+        let pitch = pitch_at(roll.min.y + r as f32 * row_h);
         let y = y_of(pitch);
         let row = Rect::from_min_size(pos2(roll.min.x, y), vec2(roll.width(), row_h));
         let out_of_key = scale.is_some_and(|set| !set.contains(pitch.rem_euclid(12) as u8));
@@ -933,7 +1048,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 }
                 app.midi.drag = Some(NoteDrag { index: i, edge, start: p, dx_ticks: 0, dy_semi: 0, copy: alt && edge == Edge::Move });
             }
-            None if pencil => app.midi.draw = Some((floor_grid(geo.tick_at(p.x)), pitch_at(p.y).clamp(0, 127))),
+            None if pencil => app.midi.draw = Some((floor_grid(geo.tick_at(p.x)), to_scale(pitch_at(p.y)).clamp(0, 127))),
             None => app.midi.band = Some(p),
         }
     }
@@ -982,9 +1097,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 start,
                 length,
             };
-            if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&[note], start)})).is_ok() {
+            let notes = tools::stamp(app.midi.chord, clip_key, note);
+            if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&notes, start)})).is_ok() {
                 app.midi.last_length = Some(length);
-                audition(app, cid, &[note]);
+                audition(app, cid, &notes);
             }
             app.midi.selected.clear();
             app.midi.draw = None;
@@ -998,7 +1114,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             // A moved note keeps its offset from the grid; an edge lands on a grid line.
             Edge::Move => {
                 d.dx_ticks = snap_rel(f64::from((p.x - d.start.x) / px_per_tick));
-                d.dy_semi = -((p.y - d.start.y) / row_h).round() as i64;
+                // Folded, a row is not a semitone: the grabbed note goes to the row's pitch.
+                d.dy_semi = if geo.fold == 0 { -((p.y - d.start.y) / row_h).round() as i64 } else { i64::from(pitch_at(p.y) - i32::from(n.pitch)) };
+                if scale.is_some() && keep_scale {
+                    let to = to_scale(i32::from(n.pitch) + d.dy_semi as i32);
+                    d.dy_semi = i64::from(to - i32::from(n.pitch));
+                }
             }
             Edge::Start => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.start),
             Edge::End => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.end()),
@@ -1073,7 +1194,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 }
             }
             None if pencil => {
-                let pitch = pitch_at(p.y).clamp(0, 127);
+                let pitch = to_scale(pitch_at(p.y)).clamp(0, 127);
                 let start = floor_grid(geo.tick_at(p.x));
                 let length = app.midi.last_length.unwrap_or(grid_ticks).max(1);
                 let note = soundcraft_midi::Note {
@@ -1085,8 +1206,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                     start,
                     length,
                 };
-                if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&[note], start)})).is_ok() {
-                    audition(app, cid, &[note]);
+                let notes = tools::stamp(app.midi.chord, clip_key, note);
+                if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&notes, start)})).is_ok() {
+                    audition(app, cid, &notes);
                 }
                 app.midi.selected.clear();
             }

@@ -11,6 +11,7 @@ pub mod band_print;
 pub mod brand;
 pub mod catalog;
 pub mod catalog_more;
+pub mod chord_follow;
 pub mod clip_group_file;
 pub mod cmd;
 pub mod dawproject;
@@ -750,6 +751,16 @@ impl Engine {
                         let was = self.doc.edit.values.get(&key).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(1.0);
                         let _ = cmd::clip::elastic(self, &serde_json::json!({"clips": [clip.0], "ratio": was * ratio}));
                     }
+                }
+                // MIDI clips set to follow the chord lane take its changes, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && (before.band.chords != self.doc.band.chords
+                        || (before.band.key, before.band.scale) != (self.doc.band.key, self.doc.band.scale))
+                    && self.doc.tracks.iter().any(|t| t.clips().iter().any(|c| c.follow_chords.is_some()))
+                {
+                    chord_follow::follow(Arc::make_mut(&mut self.doc));
                 }
                 // A frozen track's frozen parts and edit-locked clips are not edited: the command
                 // is undone.

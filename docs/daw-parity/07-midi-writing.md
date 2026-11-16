@@ -134,12 +134,12 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Key signature track | ● | ● | ● | ● | **Works** |
-| Scale shown in the editor; rows folded to the scale | ◐ | ● | ● | ● | **Partial**: with a key on the Key ruler, rows out of the key are shaded; no folding |
-| Notes drawn or dragged stay in the scale | ○ | ● | ● | ● | **Missing** |
+| Scale shown in the editor; rows folded to the scale | ◐ | ● | ● | ● | **Works**: with a key on the Key ruler, rows out of the key are shaded, and More › Fold to Scale keeps only the scale's rows (and those of pitches with notes) |
+| Notes drawn or dragged stay in the scale | ○ | ● | ● | ● | **Works** as an option (More › Keep to Scale): the Pencil and a vertical drag land on the nearest pitch of the key at the clip's start |
 | Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band and Cleanup; shown above the editor |
 | Chords detected from MIDI or audio | ◐ | ● | ● | ● | **Works** (Detect Chords) |
-| Clips follow the chord track when it changes | ○ | ● | ● | ● | **Missing** |
-| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Missing** |
+| Clips follow the chord track when it changes | ○ | ● | ● | ● | **Works** per clip, opt in (More › Follow Chord Lane, `clip.follow_chords`): the clip keeps the chords it was written against; when the chord lane or the band key changes, its chord tones go to the nearest tone of the new chord and other notes move as the root does, in the same undo step. Destructive (the notes are rewritten); the Band is unchanged |
+| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Partial**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key); no chord pads |
 | Wrong notes corrected against key and chords, switchable | ○ | ○ | ○ | ○ | **Works** (MIDI Cleanup, non-destructive) |
 
 ## F. Drums and patterns
@@ -382,3 +382,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Quantize done more fully: window, random offset, note ends and lengths; built-in grooves and a groove from a clip; playback quantize per clip and per track with the notes left in place |
 | 2026-11-16 | minor | Controller lanes: Line and Curve tools, ramps between points, scale and thin, program change and poly pressure lanes, controllers that follow their notes |
 | 2026-11-16 | minor | Several selected MIDI clips in the editor: the others show in their colour, a click switches to one |
+| 2026-11-16 | minor | Scales and chords: fold to scale, keep to scale, chord stamp, clips that follow the chord lane (opt in) |

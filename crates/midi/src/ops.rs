@@ -292,6 +292,30 @@ impl PlayQuantize {
     }
 }
 
+/// One chord of the chord lane as a following clip keeps it: `[start, end)` in ticks from the
+/// clip's start, its root pitch class and its pitch classes (bit `pc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FollowChord {
+    pub start: i64,
+    pub end: i64,
+    pub root: u8,
+    pub tones: u16,
+}
+
+/// Where `pitch`, written under `old`, goes under `new`: a chord tone to the nearest tone of the
+/// new chord (it stays when it is one; the lower on a tie), any other note as the root moves,
+/// the shortest way.
+pub fn follow_chord_pitch(pitch: u8, old: &FollowChord, new: &FollowChord) -> u8 {
+    let pc = i32::from(pitch % 12);
+    let has = |tones: u16, pc: i32| (tones >> pc.rem_euclid(12)) & 1 == 1;
+    let d = if has(old.tones, pc) && new.tones != 0 {
+        (0..=6).flat_map(|k| [-k, k]).find(|k| has(new.tones, pc + k)).unwrap_or(0)
+    } else {
+        (i32::from(new.root) - i32::from(old.root) + 6).rem_euclid(12) - 6
+    };
+    (i32::from(pitch) + d).clamp(0, 127) as u8
+}
+
 /// Transposes notes by `semitones`. Pitches are **clamped** to 0..=127 (notes are never
 /// dropped, so the slice length is unchanged); notes pushed past either end pile up on 0 or 127.
 pub fn transpose(notes: &mut [Note], semitones: i32) {
