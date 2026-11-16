@@ -19,7 +19,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Clip", 23),
     ("Event", 15),
     ("Process", 14),
-    ("AI", 13),
+    ("AI", 14),
     ("Options", 17),
     ("Setup", 9),
     ("Window", 33),
@@ -198,6 +198,7 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Convert to MIDI…",
             "Detect Chords…",
             "Transcribe Lyrics…",
+            "Find in Transcript…",
             "MIDI Cleanup…",
             "Generate MIDI from Text…",
             "Generate Song…"

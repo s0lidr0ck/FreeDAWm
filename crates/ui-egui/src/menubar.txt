@@ -501,6 +501,7 @@ AI > ## Transcribe [desktop]
 AI > Convert to MIDI… [desktop]
 AI > Detect Chords… [desktop]
 AI > Transcribe Lyrics… [desktop]
+AI > Find in Transcript… = @lyrics.find
 AI > MIDI Cleanup…
 AI > --- [desktop]
 AI > ## Generate [desktop]

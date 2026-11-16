@@ -409,6 +409,8 @@ impl Dialogs {
                 }
             }
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
+            // Not a path: the words to find (the prompt is the same one-line field).
+            "lyrics.find" => Dialog::PathPrompt { cmd: id.into(), title: "Find in Transcript".into(), path: String::new(), key: "text".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
             "session.save" if e.path.is_some() => return false,
@@ -970,6 +972,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && cmd != "session.save_copy"
                         && cmd != "file.export_dawproject"
                         && key != "dir"
+                        && key != "text"
                         && ui.button("Browse…").clicked()
                         && let Some(p) = pick(cmd, &[])
                     {
