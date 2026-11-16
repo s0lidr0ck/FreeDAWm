@@ -43,6 +43,7 @@ pub mod scout_prompt;
 pub mod spill;
 pub mod split_files;
 pub mod tempo_detect;
+pub mod tick_clips;
 pub mod vocal;
 pub mod vocal_studio;
 
@@ -729,6 +730,15 @@ impl Engine {
         }
         match result {
             Ok(mut v) => {
+                // MIDI clips on tick-timebase tracks stay on their bars when an edit changes the
+                // tempo map (undo and redo restore whole documents; a loaded session is as saved).
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && before.tempo != self.doc.tempo
+                {
+                    tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc));
+                }
                 // A frozen track's frozen parts and edit-locked clips are not edited: the command
                 // is undone.
                 if !Arc::ptr_eq(&before, &self.doc)

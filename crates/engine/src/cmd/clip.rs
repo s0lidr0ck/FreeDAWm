@@ -324,11 +324,29 @@ fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             c.loop_id = Some(lid);
         }
+        // A MIDI clip on a tick-timebase track loops in bars and beats: each copy starts a whole
+        // clip length in ticks after the one before, so under a changing tempo the copies stay
+        // on their bars (and each is as long as the clip is in ticks there).
+        let musical = matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) && s.track(tid).is_some_and(|t| t.ticks_timebase);
+        let sr = s.sample_rate;
+        let map = s.tempo.clone();
+        let (t0, t1) = (map.samples_to_ticks_f(c.start, sr), map.samples_to_ticks_f(c.end(), sr));
+        let at_tick = |t: f64| {
+            let x = map.ticks_f_to_samples_f(t, sr).round();
+            if x.is_finite() { x.clamp(0.0, i64::MAX as f64 / 2.0) as i64 } else { 0 }
+        };
         let mut copies = Vec::new();
         for k in 1..=reps {
             let mut nc = c.clone();
             nc.id = s.new_clip_id();
-            nc.start = c.start.saturating_add(c.length.saturating_mul(k));
+            if musical && t1 > t0 {
+                let span = t1 - t0;
+                let (a, b) = (at_tick(t0 + span * k as f64), at_tick(t0 + span * (k + 1) as f64));
+                nc.start = a;
+                nc.length = b.saturating_sub(a).max(1);
+            } else {
+                nc.start = c.start.saturating_add(c.length.saturating_mul(k));
+            }
             copies.push((tid, nc));
         }
         made += copies.len();
@@ -412,6 +430,20 @@ fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
 mod tests {
     use serde_json::json;
     use soundcraft_model::{ClipId, TrackId};
+
+    /// Bug 15: a one-bar MIDI clip looped over a tempo change puts each copy on the next bar.
+    #[test]
+    fn midi_loops_on_a_tick_track_stay_on_the_bars() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        // 120 bpm, then 60 bpm from bar 2: bar 2 starts at 96 000, bar 3 at 288 000.
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("clip.loop", &json!({"clips": [clip], "count": 3})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 192_000), (288_000, 192_000)]);
+    }
 
     #[test]
     fn elastic_warp_renders_and_remove_warp_restores() {
