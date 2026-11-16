@@ -129,12 +129,12 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Logical Editor, Project Logical Editor, macros | **Missing** | |
 | MIDI Remote: scripted controller support with a mapping assistant | **Missing** | |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
-| Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (COMMIT1) |
+| Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
 | Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform; no free warp tool |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
 | Modulators for any parameter | **Missing** | |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
-| Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F); no talkback, no video |
+| Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (COMMIT2); no video |
 | ARA 2 and spectral editing | **Missing** | A view flag exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | A read-only score with print and MusicXML export; drum step sequencer only |
 | Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; export to a ProRes movie; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
@@ -164,7 +164,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Feature | Status | What it is, and its limits |
 |---|---|---|
 | Every command open to scripts and AI agents | **Works** | About 330 commands with documented parameters. A command-line tool runs them on a session without the window; a running app accepts them on a local port; an MCP server lets an AI agent list commands, run them, look at the session, take screenshots and click. Any menu item can be invoked by its path |
-| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. No talkback or video. On a local network the link is not encrypted, and a paired computer can run any command; the Network window says both |
+| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. On a local network PCs pair and connect over an encrypted link bound to their keys (COMMIT2); the phone's page stays on the plain link. Talkback: the control room's talk key mixes its input into the stream the performer hears, the music dimmed, while stopped too; never recorded (COMMIT2). No video. A paired computer can run any command; the Network window says so and which link each uses |
 | Scout: measured mix advice from an AI model | **Works** | Captures loudness, true peak, spectrum, stereo and transient measures of a mix or a channel, sends them with the channel's settings to Claude using the user's own key, and draws the returned EQ suggestions on the EQ as guides. It changes nothing by itself; each suggestion can be applied on request, one undo step each. Reference profiles can be built from other recordings, per stem |
 | Local models beyond stems | **Works** | Lead from backing vocals; drums into six parts; audio to MIDI by four models (general, piano with pedal, drums, voice) with a live preview; MIDI from a text description; a whole song from a prompt. All run on the user's machine after a download; each model's licence is shown, and non-commercial ones ask for confirmation |
 | Mend: vocal de-noise and de-reverb on a live insert | **Works** | The same model as Clean Vocal, running in the chain with about 2.9 s latency or a lighter live mode. Desktop only |
@@ -188,7 +188,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
 | 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a) |
-| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can, and that the local link is not encrypted while the internet one is. The encrypted local link is tier 4 |
+| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (COMMIT2, below) |
 | 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (3b781d6): Bounce to Movie uses both |
 
 ## Suggested order of work
@@ -208,7 +208,7 @@ local link allows in the Network window (row 6).
 | Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) | **Not started here**: section 7's work (its rows are still Missing); not begun so as not to cross it |
 | Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (ca44ec5): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (3b781d6): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
 | Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (06244b1): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
-| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (COMMIT1): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
+| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (aee379b): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
 | Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Another section's** ([section 5](05-built-in-effects.md)) |
 | Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)) |
@@ -227,7 +227,7 @@ workflow (specialist; revisit if users ask); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
 sessions kept between visits (12–18; not started, design below); talkback and encrypted local links for remote recording
-(10–16; not started, design below); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
+(10–16): **done** (COMMIT2, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
 and the scan helper is a start; not started, design below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
 
 **Designs for the larger items, not built yet.** Each was judged too big to finish well in the
@@ -246,13 +246,29 @@ same pass as the items above; these are the starting points.
   `Recorder` take buffer the desktop uses; latency from `AudioContext.outputLatency` plus
   `baseLatency`. Sessions and takes kept in the origin-private file system (OPFS) as the autosave
   folder, so a visit picks up where the last left off; the Record refusal added here goes away.
-- *Encrypted local link (part of 10–16 h).* Reuse the internet path's QUIC (TLS 1.3) on the local
-  network instead of the plain TCP link: each side keeps a self-signed key; pairing runs a
-  password-authenticated key exchange (SPAKE2 or similar) over the 4-digit code, which binds both
-  keys, so a machine in the middle of the first contact learns nothing and cannot pass; later
-  connections pin the keys. QUIC needs a UDP socket beside today's TCP listener: a new listening
-  socket, so the owner decides before it is built. Talkback then rides the existing live-mix
-  stream in the other direction.
+- *Encrypted local link (built, COMMIT2; owner-approved UDP port).* The internet path's QUIC
+  (TLS 1.3, iroh) on the local network: a UDP socket on the network port's number beside the TCP
+  listener, with no relays, no address lookup and no router port mapping, so nothing leaves the
+  local network. Each PC's key is the one it already keeps for the internet. The booth adds its
+  UDP port and key to the mDNS record it already sends; a remote PC dials that key (only its
+  holder can answer) and pairs with the code on the booth's screen, attempt limits as before.
+  The booth binds the paired PC to its key (its token is refused on the plain link and from any
+  other key); the remote PC keeps the booth's key and later dials only it. Setup › Network:
+  Offer the encrypted local link (on by default), Take PCs over the encrypted link only (the
+  plain link then serves the phone's page alone), and which link each PC is on. *Not built:* the
+  password-authenticated exchange over the code (SPAKE2): no such crate is in the dependency
+  tree and hand-written key-exchange code was not wanted. Without it, a machine that answers the
+  very first contact with its own key (by forging the booth's mDNS record) could still sit in the
+  middle of that one pairing, as it can on the plain link today; once paired the keys are pinned.
+  PCs paired over the plain link keep working there until paired again. The phone's page stays
+  on plain HTTP (a browser cannot speak this link).
+- *Talkback (built, COMMIT2).* The control room's talkback (its input, level and talk key, F11 or
+  the Network window's Talk to the performer, held) is mixed into the copy of the mix the stream
+  sends, the music dimmed by the control room's dim (once: the monitor's own dim already counts
+  when talkback dims), ramped over 10 ms. While the transport is stopped the stream carries the
+  talkback alone, on its own clock, and the performer hears it stopped too; the next roll starts
+  a new epoch. It is never in the booth's main mix or a bounce, and the performer's take records
+  his own inputs, never the stream.
 - *Plug-ins in their own process (16–28 h).* One helper process per hosted plug-in (the scan
   helper's launcher is the start), audio through shared memory, one block of added latency so
   the audio callback never waits: it hands block *n* over and takes block *n − 1*'s result; a
@@ -277,6 +293,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Remote recording: the encrypted local link and talkback |
 | 2026-11-16 | minor | Timing alignment of stacked vocals built (Align timing in the Vocal Studio) |
 | 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export; a first-run tour; where the rest stands, and designs for the larger items |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |

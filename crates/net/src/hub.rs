@@ -26,6 +26,31 @@ use crate::pairing::{Confirm, Pairing, PendingPair};
 use crate::proto::{BoothTransport, FollowerReport, RemoteAction, RemoteStatus, RigStatus, SketchNote, TransportState};
 use crate::take::{BoothAnchor, TakeEnvelope, remote_port_name};
 
+/// Which link a connection came in by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkKind {
+    /// The plain TCP listener on the local network (not encrypted): the phone's page, and PCs
+    /// unless [`NetConfig::encrypted_only`].
+    #[default]
+    Plain,
+    /// The encrypted local link (QUIC, bridged by [`crate::internet::Internet::serve_lan_to`]):
+    /// PCs only; pairing by code binds the device to its key.
+    Encrypted,
+    /// Over the internet (QUIC, bridged): PCs only, pairing by invite only.
+    Internet,
+}
+
+impl LinkKind {
+    /// How the Network window and the status feed name it.
+    pub fn text(self) -> &'static str {
+        match self {
+            LinkKind::Plain => "local link, not encrypted",
+            LinkKind::Encrypted => "encrypted local link",
+            LinkKind::Internet => "over the internet, encrypted",
+        }
+    }
+}
+
 /// A PC's take clock (see [`crate::sync`]): seconds rolled since its transport started, as
 /// audible now; `None` while stopped. Read on network threads: lock-free behind it.
 pub trait TakeClock: Send + Sync {
@@ -149,6 +174,8 @@ struct Link {
     landed: bool,
     /// It hears the booth's mix (the stream).
     streaming: bool,
+    /// The link it came in by.
+    kind: LinkKind,
 }
 
 /// The live sketch of one remote port (booth timeline seconds).
@@ -200,6 +227,8 @@ struct Inner {
     listening: Mutex<Option<Listening>>,
     /// The loopback listener the internet bridge connects to (only pairing by invite there).
     internet: Mutex<Option<Listening>>,
+    /// The loopback listener the encrypted local link's bridge connects to.
+    secure: Mutex<Option<Listening>>,
     /// Invites made (their one-time secret and when they expire, hub seconds).
     invites: Mutex<Vec<(String, f64)>>,
     open: AtomicUsize,
@@ -249,6 +278,7 @@ impl Hub {
                 streaming: AtomicBool::new(false),
                 listening: Mutex::new(None),
                 internet: Mutex::new(None),
+                secure: Mutex::new(None),
                 invites: Mutex::new(Vec::new()),
                 open: AtomicUsize::new(0),
                 next_id: AtomicU64::new(1),
@@ -337,13 +367,16 @@ impl Hub {
         Ok(json!({"request": r.id, "pc": self.pc_name()}))
     }
 
-    fn pair_confirm(&self, id: &str, code: &str) -> Result<Value, (String, u8)> {
+    /// `peer`: the device's key when it pairs over the encrypted local link (it is then bound to
+    /// that key and that link).
+    fn pair_confirm(&self, id: &str, code: &str, peer: Option<&str>) -> Result<Value, (String, u8)> {
         let now = self.now_s();
         let got = lock(&self.inner.pairing).confirm(id, code, now);
         match got {
             Confirm::Paired { name, kind } => {
                 let token = new_token();
-                let dev = PairedDevice { name: name.clone(), kind, token: token.clone(), follows: false };
+                let key = peer.unwrap_or_default().to_string();
+                let dev = PairedDevice { name: name.clone(), kind, token: token.clone(), follows: false, key };
                 self.update_config(|c| c.paired.push(dev));
                 Ok(json!({"token": token, "name": name, "pc": self.pc_name()}))
             }
@@ -440,6 +473,9 @@ impl Hub {
             }
             if l.connected && l.streaming {
                 parts.push("hears the mix".into());
+            }
+            if l.connected {
+                parts.push(l.kind.text().into());
             }
             let receiving = self.receiving(&l.name);
             if let Some(p) = receiving {
@@ -638,7 +674,7 @@ impl Hub {
         let hub = self.clone();
         std::thread::Builder::new()
             .name("freedawm-net-accept".into())
-            .spawn(move || hub.accept_loop(listener, stop, false))
+            .spawn(move || hub.accept_loop(listener, stop, LinkKind::Plain))
             .map_err(|e| e.to_string())?;
         log::info!("network: listening on port {actual}");
         Ok(actual)
@@ -660,9 +696,48 @@ impl Hub {
         let hub = self.clone();
         std::thread::Builder::new()
             .name("freedawm-net-accept-internet".into())
-            .spawn(move || hub.accept_loop(listener, stop, true))
+            .spawn(move || hub.accept_loop(listener, stop, LinkKind::Internet))
             .map_err(|e| e.to_string())?;
         Ok(port)
+    }
+
+    /// The listener the encrypted local link's bridge connects to
+    /// ([`crate::internet::Internet::serve_lan_to`]): loopback only, any free port; JSON lines
+    /// only, each connection's first line the caller's key. Kept until [`Hub::stop_secure`];
+    /// returns its port.
+    pub fn listen_secure(&self) -> Result<u16, String> {
+        if let Some(l) = lock(&self.inner.secure).as_ref() {
+            return Ok(l.port);
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("cannot listen for the encrypted link: {e}"))?;
+        let port = listener.local_addr().map(|a| a.port()).map_err(|e| e.to_string())?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let stop = Arc::new(AtomicBool::new(false));
+        *lock(&self.inner.secure) = Some(Listening { port, stop: Arc::clone(&stop) });
+        let hub = self.clone();
+        std::thread::Builder::new()
+            .name("freedawm-net-accept-secure".into())
+            .spawn(move || hub.accept_loop(listener, stop, LinkKind::Encrypted))
+            .map_err(|e| e.to_string())?;
+        Ok(port)
+    }
+
+    /// The encrypted link's listener port, while there is one.
+    pub fn secure_port(&self) -> Option<u16> {
+        lock(&self.inner.secure).as_ref().map(|l| l.port)
+    }
+
+    pub fn stop_secure(&self) {
+        if let Some(l) = lock(&self.inner.secure).take() {
+            l.stop.store(true, Ordering::SeqCst);
+            self.inner.changed.notify_all();
+            self.inner.transport_changed.notify_all();
+        }
+    }
+
+    /// The remote recorders connected now and the link each came by (the Network window).
+    pub fn links(&self) -> Vec<(String, LinkKind)> {
+        lock(&self.inner.links).iter().filter(|l| l.connected).map(|l| (l.name.clone(), l.kind)).collect()
     }
 
     /// The internet bridge's listener port, while there is one.
@@ -718,7 +793,7 @@ impl Hub {
         }
         let name = crate::pairing::clean_name(name);
         let token = new_token();
-        let dev = PairedDevice { name: name.clone(), kind: "pc".into(), token: token.clone(), follows: false };
+        let dev = PairedDevice { name: name.clone(), kind: "pc".into(), token: token.clone(), follows: false, key: String::new() };
         self.update_config(|c| c.paired.push(dev));
         log::info!("network: {name} paired over the internet with an invite");
         Ok(json!({"token": token, "name": name, "pc": self.pc_name()}))
@@ -737,7 +812,7 @@ impl Hub {
         stop.load(Ordering::SeqCst)
     }
 
-    fn accept_loop(&self, listener: TcpListener, stop: Arc<AtomicBool>, internet: bool) {
+    fn accept_loop(&self, listener: TcpListener, stop: Arc<AtomicBool>, kind: LinkKind) {
         while !self.stopped(&stop) {
             match listener.accept() {
                 Ok((stream, addr)) => {
@@ -748,7 +823,7 @@ impl Hub {
                     let hub = self.clone();
                     let stop = Arc::clone(&stop);
                     let spawned = std::thread::Builder::new().name("freedawm-net-conn".into()).spawn(move || {
-                        hub.serve(stream, addr, &stop, internet);
+                        hub.serve(stream, addr, &stop, kind);
                         hub.inner.open.fetch_sub(1, Ordering::SeqCst);
                     });
                     if spawned.is_err() {
@@ -764,7 +839,7 @@ impl Hub {
         }
     }
 
-    fn serve(&self, stream: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>, internet: bool) {
+    fn serve(&self, stream: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>, kind: LinkKind) {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_nodelay(true);
         let _ = stream.set_read_timeout(Some(LINK_TIMEOUT));
@@ -776,9 +851,9 @@ impl Hub {
             _ => return,
         };
         if first == b'{' {
-            self.serve_lines(reader, stream, addr, stop, internet);
-        } else if internet {
-            // No service remote page over the internet.
+            self.serve_lines(reader, stream, addr, stop, kind);
+        } else if kind != LinkKind::Plain {
+            // The service remote page is on the plain listener only.
         } else {
             self.serve_http(reader, stream, stop);
         }
@@ -807,7 +882,7 @@ impl Hub {
             ("POST", "/api/pair/confirm") => {
                 let id = body.get("request").and_then(Value::as_str).unwrap_or("");
                 let code = body.get("code").and_then(Value::as_str).unwrap_or("");
-                match self.pair_confirm(id, code) {
+                match self.pair_confirm(id, code, None) {
                     Ok(v) => respond_json(&mut out, 200, &v),
                     Err((e, left)) => respond_json(&mut out, 403, &json!({"error": e, "left": left})),
                 }
@@ -905,7 +980,10 @@ impl Hub {
 
     // ---- JSON lines: paired PCs and remote recorders ----
 
-    fn serve_lines(&self, mut reader: BufReader<TcpStream>, out: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>, internet: bool) {
+    fn serve_lines(&self, mut reader: BufReader<TcpStream>, out: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>, kind: LinkKind) {
+        let internet = kind == LinkKind::Internet;
+        // The caller's key on the encrypted link (its bridge's first line).
+        let mut peer: Option<String> = None;
         let out = Arc::new(Mutex::new(out));
         let mut buf = Vec::new();
         let mut who: Option<PairedDevice> = None;
@@ -938,7 +1016,24 @@ impl Hub {
             if let Some(l) = link {
                 self.touch_link(l);
             }
+            let plain_refused = kind == LinkKind::Plain && lock(&self.inner.cfg).encrypted_only;
             let reply: Option<Value> = match method.as_str() {
+                "link.peer" => {
+                    let key = params.get("key").and_then(Value::as_str).filter(|k| crate::internet::key_from_hex(k).is_some());
+                    match key {
+                        Some(k) if kind == LinkKind::Encrypted && peer.is_none() && who.is_none() => {
+                            peer = Some(k.to_string());
+                            None
+                        }
+                        _ => Some(json!({"ok": false, "error": "not on this link"})),
+                    }
+                }
+                _ if kind == LinkKind::Encrypted && peer.is_none() => {
+                    Some(json!({"ok": false, "error": "the encrypted link did not say who is calling"}))
+                }
+                "pair.request" | "pair.confirm" | "pair.invite" | "hello" if plain_refused => Some(
+                    json!({"ok": false, "error": "this booth takes PCs over the encrypted local link only (Setup › Network on the booth)", "pair": true}),
+                ),
                 "pair.request" | "pair.confirm" if internet => {
                     Some(json!({"ok": false, "error": "over the internet, pair with an invite from the booth", "pair": true}))
                 }
@@ -951,6 +1046,7 @@ impl Hub {
                     self.pair_confirm(
                         params.get("request").and_then(Value::as_str).unwrap_or(""),
                         params.get("code").and_then(Value::as_str).unwrap_or(""),
+                        peer.as_deref(),
                     )
                     .map_err(|(e, _)| e),
                 )),
@@ -958,12 +1054,16 @@ impl Hub {
                     let token = params.get("token").and_then(Value::as_str).unwrap_or("");
                     match self.device(token) {
                         None => Some(json!({"ok": false, "error": "not paired", "pair": true})),
+                        // Paired over the encrypted link: only over it, and only with its key.
+                        Some(dev) if !dev.key.is_empty() && (kind != LinkKind::Encrypted || peer.as_deref() != Some(dev.key.as_str())) => Some(
+                            json!({"ok": false, "error": "this PC was paired over the encrypted local link: connect over it, with the same key", "pair": true}),
+                        ),
                         Some(dev) => {
                             let follower = params.get("role").and_then(Value::as_str) == Some("follower");
                             if follower {
                                 let report: FollowerReport =
                                     params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default();
-                                let l = self.open_link(&dev, report);
+                                let l = self.open_link(&dev, report, kind);
                                 link = Some(l);
                                 let flag = Arc::new(AtomicBool::new(false));
                                 pusher = Some(Arc::clone(&flag));
@@ -1223,14 +1323,23 @@ impl Hub {
         }
     }
 
-    fn open_link(&self, dev: &PairedDevice, report: FollowerReport) -> u64 {
+    fn open_link(&self, dev: &PairedDevice, report: FollowerReport, kind: LinkKind) -> u64 {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let ports: Vec<String> = report.ports.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         let inputs: Vec<String> = report.inputs.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         {
             let mut links = lock(&self.inner.links);
             links.retain(|l| l.name != dev.name);
-            links.push(Link { id, name: dev.name.clone(), report, connected: true, last_seen: Instant::now(), landed: false, streaming: false });
+            links.push(Link {
+                id,
+                name: dev.name.clone(),
+                report,
+                connected: true,
+                last_seen: Instant::now(),
+                landed: false,
+                streaming: false,
+                kind,
+            });
         }
         let name = dev.name.clone();
         self.update_config(|c| {

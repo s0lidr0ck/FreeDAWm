@@ -18,7 +18,8 @@ use crate::feed::SampleRing;
 
 /// Samples each ring holds (interleaved stereo plus block headers): over a second at 96 kHz.
 const RING: usize = 1 << 18;
-/// A tap block's header: frames, take clock (2 words), timeline (2 words), rolling.
+/// A tap block's header: frames, take clock (2 words), timeline (2 words), flags (1 rolling,
+/// 2 talkback).
 const HEADER: usize = 6;
 
 fn split(v: i64) -> (f32, f32) {
@@ -45,6 +46,8 @@ pub struct TapBlock {
     pub rolled: i64,
     pub position: i64,
     pub rolling: bool,
+    /// The host's talkback is in it (sent to the performer while stopped too).
+    pub talk: bool,
     /// Interleaved stereo.
     pub samples: Vec<f32>,
 }
@@ -73,6 +76,12 @@ impl MixTap {
     /// The audio thread: a rendered block of `frames` (`left`, `right`; mono when they are the
     /// same slice) at take clock `rolled` and timeline `position`. Never allocates or blocks.
     pub fn push_block(&self, left: &[f32], right: &[f32], frames: usize, rolled: i64, position: i64, rolling: bool) {
+        self.push_block_talk(left, right, frames, rolled, position, rolling, false);
+    }
+
+    /// [`MixTap::push_block`], `talk` saying the host's talkback is mixed into it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_block_talk(&self, left: &[f32], right: &[f32], frames: usize, rolled: i64, position: i64, rolling: bool, talk: bool) {
         if !self.on.load(Ordering::Relaxed) || frames == 0 {
             return;
         }
@@ -83,7 +92,8 @@ impl MixTap {
         }
         let (r0, r1) = split(rolled);
         let (p0, p1) = split(position);
-        let head = [f32::from_bits(frames as u32), r0, r1, p0, p1, if rolling { 1.0 } else { 0.0 }];
+        let flags = u8::from(rolling) | (u8::from(talk) << 1);
+        let head = [f32::from_bits(frames as u32), r0, r1, p0, p1, f32::from(flags)];
         self.ring.push(need, |i| {
             if let Some(h) = head.get(i) {
                 return *h;
@@ -111,10 +121,11 @@ impl MixTap {
             self.ring.pop_exact(&mut buf);
             let rolled = join(buf[1], buf[2]);
             let position = join(buf[3], buf[4]);
-            let rolling = buf[5] > 0.5;
+            let flags = buf[5].round().clamp(0.0, 3.0) as u8;
+            let (rolling, talk) = (flags & 1 != 0, flags & 2 != 0);
             let mut samples = vec![0.0; frames * 2];
             self.ring.pop_exact(&mut samples);
-            out.push(TapBlock { rolled, position, rolling, samples });
+            out.push(TapBlock { rolled, position, rolling, talk, samples });
         }
     }
 
@@ -307,7 +318,7 @@ mod tests {
         let mut out = Vec::new();
         tap.read(&mut out);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], TapBlock { rolled: 10, position: 5_000, rolling: true, samples: vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3] });
+        assert_eq!(out[0], TapBlock { rolled: 10, position: 5_000, rolling: true, talk: false, samples: vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3] });
         assert_eq!((out[1].rolled, out[1].position, out[1].rolling), (13, -7, false));
         assert_eq!(join(split(i64::MIN + 3).0, split(i64::MIN + 3).1), i64::MIN + 3);
     }

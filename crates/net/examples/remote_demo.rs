@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 fn main() {
     let port: u16 = std::env::args().nth(1).and_then(|p| p.parse().ok()).unwrap_or(48199);
     let mut cfg = NetConfig { enabled: true, pc_name: "Booth".into(), ..NetConfig::default() };
-    cfg.paired.push(PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo".into(), follows: false });
-    cfg.paired.push(PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: "piano".into(), follows: true });
+    cfg.paired.push(PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo".into(), follows: false, key: String::new() });
+    cfg.paired.push(PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: "piano".into(), follows: true, key: String::new() });
     let hub = Hub::new(cfg, None);
     let port = match hub.listen(port) {
         Ok(p) => p,

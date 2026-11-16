@@ -38,5 +38,6 @@ fn the_network_window_says_what_pairing_allows_and_that_the_local_link_is_plain(
         return;
     }
     assert!(h.query_by_label_contains("can do everything you can do here").is_some());
-    assert!(h.query_by_label_contains("link is not encrypted").is_some());
+    assert!(h.query_by_label_contains("a link that is not encrypted").is_some());
+    assert!(h.query_by_label_contains("Offer the encrypted local link").is_some());
 }

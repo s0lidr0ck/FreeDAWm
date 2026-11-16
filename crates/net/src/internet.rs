@@ -13,6 +13,14 @@
 //!
 //! Relays: n0's public relays by default (free, rate-limited, meant for hobby use), or the one
 //! named in Setup › Network (a self-hosted `iroh-relay` later needs no code change).
+//!
+//! The encrypted local link ([`Internet::start_lan`]) is the same QUIC on the local network
+//! only: a UDP socket on the network port beside the TCP listener, no relays, no address lookup
+//! and no router port mapping, so it sends nothing beyond the network it is on. A booth
+//! announces its key with its address (mDNS TXT); a remote PC dials that key, so only the PC
+//! holding it can answer, and once paired it keeps the key and refuses another. The booth bridges
+//! each stream to its encrypted-link listener ([`crate::hub::Hub::listen_secure`]) with the
+//! caller's key on the first line, so pairings made there are bound to that key.
 
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
@@ -22,6 +30,8 @@ use std::time::Duration;
 
 /// The protocol name both ends speak.
 pub const ALPN: &[u8] = b"freedawm/rig/1";
+/// The encrypted local link's protocol name (another listener: pairing by code is allowed there).
+pub const ALPN_LAN: &[u8] = b"freedawm/lan/1";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -81,6 +91,7 @@ pub struct Internet {
     rt: tokio::runtime::Runtime,
     ep: Endpoint,
     conns: Arc<Mutex<Vec<iroh::endpoint::Connection>>>,
+    alpn: &'static [u8],
 }
 
 /// A new key pair (32 bytes, for the network settings).
@@ -105,6 +116,22 @@ pub fn key_from_hex(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+/// The first line a bridged encrypted-link stream carries to the hub: the caller's key.
+pub fn peer_line(key: &[u8; 32]) -> String {
+    format!("{{\"method\":\"link.peer\",\"params\":{{\"key\":\"{}\"}}}}\n", key_hex(key))
+}
+
+/// A booth on the local network as an encrypted-link address: its key (hex) at `addr` (its IP
+/// and UDP port). `None` for a key that is not one.
+pub fn lan_addr(key: &str, addr: SocketAddr) -> Option<EndpointAddr> {
+    let k = iroh::PublicKey::from_bytes(&key_from_hex(key)?).ok()?;
+    Some(EndpointAddr::new(k).with_ip_addr(addr))
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("freedawm-internet").enable_all().build().map_err(|e| e.to_string())
+}
+
 async fn pump(stream: (iroh::endpoint::SendStream, iroh::endpoint::RecvStream), tcp: tokio::net::TcpStream) {
     let _ = tcp.set_nodelay(true);
     let (mut send, mut recv) = stream;
@@ -123,12 +150,7 @@ async fn pump(stream: (iroh::endpoint::SendStream, iroh::endpoint::RecvStream), 
 impl Internet {
     /// Starts this PC's endpoint with key `key` (see [`new_key`]).
     pub fn start(key: [u8; 32], relays: Relays) -> Result<Internet, String> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("freedawm-internet")
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
+        let rt = runtime()?;
         let secret = SecretKey::from_bytes(&key);
         let ep = rt.block_on(async {
             let b = match &relays {
@@ -141,7 +163,71 @@ impl Internet {
             };
             b.secret_key(secret).alpns(vec![ALPN.to_vec()]).bind().await.map_err(|e| e.to_string())
         })?;
-        Ok(Internet { rt, ep, conns: Arc::new(Mutex::new(Vec::new())) })
+        Ok(Internet { rt, ep, conns: Arc::new(Mutex::new(Vec::new())), alpn: ALPN })
+    }
+
+    /// The encrypted local link's endpoint (see the module docs) with key `key`, on UDP port
+    /// `port` of every interface (0: any free port, as a remote PC dials out from).
+    pub fn start_lan(key: [u8; 32], port: u16) -> Result<Internet, String> {
+        let rt = runtime()?;
+        let secret = SecretKey::from_bytes(&key);
+        let ep = rt.block_on(async {
+            Endpoint::builder(presets::Minimal)
+                .relay_mode(RelayMode::Disabled)
+                .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
+                .clear_ip_transports()
+                .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
+                .map_err(|e| format!("cannot use UDP port {port}: {e}"))?
+                .secret_key(secret)
+                .alpns(vec![ALPN_LAN.to_vec()])
+                .bind()
+                .await
+                .map_err(|e| format!("cannot listen on UDP port {port}: {e}"))
+        })?;
+        Ok(Internet { rt, ep, conns: Arc::new(Mutex::new(Vec::new())), alpn: ALPN_LAN })
+    }
+
+    /// The UDP port this endpoint listens on.
+    pub fn udp_port(&self) -> Option<u16> {
+        self.ep.bound_sockets().iter().map(SocketAddr::port).find(|p| *p != 0)
+    }
+
+    /// This PC's key in full (hex): what a booth announces and a remote PC pins.
+    pub fn key_hex(&self) -> String {
+        key_hex(self.ep.id().as_bytes())
+    }
+
+    /// The booth's side of the encrypted local link: every stream becomes a connection to the
+    /// hub's encrypted-link listener on `local_port`, its first line the caller's key
+    /// ([`peer_line`]).
+    pub fn serve_lan_to(&self, local_port: u16) {
+        use tokio::io::AsyncWriteExt;
+        let ep = self.ep.clone();
+        let conns = Arc::clone(&self.conns);
+        self.rt.spawn(async move {
+            while let Some(incoming) = ep.accept().await {
+                let conns = Arc::clone(&conns);
+                tokio::spawn(async move {
+                    let Ok(conn) = incoming.await else { return };
+                    lock(&conns).push(conn.clone());
+                    let line = peer_line(conn.remote_id().as_bytes());
+                    while let Ok(bi) = conn.accept_bi().await {
+                        let line = line.clone();
+                        tokio::spawn(async move {
+                            match tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await {
+                                Ok(mut tcp) => {
+                                    if tcp.write_all(line.as_bytes()).await.is_ok() {
+                                        pump(bi, tcp).await;
+                                    }
+                                }
+                                Err(e) => log::warn!("encrypted link: the hub is not listening: {e}"),
+                            }
+                        });
+                    }
+                    lock(&conns).retain(|c| c.stable_id() != conn.stable_id());
+                });
+            }
+        });
     }
 
     /// This PC's address for an invite: its key, its relay and its IP addresses (waits up to
@@ -187,6 +273,7 @@ impl Internet {
         let local = listener.local_addr().map_err(|e| e.to_string())?;
         let ep = self.ep.clone();
         let conns = Arc::clone(&self.conns);
+        let alpn = self.alpn;
         let current: Arc<tokio::sync::Mutex<Option<iroh::endpoint::Connection>>> = Arc::new(tokio::sync::Mutex::new(None));
         self.rt.spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
@@ -196,7 +283,7 @@ impl Internet {
                         let mut cur = current.lock().await;
                         let alive = cur.as_ref().is_some_and(|c| c.close_reason().is_none());
                         if !alive {
-                            match tokio::time::timeout(Duration::from_secs(15), ep.connect(host.clone(), ALPN)).await {
+                            match tokio::time::timeout(Duration::from_secs(15), ep.connect(host.clone(), alpn)).await {
                                 Ok(Ok(c)) => {
                                     let mut all = lock(&conns);
                                     all.retain(|x| x.close_reason().is_none());

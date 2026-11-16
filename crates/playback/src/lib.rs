@@ -477,6 +477,12 @@ struct AudioState {
     /// on the audio thread never allocates).
     main: Vec<Vec<f32>>,
     main_width: usize,
+    /// The remote mix stream with the control room's talkback in it (left, right; `max_block`
+    /// each, allocated once), and where the talkback's level and the music's dim under it were
+    /// at the end of the last block (ramped, see [`AudioState::talk_into_stream`]).
+    tap_buf: [Vec<f32>; 2],
+    talk_gain: f32,
+    talk_dim: f32,
     /// Where the main mix and the hardware outputs land on the device.
     out: OutMap,
     pending_len: usize,
@@ -601,6 +607,59 @@ fn send_band_garbage(mix: &mut MixEngine, garbage: &Sender<Garbage>, runtime: Op
     }
 }
 
+/// Talkback into the remote mix stream: while the control room's talkback is on (or still
+/// ramping off), `tap` gets the main mix (`main`, its first two channels; a mono mix on both)
+/// with the talkback input added at its level, and the music dimmed by the control room's dim
+/// unless the monitor dims it already (talkback that dims). Both ramp over 10 ms from where the
+/// last block left them (`gain`, `dim`). Returns whether `tap` holds this block (else the tap
+/// takes the mix as it is). Audio thread: never allocates.
+fn talk_into_stream(s: &Session, input: &[Vec<f32>], main: &[Vec<f32>], n: usize, tap: &mut [Vec<f32>; 2], gain: &mut f32, dim: &mut f32) -> bool {
+    let Some(tb) = s.control_room.as_ref().map(|c| (&c.talkback, c.dim_db)) else {
+        (*gain, *dim) = (0.0, 1.0);
+        return false;
+    };
+    let (talk, dim_db) = tb;
+    let on = talk.on && !talk.input.is_empty();
+    let to = if on { soundcraft_dsp::db_to_gain(talk.level_db) } else { 0.0 };
+    let dim_to = if on && !talk.dims { soundcraft_dsp::db_to_gain(dim_db) } else { 1.0 };
+    if to == 0.0 && *gain == 0.0 && (*dim - 1.0).abs() < 1e-6 {
+        *dim = 1.0;
+        return false;
+    }
+    let src = s.input_channels(&talk.input);
+    let rate = s.sample_rate.as_f64() as f32;
+    let step = 1.0 / (0.010 * rate).max(1.0);
+    let ramp = |cur: f32, target: f32| {
+        if (target - cur).abs() <= step {
+            target
+        } else if target > cur {
+            cur + step
+        } else {
+            cur - step
+        }
+    };
+    let (mut g, mut d) = (*gain, *dim);
+    let left = main.first();
+    let right = main.get(1).or(left);
+    let [tl, tr] = tap;
+    for i in 0..n.min(tl.len()).min(tr.len()) {
+        g = ramp(g, to);
+        d = ramp(d, dim_to);
+        let mic = src.map_or(0.0, |(first, width)| {
+            let sum: f32 = (first..first + width).filter_map(|c| input.get(c).and_then(|x| x.get(i))).copied().filter(|v| v.is_finite()).sum();
+            sum / width.max(1) as f32
+        });
+        let l = left.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        let r = right.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        if let (Some(a), Some(b)) = (tl.get_mut(i), tr.get_mut(i)) {
+            *a = l * d + mic * g;
+            *b = r * d + mic * g;
+        }
+    }
+    (*gain, *dim) = (g, d);
+    true
+}
+
 fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
@@ -641,6 +700,9 @@ impl AudioState {
             pending: vec![vec![0.0; max_block]; nch],
             main: vec![vec![0.0; max_block]; MAX_CHANNELS],
             main_width: nch,
+            tap_buf: [vec![0.0; max_block], vec![0.0; max_block]],
+            talk_gain: 0.0,
+            talk_dim: 1.0,
             pending_len: 0,
             read: 0.0,
             device_rate,
@@ -1308,15 +1370,26 @@ impl AudioState {
             let pdc = i64::try_from(self.mix.latency).unwrap_or(0);
             let rolled = self.shared.rolled.load(Ordering::Relaxed).saturating_sub(pdc);
             let pos = self.pos.saturating_sub(pdc);
+            // Talkback rides the stream to the performer (never the booth's own outputs).
+            let talk = self.shared.tap.is_on()
+                && talk_into_stream(&self.session, &self.mix.input, main, n, &mut self.tap_buf, &mut self.talk_gain, &mut self.talk_dim);
             if let Some((first, rest)) = main.split_first_mut() {
                 let second = rest.first_mut();
+                if talk {
+                    let [l, r] = &self.tap_buf;
+                    self.shared.tap.push_block_talk(l, r, n, rolled, pos, self.playing, true);
+                }
                 match second {
                     Some(r) => {
-                        self.shared.tap.push_block(first, r, n, rolled, pos, self.playing);
+                        if !talk {
+                            self.shared.tap.push_block(first, r, n, rolled, pos, self.playing);
+                        }
                         self.shared.stream_in.mix_into(first, r, n, rolled, self.playing);
                     }
                     None => {
-                        self.shared.tap.push_block(first, first, n, rolled, pos, self.playing);
+                        if !talk {
+                            self.shared.tap.push_block(first, first, n, rolled, pos, self.playing);
+                        }
                         self.shared.stream_in.mix_into(first, &mut [], n, rolled, self.playing);
                     }
                 }
@@ -1454,7 +1527,12 @@ impl AudioState {
         }
         // An instrument releasing what live input held keeps the mix rendering until it is done.
         // So does a count-off (its clicks, with the transport held at the record point).
-        let monitoring = hears || self.let_go || self.mix.live_tail() || self.countoff.is_some();
+        // Talkback is heard (in the cues, and in the remote performer's stream) while stopped too.
+        // (On the performer's side: the booth's talkback, queued while both are stopped.)
+        let talking = self.talk_gain > 0.0
+            || self.session.control_room.as_ref().is_some_and(|c| c.talkback.on && !c.talkback.input.is_empty())
+            || (!self.playing && self.shared.stream_in.is_on() && self.shared.stream_in.queued() > 0);
+        let monitoring = hears || self.let_go || self.mix.live_tail() || self.countoff.is_some() || talking;
         self.monitoring = monitoring;
         // A Scout capture runs while the transport is stopped too (it measures silence, or the
         // live input): the mix renders, the output stays silent.
@@ -3685,6 +3763,49 @@ fn open_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn talkback_goes_into_the_remote_stream_with_the_music_dimmed_and_nowhere_else() {
+        let mut s = Session {
+            control_room: Some(soundcraft_model::ControlRoom {
+                talkback: soundcraft_model::Talkback { input: "In 1".into(), level_db: 0.0, dims: false, on: true },
+                dim_db: -20.0,
+                ..soundcraft_model::ControlRoom::default()
+            }),
+            ..Session::default()
+        };
+        let input = vec![vec![0.5f32; 64]];
+        let main = vec![vec![1.0f32; 64], vec![-1.0f32; 64]];
+        let mut tap = [vec![0.0f32; 64], vec![0.0f32; 64]];
+        let (mut g, mut d) = (0.0f32, 1.0f32);
+        // Ramped in over 10 ms (480 frames at 48 kHz): the first block starts from silence.
+        assert!(talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+        assert!(tap[0][0] < 1.0 && tap[0][0] > 0.99, "{}", tap[0][0]);
+        for _ in 0..10 {
+            assert!(talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+        }
+        // The music dimmed by 20 dB, the voice at its level, on both sides.
+        assert!((tap[0][63] - (0.1 + 0.5)).abs() < 1e-4, "{}", tap[0][63]);
+        assert!((tap[1][63] - (-0.1 + 0.5)).abs() < 1e-4, "{}", tap[1][63]);
+        assert_eq!(main, vec![vec![1.0f32; 64], vec![-1.0f32; 64]], "the booth's own mix is untouched");
+        // Talkback that dims the monitor: the mix arrives dimmed already, not dimmed again.
+        s.control_room.as_mut().unwrap().talkback.dims = true;
+        for _ in 0..10 {
+            talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d);
+        }
+        assert!((tap[0][63] - 1.5).abs() < 1e-4, "{}", tap[0][63]);
+        // Let go: it ramps out, then the tap takes the mix as it is.
+        s.control_room.as_mut().unwrap().talkback.on = false;
+        let mut blocks = 0;
+        while talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d) {
+            blocks += 1;
+            assert!(blocks < 20, "it ramps out");
+        }
+        assert_eq!((g, d), (0.0, 1.0));
+        // Without a control room: never.
+        s.control_room = None;
+        assert!(!talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+    }
 
     /// A stream that builds; `starts` says whether the device lets it play (it can refuse after a
     /// reconnect).
