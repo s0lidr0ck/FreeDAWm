@@ -684,8 +684,11 @@ mod tests {
         let p = &info.params[0];
         let ours = json!({"format": "soundcraft-plugin-preset", "params": {p.id: 0.5, "not_a_param": 1.0, "bad": "x"}}).to_string();
         let got = params_of_json(info, "Mine", &ours).unwrap();
-        assert_eq!(got.len(), 1);
+        // The preset's own value, none of the entries that are not parameters, and whatever a
+        // partial Comp preset is filled in with (its split and crossovers).
         assert_eq!(got[p.id], json!(0.5));
+        assert!(!got.contains_key("not_a_param") && !got.contains_key("bad"));
+        assert!(got.keys().all(|k| info.params.iter().any(|pi| pi.id == k.as_str())));
         assert!(params_of_json(info, "Mine", "not json").is_none());
     }
 }

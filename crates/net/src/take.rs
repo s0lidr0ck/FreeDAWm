@@ -379,7 +379,9 @@ mod tests {
         let punch = BoothAnchor { punch: Some([1.52, 1.55]), ..anchor };
         let l = land_audio(&mut e, &audio_env(punch), &path, 24_000).unwrap();
         let clip = e.session().find_clip(l.clips[0]).unwrap().1.clone();
-        assert_eq!((clip.start, clip.length), (72_960, 1_440));
+        // The kept range 1.52–1.55 s (72 960..74 400), with half of the 10 ms punch crossfade
+        // (240 samples) out of the take's handle at each punch point.
+        assert_eq!((clip.start, clip.length), (72_720, 1_920));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
