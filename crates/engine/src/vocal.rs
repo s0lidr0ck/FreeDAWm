@@ -761,6 +761,29 @@ pub fn run_until_idle(e: &mut Engine, only: &[ClipId]) -> Result<usize> {
     Ok(n)
 }
 
+/// Analyses `clips` now (blocking, no renders), so a command that gives a tuned clip new audio
+/// carries its edits onto the new notes in the same undo step. A clip already analysed, or one
+/// that can't be, is skipped; an analysis that fails is left to the background worker, which
+/// marks it failed. Returns how many ran.
+pub fn analyse_now(e: &mut Engine, clips: &[ClipId]) -> usize {
+    let cancel = AtomicBool::new(false);
+    let mut n = 0;
+    for id in clips {
+        let s = e.session();
+        let Some((_, c)) = s.find_clip(*id) else { continue };
+        let Some(key) = AnalysisKey::of(s, c) else { continue };
+        if s.vocal.analyses.contains_key(&key.hash()) || !analysable(s, c) {
+            continue;
+        }
+        let job = VocalJob::Analyse { key, session: e.session_arc(), clip: *id, rate: key.rate };
+        if let Ok(done) = job.run(&cancel) {
+            install(e, done);
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Drops the derived vocal data no clip uses any more: analyses and heard audio of analysis keys
 /// no clip (on any playlist) hears, and renders of clips without a live tuning. Called on load
 /// only: after Commit or Remove the cache is kept, so their Undo plays tuned again at once. `true`

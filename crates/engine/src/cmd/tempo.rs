@@ -120,52 +120,9 @@ fn tempo_conform(e: &mut Engine, p: &Value) -> Result<Value> {
     cuts.extend(pairs.iter().map(|p| p.0).filter(|b| *b > w0 && *b < w1));
     cuts.push(w1);
     let used: Vec<TrackId> = tracks.iter().copied().filter(|t| jobs.iter().any(|j| j.0 == *t)).collect();
-    let chans: Vec<usize> = used.iter().map(|t| s.track(*t).map_or(1, |x| x.channels().max(1))).collect();
-    let mut outs: Vec<Vec<Vec<f32>>> = chans.iter().map(|n| vec![Vec::new(); *n]).collect();
-    // The beat joins: each segment runs on past its end beat and that tail crossfades (`JOIN_XF`)
-    // into the next segment's head, which starts on the beat exactly; the tail reads near the
-    // beat, give or take the stretch's splice search, so the join doesn't step. Where a transient
-    // starts on the beat (judged on the sum of the tracks) the segment stops at the beat as
-    // before: run on, its splice search could pull the transient in early (a flam), and the
-    // transient masks the join.
-    let xf = (sr * JOIN_XF) as usize;
-    let frame = (sr * 0.04) as usize;
-    let mut tails: Vec<Vec<Vec<f32>>> = chans.iter().map(|n| vec![Vec::new(); *n]).collect();
-    let fsr = sr as f32;
-    for w in cuts.windows(2) {
-        let (Some(a), Some(b)) = (w.first().copied(), w.get(1).copied()) else { continue };
-        let n_in = usize::try_from(b - a).unwrap_or(0);
-        let n_out = usize::try_from(f(b) - f(a)).unwrap_or(0);
-        if n_in == 0 || n_out == 0 {
-            continue;
-        }
-        let ratio = n_out as f64 / n_in as f64;
-        // The tail, plus a frame: the stretch's last frame is only partly overlapped.
-        let mut ext = if b < w1 { (((xf + frame) as f64 / ratio).ceil() as usize).min(usize::try_from(w1 - b).unwrap_or(0)) } else { 0 };
-        let mut raws: Vec<Vec<Vec<f32>>> =
-            used.iter().zip(&chans).map(|(t, n)| raw_window(s, jobs.iter().filter(|j| j.0 == *t).map(|j| &j.1), a, n_in + ext, *n)).collect();
-        let mut guide = vec![0.0f32; n_in + ext];
-        for ch in raws.iter().flatten() {
-            for (g, v) in guide.iter_mut().zip(ch) {
-                *g += *v;
-            }
-        }
-        if onset(&guide, n_in, xf) {
-            ext = 0;
-            guide.truncate(n_in);
-            raws.iter_mut().flatten().for_each(|c| c.truncate(n_in));
-        }
-        let tail_len = ((ext as f64 * ratio).floor() as usize).saturating_sub(frame).min(xf);
-        let plan = soundcraft_dsp::offline::wsola_plan(&guide, ratio, fsr);
-        for ((raw, out), tail) in raws.iter().zip(outs.iter_mut()).zip(tails.iter_mut()) {
-            for ((o, mut x), t) in out.iter_mut().zip(soundcraft_dsp::offline::wsola_apply(raw, &plan)).zip(tail.iter_mut()) {
-                x.resize(n_out + tail_len, 0.0);
-                crossfade_join(t, &mut x);
-                *t = x.split_off(n_out);
-                o.extend_from_slice(&x);
-            }
-        }
-    }
+    let material: Vec<(Vec<&Clip>, usize)> =
+        used.iter().map(|t| (jobs.iter().filter(|j| j.0 == *t).map(|j| &j.1).collect(), s.track(*t).map_or(1, |x| x.channels().max(1)))).collect();
+    let outs = warp_render(s, &material, &cuts, &f, soundcraft_mix::clip_source_window, false);
     let s = e.session_mut();
     let start = f(w0);
     let mut made = 0;
@@ -277,6 +234,73 @@ fn warp_sequence(
     seq.sort();
 }
 
+/// Reads `n` samples of a clip's material from source position `at` (all its channels).
+pub(crate) type ClipReader = fn(&soundcraft_model::Session, &Clip, Samples, usize) -> Option<Vec<Vec<f32>>>;
+
+/// The material of each of `tracks` (its clips, read by `read`, and its channel count) from
+/// `cuts[0]` to the last cut, rendered so each cut lands where `f` puts it: Straighten's
+/// stretch. Each segment between cuts is planned once (WSOLA, pitch kept), on the sum of the
+/// tracks, and applied to every track, so they stay sample-aligned. Returns each track's
+/// channels, `f(last) - f(first)` samples long.
+pub(crate) fn warp_render(
+    s: &soundcraft_model::Session,
+    tracks: &[(Vec<&Clip>, usize)],
+    cuts: &[Samples],
+    f: &dyn Fn(Samples) -> Samples,
+    read: ClipReader,
+    stop_at_offsets: bool,
+) -> Vec<Vec<Vec<f32>>> {
+    let sr = s.sample_rate.as_f64();
+    let w1 = cuts.last().copied().unwrap_or(0);
+    let mut outs: Vec<Vec<Vec<f32>>> = tracks.iter().map(|(_, n)| vec![Vec::new(); *n]).collect();
+    // The beat joins: each segment runs on past its end beat and that tail crossfades (`JOIN_XF`)
+    // into the next segment's head, which starts on the beat exactly; the tail reads near the
+    // beat, give or take the stretch's splice search, so the join doesn't step. Where a transient
+    // starts on the beat (judged on the sum of the tracks) the segment stops at the beat as
+    // before: run on, its splice search could pull the transient in early (a flam), and the
+    // transient masks the join.
+    let xf = (sr * JOIN_XF) as usize;
+    let frame = (sr * 0.04) as usize;
+    let mut tails: Vec<Vec<Vec<f32>>> = tracks.iter().map(|(_, n)| vec![Vec::new(); *n]).collect();
+    let fsr = sr as f32;
+    for w in cuts.windows(2) {
+        let (Some(a), Some(b)) = (w.first().copied(), w.get(1).copied()) else { continue };
+        let n_in = usize::try_from(b - a).unwrap_or(0);
+        let n_out = usize::try_from(f(b) - f(a)).unwrap_or(0);
+        if n_in == 0 || n_out == 0 {
+            continue;
+        }
+        let ratio = n_out as f64 / n_in as f64;
+        // The tail, plus a frame: the stretch's last frame is only partly overlapped.
+        let mut ext = if b < w1 { (((xf + frame) as f64 / ratio).ceil() as usize).min(usize::try_from(w1 - b).unwrap_or(0)) } else { 0 };
+        let mut raws: Vec<Vec<Vec<f32>>> = tracks.iter().map(|(clips, n)| raw_window(s, clips.iter().copied(), a, n_in + ext, *n, read)).collect();
+        let mut guide = vec![0.0f32; n_in + ext];
+        for ch in raws.iter().flatten() {
+            for (g, v) in guide.iter_mut().zip(ch) {
+                *g += *v;
+            }
+        }
+        // With `stop_at_offsets`, likewise where the sound stops at the cut (a sung note's end):
+        // run on, its tail would ring past the place it was moved to.
+        if onset(&guide, n_in, xf) || (stop_at_offsets && offset(&guide, n_in, xf)) {
+            ext = 0;
+            guide.truncate(n_in);
+            raws.iter_mut().flatten().for_each(|c| c.truncate(n_in));
+        }
+        let tail_len = ((ext as f64 * ratio).floor() as usize).saturating_sub(frame).min(xf);
+        let plan = soundcraft_dsp::offline::wsola_plan(&guide, ratio, fsr);
+        for ((raw, out), tail) in raws.iter().zip(outs.iter_mut()).zip(tails.iter_mut()) {
+            for ((o, mut x), t) in out.iter_mut().zip(soundcraft_dsp::offline::wsola_apply(raw, &plan)).zip(tail.iter_mut()) {
+                x.resize(n_out + tail_len, 0.0);
+                crossfade_join(t, &mut x);
+                *t = x.split_off(n_out);
+                o.extend_from_slice(&x);
+            }
+        }
+    }
+    outs
+}
+
 /// Straighten's crossfade at each beat join (seconds).
 const JOIN_XF: f64 = 0.005;
 
@@ -287,6 +311,15 @@ fn onset(guide: &[f32], at: usize, n: usize) -> bool {
     let before = guide.get(at.saturating_sub(n)..at).unwrap_or_default();
     let after = guide.get(at..(at + n).min(guide.len())).unwrap_or_default();
     energy(after) > 4.0 * energy(before) + 1e-12
+}
+
+/// Whether a sound stops at `at` in `guide`: the `n` samples before it are much louder than the
+/// `n` from it.
+fn offset(guide: &[f32], at: usize, n: usize) -> bool {
+    let energy = |x: &[f32]| x.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>() / x.len().max(1) as f64;
+    let before = guide.get(at.saturating_sub(n)..at).unwrap_or_default();
+    let after = guide.get(at..(at + n).min(guide.len())).unwrap_or_default();
+    energy(before) > 4.0 * energy(after) + 1e-12
 }
 
 /// Fades the previous segment's `tail` out over the head of `head` (equal gain: the two are
@@ -301,14 +334,21 @@ fn crossfade_join(tail: &[f32], head: &mut [f32]) {
 
 /// A track's clip material (before clip gain and fades) over `n` samples from timeline position
 /// `a`, `channels` wide; silence where no clip plays.
-fn raw_window<'a>(s: &soundcraft_model::Session, clips: impl Iterator<Item = &'a Clip>, a: Samples, n: usize, channels: usize) -> Vec<Vec<f32>> {
+fn raw_window<'a>(
+    s: &soundcraft_model::Session,
+    clips: impl Iterator<Item = &'a Clip>,
+    a: Samples,
+    n: usize,
+    channels: usize,
+    read: ClipReader,
+) -> Vec<Vec<f32>> {
     let mut out = vec![vec![0.0f32; n]; channels.max(1)];
     let b = a.saturating_add(i64::try_from(n).unwrap_or(0));
     for c in clips {
         let soundcraft_model::ClipContent::Audio { offset, .. } = c.content else { continue };
         let (lo, hi) = (a.max(c.start), b.min(c.end()));
         let Some(len) = usize::try_from(hi - lo).ok().filter(|l| *l > 0) else { continue };
-        let Some(data) = soundcraft_mix::clip_source_window(s, c, offset.saturating_add(lo - c.start), len) else { continue };
+        let Some(data) = read(s, c, offset.saturating_add(lo - c.start), len) else { continue };
         if data.is_empty() {
             continue;
         }

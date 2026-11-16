@@ -23,8 +23,8 @@ is no "all four have it" list: the question for each row is whether it is worth 
   on sections 1–7 that had landed there), not from the docs. A feature that another agent has
   since finished on the branch may be marked lower here than it now is; the earlier sections' own
   rows are the record for those. Re-read by hand: higher-order Ambisonics encodes first order
-  only, the object/bed switch is read only by drawing code, timing alignment in Fit to Lead is
-  refused, nothing outside the video crate calls its encoder.
+  only, the object/bed switch is read only by drawing code, timing alignment in Fit to Lead was
+  refused (since built), nothing outside the video crate calls its encoder.
 - **The four DAWs:** from their manuals and from release coverage of the versions above (listed
   under Sources). "Signature" is a judgement: a feature is listed under the product most
   identified with it, even where another has since added something similar.
@@ -129,7 +129,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Logical Editor, Project Logical Editor, macros | **Missing** | |
 | MIDI Remote: scripted controller support with a mapping assistant | **Missing** | |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
-| Audio Alignment of stacked takes | **Missing** | The option exists in Fit to Lead and is refused with a message |
+| Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (COMMIT1) |
 | Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform; no free warp tool |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
 | Modulators for any parameter | **Missing** | |
@@ -169,7 +169,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Local models beyond stems | **Works** | Lead from backing vocals; drums into six parts; audio to MIDI by four models (general, piano with pedal, drums, voice) with a live preview; MIDI from a text description; a whole song from a prompt. All run on the user's machine after a download; each model's licence is shown, and non-commercial ones ask for confirmation |
 | Mend: vocal de-noise and de-reverb on a live insert | **Works** | The same model as Clean Vocal, running in the chain with about 2.9 s latency or a lighter live mode. Desktop only |
 | MIDI Cleanup against key and chords | **Works** | Corrects a transcribed part without changing starts, velocities or pitches of kept notes; switchable until committed |
-| Vocal Studio: every vocal on one pitch view | **Works** | Marks clashes and unisons across tracks, moves clashing notes to fit the lead, writes a harmony. Timing alignment is not done |
+| Vocal Studio: every vocal on one pitch view | **Works** | Marks clashes and unisons across tracks, moves clashing notes to fit the lead, lines up a double's note starts and ends with the lead's, writes a harmony |
 | ChamberMade; Imprint and Vault | **Works** | A reverb from a room you draw (size, materials, objects, speaker and microphone); capture of an impulse response from any plug-in, outboard unit or room, then convolution with it |
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
@@ -208,7 +208,7 @@ local link allows in the Network window (row 6).
 | Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) | **Not started here**: section 7's work (its rows are still Missing); not begun so as not to cross it |
 | Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (ca44ec5): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (3b781d6): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
 | Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (06244b1): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
-| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Not started**: it needs the note-level timing the vocal edits do not have (see the design below) |
+| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (COMMIT1): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
 | Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Another section's** ([section 5](05-built-in-effects.md)) |
 | Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)) |
@@ -259,11 +259,6 @@ same pass as the items above; these are the starting points.
   block not back in time is silence and a counted overrun. Parameters, state and the editor
   window over a pipe. A helper that dies bypasses its slot, says so, and is restarted from the
   last stored state on request.
-- *Timing alignment of stacked vocals (10–16 h).* Pair each note of the backing part with the
-  lead note it overlaps; a warp map from the backing note starts and ends to the lead's, limited
-  to a set distance; rendered as Straighten renders warp markers, with the tuning analysis
-  re-run on the result (note edits are tied to the audio they were made on, which is why this is
-  not a small change).
 
 ## Sources
 
@@ -282,5 +277,6 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Timing alignment of stacked vocals built (Align timing in the Vocal Studio) |
 | 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export; a first-run tour; where the rest stands, and designs for the larger items |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |
