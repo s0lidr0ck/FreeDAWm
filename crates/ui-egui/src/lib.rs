@@ -997,6 +997,11 @@ pub struct SoundApp {
     _palette_lock: theme::TestPaletteGuard,
 }
 
+/// Why this build cannot record, if it cannot: the browser build has no audio input yet.
+pub(crate) fn record_unavailable(web: bool) -> Option<&'static str> {
+    web.then_some("The browser build cannot record yet: record in the desktop app (Linux, macOS, Windows or FreeBSD) and open the session here.")
+}
+
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         let thumb_dir = services.thumb_dir.clone();
@@ -1477,6 +1482,10 @@ impl SoundApp {
     }
 
     fn start_recording(&mut self, countoff: bool) {
+        if let Some(why) = record_unavailable(cfg!(target_arch = "wasm32")) {
+            self.ui.status = why.into();
+            return;
+        }
         let armed = self.engine.session().tracks.iter().any(|t| t.mixer.record_arm);
         if !armed {
             let why = if self.engine.session().tracks.is_empty() {
@@ -3303,6 +3312,14 @@ mod tests {
         app.take_reported = Some(soundcraft_playback::Latency { input: 100, output: 120, feed: 30, mix: 64 });
         assert_eq!(app.take_latency(), 314);
         assert_eq!(app.take_latency(), 314);
+    }
+
+    #[test]
+    fn the_browser_build_says_it_cannot_record() {
+        // Only the web build is refused, and the reason names what to do instead.
+        assert_eq!(super::record_unavailable(false), None);
+        let why = super::record_unavailable(true).unwrap();
+        assert!(why.contains("cannot record") && why.contains("desktop app"), "{why}");
     }
 
     #[test]
