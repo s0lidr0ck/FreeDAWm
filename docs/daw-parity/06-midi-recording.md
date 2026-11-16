@@ -137,7 +137,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Each loop pass kept as a take | ● | ● | ● | ● | **Partial**: each pass goes to a new playlist that holds nothing else (bug 2) |
+| Each loop pass kept as a take | ● | ● | ● | ● | **Works**: each pass after the first on a new playlist that starts as a copy of the track's |
 | Passes add up into one clip (drum-machine style) | ● | ● | ● | ● | **Missing** |
 | Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Missing**: clips appear only after Stop |
 | Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Missing** |
@@ -228,7 +228,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | # | Bug | Where |
 |---|---|---|
 | 1 | **Fixed.** Notes played between pressing Record and the transport rolling, or a first downbeat played a little early, moved before the take's start by the output latency and were dropped. An event heard from the take's start on that the latency would move before it now begins the take (`midi_record::played_at`). Test: `midi_record::tests::notes_played_before_the_transport_rolled_begin_the_take_despite_latency` (512 samples of latency) | `engine/src/midi_record.rs` (`played_at`) |
-| 2 | Loop record: the second and later passes each go on a new, empty playlist that becomes the active one. Everything else on the track vanishes from playback until the playlist is switched back. Audio copies the playlist first | `engine/src/midi_record.rs:153-156` |
+| 2 | **Fixed.** Each loop pass after the first went on a new, empty playlist, so the rest of the song vanished from playback. Each now goes on a copy of the track's playlist as it was before the take, as audio passes do. Test: `midi_record::tests::loop_recording_makes_a_clip_per_pass_on_new_playlists` | `engine/src/midi_record.rs` (`record_midi_on`) |
 | 3 | A take erases everything under its whole range, even if one note was played, although the old part was audible during the take | `engine/src/edit.rs:254-255` |
 | 4 | Record pressed while a loop plays and the playhead is before the loop: after the first wrap every note is silently discarded | `engine/src/io.rs:2368`; `engine/src/midi_record.rs:131-136` |
 | 5 | In a loop, a downbeat played slightly early is moved to the end of the pass before, where it is cut to almost nothing and its note-off is orphaned. With input quantize it snaps to the loop end, outside the clip. The same happens to a note played just before Stop | `engine/src/midi_record.rs:80, 146-149` |
@@ -310,3 +310,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 |---|---|---|
 | 2026-11-16 | major | First version: recording MIDI against Pro Tools, Studio Pro, Logic Pro and Cubase |
 | 2026-11-16 | minor | Bug 1 fixed: notes played before the transport rolls begin the take instead of being dropped |
+| 2026-11-16 | minor | Bug 2 fixed: loop passes after the first land on a copy of the track's playlist, not an empty one |

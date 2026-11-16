@@ -132,6 +132,9 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
                 (at, x.msg, pass)
             })
             .collect();
+        // The playlist as it was before this take: each loop pass after the first goes on a copy
+        // of it, so the rest of the song stays on the track whichever pass is active.
+        let base: Vec<Clip> = if take.looped.is_some() { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
         let mut placed_first = false;
         for pass in 0..=passes {
             let range = match take.looped {
@@ -155,10 +158,19 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
                 seq.notes.iter_mut().for_each(|n| n.start = n.start.saturating_sub(base).max(0));
                 seq.sort();
             }
-            // Each pass after the first that went down on this track: a new playlist.
-            if placed_first && let Some(t) = s.track_mut(tid) {
-                t.playlists.push(Playlist::new(format!("{}.{:02}", t.name, t.playlists.len() + 1)));
-                t.active_playlist = t.playlists.len() - 1;
+            // Each pass after the first that went down on this track: a new playlist, holding what
+            // the track held before the take.
+            if placed_first {
+                let mut clips = base.clone();
+                for c in &mut clips {
+                    c.id = s.new_clip_id();
+                }
+                if let Some(t) = s.track_mut(tid) {
+                    let mut pl = Playlist::new(format!("{}.{:02}", t.name, t.playlists.len() + 1));
+                    pl.clips = clips;
+                    t.playlists.push(pl);
+                    t.active_playlist = t.playlists.len() - 1;
+                }
             }
             let id = s.new_clip_id();
             let name = s.track(tid).map(|t| t.name.clone()).unwrap_or_default();
@@ -289,6 +301,9 @@ mod tests {
     fn loop_recording_makes_a_clip_per_pass_on_new_playlists() {
         let mut e = Engine::default();
         let t = armed(&mut e, "midi:all", 0);
+        // The rest of the song, outside the loop: on every pass's playlist.
+        let outro = Clip::midi(e.session_mut().new_clip_id(), "Outro", 6 * Q, Q, Sequence::default());
+        crate::edit::place_clip(e.session_mut(), t, outro);
         let lp = Range::new(0, 4 * Q);
         let take = MidiTake { start: 0, end: 12 * Q, looped: Some(lp), punch: None, latency: 0 };
         let mut events = vec![ev(Q, "K", [0x90, 60, 100]), ev(2 * Q, "K", [0x80, 60, 0])];
@@ -298,9 +313,14 @@ mod tests {
         let tr = e.session().track(t).unwrap();
         assert_eq!(tr.playlists.len(), 2);
         assert_eq!(tr.active_playlist, 1, "the last pass is on top");
-        let spans: Vec<(Samples, Samples, u8)> =
-            tr.playlists.iter().flat_map(|p| p.clips.iter().map(|c| (c.start, c.length, c.midi_playing().unwrap().notes[0].pitch))).collect();
-        assert_eq!(spans, vec![(0, 4 * Q, 60), (0, 4 * Q, 64)]);
+        let spans: Vec<(Samples, Samples, Option<u8>)> = tr
+            .playlists
+            .iter()
+            .flat_map(|p| p.clips.iter().map(|c| (c.start, c.length, c.midi_playing().unwrap().notes.first().map(|n| n.pitch))))
+            .collect();
+        assert_eq!(spans, vec![(0, 4 * Q, Some(60)), (6 * Q, Q, None), (0, 4 * Q, Some(64)), (6 * Q, Q, None)]);
+        let ids: Vec<ClipId> = tr.playlists.iter().flat_map(|p| p.clips.iter().map(|c| c.id)).collect();
+        assert_ne!(ids[1], ids[3], "the copy is a clip of its own");
         assert_eq!(e.undo_label(), Some("Record"));
     }
 
