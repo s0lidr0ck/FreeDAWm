@@ -1,6 +1,6 @@
 # Four-DAW parity, section 8: what only one of them has
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (clip launcher deferred by the owner) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Other product names below (Dolby Atmos, Melodyne, Splice,
@@ -203,21 +203,21 @@ local link allows in the Network window (row 6).
 
 **2. Signature features worth taking, best value first (≈ 190–300 h).**
 
-| Work | Est. (h) | Why |
-|---|---:|---|
-| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) |
-| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) |
-| Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel |
-| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option |
-| Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow |
-| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once |
-| Modulators for any parameter | 10–16 | Also in section 5's list |
-| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback |
-| Mixer snapshots | 6–10 | |
-| Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first |
-| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it |
-| Atmos: objects and beds routed for real, ADM export, a binaural monitor | 30–50 | A renderer of FreeDAWm's own; Dolby's needs a licence. Also in [section 3](03-mixing.md) |
-| ARA 2 hosting | 30–45 | Also in [section 4](04-editing-audio.md) |
+| Work | Est. (h) | Why | Status |
+|---|---:|---|---|
+| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) |  |
+| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) |  |
+| Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel |  |
+| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option |  |
+| Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow |  |
+| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once |  |
+| Modulators for any parameter | 10–16 | Also in section 5's list |  |
+| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback |  |
+| Mixer snapshots | 6–10 | |  |
+| Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first | **Deferred by the owner** (2026-11-16): not to be built for now |
+| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it |  |
+| Atmos: objects and beds routed for real, ADM export, a binaural monitor | 30–50 | A renderer of FreeDAWm's own; Dolby's needs a licence. Also in [section 3](03-mixing.md) |  |
+| ARA 2 hosting | 30–45 | Also in [section 4](04-editing-audio.md) |  |
 
 **3. Not worth chasing, or not possible.** Hardware DSP mixing and EUCON (tied to one maker's
 hardware); cloud collaboration and tablet companions (a service and second app to run); a large
@@ -247,4 +247,5 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Clip launcher deferred by the owner |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |
