@@ -55,6 +55,30 @@ fn shift_equals_and_minus_step_the_grid_value_and_with_alt_the_nudge_value() {
     }
 }
 
+/// On a US keyboard "+" is Shift+=, which steps the Grid value; the "=" key itself nudges later beside
+/// "−" nudging earlier, so both work from the main keys, and the keypad's "+" still nudges.
+#[test]
+fn equals_nudges_later_while_shift_equals_steps_the_grid() {
+    for (os, _) in OSES {
+        let (ctx, mut app) = rig(os);
+        app.run("view.grid", json!({"value": "1/16"})).unwrap();
+        app.run("view.nudge", json!({"value": {"samples": 100}})).unwrap();
+        app.run("edit.select", json!({"tracks": ["Kick"], "start": 48_000, "end": 96_000})).unwrap();
+        press(&ctx, &mut app, Key::Equals, Modifiers::NONE);
+        assert_eq!(start(&app), 48_100, "{os:?}: = nudges later");
+        press(&ctx, &mut app, Key::Minus, Modifiers::NONE);
+        assert_eq!(start(&app), 48_000, "{os:?}: − nudges earlier");
+        // US Shift+= arrives as "+" with Shift: the Grid value, not a nudge.
+        press(&ctx, &mut app, Key::Plus, Modifiers::SHIFT);
+        assert_eq!(start(&app), 48_000, "{os:?}");
+        assert_eq!(app.engine.session().edit.grid.label(), "1/8 note", "{os:?}");
+        press(&ctx, &mut app, Key::Plus, Modifiers::NONE);
+        assert_eq!(start(&app), 48_100, "{os:?}: keypad + nudges later");
+        // "=" is a fixed key now, so the shortcut editor will not hand it to a command.
+        assert!(matches!(shortcuts::holder(&Default::default(), "=", ""), Some(shortcuts::Holder::Fixed(_))), "{os:?}");
+    }
+}
+
 #[test]
 fn commands_focus_nudges_matches_the_selections_plays_and_redoes() {
     for (os, _) in OSES {
