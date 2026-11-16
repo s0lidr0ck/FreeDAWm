@@ -278,6 +278,48 @@ pub fn shift_from(s: &mut Session, track: TrackId, from: Samples, by: Samples) {
     }
 }
 
+/// Commands an edit-locked clip never blocks: undo and redo, and the lock itself.
+const LOCK_EXEMPT: [&str; 3] = ["edit.undo", "edit.redo", "clip.edit_lock"];
+
+/// Commands that move whole stretches of the timeline: an edit-locked clip may move with them, as
+/// long as nothing else about it changes.
+const LOCK_MOVES: [&str; 2] = ["event.insert_time", "event.cut_time"];
+
+/// What an edit-locked clip's lock protects: where it is, what it plays and how it sounds.
+/// Names, colours, ratings, groups and the caches kept current by the engine are not edits.
+fn locked_material(c: &Clip) -> impl PartialEq + '_ {
+    (
+        (c.length, &c.content, c.gain_db.to_bits(), &c.gain_env, c.gain_bypass),
+        (c.fade_in, c.fade_out, c.muted, c.stretch.to_bits(), c.source_channel, &c.warp, c.sync_point),
+    )
+}
+
+/// Why the command `id`, which turned `before` into `after`, must be refused: it changed or
+/// removed an edit-locked clip (one the command left locked). A clip that went with its track or
+/// its playlist is not refused; neither is a change of the session's sample rate, which moves
+/// everything. The engine undoes a refused command.
+pub fn locked_edit_refused(id: &str, before: &Session, after: &Session) -> Option<String> {
+    if LOCK_EXEMPT.contains(&id) || before.sample_rate != after.sample_rate {
+        return None;
+    }
+    let moves = LOCK_MOVES.contains(&id);
+    for t in &before.tracks {
+        // A deleted track takes its clips with it; so does a deleted playlist.
+        let Some(nt) = after.track(t.id) else { continue };
+        let playlist_gone = nt.playlists.len() < t.playlists.len();
+        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked) {
+            let refused = match nt.playlists.iter().flat_map(|p| &p.clips).find(|c| c.id == old.id) {
+                None => !playlist_gone,
+                Some(new) => new.edit_locked && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start)),
+            };
+            if refused {
+                return Some(format!("clip `{}` on `{}` is edit-locked; unlock it to change it", old.name, t.name));
+            }
+        }
+    }
+    None
+}
+
 /// Time- or edit-locked: the clip doesn't move, and Shuffle stops at it.
 pub fn locked(c: &Clip) -> bool {
     c.time_locked || c.edit_locked

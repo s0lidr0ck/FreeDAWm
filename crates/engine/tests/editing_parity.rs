@@ -171,3 +171,62 @@ fn trimming_a_stretched_clip_keeps_the_rest_in_place() {
     run(&mut e, "edit.trim_clip", json!({"clip": id.0, "start": 0}));
     assert_eq!(clips(&e, t), vec![(0, 2000, 1000)]);
 }
+
+// ---- bug 4: an edit-locked clip could still be cut, cleared, separated, trimmed... ---------
+
+/// Clip A (0..1000) edit-locked, clip B (1000..2000) not, on one track.
+fn locked() -> (Engine, TrackId, Vec<ClipId>) {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1000, 0), (1000, 1000, 1000)]);
+    e.session_mut().find_clip_mut(c[0]).unwrap().edit_locked = true;
+    (e, t, c)
+}
+
+#[test]
+fn edits_that_would_change_an_edit_locked_clip_are_refused() {
+    let range = json!({"start": 200, "end": 1500});
+    let cases: Vec<(&str, Value)> = vec![
+        ("edit.clear", range.clone()),
+        ("edit.cut", range.clone()),
+        ("edit.separate", json!({"at": 500})),
+        ("edit.trim_to_selection", json!({"start": 200, "end": 800})),
+        ("edit.trim_start_to_insertion", json!({"at": 300})),
+        ("edit.trim_end_to_insertion", json!({"at": 700})),
+        ("edit.fades_create", json!({"start": 0, "end": 300})),
+        ("edit.insert_silence", json!({"start": 500, "end": 600})),
+        ("edit.paste", json!({"at": 500})),
+        ("clip.gain", json!({"db": -6.0})),
+        ("edit.mute_clips", json!({})),
+    ];
+    for (id, p) in cases {
+        let (mut e, t, c) = locked();
+        run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+        run(&mut e, "edit.copy", json!({}));
+        run(&mut e, "edit.select", json!({"clips": [c[0].0, c[1].0]}));
+        let before = clips(&e, t);
+        let mut p = p;
+        p["tracks"] = json!([t.0]);
+        let r = e.execute(id, &p);
+        assert!(r.as_ref().is_err_and(|err| err.to_string().contains("edit-locked")), "{id}: {r:?}");
+        assert_eq!(clips(&e, t), before, "{id} leaves the track as it was");
+        let a = e.session().find_clip(c[0]).unwrap().1;
+        assert!(a.gain_db == 0.0 && !a.muted && a.fade_in.len == 0, "{id}");
+    }
+}
+
+#[test]
+fn a_locked_clip_can_be_renamed_unlocked_moved_by_insert_time_and_deleted_with_its_track() {
+    let (mut e, t, c) = locked();
+    run(&mut e, "clip.rename", json!({"clip": c[0].0, "name": "kept"}));
+    run(&mut e, "event.insert_time", json!({"tracks": [t.0], "start": 0, "length": 500}));
+    assert_eq!(clips(&e, t), vec![(500, 1000, 0), (1500, 1000, 1000)]);
+    // The unlocked neighbour can be edited as before.
+    run(&mut e, "edit.clear", json!({"tracks": [t.0], "start": 1500, "end": 2500}));
+    assert_eq!(clips(&e, t), vec![(500, 1000, 0)]);
+    run(&mut e, "clip.edit_lock", json!({"clips": [c[0].0]}));
+    run(&mut e, "edit.separate", json!({"tracks": [t.0], "at": 1000}));
+    assert_eq!(clips(&e, t).len(), 2, "unlocked, it splits");
+    let (mut e, t, _) = locked();
+    run(&mut e, "track.delete", json!({"tracks": [t.0]}));
+    assert!(e.session().track(t).is_none());
+}

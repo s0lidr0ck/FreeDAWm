@@ -38,7 +38,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups and edit lock are mostly not honoured; no clip transpose; clip effects are lost on a split |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups are not honoured; no clip transpose; clip effects are lost on a split |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
@@ -134,7 +134,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip gain as one value, with bypass and render | ● | ● | ● | ● | **Works** |
 | Clip gain as a drawn line | ● | ● | ◐ | ● | **Partial**: played and shown, but points cannot be added or dragged; it only arrives by converting volume automation |
 | Clip mute | ● | ● | ● | ● | **Works** |
-| Clip lock (position, or all edits) | ● | ● | ● | ● | **Partial**: only moves and the Trim tool obey it (bug 4) |
+| Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
 | Clip groups that select and move as one | ● | ● | ● | ● | **Flag only**: the group is stored and exported, never used in editing |
 | Loop a clip without making copies | ● | ◐ | ● | ◐ | **Partial**: makes real copies, N times or to a length |
@@ -268,7 +268,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 1 | **Fixed.** Selecting clips A and C and pressing Delete also removed clip B between them, on every track involved. Delete, Cut and Copy now act on the selected clips alone while the selection is still the span they set (`object_clips`, `edit::remove_clips`); a range passed or chosen still clears the range. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`object_clips`, `cut_copy_objects`, `clear`) |
 | 2 | **Fixed.** Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy placed clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cut the first off. They now place their clips together (`edit::put_clips`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`paste`, `put_clips`); `engine/src/cmd/clip.rs` (`loop_clips`); `engine/src/cmd/clip_more.rs` (`copy_to`) |
 | 3 | **Fixed.** Trimming or splitting a stretched clip advanced the file position by timeline samples, not source samples, so the remaining piece played from the wrong place. `Clip::trim_start_to` now moves the offset by `source_span` (timeline ÷ ratio, as playback reads it), and the Trim tool, Trim to File, Trim to Fill and crossfade handles measure the file at the clip's ratio. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs` (`trim_start_to`, `source_span`, `timeline_span`); `engine/src/edit.rs` (`trim_clip`, `create_fades`) |
-| 4 | An edit-locked clip can still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped | `engine/src/edit.rs:82-455, 800-882` |
+| 4 | **Fixed.** An edit-locked clip could still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped. One check after every command (`edit::locked_edit_refused`, next to the frozen-track check in `Engine::execute`) refuses and undoes any command that changed or removed a clip it left edit-locked; renaming, colouring, unlocking, deleting the track or playlist, and Insert/Cut Time moving it are allowed. Recording does not run through commands and still overwrites. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`locked_edit_refused`); `engine/src/lib.rs` (`execute`) |
 | 5 | Per-clip effects are stored under the clip's id, so a split's right half and every copy play without them | `engine/src/cmd/clip_more.rs:194`; `mix/src/lib.rs:2882` |
 | 6 | Heal joins two pieces when only their clip gain matches; the second piece's gain line, mute, stretch and channel are dropped | `engine/src/edit.rs:432-455` |
 | 7 | Insert Time and Cut Time move the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures | `engine/src/cmd/event.rs:244-293` |
@@ -341,3 +341,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 1 fixed: Delete, Cut and Copy of selected clips leave the clips between them alone |
 | 2026-11-16 | minor | Bug 2 fixed: pasted, duplicated, repeated, looped and copied crossfaded pairs keep their crossfade |
 | 2026-11-16 | minor | Bug 3 fixed: trimming or splitting a stretched clip keeps each piece on its audio |
+| 2026-11-16 | minor | Bug 4 fixed: edits that would change an edit-locked clip are refused |

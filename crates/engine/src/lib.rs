@@ -717,10 +717,11 @@ impl Engine {
         }
         match result {
             Ok(mut v) => {
-                // A frozen track's frozen parts are not edited: the command is undone.
+                // A frozen track's frozen parts and edit-locked clips are not edited: the command
+                // is undone.
                 if !Arc::ptr_eq(&before, &self.doc)
                     && self.loads == loads
-                    && let Some(why) = cmd::freeze::refused_edit(id, &before, &self.doc)
+                    && let Some(why) = cmd::freeze::refused_edit(id, &before, &self.doc).or_else(|| edit::locked_edit_refused(id, &before, &self.doc))
                 {
                     self.doc = before;
                     self.revision = self.revision.wrapping_add(1);
