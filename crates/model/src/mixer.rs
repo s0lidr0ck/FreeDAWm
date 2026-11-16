@@ -424,6 +424,15 @@ pub fn track_input_channel(k: usize, first: usize, width: usize) -> usize {
     first.saturating_add(k.min(width.saturating_sub(1)))
 }
 
+/// The device input channel that track channel `k` of a `track_channels`-wide track reads when no
+/// hardware input is chosen, on a device with `device_inputs` channels: the device's first
+/// channels in order (a stereo track hears and records In 1-2), and on a device with fewer
+/// channels than the track, its last channel on the remaining sides (a mono device feeds both
+/// sides). Monitoring and recording both use this, so what is heard is what is recorded.
+pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> usize {
+    track_input_channel(k, 0, track_channels.min(device_inputs).max(1))
+}
+
 /// Per-track input monitoring (the strip's "I" button).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1534,5 +1543,14 @@ mod tests {
         assert_eq!(track_input_channel(1, 6, 2), 7);
         assert_eq!(track_input_channel(5, 6, 2), 7);
         assert_eq!(track_input_channel(1, 3, 0), 3);
+    }
+
+    #[test]
+    fn no_input_is_the_devices_first_channels() {
+        let chans = |track, device| (0..track).map(|k| default_input_channel(k, track, device)).collect::<Vec<_>>();
+        assert_eq!(chans(2, 8), [0, 1]);
+        assert_eq!(chans(2, 1), [0, 0]);
+        assert_eq!(chans(1, 8), [0]);
+        assert_eq!(chans(2, 0), [0, 0], "no device channels: nothing to read, never a panic");
     }
 }

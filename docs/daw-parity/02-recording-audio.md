@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 1 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -170,7 +170,7 @@ Lines move while section 1's work is in progress, so functions are named.
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | A stereo track with no input chosen monitors input 1 on both sides but records inputs 1 and 2 | `crates/mix/src/lib.rs` (input span for no input) against `plan_takes` in `crates/engine/src/io.rs` |
+| 1 | **Fixed:** a stereo track with no input chosen monitored input 1 on both sides but recorded inputs 1 and 2; both now use the device's first channels (In 1-2; In 1 twice on a mono device) | `crates/mix/src/lib.rs` (input span for no input) against `plan_takes` in `crates/engine/src/io.rs` |
 | 2 | An audio track whose input is a bus hears and records hardware inputs instead; the menu offers busses to every track | the same two places; `crates/ui-egui/src/mix_window.rs` input menu |
 | 3 | Record pressed while a loop is playing: the take is placed as one straight clip running past the loop end | `start_recording` in `crates/ui-egui/src/lib.rs` (the plan has no pass) |
 | 4 | Loop record on a plain track leaves playlists that hold only the loop, so the track is silent elsewhere | `place_take` in `crates/engine/src/io.rs` |
@@ -220,4 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 1 fixed |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

@@ -2113,7 +2113,8 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
 /// `<track>_<NN>.wav` in the `Audio Files` of the session's folder (`unsaved_dir` until it is saved).
 /// An input that doesn't resolve, or needs a channel the device lacks (`input_channels`), is
 /// refused by track and input name; it never wraps onto other channels. A track with no
-/// hardware input records from channel 0 up, as before.
+/// hardware input records the device's first channels, as it monitors them
+/// ([`default_input_channel`](soundcraft_model::default_input_channel)).
 pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std::result::Result<Vec<(TrackId, Vec<usize>, PathBuf)>, String> {
     let dir = e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir);
     let s = e.session();
@@ -2136,7 +2137,8 @@ pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std:
                 }
                 chans
             }
-            _ => (0..t.channels()).map(|k| k % input_channels.max(1)).collect(),
+            // No hardware input: the channels the track monitors (`default_input_channel`).
+            _ => (0..t.channels()).map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels)).collect(),
         };
         let file = |n: usize| dir.join("Audio Files").join(format!("{}_{n:02}.wav", sanitize_name(&t.name)));
         let path = (take_no..take_no + 1_000).map(file).find(|p| !p.exists()).unwrap_or_else(|| file(take_no));
@@ -2492,10 +2494,12 @@ mod record_tests {
         e.execute("setup.io", &json!({"action": "create_input", "name": "Vox Mic", "format": "mono", "first_channel": 4})).unwrap();
         armed(&mut e, "Dbl", "stereo", "Vox Mic");
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 8).unwrap()[0].1, vec![4, 4]);
-        // No input keeps today's default: from channel 0.
+        // No input records what it monitors (`default_input_channel`): In 1-2, or In 1 twice on
+        // a mono device.
         let mut e = Engine::default();
         armed(&mut e, "Pad", "stereo", "none");
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 8).unwrap()[0].1, vec![0, 1]);
+        assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 1).unwrap()[0].1, vec![0, 0]);
     }
 
     #[test]

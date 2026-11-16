@@ -432,6 +432,9 @@ struct Strip {
     /// The device input channels (first, width) the strip hears when monitoring, resolved in
     /// `sync`; `None`: an unknown input (silence).
     in_span: Option<(usize, usize)>,
+    /// No hardware input is chosen: track channel `k` hears
+    /// [`default_input_channel`](soundcraft_model::default_input_channel), as its take records.
+    in_default: bool,
     /// The strip heard live input in its last render (monitored audio input, or live MIDI into
     /// its instrument): the mix's tail must not cut what is still being played.
     hears_live: bool,
@@ -593,6 +596,7 @@ impl Strip {
             scout: None,
             dest: Dest::None,
             in_span: None,
+            in_default: false,
             hears_live: false,
             llm: false,
             llm_bits: 0,
@@ -1490,15 +1494,12 @@ impl MixEngine {
                 strip.llm_dry = vec![vec![0.0; mb]; n];
             }
             strip.dest = out_dest(s, &t.mixer.output);
-            // A named input (or a legacy "In N" / "In N-M") gives its device channels; no input
-            // is "In 1" (a stereo track hears device channel 1 on both sides); any other route
-            // gives track channel k device channel k.
-            strip.in_span = match &t.mixer.input {
-                Route::Hardware(h) => s.input_channels(h),
-                // The Band's musicians and a module's MIDI have no audio input: they hear what
-                // "no input" hears.
-                Route::None | Route::Musician(_) | Route::Modules(_) | Route::Midi(_) => Some((0, 1)),
-                _ => Some((0, ch)),
+            // A named input (or a legacy "In N" / "In N-M") gives its device channels; any other
+            // route (no input, and the Band's musicians and a module's MIDI, which have no audio
+            // input) hears the device's first channels in order, as `plan_takes` records them.
+            (strip.in_span, strip.in_default) = match &t.mixer.input {
+                Route::Hardware(h) => (s.input_channels(h), false),
+                _ => (Some((0, ch)), true),
             };
         }
         // Sources tapped before their fader keep their pre-fader copy, sized here.
@@ -2530,11 +2531,12 @@ fn process_strip(
         TrackKind::Audio if !live.input.is_empty() && t.mixer.hears_input(live.monitor_only, live.auto_input) => {
             // Input monitoring: the track hears its hardware input instead of its clips. A named
             // input (or a legacy "In N" / "In N-M") gives its device channels; with no hardware
-            // input, track channel k hears device channel k, as before.
+            // input, `default_input_channel` (the channels its take records).
             // An unknown input, or a channel the device lacks, is silence: never wrapped onto
             // another channel.
             strip.hears_live = true;
             if let Some((first, width)) = strip.in_span {
+                let width = if strip.in_default { width.min(live.input.len()).max(1) } else { width };
                 for (k, dst) in strip.buf.iter_mut().enumerate() {
                     if let Some(src) = live.input.get(track_input_channel(k, first, width)) {
                         for (d, x) in dst.iter_mut().zip(src.iter()).take(frames) {
@@ -7251,6 +7253,25 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    #[test]
+    fn a_stereo_track_with_no_input_monitors_what_it_records() {
+        // Bug: it heard In 1 on both sides but recorded In 1-2. Now both are
+        // `default_input_channel`: In 1-2 on a stereo device, In 1 twice on a mono one.
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::On;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut out = vec![vec![0.0; 512]; 2];
+        eng.input = vec![vec![0.1; 512], vec![0.3; 512]];
+        eng.render(&s, 0, 512, &mut out);
+        assert!(out[0][100] > 0.01 && (out[1][100] / out[0][100] - 3.0).abs() < 1e-3, "{} {}", out[0][100], out[1][100]);
+        let heard: Vec<usize> = (0..2).map(|k| soundcraft_model::default_input_channel(k, 2, 2)).collect();
+        assert_eq!(heard, [0, 1]);
+        eng.input = vec![vec![0.1; 512]];
+        eng.render(&s, 512, 512, &mut out);
+        assert!(out[0][100] > 0.01 && (out[1][100] - out[0][100]).abs() < 1e-6, "{} {}", out[0][100], out[1][100]);
     }
 
     #[test]
