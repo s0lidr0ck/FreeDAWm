@@ -27,6 +27,7 @@ pub(crate) mod event_more;
 mod file;
 pub(crate) mod freeze;
 mod module_record;
+pub mod pan_law;
 mod record_format;
 mod record_print;
 pub use freeze::all_frozen;
@@ -172,6 +173,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(automation_edit::specs());
         v.extend(auto_write::specs());
         v.extend(options::specs());
+        v.extend(pan_law::specs());
         v.extend(transport::specs());
         v.extend(tab::specs());
         v.extend(query::specs());

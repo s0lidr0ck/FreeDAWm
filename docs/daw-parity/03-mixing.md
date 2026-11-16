@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 16 fixed: Audio Units are told a render is offline) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a choice of pan law) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -31,7 +31,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
-| B. Panning | One fixed pan law, dual pan for stereo | Medium: no law choice, no balance or width |
+| B. Panning | Four pan laws, dual pan for stereo | Medium: no balance or width |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
@@ -64,7 +64,7 @@ scale** (meters no longer miss a peak).
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Choice of pan law | ● | ● | ● | ● | **Missing**: fixed at −3 dB; the other laws exist in code, unused |
+| Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Options › More › Pan Law, `mix.pan_law`) |
 | Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
 | Balance, and width or combined panner | ○ | ● | ● | ● | **Missing** |
 | Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
@@ -270,7 +270,7 @@ one a mix engineer would not forgive.
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | |
-| Pan law choice; balance and width for stereo; per-track delay | 6–10 | The laws are already in `crates/dsp` |
+| Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
 | Real-time bounce | 4–6 | |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: a choice of pan law |
 | 2026-11-16 | minor | bug 16 fixed: Audio Units are told a render is offline |
 | 2026-11-16 | minor | bug 15 fixed: routing loops are refused |
 | 2026-11-16 | minor | bug 14 was not one: a mono bus into a stereo aux is as loud as a centred mono track |

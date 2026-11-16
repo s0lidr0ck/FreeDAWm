@@ -99,8 +99,9 @@ fn greyed_out_items_say_why() {
 }
 
 /// Ids whose menu item names its parameter in the label (a ruler, a width, a rating…).
-const PARAMETERISED: [&str; 8] = [
+const PARAMETERISED: [&str; 9] = [
     "view.ruler",
+    "mix.pan_law",
     "view.main_counter",
     "options.scrolling",
     "options.solo_mode",
@@ -280,8 +281,10 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
     if UI_TOGGLES.contains(&id) || matches!(id, "clip.edit_lock" | "clip.time_lock" | "ui.mix.slim_editors") {
         return Some(Answer::Flips);
     }
-    if matches!(id, "window.mix" | "window.edit" | "window.workspace" | "options.scrolling" | "options.solo_mode" | "view.main_counter")
-        || id.starts_with("view.waveform_p")
+    if matches!(
+        id,
+        "window.mix" | "window.edit" | "window.workspace" | "options.scrolling" | "options.solo_mode" | "mix.pan_law" | "view.main_counter"
+    ) || id.starts_with("view.waveform_p")
         || id.starts_with("view.clip_time_")
     {
         return Some(Answer::ComesOn);

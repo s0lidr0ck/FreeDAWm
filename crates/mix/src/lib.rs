@@ -709,6 +709,7 @@ pub struct MixEngine {
     /// The meters of the blocks rendered so far were not taken (the realtime side could not
     /// publish them): the next block's peaks are folded into them instead of replacing them.
     pub meters_held: bool,
+    /// The session's pan law ([`session_pan_law`]), taken at the start of every block.
     pub pan_law: PanLaw,
     /// Last rendered position end (to detect seeks).
     last_end: Samples,
@@ -1744,6 +1745,8 @@ impl MixEngine {
         }
         self.last_ports = self.live_midi.ports;
         self.ensure_synced(s);
+        // The session's pan law, read every block (a setting, not a sync).
+        self.pan_law = session_pan_law(s);
         self.place_scout(s);
         // The band plays once for the block, before the strips (they only read its slots).
         self.render_band(s, pos, frames, seek);
@@ -2622,7 +2625,7 @@ fn process_strip(
             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
         }
         if let Some(src) = busses.get(b) {
-            read_bus(src, t, &mut strip.bus_in, frames);
+            read_bus(src, t, &mut strip.bus_in, frames, session_pan_law(s));
         }
     }
     // Record with inserts: while it records, the input goes through the strip whether it is
@@ -2710,7 +2713,7 @@ fn process_strip(
             if let Route::Bus(b) = &t.mixer.input
                 && let Some(src) = busses.get(b)
             {
-                read_bus(src, t, &mut strip.buf, frames);
+                read_bus(src, t, &mut strip.buf, frames, session_pan_law(s));
             }
         }
         TrackKind::Instrument | TrackKind::Midi => {
@@ -3287,7 +3290,7 @@ fn strip_channels(t: &Track, main_ch: usize) -> usize {
 /// The format a strip's buffer actually carries (a mono instrument renders in stereo).
 /// Adds `frames` of bus `src` into `dst` (the strip of `t`, `dst.len()` channels wide): as is
 /// when the formats match, a mono bus on both sides of a stereo strip, else down- or up-mixed.
-fn read_bus(src: &BusBuf, t: &Track, dst: &mut [Vec<f32>], frames: usize) {
+fn read_bus(src: &BusBuf, t: &Track, dst: &mut [Vec<f32>], frames: usize, law: PanLaw) {
     let (ns, nd) = (src.buf.len(), dst.len());
     let dst_fmt = strip_format(t, nd);
     let m = if src.fmt == dst_fmt && ns == nd {
@@ -3300,7 +3303,7 @@ fn read_bus(src: &BusBuf, t: &Track, dst: &mut [Vec<f32>], frames: usize) {
         m
     } else {
         let stereo = if ns == 1 { [0.0, 0.0] } else { [-1.0, 1.0] };
-        build_matrix(src.fmt, ns, dst_fmt, nd, &PanSpec { stereo, surround: None }, PanLaw::Minus3)
+        build_matrix(src.fmt, ns, dst_fmt, nd, &PanSpec { stereo, surround: None }, law)
     };
     apply_matrix(&src.buf, frames, dst, &m, 1.0);
 }
@@ -4473,6 +4476,26 @@ fn send_muted(t: &Track, i: usize, base: bool, pos: Samples) -> bool {
         return base || l.value_at(pos, 0.0) >= 0.5;
     }
     base
+}
+
+/// The `s.edit.values` key of the session's pan law: the centre level in dB (0, −3, −4.5 or −6).
+pub const PAN_LAW_KEY: &str = "mix.pan_law_db";
+
+/// The pan law the session asks for ([`PAN_LAW_KEY`]); −3 dB when unset or not one of the four.
+/// Used by mono tracks and sends into stereo and by a mono bus read by a wider aux.
+pub fn session_pan_law(s: &Session) -> PanLaw {
+    pan_law_for_db(s.edit.value(PAN_LAW_KEY, -3.0))
+}
+
+/// The pan law whose centre level is `db` (the nearest of the four).
+pub fn pan_law_for_db(db: f64) -> PanLaw {
+    if !db.is_finite() {
+        return PanLaw::Minus3;
+    }
+    [PanLaw::Zero, PanLaw::Minus3, PanLaw::Minus4_5, PanLaw::Minus6]
+        .into_iter()
+        .min_by(|a, b| (f64::from(a.center_db()) - db).abs().total_cmp(&(f64::from(b.center_db()) - db).abs()))
+        .unwrap_or(PanLaw::Minus3)
 }
 
 fn lerp_gain(db0: f32, db1: f32, i: usize, n: usize) -> f32 {
@@ -5884,6 +5907,19 @@ mod tests {
         eng.render(&s, 1024, 512, &mut buf);
         assert_eq!(eng.meters[&t].peak[0], 0.0, "taken: the next block starts afresh");
         assert_eq!(eng.main_meter.peak, [0.0; 2]);
+    }
+
+    /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).
+    #[test]
+    fn the_session_pan_law_sets_the_centre_level() {
+        let (mut s, _) = session_with_dc(0.5, 4800);
+        for (db, want) in [(0.0, 0.5f32), (-3.0, 0.5 * std::f32::consts::FRAC_1_SQRT_2), (-4.5, 0.5 * db_to_gain(-4.5)), (-6.0, 0.25)] {
+            s.edit.values.insert(PAN_LAW_KEY.into(), db);
+            let out = render_range(&s, Range::new(0, 4800), 512);
+            assert!((out[0][1000] - want).abs() < 2e-3 && (out[1][1000] - want).abs() < 2e-3, "{db} dB: {} vs {want}", out[0][1000]);
+        }
+        assert_eq!(pan_law_for_db(f64::NAN), PanLaw::Minus3);
+        assert_eq!(pan_law_for_db(-5.0), PanLaw::Minus4_5);
     }
 
     #[test]
