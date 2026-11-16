@@ -875,6 +875,8 @@ mod tests {
         use soundcraft_model::{ChannelFormat, Clip, Route, Session, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
         s.edit.click = false;
+        // (a constant level from the first frame: no automatic edge fade on the clip's start)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         let print = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Print"));
         let src = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Synth"));
         let bus = s.add_bus("Print Bus", ChannelFormat::Mono);

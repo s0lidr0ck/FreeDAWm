@@ -397,8 +397,37 @@ fn loop_or_end(looped: Option<Range>, end: Option<Samples>) -> (Option<Range>, O
     }
 }
 
+/// How long the output ramps in after a start and out before a stop or a jump, in seconds: long
+/// enough that cutting into or out of a waveform does not click, short enough not to be heard
+/// as a fade.
+const DECLICK_SECS: f64 = 0.003;
+
+/// A transport change that waits for the output to ramp out first (see [`AudioState::defer`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Deferred {
+    /// Stop; then locate to `then_at` if one came in during the ramp.
+    Stop {
+        then_at: Option<Samples>,
+    },
+    Locate(Samples),
+    Play {
+        from: Samples,
+        end: Option<Samples>,
+        looped: Option<Range>,
+        countoff: Option<CountOff>,
+    },
+}
+
 /// State owned by the audio callback.
 struct AudioState {
+    /// The declick ramp: the gain the output plays at now, moving by one ramp step a frame
+    /// towards `ramp_to` (0 while a deferred change waits, else 1).
+    ramp: f32,
+    ramp_to: f32,
+    /// A Stop, Locate or Play received while playing: applied once the ramp reaches 0.
+    deferred: Option<Deferred>,
+    /// The declick ramps run (always, but for tests comparing render paths sample for sample).
+    declick: bool,
     /// The preview playing ([`Cmd::Preview`]) and its read position, in its own frames.
     preview: Option<(Arc<PreviewAudio>, f64)>,
     rx: Receiver<Cmd>,
@@ -545,6 +574,10 @@ impl AudioState {
         let sr = session.sample_rate.as_f64() as f32;
         let nch = main_channels(&session);
         AudioState {
+            ramp: 1.0,
+            ramp_to: 1.0,
+            deferred: None,
+            declick: true,
             preview: None,
             garbage,
             old_sessions: None,
@@ -659,42 +692,24 @@ impl AudioState {
                 }
                 Cmd::OldSessions(tx) => self.old_sessions = Some(tx),
                 Cmd::Play { from, end, looped, countoff } => {
-                    self.shared.rolled.store(0, Ordering::Relaxed);
-                    self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
-                    self.shared.play_pending.store(false, Ordering::Release);
-                    self.midi_pass = 0;
-                    self.pos = from;
-                    self.shared.position.store(from, Ordering::Relaxed);
-                    (self.looped, self.end) = loop_or_end(looped, end);
-                    // With a count-off the transport rolls once it is over (`render_next`).
-                    self.countoff = countoff.filter(|c| !c.is_empty());
-                    self.countoff_at = 0;
-                    self.playing = self.countoff.is_none();
-                    // After a count-off nothing is moved in: what was played during it is not taken.
-                    self.midi_floor = self.playing.then_some(from);
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    reset = true;
+                    let play = Deferred::Play { from, end, looped, countoff };
+                    if !self.defer(play) {
+                        self.apply(play);
+                        reset = true;
+                    }
                 }
                 Cmd::Stop => {
-                    self.playing = false;
-                    // A count-off stopped is over: the transport never rolls, nothing is taken.
-                    self.countoff = None;
-                    self.end = None;
-                    self.looped = None;
-                    // What was rendered ahead is playback: not heard after Stop.
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    reset = true;
-                    // The transport stopping ends a Scout capture.
-                    self.mix.stop_scout();
+                    let stop = Deferred::Stop { then_at: None };
+                    if !self.defer(stop) {
+                        self.apply(stop);
+                        reset = true;
+                    }
                 }
                 Cmd::Locate(at) => {
-                    self.pos = at;
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    // A jump keeps the Scout capture: it records a new played range.
-                    reset = true;
+                    if !self.defer(Deferred::Locate(at)) {
+                        self.apply(Deferred::Locate(at));
+                        reset = true;
+                    }
                 }
                 Cmd::Action(track, module, name) => {
                     // (no allocation: a lookup and the plugin's own flag)
@@ -734,6 +749,7 @@ impl AudioState {
                         None => {
                             self.pos = range.start;
                             (self.looped, self.end) = loop_or_end(Some(range), None);
+                            self.ramp_in();
                             self.playing = true;
                             self.pending_len = 0;
                             self.read = 0.0;
@@ -790,6 +806,7 @@ impl AudioState {
                     self.playing = false;
                     self.end = None;
                     self.looped = None;
+                    self.deferred = None;
                     self.pending_len = 0;
                     self.read = 0.0;
                     self.mix.stop_scout();
@@ -826,6 +843,7 @@ impl AudioState {
             self.countoff = None;
             self.end = None;
             self.looped = None;
+            self.deferred = None;
         }
         if changed {
             // Place adopted instances now (not only once playback starts), so editors see them;
@@ -837,8 +855,134 @@ impl AudioState {
         }
         self.send_garbage(false);
         self.return_scout();
-        self.shared.playing.store(self.playing, Ordering::Relaxed);
+        self.publish_playing();
         self.publish_countoff();
+    }
+
+    /// Whether the transport reads as playing: a Stop ramping out already reads stopped.
+    fn publish_playing(&self) {
+        let stopping = matches!(self.deferred, Some(Deferred::Stop { .. }));
+        self.shared.playing.store(self.playing && !stopping, Ordering::Relaxed);
+    }
+
+    /// Frames of the declick ramp at the session rate (at least one).
+    fn ramp_frames(&self) -> usize {
+        ((self.session.sample_rate.as_f64() * DECLICK_SECS).round() as usize).max(1)
+    }
+
+    /// Holds `change` until the output has ramped out, when the transport is playing (so cutting
+    /// away from the audio would click). False when it is to be applied now: stopped, counting
+    /// off, recording (the take's edges stay exact) or lent. A change arriving while another
+    /// waits replaces it, except that a Locate after a Stop is applied after the Stop, and a
+    /// Locate during a deferred Play moves the Play's start.
+    fn defer(&mut self, change: Deferred) -> bool {
+        if !self.declick || !self.playing || self.countoff.is_some() || self.recording || self.lent {
+            if self.deferred.is_some() {
+                // (cannot happen: a deferral is only made while playing, and those end it)
+                self.deferred = None;
+            }
+            return false;
+        }
+        self.deferred = Some(match (self.deferred, change) {
+            (Some(Deferred::Stop { .. }), Deferred::Locate(at)) => Deferred::Stop { then_at: Some(at) },
+            (Some(Deferred::Play { end, looped, countoff, .. }), Deferred::Locate(at)) => Deferred::Play { from: at, end, looped, countoff },
+            (_, c) => c,
+        });
+        self.ramp_to = 0.0;
+        true
+    }
+
+    /// Ramp the output in from silence (a start, or the far side of a jump).
+    fn ramp_in(&mut self) {
+        self.ramp = if self.declick { 0.0 } else { 1.0 };
+        self.ramp_to = 1.0;
+    }
+
+    /// Applies a transport change: at once (see [`AudioState::defer`]), or once its ramp out is
+    /// over. The caller resets the mix at the new position.
+    fn apply(&mut self, change: Deferred) {
+        self.deferred = None;
+        self.ramp_to = 1.0;
+        match change {
+            Deferred::Play { from, end, looped, countoff } => {
+                self.shared.rolled.store(0, Ordering::Relaxed);
+                self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
+                self.shared.play_pending.store(false, Ordering::Release);
+                self.midi_pass = 0;
+                self.pos = from;
+                self.shared.position.store(from, Ordering::Relaxed);
+                (self.looped, self.end) = loop_or_end(looped, end);
+                // With a count-off the transport rolls once it is over (`render_next`).
+                self.countoff = countoff.filter(|c| !c.is_empty());
+                self.countoff_at = 0;
+                self.playing = self.countoff.is_none();
+                // After a count-off nothing is moved in: what was played during it is not taken.
+                self.midi_floor = self.playing.then_some(from);
+                self.pending_len = 0;
+                self.read = 0.0;
+                self.ramp_in();
+            }
+            Deferred::Stop { then_at } => {
+                self.playing = false;
+                // A count-off stopped is over: the transport never rolls, nothing is taken.
+                self.countoff = None;
+                self.end = None;
+                self.looped = None;
+                // What was rendered ahead is playback: not heard after Stop.
+                self.pending_len = 0;
+                self.read = 0.0;
+                // The transport stopping ends a Scout capture.
+                self.mix.stop_scout();
+                if let Some(at) = then_at {
+                    self.pos = at;
+                }
+                // Live input still heard comes back in smoothly from the ramp's silence.
+                self.publish_playing();
+            }
+            Deferred::Locate(at) => {
+                self.pos = at;
+                self.pending_len = 0;
+                self.read = 0.0;
+                // A jump keeps the Scout capture: it records a new played range.
+                if self.playing {
+                    self.ramp_in();
+                }
+            }
+        }
+    }
+
+    /// The declick ramp over the `n` frames just mapped into `pending`: towards `ramp_to`, and
+    /// out towards a known end of play so the last frame before it is silent. Nothing to do (no
+    /// work) when the gain is 1 and no end is near.
+    fn apply_ramp(&mut self, n: usize) {
+        let len = self.ramp_frames();
+        let step = 1.0 / len as f32;
+        let end_near = self.declick && self.playing && self.end.is_some_and(|e| e.saturating_sub(self.pos) <= len as i64 + n as i64);
+        if self.ramp == 1.0 && self.ramp_to == 1.0 && !end_near {
+            return;
+        }
+        let mut g = self.ramp;
+        for i in 0..n {
+            g = if g < self.ramp_to { (g + step).min(self.ramp_to) } else { (g - step).max(self.ramp_to) };
+            // Rounding must not leave a sliver short of the target (a frame more to wait).
+            if (g - self.ramp_to).abs() < step * 0.5 {
+                g = self.ramp_to;
+            }
+            let mut k = g;
+            if end_near && let Some(e) = self.end {
+                // Reaches 0 on the last frame before the end.
+                let left = e.saturating_sub(self.pos.saturating_add(i as i64)).saturating_sub(1);
+                k *= (left as f32 / len as f32).clamp(0.0, 1.0);
+            }
+            if k != 1.0 {
+                for ch in &mut self.pending {
+                    if let Some(x) = ch.get_mut(i) {
+                        *x *= k;
+                    }
+                }
+            }
+        }
+        self.ramp = g;
     }
 
     /// The count-off state for [`Player::countoff_elapsed`] (two atomic stores).
@@ -967,6 +1111,24 @@ impl AudioState {
     fn render_next(&mut self, quantum: usize) {
         let mb = self.max_block;
         let mut n = quantum.clamp(1, mb);
+        // A change waiting for the ramp out: applied once the output is silent; until then the
+        // block ends where the ramp reaches 0, so the change lands on that frame.
+        if let Some(d) = self.deferred {
+            if self.ramp <= 0.0 {
+                self.apply(d);
+                self.mix.reset_at(&self.session, self.pos);
+                if !self.playing && self.countoff.is_none() && !self.monitoring && !self.mix.scout_armed() {
+                    for c in &mut self.pending {
+                        c.iter_mut().for_each(|x| *x = 0.0);
+                    }
+                    self.pending_len = mb;
+                    return;
+                }
+            } else {
+                let left = (self.ramp * self.ramp_frames() as f32).ceil() as usize;
+                n = n.min(left.max(1));
+            }
+        }
         if let Some(l) = self.looped
             && self.pos >= l.end
         {
@@ -1005,6 +1167,8 @@ impl AudioState {
             self.popped += n;
         }
         self.mix.monitor_only = !self.playing;
+        // Clips running across the loop's edges ramp there (`MixEngine::looping`).
+        self.mix.looping = if self.declick { self.looped } else { None };
         self.mix.recording = self.recording;
         self.mix.punch = self.punch;
         self.mix.countoff = self.countoff.map(|c| (c, self.countoff_at));
@@ -1058,6 +1222,7 @@ impl AudioState {
         // took from its bus (internal recording), captured with the block's position (the take's
         // first frame has an exact timeline position).
         let first = self.capture_block(n);
+        self.apply_ramp(n);
         let mix_latency = u32::try_from(self.mix.latency).unwrap_or(u32::MAX);
         self.shared.mix_latency.store(mix_latency, Ordering::Relaxed);
         if first && let Some(cap) = &self.capture {
@@ -3824,6 +3989,8 @@ mod tests {
     fn audio_output_state(format: soundcraft_model::ChannelFormat, channels: Vec<Vec<f32>>) -> AudioState {
         use soundcraft_model::{Clip, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         s.outputs[0].format = format;
         let t = s.add_track(TrackKind::Audio, format, None);
@@ -3835,7 +4002,8 @@ mod tests {
         let (tx, rx) = channel();
         let st = AudioState::new(rx, shared, Arc::new(s), 48_000.0, max_block_for(None), channel().0);
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
-        st
+        // (a channel-layout test: the declick ramps have tests of their own)
+        exact(st)
     }
 
     #[test]
@@ -3903,7 +4071,7 @@ mod tests {
         let s = Arc::new(s);
         let shared = Arc::new(Shared::new());
         let (tx, rx) = channel();
-        let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), channel().0);
+        let mut st = exact_new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), channel().0);
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
         // An 8-channel device: channels in order, the rest silent.
         let mut out = vec![0.0f32; 8 * 256];
@@ -4304,9 +4472,14 @@ mod tests {
             }
             assert!(before > 0.1, "{plugin}: the clip plays before the locate");
             tx.send(Cmd::Locate(1_000_000)).unwrap();
-            for _ in 0..8 {
+            // The old position ramps out over the declick (never louder than it played), then
+            // nothing from before the locate is heard.
+            let ramp = st.ramp_frames();
+            for k in 0..8 {
                 st.fill(&mut out, 2);
-                assert!(out.iter().all(|x| x.abs() < 1e-6), "{plugin}: audio from before the locate");
+                let quiet = if k == 0 { 2 * ramp } else { 0 };
+                assert!(out.iter().take(quiet).all(|x| x.abs() <= before + 1e-6), "{plugin}: the ramp out");
+                assert!(out.iter().skip(quiet).all(|x| x.abs() < 1e-6), "{plugin}: audio from before the locate");
             }
         }
     }
@@ -4342,6 +4515,8 @@ mod tests {
     fn clip_session(frames: usize, inserts: &[&str]) -> Session {
         use soundcraft_model::{ChannelFormat, Clip, Insert, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
         let left: Vec<f32> = (0..frames).map(|i| 0.4 * (i as f32 * 0.031).sin()).collect();
@@ -4370,6 +4545,41 @@ mod tests {
         tx.send(Cmd::Session(Arc::new(s.clone()), Vec::new())).unwrap();
         tx.send(play).unwrap();
         (st, shared, tx)
+    }
+
+    /// `st` without its declick ramps: for tests comparing the render paths with an offline
+    /// render sample for sample (the ramps have tests of their own, `declick_*`).
+    fn exact(mut st: AudioState) -> AudioState {
+        st.declick = false;
+        st.ramp = 1.0;
+        st
+    }
+
+    /// A session with one mono clip of `len` frames at `level` from 0 (no click).
+    fn const_clip_session(level: f32, len: usize) -> Session {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        s.edit.click = false;
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        s.pool.insert(
+            SourceId(9),
+            Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![level; len]] })),
+        );
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "c", SourceId(9), 0, 0, len as i64));
+        s
+    }
+
+    /// A centred mono track's gain into each side of a stereo main (the −3 dB pan law).
+    fn db_to_gain_pan() -> f32 {
+        soundcraft_dsp::db_to_gain(-3.0)
+    }
+
+    /// [`AudioState::new`], [`exact`].
+    fn exact_new(rx: Receiver<Cmd>, shared: Arc<Shared>, s: Arc<Session>, rate: f64, max_block: usize, garbage: Sender<Garbage>) -> AudioState {
+        exact(AudioState::new(rx, shared, s, rate, max_block, garbage))
     }
 
     /// Stereo callbacks of these sizes, deinterleaved.
@@ -4407,7 +4617,8 @@ mod tests {
     #[test]
     fn a_128_frame_callback_renders_one_128_frame_block() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, max_block_for(Some(128)));
+        let (st, shared, _tx) = playing(&s, 48_000.0, max_block_for(Some(128)));
+        let mut st = exact(st);
         let mut got = [Vec::new(), Vec::new()];
         for k in 1..=10 {
             let block = callbacks(&mut st, &[128]);
@@ -4424,7 +4635,8 @@ mod tests {
     #[test]
     fn odd_and_oversized_callbacks_render_in_chunks_without_allocating() {
         let s = clip_session(20_000, &[]);
-        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         attach(&tx, &feed::InputFeed::fixed(2, 256), 256);
         let sizes = [441, 1056, 5000];
         let mut got = callbacks(&mut st, &sizes);
@@ -4518,13 +4730,15 @@ mod tests {
         callbacks(&mut st, &[256]);
         let r = probe.read();
         assert!(r.playing);
-        assert_eq!(r.rolled, 256, "counted from the new Play");
+        // The old pass ramps out first (declick), then the new Play takes and the clock restarts.
+        assert_eq!(r.rolled, 256 - st.ramp_frames() as i64, "counted from the new Play");
     }
 
     #[test]
     fn builtin_plugins_render_any_block_size() {
         let s = clip_session(4800, &["gain", "compressor"]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[96, 128, 17, 256, 96, 128, 17, 256]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 2 * (96 + 128 + 17 + 256));
         assert_matches_offline(&got, &s);
@@ -4593,7 +4807,8 @@ mod tests {
     #[test]
     fn switching_to_the_direct_path_plays_out_what_the_resampler_rendered() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         // At ×1.25 a 10-frame callback renders 13 frames and reads up to 12.5.
         shared.speed.store(1250, Ordering::Relaxed);
         callbacks(&mut st, &[10]);
@@ -4612,7 +4827,8 @@ mod tests {
     #[test]
     fn switching_to_the_resampler_starts_where_the_direct_path_stopped() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         callbacks(&mut st, &[100]);
         shared.speed.store(2000, Ordering::Relaxed);
         let got = callbacks(&mut st, &[50]);
@@ -4630,7 +4846,8 @@ mod tests {
         // Bug: a selection of 64 samples or less with Loop Playback on played to the session end.
         let s = clip_session(4800, &[]);
         let tiny = Cmd::Play { from: 1000, end: None, looped: Some(Range::new(1000, 1040)), countoff: None };
-        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, tiny);
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, tiny);
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[441, 441]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 1040);
         assert!(!shared.playing.load(Ordering::Relaxed), "stopped at the sliver's end");
@@ -4647,7 +4864,8 @@ mod tests {
     fn the_direct_path_loops_and_ends_on_the_exact_frame() {
         let s = clip_session(4800, &[]);
         let looped = Cmd::Play { from: 1000, end: None, looped: Some(Range::new(1000, 1700)), countoff: None };
-        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, looped);
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, looped);
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[441, 333, 1056, 17, 441]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 1000 + 2288 % 700);
         let lap = offline(&s, 1000..1700);
@@ -4656,7 +4874,9 @@ mod tests {
             assert_bits(&got[c], &want, "the loop, lap after lap");
         }
 
-        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(300), looped: None, countoff: None });
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(300), looped: None, countoff: None });
+
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[441]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 300);
         assert!(!shared.playing.load(Ordering::Relaxed));
@@ -4751,19 +4971,121 @@ mod tests {
     }
 
     #[test]
-    fn stop_drops_what_was_rendered_ahead() {
+    fn stop_ramps_out_what_was_rendered_ahead_and_then_is_silent() {
         // The resampler renders ahead: at 44.1 kHz a 100-frame callback renders 109 frames.
-        let (mut st, _shared, tx, feed, _s) = monitored_clip(44_100.0, Cmd::Play { from: 0, end: None, looped: None, countoff: None });
+        // Those, and the declick ramp after them, play out falling to silence; nothing after.
+        let (mut st, _shared, tx, feed, s) = monitored_clip(44_100.0, Cmd::Play { from: 0, end: None, looped: None, countoff: None });
         feed.push(&[0.0; 100]);
         let played = callbacks(&mut st, &[100]);
         assert!(played[0].iter().any(|x| x.abs() > 0.05), "the clip plays");
         assert!(st.pending_len as f64 > st.read, "frames are left over");
         tx.send(Cmd::Stop).unwrap();
-        feed.push(&[0.0; 100]);
-        let after = callbacks(&mut st, &[100]);
-        for side in &after {
-            assert!(side.iter().all(|x| x.abs() < 1e-6), "playback heard after Stop: {:?}", &side[..12]);
+        let mut after = [Vec::new(), Vec::new()];
+        for _ in 0..4 {
+            feed.push(&[0.0; 100]);
+            let got = callbacks(&mut st, &[100]);
+            for c in 0..2 {
+                after[c].extend_from_slice(&got[c]);
+            }
         }
+        // At 44.1 kHz: the leftover (under 10 frames) and the ramp's 144 session frames.
+        let heard = 10 + (st.ramp_frames() as f64 * 44_100.0 / 48_000.0).ceil() as usize + 2;
+        // Full level over the stretch heard (the start's own ramp-in keeps `played` lower).
+        let peak = offline(&s, 0..400).iter().flatten().fold(0.0f32, |m, x| m.max(x.abs()));
+        for side in &after {
+            assert!(side[..heard].iter().all(|x| x.abs() <= peak + 1e-6), "the ramp out is no louder than playback");
+            assert!(side[heard..].iter().all(|x| x.abs() < 1e-6), "playback heard after the ramp: {:?}", &side[heard..heard + 12]);
+        }
+    }
+
+    #[test]
+    fn declick_ramps_in_at_play_and_out_at_stop_without_moving_the_audio() {
+        // A constant clip: the start ramps in linearly over the ramp, then plays at full level;
+        // a Stop ramps out over the same length, then the transport stops.
+        let (mut st, shared, tx) = playing(&const_clip_session(0.5, 48_000), 48_000.0, 256);
+        let r = st.ramp_frames();
+        assert_eq!(r, 144, "3 ms at 48 kHz");
+        let got = callbacks(&mut st, &[512]);
+        assert!(got[0][0].abs() < 0.5 / r as f32 * 1.5, "starts from silence: {}", got[0][0]);
+        for i in 1..r {
+            assert!(got[0][i] >= got[0][i - 1], "rising at {i}");
+        }
+        assert!(got[0][r..].iter().all(|x| (x - got[0][r]).abs() < 1e-6), "full level after the ramp");
+        tx.send(Cmd::Stop).unwrap();
+        st.drain();
+        assert!(!shared.playing.load(Ordering::Relaxed), "a Stop reads stopped at once");
+        let got = callbacks(&mut st, &[512]);
+        for i in 1..r {
+            assert!(got[0][i] <= got[0][i - 1], "falling at {i}");
+        }
+        assert!(got[0][r - 1].abs() < 0.5 / r as f32 * 1.5);
+        assert!(got[0][r..].iter().all(|x| *x == 0.0), "stopped after the ramp");
+        assert_eq!(shared.position.load(Ordering::Relaxed), 512 + r as i64, "the ramp plays on from where it was");
+    }
+
+    #[test]
+    fn declick_locate_ramps_out_jumps_and_ramps_in() {
+        let s = const_clip_session(0.5, 96_000);
+        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        let r = st.ramp_frames();
+        callbacks(&mut st, &[512]);
+        tx.send(Cmd::Locate(48_000)).unwrap();
+        let got = callbacks(&mut st, &[512]);
+        // Out over r frames, then in over r frames from the new place: a dip, never a step.
+        assert!(got[0][r - 1].abs() < 0.01 && got[0][r].abs() < 0.01, "silent at the jump");
+        assert!(got[0][2 * r..].iter().all(|x| (x - got[0][511]).abs() < 1e-6), "full level from the new place");
+        for w in got[0].windows(2) {
+            assert!((w[1] - w[0]).abs() <= 0.5 / r as f32 * 1.01 + 1e-6, "a step of {} at a jump", (w[1] - w[0]).abs());
+        }
+        assert_eq!(shared.position.load(Ordering::Relaxed), 48_000 + 512 - r as i64);
+        // A second Play while rolling ramps out first too.
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        let got = callbacks(&mut st, &[512]);
+        for w in got[0].windows(2) {
+            assert!((w[1] - w[0]).abs() <= 0.5 / r as f32 * 1.01 + 1e-6, "a step of {} at a Play", (w[1] - w[0]).abs());
+        }
+    }
+
+    #[test]
+    fn declick_a_clip_running_across_the_loop_ramps_at_the_wrap() {
+        // A constant clip longer than the loop: without ramps the wrap would jump straight from
+        // the loop's end into the middle of the clip. With them it dips to silence and back,
+        // the plug-ins and the rest of the mix carrying on.
+        let mut s = const_clip_session(0.5, 48_000);
+        s.edit.values.remove("playback.auto_fade_ms");
+        let lp = Range::new(1000, 2000);
+        let (st, _shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 1000, end: None, looped: Some(lp), countoff: None });
+        let mut st = st;
+        let got = callbacks(&mut st, &[2500]);
+        let auto = soundcraft_mix::auto_fade_frames(&s) as usize;
+        assert_eq!(got[0][999], 0.0, "silent on the loop's last frame");
+        assert_eq!(got[0][1000], 0.0, "and on its first, after the wrap");
+        assert!((got[0][1000 + 2 * auto] - got[0][500]).abs() < 1e-6, "full level again");
+        let step = 0.5 * db_to_gain_pan() / 16.0;
+        for w in got[0][200..2500].windows(2) {
+            assert!((w[1] - w[0]).abs() < step, "a step of {}", (w[1] - w[0]).abs());
+        }
+    }
+
+    #[test]
+    fn declick_ramps_out_before_a_known_end_and_not_while_recording() {
+        let s = const_clip_session(0.5, 48_000);
+        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(1000), looped: None, countoff: None });
+        let r = st.ramp_frames();
+        let got = callbacks(&mut st, &[1200]);
+        assert!(!shared.playing.load(Ordering::Relaxed));
+        assert_eq!(got[0][999], 0.0, "the last frame before the end is silent");
+        assert!((got[0][1000 - r - 1] - 0.5 * db_to_gain_pan()).abs() < 1e-6, "full level until the ramp");
+        for i in (1000 - r)..1000 {
+            assert!(got[0][i] <= got[0][i - 1], "falling at {i}");
+        }
+        // Recording: a Stop is exact (the take's end must not move).
+        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        tx.send(Cmd::Recording(true)).unwrap();
+        callbacks(&mut st, &[512]);
+        tx.send(Cmd::Stop).unwrap();
+        callbacks(&mut st, &[64]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 512, "stopped where it was");
     }
 
     #[test]
@@ -4771,7 +5093,8 @@ mod tests {
         // At ×1.25 a 10-frame callback renders 13 frames and reads 0..11.25; the next starts at
         // 12.5, between that block's last frame and the next block's first.
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         shared.speed.store(1250, Ordering::Relaxed);
         let got = callbacks(&mut st, &[10; 40]);
         let want = offline(&s, 0..600);
@@ -4837,6 +5160,8 @@ mod tests {
     fn device_callback(device: usize, rate: f64, output: soundcraft_model::Route, edit: impl FnOnce(&mut Session)) -> Vec<Vec<f32>> {
         use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         edit(&mut s);
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
@@ -4847,7 +5172,8 @@ mod tests {
         tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(5), 0, 0, 4800));
         tr.mixer.output = output;
         let (st, _shared, _tx) = playing(&s, rate, 256);
-        let mut st = st.with_device_channels(device);
+        // (a channel-layout test: the declick ramps have tests of their own)
+        let mut st = exact(st).with_device_channels(device);
         let mut out = vec![0.0f32; device * 128];
         st.fill(&mut out, device);
         (0..device).map(|c| out.iter().skip(c).step_by(device).copied().collect()).collect()
@@ -5019,8 +5345,10 @@ mod tests {
         st.fill(&mut out, 2);
         let back = side.take_scout().expect("a transport Stop ends it");
         assert!(back.finished());
-        assert_eq!(back.played(), &[Range::new(0, 512), Range::new(96_000, 96_512), Range::new(10_000, 10_512)]);
-        assert_eq!(back.frames(), 3 * 512);
+        // Each jump and the Stop first ramp the old position out over the declick, then land.
+        let r = st.ramp_frames() as i64;
+        assert_eq!(back.played(), &[Range::new(0, 512 + r), Range::new(96_000, 96_512), Range::new(10_000, 10_512)]);
+        assert_eq!(back.frames(), 3 * 512 + r as u64);
 
         // Playback reaching its end stops the transport, and the capture with it.
         side.arm(&tx, rig(&s, t, None, None), Cmd::ScoutArm);

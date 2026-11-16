@@ -704,6 +704,10 @@ pub struct MixEngine {
     /// hear their input in the blocks that touch it and play their clips before and after.
     /// `None`: they hear their input for the whole recording.
     pub punch: Option<Range>,
+    /// The loop the transport is playing, set by the audio host each block: clips running across
+    /// its edges ramp out before its end and in after its start, so the wrap does not click.
+    /// Offline renders leave it `None`.
+    pub looping: Option<Range>,
     /// Mix the metronome (Options > Click) into the output. Playback turns this on; offline renders
     /// (bounces, stems, exports) leave it off so the click is never printed into a file.
     pub metronome: bool,
@@ -932,6 +936,7 @@ impl MixEngine {
             recording: false,
             punch: None,
             metronome: false,
+            looping: None,
             countoff: None,
             external: false,
             adopt: HashMap::new(),
@@ -1761,6 +1766,7 @@ impl MixEngine {
             band: &self.band_out,
             midi: &self.live_midi,
             ports_gone: self.ports_gone,
+            looping: self.looping,
         };
         // In levels (`order` sorts them): a strip keyed by another renders after it, each level in
         // parallel. Without sidechains there is one level.
@@ -1915,6 +1921,7 @@ impl MixEngine {
                 band: &self.band_out,
                 midi: &self.live_midi,
                 ports_gone: self.ports_gone,
+                looping: self.looping,
             };
             // An aux reads busses that already carry the tracks' compensation delay. An aux
             // without a bus input hears nothing but its own modules; it is compensated as if its
@@ -2438,6 +2445,8 @@ struct LiveInput<'a> {
     midi: &'a LiveMidi,
     /// The MIDI input port slots whose port is gone since the last block (bit per slot).
     ports_gone: u16,
+    /// The loop being played ([`MixEngine::looping`]).
+    looping: Option<Range>,
 }
 
 fn process_strip(
@@ -2620,8 +2629,9 @@ fn process_strip(
                 if clip.muted || !clip.is_audio() || !clip.range().overlaps(&block) {
                     continue;
                 }
+                let edges = Edges::of(s, t.clips(), clip, block, live.looping);
                 match clip_fx_params(s, clip.id.0) {
-                    None => render_clip(s, clip, pos, frames, &mut strip.buf, &mut strip.scratch),
+                    None => render_clip(s, clip, pos, frames, &mut strip.buf, edges),
                     Some(params) => {
                         let nch = strip.buf.len();
                         if strip.clipbuf.len() != nch || strip.clipbuf.first().map_or(0, Vec::len) < frames {
@@ -2630,7 +2640,7 @@ fn process_strip(
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
-                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, &mut strip.scratch);
+                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, edges);
                         let fx = strip.clip_fx.entry(clip.id.0).or_insert_with(|| ClipFx::new(s.sample_rate.as_f64() as f32, nch));
                         fx.configure(params);
                         fx.process(&mut strip.clipbuf, frames);
@@ -3324,7 +3334,77 @@ mod click {
     }
 }
 
-fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut [Vec<f32>], _scratch: &mut [f32]) {
+/// The automatic edge fades' length when Options › Automatic Edge Fades has none set, ms.
+pub const AUTO_FADE_MS: f64 = 1.0;
+
+/// The automatic edge fades' length in frames at `s`'s rate; 0 when they are off
+/// (`playback.auto_fade_ms` 0).
+pub fn auto_fade_frames(s: &Session) -> i64 {
+    let ms = s.edit.value("playback.auto_fade_ms", AUTO_FADE_MS).clamp(0.0, 100.0);
+    (s.sample_rate.as_f64() * ms / 1000.0).round() as i64
+}
+
+/// The short ramps a clip's audio gets at edges that would otherwise click: an edge without a
+/// fade of its own that faces silence (no clip butting against it: a split plays straight
+/// through), and, while looping, the loop's end and start where the clip runs across them.
+/// Each ramp is linear over `len` frames, silent on the edge's own frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Edges {
+    len: i64,
+    start: Option<Samples>,
+    end: Option<Samples>,
+    loop_in: Option<Samples>,
+    loop_out: Option<Samples>,
+}
+
+impl Edges {
+    /// The edges of `clip` (one of `clips`, its playlist) that `block` comes near. Reads only:
+    /// no allocation (safe on the audio thread).
+    fn of(s: &Session, clips: &[Clip], clip: &Clip, block: Range, looping: Option<Range>) -> Edges {
+        let len = auto_fade_frames(s);
+        if len <= 0 {
+            return Edges::default();
+        }
+        let near = |at: Samples| block.start < at.saturating_add(len) && block.end > at.saturating_sub(len);
+        let mut e = Edges { len, ..Edges::default() };
+        if clip.fade_in.len <= 0 && near(clip.start) && !clips.iter().any(|p| continues(p, clip)) {
+            e.start = Some(clip.start);
+        }
+        if clip.fade_out.len <= 0 && near(clip.end()) && !clips.iter().any(|n| continues(clip, n)) {
+            e.end = Some(clip.end());
+        }
+        if let Some(l) = looping {
+            if clip.start < l.start && l.start < clip.end() && near(l.start) {
+                e.loop_in = Some(l.start);
+            }
+            if clip.start < l.end && l.end < clip.end() && near(l.end) {
+                e.loop_out = Some(l.end);
+            }
+        }
+        e
+    }
+
+    fn is_none(&self) -> bool {
+        self.start.is_none() && self.end.is_none() && self.loop_in.is_none() && self.loop_out.is_none()
+    }
+
+    /// The ramp's gain at timeline position `p`.
+    fn gain(&self, p: Samples) -> f32 {
+        let len = self.len.max(1) as f32;
+        let up = |from: Option<Samples>| from.filter(|f| p >= *f).map_or(1.0, |f| ((p - f) as f32 / len).min(1.0));
+        let down = |to: Option<Samples>| to.filter(|t| p < *t).map_or(1.0, |t| ((t - 1 - p) as f32 / len).min(1.0));
+        up(self.start) * up(self.loop_in) * down(self.end) * down(self.loop_out)
+    }
+}
+
+/// Whether clip `b` starts right where clip `a` ends (a split, a comp edit, a file split in
+/// pieces): what plays across that edit point is the user's to fade, and a split plays straight
+/// through. No automatic fade goes between them.
+fn continues(a: &Clip, b: &Clip) -> bool {
+    a.id != b.id && !a.muted && !b.muted && a.is_audio() && b.is_audio() && a.end() == b.start
+}
+
+fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut [Vec<f32>], auto: Edges) {
     let ClipContent::Audio { source, offset } = clip.content else { return };
     let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
     let Some(isect) = clip.range().intersect(&block) else { return };
@@ -3370,8 +3450,12 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
             // The last sample of this step, not the first sample of the next one, so a breakpoint
             // on the boundary does not ramp the audio before it.
             let rel1 = pos.saturating_add(seg_end.saturating_sub(1) as i64).saturating_sub(clip.start);
-            let g0 = clip.gain_at(rel0);
-            let g1 = clip.gain_at(rel1.min(clip.length));
+            let mut g0 = clip.gain_at(rel0);
+            let mut g1 = clip.gain_at(rel1.min(clip.length));
+            if !auto.is_none() {
+                g0 *= auto.gain(clip.start.saturating_add(rel0));
+                g1 *= auto.gain(clip.start.saturating_add(rel1));
+            }
             let n = (seg_end - i).saturating_sub(1).max(1) as f32;
             if unstretched && (i < run_at || seg_end > run_at.saturating_add(RUN)) {
                 run_at = i;
@@ -4899,18 +4983,20 @@ pub fn fold_down_stereo(fmt: ChannelFormat, ch: &[Vec<f32>]) -> Vec<Vec<f32>> {
     out
 }
 
-/// Render only one track's clips (no mixer processing) — Consolidate.
+/// Render only one track's clips (no mixer processing) — Consolidate. The clips' material as
+/// edits take it: without the automatic edge fades playback and bounces add (`Edges`), which a
+/// clip made from this render gets again where it plays.
 pub fn render_clips(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> {
     let Some(t) = s.track(track) else { return Vec::new() };
     let len = usize::try_from(range.len().max(0)).unwrap_or(0).min(MAX_RENDER_SAMPLES / t.channels().max(1));
     let mut out = vec![vec![0.0f32; len]; t.channels().max(1)];
-    let mut scratch = Vec::new();
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
+        let edges = Edges::default();
         match clip_fx_params(s, c.id.0) {
-            None => render_clip(s, c, range.start, len, &mut out, &mut scratch),
+            None => render_clip(s, c, range.start, len, &mut out, edges),
             Some(params) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
-                render_clip(s, c, range.start, len, &mut tmp, &mut scratch);
+                render_clip(s, c, range.start, len, &mut tmp, edges);
                 let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, tmp.len());
                 fx.configure(params);
                 let mut done = 0;
@@ -5250,6 +5336,8 @@ mod tests {
     /// A mono audio track holding one clip of a two-channel source, L = 0.8 and R = 0.2.
     fn stereo_clip_on_mono(chosen: Option<u16>) -> (Session, TrackId) {
         let mut s = Session::default();
+        // (about levels, not clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
         s.pool.insert(SourceId(7), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.8; 4800], vec![0.2; 4800]] })));
         let id = s.new_clip_id();
@@ -5257,6 +5345,87 @@ mod tests {
         c.source_channel = chosen;
         s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
         (s, t)
+    }
+
+    /// A mono track of constant 0.5 clips over `[start, start + len)` of one source, at `offset`.
+    fn const_clips(clips: &[(i64, i64, i64)]) -> (Session, TrackId) {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        s.pool.insert(SourceId(8), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 48_000]] })));
+        for &(start, len, offset) in clips {
+            let id = s.new_clip_id();
+            s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "c", SourceId(8), offset, start, len));
+        }
+        (s, t)
+    }
+
+    /// The left side of the main mix over `[0, 4000)` (playback's path, with its edge fades),
+    /// scaled so a full-level 0.5 clip reads 0.5.
+    fn heard(s: &Session) -> Vec<f32> {
+        let out = render_range(s, Range::new(0, 4000), 256);
+        let k = 1.0 / soundcraft_dsp::db_to_gain(-3.0);
+        out[0].iter().map(|x| x * k).collect()
+    }
+
+    #[test]
+    fn unfaded_clip_edges_ramp_so_a_cut_does_not_click() {
+        let (s, t) = const_clips(&[(1000, 2000, 0)]);
+        let l = auto_fade_frames(&s) as usize;
+        assert_eq!(l, 48, "1 ms at 48 kHz");
+        // Edits take the material as it is (Consolidate, Process).
+        let material = &render_clips(&s, t, Range::new(0, 4000))[0];
+        assert!((material[1000] - 0.5).abs() < 1e-6);
+        let out = &heard(&s);
+        assert_eq!(out[1000], 0.0, "silent on the first frame");
+        assert_eq!(out[2999], 0.0, "and on the last");
+        assert!((out[1000 + 2 * l] - 0.5).abs() < 1e-6 && (out[2999 - 2 * l] - 0.5).abs() < 1e-6, "full level inside");
+        for w in out[990..3010].windows(2) {
+            assert!((w[1] - w[0]).abs() < 0.5 / 16.0, "a step of {}", (w[1] - w[0]).abs());
+        }
+        // A fade of its own replaces the automatic one.
+        let (mut s, _) = const_clips(&[(1000, 2000, 0)]);
+        s.tracks[0].playlist_mut().unwrap().clips[0].fade_in.len = 500;
+        let out = &heard(&s);
+        assert!(out[1000 + 2 * l] < 0.2, "the clip's own 500-frame fade, not the short one");
+        // Off: the cut is hard.
+        let (mut s, _) = const_clips(&[(1000, 2000, 0)]);
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        let out = &heard(&s);
+        assert!((out[1000] - 0.5).abs() < 1e-6 && (out[2999] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_split_plays_straight_through_without_automatic_fades() {
+        // Two halves of one stretch of material, end to end: no dip at the split.
+        let (s, _) = const_clips(&[(1000, 1000, 0), (2000, 1000, 1000)]);
+        let out = &heard(&s);
+        assert!(out[1900..2100].iter().all(|x| (x - 0.5).abs() < 1e-6), "no dip at the split");
+        assert_eq!(out[1000], 0.0, "the outer edges still ramp");
+        assert_eq!(out[2999], 0.0);
+        // Butted from elsewhere in the file (or another file: a file split in pieces) too.
+        let (s, _) = const_clips(&[(1000, 1000, 0), (2000, 1000, 5000)]);
+        assert!(heard(&s)[1900..2100].iter().all(|x| (x - 0.5).abs() < 1e-6));
+        // With a gap between them, each edge faces silence and ramps.
+        let (s, _) = const_clips(&[(1000, 900, 0), (2000, 1000, 1000)]);
+        let out = &heard(&s);
+        assert_eq!(out[1899], 0.0);
+        assert_eq!(out[2000], 0.0);
+    }
+
+    #[test]
+    fn a_clip_across_the_loop_ramps_at_its_edges_only_while_looping() {
+        let (s, t) = const_clips(&[(0, 4000, 0)]);
+        let clip = s.tracks[0].clips()[0].clone();
+        let l = Range::new(1000, 3000);
+        let e = Edges::of(&s, s.tracks[0].clips(), &clip, Range::new(2990, 3000), Some(l));
+        assert_eq!(e.loop_out, Some(3000));
+        assert_eq!(e.gain(2999), 0.0, "silent on the loop's last frame");
+        assert!((e.gain(2999 - 48) - 1.0).abs() < 1e-6);
+        let e = Edges::of(&s, s.tracks[0].clips(), &clip, Range::new(1000, 1010), Some(l));
+        assert_eq!((e.loop_in, e.gain(1000)), (Some(1000), 0.0), "and on its first");
+        // Not looping: no ramp inside the clip.
+        assert!(Edges::of(&s, s.tracks[0].clips(), &clip, Range::new(2990, 3000), None).is_none());
+        let _ = t;
     }
 
     #[test]
@@ -5554,6 +5723,8 @@ mod tests {
 
     fn session_with_dc(level: f32, frames: usize) -> (Session, TrackId) {
         let mut s = Session::default();
+        // (about levels, not clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         let t = add_dc_track(&mut s, level, frames);
         (s, t)
     }
@@ -7200,6 +7371,8 @@ mod tests {
     #[test]
     fn delay_compensation_aligns_an_aux_insert() {
         let mut s = Session::default();
+        // (impulses at the clip's first frame: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         let n = 8192;
         let mut left = vec![0.0f32; n];
         for at in [0usize, 2048, 8000] {
@@ -7656,6 +7829,8 @@ mod tests {
     /// A session with one track of `fmt` playing a distinct DC level per channel (0.1, 0.2, …).
     fn multichannel_session(fmt: ChannelFormat, main: ChannelFormat, frames: usize) -> (Session, TrackId) {
         let mut s = Session::default();
+        // (about levels, not clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.outputs[0].format = main;
         let t = s.add_track(TrackKind::Audio, fmt, None);
         let chans: Vec<Vec<f32>> = (0..fmt.channels()).map(|c| (0..frames).map(|i| 0.1 * (c + 1) as f32 + (i % 7) as f32 * 1e-3).collect()).collect();

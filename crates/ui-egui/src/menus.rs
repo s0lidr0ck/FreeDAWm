@@ -806,6 +806,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("options.automation_follows_edit") => e.automation_follows_edit,
         Some("options.click") => e.click,
         Some("options.delay_compensation") => e.delay_compensation,
+        Some("options.auto_fades") => e.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS) > 0.0,
         // `video.online` keeps the opposite flag (the engine's `OFFLINE_FLAG`).
         Some("video.online") => !e.flag("video.offline"),
         Some("options.scrolling") => e.scrolling == scrolling_mode(leaf),

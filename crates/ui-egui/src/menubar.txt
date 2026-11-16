@@ -538,6 +538,7 @@ Options > Delay Compensation
 Options > Edit/Tool Mode Keyboard Lock
 Options > ---
 Options > More > Prepare DPE Tracks = Options > Prepare DPE Tracks
+Options > More > Automatic Edge Fades = Options > Automatic Edge Fades
 
 Setup > ## Audio
 Setup > Playback Engine...

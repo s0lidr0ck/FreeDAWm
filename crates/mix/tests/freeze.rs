@@ -189,6 +189,8 @@ fn a_mono_tracks_render_is_at_unity() {
     // A mono track renders through a stereo main mix and folds back: the centre pan law (exactly
     // -3 dB) must be undone exactly, or the render plays about 0.01 dB hot.
     let mut s = Session::default();
+    // (sample-exact edges: no automatic edge fades)
+    s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
     s.pool.insert(CLIP, Arc::new(SourceAudio::new(AudioBuffer { sample_rate: SR as u32, channels: vec![vec![0.4; LEN]] })));
     let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Bass"));
     let clip = s.new_clip_id();

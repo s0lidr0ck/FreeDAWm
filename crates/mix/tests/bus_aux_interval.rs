@@ -14,6 +14,8 @@ const AT: [usize; 3] = [0, 2048, 8000];
 /// onto bus B (or the main mix) with a unity-ratio compressor of 5 ms lookahead on it.
 fn fixture(insert: bool, aux_to_main: bool) -> (Session, BusId, BusId) {
     let mut s = Session::default();
+    // (sample-exact edges: no automatic edge fades)
+    s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
     s.edit.delay_compensation = true;
     let mut signal = vec![0.0; 8192];
     for at in AT {

@@ -35,6 +35,26 @@ pub fn specs() -> Vec<CommandSpec> {
         toggle!("options.midi_merge", "MIDI Merge", [], None, midi_merge),
         toggle!("options.pre_fader_metering", "Pre-Fader Metering", ["Options"], None, pre_fader_metering),
         toggle!("options.delay_compensation", "Delay Compensation", ["Options"], None, delay_compensation),
+        // Short ramps on clip edges without a fade of their own (and across the loop's edges
+        // while looping), so a cut never clicks. On by default at `AUTO_FADE_MS`.
+        cmd!(noundo "options.auto_fades", "Automatic Edge Fades", ["Options"], None, "{value?: bool, ms?: 0.1..100}", always, |e, p| {
+            let s = e.session_mut();
+            let now = s.edit.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS);
+            let ms = match (p.get("ms").and_then(Value::as_f64), p.get("value").and_then(Value::as_bool)) {
+                (Some(ms), _) if ms.is_finite() => ms.clamp(0.1, 100.0),
+                (Some(_), _) => return Err(bad("options.auto_fades", "`ms` must be a number")),
+                (None, Some(false)) => 0.0,
+                (None, Some(true)) => s.edit.value("playback.auto_fade_ms_on", soundcraft_mix::AUTO_FADE_MS),
+                (None, None) if now > 0.0 => 0.0,
+                (None, None) => s.edit.value("playback.auto_fade_ms_on", soundcraft_mix::AUTO_FADE_MS),
+            };
+            if ms > 0.0 {
+                // The length to come back to when it is turned on again.
+                s.edit.values.insert("playback.auto_fade_ms_on".into(), ms);
+            }
+            s.edit.values.insert("playback.auto_fade_ms".into(), ms);
+            Ok(json!({"value": ms > 0.0, "ms": ms}))
+        }),
         cmd!(noundo "options.destructive_record", "Destructive Record", ["Options"], None, "{value?: bool}", always, |e, p| record_mode(e, p, "destructive")),
         cmd!(noundo "options.trackpunch", "TrackPunch", ["Options"], Some("Cmd+Shift+T"), "{value?: bool}", always, |e, p| record_mode(e, p, "trackpunch")),
         cmd!(noundo "options.scrolling", "Edit Window Scrolling", ["Options", "Edit Window Scrolling"], None, "{mode: none|after_playback|page|continuous|center}", always, |e, p| {
@@ -138,4 +158,24 @@ fn session_setup(e: &mut Engine, p: &Value) -> Result<Value> {
         s.name = n.to_string();
     }
     Ok(json!({"frame_rate": s.frame_rate.label(), "bit_depth": s.bit_depth, "sample_rate": s.sample_rate.hz()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Engine;
+    use serde_json::json;
+
+    #[test]
+    fn automatic_edge_fades_toggle_and_keep_their_length() {
+        let mut e = Engine::default();
+        let fades = |e: &Engine| soundcraft_mix::auto_fade_frames(e.session());
+        assert_eq!(fades(&e), 48, "on by default, 1 ms at 48 kHz");
+        assert_eq!(e.execute("options.auto_fades", &json!({})).unwrap()["value"], false);
+        assert_eq!(fades(&e), 0);
+        e.execute("options.auto_fades", &json!({"ms": 2.0})).unwrap();
+        assert_eq!(fades(&e), 96);
+        e.execute("options.auto_fades", &json!({"value": false})).unwrap();
+        assert_eq!(e.execute("options.auto_fades", &json!({})).unwrap()["ms"], 2.0, "back on at the length it had");
+        assert!(e.execute("options.auto_fades", &json!({"ms": "long"})).is_ok(), "a non-number `ms` is ignored, not stored");
+    }
 }

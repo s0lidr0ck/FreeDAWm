@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 11 fixed: a missing chosen device is told to the user) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (declick: transport ramps, loop-edge ramps and automatic edge fades) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -35,9 +35,9 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Transport and locating | Solid core; several play commands are wrong | Small: bugs and small features |
 | B. Looping | Gapless and sample-accurate, but fixed at Play | Small |
 | C. Speed, scrub, shuttle | Half speed only; no scrub audio at all | **Large**: all four scrub |
-| D. Audio engine | Device choice, wide delay compensation, disk cache | Medium: sound quality at mismatched rates, clicks on stop/locate, realtime safety |
+| D. Audio engine | Device choice, wide delay compensation, disk cache, declicked transport | Medium: sound quality at mismatched rates, realtime safety |
 | E. Media and formats | Reads everything; streams only WAV | Small to medium |
-| F. Clip rendering | Gain, envelopes, fades, clip EQ/comp, comping | Medium: channel bugs, no automatic fades, no per-clip pitch |
+| F. Clip rendering | Gain, envelopes, fades, automatic edge fades, clip EQ/comp, comping | Medium: no per-clip pitch |
 | G. Tempo and time-stretch | Offline WSOLA only; "Elastic" is a label | **Large**: all four stretch in real time and follow tempo |
 | H. Auditioning | None for files or clips | **Large**: all four preview before placing |
 
@@ -76,7 +76,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Turn looping on or off while playing | ● | ● | ● | ● | **Missing**: takes effect at the next Play |
 | Loop follows the selection | ● | ● | ● | ● | **Works** (it is the default behaviour) |
 | Skip a range during playback | ○ | ○ | ● | ● | **Missing** |
-| Smooth loop join (no click at the wrap) | ● | ● | ● | ● | **Missing**: no crossfade or declick at the wrap |
+| Smooth loop join (no click at the wrap) | ● | ● | ● | ● | **Works**: clips running across the loop's edges ramp out and back in over 1 ms (a short dip, no crossfade); plug-in tails run on |
 
 ## C. Speed, scrub and shuttle
 
@@ -106,7 +106,7 @@ Varispeed is the only whole-project speed control among the four.
 | Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
 | Skip plug-ins on silent tracks | ● | ● | ● | ● | **Missing**: every active strip runs every block |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
-| No click on stop, locate and start | ● | ● | ● | ● | **Missing**: output cuts to zero; plug-ins are reset, so reverb tails are cut |
+| No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
 | Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: adding a track or plug-in allocates on the audio thread |
 | Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only |
 | Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Missing** (belongs to the mixing section) |
@@ -132,7 +132,7 @@ Varispeed is the only whole-project speed control among the four.
 | Fades drawn in real time, several shapes | ● | ● | ● | ● | **Works**: five shapes plus a continuous curve |
 | Crossfades | ● | ● | ● | ● | **Partial**: both sides always share one shape |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Missing** |
-| Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Missing**: an unfaded cut can click |
+| Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
 | Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
 | Mute a clip | ● | ● | ● | ● | **Works** |
@@ -203,7 +203,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 
 | Work | Est. (h) | Notes |
 |---|---:|---|
-| Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | Cheapest audible improvement |
+| Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | A new player command; the loop logic exists |
 | Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | The player's speed path can carry it once it has a better resampler |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | The offline sinc exists; this needs a realtime form |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | declick: transport ramps, loop-edge ramps and automatic edge fades |
 | 2026-11-16 | minor | bug 11 fixed: a missing chosen device is told to the user |
 | 2026-11-16 | minor | bug 9 fixed: Reconnect closes the old device first |
 | 2026-11-16 | minor | bug 8 fixed: Clip Gain Bypass is a real bypass |

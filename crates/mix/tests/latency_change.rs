@@ -113,6 +113,8 @@ fn stub(track: TrackId, module: ModuleId) -> Vec<PreparedInstance> {
 fn session(signal: &[f32], ms: f32, invert: bool) -> (Session, TrackId, TrackId, ModuleId) {
     let mut s = Session::default();
     s.edit.delay_compensation = true;
+    // (sample-exact edges: no automatic edge fades)
+    s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
     s.pool.insert(SourceId(31), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: SR as u32, channels: vec![signal.to_vec(), signal.to_vec()] })));
     let mut add = |name: &str| {
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some(name));
