@@ -542,29 +542,76 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
 }
 
 /// MIDI clips `clips` alone as a Standard MIDI File (Clip › Export Clip as MIDI): one track a
-/// track, each holding what those clips play (as `export_midi` writes them), at their place in the
-/// song under its tempo map.
+/// track, each holding what those clips play (as `export_midi` writes them), under the song's
+/// tempo map. The file starts at the earliest clip's start (tick 0 there), the clips keeping their
+/// spacing; the tempo and meter in force there open the file.
 pub fn export_clips_midi(e: &Engine, clips: &[soundcraft_model::ClipId]) -> Result<Vec<u8>> {
     let mut s = e.session().clone();
     let mut only = Vec::new();
+    let mut first: Option<Samples> = None;
     for t in &mut s.tracks {
         let mut kept = false;
         for pl in &mut t.playlists {
             pl.clips.retain(|c| clips.contains(&c.id) && matches!(c.content, soundcraft_model::ClipContent::Midi { .. }));
             kept |= !pl.clips.is_empty();
+            first = pl.clips.iter().map(|c| c.start).chain(first).min();
         }
         if kept {
             only.push(t.id);
         }
     }
-    if only.is_empty() {
+    let (Some(first), false) = (first, only.is_empty()) else {
         return Err(EngineError::BadParams("file.export_clip_midi".into(), "select a MIDI clip".into()));
-    }
+    };
     s.markers.clear();
-    export_midi_of(&s, Some(&only))
+    let mut smf = smf_of(&s, Some(&only))?;
+    let (_, _, file_tick) = smf_tempo_map(&s);
+    shift_smf(&mut smf, file_tick(s.tempo.samples_to_ticks(first, s.sample_rate)));
+    soundcraft_midi::write_smf(&smf).map_err(|err| EngineError::Io(err.to_string()))
+}
+
+/// `smf` with tick `origin` made its tick 0: events before it move to 0, the tempo and meter in
+/// force at it open the file.
+fn shift_smf(smf: &mut soundcraft_midi::Smf, origin: i64) {
+    if origin <= 0 {
+        return;
+    }
+    let at = |tick: i64| tick.saturating_sub(origin).max(0);
+    for t in &mut smf.tracks {
+        for n in &mut t.sequence.notes {
+            n.start = at(n.start);
+        }
+        for c in &mut t.sequence.ctrls {
+            c.tick = at(c.tick);
+        }
+    }
+    for l in &mut smf.lyrics {
+        l.1 = at(l.1);
+    }
+    for m in &mut smf.markers {
+        m.0 = at(m.0);
+    }
+    // Of the tempos (and meters) at or before the origin, only the last is still in force.
+    let keep_from = |ticks: &[i64]| ticks.iter().rposition(|t| *t <= origin).unwrap_or(0);
+    let k = keep_from(&smf.tempos.iter().map(|t| t.0).collect::<Vec<_>>());
+    smf.tempos = smf.tempos.split_off(k.min(smf.tempos.len()));
+    for t in &mut smf.tempos {
+        t.0 = at(t.0);
+    }
+    let k = keep_from(&smf.meters.iter().map(|m| m.0).collect::<Vec<_>>());
+    smf.meters = smf.meters.split_off(k.min(smf.meters.len()));
+    for m in &mut smf.meters {
+        m.0 = at(m.0);
+    }
 }
 
 fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
+    let smf = smf_of(s, only)?;
+    soundcraft_midi::write_smf(&smf).map_err(|err| EngineError::Io(err.to_string()))
+}
+
+/// What [`export_midi_of`] writes.
+fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf> {
     let (tempos, meters, file_tick) = smf_tempo_map(s);
     let mut smf = soundcraft_midi::Smf {
         format: 1,
@@ -651,7 +698,7 @@ fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
         smf.lyrics.extend(crate::lyrics::midi_lyrics(s, t.id).into_iter().map(|(tick, text)| (index, file_tick(tick), text)));
         smf.tracks.push(soundcraft_midi::SmfTrack { name: format!("{} Lyrics", t.name), sequence: soundcraft_midi::Sequence::default() });
     }
-    soundcraft_midi::write_smf(&smf).map_err(|err| EngineError::Io(err.to_string()))
+    Ok(smf)
 }
 
 /// A bounce of the main mix, or of one bus, over a range, written to its file block by block so no

@@ -271,7 +271,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Import and export standard MIDI files | ● | ● | ● | ● | **Works**; see [section 6](06-midi-recording.md#l-files) and bugs 16 and 17 |
-| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file, at their place in the song |
+| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file starting at the clip's start (with several, at the earliest one's, the others keeping their spacing; owner's decision), opened by the tempo and meter in force there |
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways; muted notes are left out of an export (the format cannot mark a note muted, so they would come back sounding; owner's decision), and the export report says so |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
 
@@ -398,3 +398,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | MIDI effects on a track (section 6): the row on MIDI effects is Partial |
 | 2026-11-16 | minor | Reverse Clip mirrors controller ramps (a ramp runs the other way, its curve bent the other way) |
 | 2026-11-16 | minor | Owner's decision: DAWproject export leaves muted notes out (the format cannot mark them) |
+| 2026-11-16 | minor | Owner's decision: Export Clip as MIDI starts the file at the clip's start (several clips: the earliest's) |

@@ -97,7 +97,7 @@ pub fn specs() -> Vec<CommandSpec> {
             crate::io::write_file(&path, &bytes)?;
             Ok(json!({"path": path, "bytes": bytes.len()}))
         }),
-        cmd!(noundo "file.export_clip_midi", "Export Clip as MIDI...", [], None, "{path, clips?} — the selected MIDI clips alone as a .mid file, at their place in the song", has_selection, |e, p| {
+        cmd!(noundo "file.export_clip_midi", "Export Clip as MIDI...", [], None, "{path, clips?} — the selected MIDI clips alone as a .mid file, starting at the earliest one's start, the clips keeping their spacing", has_selection, |e, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("file.export_clip_midi", "`path` required"))?.to_string();
             let clips = clip_ids_param(e, p);
             let bytes = crate::io::export_clips_midi(e, &clips)?;
@@ -815,6 +815,33 @@ mod tests {
         e.execute("file.export_clip_midi", &json!({"path": one.to_string_lossy(), "clips": [keys_clip]})).unwrap();
         let ctrls = cc_numbers(&std::fs::read(&one).unwrap());
         assert_eq!(ctrls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), vec!["Keys"], "{ctrls:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_clip_as_midi_starts_at_the_earliest_clip() {
+        let mut e = midi_engine();
+        let ids: Vec<u64> = e.session().tracks.iter().filter_map(|t| t.clips().first().map(|c| c.id.0)).collect();
+        // Keys moved to bar 3 (two bars of 4/4 at 120 bpm: 4 s), Drums to bar 5.
+        let sr = e.session().sample_rate.as_f64() as i64;
+        let (keys, drums) = (ids[0], ids[1]);
+        e.session_mut().find_clip_mut(soundcraft_model::ClipId(keys)).unwrap().start = 4 * sr;
+        e.session_mut().find_clip_mut(soundcraft_model::ClipId(drums)).unwrap().start = 8 * sr;
+        let q = i64::from(soundcraft_midi::PPQ);
+        let dir = std::env::temp_dir().join(format!("sc-clip-midi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first_note = |e: &mut Engine, clips: Vec<u64>| {
+            let path = dir.join("clip.mid");
+            e.execute("file.export_clip_midi", &json!({"path": path.to_string_lossy(), "clips": clips})).unwrap();
+            let smf = soundcraft_midi::read_smf(&std::fs::read(&path).unwrap()).unwrap();
+            smf.tracks.iter().map(|t| (t.name.clone(), t.sequence.notes.first().map(|n| n.start))).collect::<Vec<_>>()
+        };
+        assert_eq!(first_note(&mut e, vec![drums]), vec![("Drums".to_string(), Some(0))], "one clip starts the file");
+        assert_eq!(
+            first_note(&mut e, vec![keys, drums]),
+            vec![("Keys".to_string(), Some(0)), ("Drums".to_string(), Some(8 * q))],
+            "several keep their spacing from the earliest"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
