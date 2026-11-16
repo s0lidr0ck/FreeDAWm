@@ -19,8 +19,10 @@ and left to ring for 4 more, 36 minutes in all.
 | `--low`, `--high` | `A0`, `C8` | range, as note names or MIDI numbers |
 | `--step` | `3` | semitones between sampled notes |
 | `--vels` | `24,48,72,96,112,127` | velocity layers |
+| `--layers` | | this many evenly spaced velocities up to 127 (16: 8, 16, … 127), instead of `--vels` |
 | `--robins` | `1` | strikes per note, for instruments that vary each take |
 | `--hold` | `8` | seconds each note is held |
+| `--hold-high` | as `--hold` | seconds the highest note is held; the notes between shorten evenly |
 | `--tail` | `4` | seconds left to ring after the release |
 | `--bpm` | `120` | the file's tempo |
 
