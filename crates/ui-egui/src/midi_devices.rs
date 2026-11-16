@@ -344,6 +344,54 @@ pub fn output_choices(app: &SoundApp, current: Option<&str>) -> Vec<(String, boo
     out
 }
 
+/// The output menu's "Play Instrument On" part (instrument and MIDI tracks): play the instrument
+/// of another instrument or MIDI track (several tracks on their own channels play one
+/// multi-timbral instrument), the channel, and taking it off.
+fn to_track_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let s = app.engine.session();
+    let Some(track) = s.track(id) else { return };
+    let current = track.instrument.as_ref().and_then(soundcraft_engine::cmd::midi_out::target_track);
+    let channel = track.instrument.as_ref().filter(|_| current.is_some()).and_then(|i| i.params.get("channel").copied()).unwrap_or(0.0) as u8;
+    let targets: Vec<(TrackId, String)> =
+        s.tracks.iter().filter(|t| t.id != id && t.kind.is_midi() && t.instrument.is_some()).map(|t| (t.id, t.name.clone())).collect();
+    let title = match current.and_then(|c| s.track(c)) {
+        Some(t) => format!("Play Instrument On: {}", t.name),
+        None => "Play Instrument On".to_string(),
+    };
+    ui.menu_button(title, |ui| {
+        if targets.is_empty() {
+            ui.label(egui::RichText::new("No other instrument tracks").small().color(Tokens::current().text_dim));
+        }
+        for (t, name) in &targets {
+            if ui.add(egui::Button::selectable(current == Some(*t), name.as_str())).clicked() {
+                if let Err(e) = app.run("mix.midi_to_track", json!({"track": id.0, "target": t.0})) {
+                    app.ui.status = e;
+                }
+                ui.close();
+            }
+        }
+        let Some(target) = current else { return };
+        ui.separator();
+        ui.menu_button(if channel == 0 { "Channel: as played".to_string() } else { format!("Channel: {channel}") }, |ui| {
+            for ch in 0..=16u8 {
+                let label = if ch == 0 { "As played".to_string() } else { ch.to_string() };
+                if ui.add(egui::Button::selectable(channel == ch, label)).clicked() {
+                    if let Err(e) = app.run("mix.midi_to_track", json!({"track": id.0, "target": target.0, "channel": ch})) {
+                        app.ui.status = e;
+                    }
+                    ui.close();
+                }
+            }
+        });
+        if ui.button("Not on Another Track").clicked() {
+            if let Err(e) = app.run("mix.midi_to_track", json!({"track": id.0, "target": null})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    });
+}
+
 /// The output menu's MIDI section (instrument and MIDI tracks): send what the track plays to a
 /// hardware MIDI output port (its instrument becomes External MIDI), and the channel.
 pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
@@ -378,6 +426,7 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
             ui.close();
         }
     }
+    to_track_menu(app, ui, id);
     let Some(port) = current else { return };
     ui.menu_button(if channel == 0 { "MIDI Channel: as played".to_string() } else { format!("MIDI Channel: {channel}") }, |ui| {
         for ch in 0..=16u8 {

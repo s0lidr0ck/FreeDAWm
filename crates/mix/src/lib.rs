@@ -74,6 +74,7 @@ mod band_lanes;
 pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
 pub mod external_midi;
+pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
@@ -84,11 +85,11 @@ pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx};
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
-use sidechain::{KeySlot, KeySource, fill_key};
 pub use sidechain::{
-    ModuleInputRoute, SidechainProblem, SidechainRoute, describe_route, module_input_refusal, module_input_routes, short_problem, sidechain_refusal,
-    sidechain_regressions, sidechain_routes, sidechain_routes_with,
+    INSTRUMENT_OUT, ModuleInputRoute, SidechainProblem, SidechainRoute, describe_route, module_input_refusal, module_input_routes, short_problem,
+    sidechain_refusal, sidechain_regressions, sidechain_routes, sidechain_routes_with,
 };
+use sidechain::{KeySlot, KeySource, fill_key};
 
 /// Default (stereo) main mix width. The actual width is [`main_channels`].
 pub const MAIN_CHANNELS: usize = 2;
@@ -478,6 +479,9 @@ struct Strip {
     /// Notes the module sources started that still sound: (source index, channel, pitch), so a
     /// source taken out of the set closes only its own. Capacity reserved in `Strip::new`.
     midi_held: Vec<(u8, u8, u8)>,
+    /// Which MIDI tracks play this strip's instrument, as last heard (a change lets go of the
+    /// notes the ones that left held).
+    routed_sig: u64,
     /// The instrument's next block starts somewhere new: send it the controllers in effect there.
     chase: bool,
     muted: bool,
@@ -687,6 +691,7 @@ impl Strip {
             midi_src: Vec::new(),
             midi_in: Box::new(StripMidi::new()),
             midi_held: Vec::with_capacity(MIDI_HELD),
+            routed_sig: 0,
             chase: true,
             muted: false,
             mute_gain: 1.0,
@@ -742,6 +747,10 @@ impl Strip {
 
     /// The MIDI module `m` of this strip emitted in the block it last rendered.
     fn module_midi(&self, m: ModuleId) -> Option<&MidiOut> {
+        if m == sidechain::INSTRUMENT_OUT {
+            // A MIDI track playing another track's instrument: what its MIDI to Track played.
+            return self.instrument.as_ref().filter(|p| p.emits).map(|p| &p.midi);
+        }
         self.plugins.iter().flatten().find(|p| p.module == m && p.emits).map(|p| &p.midi)
     }
 
@@ -1702,6 +1711,17 @@ impl MixEngine {
                     .enumerate()
                     .filter(|(_, m)| plan.midi_ok(t.id, **m))
                     .filter_map(|(k, m)| Some((u8::try_from(k).ok()?, s.tracks.iter().position(|x| x.id == m.track)?, m.module))),
+            );
+            // MIDI tracks playing this track's instrument (MIDI to Track), after the input's
+            // modules: indices from `ROUTED_MIDI` on.
+            strip.midi_src.extend(
+                s.tracks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| x.instrument.as_ref().and_then(track_midi::target_of) == Some(t.id))
+                    .filter(|(_, x)| plan.midi_ok(t.id, ModuleRef { track: x.id, module: sidechain::INSTRUMENT_OUT }))
+                    .enumerate()
+                    .filter_map(|(j, (si, _))| Some((u8::try_from(ROUTED_MIDI + j).ok()?, si, sidechain::INSTRUMENT_OUT))),
             );
             strip.module_in.reserve(sources.len());
             strip.pre_key = false;
@@ -2877,6 +2897,10 @@ fn out_dest(s: &Session, r: &Route) -> Dest {
     }
 }
 
+/// The first `midi_src` index of a MIDI track playing this strip's instrument (MIDI to Track);
+/// the input's own modules come before it.
+const ROUTED_MIDI: usize = 128;
+
 /// Source → trim → inserts → (pre-fader copy) → mute/fader for one strip. Independent of other
 /// strips except that aux inputs read `busses`, so non-aux strips can run in parallel.
 /// Live input routed to monitored tracks.
@@ -2914,6 +2938,13 @@ fn process_strip(
     for c in strip.buf.iter_mut() {
         c.iter_mut().take(frames).for_each(|x| *x = 0.0);
     }
+    // What an instrument passed on last block (MIDI to Track) was read before this strip ran
+    // again; one that does not run this block passes nothing.
+    if let Some(inst) = strip.instrument.as_mut().filter(|i| i.emits) {
+        inst.midi.clear();
+    }
+    // Other tracks playing this one's instrument (MIDI to Track): their events are in `midi_in`.
+    let routed = strip.midi_src.iter().any(|x| usize::from(x.0) >= ROUTED_MIDI);
     let transport = transport_at(s, pos, !live.monitor_only, live.recording);
     // A musician input plays the band's events instead of the clips, stopped too (its notes close).
     let musician = match t.mixer.input {
@@ -3074,7 +3105,7 @@ fn process_strip(
         // take are not heard, as the take will replace them.
         TrackKind::Audio if t.mixer.record_arm && live.auto_input => {}
         TrackKind::Instrument | TrackKind::Midi
-            if live.monitor_only && musician.is_none() && !module_in && live_filter.is_none() && strip.live_tail == 0 => {}
+            if live.monitor_only && musician.is_none() && !module_in && !routed && live_filter.is_none() && strip.live_tail == 0 => {}
         TrackKind::Audio => {
             let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
             for clip in t.clips() {
@@ -3126,6 +3157,26 @@ fn process_strip(
                     apply_params(inst, ins, t, None, pos);
                 }
                 inst.plugin.set_transport(&transport);
+                if inst.id == track_midi::ID {
+                    // A muted source lets go of what it holds on the target and starts nothing.
+                    inst.plugin.set_param("muted", if t.mixer.mute || solo_muted || strip.muted { 1.0 } else { 0.0 });
+                }
+                // Sources that stopped playing into this instrument let go of the notes they held.
+                let sig = strip
+                    .midi_src
+                    .iter()
+                    .filter(|x| usize::from(x.0) >= ROUTED_MIDI)
+                    .fold(0u64, |h, x| h.wrapping_mul(1_000_003).wrapping_add(u64::from(x.0) << 32 | (x.1 as u64).wrapping_add(1)));
+                if sig != strip.routed_sig {
+                    strip.routed_sig = sig;
+                    strip.midi_held.retain(|(k, ch, pitch)| {
+                        let gone = usize::from(*k) >= ROUTED_MIDI;
+                        if gone {
+                            inst.plugin.midi_raw(0, [0x80 | (*ch & 0x0F), *pitch & 0x7F, 0]);
+                        }
+                        !gone
+                    });
+                }
                 // A musician or module input has no clip controllers to chase (and while only live
                 // MIDI is heard, stopped, the clips wait for the transport).
                 let chased = !live.monitor_only && musician.is_none() && !module_in && std::mem::take(&mut strip.chase);
@@ -3147,6 +3198,10 @@ fn process_strip(
                         if let Some(f) = live_filter {
                             deliver_live_midi(live.midi, f, inst, &mut strip.live_held);
                         }
+                        // And what the MIDI tracks routed to it play, each on its channel.
+                        if routed {
+                            deliver_module_midi(&strip.midi_in, inst, &mut strip.midi_held);
+                        }
                     }
                 }
                 if strip.buf.len() >= 2 {
@@ -3161,6 +3216,9 @@ fn process_strip(
                     for (x, y) in c0.iter_mut().zip(strip.scratch.iter()).take(frames) {
                         *x = 0.5 * (*x + *y);
                     }
+                }
+                if inst.emits {
+                    inst.plugin.midi_out(&mut inst.midi);
                 }
                 if contain_failure(inst, &mut strip.buf, frames) {
                     strip.failures.record(SlotKey::Instrument);
@@ -6170,6 +6228,7 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
         return Some(p);
     }
     external_midi::create(id)
+        .or_else(|| track_midi::create(id))
         .or_else(|| soundcraft_dsp::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))

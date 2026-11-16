@@ -49,8 +49,8 @@ revision history:
    Offsets, count-off set-up, capture of what was just played and the input filter now work. Still stored and
    unread: MIDI Thru in the Options menu and the other settings bug 22 lists.
 3. **Going out and mapping.** MIDI output to hardware ports works (External MIDI), and Mackie
-   Control and HUI surfaces drive the mixer and transport. Still missing: clock and timecode out,
-   a MIDI track playing an instrument on another track, and MIDI learn.
+   Control and HUI surfaces drive the mixer and transport, MIDI learn maps controllers, and a MIDI
+   track can play an instrument on another track. Still missing: clock and timecode out.
 
 The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
 synth). There is no piano, and only the synth answers the sustain pedal and pitch bend.
@@ -87,7 +87,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Panic (all notes off) | ● | ● | ● | ● | **Works** (Event › All MIDI Notes Off, Cmd+Shift+.) |
 | Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Missing**: Low Latency Monitoring covers audio tracks only |
 | MIDI activity or velocity meter on the track | ● | ● | ● | ● | **Partial**: only on the take being recorded |
-| MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Missing**: a MIDI track records but is silent |
+| MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Works**: the track's output menu › Play Instrument On picks an instrument or MIDI track and a channel (`mix.midi_to_track`); the track's instrument becomes MIDI to Track, which passes what it plays (clips, live input, chase, the panic) to the target's instrument in the same block, each event on its channel, merged with the target's own notes. The source renders first, so its notes land at the same sample offsets as the target's own and share its delay compensation; a route that would feed a track into itself is refused. Mute or solo of the source lets go of its notes. Multi-output instruments (one instrument's outputs on several mixer channels) remain |
 | Instrument with several audio outputs to separate mixer channels | ● | ● | ● | ● | **Missing** |
 
 ## C. Timing
@@ -273,7 +273,7 @@ either wire the control or take it off the menu.
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take (`036f22e`) |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
-| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
+| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly: a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, left for the mixing work |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
@@ -296,7 +296,10 @@ either wire the control or take it off the menu.
   Stop sends Stop; a locate while stopped sends Song Position Pointer, and for MTC a full-frame
   SysEx. Nothing new crosses to the audio thread but the port keys (atomics), so it stays
   allocation-free. Tests: render blocks at a known tempo and count the 0xF8 stamps.
-- *A MIDI track playing an instrument on another track (multi-timbral).* A MIDI track's output
+- *A MIDI track playing an instrument on another track (multi-timbral).* *Built, differently from
+  this sketch: no new `Route`; the source's instrument becomes MIDI to Track (`mix::track_midi`,
+  the target in its state, as External MIDI keeps its port), whose events the target reads as it
+  reads a module's MIDI.* A MIDI track's output
   gets a route `Route::Instrument(TrackId)` (and a channel). The mix renders MIDI sources first:
   such a track's notes (clips, live input, chase) are scheduled into a per-strip MIDI buffer
   instead of an instrument, the same fixed-capacity block buffer modules' MIDI uses
@@ -410,3 +413,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Commits noted on the second round's rows; designs for MIDI take lanes, low-latency monitoring and MIDI effects |
 | 2026-11-16 | minor | Synth and sampler rows brought up to date (Bend Range, sustain, mod wheel; Mod Wheel Vibrato 0 by default) |
 | 2026-11-16 | minor | MIDI take lanes: Keep Takes as Lanes record mode, lanes with notes under MIDI and instrument tracks, pick, swipe and cycle between MIDI takes |
+| 2026-11-16 | minor | A MIDI track plays an instrument on another track (Play Instrument On, MIDI to Track), several on their channels into one multi-timbral instrument; multi-output instruments still open |

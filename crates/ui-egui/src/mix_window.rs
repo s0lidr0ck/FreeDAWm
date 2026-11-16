@@ -1643,6 +1643,7 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
 /// Audio Unit (`au:<type>:<subtype>:<manufacturer>`) plugin's.
 pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
     soundcraft_mix::external_midi::plugin_info(id)
+        .or_else(|| soundcraft_mix::track_midi::plugin_info(id))
         .or_else(|| soundcraft_dsp::plugin_info(id))
         .or_else(|| soundcraft_clap_host::plugin_info(id))
         .or_else(|| soundcraft_vst3_host::plugin_info(id))

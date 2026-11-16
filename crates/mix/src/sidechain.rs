@@ -131,6 +131,11 @@ pub struct ModuleInputRoute {
     pub result: Result<(), SidechainProblem>,
 }
 
+/// The "module" of a [`ModuleInputRoute`] whose source is a MIDI track playing an instrument on
+/// another track (its instrument is MIDI to Track, [`crate::track_midi`]): the source's
+/// instrument slot, not one of its chain modules.
+pub const INSTRUMENT_OUT: ModuleId = ModuleId(u32::MAX);
+
 /// What resolving the session's sidechain routing gives the engine.
 pub(crate) struct Plan {
     pub routes: Vec<SidechainRoute>,
@@ -332,6 +337,21 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
             midi.push(ModuleInputRoute { track: ct.id, source, module, result });
         }
     }
+    // MIDI tracks playing an instrument on another track (MIDI to Track) order like module MIDI
+    // inputs: the source renders before the target; one that would close a loop plays nothing.
+    for (si, st) in s.tracks.iter().enumerate() {
+        let Some(target) = st.instrument.as_ref().and_then(crate::track_midi::target_of) else { continue };
+        let ci = s.tracks.iter().position(|t| t.id == target);
+        let result = ci.map_or(Err(SidechainProblem::Missing), |ci| check_routed(s, &adj, ci, si));
+        if result.is_ok()
+            && let Some(ci) = ci
+            && let Some(a) = adj.get_mut(si)
+            && !a.contains(&ci)
+        {
+            a.push(ci);
+        }
+        midi.push(ModuleInputRoute { track: target, source: st.id, module: INSTRUMENT_OUT, result });
+    }
     // Links order after sidechains: a link that would close a loop reads a block late instead.
     let link_over = match over {
         Over::Link(t, m, g) => Some((t, m, g)),
@@ -371,6 +391,21 @@ fn check_midi(s: &Session, adj: &[Vec<usize>], ci: usize, si: Option<usize>, mod
         return Err(SidechainProblem::Unsupported("a module on an aux or folder track can't feed an instrument track (auxes render after it)"));
     }
     if st.inactive {
+        return Err(SidechainProblem::Inactive);
+    }
+    Ok(())
+}
+
+/// Whether MIDI track `si` may play the instrument of track `ci` given the routing so far.
+fn check_routed(s: &Session, adj: &[Vec<usize>], ci: usize, si: usize) -> Result<(), SidechainProblem> {
+    let (Some(ct), Some(st)) = (s.tracks.get(ci), s.tracks.get(si)) else { return Err(SidechainProblem::Missing) };
+    if !ct.kind.is_midi() || !st.kind.is_midi() {
+        return Err(SidechainProblem::Unsupported("only a MIDI or instrument track plays an instrument or MIDI track's instrument"));
+    }
+    if si == ci || reaches(adj, ci, si) {
+        return Err(SidechainProblem::Cycle);
+    }
+    if st.inactive || ct.inactive {
         return Err(SidechainProblem::Inactive);
     }
     Ok(())
