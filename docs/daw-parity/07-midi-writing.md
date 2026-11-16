@@ -1,6 +1,6 @@
 # Four-DAW parity, section 7: writing MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and first tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Third-party instruments named below belong to their makers.
@@ -69,15 +69,15 @@ The gaps are of four kinds:
 | Notes edited directly on the track | ● | ◐ | ○ | ● | **Flag only**: the view exists in the menu; nothing handles it |
 | Draw, move, resize, copy by dragging, delete | ● | ● | ● | ● | **Works**; drawing needs the main window's Pencil tool |
 | Marquee, shift-click, select all | ● | ● | ● | ● | **Works** |
-| Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Missing**; the rule command only counts |
+| Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Partial**: Invert Selection and Select Same Pitch in the editor's More menu; by rule, the command only counts |
 | Split a note, join notes | ● | ● | ● | ● | **Works** |
 | Mute notes | ● | ● | ● | ● | **Missing** |
 | Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
 | Edit several clips or tracks at once | ● | ● | ● | ● | **Missing**: one clip at a time |
-| Notes can run past the clip's edge and still play, or the clip grows | ● | ● | ● | ● | **Missing**: they are kept, unseen and silent (bug 4) |
-| Every edit undoable, one step per drag | ● | ● | ● | ● | **Works**, except the event list (bug 21) |
+| Notes can run past the clip's edge and still play, or the clip grows | ● | ● | ● | ● | **Works**: an edit that puts notes past the end grows the clip to the next bar line, up to the next clip (bug 4, fixed); notes a trim left past the end stay hidden |
+| Every edit undoable, one step per drag | ● | ● | ● | ● | **Works**, the event list too (bug 21, fixed) |
 | Every edit scriptable | ○ | ◐ | ◐ | ◐ | **Works** |
 
 ## B. Grid, snap and keys
@@ -91,7 +91,7 @@ The gaps are of four kinds:
 | New note takes the last note's length and velocity | ● | ● | ● | ● | **Works** |
 | Zoom, scroll, zoom to the notes | ● | ● | ● | ● | **Partial**: fit shows the clip, not the notes |
 | Keys: nudge, transpose by semitone and octave | ● | ● | ● | ● | **Works** |
-| Keys: lengthen and shorten | ● | ● | ● | ● | **Missing** |
+| Keys: lengthen and shorten | ● | ● | ● | ● | **Works**: Alt+Right and Alt+Left, a grid step |
 
 ## C. Velocity and controllers
 
@@ -114,18 +114,18 @@ The gaps are of four kinds:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Quantize the selected notes: grid, strength, swing | ● | ● | ● | ● | **Partial**: acts on the whole clip (bug 1) on a clip-relative grid (bug 2) |
+| Quantize the selected notes: grid, strength, swing | ● | ● | ● | ● | **Works**: the selected notes (every note when none is), on the grid counted from the bar (bugs 1 and 2, fixed); triplet, dotted and quintuplet grids |
 | Quantize window, note ends, keep length, random offset | ● | ● | ● | ● | **Flag only** |
 | Groove templates; take a groove from audio or MIDI | ● | ● | ● | ● | **Missing** |
 | Quantize applied at playback, original kept | ● | ● | ● | ● | **Missing**: quantize rewrites the notes |
-| Restore the original performance | ● | ● | ● | ● | **Partial**: only for takes recorded with input quantize, or after an explicit flatten; misaligned after a trim or split (bug 12) |
-| Humanise timing | ● | ● | ● | ● | **Flag only** |
+| Restore the original performance | ● | ● | ● | ● | **Partial**: only for takes recorded with input quantize, or after an explicit flatten; kept in place through trims and splits (bug 12, fixed) |
+| Humanise timing | ● | ● | ● | ● | **Works**: timing and velocity, seeded, in the MIDI Operations window |
 | Transpose | ● | ● | ● | ● | **Works** by semitones |
 | Transpose within the key | ● | ● | ● | ● | **Missing** |
 | Snap notes to the scale or the chord | ◐ | ● | ● | ● | **Works**, following the key ruler |
-| Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Partial**: legato has a button (whole clip); the rest are **Flag only** |
+| Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Works**: legato, set, add and scale length (bug 7, fixed) and Fix Overlaps in the MIDI Operations window, on the selected notes |
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
-| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Missing** |
+| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Partial**: strum (up or down), reverse, half and double time in the MIDI Operations window; no flam or pitch inversion |
 | Split notes out by pitch or channel | ● | ● | ● | ● | **Flag only** |
 | Rule-based transformer | ◐ | ◐ | ● | ● | **Missing** |
 
@@ -134,7 +134,7 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Key signature track | ● | ● | ● | ● | **Works** |
-| Scale shown in the editor; rows folded to the scale | ◐ | ● | ● | ● | **Missing** |
+| Scale shown in the editor; rows folded to the scale | ◐ | ● | ● | ● | **Partial**: with a key on the Key ruler, rows out of the key are shaded; no folding |
 | Notes drawn or dragged stay in the scale | ○ | ● | ● | ● | **Missing** |
 | Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band and Cleanup; shown above the editor |
 | Chords detected from MIDI or audio | ◐ | ● | ● | ● | **Works** (Detect Chords) |
@@ -173,13 +173,13 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Create an empty clip; draw one | ● | ● | ● | ● | **Works** |
 | Notes shown in the clip | ● | ● | ● | ● | **Works** |
-| Clips stay on their bars when the tempo changes | ● | ● | ● | ● | **Missing**: the notes follow the tempo, the clip's start and length do not (bug 3) |
-| Track set to follow bars or absolute time | ● | ● | ● | ● | **Flag only** |
-| Split | ● | ● | ● | ● | **Partial**: a note across the cut stays in the left clip and stops at the cut; the right clip gets none of it and loses the controller state before the cut |
+| Clips stay on their bars when the tempo changes | ● | ● | ● | ● | **Works** for MIDI clips on tick-timebase tracks, the default for MIDI and instrument tracks (bug 3, fixed) |
+| Track set to follow bars or absolute time | ● | ● | ● | ● | **Works** for MIDI clips: a tick track's clips follow tempo edits, a sample track's stay; audio clips stay in samples on either |
+| Split | ● | ● | ● | ● | **Partial**: a note across the cut stays in the left clip and stops at the cut; the right clip gets none of it but starts in the controller state from before the cut (bug 11, fixed) |
 | Trim the end; drag it back out | ● | ● | ● | ● | **Works** |
-| Trim the start; drag it back out | ● | ● | ● | ● | **Partial**: notes and controllers before the new start are deleted (bug 5) |
+| Trim the start; drag it back out | ● | ● | ● | ● | **Works**: what falls before the new start is hidden, its controllers set the starting state, and dragging back returns it (bug 5, fixed) |
 | Join clips | ● | ● | ● | ● | **Partial**: Consolidate works; Heal is for audio only |
-| Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; copies are spaced in samples, not bars |
+| Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; Loop spaces MIDI copies in bars (bug 15), Repeat still in samples |
 | Loop a clip; copies that change together | ◐ | ● | ● | ● | **Partial**: independent copies only |
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
 | Transpose and velocity offset per clip | ● | ● | ● | ● | **Missing**: per track only |
@@ -191,13 +191,13 @@ The gaps are of four kinds:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Notes start on their exact sample | ● | ● | ● | ● | **Works** |
+| Notes start on their exact sample | ● | ● | ● | ● | **Works**, never before their clip (bug 8, fixed) |
 | Controllers, program and bend chased on a locate | ● | ● | ● | ● | **Works**; poly aftertouch is not |
 | A long note already sounding at the play position is started | ● | ● | ● | ● | **Missing** |
 | No hanging notes on stop, locate, loop or clip end | ● | ● | ● | ● | **Works** |
-| Two overlapping notes of one pitch each get their own end | ● | ● | ● | ● | **Partial**: tracked by pitch, so the first note-off ends both |
-| Each note plays on its own channel | ● | ● | ● | ● | **Partial**: only in recorded and Band-printed clips; in other clips the channel field changes nothing |
-| Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties); not undoable, and a negative delay piles early notes on the clip start |
+| Two overlapping notes of one pitch each get their own end | ● | ● | ● | ● | **Works**: the later note retriggers the voice and the sound lasts to the later end (bug 19, fixed) |
+| Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
+| Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties), undoable; a negative delay plays early notes before the clip (bug 10, fixed) |
 | MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Missing** |
 | Dense clips play without cost growing | ● | ● | ● | ● | **Partial**: every block scans every note of each clip under the playhead and walks the tempo map for each |
 
@@ -208,7 +208,7 @@ The gaps are of four kinds:
 | Tempo track: points, ramps, curves; meter changes | ● | ● | ● | ● | **Works** |
 | Tempo taken from a selection | ● | ● | ● | ● | **Works** (Identify Beat) |
 | Tempo taken from a MIDI performance | ◐ | ◐ | ● | ● | **Missing** |
-| Insert and cut time across the song | ● | ● | ● | ● | **Partial**: clips, automation and markers move; tempo, meter, key and chord lanes stay behind |
+| Insert and cut time across the song | ● | ● | ● | ● | **Works**: clips, automation, markers, tempo, meter, key and the Band's chord and section lanes move (bug 14, fixed) |
 | Arranger sections to reorder the song | ○ | ● | ● | ● | **Missing** for clips; sections drive the Band only |
 | Track alternatives for MIDI | ● | ● | ● | ● | **Works** (playlists) |
 | Global transpose track | ○ | ● | ● | ● | **Missing** |
@@ -253,7 +253,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Swap the instrument, keep the notes | ● | ● | ● | ● | **Works** |
 | Track presets: instrument plus effects | ● | ● | ● | ● | **Works** |
 | Automate instrument parameters | ● | ● | ● | ● | **Missing**, for built-in and hosted instruments alike |
-| Instrument latency compensated | ● | ● | ● | ● | **Missing** (it is for the same plug-in used as an insert) |
+| Instrument latency compensated | ● | ● | ● | ● | **Works** (bug 23, fixed) |
 | Freeze with the release tail | ● | ● | ● | ● | **Works** |
 | Mix bounce keeps the last note's tail | ● | ● | ● | ● | **Missing**: the bounce ends at the last clip |
 | Third-party instruments with state saved in the session | ● | ● | ● | ● | **Works** (CLAP, VST3, AU) |
@@ -268,7 +268,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Import and export standard MIDI files | ● | ● | ● | ● | **Works**; see [section 6](06-midi-recording.md#l-files) and bugs 16 and 17 |
-| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Missing**; the built-in browser imports on double-click |
+| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click; dragging a clip out is **Missing** |
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
 
@@ -278,37 +278,37 @@ Found while reading; none was reproduced by running the program. Paths are under
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | Quantize and Legato from the editor ignore the note selection and change every note in the clip | `ui-egui/src/midi_editor.rs:425-427, 476-484`; `engine/src/cmd/event.rs:295-309` |
-| 2 | Quantize counts its grid and its swing from the clip's start, the editor draws its grid from the bar. A clip that starts off the grid quantizes to lines that are not the ones shown, with swing on the wrong beats. Controller lanes place points the same way | `midi/src/ops.rs:60-75`; `ui-egui/src/midi_lanes.rs:255, 279` |
-| 3 | A MIDI clip's start and length are in samples and tempo edits never move them. After a tempo change the clip is off its bar, and notes that now fall past its end are silently not played | `mix/src/lib.rs:3677, 3726-3728`; `model/src/track.rs:266-268`; `engine/src/cmd/event.rs:201-242` |
-| 4 | Moving, pasting or duplicating notes past the clip's end keeps them where they cannot be seen or heard. Score, ghost notes and playback all drop them; MIDI export writes them | `engine/src/cmd/midi.rs:194-208`; `ui-egui/src/midi_editor.rs:497, 605` |
-| 5 | Trimming a clip's start deletes the notes and controllers before it, including a note still sounding there and the program change or pedal the rest depends on. Dragging the start back does not return them | `engine/src/edit.rs:63-79` |
-| 6 | Dragging notes left past the clip's start piles them all at the start; transposing past the top or bottom piles chords onto one pitch | `engine/src/cmd/midi.rs:202-203`; `midi/src/ops.rs:113-117` |
-| 7 | Event › Change Duration from the menu applies legato to the selected clips without asking; Change Velocity with no values does nothing; Quantize from the menu always uses 16ths; a grid the command does not know (triplet quarter, dotted) silently becomes 16ths | `ui-egui/src/menus.rs:949-965`; `engine/src/cmd/event.rs:311-363` |
-| 8 | A note at the very start of a clip that does not begin exactly on a tick (slipped, recorded, or the right half of a split) can be placed a few samples before the clip and skipped when playback starts there | `mix/src/lib.rs:3674-3737` |
-| 9 | Clip notes are sent without their channel except in recorded and Band-printed clips, so the editor's Channel field changes nothing and multi-channel instruments cannot be addressed from drawn notes | `mix/src/lib.rs:3742` |
-| 10 | Real-Time Properties and MIDI Track Offsets change the session without an undo step; undoing an earlier edit silently reverts them. A negative delay plays every early note together at the clip's start | `engine/src/cmd/event_more.rs:107-116`; `mix/src/lib.rs:3724` |
-| 11 | A split leaves the right-hand clip without the controller state from before the cut (program, pedal, bend) | `engine/src/edit.rs:36-61` |
-| 12 | Restore Performance after a start trim or a split puts the original notes back at the wrong place, because the stored original is not trimmed or split with the clip | `engine/src/cmd/event_more.rs:464-470` |
-| 13 | Consolidate takes the raw notes of a clip set to "Cleaned" and drops its cleanup settings | `engine/src/edit.rs:182-219` |
-| 14 | Insert Time and Cut Time move clips but leave tempo, meter, key and the Band's chord and section lanes where they were | `engine/src/cmd/event.rs:244-293` |
-| 15 | Loop and repeat space their copies in samples, so under a changing tempo they drift off the bars | `engine/src/cmd/clip.rs:340`; `engine/src/cmd/edit.rs:714` |
-| 16 | MIDI export does not match what plays: muted clips, notes hidden past a clip's end and stored channels are written; Real-Time Properties, track offsets and Cleanup are not applied | `engine/src/io.rs:536-588` |
-| 17 | MIDI import at a position other than the start moves the notes but leaves the file's tempo changes at their original place; the browser imports at the session start though it says "at the insertion point", and does not recognise `.MID` | `engine/src/io.rs:407-451`; `ui-egui/src/windows.rs:480` |
-| 18 | Printing the Band switches the track's input to none, even when only part of the song was printed | `engine/src/cmd/band.rs:1321-1371` |
-| 19 | Overlapping notes of one pitch are tracked as one, so the first note-off ends both | `mix/src/lib.rs:3755` |
+| 1 | **Fixed.** Quantize and Legato from the editor ignored the note selection and changed every note in the clip. `event.quantize`, `event.change_duration`, `event.transpose` and `event.change_velocity` take `indices` (one clip) and act on those notes only, returning where they are after the re-sort; the editor passes its selection (every note when none is selected) and keeps it on the same notes. Legato on a selection runs each picked note to the next picked one. Tests: `quantize_and_legato_touch_only_the_picked_notes` (engine), `quantize_acts_on_the_selected_notes_only` (`ui-egui/tests/midi_quantize.rs`) | `ui-egui/src/midi_editor.rs` (`run_on_selection`); `engine/src/cmd/event.rs` (`midi_op`) |
+| 2 | **Fixed.** Quantize counted its grid and its swing from the clip's start while the editor draws its grid from the bar. The grid and swing now count from each bar's start (`ops::quantize_on`); a note in the clip is not moved before its start. Controller points clicked into a lane snap to the bar-counted grid too. Tests: `quantize_on_counts_the_grid_and_swing_from_each_span` (`midi/tests/ops.rs`), `quantize_counts_the_grid_from_the_bar` (engine) | `midi/src/ops.rs`; `engine/src/cmd/event.rs`; `ui-egui/src/midi_lanes.rs` |
+| 3 | **Fixed.** A MIDI clip's start and length were in samples and tempo edits never moved them. When a command changes the tempo map, every MIDI clip on a tick-timebase track that the command left in place is moved from its ticks in the old map to the same ticks in the new one (start and end, in fractional ticks), so it stays on its bar and its last notes stay inside it; one undo step with the tempo edit. Clips on sample-timebase tracks, audio clips, and clips the command moved itself (Insert/Cut Time, Move Song Start) are left alone; undo, redo and loading move nothing, so an old session opens and sounds as saved; a frozen MIDI track already refuses tempo edits. Tests: `engine/src/tick_clips.rs` | `engine/src/tick_clips.rs`; `engine/src/lib.rs` (`execute`) |
+| 4 | **Fixed.** Notes moved, copied, added or edited past the clip's end grow the clip to the bar line after them, up to the next clip on the playlist (and not past a day); an edit-locked clip does not grow. Notes left past a clip's end by a trim stay hidden, as before. Test: `notes_put_past_the_end_grow_the_clip_up_to_the_next_clip` | `engine/src/cmd/midi.rs` (`grow_to_fit`) |
+| 5 | **Fixed.** Trimming a clip's start deleted the notes and controllers before it. They are now kept at negative ticks: hidden, not played, and back when the start is dragged out again; the controllers among them set the state the clip starts in (sent at its start, chased after a locate). The editor, score, ghosts and the timeline show only the clip's window; Select All picks only visible notes; MIDI export writes the window; a copied part keeps only what reaches into it plus the controller state. A note sounding across the new start is hidden with the rest (playing it from the middle is the tier-2 item). Sessions saved before load as they were. Tests: `trimming_the_start_hides_notes_and_dragging_back_returns_them` (engine), `notes_hidden_by_a_start_trim_are_silent_and_their_controllers_set_the_start_state` (mix) | `engine/src/edit.rs` (`rebase_midi_start`, `crop_hidden_midi`); `mix/src/lib.rs` (`schedule_notes`, `chase_channel`); `engine/src/io.rs` (`export_midi`) |
+| 6 | **Fixed.** Notes dragged or copied left past the clip's start now stop as a group with the earliest at the start; a move, copy or Transpose past either end of the keyboard takes only as much of the shift as every note can, so chords keep their shape (`ops::fitting_shift`, `ops::transpose_within`). Tests: `moves_past_the_start_or_the_keyboard_keep_the_shape`, `transpose_within_keeps_the_shape` | `engine/src/cmd/midi.rs` (`fitting_move`); `midi/src/ops.rs` |
+| 7 | **Fixed.** Event › Quantize… and Change Duration… (and their shortcuts) open the MIDI Operations window on that operation (grid with triplets and dotted values, strength and swing; legato, set, add or scale), acting on the editor's selected notes when it shows some. `event.quantize` reads any note value (`1/4t`, `1/8d`, `1/16.`, `1/8q`) and refuses one it cannot read; `event.change_duration` and `event.change_velocity` with no values are refused instead of applying legato or nothing. Test: `quantize_and_change_duration_menu_items_ask_before_acting` | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `engine/src/cmd/event.rs` (`note_value_ticks`) |
+| 8 | **Fixed.** A note at the start of a clip that does not begin on a tick was placed a few samples before it and skipped when playback started there. Events in the clip are never placed before its start. Test: `a_note_at_the_start_of_a_clip_off_the_tick_grid_plays_from_the_start` | `mix/src/lib.rs` (`schedule_notes`) |
+| 9 | **Fixed.** A clip with any note or controller set off channel 1 (the editor's Channel field, a multi-channel file) plays every event on its own channel, as recorded and Band-printed clips do; clips all on channel 1 play exactly as before. Built-in instruments ignore the channel, so they sound the same; a hosted multi-timbral instrument now hears the parts on their channels. Test: `a_note_set_off_channel_1_plays_on_its_channel` | `mix/src/lib.rs` (`plays_channels`) |
+| 10 | **Fixed** (the parts in this section's scope). A Real-Time Properties change is an undo step (a slider drag is one), so undo no longer reverts it unannounced. A negative delay plays each early note before the clip's start, at its own time, instead of piling them on the start. MIDI Track Offsets stay a setting (section 6's bug 16 covers that menu item). Tests: `rtp_and_offsets_are_settings`, `a_negative_delay_moves_early_notes_before_the_clip_rather_than_piling_them` | `engine/src/cmd/event_more.rs`; `mix/src/lib.rs` |
+| 11 | **Fixed.** The right half of a split starts with the last value of each controller from before the cut (program, pedal, bend), hidden before its start. Test: `split_halves_keep_the_controller_state_and_their_original_performance` | `engine/src/edit.rs` (`split_clip`) |
+| 12 | **Fixed.** The stored original performance is shifted with every start trim, and a split gives the right half its own copy in its own time, so Restore Performance puts the notes back where they were. Same test as 11 | `engine/src/edit.rs` (`shift_originals`, `separate_at`) |
+| 13 | **Fixed.** Consolidate merges a clip on Cleaned as it sounds: its cleaned notes, leaving the cleanup behind. Test: `consolidate_keeps_what_a_cleaned_clip_plays` | `engine/src/edit.rs` (`copy_range_with`) |
+| 14 | **Fixed.** Tempo, meter and key changes already moved (section 4's bug 7). The Band's chord and section lanes now move too: after the insertion point by the inserted time, a block across it grows; Cut Time removes what was inside the cut and closes up. Test: `insert_and_cut_time_move_the_band_lanes` | `engine/src/cmd/event.rs` (`insert_time`, `cut_time`) |
+| 15 | **Partly fixed.** Clip › Loop places each copy of a MIDI clip on a tick track a whole clip length in ticks after the one before, so copies stay on the bars under a changing tempo. Edit › Repeat (in the audio-editing command file) still spaces copies in samples. Test: `midi_loops_on_a_tick_track_stay_on_the_bars` | `engine/src/cmd/clip.rs` (`loop_clips`) |
+| 16 | **Fixed** (with section 6's bug 21). MIDI export writes what plays: no muted clips, no notes hidden before a clip's start or past its end (a note is cut at the end), a Cleaned clip's cleaned notes, the Real-Time Properties and the MIDI Track Offset applied. Stored channels are written, and now also play (bug 9). Test: `smf_export_writes_what_plays` | `engine/src/io.rs` (`export_midi`) |
+| 17 | **Fixed.** A MIDI file imported at a later position brings its tempo and meter changes there, after its own tick 0, instead of rewriting the song from its start; the browser imports at the insertion point and recognises `.MID`, `.midi`, `.smf` and `.kar` in any case. Tests: `a_midi_file_imported_later_brings_its_tempo_with_its_notes`, `the_browser_knows_midi_files_in_any_case` | `engine/src/io.rs` (`import_midi_bytes`); `ui-egui/src/windows.rs` (`is_midi_file`) |
+| 18 | **Not changed: needs a design.** A musician input plays instead of the track's clips, so keeping it after a partial print would silence the printed clip, and switching it off silences the rest of the song; a test pins today's behaviour (nothing plays outside a printed block). The fix is a mix change: a musician that plays around printed clips | `engine/src/cmd/band.rs:1321-1371`; `mix/src/lib.rs` |
+| 19 | **Fixed.** Overlapping notes of one pitch share one voice: a note starting over another retriggers it (a note-off first, so every note-on has its own note-off) and only the last to end closes it, so the first note-off no longer cuts the second note short. Test: `overlapping_notes_of_one_pitch_each_get_their_own_end` | `mix/src/lib.rs` (`schedule_notes`) |
 | 20 | New controller points always go on channel 1 and lanes mix every channel's data | `ui-egui/src/midi_lanes.rs:140` |
-| 21 | Dragging a velocity in the event list makes one undo step per screen frame | `ui-egui/src/windows.rs:255-256` |
-| 22 | The score draws a ledger line through the D above middle C | `ui-egui/src/score_editor.rs:105-106` |
-| 23 | Instruments report latency that nothing reads, so a hosted instrument with look-ahead plays late against the other tracks | `mix/src/lib.rs:2753, 4149-4167` |
+| 21 | **Fixed.** Dragging a velocity in the event list is one undo step (`execute_merged`, ended when the drag stops). Not covered by a test: it needs a pointer drag in the window | `ui-egui/src/windows.rs` (`event_list`) |
+| 22 | **Fixed.** The D above middle C (and the B below it) sat next to a ledger line; only middle C takes the ledger between the staves. Test: `only_middle_c_takes_the_ledger_between_the_staves` | `ui-egui/src/score_editor.rs` (`ledgers`) |
+| 23 | **Fixed.** An instrument's own latency is compensated as an insert's is (the built-in instruments report none, so they are unchanged; a frozen track plays its render). Test: `an_instruments_latency_is_compensated` | `mix/src/lib.rs` (`process_strip`) |
 | 24 | A plug-in that accepts only CLAP note events gets no controllers, bend or pressure; CLAP note-offs always carry release velocity 0 | `clap-host/src/plugin.rs:121-128, 304-308` |
-| 25 | Sampler in one-shot mode with a loop on never stops: the voice plays until all notes off | `dsp/src/plugins/sampler.rs:772, 835-838, 1082-1086` |
-| 26 | Voice stealing cuts the old voice dead (a click) in the sampler, Juke and the drum synth; Juke drops hits when more than 64 are waiting | `dsp/src/plugins/sampler.rs:771-776`; `juke.rs:577-585, 707-716`; `drums.rs:172-185` |
+| 25 | **Fixed.** A one-shot that loops is released by its note-off (a loop has no end to play to); one-shots without a loop still play through. Audible change: such voices now stop at the note-off and release. Test: `a_looping_one_shot_is_released_by_its_note_off` | `dsp/src/plugins/sampler.rs` (`begin`) |
+| 26 | **Partly fixed.** Juke keeps up to 512 delayed hits waiting (humanise, flams, ratchets) instead of 64. Voice stealing still cuts the old voice dead (a click) in the sampler, Juke and the drum synth. Not covered by a test | `dsp/src/plugins/sampler.rs:771-776`; `juke.rs:577-585, 707-716`; `drums.rs:172-185` |
 | 27 | Aliasing: the synth's triangle, the cymbal and cowbell square banks, and any sample pitched up in the sampler or Juke (no filtering before resampling) | `dsp/src/osc.rs:74-79`; `plugins/drums.rs:294-301`; `juke.rs:981-1005`; `sampler.rs:446-466` |
-| 28 | Stepping when a synth's mix, resonance, detune or envelope amount is changed; the sampler's cutoff moves in steps of 16 samples | `dsp/src/plugins/synth.rs:423-426`; `sampler.rs:908-914` |
+| 28 | **Partly fixed.** The synth's oscillator mix, resonance, detune and filter-envelope amount are smoothed (20 ms) and settle exactly on the value, so a steady sound is unchanged. The sampler's cutoff steps of 16 samples remain. Test: `mix_resonance_detune_and_envelope_amount_are_smoothed` | `dsp/src/plugins/synth.rs`; `sampler.rs:908-914` |
 | 29 | Work on the audio thread that can stall it: a built-in instrument added while playing is created and sized there, and replacing a sampler's sound frees the old one there | `mix/src/lib.rs:1510-1517, 1637-1645, 4043-4058`; `dsp/src/plugins/sampler.rs:1201-1212` |
-| 30 | Juke mixes a stereo pad sample to mono before panning; instruments under-report their tails; Juke's humanise differs on each live replay | `dsp/src/plugins/juke.rs:805-810, 1046-1058, 1187-1193`; `synth.rs:513-515`; `drums.rs:375-377` |
-| 31 | Possible crash, not confirmed: the editor adds a note's start and length without a guard, and a move command allows a start at the largest value | `ui-egui/src/midi_editor.rs:697, 781`; `engine/src/cmd/midi.rs:586-599` |
+| 30 | **Partly fixed.** The synth and the drum synth report tails that reach silence (their times are "to -60 dB"; the voices ring on to -100 and -80 dB), and the drum synth counts every drum's decay, not only the kick's and the crash's: freezes and bounces made from now on keep the whole tail. Juke's stereo pads and replay humanise remain. Test: `reported_tails_cover_the_release` | `dsp/src/plugins/synth.rs`; `drums.rs` (`tail_samples`); `juke.rs:805-810, 1046-1058, 1187-1193` |
+| 31 | **Confirmed and fixed.** A note moved to the largest start (a script can) overflowed `start + length` in the editor and on the timeline: a panic in debug builds (overflow checks), a wrapped value in release. Those sums saturate now. Test: `a_note_at_the_largest_start_does_not_overflow_the_editor` | `ui-egui/src/midi_editor.rs`; `ui-egui/src/edit_window.rs` |
 
 ## Suggested order of work
 
@@ -368,3 +368,11 @@ What instruments count as "in the box" differs by edition and bundle.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | major | First version: writing MIDI against Pro Tools, Studio Pro, Logic Pro and Cubase |
+| 2026-11-16 | minor | Bugs 1 and 2 fixed: Quantize and Legato act on the selected notes, on the grid counted from the bar |
+| 2026-11-16 | minor | Bugs 4, 5, 6, 11, 12 and 13 fixed: a start trim hides notes instead of deleting them, edits past the end grow the clip, moves keep their shape, split halves keep the controller state and their original performance, Consolidate keeps cleaned notes |
+| 2026-11-16 | minor | Bug 7 fixed: Quantize… and Change Duration… ask in the MIDI Operations window; unknown grids and empty values are refused |
+| 2026-11-16 | minor | Bugs 3 and 15 (Loop) fixed: MIDI clips on tick tracks stay on their bars through tempo edits |
+| 2026-11-16 | minor | Bugs 8, 9, 10, 19 and 23 fixed: notes never before their clip, channels kept, Real-Time Properties undoable with a working negative delay, overlapping notes retrigger, instrument latency compensated |
+| 2026-11-16 | minor | Bugs 14, 16 and 17 fixed: the Band's lanes move with Insert/Cut Time, MIDI export writes what plays, MIDI import brings its tempo to where it lands |
+| 2026-11-16 | minor | Bugs 21, 22 and 31 (confirmed) fixed; bugs 25, 28 (synth) and 30 (tails) fixed among the instruments; bug 18 needs a mix design |
+| 2026-11-16 | minor | Tier 2 begun: selection tools and length keys, scale shading, humanise, strum, reverse, half and double time, fix overlaps; a dropped `.mid` imports at the insertion point (the drag-in row said Missing: corrected) |
