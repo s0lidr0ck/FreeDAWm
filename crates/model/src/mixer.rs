@@ -979,6 +979,10 @@ pub struct Mixer {
     pub record_arm: bool,
     #[serde(default)]
     pub input_monitor: InputMonitor,
+    /// Record with inserts (print): an armed audio track's take is what its trim, polarity and
+    /// inserts make of the input (after them, before the fader), not the input as it came in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_inserts: bool,
     #[serde(default)]
     pub phase_invert: bool,
     pub input: Route,
@@ -1020,6 +1024,7 @@ impl Mixer {
             solo_safe: false,
             record_arm: false,
             input_monitor: InputMonitor::Auto,
+            record_inserts: false,
             phase_invert: false,
             input: Route::None,
             output: Route::Main,

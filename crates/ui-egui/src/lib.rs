@@ -1506,16 +1506,8 @@ impl SoundApp {
         let rate = self.recorder.as_ref().map_or(0, |r| r.sample_rate);
         self.take_reported = None;
         let latency = self.take_latency();
-        self.take_plan = Some(soundcraft_engine::io::Recording {
-            start: self.record_start,
-            pass,
-            punch: self.punch,
-            rate,
-            takes,
-            latency,
-            loop_from,
-            tap_latency: 0,
-        });
+        self.take_plan =
+            Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes, latency, loop_from });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -1527,12 +1519,19 @@ impl SoundApp {
     fn refine_take_plan(&mut self) {
         let Some(start) = self.recorder.as_ref().and_then(soundcraft_playback::record::Recorder::start_pos) else { return };
         let latency = self.take_latency();
-        let tap = self.recorder.as_ref().and_then(soundcraft_playback::record::Recorder::start_tap_latency).map_or(0, i64::from);
         let Some(plan) = &mut self.take_plan else { return };
-        if (plan.start, plan.latency, plan.tap_latency) == (start, latency, tap) {
+        // Each internal take's delay, in tap order (the order the plan lists them).
+        let mut changed = (plan.start, plan.latency) != (start, latency);
+        let rec = self.recorder.as_ref();
+        for (k, t) in plan.takes.iter_mut().filter(|t| t.internal).enumerate() {
+            let tap = rec.and_then(|r| r.start_tap_latency(k)).map_or(0, i64::from);
+            changed |= t.tap_latency != tap;
+            t.tap_latency = tap;
+        }
+        if !changed {
             return;
         }
-        (plan.start, plan.latency, plan.tap_latency) = (start, latency, tap);
+        (plan.start, plan.latency) = (start, latency);
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -1564,6 +1563,8 @@ impl SoundApp {
                 path: path.clone(),
                 channels: inputs.len(),
                 internal: plan.is_tap(*track),
+                from_device: plan.from_device(*track),
+                tap_latency: 0,
             })
             .collect();
         if let Some(p) = &self.player {
@@ -2144,7 +2145,6 @@ impl SoundApp {
             takes: Vec::new(),
             latency,
             loop_from: None,
-            tap_latency: 0,
         });
         self.punch = None;
         self.autosaved_rev = 0;

@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (internal recording from a bus; bug 2 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (record with inserts) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -35,7 +35,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
 | E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
-| G. Capture and files | Lock-free capture to disk, crash recovery, RF64 | Medium: 32-bit float WAV only, no timestamp, no printing |
+| G. Capture and files | Lock-free capture to disk, crash recovery, RF64 | Medium: 32-bit float WAV only, no timestamp |
 | H. Safety and feedback | Device and disk trouble keep the take | Small: no pre-record, no remaining-time display |
 | I. Remote recording | LAN and internet recorders with clock alignment | **Ahead**: none of the four has it built in |
 
@@ -55,7 +55,7 @@ depth and write a timestamp into it**, and **smooth the punch points**.
 | Multichannel (surround) inputs | ● | ● | ● | ● | **Missing**: inputs are one or two channels wide |
 | One input on several tracks | ● | ● | ● | ● | **Works** |
 | A bus or another track's output as the input | ● | ● | ● | ● | **Works** for a bus: the track hears and records it as the mix renders it, with no input device needed, placed by the bus's delay compensation; a track's output is recorded by routing it (or a send) to a bus, as in Pro Tools |
-| Record with effects (print) | ◐ | ● | ◐ | ● | **Missing**: trim, polarity and inserts are monitor-only |
+| Record with effects (print) | ◐ | ● | ◐ | ● | **Works**: a per-track Record with inserts switch (input menu, `mix.record_inserts`) takes the strip after trim, polarity and inserts, before the fader, heard or not; placed by the round trip plus the inserts' latency. A bus can be printed the same way |
 | Record many inputs at once | ● | ● | ● | ● | **Works** in code (up to 64 named inputs, one writer thread); never measured on a large interface |
 
 Studio Pro and Cubase have input channels in the mixer whose inserts are recorded. Pro Tools and
@@ -192,7 +192,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Record from a bus or a track's output (internal recording) | 10–16 | **Done** (bus input; a track's output via a bus); closed bug 2 |
-| Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | Follows the row above |
+| Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | **Done** (the switch) |
 | Bit depth and file type for takes; BWF timestamp and originator | 5–8 | The remote path already honours bit depth |
 | Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | QuickPunch can then mean something or go |
 | Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | Replaces the unused record-mode value; closes bug 4 by design |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

@@ -2103,6 +2103,15 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         crate::band::input_menu(app, ui, id);
         crate::band::module_input_menu(app, ui, id);
     }
+    if input && session.track(id).is_some_and(|t| t.kind == TrackKind::Audio) {
+        ui.separator();
+        let on = session.track(id).is_some_and(|t| t.mixer.record_inserts);
+        let tip = "The take is what the trim, polarity and inserts make of the input (printed), not the input as it came in";
+        if ui.add(egui::Button::selectable(on, "Record with inserts")).on_hover_text(tip).clicked() {
+            let _ = app.run("mix.record_inserts", json!({"track": id.0, "value": !on}));
+            ui.close();
+        }
+    }
     // An instrument or MIDI track plays its instrument: a bus is no input for it.
     if input && session.track(id).is_some_and(|t| t.kind.is_midi()) {
         return;

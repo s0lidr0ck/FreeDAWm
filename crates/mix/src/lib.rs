@@ -451,6 +451,10 @@ struct Strip {
     /// in `sync`; empty otherwise). It is what the track monitors and what its take records
     /// ([`MixEngine::record_tap`]).
     bus_in: Vec<Vec<f32>>,
+    /// Record with inserts (an audio track): this block after the trim, polarity and inserts,
+    /// before the fader (sized in `sync`; empty otherwise). It is what the track's take records
+    /// ([`MixEngine::record_tap`]).
+    print: Vec<Vec<f32>>,
     /// How many chain modules (from the top) the frozen render held last block: a module that
     /// comes back to life (thawed, or a freeze point moved up) starts clean.
     frozen_mods: usize,
@@ -607,6 +611,7 @@ impl Strip {
             llm_latency: 0,
             llm_dry: Vec::new(),
             bus_in: Vec::new(),
+            print: Vec::new(),
             frozen_mods: 0,
             frozen_inst: false,
             live_tail: 0,
@@ -1251,12 +1256,21 @@ impl MixEngine {
     /// What the last `render` put on each hardware output, indexed like `Session::outputs`
     /// (index 0, the main, is empty). The player maps them onto device channels. Each channel
     /// holds `max_block` samples, of which the rendered frames lead.
-    /// What audio track `t` recorded from its bus input in the last block (internal recording):
-    /// its channels (the block's first frames) and how late that bus runs behind the timeline
-    /// (the delay compensation it carries, in frames). `None` when `t` does not read a bus.
+    /// What audio track `t` recorded in the last block when its take is not the device input as
+    /// it came in: its bus input (internal recording), or what its inserts made of its input
+    /// (record with inserts). Its channels (the block's first frames) and how late they run
+    /// behind the timeline besides any input round trip (a bus's delay compensation, the
+    /// inserts' latency; frames). `None` when its take records the device input.
     /// Audio thread: no allocation.
     pub fn record_tap(&self, t: TrackId) -> Option<(&[Vec<f32>], usize)> {
-        let st = self.strips.get(&t).filter(|st| !st.bus_in.is_empty())?;
+        let st = self.strips.get(&t)?;
+        // Record with inserts: after them, so later by their latency too (a bus input's delay
+        // and theirs; a hardware input's is the round trip the take is placed by anyway).
+        if !st.print.is_empty() {
+            let bus = if st.bus_in.is_empty() { 0 } else { st.base };
+            return Some((st.print.as_slice(), bus.saturating_add(st.latency)));
+        }
+        let st = Some(st).filter(|st| !st.bus_in.is_empty())?;
         Some((st.bus_in.as_slice(), st.base))
     }
 
@@ -1510,6 +1524,10 @@ impl MixEngine {
             let n = if sidechain::reads_bus(t) { ch } else { 0 };
             if strip.bus_in.len() != n || strip.bus_in.iter().any(|b| b.len() != mb) {
                 strip.bus_in = vec![vec![0.0; mb]; n];
+            }
+            let n = if t.kind == TrackKind::Audio && t.mixer.record_inserts { ch } else { 0 };
+            if strip.print.len() != n || strip.print.iter().any(|b| b.len() != mb) {
+                strip.print = vec![vec![0.0; mb]; n];
             }
             strip.dest = out_dest(s, &t.mixer.output);
             // A named input (or a legacy "In N" / "In N-M") gives its device channels; any other
@@ -2548,6 +2566,12 @@ fn process_strip(
             read_bus(src, t, &mut strip.bus_in, frames);
         }
     }
+    // Record with inserts: while it records, the input goes through the strip whether it is
+    // heard or not (`silent_print`: not heard, so the strip's output is silence).
+    let hears = t.mixer.hears_input(live.monitor_only, live.auto_input);
+    let prints = !strip.print.is_empty() && frozen.is_none() && t.mixer.record_arm && live.auto_input && !live.monitor_only;
+    let silent_print = prints && !hears;
+    let hears = hears || prints;
     // The instrument ran its release this block: a strip whose instrument did not run (frozen,
     // failed, gone, or no longer an instrument track) has no release to wait for.
     let mut tail_ran = false;
@@ -2557,7 +2581,7 @@ fn process_strip(
                 play_frozen(s, fz, pos, frames, &mut strip.buf);
             }
         }
-        TrackKind::Audio if !strip.bus_in.is_empty() && t.mixer.hears_input(live.monitor_only, live.auto_input) => {
+        TrackKind::Audio if !strip.bus_in.is_empty() && hears => {
             // Input monitoring of a bus: the track hears the bus instead of its clips.
             strip.hears_live = true;
             for (dst, src) in strip.buf.iter_mut().zip(&strip.bus_in) {
@@ -2566,9 +2590,7 @@ fn process_strip(
                 }
             }
         }
-        TrackKind::Audio
-            if !live.input.is_empty() && !matches!(t.mixer.input, Route::Bus(_)) && t.mixer.hears_input(live.monitor_only, live.auto_input) =>
-        {
+        TrackKind::Audio if !live.input.is_empty() && !matches!(t.mixer.input, Route::Bus(_)) && hears => {
             // Input monitoring: the track hears its hardware input instead of its clips. A named
             // input (or a legacy "In N" / "In N-M") gives its device channels; with no hardware
             // input, `default_input_channel` (the channels its take records).
@@ -2809,6 +2831,19 @@ fn process_strip(
     if let (Some(win), Some(taps)) = (live.scout, strip.scout.as_deref_mut()) {
         taps.feed_post(&strip.buf, win);
     }
+    // Record with inserts: the take is this, after the inserts and before the fader.
+    if !strip.print.is_empty() {
+        for (d, src) in strip.print.iter_mut().zip(strip.buf.iter()) {
+            for (x, y) in d.iter_mut().zip(src.iter()).take(frames) {
+                *x = if prints { *y } else { 0.0 };
+            }
+        }
+        if silent_print {
+            for c in strip.buf.iter_mut() {
+                c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+            }
+        }
+    }
     strip.gr = gr;
     strip.llm_bits = bits;
     strip.llm_latency = skipped.min(MAX_LATENCY);
@@ -3021,6 +3056,8 @@ fn structure_fingerprint(s: &Session) -> usize {
         t.inactive.hash(&mut h);
         t.mixer.inserts.len().hash(&mut h);
         t.mixer.input.hash(&mut h);
+        // Record with inserts sizes the strip's print buffer.
+        t.mixer.record_inserts.hash(&mut h);
         t.mixer.output.hash(&mut h);
         for i in &t.mixer.inserts {
             (i.id, i.plugin.as_str(), i.sidechain, i.link_group).hash(&mut h);
@@ -7302,6 +7339,39 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    #[test]
+    fn record_with_inserts_taps_the_input_after_the_strip_monitored_or_not() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let tr = s.track_mut(t).unwrap();
+        (tr.mixer.record_arm, tr.mixer.record_inserts, tr.mixer.trim_db) = (true, true, -6.0);
+        tr.mixer.input_monitor = soundcraft_model::InputMonitor::Off;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.input = vec![vec![0.5; 512]];
+        let mut out = vec![vec![0.0; 512]; 2];
+        let printed = 0.5 * db_to_gain(-6.0);
+        // Recording with monitoring Off: the input goes through the trim for the take, unheard.
+        eng.recording = true;
+        eng.render(&s, 0, 512, &mut out);
+        let (tap, late) = eng.record_tap(t).unwrap();
+        assert_eq!(late, 0);
+        assert!((tap[0][100] - printed).abs() < 1e-4, "{}", tap[0][100]);
+        assert!(out[0][100].abs() < 1e-6, "not heard: {}", out[0][100]);
+        // Monitored: heard as printed.
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::On;
+        eng.render(&s, 512, 512, &mut out);
+        assert!((eng.record_tap(t).unwrap().0[0][100] - printed).abs() < 1e-4);
+        assert!((out[0][100] - printed * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3, "{}", out[0][100]);
+        // Not recording: nothing to take.
+        eng.recording = false;
+        eng.render(&s, 1024, 512, &mut out);
+        assert!(eng.record_tap(t).unwrap().0[0][100].abs() < 1e-6);
+        // Off, the track has no tap: its take is the input as it came in.
+        s.track_mut(t).unwrap().mixer.record_inserts = false;
+        eng.render(&s, 1536, 512, &mut out);
+        assert!(eng.record_tap(t).is_none());
     }
 
     #[test]

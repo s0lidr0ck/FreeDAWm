@@ -922,18 +922,18 @@ impl AudioState {
         let first = !cap.started.load(Ordering::Relaxed);
         let taps = &self.taps;
         let mut tapped: [Option<&[Vec<f32>]>; record::MAX_TAPS] = [None; record::MAX_TAPS];
-        let mut late = 0usize;
-        for (slot, (track, _)) in tapped.iter_mut().zip(taps.list()) {
-            if let Some((bufs, l)) = self.mix.record_tap(*track) {
+        for (k, (slot, (track, _))) in tapped.iter_mut().zip(taps.list()).enumerate() {
+            if let Some((bufs, late)) = self.mix.record_tap(*track) {
                 *slot = Some(bufs);
-                late = late.max(l);
+                if first && let Some(at) = cap.start_tap.get(k) {
+                    at.store(u32::try_from(late).unwrap_or(u32::MAX), Ordering::Relaxed);
+                }
             }
         }
         if first {
             cap.start_pos.store(self.pos, Ordering::Relaxed);
             // The feed's latency now, at the take's start (a drift feed's moves).
             cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
-            cap.start_tap.store(u32::try_from(late).unwrap_or(u32::MAX), Ordering::Relaxed);
         }
         let input = &self.mix.input;
         // Without taps the frame is the input as it is (its width is the device's).

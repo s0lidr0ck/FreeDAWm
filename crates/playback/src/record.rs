@@ -70,9 +70,9 @@ pub(crate) struct Capture {
     pub(crate) start_feed: AtomicU32,
     /// The mix's own delay (PDC, frames) after the take's first block rendered, once `started`.
     pub(crate) start_mix: AtomicU32,
-    /// How far behind the timeline the recorded busses ran when the take's first frame was
-    /// captured (their delay compensation, frames), once `started`.
-    pub(crate) start_tap: AtomicU32,
+    /// How far behind the timeline each tap ran when the take's first frame was captured
+    /// (frames, see [`soundcraft_mix::MixEngine::record_tap`]), once `started`.
+    pub(crate) start_tap: [AtomicU32; MAX_TAPS],
     pub(crate) started: AtomicBool,
 }
 
@@ -144,7 +144,7 @@ impl Capture {
             start_pos: AtomicI64::new(0),
             start_feed: AtomicU32::new(0),
             start_mix: AtomicU32::new(0),
-            start_tap: AtomicU32::new(0),
+            start_tap: std::array::from_fn(|_| AtomicU32::new(0)),
             started: AtomicBool::new(false),
         }
     }
@@ -367,10 +367,11 @@ impl Recorder {
         self.internal
     }
 
-    /// How far behind the timeline the recorded busses ran at the current take's first frame
-    /// (frames), once it has one: their takes are placed earlier by this.
-    pub fn start_tap_latency(&self) -> Option<u32> {
-        self.capture.started.load(Ordering::Acquire).then(|| self.capture.start_tap.load(Ordering::Relaxed))
+    /// How far behind the timeline tap `k` ([`Taps`]) ran at the current take's first frame
+    /// (frames), once it has one: its take is placed earlier by this.
+    pub fn start_tap_latency(&self, k: usize) -> Option<u32> {
+        let at = self.capture.start_tap.get(k)?;
+        self.capture.started.load(Ordering::Acquire).then(|| at.load(Ordering::Relaxed))
     }
 
     /// Open the input device `audio` chooses (else the default) as its own stream (split: not the
@@ -916,7 +917,7 @@ mod tests {
             st.fill(&mut out, 2);
         }
         assert_eq!(r.start_pos(), Some(0));
-        assert_eq!(r.start_tap_latency(), Some(0));
+        assert_eq!(r.start_tap_latency(0), Some(0));
         // No input callback ever beats: not a stalled device.
         r.seen.1 = Instant::now().checked_sub(STALL).unwrap();
         assert_eq!(r.trouble(), None);
