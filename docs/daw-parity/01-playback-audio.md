@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 3 fixed: Play Selection with an insertion point) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bugs 4 and 5 fixed: stereo clips on mono tracks, Split into Mono) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -141,8 +141,8 @@ Varispeed is the only whole-project speed control among the four.
 | Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Partial**: pastes linked copies |
 | Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Partial**: an overlap is cut away at edit time; there is no layered editing |
 | Takes and swipe comping | ● | ● | ● | ● | **Works**; a take cannot be auditioned without making it active |
-| Stereo clip on a mono track | ● | ● | ● | ● | **Partial**: plays the left channel only |
-| Split a stereo track into mono | ● | ● | ● | ● | **Partial**: both new tracks play the left channel |
+| Stereo clip on a mono track | ● | ● | ● | ● | **Works**: folded to mono at equal level |
+| Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
 | Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
 | Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
 | ARA editors | ● | ● | ● | ● | **Missing** |
@@ -183,8 +183,8 @@ All in features the docs count as done. Each needs a regression test with its fi
 | 1 | **Fixed:** with Loop Playback on, a selection of 64 samples or less played on to the end of the session; it now plays once and stops | `crates/playback/src/lib.rs:647`, `crates/ui-egui/src/lib.rs:2166` |
 | 2 | **Fixed:** `transport.play {from}` ignored `from` when stopped; Edit › Play Timeline played the edit selection. Both now play from where they say (Play Timeline loops the timeline range with Loop Playback on) | `crates/engine/src/cmd/transport.rs:10`, `cmd/edit_more.rs:128` |
 | 3 | **Fixed:** Play Selection with an insertion point played one sample; it now plays on from there | `crates/ui-egui/src/lib.rs:2243` |
-| 4 | A stereo clip on a mono track plays only the left channel | `crates/mix/src/lib.rs:3262` |
-| 5 | Split into Mono makes two tracks that both play the left channel | `crates/engine/src/cmd/track.rs:463` |
+| 4 | **Fixed:** a stereo clip on a mono track played only the left channel; it now folds to mono at equal level (½L + ½R, as a mono device folds the main mix) | `crates/mix/src/lib.rs:3262` |
+| 5 | **Fixed:** Split into Mono made two tracks that both played the left channel; each clip now carries the source channel it plays | `crates/engine/src/cmd/track.rs:463` |
 | 6 | After Process, the clip's effects are baked in and still active, so they are heard twice | `cmd/audiosuite.rs:118` |
 | 7 | Elastic Properties on a non-elastic track changes speed but not length: the tail is cut or runs into silence | `cmd/clip.rs:202` |
 | 8 | Clip Gain › Bypass erases the gain and its envelope | `cmd/clip.rs:83` |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bugs 4 and 5 fixed: stereo clips on mono tracks, Split into Mono |
 | 2026-11-16 | minor | bug 3 fixed: Play Selection with an insertion point |
 | 2026-11-16 | minor | bug 2 fixed: Play from a position and Play Timeline |
 | 2026-11-16 | minor | bug 1 fixed: a loop of 64 samples or less plays once |

@@ -3258,8 +3258,12 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     // Vocal tuning's render replaces the heard audio inside its spans (looked up once per block).
     let unstretched = (stretch - 1.0).abs() < 1e-9;
     let tuned = tuned_spans(s, clip);
-    for (ch, dst) in buf.iter_mut().enumerate() {
-        let mut src = audio.cursor(ch % nsrc, rt);
+    // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
+    let (taps, tap) = clip.channel_taps(nsrc, buf.len());
+    for which in 0..taps {
+        let (dch, ch, weight) = tap(which);
+        let Some(dst) = buf.get_mut(dch) else { continue };
+        let mut src = audio.cursor(ch, rt);
         let mut cleaned = alt.and_then(|(w, origin, a)| {
             let n = a.num_channels();
             (n > 0).then(|| (w, origin, a.cursor(ch % n, rt)))
@@ -3316,7 +3320,7 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                 };
                 let t = (k - i) as f32 / n;
                 if let Some(d) = dst.get_mut(k) {
-                    *d += v * (g0 + (g1 - g0) * t);
+                    *d += v * weight * (g0 + (g1 - g0) * t);
                 }
             }
             i = seg_end;
@@ -3356,15 +3360,22 @@ pub fn tuned_spans<'a>(s: &'a Session, clip: &Clip) -> Option<&'a soundcraft_mod
 }
 
 /// [`clip_source_window`] without the vocal tuning: what the clip sounds like before tuning (the
-/// source with Clean Vocal blended in), which the tuner analyses and renders from.
+/// source with Clean Vocal blended in), which the tuner analyses and renders from. A clip with a
+/// [`Clip::source_channel`] gives that one channel.
 pub fn clip_heard_window(s: &Session, clip: &Clip, start: Samples, n: usize) -> Option<Vec<Vec<f32>>> {
     let ClipContent::Audio { source, .. } = clip.content else { return None };
     let audio = s.pool.get(source)?;
     let alt = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
     let nalt = alt.map_or(0, |(_, _, a)| a.num_channels());
     let edges = alt.map(|(_, origin, a)| CleanEdges::new(s, clip, origin, a.frames()));
+    // A clip playing one chosen source channel (Split into Mono) renders only that channel.
+    let nsrc = audio.num_channels();
+    let chans = match clip.source_channel.map(usize::from).filter(|c| *c < nsrc) {
+        Some(c) => c..c + 1,
+        None => 0..nsrc,
+    };
     Some(
-        (0..audio.num_channels())
+        chans
             .map(|ch| {
                 let mut src = audio.cursor(ch, false);
                 let mut cleaned = alt.filter(|_| nalt > 0).map(|(w, origin, a)| (w, origin, a.cursor(ch % nalt, false)));
@@ -5146,6 +5157,47 @@ mod tests {
         ins.params.insert("level".into(), level_db);
         tr.instrument = Some(ins);
         s
+    }
+
+    /// A mono audio track holding one clip of a two-channel source, L = 0.8 and R = 0.2.
+    fn stereo_clip_on_mono(chosen: Option<u16>) -> (Session, TrackId) {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        s.pool.insert(SourceId(7), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.8; 4800], vec![0.2; 4800]] })));
+        let id = s.new_clip_id();
+        let mut c = Clip::audio(id, "st", SourceId(7), 0, 0, 4800);
+        c.source_channel = chosen;
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+        (s, t)
+    }
+
+    #[test]
+    fn a_stereo_clip_on_a_mono_track_folds_both_channels() {
+        // Bug: only the left channel played. Folded at equal level, as a mono device folds the main.
+        let (s, t) = stereo_clip_on_mono(None);
+        let out = render_clips(&s, t, Range::new(0, 1000));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].iter().all(|x| (x - 0.5).abs() < 1e-6), "0.5·L + 0.5·R, got {}", out[0][10]);
+        // A chosen channel plays alone; one the source lacks plays the source as it is.
+        let (s, t) = stereo_clip_on_mono(Some(1));
+        assert!(render_clips(&s, t, Range::new(0, 1000))[0].iter().all(|x| (x - 0.2).abs() < 1e-6));
+        let (s, t) = stereo_clip_on_mono(Some(5));
+        assert!(render_clips(&s, t, Range::new(0, 1000))[0].iter().all(|x| (x - 0.5).abs() < 1e-6));
+        // A stereo track still plays channel for channel; a chosen channel plays on both sides.
+        let (mut s, t) = stereo_clip_on_mono(None);
+        s.track_mut(t).unwrap().format = ChannelFormat::Stereo;
+        let out = render_clips(&s, t, Range::new(0, 100));
+        assert!((out[0][5] - 0.8).abs() < 1e-6 && (out[1][5] - 0.2).abs() < 1e-6);
+        let (mut s, t) = stereo_clip_on_mono(Some(1));
+        s.track_mut(t).unwrap().format = ChannelFormat::Stereo;
+        let out = render_clips(&s, t, Range::new(0, 100));
+        assert!((out[0][5] - 0.2).abs() < 1e-6 && (out[1][5] - 0.2).abs() < 1e-6);
+        // And the heard window gives only the chosen channel.
+        let (s, t) = stereo_clip_on_mono(Some(1));
+        let c = s.track(t).unwrap().clips()[0].clone();
+        let w = clip_heard_window(&s, &c, 0, 10).unwrap();
+        assert_eq!(w.len(), 1);
+        assert!((w[0][3] - 0.2).abs() < 1e-6);
     }
 
     #[test]

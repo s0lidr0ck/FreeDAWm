@@ -272,6 +272,12 @@ pub struct Clip {
     /// rendered to; empty for every other clip. `clip.remove_warp` clears them with the render.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warp: Vec<(Samples, Samples)>,
+    /// The one source channel this clip plays on every channel of its track (Split into Mono
+    /// makes these); `None` plays the source as it is: channel for channel, or a multichannel
+    /// source on a mono track at equal level ([`Clip::channel_taps`]). A channel the source does
+    /// not have plays as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel: Option<u16>,
 }
 
 fn one() -> f64 {
@@ -307,7 +313,26 @@ impl Clip {
             tune: None,
             from_layer: None,
             warp: Vec::new(),
+            source_channel: None,
         }
+    }
+
+    /// How an audio clip's `nsrc`-channel source feeds a track of `ndst` channels: the number of
+    /// taps, and tap `i` as `(track channel, source channel, gain)`. A chosen
+    /// [`Clip::source_channel`] plays on every track channel; a multichannel source on a mono
+    /// track folds down at equal level (each channel `1/nsrc`, as a mono device folds the main
+    /// mix: `0.5·L + 0.5·R`); otherwise track channel `k` plays source channel `k mod nsrc`.
+    pub fn channel_taps(&self, nsrc: usize, ndst: usize) -> (usize, impl Fn(usize) -> (usize, usize, f32)) {
+        let chosen = self.source_channel.map(usize::from).filter(|c| *c < nsrc);
+        let fold = chosen.is_none() && ndst == 1 && nsrc > 1;
+        let count = if fold { nsrc } else { ndst };
+        let w = if fold { 1.0 / nsrc as f32 } else { 1.0 };
+        let n = nsrc.max(1);
+        (count, move |i: usize| match (chosen, fold) {
+            (Some(c), _) => (i, c, 1.0),
+            (None, true) => (0, i, w),
+            (None, false) => (i, i % n, 1.0),
+        })
     }
 
     pub fn midi(id: ClipId, name: impl Into<String>, start: Samples, length: Samples, sequence: Sequence) -> Clip {

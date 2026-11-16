@@ -479,12 +479,14 @@ fn split_mono(e: &mut Engine, p: &Value) -> Result<Value> {
             let mut clips = src.clips().to_vec();
             for c in &mut clips {
                 c.id = s.new_clip_id();
-                // Mono tracks read channel 0 of the source; record the channel in the name for now.
+                // Each new track plays its own channel of the source (not a fold of all of them).
                 c.name = format!("{}.{suffix}", c.name);
+                if matches!(c.content, soundcraft_model::ClipContent::Audio { .. }) {
+                    c.source_channel = u16::try_from(ch).ok();
+                }
             }
             if let Some(tr) = s.track_mut(id) {
                 tr.mixer.pan = vec![if ch == 0 { -1.0 } else { 1.0 }];
-                tr.comments = format!("source_channel={ch}");
                 if let Some(pl) = tr.playlist_mut() {
                     pl.clips = clips;
                 }
@@ -1279,6 +1281,37 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_into_mono_gives_each_track_its_own_channel() {
+        // Bug: both new tracks played the left channel.
+        use soundcraft_model::{Clip, SourceAudio, SourceId};
+        let mut e = Engine::default();
+        let s = e.session_mut();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Gtr"));
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.8; 2000], vec![0.2; 2000]] };
+        s.pool.insert(SourceId(3), std::sync::Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "g", SourceId(3), 0, 0, 2000));
+        let out = e.execute("track.split_into_mono", &json!({"tracks": [t.0]})).unwrap();
+        let ids: Vec<soundcraft_model::TrackId> =
+            out["tracks"].as_array().unwrap().iter().map(|v| soundcraft_model::TrackId(v.as_u64().unwrap())).collect();
+        assert_eq!(ids.len(), 2);
+        for (k, (tid, want)) in ids.iter().zip([0.8f32, 0.2]).enumerate() {
+            let s = e.session();
+            let tr = s.track(*tid).unwrap();
+            assert_eq!(tr.clips()[0].source_channel, Some(k as u16));
+            assert!(tr.comments.is_empty(), "no channel note left in the comments");
+            let heard = soundcraft_mix::render_clips(s, *tid, soundcraft_time::Range::new(0, 100));
+            assert!((heard[0][50] - want).abs() < 1e-6, "track {k} plays its channel: {}", heard[0][50]);
+        }
+        // A session saved before the field existed opens with it unset.
+        let mut v = serde_json::to_value(&e.session().track(ids[1]).unwrap().clips()[0]).unwrap();
+        assert_eq!(v["source_channel"], json!(1));
+        v.as_object_mut().unwrap().remove("source_channel");
+        let old: Clip = serde_json::from_value(v).unwrap();
+        assert_eq!(old.source_channel, None);
+    }
 
     #[test]
     fn midi_input_routes() {
