@@ -7,7 +7,7 @@ usage: python3 -I sampling.py midi <out folder> [options]
 `midi` writes <out>/sampling.mid and <out>/plan.json (what the file plays, and when). Each note
 has a slot of its own: held for --hold seconds (down to --hold-high at the top note), then left to ring for --tail seconds before the
 next one starts. Notes run from --low to --high every --step semitones, each at every velocity
-in --vels (or --layers of them, evenly spaced), --robins times in a row (for an instrument that plays a different take each time).
+of --layers evenly spaced velocities (or those in --vels), --robins times in a row (for an instrument that plays a different take each time).
 
 `split` reads a WAV rendered from that file (16-, 24- or 32-bit, or 32-bit float), lines it up
 by the first note, cuts each slot from its start to where it has rung out, fades the end, and
@@ -57,12 +57,12 @@ def varlen(n):
 
 def cmd_midi(a):
     low, high = parse_note(a.low), parse_note(a.high)
-    if a.layers:
+    if not a.vels:
         vels = sorted({max(1, round(127 * i / a.layers)) for i in range(1, a.layers + 1)})
     else:
         vels = sorted({int(v) for v in a.vels.split(",")})
-    top = a.hold if a.hold_high is None else a.hold_high
-    if low > high or a.step < 1 or a.robins < 1 or not vels or vels[0] < 1 or vels[-1] > 127:
+    top = a.hold_high
+    if low > high or a.step < 1 or a.robins < 1 or a.layers < 1 or not vels or vels[0] < 1 or vels[-1] > 127:
         sys.exit("nothing to play: check --low, --high, --step, --vels and --robins")
     if a.hold <= 0 or top <= 0 or a.tail < 0 or not 20 <= a.bpm <= 400:
         sys.exit("--hold must be above 0, --tail 0 or more, --bpm between 20 and 400")
@@ -285,11 +285,11 @@ def main():
     m.add_argument("--low", default="A0", help="lowest note, a name or a number (default A0)")
     m.add_argument("--high", default="C8", help="highest note (default C8)")
     m.add_argument("--step", type=int, default=3, help="semitones between notes (default 3)")
-    m.add_argument("--vels", default="24,48,72,96,112,127", help="velocities, soft to hard")
-    m.add_argument("--layers", type=int, help="this many evenly spaced velocities up to 127, instead of --vels")
+    m.add_argument("--vels", help="the velocities to play, soft to hard, instead of --layers (as 40,72,100,124)")
+    m.add_argument("--layers", type=int, default=12, help="evenly spaced velocities up to 127 (default 12)")
     m.add_argument("--robins", type=int, default=1, help="times each note is struck (default 1)")
     m.add_argument("--hold", type=float, default=8.0, help="seconds each note is held (default 8)")
-    m.add_argument("--hold-high", type=float, help="seconds the highest note is held (default: as --hold)")
+    m.add_argument("--hold-high", type=float, default=3.0, help="seconds the highest note is held (default 3)")
     m.add_argument("--tail", type=float, default=4.0, help="seconds left to ring after it (default 4)")
     m.add_argument("--bpm", type=float, default=120.0)
     m.set_defaults(run=cmd_midi)
