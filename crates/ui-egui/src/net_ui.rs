@@ -474,6 +474,15 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// Pairing requests waiting: their codes, on screen, wherever the user is.
+/// What a paired device can do, and how far the local link can be trusted: shown in the Network
+/// window, under the switch that lets the network in.
+pub(crate) const LOCAL_LINK_NOTE: &str = "A paired device can do everything you can do here: run any command, click, take screenshots, \
+open and save sessions. On this network the link is not encrypted: anyone else on the network can read what passes over it. \
+Pair only devices you trust, on a network you trust. Connections over the internet (below) are encrypted.";
+
+/// The same, short, under a pairing code.
+pub(crate) const PAIRING_NOTE: &str = "Pair only a device you trust: once paired it can do everything you can do here.";
+
 pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(net) = &app.net else { return };
     let pending = net.hub.pending_pairings();
@@ -495,6 +504,7 @@ pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
         }
         ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        ui.label(egui::RichText::new(PAIRING_NOTE).small().color(t.text_dim));
     });
     if let Some(id) = deny {
         net.hub.deny_pairing(&id);
@@ -543,6 +553,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 net.hub.update_config(|c| c.enabled = allow);
                 if allow { net.start_listening() } else { net.stop_listening() }
             }
+            ui.label(egui::RichText::new(LOCAL_LINK_NOTE).small().color(t.text_dim));
             ui.horizontal(|ui| {
                 ui.label("Port:");
                 let mut port = i64::from(cfg.port);
