@@ -191,6 +191,12 @@ pub struct MidiEditorState {
     /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
     /// its own line, new points on the clip's main channel.
     pub ctrl_channel: Option<u8>,
+    /// What a drag on empty lane space does: select points, or draw a line or a curve.
+    pub ctrl_tool: crate::midi_lanes::LaneTool,
+    /// Scale Points' percent (the lanes' right-click menu).
+    pub ctrl_scale_pct: f64,
+    /// Moving or copying notes takes the controllers under them along.
+    pub ctrls_follow: bool,
     /// A drag in a controller lane.
     pub ctrl_drag: Option<crate::midi_lanes::CtrlDrag>,
     /// The controller lanes as last drawn.
@@ -237,6 +243,9 @@ impl Default for MidiEditorState {
             lanes: Vec::new(),
             ctrl_sel: None,
             ctrl_channel: None,
+            ctrl_tool: crate::midi_lanes::LaneTool::Select,
+            ctrl_scale_pct: 100.0,
+            ctrls_follow: false,
             ctrl_drag: None,
             drawn_lanes: Vec::new(),
             ctrl_menu: None,
@@ -466,7 +475,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         let lanes_text = if app.midi.lanes.is_empty() { "Lanes".to_string() } else { format!("Lanes ({})", app.midi.lanes.len()) };
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
-            .on_hover_text("Show CC, pitch bend and aftertouch lanes under the velocity lane");
+            .on_hover_text("Show CC, pitch bend, aftertouch, poly pressure and program lanes under the velocity lane");
+        let mut follow = app.midi.ctrls_follow;
+        if ui
+            .checkbox(&mut follow, "Controllers Follow Notes")
+            .on_hover_text("Moving or copying notes takes the controllers under them along")
+            .changed()
+        {
+            app.midi.ctrls_follow = follow;
+        }
         if ui.button("Legato").on_hover_text("Each selected note (every note when none is) lasts until the next one").clicked() {
             op = Some(("event.change_duration", json!({"legato": 0})));
             ui.close();
@@ -935,7 +952,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 // Alt held at the press leaves the notes and drops copies (Alt during the drag
                 // only stops the snapping).
                 let id = if d.copy { "midi.notes_copy" } else { "midi.notes_move" };
-                app.run(id, json!({"clip": cid.0, "indices": picked, "ticks": d.dx_ticks, "semitones": d.dy_semi})).ok()
+                app.run(
+                    id,
+                    json!({"clip": cid.0, "indices": picked, "ticks": d.dx_ticks, "semitones": d.dy_semi, "with_ctrls": app.midi.ctrls_follow}),
+                )
+                .ok()
             }
             _ => None,
         };
@@ -1040,7 +1061,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         };
         if (semi != 0 || ticks != 0)
             && !app.midi.selected.is_empty()
-            && let Ok(r) = app.run("midi.notes_move", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi}))
+            && let Ok(r) = app.run(
+                "midi.notes_move",
+                json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi, "with_ctrls": app.midi.ctrls_follow}),
+            )
             && let Some(a) = r.get("indices").and_then(|v| v.as_array())
         {
             app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
@@ -1154,7 +1178,8 @@ fn clipboard_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, notes: &[soundcraft_
     }
     if dup && !chosen.is_empty() {
         let ticks = duplicate_offset(&chosen, grid);
-        if let Ok(r) = app.run("midi.notes_copy", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks}))
+        if let Ok(r) =
+            app.run("midi.notes_copy", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "with_ctrls": app.midi.ctrls_follow}))
             && let Some(a) = r.get("indices").and_then(|v| v.as_array())
         {
             app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();

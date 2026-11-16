@@ -23,7 +23,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("midi.note_add", "Add Note", [], None, "{clip, pitch, start_ticks, length_ticks?: 480, velocity?: 100, channel?: 0}", always, note_add),
         cmd!("midi.note_edit", "Edit Note", [], None, "{clip, index, pitch?, start_ticks?, length_ticks?, velocity?}", always, note_edit),
         cmd!("midi.note_delete", "Delete Notes", [], None, "{clip, indices: [n]}", always, note_delete),
-        cmd!("midi.notes_move", "Move Notes", [], None, "{clip, indices: [n], ticks?: 0, semitones?: 0} -> {moved, indices}", always, notes_move),
+        cmd!(
+            "midi.notes_move",
+            "Move Notes",
+            [],
+            None,
+            "{clip, indices: [n], ticks?: 0, semitones?: 0, with_ctrls?: false (the controllers under the notes move with them)} -> {moved, indices}",
+            always,
+            notes_move
+        ),
         cmd!(
             "midi.notes_resize",
             "Resize Notes",
@@ -47,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Notes",
             [],
             None,
-            "{clip, indices: [n], ticks?: 0, semitones?: 0} -> {indices} (the copies)",
+            "{clip, indices: [n], ticks?: 0, semitones?: 0, with_ctrls?: false (the controllers under the notes are copied with them)} -> {indices} (the copies)",
             always,
             notes_copy
         ),
@@ -203,6 +211,9 @@ fn notes_move(e: &mut Engine, p: &Value) -> Result<Value> {
     let idx = indices(p);
     let seq = seq_mut(e, id, "midi.notes_move")?;
     let (dt, ds) = fitting_move(seq, &idx, i64_or(p, "ticks", 0), i64_or(p, "semitones", 0));
+    if bool_or(p, "with_ctrls", false) {
+        carry_ctrls(seq, &idx, dt, false);
+    }
     for (i, n) in seq.notes.iter_mut().enumerate() {
         if idx.contains(&i) {
             n.start = n.start.saturating_add(dt).max(0);
@@ -212,6 +223,30 @@ fn notes_move(e: &mut Engine, p: &Value) -> Result<Value> {
     let kept = sort_tracked(seq, &idx);
     grow_to_fit(e, id, &kept);
     Ok(json!({"moved": kept.len(), "indices": kept}))
+}
+
+/// The controllers under the notes at `idx` (from the first start to the last end) moved, or
+/// copied, `dt` ticks with them; what was on those lanes and channels where they land is
+/// replaced. Hidden events (before tick 0) stay.
+fn carry_ctrls(seq: &mut Sequence, idx: &[usize], dt: i64, copy: bool) {
+    let picked: Vec<&Note> = idx.iter().filter_map(|i| seq.notes.get(*i)).collect();
+    let (Some(lo), Some(hi)) = (picked.iter().map(|n| n.start).min(), picked.iter().map(|n| n.end()).max()) else { return };
+    if dt == 0 {
+        return;
+    }
+    let under = |c: &soundcraft_midi::CtrlEvent| c.tick >= lo.max(0) && c.tick < hi;
+    let carried: Vec<soundcraft_midi::CtrlEvent> =
+        seq.ctrls.iter().filter(|c| under(c)).map(|c| soundcraft_midi::CtrlEvent { tick: c.tick.saturating_add(dt).max(0), ..*c }).collect();
+    if carried.is_empty() {
+        return;
+    }
+    let (to_lo, to_hi) = (lo.max(0).saturating_add(dt), hi.saturating_add(dt));
+    seq.ctrls.retain(|c| {
+        let landed_on = c.tick >= to_lo && c.tick < to_hi && carried.iter().any(|m| m.kind == c.kind && m.channel == c.channel);
+        !(landed_on || (!copy && under(c)))
+    });
+    seq.ctrls.extend(carried);
+    seq.ctrls.sort_by_key(|c| c.tick);
 }
 
 /// How far the notes at `idx` can move and keep their shape: not left of the clip's start (the
@@ -368,6 +403,9 @@ fn notes_copy(e: &mut Engine, p: &Value) -> Result<Value> {
     let seq = seq_mut(e, id, C)?;
     let idx = picked(p, seq.notes.len());
     let (dt, ds) = fitting_move(seq, &idx, i64_or(p, "ticks", 0), i64_or(p, "semitones", 0));
+    if bool_or(p, "with_ctrls", false) {
+        carry_ctrls(seq, &idx, dt, true);
+    }
     let copies: Vec<Note> = idx
         .iter()
         .filter_map(|i| seq.notes.get(*i))

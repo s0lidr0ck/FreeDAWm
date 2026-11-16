@@ -103,11 +103,11 @@ The gaps are of four kinds:
 | Release velocity | ● | ◐ | ● | ● | **Flag only**: stored; every edit writes the middle value |
 | Per-note probability | ○ | ● | ◐ | ◐ | **Missing** in notes; present on pattern steps |
 | Lanes for any controller, pitch bend, channel pressure; several at once | ● | ● | ● | ● | **Works**, per MIDI channel or every channel with a line each (bug 20, fixed) |
-| Lanes for poly aftertouch and program change | ● | ● | ● | ● | **Missing**: recorded data of those kinds is not shown |
+| Lanes for poly aftertouch and program change | ● | ● | ● | ● | **Works**: a Program Change lane and a Poly Pressure lane per key (Lanes › Poly Pressure lists the keys with data and the selected notes' keys first); a clip with such data opens with them shown |
 | Draw freehand | ● | ● | ● | ● | **Works** |
-| Line, curve and shape tools; ramps between points | ● | ● | ● | ● | **Missing**: values are stepped |
-| Scale or thin a range of controller data | ● | ● | ● | ● | **Missing** |
-| Controllers move and copy with their notes | ● | ● | ● | ● | **Missing** |
+| Line, curve and shape tools; ramps between points | ● | ● | ● | ● | **Partial**: Lanes › a drag on empty space Draws a Line or Draws a Curve; right-click › Ramp Between Points turns the steps between selected points into ramps. Ramps are written as events where the value changes, at most one every 30 ticks (thinned on write): the model has no curved segment, so playback still steps between events. No sine, square or other shapes |
+| Scale or thin a range of controller data | ● | ● | ● | ● | **Works**: right-click on selected points › Scale Points (percent) and Thin Points (drops points a straight line passes within 2 of, and repeats); `midi.ctrl_scale` also adds an offset |
+| Controllers move and copy with their notes | ● | ● | ● | ● | **Works** as an option (More › Controllers Follow Notes): moving or copying notes takes the controllers from the first note's start to the last one's end along, replacing what was on those lanes and channels where they land |
 | Per-note expression (MPE) editing | ◐ | ● | ● | ● | **Missing** |
 
 ## D. Operations
@@ -380,3 +380,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Bugs 20, 15 (Repeat) and 24 fixed: controller lanes per channel, Repeat in bars on tick tracks, CLAP note-only plug-ins hear bend, pressure and the expression controllers, note-offs carry release velocity |
 | 2026-11-16 | minor | Selection and note mute: select by clicking a key, Select by Rule… sets the editor selection, notes can be muted |
 | 2026-11-16 | minor | Quantize done more fully: window, random offset, note ends and lengths; built-in grooves and a groove from a clip; playback quantize per clip and per track with the notes left in place |
+| 2026-11-16 | minor | Controller lanes: Line and Curve tools, ramps between points, scale and thin, program change and poly pressure lanes, controllers that follow their notes |

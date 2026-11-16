@@ -35,14 +35,32 @@ pub const COMMON: [(CtrlKind, &str); 7] = [
     (CtrlKind::ChannelPressure, "Aftertouch"),
 ];
 
+/// What a drag on empty space in a lane does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneTool {
+    /// Selects the points inside a rubber band.
+    Select,
+    /// Draws a straight ramp from the press to the release.
+    Line,
+    /// Draws a curve (starting fast) from the press to the release.
+    Curve,
+}
+
+impl LaneTool {
+    /// The `curve` `midi.ctrl_line` draws with.
+    pub fn curve(self) -> f64 {
+        if self == LaneTool::Curve { 0.6 } else { 0.0 }
+    }
+}
+
 /// A lane's name.
 pub fn lane_label(kind: CtrlKind) -> String {
     match COMMON.iter().find(|(k, _)| *k == kind) {
         Some((_, name)) => (*name).to_string(),
         None => match kind {
             CtrlKind::Cc(n) => format!("CC{n}"),
-            CtrlKind::PolyPressure(p) => format!("Poly Pressure {p}"),
-            CtrlKind::Program => "Program".into(),
+            CtrlKind::PolyPressure(p) => format!("Poly Pressure {}", soundcraft_midi::note_name(p.min(127))),
+            CtrlKind::Program => "Program Change".into(),
             _ => String::new(),
         },
     }
@@ -58,6 +76,8 @@ pub fn lane_short(kind: CtrlKind) -> (String, String) {
         CtrlKind::Cc(64) => "Sustain",
         CtrlKind::PitchBend => return ("Bend".into(), "pitch".into()),
         CtrlKind::ChannelPressure => return ("Touch".into(), "after".into()),
+        CtrlKind::Program => return ("Prog".into(), "change".into()),
+        CtrlKind::PolyPressure(p) => return ("Poly".into(), soundcraft_midi::note_name(p.min(127))),
         _ => "",
     };
     match kind {
@@ -83,7 +103,9 @@ pub fn lanes_with_data(seq: &Sequence) -> Vec<CtrlKind> {
     let order = |k: &CtrlKind| match k {
         CtrlKind::Cc(n) => u32::from(*n),
         CtrlKind::PitchBend => 200,
-        _ => 300,
+        CtrlKind::ChannelPressure => 210,
+        CtrlKind::PolyPressure(p) => 300 + u32::from(*p),
+        CtrlKind::Program => 500,
     };
     v.sort_by_key(order);
     v
@@ -106,6 +128,8 @@ pub enum CtrlDrag {
     Pencil { lane: CtrlKind, points: Vec<(i64, i32)> },
     /// A rubber band from `from`.
     Band { lane: CtrlKind, from: Pos2 },
+    /// The Line or Curve tool: from the press (tick, value).
+    Line { lane: CtrlKind, from: (i64, i32) },
 }
 
 /// One lane on screen: where values sit.
@@ -214,6 +238,50 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
             }
         });
     });
+    let mut prog = app.midi.lanes.contains(&CtrlKind::Program);
+    let prog_text = if seq.ctrls.iter().any(|c| c.kind == CtrlKind::Program) { "Program Change \u{2022}" } else { "Program Change" };
+    if ui.checkbox(&mut prog, prog_text).changed() {
+        toggle(app, CtrlKind::Program, prog);
+    }
+    ui.menu_button("Poly Pressure", |ui| {
+        // The keys with data and the selected notes' keys first, then every key.
+        let mut first: Vec<u8> = seq.ctrls.iter().filter_map(|c| if let CtrlKind::PolyPressure(p) = c.kind { Some(p) } else { None }).collect();
+        first.extend(app.midi.selected.iter().filter_map(|i| seq.notes.get(*i)).map(|n| n.pitch));
+        first.sort_unstable();
+        first.dedup();
+        let has = |p: u8| seq.ctrls.iter().any(|c| c.kind == CtrlKind::PolyPressure(p));
+        let mut item = |ui: &mut Ui, p: u8| {
+            let kind = CtrlKind::PolyPressure(p);
+            let mut on = app.midi.lanes.contains(&kind);
+            let name = soundcraft_midi::note_name(p.min(127));
+            if ui.checkbox(&mut on, if has(p) { format!("{name} \u{2022}") } else { name }).changed() {
+                toggle(app, kind, on);
+            }
+        };
+        for p in &first {
+            item(ui, *p);
+        }
+        ui.separator();
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            for p in (0u8..=127).rev().filter(|p| !first.contains(p)) {
+                item(ui, p);
+            }
+        });
+    })
+    .response
+    .on_hover_text("Polyphonic aftertouch: a lane per key");
+    ui.separator();
+    ui.label(egui::RichText::new("A drag on empty lane space").small());
+    for (tool, name, tip) in [
+        (LaneTool::Select, "Selects Points", "A rubber band selects the points inside it"),
+        (LaneTool::Line, "Draws a Line", "A straight ramp from where the drag starts to where it ends"),
+        (LaneTool::Curve, "Draws a Curve", "A curve from where the drag starts to where it ends"),
+    ] {
+        if ui.radio(app.midi.ctrl_tool == tool, name).on_hover_text(tip).clicked() {
+            app.midi.ctrl_tool = tool;
+        }
+    }
+    ui.separator();
     ui.menu_button(channel_menu_label(app.midi.ctrl_channel), |ui| {
         let used: Vec<u8> = (0u8..16).filter(|ch| seq.ctrls.iter().any(|c| c.channel == *ch)).collect();
         if ui.radio(app.midi.ctrl_channel.is_none(), "All Channels").clicked() {
@@ -329,12 +397,14 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
                 app.midi.ctrl_sel = Some((kind, vec![i]));
             }
             CtrlDrag::Points { lane: kind, from: at }
+        } else if app.midi.ctrl_tool != LaneTool::Select {
+            CtrlDrag::Line { lane: kind, from: (snap(geo.tick_at(at.x)), lg.value_at(at.y)) }
         } else {
             CtrlDrag::Band { lane: kind, from: at }
         });
     }
     let drag = app.midi.ctrl_drag.clone().filter(|d| match d {
-        CtrlDrag::Points { lane, .. } | CtrlDrag::Pencil { lane, .. } | CtrlDrag::Band { lane, .. } => *lane == kind,
+        CtrlDrag::Points { lane, .. } | CtrlDrag::Pencil { lane, .. } | CtrlDrag::Band { lane, .. } | CtrlDrag::Line { lane, .. } => *lane == kind,
     });
     let sel = selected(app, seq, kind);
     // A points drag: the offset so far (time keeps the grid offset, as notes do).
@@ -406,6 +476,13 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         (Some(CtrlDrag::Band { from, .. }), Some(at)) => {
             p.rect(Rect::from_two_pos(*from, at), 0.0, t.accent.gamma_multiply(0.15), Stroke::new(1.0, t.accent), StrokeKind::Inside);
         }
+        (Some(CtrlDrag::Line { from, .. }), Some(at)) => {
+            // The ramp it will write, as a preview.
+            let to = (snap(geo.tick_at(at.x)), lg.value_at(at.y));
+            let pts = soundcraft_engine::cmd::midi_ctrl::ramp_points(kind, *from, to, app.midi.ctrl_tool.curve(), 30);
+            let line: Vec<Pos2> = pts.iter().map(|(tk, v)| pos2(geo.x_of(*tk), lg.y_of(*v))).collect();
+            p.add(Shape::line(line, Stroke::new(1.5, t.accent)));
+        }
         _ => {}
     }
     if resp.drag_stopped() {
@@ -422,6 +499,14 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
                     let moved =
                         v["indices"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default();
                     app.midi.ctrl_sel = Some((kind, moved));
+                }
+            }
+            Some(CtrlDrag::Line { from, .. }) => {
+                if let Some(at) = pointer {
+                    let to = [snap(geo.tick_at(at.x)), i64::from(lg.value_at(at.y))];
+                    let p = json!({"clip": cid.0, "lane": lane_id(kind), "from": [from.0, from.1], "to": to, "curve": app.midi.ctrl_tool.curve(), "channel": channel});
+                    let _ = app.run("midi.ctrl_line", p);
+                    app.midi.ctrl_sel = None;
                 }
             }
             Some(CtrlDrag::Band { from, .. }) => {
@@ -470,7 +555,8 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         && let Some(at) = resp.interact_pointer_pos()
     {
         app.midi.ctrl_menu = point_at(lg, geo, &events, at);
-        if let Some(i) = app.midi.ctrl_menu {
+        // A point already selected keeps the selection (for Ramp, Thin and Scale).
+        if let Some(i) = app.midi.ctrl_menu.filter(|i| !sel.contains(i)) {
             app.midi.ctrl_sel = Some((kind, vec![i]));
         }
     }
@@ -511,6 +597,31 @@ fn point_menu(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, kind
             app.midi.ctrl_sel = None;
             ui.close();
         }
+        ui.separator();
+    }
+    // On two or more selected points: ramp, thin, scale.
+    let sel: Vec<usize> = match &app.midi.ctrl_sel {
+        Some((k, v)) if *k == kind => v.clone(),
+        _ => Vec::new(),
+    };
+    if sel.len() >= 2 {
+        if ui.button("Ramp Between Points").on_hover_text("Replace the steps between the selected points with ramps").clicked() {
+            let _ = app.run("midi.ctrl_ramp", json!({"clip": cid.0, "indices": sel}));
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        if ui.button("Thin Points").on_hover_text("Remove selected points a straight line passes close to, and repeats").clicked() {
+            let _ = app.run("midi.ctrl_thin", json!({"clip": cid.0, "indices": sel}));
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut app.midi.ctrl_scale_pct).range(0.0..=400.0).suffix(" %"));
+            if ui.button("Scale Points").on_hover_text("Each selected value times this percent").clicked() {
+                let _ = app.run("midi.ctrl_scale", json!({"clip": cid.0, "indices": sel, "percent": app.midi.ctrl_scale_pct}));
+                ui.close();
+            }
+        });
         ui.separator();
     }
     if ui.button("Hide Lane").clicked() {

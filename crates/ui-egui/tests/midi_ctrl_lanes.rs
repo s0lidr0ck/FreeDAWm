@@ -188,7 +188,7 @@ fn lane_helpers() {
             .map(|k| soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: *k, value: 0 })
             .collect(),
     };
-    assert_eq!(midi_lanes::lanes_with_data(&seq), vec![CtrlKind::Cc(1), CtrlKind::Cc(11), CtrlKind::PitchBend]);
+    assert_eq!(midi_lanes::lanes_with_data(&seq), vec![CtrlKind::Cc(1), CtrlKind::Cc(11), CtrlKind::PitchBend, CtrlKind::Program]);
     assert_eq!(midi_lanes::lane_height(2, 400.0), midi_lanes::LANE_H);
     assert_eq!(midi_lanes::lane_height(4, 40.0), 18.0);
     let lg = LaneGeometry { kind: CtrlKind::PitchBend, rect: egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 56.0)) };
@@ -243,4 +243,30 @@ fn lanes_show_and_write_one_channel() {
     let ch3: Vec<i64> = ev.iter().filter(|x| x.1 == 2).map(|x| x.0).collect();
     assert_eq!(ch3, vec![480, 2880], "{ev:?}");
     assert!(ev.iter().filter(|x| x.1 == 0).count() > 2, "{ev:?}");
+}
+
+/// The Line tool: a drag on empty lane space draws a ramp (values where they change, the end
+/// exact); program change and poly pressure have lanes.
+#[test]
+fn the_line_tool_draws_a_ramp_and_program_has_a_lane() {
+    let (mut h, clip) = harness();
+    h.state_mut().midi.ctrl_tool = midi_lanes::LaneTool::Line;
+    h.step();
+    let (a, b) = (at(&h, CtrlKind::Cc(1), 960, 20), at(&h, CtrlKind::Cc(1), 1920, 100));
+    drag(&mut h, a, b);
+    let e = events(&mut h, clip, "cc1");
+    assert!(e.len() > 6, "{e:?}");
+    let ramp: Vec<&(i64, i64)> = e.iter().filter(|x| (960..=1920).contains(&x.0)).collect();
+    assert!((18..=22).contains(&ramp[0].1), "{e:?}");
+    assert!(ramp.windows(2).all(|w| w[1].1 > w[0].1), "{e:?}");
+    assert!((96..=104).contains(&ramp[ramp.len() - 1].1), "{e:?}");
+    assert_eq!(h.state().engine.undo_label(), Some("Draw Controller Line"));
+    // A program change shows its own lane.
+    h.state_mut().run("midi.ctrl_add", json!({"clip": clip, "lane": "program", "tick": 0, "value": 3})).unwrap();
+    let seq = match &h.state().engine.session().find_clip(soundcraft_model::ClipId(clip)).unwrap().1.content {
+        soundcraft_model::ClipContent::Midi { sequence } => sequence.clone(),
+        _ => panic!("a MIDI clip"),
+    };
+    assert_eq!(midi_lanes::lanes_with_data(&seq), vec![CtrlKind::Cc(1), CtrlKind::Program]);
+    assert_eq!(midi_lanes::lane_short(CtrlKind::PolyPressure(60)).0, "Poly");
 }
