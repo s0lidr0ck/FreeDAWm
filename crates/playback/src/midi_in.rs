@@ -164,6 +164,8 @@ pub struct MidiHub {
     activity: [AtomicU64; MAX_MIDI_PORTS],
     thru: AtomicBool,
     record: MidiRing,
+    /// What the mix heard while playing and not recording, for Capture MIDI (`capture_block`).
+    capture: MidiRing,
     /// The notes held now on any port and channel (bit per pitch), for naming a chord as it is
     /// played (the Chords ruler's picker).
     held: [AtomicU64; 2],
@@ -181,6 +183,7 @@ impl MidiHub {
             activity: std::array::from_fn(|_| AtomicU64::new(0)),
             thru: AtomicBool::new(true),
             record: MidiRing::new(RECORD_RING),
+            capture: MidiRing::new(RECORD_RING),
             held: [AtomicU64::new(0), AtomicU64::new(0)],
             pedals: std::array::from_fn(|_| AtomicU32::new(0)),
         })
@@ -336,29 +339,47 @@ impl MidiHub {
         // The age is real time, turned into timeline frames at full speed: right because a take
         // only ever records at full speed (`Player::can_record` and `Player::set_speed` refuse
         // varispeed while recording). Were that to change, the age would scale by the speed.
-        for e in live.events() {
-            let age = ((now as f64 - e.stamp as f64) * rate / 1e6).round() as i64;
-            let at = base.saturating_sub(age).max(floor);
-            let packed = pack(e.msg) | (u64::from(e.port) << 24) | (u64::from(pass) << 32);
-            self.record.push(at as u64, packed);
-        }
+        heard_into(&self.record, live, base, now, rate, pass, floor);
+    }
+
+    /// Audio thread, while playing and not recording: the block's events for Capture MIDI, placed
+    /// as [`MidiHub::record_block`] places them (no floor). The ring keeps the newest: when the
+    /// UI falls behind, what does not fit is dropped. Never allocates.
+    pub fn capture_block(&self, live: &LiveMidi, base: i64, now: u64, rate: f64, pass: u16) {
+        heard_into(&self.capture, live, base, now, rate, pass, i64::MIN);
+    }
+
+    /// UI thread: what was captured since the last call.
+    pub fn take_captured(&self, out: &mut Vec<RecordedMidi>) {
+        drain_heard(&self.capture, out);
     }
 
     /// UI thread: what was recorded since the last call.
     pub fn take_recorded(&self, out: &mut Vec<RecordedMidi>) {
-        while let Some((at, packed)) = self.record.pop() {
-            out.push(RecordedMidi {
-                at: at as i64,
-                port: ((packed >> 24) & 0xFF) as u8,
-                msg: unpack(packed),
-                pass: ((packed >> 32) & 0xFFFF) as u16,
-            });
-        }
+        drain_heard(&self.record, out);
     }
 
     /// Recorded events lost because the UI thread fell behind.
     pub fn record_dropped(&self) -> u64 {
         self.record.dropped()
+    }
+}
+
+/// `live`'s events into `ring`, each at its timeline position from its raw age (see
+/// [`MidiHub::record_block`]), not before `floor`, with its port slot and loop pass.
+fn heard_into(ring: &MidiRing, live: &LiveMidi, base: i64, now: u64, rate: f64, pass: u16, floor: i64) {
+    for e in live.events() {
+        let age = ((now as f64 - e.stamp as f64) * rate / 1e6).round() as i64;
+        let at = base.saturating_sub(age).max(floor);
+        let packed = pack(e.msg) | (u64::from(e.port) << 24) | (u64::from(pass) << 32);
+        ring.push(at as u64, packed);
+    }
+}
+
+/// Everything in a ring [`heard_into`] filled, as recorded events.
+fn drain_heard(ring: &MidiRing, out: &mut Vec<RecordedMidi>) {
+    while let Some((at, packed)) = ring.pop() {
+        out.push(RecordedMidi { at: at as i64, port: ((packed >> 24) & 0xFF) as u8, msg: unpack(packed), pass: ((packed >> 32) & 0xFFFF) as u16 });
     }
 }
 
@@ -820,6 +841,19 @@ mod tests {
         out.clear();
         hub.take_recorded(&mut out);
         assert_eq!(out.iter().map(|x| x.at).collect::<Vec<_>>(), vec![48_000, 48_048]);
+    }
+
+    #[test]
+    fn what_is_heard_while_playing_is_captured_apart_from_a_take() {
+        let hub = MidiHub::new();
+        let mut live = LiveMidi::new();
+        live.push(LiveEvent { offset: 0, port: 1, msg: [0x90, 60, 90], stamp: 9_000 });
+        hub.capture_block(&live, 48_000, 10_000, 48_000.0, 2);
+        let (mut rec, mut cap) = (Vec::new(), Vec::new());
+        hub.take_recorded(&mut rec);
+        hub.take_captured(&mut cap);
+        assert!(rec.is_empty(), "not a take's");
+        assert_eq!(cap, vec![RecordedMidi { at: 47_952, port: 1, msg: [0x90, 60, 90], pass: 2 }]);
     }
 
     #[test]

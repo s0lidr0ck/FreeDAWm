@@ -1222,6 +1222,9 @@ impl AudioState {
                     h.record_pedals(self.pos.saturating_sub(self.midi_lead).max(floor), self.midi_pass);
                 }
                 h.record_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass, floor);
+            } else if self.playing && !self.mix.live_midi.is_empty() {
+                // Not recording: kept for Capture MIDI (what was just played).
+                h.capture_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass);
             }
         }
         if self.playing {

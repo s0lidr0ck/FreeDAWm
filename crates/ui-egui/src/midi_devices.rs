@@ -44,6 +44,67 @@ pub(crate) fn start_take(app: &mut SoundApp) {
     }
 }
 
+/// Most events Capture MIDI keeps (the newest).
+const CAPTURE_MAX: usize = 100_000;
+
+/// While not recording (each frame): what the audio thread heard while playing, kept for Capture
+/// MIDI (the newest [`CAPTURE_MAX`]).
+pub(crate) fn collect_capture(app: &mut SoundApp) {
+    if let Some(h) = &app.midi_hub {
+        h.take_captured(&mut app.midi_capture);
+    }
+    if app.midi_capture.len() > CAPTURE_MAX {
+        let extra = app.midi_capture.len() - CAPTURE_MAX;
+        app.midi_capture.drain(..extra);
+    }
+}
+
+/// Event › More MIDI › Capture MIDI: what was played on the MIDI inputs during the playback under
+/// way (or the last one) without recording becomes a take on the record-armed MIDI and instrument
+/// tracks (or, with none armed, the selected ones), placed as a recorded take is (latency, input
+/// filter, record mode, input quantize): over the loop when it looped, else from the bar where it
+/// began to the end of the bar where it ended. One undo step.
+pub(crate) fn capture(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    collect_capture(app);
+    let heard = std::mem::take(&mut app.midi_capture);
+    let events = recorded_events(app, &heard);
+    if events.is_empty() {
+        return Err("Nothing was played to capture: play along while the transport runs, then Capture MIDI.".into());
+    }
+    let latency = take_latency(app);
+    let s = app.engine.session();
+    let (sr, tempo) = (s.sample_rate, &s.tempo);
+    let looped = app.play_loop.filter(|_| events.iter().any(|e| e.pass > 0));
+    let take = match looped {
+        Some(l) => soundcraft_engine::midi_record::MidiTake { start: l.start, end: l.end, looped: Some(l), punch: None, latency },
+        None => {
+            let first = events.iter().map(|e| e.at.saturating_sub(latency)).min().unwrap_or(0).max(0);
+            let last = events.iter().map(|e| e.at).max().unwrap_or(first);
+            let bar = |at: soundcraft_time::Samples| tempo.bar_beat_at_tick(tempo.samples_to_ticks(at, sr)).bar;
+            let start = tempo.tick_to_samples(tempo.bar_start_tick(bar(first)), sr).min(first);
+            let end = tempo.tick_to_samples(tempo.bar_start_tick(bar(last).saturating_add(1)), sr).max(last.saturating_add(1));
+            soundcraft_engine::midi_record::MidiTake { start, end, looped: None, punch: None, latency }
+        }
+    };
+    let armed = soundcraft_engine::midi_record::armed_midi_tracks(s);
+    let tracks: Vec<soundcraft_model::TrackId> = if armed.is_empty() {
+        s.tracks
+            .iter()
+            .filter(|t| s.edit.selected_tracks.contains(&t.id) && t.kind.is_midi() && matches!(t.mixer.input, Route::Midi(_)))
+            .map(|t| t.id)
+            .collect()
+    } else {
+        armed
+    };
+    if tracks.is_empty() {
+        app.midi_capture = heard;
+        return Err("Capture MIDI needs a record-armed (or selected) MIDI or instrument track on a MIDI input.".into());
+    }
+    let ids = soundcraft_engine::midi_record::record_midi_on(&mut app.engine, &tracks, &take, &events);
+    app.ui.status = format!("Captured {} clip(s)", ids.len());
+    Ok(serde_json::json!({"clips": ids}))
+}
+
 /// Recorded MIDI events the take lost because the window did not collect them in time (it
 /// stopped drawing, and the record ring filled).
 pub(crate) fn lost_in_take(app: &SoundApp) -> u64 {
@@ -370,6 +431,27 @@ mod tests {
         };
         assert_eq!((pitch(keys), pitch(typed)), (Some(60), Some(72)));
         assert!(app.midi_rec.is_empty());
+    }
+
+    #[test]
+    fn capture_midi_makes_a_take_of_what_was_just_played() {
+        use soundcraft_playback::midi_in::{RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        assert!(app.run("ui.capture_midi", json!({})).is_err(), "nothing played yet");
+        // Played (not recorded) a little into bar 2 at 120 bpm: a bar is 96,000 samples.
+        let note = |at: i64, msg: [u8; 3]| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass: 0 };
+        app.midi_capture = vec![note(100_000, [0x90, 60, 100]), note(130_000, [0x80, 60, 0])];
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        let r = app.run("ui.capture_midi", json!({})).unwrap();
+        let id = soundcraft_model::ClipId(r["clips"][0].as_u64().unwrap());
+        let (_, c) = app.engine.session().find_clip(id).unwrap();
+        assert_eq!((c.start, c.length), (96_000, 96_000), "the bar it was played in");
+        let n = c.midi_playing().unwrap().notes[0];
+        assert_eq!((n.pitch, n.length), (60, 30_000 * 960 / 24_000));
+        assert!(app.midi_capture.is_empty(), "captured once");
+        assert_eq!(app.engine.undo_label(), Some("Record"));
     }
 
     #[test]

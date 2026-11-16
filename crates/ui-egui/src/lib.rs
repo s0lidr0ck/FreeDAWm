@@ -798,6 +798,9 @@ pub struct SoundApp {
     /// The hub's count of recorded events lost (the window did not collect them in time) when
     /// the take started: what it counts beyond is this take's loss, reported at Stop.
     pub(crate) midi_rec_lost_at: u64,
+    /// What was played on the MIDI inputs during the playback under way (or the last one), not
+    /// recorded: Event › More MIDI › Capture MIDI makes a take of it (`midi_devices::capture`).
+    pub(crate) midi_capture: Vec<soundcraft_playback::midi_in::RecordedMidi>,
     /// The last local MIDI take as recorded (events as heard, and where they go), for a remote
     /// recorder to send to the booth (`net_ui`).
     pub(crate) last_midi_take: Option<(soundcraft_engine::midi_record::MidiTake, Vec<soundcraft_engine::midi_record::RecordedEvent>)>,
@@ -1014,6 +1017,7 @@ impl SoundApp {
             midi_window_was_open: false,
             midi_rec: Vec::new(),
             midi_rec_lost_at: 0,
+            midi_capture: Vec::new(),
             last_midi_take: None,
             last_audio_take: None,
             play_from: 0,
@@ -1377,6 +1381,8 @@ impl SoundApp {
         }
         self.play_from = from;
         self.play_loop = looped;
+        // A new playback: what Capture MIDI keeps starts again.
+        self.midi_capture.clear();
         self.countoff = countoff.filter(|_| self.player.is_some());
         if let Some(p) = &self.player {
             p.set_band_library(self.engine.band_library());
@@ -2556,6 +2562,8 @@ impl SoundApp {
         if self.engine.transport.recording {
             self.refine_take_plan();
             midi_devices::collect(self);
+        } else {
+            midi_devices::collect_capture(self);
         }
         self.poll_measure();
         if self.measuring.is_some() {

@@ -9,6 +9,7 @@ use soundcraft_engine::catalog;
 /// UI-layer commands: (id, label, catalog path or "", shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", "", None),
+    ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
@@ -1136,6 +1137,9 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    if id == "ui.capture_midi" {
+        return Some(crate::midi_devices::capture(app));
     }
     // The MIDI Editor's state and tools: `linked` sets its 🔗 Link; Select all, Split, Join,
     // Grid, ghosts, zoom and the note bar (`midi_edit_tools::command`).

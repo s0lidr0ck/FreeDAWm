@@ -156,7 +156,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Count-in | ● | ● | ● | ● | **Works**: Setup › Click/Countoff… sets the bars and the click |
 | Notes played during the count-in are kept as a pickup | ● | ● | ● | ● | **Missing**: deliberately not taken |
 | Metronome, optionally only while recording | ● | ● | ● | ● | **Works** |
-| Capture what was just played without having pressed Record | ● | ● | ● | ● | **Flag only**: the command exists; no buffer listens |
+| Capture what was just played without having pressed Record | ● | ● | ● | ● | **Works** while the transport plays: Event › More MIDI › Capture MIDI (desktop) makes a take of the playback under way or the last one, on the armed (or selected) tracks; not with the transport stopped |
 | Recording starts at the first note played | ● | ○ | ○ | ○ | **Missing** |
 | The take is drawn as it is played | ● | ● | ● | ● | **Works** |
 | Footswitch punch; record from a controller's transport keys | ● | ● | ● | ● | **Missing** |
@@ -329,3 +329,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI takes follow QuickPunch's punches: punch out and keep playing works for MIDI |
 | 2026-11-16 | minor | Record modes: Replace, Merge (the MIDI Merge switch, read at last) and New Playlist; merged loop passes add up; settles bug 3 |
 | 2026-11-16 | minor | MIDI Track Offsets apply to what is recorded |
+| 2026-11-16 | minor | Capture MIDI: what was just played without Record becomes a take |
