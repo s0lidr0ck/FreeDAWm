@@ -21,7 +21,7 @@
 //! point. A pass, and everything dragged during it, is one undo step. Nothing here runs on the
 //! audio thread: it edits the document, which the player picks up as for any edit.
 
-use super::mix::{current_value, is_link_role_param};
+use super::mix::{current_value, grouped_ids, is_link_role_param};
 use super::{CommandSpec, always, bad, has_selection, str_param, tracks_required};
 use crate::{Engine, Result};
 use serde_json::{Value, json};
@@ -136,6 +136,26 @@ fn is_switch(p: &AutoParam) -> bool {
     matches!(p, AutoParam::Mute | AutoParam::SendMute(_))
 }
 
+/// `held` plus, for a fader or a mute, the same control of the tracks that share it through an
+/// active mix group: a group member moves with the held one, so it is held as long (without this
+/// a member stopped writing half a second after the dragged fader stood still).
+fn with_group(s: &Session, held: Vec<(TrackId, AutoParam)>) -> Vec<(TrackId, AutoParam)> {
+    let mut out = held.clone();
+    for (t, p) in held {
+        let attr = match p {
+            AutoParam::Volume => "volume",
+            AutoParam::Mute => "mute",
+            _ => continue,
+        };
+        for m in grouped_ids(s, t, attr) {
+            if !out.iter().any(|x| x.0 == m && x.1 == p) {
+                out.push((m, p.clone()));
+            }
+        }
+    }
+    out
+}
+
 /// Whether `p` still names something on the track (a module lane whose module was removed, a send
 /// lane whose send is gone, a panner the track does not have) and may be written.
 fn writable(s: &Session, t: TrackId, p: &AutoParam) -> bool {
@@ -161,21 +181,26 @@ impl Engine {
         }
     }
 
-    /// Hold (or let go of) a control, as a touch-sensitive fader does.
+    /// Hold (or let go of) a control, as a touch-sensitive fader does. Holding a fader or a mute
+    /// in a mix group holds the group's (they move with it).
     pub fn automation_hold(&mut self, track: TrackId, param: AutoParam, on: bool) {
-        let w = &mut self.auto_write;
-        w.held.retain(|x| !(x.0 == track && x.1 == param));
-        if on {
-            w.held.push((track, param));
-        } else {
-            // A let-go control stops writing now, not half a second later.
-            w.pulses.retain(|x| !(x.0 == track && x.1 == param));
+        for (track, param) in with_group(self.session(), vec![(track, param)]) {
+            let w = &mut self.auto_write;
+            w.held.retain(|x| !(x.0 == track && x.1 == param));
+            if on {
+                w.held.push((track, param));
+            } else {
+                // A let-go control stops writing now, not half a second later.
+                w.pulses.retain(|x| !(x.0 == track && x.1 == param));
+            }
         }
     }
 
     /// The controls the host's pointer holds this frame (a fader or a knob being dragged, even
-    /// standing still). Replaces the last frame's list; one let go stops writing at once.
+    /// standing still), with their mix groups' (see [`Engine::automation_hold`]). Replaces the
+    /// last frame's list; one let go stops writing at once.
     pub fn automation_ui_held(&mut self, held: Vec<(TrackId, AutoParam)>) {
+        let held = with_group(self.session(), held);
         let w = &mut self.auto_write;
         for x in &w.ui_held {
             if !held.contains(x) {
@@ -471,6 +496,27 @@ mod tests {
         assert_eq!(play(&mut e, 30 * q), 1);
         e.automation_ui_held(Vec::new());
         assert_eq!(play(&mut e, 31 * q), 0);
+    }
+
+    /// Mix bug 6: the members of a group stopped writing half a second after the dragged fader
+    /// stood still, while it was still held.
+    #[test]
+    fn a_held_grouped_fader_holds_its_group() {
+        let mut e = crate::demo::demo_engine();
+        e.execute("track.group", &json!({"tracks": [3, 6]})).unwrap();
+        e.execute("mix.automation_mode", &json!({"tracks": [3, 6], "mode": "touch"})).unwrap();
+        let (a, b) = (TrackId(3), TrackId(6));
+        let q = i64::from(e.session().sample_rate.hz()) / 10;
+        play(&mut e, 0);
+        e.automation_ui_held(vec![(a, AutoParam::Volume)]);
+        e.execute("mix.volume", &json!({"tracks": [a.0], "db": -3.0})).unwrap();
+        for i in 1..=20 {
+            assert_eq!(play(&mut e, i * q), 2, "both faders write at {i}");
+        }
+        e.automation_ui_held(Vec::new());
+        assert_eq!(play(&mut e, 21 * q), 0, "let go, the group stops at once");
+        stop(&mut e, 22 * q);
+        assert_eq!(points(&e, b, &AutoParam::Volume).len(), points(&e, a, &AutoParam::Volume).len());
     }
 
     #[test]

@@ -215,7 +215,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// `t` plus the members of its active mix groups that share `attr`.
-fn grouped_ids(s: &Session, t: TrackId, attr: &str) -> Vec<TrackId> {
+pub(super) fn grouped_ids(s: &Session, t: TrackId, attr: &str) -> Vec<TrackId> {
     let mut ids = vec![t];
     for g in &s.groups {
         if g.active && g.mix && g.members.contains(&t) && g.attributes.iter().any(|a| a == attr) {
