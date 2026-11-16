@@ -2173,6 +2173,31 @@ impl SoundApp {
         self.forget_measure();
     }
 
+    /// Discard Take: stop, and throw the take away. Nothing is placed, the take files go, and
+    /// the MIDI heard is dropped.
+    fn discard_recording(&mut self) {
+        if !self.engine.transport.recording {
+            return;
+        }
+        self.engine.transport.recording = false;
+        if let Some(p) = &self.player {
+            p.set_recording(false);
+        }
+        let (takes, _) = self.recorder.as_mut().map(soundcraft_playback::record::Recorder::finish).unwrap_or_default();
+        for (_, path) in &takes {
+            if let Err(e) = std::fs::remove_file(path) {
+                log::warn!("discard take: {}: {e}", path.display());
+            }
+        }
+        self.midi_rec.clear();
+        self.take_plan = None;
+        self.punch = None;
+        // The autosave forgets the plan (nothing to recover).
+        self.autosaved_rev = 0;
+        self.stop_play();
+        self.ui.status = if takes.is_empty() { "Take discarded".into() } else { format!("Take discarded ({} file(s) deleted)", takes.len()) };
+    }
+
     fn finish_recording(&mut self) {
         self.engine.transport.recording = false;
         if let Some(p) = &self.player {
@@ -2383,6 +2408,7 @@ impl SoundApp {
                 TransportRequest::AllNotesOff => {}
                 TransportRequest::ScoutStart { capture, strips, start, end } => scout::start(self, capture, &strips, start, end),
                 TransportRequest::ScoutStop => scout::stop(self),
+                TransportRequest::DiscardTake => self.discard_recording(),
             }
         }
         self.follow_loop_changes();

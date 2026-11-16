@@ -19,6 +19,7 @@ mod clip_clean;
 mod clip_list;
 mod clip_more;
 pub mod comp;
+mod discard_take;
 mod edit;
 mod edit_more;
 pub mod editor_link;
@@ -160,6 +161,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(module_record::specs());
         v.extend(record_print::specs());
         v.extend(record_format::specs());
+        v.extend(discard_take::specs());
         v.extend(edit_more::specs());
         v.extend(view::specs());
         v.extend(track::specs());

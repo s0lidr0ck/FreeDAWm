@@ -134,6 +134,8 @@ pub enum TransportRequest {
     },
     /// `scout.capture` stop: end the armed capture (it comes back to be stored with `scout.store`).
     ScoutStop,
+    /// `transport.discard_take`: stop, and throw the take being recorded away (its files too).
+    DiscardTake,
 }
 
 /// Snapshot of the transport reported back by the host (playback position etc.).
