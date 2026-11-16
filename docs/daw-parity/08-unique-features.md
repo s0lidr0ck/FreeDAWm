@@ -183,13 +183,13 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 
 | # | What | Where | Status |
 |---|---|---|---|
-| 1 | Object/Bed switch on the mixer strip and the Renderer window: the switch is stored and drawn; no audio path reads it, and the Renderer only draws speakers and dots | `engine/src/cmd/track_more.rs:21-40`; `ui-egui/src/mix_window.rs:408-414`; `ui-egui/src/extra_windows.rs:86-145` | **Labelled** (COMMIT_row1): the switch's hover, its command's description and the Renderer window say that objects are not rendered yet and play through their panners into the bed. Rendering objects is the mixing section's work ([section 3](03-mixing.md)) |
-| 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` | **Done** (COMMIT_row2): the panner encodes every order the track carries (ACN, SN3D, to 7th order in the DSP), so 2nd and 3rd order are filled; the mixer carries at most 16 channels, so 4th to 7th order are no longer offered and are refused by the commands that make tracks, busses and outputs. The decoder to speakers is still first order |
-| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` |  |
-| 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (COMMIT_row4): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
-| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (COMMIT_row5): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23) |
-| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (COMMIT_row6): the Network window and the pairing prompt say that a paired device can do everything the user can, and that the local link is not encrypted while the internet one is. The encrypted local link is tier 4 |
-| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (COMMIT_video): Bounce to Movie uses both |
+| 1 | Object/Bed switch on the mixer strip and the Renderer window: the switch is stored and drawn; no audio path reads it, and the Renderer only draws speakers and dots | `engine/src/cmd/track_more.rs:21-40`; `ui-egui/src/mix_window.rs:408-414`; `ui-egui/src/extra_windows.rs:86-145` | **Labelled** (943143a): the switch's hover, its command's description and the Renderer window say that objects are not rendered yet and play through their panners into the bed. Rendering objects is the mixing section's work ([section 3](03-mixing.md)) |
+| 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` | **Done** (a2e9845): the panner encodes every order the track carries (ACN, SN3D, to 7th order in the DSP), so 2nd and 3rd order are filled; the mixer carries at most 16 channels, so 4th to 7th order are no longer offered and are refused by the commands that make tracks, busses and outputs. The decoder to speakers is still first order |
+| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
+| 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
+| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a) |
+| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can, and that the local link is not encrypted while the internet one is. The encrypted local link is tier 4 |
+| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (3b781d6): Bounce to Movie uses both |
 
 ## Suggested order of work
 
@@ -205,19 +205,19 @@ local link allows in the Network window (row 6).
 
 | Work | Est. (h) | Why | Status |
 |---|---:|---|---|
-| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) |  |
-| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (COMMIT_loudness): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (COMMIT_video): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
-| Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (COMMIT_scout): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
-| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option |  |
-| Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (COMMIT_transcript): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
-| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once |  |
-| Modulators for any parameter | 10–16 | Also in section 5's list |  |
-| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback |  |
-| Mixer snapshots | 6–10 | |  |
+| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) | **Not started here**: section 7's work (its rows are still Missing); not begun so as not to cross it |
+| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (ca44ec5): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (3b781d6): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
+| Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (06244b1): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
+| Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Not started**: it needs the note-level timing the vocal edits do not have (see the design below) |
+| Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
+| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Another section's** ([section 5](05-built-in-effects.md)) |
+| Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)) |
+| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback | **Not started**: section 3 has it not started; left for later, after this section's own items |
+| Mixer snapshots | 6–10 | | **Not started**: as the control room |
 | Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first | **Deferred by the owner** (2026-11-16): not to be built for now |
-| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it |  |
-| Atmos: objects and beds routed for real, ADM export, a binaural monitor | 30–50 | A renderer of FreeDAWm's own; Dolby's needs a licence. Also in [section 3](03-mixing.md) |  |
-| ARA 2 hosting | 30–45 | Also in [section 4](04-editing-audio.md) |  |
+| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it | **Not started**: design below |
+| Atmos: objects and beds routed for real, ADM export, a binaural monitor | 30–50 | A renderer of FreeDAWm's own; Dolby's needs a licence. Also in [section 3](03-mixing.md) | **Another section's** ([section 3](03-mixing.md)) |
+| ARA 2 hosting | 30–45 | Also in [section 4](04-editing-audio.md) | **Another section's** ([section 4](04-editing-audio.md)) |
 
 **3. Not worth chasing, or not possible.** Hardware DSP mixing and EUCON (tied to one maker's
 hardware); cloud collaboration and tablet companions (a service and second app to run); a large
@@ -226,9 +226,44 @@ public documentation; DAWproject covers the modern case); a live-show page and f
 workflow (specialist; revisit if users ask); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
-sessions kept between visits (12–18); talkback and encrypted local links for remote recording
-(10–16); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
-and the scan helper is a start); a first-run tour (4–6): **done** (COMMIT_tour), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+sessions kept between visits (12–18; not started, design below); talkback and encrypted local links for remote recording
+(10–16; not started, design below); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
+and the scan helper is a start; not started, design below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+
+**Designs for the larger items, not built yet.** Each was judged too big to finish well in the
+same pass as the items above; these are the starting points.
+
+- *Mastering page (24–36 h).* A release file of its own (`.fdrel`, JSON) beside sessions: an
+  ordered list of songs, each a session (bounced on demand, so a song follows its mix) or an audio
+  file; per song a gain or loudness target (the bounce's two-pass measurement, already there), a
+  gap and fades; one shared master chain plus a chain per song, run offline through
+  `RangeRender`. A `release.*` command family (add, move, remove, set, render) and a page that
+  shows the songs in a row with their integrated loudness, true peak and the album's. Export:
+  one file per song plus one continuous file with a cue sheet; DDP later.
+- *Recording and sessions kept in the browser build (12–18 h).* Input through `getUserMedia`
+  into an `AudioWorklet` that posts 128-frame blocks over a `MessagePort` (a `SharedArrayBuffer`
+  ring needs cross-origin isolation from the host, which the page cannot assume), into the same
+  `Recorder` take buffer the desktop uses; latency from `AudioContext.outputLatency` plus
+  `baseLatency`. Sessions and takes kept in the origin-private file system (OPFS) as the autosave
+  folder, so a visit picks up where the last left off; the Record refusal added here goes away.
+- *Encrypted local link (part of 10–16 h).* Reuse the internet path's QUIC (TLS 1.3) on the local
+  network instead of the plain TCP link: each side keeps a self-signed key; pairing runs a
+  password-authenticated key exchange (SPAKE2 or similar) over the 4-digit code, which binds both
+  keys, so a machine in the middle of the first contact learns nothing and cannot pass; later
+  connections pin the keys. QUIC needs a UDP socket beside today's TCP listener: a new listening
+  socket, so the owner decides before it is built. Talkback then rides the existing live-mix
+  stream in the other direction.
+- *Plug-ins in their own process (16–28 h).* One helper process per hosted plug-in (the scan
+  helper's launcher is the start), audio through shared memory, one block of added latency so
+  the audio callback never waits: it hands block *n* over and takes block *n − 1*'s result; a
+  block not back in time is silence and a counted overrun. Parameters, state and the editor
+  window over a pipe. A helper that dies bypasses its slot, says so, and is restarted from the
+  last stored state on request.
+- *Timing alignment of stacked vocals (10–16 h).* Pair each note of the backing part with the
+  lead note it overlaps; a warp map from the backing note starts and ends to the lead's, limited
+  to a set distance; rendered as Straighten renders warp markers, with the tuning analysis
+  re-run on the result (note edits are tied to the audio they were made on, which is why this is
+  not a small change).
 
 ## Sources
 
@@ -247,5 +282,5 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export; a first-run tour |
+| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export; a first-run tour; where the rest stands, and designs for the larger items |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |
