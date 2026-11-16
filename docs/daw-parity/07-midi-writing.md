@@ -340,7 +340,7 @@ and it changes notes the user did not select. Then 5 and 4 (edits that lose or h
 | Playback: start long notes already sounding, per-pitch counting, per-note channel, an index so dense clips cost little | 6–10 | Bugs 9 and 19 |
 | Automation of instrument parameters; instrument latency compensated; moves in a plug-in window recorded | 8–12 | Bug 23 |
 | Synth brought up to a usable standard: LFOs, filter types and slopes, unison, sub and noise, mono mode, stereo, presets, an editor | 14–22 | |
-| Sampler with many zones, SFZ import, sustain and bend; presets | 12–18 | Sustain pedal, pitch bend with a Bend Range setting (0–24 semitones, 2 by default) and the mod wheel (vibrato at the LFO's rate up to Mod Wheel Vibrato, 0 by default by the owner's decision so a session made before plays its mod-wheel data as it did; turn it up for vibrato) done, in the synth too; zones, SFZ and presets remain |
+| Sampler with many zones, SFZ import, sustain and bend; presets | 12–18 | Sustain pedal, pitch bend with a Bend Range setting (0–24 semitones, 2 by default) and the mod wheel (vibrato at the LFO's rate up to Mod Wheel Vibrato, 0 by default by the owner's decision so a session made before plays its mod-wheel data as it did; turn it up for vibrato; `2a60fad`) done, in the synth too; zones, SFZ and presets remain |
 | A sampled piano and a small general library | 8–14 | Needs samples the project may ship; owner's call |
 | Arranger sections for clips; insert and cut time that move everything; global transpose | 8–14 | Bug 14 |
 | Drag .mid in and out; preview of presets and MIDI files; paste between sessions | 6–10 | |
@@ -389,3 +389,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Bugs 27, 29 and 30 fixed: band-limited reading of pitched-up samples, a replaced sampler sound freed off the audio thread, Juke's stereo pads and full tails; Bend Range and mod-wheel vibrato on the synth and sampler |
 | 2026-11-16 | minor | MIDI clips: per-clip transpose and velocity offset, Reverse Clip, Note Chase |
 | 2026-11-16 | minor | Mod Wheel Vibrato on the synth and sampler defaults to 0 (owner's decision): older sessions sound as before |
+| 2026-11-16 | minor | Commits noted on the third round's MIDI rows |
