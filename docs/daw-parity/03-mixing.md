@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: group attributes and Suspend All Groups) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a new send brings its return and takes a default level) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -95,8 +95,8 @@ miss a peak, and can read pre-fader).
 | Eight or more sends, pre or post fader | ● | ● | ● | ● | **Works**: ten |
 | Send level, pan and mute, automatable | ● | ● | ● | ● | **Works**: a stereo send's pan balances it |
 | Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Partial**: busses only |
-| A new send comes with its return | ● | ● | ● | ● | **Missing**: a send to a new bus is silent until an aux is made for it |
-| Default send level setting | ● | ◐ | ● | ◐ | **Missing**: a new send starts at −∞ |
+| A new send comes with its return | ● | ● | ● | ● | **Works**: a send to a new bus from the Mix window makes its aux (`mix.send` `return: true`) |
+| Default send level setting | ● | ◐ | ● | ◐ | **Works**: silent or 0 dB (Options › More › Default Send Level; any level by `mix.default_send_level`) |
 | Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Missing**: mute silences every send |
 | Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Partial**: copies volume only and ignores the selected range |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
@@ -271,7 +271,7 @@ one a mix engineer would not forgive.
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Pre-fader option and click-free output meter done**; RMS, scales and a master loudness meter remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
-| Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes |
+| Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Return, default level and loop refusal done**; sends to tracks and hardware outputs remain |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
 | Real-time bounce | 4–6 | |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command) and suspend all done**; attributes in the Group dialog, VCA assignment in the mixer and nested VCAs remain |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: a new send brings its return and takes a default level |
 | 2026-11-16 | minor | tier 2: group attributes and Suspend All Groups |
 | 2026-11-16 | minor | tier 2: fader-section automation sample-accurate and delay-compensated |
 | 2026-11-16 | minor | tier 2: pre-fader metering |

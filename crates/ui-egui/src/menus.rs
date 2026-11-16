@@ -815,6 +815,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         // Only Solo in Place and X-OR are offered: X-OR is on or it isn't.
         Some("options.solo_mode") => e.solo_mode.contains("xor") == leaf.starts_with("X-OR"),
         Some("mix.pan_law") => Some(soundcraft_engine::cmd::pan_law::current(app.engine.session())) == pan_law_db(leaf),
+        Some("mix.default_send_level") => soundcraft_engine::cmd::default_send_db(app.engine.session()) == default_send_db(leaf),
         Some(i) if i.starts_with("view.edit_") && !matches!(i, "view.edit_all" | "view.edit_minimal") => {
             e.flag("edit_view.all") || i.strip_prefix("view.edit_").is_some_and(|v| e.flag(&format!("edit_view.{v}")))
         }
@@ -898,6 +899,11 @@ fn selected_clips_all(app: &SoundApp, f: impl Fn(&soundcraft_model::Clip) -> boo
     !clips.is_empty() && clips.into_iter().all(f)
 }
 
+/// `mix.default_send_level`'s level for a Default Send Level item ("Silent" or "0 dB").
+fn default_send_db(leaf: &str) -> f32 {
+    leaf.trim_end_matches("dB").trim().parse().unwrap_or(-144.0)
+}
+
 /// `mix.pan_law`'s law for a Pan Law item ("-4.5 dB").
 fn pan_law_db(leaf: &str) -> Option<f64> {
     leaf.trim_end_matches("dB").trim().parse().ok()
@@ -961,6 +967,7 @@ fn params_for(path: &str, id: &str) -> Value {
         "view.main_counter" => json!({"format": ruler_id(leaf)}),
         "options.scrolling" => json!({"mode": scrolling_mode(leaf)}),
         "mix.pan_law" => json!({"law": pan_law_db(leaf)}),
+        "mix.default_send_level" => json!({"db": default_send_db(leaf)}),
         "options.solo_mode" => {
             json!({"mode": if leaf.starts_with("AFL") { "afl" } else if leaf.starts_with("PFL") { "pfl" } else { "sip" }, "xor": leaf.starts_with("X-OR")})
         }

@@ -2025,7 +2025,7 @@ fn send_route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, cu
         while busses.iter().any(|bus| bus.name == format!("Bus {n}")) || app.engine.session().track_by_name(&format!("Bus {n}")).is_some() {
             n += 1;
         }
-        let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}")}));
+        let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}"), "return": true}));
         ui.close();
     }
 }

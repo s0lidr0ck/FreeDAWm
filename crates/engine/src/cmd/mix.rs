@@ -157,6 +157,24 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({}))
         }),
         cmd!("mix.send_level", "Send Level", [], None, "{track?, slot, db?, pan?, mute?, pre_fader?}", has_selection, send_level),
+        cmd!(
+            "mix.default_send_level",
+            "Default Send Level",
+            ["Options", "More", "Default Send Level"],
+            None,
+            "{db: -144..12 — the level a new send starts at (-144: silent)} → {db}",
+            always,
+            |e, p| {
+                let db = p
+                    .get("db")
+                    .and_then(Value::as_f64)
+                    .filter(|d| d.is_finite())
+                    .ok_or_else(|| bad("mix.default_send_level", "`db` (number) required"))?;
+                let db = db.clamp(-144.0, 12.0);
+                e.session_mut().edit.values.insert(DEFAULT_SEND_KEY.into(), db);
+                Ok(json!({"db": db}))
+            }
+        ),
         cmd!("mix.new_bus", "New Bus", [], None, "{name, format?: stereo}", always, |e, p| {
             let name = str_param(p, "name").filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("mix.new_bus", "`name` required"))?.to_string();
             let fmt = str_param(p, "format").and_then(soundcraft_model::ChannelFormat::from_id).unwrap_or(soundcraft_model::ChannelFormat::Stereo);
@@ -478,21 +496,43 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
         let name = e.session().track(t).map(|x| x.name.clone()).unwrap_or_default();
         return Err(bad("mix.send", format!("That would feed `{name}` into itself")));
     }
+    // A send to a bus made for it comes with its return (`return: true`, as the Mix window's
+    // "new bus..." asks): an aux on that bus, playing to the main mix.
+    let with_return = bool_or(p, "return", false) && e.session().bus_by_name(&bus).is_none();
+    let default_db = default_send_db(e.session());
     let s = e.session_mut();
     let bid = s.add_bus(&bus, soundcraft_model::ChannelFormat::Stereo);
     let tr = s.track_mut(t).ok_or_else(|| bad("mix.send", "no track"))?;
     let slot = explicit.or_else(|| tr.mixer.sends.iter().position(Option::is_none)).ok_or_else(|| bad("mix.send", "all send slots are in use"))?;
-    // Re-targeting an existing send keeps its level, pan, mute and pre/post setting.
+    // Re-targeting an existing send keeps its level, pan, mute and pre/post setting; a new one
+    // starts at the default send level.
     let mut sl = match tr.mixer.sends.get(slot).cloned().flatten() {
         Some(old) => SendSlot { target: soundcraft_model::Route::Bus(bid), ..old },
-        None => SendSlot::new(soundcraft_model::Route::Bus(bid)),
+        None => SendSlot { level_db: default_db, ..SendSlot::new(soundcraft_model::Route::Bus(bid)) },
     };
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
-    Ok(json!({"slot": slot, "bus": bid}))
+    let ret = with_return.then(|| {
+        let aux = s.add_track(soundcraft_model::TrackKind::Aux, soundcraft_model::ChannelFormat::Stereo, Some(&bus));
+        if let Some(a) = s.track_mut(aux) {
+            a.mixer.input = soundcraft_model::Route::Bus(bid);
+            a.mixer.output = soundcraft_model::Route::Main;
+        }
+        aux
+    });
+    Ok(json!({"slot": slot, "bus": bid, "return": ret}))
+}
+
+/// The `s.edit.values` key of the level a new send starts at, dB (−144: silent, as Pro Tools'
+/// default).
+pub const DEFAULT_SEND_KEY: &str = "mix.default_send_db";
+
+/// The level a new send starts at.
+pub fn default_send_db(s: &Session) -> f32 {
+    (s.edit.value(DEFAULT_SEND_KEY, -144.0) as f32).clamp(-144.0, 12.0)
 }
 
 fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1152,6 +1192,31 @@ mod tests {
         e.execute("mix.volume", &json!({"tracks": [a.0], "db": -6.0})).unwrap();
         assert_eq!(e.session().track(b).unwrap().mixer.volume_db, 6.0);
         assert!(e.execute("track.group", &json!({"tracks": [a.0], "attributes": ["colour"]})).is_err());
+    }
+
+    /// Tier 2: a new send starts at the default send level, and a send to a bus made for it
+    /// comes with its return.
+    #[test]
+    fn a_new_send_takes_the_default_level_and_can_bring_its_return() {
+        let mut e = Engine::default();
+        let t = e.execute("track.new", &json!({"count": 1})).unwrap()["tracks"][0].as_u64().unwrap();
+        let level = |e: &Engine, slot: usize| e.session().track(TrackId(t)).unwrap().mixer.sends[slot].as_ref().unwrap().level_db;
+        e.execute("mix.send", &json!({"tracks": [t], "bus": "A", "slot": 0})).unwrap();
+        assert_eq!(level(&e, 0), -144.0, "silent by default");
+        e.execute("mix.default_send_level", &json!({"db": 0.0})).unwrap();
+        let r = e.execute("mix.send", &json!({"tracks": [t], "bus": "Verb", "slot": 1, "return": true})).unwrap();
+        assert_eq!(level(&e, 1), 0.0);
+        let aux = e.session().track(TrackId(r["return"].as_u64().unwrap())).unwrap();
+        assert_eq!(aux.kind, soundcraft_model::TrackKind::Aux);
+        assert_eq!(aux.mixer.input, soundcraft_model::Route::Bus(e.session().bus_by_name("Verb").unwrap().id));
+        // An existing bus brings no second return; a level given wins over the default.
+        let n = e.session().tracks.len();
+        let r = e.execute("mix.send", &json!({"tracks": [t], "bus": "Verb", "slot": 2, "return": true, "level_db": -6.0})).unwrap();
+        assert!(r["return"].is_null() && e.session().tracks.len() == n);
+        assert_eq!(level(&e, 2), -6.0);
+        // Retargeting keeps the send's level.
+        e.execute("mix.send", &json!({"tracks": [t], "bus": "B", "slot": 2})).unwrap();
+        assert_eq!(level(&e, 2), -6.0);
     }
 
     /// Mix bug 15: an output or a send that fed a track back into itself was accepted and went

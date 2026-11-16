@@ -99,8 +99,9 @@ fn greyed_out_items_say_why() {
 }
 
 /// Ids whose menu item names its parameter in the label (a ruler, a width, a rating…).
-const PARAMETERISED: [&str; 9] = [
+const PARAMETERISED: [&str; 10] = [
     "view.ruler",
+    "mix.default_send_level",
     "mix.pan_law",
     "view.main_counter",
     "options.scrolling",
@@ -283,7 +284,14 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
     }
     if matches!(
         id,
-        "window.mix" | "window.edit" | "window.workspace" | "options.scrolling" | "options.solo_mode" | "mix.pan_law" | "view.main_counter"
+        "window.mix"
+            | "window.edit"
+            | "window.workspace"
+            | "options.scrolling"
+            | "options.solo_mode"
+            | "mix.pan_law"
+            | "mix.default_send_level"
+            | "view.main_counter"
     ) || id.starts_with("view.waveform_p")
         || id.starts_with("view.clip_time_")
     {
