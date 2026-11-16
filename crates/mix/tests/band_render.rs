@@ -149,7 +149,16 @@ fn musician_input_plays_the_band_not_the_clips() {
     lay_song(&mut s, 0);
     let t = musician_track(&mut s, 0);
     let mut seq = soundcraft_midi::Sequence::default();
-    seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 480 });
+    seq.notes.push(soundcraft_midi::Note {
+        probability: 100,
+        pitch: 60,
+        velocity: 100,
+        muted: false,
+        release_velocity: 64,
+        channel: 0,
+        start: 0,
+        length: 480,
+    });
     let cid = s.new_clip_id();
     s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 96_000, seq));
     let (inst, log) = tape(t);

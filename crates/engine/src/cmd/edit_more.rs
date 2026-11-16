@@ -1141,6 +1141,7 @@ mod tests {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
         let n = |pitch: u8, channel: u8| soundcraft_midi::Note {
+            probability: 100,
             pitch,
             velocity: 100,
             muted: false,

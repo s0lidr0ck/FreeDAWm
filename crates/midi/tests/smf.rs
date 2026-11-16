@@ -36,7 +36,7 @@ fn file(format: u16, division: u16, bodies: &[Vec<u8>]) -> Vec<u8> {
 }
 
 fn note(pitch: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
+    Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn round_trip() {
     let mut seq = Sequence {
         notes: vec![
             note(60, 0, 480),
-            Note { pitch: 64, velocity: 90, muted: false, release_velocity: 30, channel: 3, start: 480, length: 960 },
+            Note { probability: 100, pitch: 64, velocity: 90, muted: false, release_velocity: 30, channel: 3, start: 480, length: 960 },
             note(67, 960, 1),
             note(60, 1920, 240),
         ],
@@ -134,7 +134,7 @@ fn division_conversion_480_to_960() {
     assert_eq!(smf.tracks.len(), 1);
     assert_eq!(
         smf.tracks[0].sequence.notes,
-        vec![Note { pitch: 60, velocity: 100, muted: false, release_velocity: 0, channel: 0, start: 960, length: 480 }]
+        vec![Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 0, channel: 0, start: 960, length: 480 }]
     );
 }
 
@@ -171,8 +171,8 @@ fn running_status_and_velocity_zero_note_off() {
     assert_eq!(
         seq.notes,
         vec![
-            Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 1, start: 0, length: 960 },
-            Note { pitch: 64, velocity: 90, muted: false, release_velocity: 64, channel: 1, start: 0, length: 960 },
+            Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 1, start: 0, length: 960 },
+            Note { probability: 100, pitch: 64, velocity: 90, muted: false, release_velocity: 64, channel: 1, start: 0, length: 960 },
         ]
     );
     assert_eq!(
@@ -206,8 +206,11 @@ fn unmatched_note_off_ignored_and_hanging_notes_closed() {
     let smf = read_smf(&file(0, 960, &[body])).unwrap();
     let notes = &smf.tracks[0].sequence.notes;
     assert_eq!(notes.len(), 2);
-    assert_eq!(notes[0], Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 1000 });
-    assert_eq!(notes[1], Note { pitch: 62, velocity: 100, muted: false, release_velocity: 10, channel: 0, start: 100, length: 100 });
+    assert_eq!(notes[0], Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 1000 });
+    assert_eq!(
+        notes[1],
+        Note { probability: 100, pitch: 62, velocity: 100, muted: false, release_velocity: 10, channel: 0, start: 100, length: 100 }
+    );
 }
 
 #[test]
@@ -321,7 +324,7 @@ proptest! {
     #[test]
     fn written_files_read_back(notes in proptest::collection::vec((0u8..128, 1u8..128, 0u8..16, 0i64..100_000, 1i64..10_000), 0..64)) {
         let mut seq = Sequence {
-            notes: notes.iter().map(|&(pitch, velocity, channel, start, length)| Note { pitch, velocity, muted: false, release_velocity: 64, channel, start, length }).collect(),
+            notes: notes.iter().map(|&(pitch, velocity, channel, start, length)| Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel, start, length }).collect(),
             ctrls: vec![],
         };
         seq.remove_duplicates();
@@ -344,7 +347,7 @@ proptest! {
 fn writer_clamps_out_of_range_data_bytes() {
     for raw in [127u8, 128, 255] {
         let mut seq = Sequence::default();
-        seq.notes.push(Note { pitch: raw, velocity: 100, muted: false, release_velocity: raw, channel: 0, start: 0, length: 960 });
+        seq.notes.push(Note { probability: 100, pitch: raw, velocity: 100, muted: false, release_velocity: raw, channel: 0, start: 0, length: 960 });
         seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(raw), value: 64, shape: Default::default() });
         seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::PolyPressure(raw), value: 64, shape: Default::default() });
         let smf = Smf { tracks: vec![SmfTrack { name: String::new(), sequence: seq }], ..Smf::default() };

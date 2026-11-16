@@ -56,9 +56,9 @@ The gaps are of four kinds:
 3. **Much of what the four offer around notes was absent.** The second round added note mute,
    grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
    in the editor, controller ramps and a full event list; the third round editing across
-   clips, ramps that play smoothly, shared clip copies and stretching a clip (the rows below
-   say how far each goes). Still absent: an index for dense clips, chord pads, editable drum
-   maps, per-note probability and note entry in the score.
+   clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
+   probability (the rows below say how far each goes). Still absent: an index for dense clips,
+   chord pads, editable drum maps and note entry in the score.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
    filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
    automated, instrument latency is not compensated, and notes from clips reach the instrument
@@ -104,7 +104,7 @@ The gaps are of four kinds:
 | Velocity shown as note colour | ● | ● | ● | ● | **Works** |
 | Scale, compress, limit, randomise velocity | ● | ● | ● | ● | **Partial**: scale has a dialog; limit and randomise are **Flag only** |
 | Release velocity | ● | ◐ | ● | ● | **Flag only**: stored; every edit writes the middle value |
-| Per-note probability | ○ | ● | ◐ | ◐ | **Missing** in notes; present on pattern steps |
+| Per-note probability | ○ | ● | ◐ | ◐ | **Works**: MIDI Editor › More › Probability (0-100 %) on the selected notes (`midi.notes_set` `probability`; the hover shows it). Each pass the clip plays from somewhere new (a start, a locate, a loop turn) rolls every such note again with a generator seeded from the note, its clip and the pass, so a bounce or freeze plays the same notes each time. Sessions saved before load at 100 %, and notes at 100 % save as before. MIDI export writes every note. Pattern steps keep their own |
 | Lanes for any controller, pitch bend, channel pressure; several at once | ● | ● | ● | ● | **Works**, per MIDI channel or every channel with a line each (bug 20, fixed) |
 | Lanes for poly aftertouch and program change | ● | ● | ● | ● | **Works**: a Program Change lane and a Poly Pressure lane per key (Lanes › Poly Pressure lists the keys with data and the selected notes' keys first); a clip with such data opens with them shown |
 | Draw freehand | ● | ● | ● | ● | **Works** |
@@ -271,7 +271,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Import and export standard MIDI files | ● | ● | ● | ● | **Works**; see [section 6](06-midi-recording.md#l-files) and bugs 16 and 17 |
-| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click; dragging a clip out is **Missing** |
+| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file, at their place in the song |
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
 
@@ -394,3 +394,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Several MIDI clips edited at once: the roll spans every selected clip; select, move, copy, resize, delete, draw and quantize act on notes in any of them, one undo step |
 | 2026-11-16 | minor | Controller ramps in the model: Line, Curve and Ramp Between Points write a point with a ramp to the next, played as a value every 32 samples, drawn as a line, written to MIDI files as steps |
 | 2026-11-16 | minor | Shared MIDI clip copies that change together (Make Independent ends it); an Alt-trim stretches a MIDI clip, its notes scaling; a design for indexing dense clips |
+| 2026-11-16 | minor | Per-note probability, rolled each pass with a seeded generator; Export Clip as MIDI (a clip cannot be dragged out to the desktop) |

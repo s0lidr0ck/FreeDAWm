@@ -384,6 +384,7 @@ Clip > Loop = Clip > Loop...
 Clip > Unloop = Clip > Unloop...
 Clip > Duplicate as Shared Copy = @clip.share
 Clip > Make Independent = @clip.make_independent
+Clip > Export Clip as MIDI... = @file.export_clip_midi
 Clip > ---
 Clip > ## Order & groups
 Clip > Send to Back

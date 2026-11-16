@@ -97,6 +97,13 @@ pub fn specs() -> Vec<CommandSpec> {
             crate::io::write_file(&path, &bytes)?;
             Ok(json!({"path": path, "bytes": bytes.len()}))
         }),
+        cmd!(noundo "file.export_clip_midi", "Export Clip as MIDI...", [], None, "{path, clips?} — the selected MIDI clips alone as a .mid file, at their place in the song", has_selection, |e, p| {
+            let path = str_param(p, "path").ok_or_else(|| bad("file.export_clip_midi", "`path` required"))?.to_string();
+            let clips = clip_ids_param(e, p);
+            let bytes = crate::io::export_clips_midi(e, &clips)?;
+            crate::io::write_file(&path, &bytes)?;
+            Ok(json!({"path": path, "bytes": bytes.len()}))
+        }),
         cmd!(
             noundo "file.export_dawproject",
             "DAWproject...",
@@ -737,10 +744,28 @@ mod tests {
         let drums = s.add_track(TrackKind::Midi, ChannelFormat::Mono, Some("Drums"));
         let _audio = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Room"));
         let mut keys_seq = Sequence::default();
-        keys_seq.notes.push(Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 480 });
+        keys_seq.notes.push(Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 480,
+        });
         keys_seq.ctrls.push(CtrlEvent { tick: 10, channel: 0, kind: CtrlKind::Cc(7), value: 90, shape: Default::default() });
         let mut drum_seq = Sequence::default();
-        drum_seq.notes.push(Note { pitch: 36, velocity: 110, muted: false, release_velocity: 64, channel: 9, start: 0, length: 120 });
+        drum_seq.notes.push(Note {
+            probability: 100,
+            pitch: 36,
+            velocity: 110,
+            muted: false,
+            release_velocity: 64,
+            channel: 9,
+            start: 0,
+            length: 120,
+        });
         drum_seq.ctrls.push(CtrlEvent { tick: 20, channel: 9, kind: CtrlKind::Cc(11), value: 40, shape: Default::default() });
         let a = s.new_clip_id();
         let b = s.new_clip_id();
@@ -783,6 +808,13 @@ mod tests {
 
         let err = e.execute("file.export_midi", &json!({"path": dir.join("nope.mid").to_string_lossy(), "tracks": ["Room"]})).unwrap_err();
         assert!(err.to_string().contains("none of the requested tracks hold MIDI"), "{err}");
+
+        // Export Clip as MIDI: the Keys clip alone.
+        let keys_clip = e.session().tracks.iter().find(|t| t.name == "Keys").and_then(|t| t.clips().first()).map(|c| c.id.0).unwrap();
+        let one = dir.join("clip.mid");
+        e.execute("file.export_clip_midi", &json!({"path": one.to_string_lossy(), "clips": [keys_clip]})).unwrap();
+        let ctrls = cc_numbers(&std::fs::read(&one).unwrap());
+        assert_eq!(ctrls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), vec!["Keys"], "{ctrls:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

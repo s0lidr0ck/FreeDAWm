@@ -208,7 +208,7 @@ fn with_channels(h: &mut Harness<'_, SoundApp>, clip: u64) -> Vec<(i64, i64)> {
 #[test]
 fn lanes_show_and_write_one_channel() {
     use soundcraft_midi::{Note, Sequence};
-    let n = |channel| Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel, start: 0, length: 10 };
+    let n = |channel| Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel, start: 0, length: 10 };
     let seq = Sequence { notes: vec![n(2), n(2), n(0)], ctrls: Vec::new() };
     assert_eq!(midi_lanes::main_channel(&seq), 2);
     assert_eq!(midi_lanes::main_channel(&Sequence::default()), 0);

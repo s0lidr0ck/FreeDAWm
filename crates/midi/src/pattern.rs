@@ -308,6 +308,7 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                             return false;
                         }
                         seq.notes.push(Note {
+                            probability: 100,
                             pitch: lane.note,
                             velocity,
                             muted: false,

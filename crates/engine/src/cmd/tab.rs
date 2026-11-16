@@ -266,6 +266,7 @@ mod tests {
         let keys = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
         let mut seq = Sequence::default();
         seq.notes.push(Note {
+            probability: 100,
             pitch: 60,
             velocity: 100,
             muted: false,

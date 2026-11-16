@@ -1398,7 +1398,16 @@ mod tests {
 
     fn note(start: i64, length: i64, pitch: u8) -> soundcraft_midi::Note {
         let q = soundcraft_time::TICKS_PER_QUARTER;
-        soundcraft_midi::Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: start * q, length: length * q }
+        soundcraft_midi::Note {
+            probability: 100,
+            pitch,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: start * q,
+            length: length * q,
+        }
     }
 
     #[test]

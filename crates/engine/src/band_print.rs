@@ -193,7 +193,16 @@ pub fn events_to_sequence(s: &Session, range: Range, events: &[(Samples, [u8; 3]
     let close = |seq: &mut Sequence, ch: u8, pitch: u8, on: Samples, vel: u8, off: Samples, rel: u8| {
         let start = tick(on);
         let length = tick(off).min(last).saturating_sub(start).max(1);
-        seq.notes.push(Note { pitch, velocity: vel.clamp(1, 127), muted: false, release_velocity: rel, channel: ch, start, length });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch,
+            velocity: vel.clamp(1, 127),
+            muted: false,
+            release_velocity: rel,
+            channel: ch,
+            start,
+            length,
+        });
     };
     for &(at, [status, d1, d2], lower) in events {
         if status >= 0xF0 {

@@ -10,7 +10,7 @@ use soundcraft_time::Range;
 const SR: i64 = 48_000;
 
 fn note(pitch: u8, velocity: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity, muted: false, release_velocity: 64, channel: 0, start, length }
+    Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 /// An instrument track with a synth and one MIDI clip at 0 (4 s at the default 120 bpm, so a beat

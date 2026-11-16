@@ -49,7 +49,16 @@ fn service() -> (Engine, TrackId, TrackId, TrackId, SourceId) {
     // The band clip is trimmed: it starts half a second into its file.
     s.track_mut(band).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(c2, "Band_01", bsrc, SR / 2, AT, LEN - SR / 2));
     let mut seq = soundcraft_midi::Sequence::default();
-    seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 });
+    seq.notes.push(soundcraft_midi::Note {
+        probability: 100,
+        pitch: 60,
+        velocity: 100,
+        muted: false,
+        release_velocity: 64,
+        channel: 0,
+        start: 0,
+        length: 960,
+    });
     s.track_mut(keys).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(c3, "Keys", AT, LEN, seq));
     s.add_marker("Amazing Grace", MarkerKind::Marker, M1, M1);
     s.add_marker("Song: 2/B", MarkerKind::Marker, M2, M2);

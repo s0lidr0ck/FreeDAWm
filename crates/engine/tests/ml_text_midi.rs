@@ -135,6 +135,7 @@ fn with_riff(program: Option<i32>, channel: u8) -> (Engine, u64) {
     let mut seq = soundcraft_midi::Sequence::default();
     for (i, pitch) in [60u8, 64, 67].into_iter().enumerate() {
         seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
             pitch,
             velocity: 90,
             muted: false,

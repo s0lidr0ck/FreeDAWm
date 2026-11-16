@@ -43,8 +43,26 @@ fn piano_session() -> Session {
     let q = soundcraft_time::TICKS_PER_QUARTER;
     let mut seq = Sequence::default();
     for (i, (pitch, vel)) in [(60u8, 100u8), (64, 80), (67, 110), (72, 60), (65, 90), (69, 70)].into_iter().enumerate() {
-        seq.notes.push(Note { pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start: i as i64 * q, length: q * 3 / 2 });
-        seq.notes.push(Note { pitch: pitch - 12, velocity: vel, muted: false, release_velocity: 64, channel: 0, start: i as i64 * q, length: q });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch,
+            velocity: vel,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: i as i64 * q,
+            length: q * 3 / 2,
+        });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch: pitch - 12,
+            velocity: vel,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: i as i64 * q,
+            length: q,
+        });
     }
     let cid = s.new_clip_id();
     let len = s.sample_rate.samples(5.0);

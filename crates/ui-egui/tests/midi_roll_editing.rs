@@ -237,7 +237,7 @@ fn pure_helpers() {
     assert_eq!(edge_at(98.0, 100.0), Edge::End);
     // A narrow note has no left edge to grab.
     assert_eq!(edge_at(2.0, 10.0), Edge::Move);
-    let n = |start, length| Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
+    let n = |start, length| Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
     assert_eq!(duplicate_offset(&[n(0, 480), n(480, 300)], 480), 960);
     assert_eq!(duplicate_offset(&[n(100, 480)], 480), 480);
     let p = midi_editor::placed(&[n(500, 10), n(700, 10)], 2000);

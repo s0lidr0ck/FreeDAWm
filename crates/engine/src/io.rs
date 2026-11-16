@@ -538,7 +538,33 @@ pub(crate) fn smf_tempo_map(s: &Session) -> (Vec<(i64, f64)>, Vec<(i64, u8, u8)>
 
 /// Export MIDI clips as a format-1 SMF. `only` limits the file to those tracks.
 pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
-    let s = e.session();
+    export_midi_of(e.session(), only)
+}
+
+/// MIDI clips `clips` alone as a Standard MIDI File (Clip › Export Clip as MIDI): one track a
+/// track, each holding what those clips play (as `export_midi` writes them), at their place in the
+/// song under its tempo map.
+pub fn export_clips_midi(e: &Engine, clips: &[soundcraft_model::ClipId]) -> Result<Vec<u8>> {
+    let mut s = e.session().clone();
+    let mut only = Vec::new();
+    for t in &mut s.tracks {
+        let mut kept = false;
+        for pl in &mut t.playlists {
+            pl.clips.retain(|c| clips.contains(&c.id) && matches!(c.content, soundcraft_model::ClipContent::Midi { .. }));
+            kept |= !pl.clips.is_empty();
+        }
+        if kept {
+            only.push(t.id);
+        }
+    }
+    if only.is_empty() {
+        return Err(EngineError::BadParams("file.export_clip_midi".into(), "select a MIDI clip".into()));
+    }
+    s.markers.clear();
+    export_midi_of(&s, Some(&only))
+}
+
+fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
     let (tempos, meters, file_tick) = smf_tempo_map(s);
     let mut smf = soundcraft_midi::Smf {
         format: 1,
@@ -4237,7 +4263,16 @@ mod name_tests {
 
     #[test]
     fn a_midi_track_name_is_cut_to_a_length_that_can_be_drawn() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 960,
+        };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: "n".repeat(1_000_000), sequence }], ..Default::default() };
         let mut e = Engine::default();
@@ -4271,7 +4306,16 @@ mod name_tests {
     /// Bug 17: a MIDI file imported at bar 3 brings its tempo there, not to the song's start.
     #[test]
     fn a_midi_file_imported_later_brings_its_tempo_with_its_notes() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 960,
+        };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let smf = soundcraft_midi::Smf {
             tracks: vec![soundcraft_midi::SmfTrack { name: "Lead".into(), sequence }],
@@ -4289,8 +4333,16 @@ mod name_tests {
 
     #[test]
     fn midi_longer_than_a_day_is_refused() {
-        let held =
-            soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: (1 << 28) - 1 };
+        let held = soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: (1 << 28) - 1,
+        };
         let sequence = soundcraft_midi::Sequence { notes: vec![held], ..Default::default() };
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: String::new(), sequence }], ..Default::default() };
         let err = import_midi_bytes(&mut Engine::default(), &soundcraft_midi::write_smf(&smf).unwrap(), 0, false).unwrap_err();
@@ -4299,7 +4351,16 @@ mod name_tests {
 
     #[test]
     fn midi_with_more_meter_changes_than_scores_have_is_refused() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 960,
+        };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let meters = (0..=MAX_MIDI_METERS as i64).map(|bar| (bar * 3840, 4, 4)).collect();
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: String::new(), sequence }], meters, ..Default::default() };
@@ -4676,7 +4737,7 @@ mod smf_tempo_tests {
     fn smf_export_writes_what_plays() {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
-        let note = |pitch, start| Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 };
+        let note = |pitch, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 };
         // A muted note (pitch 64) is left out too.
         let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }], ctrls: Vec::new() };
         let a = s.new_clip_id();
@@ -4709,7 +4770,7 @@ mod smf_tempo_tests {
             .iter()
             .map(|at| {
                 let start = s.tempo.samples_to_ticks(*at, sr) - s.tempo.samples_to_ticks(0, sr);
-                Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 }
+                Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 }
             })
             .collect();
         let cid = s.new_clip_id();

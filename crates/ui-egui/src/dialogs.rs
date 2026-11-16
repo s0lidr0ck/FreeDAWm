@@ -599,7 +599,7 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
     let key = path_key(id)?;
     let importing = id.contains("import") || id.contains("open");
     let ext = match id {
-        "file.export_midi" => ".mid",
+        "file.export_midi" | "file.export_clip_midi" => ".mid",
         "file.export_lyrics" => ".lrc",
         "file.export_lyrics_text" => ".txt",
         "file.export_sibelius" => ".musicxml",

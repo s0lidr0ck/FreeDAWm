@@ -63,7 +63,7 @@ fn tape(t: TrackId) -> (PreparedInstance, Log) {
 fn clip_with(s: &mut Session, t: TrackId, pitch: u8, tick: i64, len: i64, channels: bool) {
     let id = s.new_clip_id();
     let seq = Sequence {
-        notes: vec![Note { start: tick, length: len, pitch, velocity: 100, release_velocity: 0, channel: 0, muted: false }],
+        notes: vec![Note { probability: 100, start: tick, length: len, pitch, velocity: 100, release_velocity: 0, channel: 0, muted: false }],
         ctrls: Vec::new(),
     };
     let mut c = Clip::midi(id, "notes", 0, SR as i64, seq);

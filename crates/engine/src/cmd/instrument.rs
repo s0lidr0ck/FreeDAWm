@@ -141,7 +141,7 @@ mod tests {
     fn rms_of_a_note(e: &mut Engine, t: TrackId, secs: i64) -> f32 {
         let q = TICKS_PER_QUARTER;
         let mut seq = Sequence::default();
-        seq.notes.push(Note { pitch: 93, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 2 * q });
+        seq.notes.push(Note { probability: 100, pitch: 93, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 2 * q });
         let s = e.session_mut();
         let cid = s.new_clip_id();
         crate::edit::place_clip(s, t, Clip::midi(cid, "note", 0, 48_000 * 4, seq));

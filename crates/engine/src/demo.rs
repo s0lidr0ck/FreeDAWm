@@ -167,7 +167,7 @@ fn pad(sr: f64, frames: usize) -> (Vec<f32>, Vec<f32>) {
 }
 
 fn note(pitch: u8, start: i64, len: i64, vel: u8) -> Note {
-    Note { pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start, length: len }
+    Note { probability: 100, pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start, length: len }
 }
 
 fn keys_sequence() -> Sequence {

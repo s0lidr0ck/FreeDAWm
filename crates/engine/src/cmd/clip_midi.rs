@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn a_clip_reverses_notes_and_controller_spans() {
-        let n = |pitch, start, length| Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
+        let n = |pitch, start, length| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
         let c = |tick, value| CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(1), value, shape: Default::default() };
         let seq = Sequence { notes: vec![n(60, 0, 100), n(62, 300, 200), n(64, -50, 10)], ctrls: vec![c(-10, 5), c(200, 10), c(600, 20)] };
         let r = reversed(&seq, 1000);

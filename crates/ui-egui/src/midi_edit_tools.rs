@@ -287,8 +287,9 @@ pub fn parse_pitch(text: &str) -> Option<i64> {
 /// "F4 · 34.1.1 · len 1.0.0 · vel 96 · ch 1": a note of the clip starting at session tick `base`.
 pub fn note_details(s: &Session, base: i64, n: &Note) -> String {
     let start = base.saturating_add(n.start);
+    let chance = if n.probability < 100 { format!(" · {} %", n.probability) } else { String::new() };
     format!(
-        "{} · {} · len {} · vel {} · ch {}",
+        "{} · {} · len {} · vel {} · ch {}{chance}",
         soundcraft_midi::note_name(n.pitch),
         position_text(s, start),
         bbt_len(&s.tempo, start, n.length),
@@ -677,8 +678,16 @@ pub fn press_key(app: &mut SoundApp, cid: ClipId, pitch: u8) {
     let Some((_, clip)) = s.find_clip(cid) else { return };
     let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
     let len = s.tempo.samples_to_ticks(clip.end(), s.sample_rate).saturating_sub(base).max(1);
-    let note =
-        Note { pitch: pitch.min(127), velocity: app.midi.last_velocity, muted: false, release_velocity: 64, channel: 0, start: 0, length: len };
+    let note = Note {
+        probability: 100,
+        pitch: pitch.min(127),
+        velocity: app.midi.last_velocity,
+        muted: false,
+        release_velocity: 64,
+        channel: 0,
+        start: 0,
+        length: len,
+    };
     let Some((copy, from, _)) = crate::midi_editor::audition_session(&s, cid, &[note]) else { return };
     let to = from.saturating_add((KEY_HOLD_S * s.sample_rate.as_f64()) as i64).min(clip.end());
     crate::midi_editor::start_audition(app, copy, from, to);

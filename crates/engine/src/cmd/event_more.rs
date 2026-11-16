@@ -487,6 +487,7 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
             } else if !rest {
                 for pitch in &pitches {
                     sequence.notes.push(Note {
+                        probability: 100,
                         pitch: *pitch,
                         velocity: vel,
                         muted: false,
@@ -817,6 +818,7 @@ fn retro_record(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         .min(max_tick);
         let note = Note {
+            probability: 100,
             pitch: i64_or(v, "pitch", 60).clamp(0, 127) as u8,
             velocity: i64_or(v, "velocity", 100).clamp(1, 127) as u8,
             muted: false,

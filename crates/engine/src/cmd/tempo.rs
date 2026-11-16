@@ -780,7 +780,7 @@ pub(crate) mod tests {
             .map(|p| {
                 let a = s.tempo.samples_to_ticks(*p as i64, rate);
                 let length = s.tempo.samples_to_ticks(*p as i64 + 12_000, rate) - a;
-                Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: a, length }
+                Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: a, length }
             })
             .collect();
         let cid = s.new_clip_id();

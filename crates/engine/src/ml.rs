@@ -1147,6 +1147,7 @@ pub fn midi_sequence(s: &soundcraft_model::Session, start: Samples, len: Samples
         }
         let b = tick(n.end).clamp(a + 1, last);
         seq.notes.push(Note {
+            probability: 100,
             pitch: n.pitch.min(127),
             velocity: n.velocity.clamp(1, 127),
             muted: false,

@@ -53,7 +53,7 @@ fn chords_scales_and_folding_helpers() {
     let c_major = soundcraft_engine::vocal::key_set(0, 0);
     assert_eq!(nearest_in(c_major, 61), 60, "C# goes down to C on a tie");
     assert_eq!(nearest_in(c_major, 66), 65);
-    let n = Note { pitch: 62, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 10 };
+    let n = Note { probability: 100, pitch: 62, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 10 };
     let p = |v: Vec<Note>| v.iter().map(|n| n.pitch).collect::<Vec<_>>();
     assert_eq!(p(stamp(None, None, n)), vec![62]);
     assert_eq!(p(stamp(Some(Chord::Minor), None, n)), vec![62, 65, 69]);

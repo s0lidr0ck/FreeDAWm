@@ -2,7 +2,7 @@ use soundcraft_midi::ops::*;
 use soundcraft_midi::*;
 
 fn n(pitch: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
+    Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 fn starts(notes: &[Note]) -> Vec<i64> {

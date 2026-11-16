@@ -447,7 +447,7 @@ pub fn placed(notes: &[soundcraft_midi::Note], at: i64) -> serde_json::Value {
     let v: Vec<serde_json::Value> = notes
         .iter()
         .map(|n| {
-            json!({"pitch": n.pitch, "start": n.start.saturating_sub(first).saturating_add(at).max(0), "length": n.length, "velocity": n.velocity, "channel": n.channel})
+            json!({"pitch": n.pitch, "start": n.start.saturating_sub(first).saturating_add(at).max(0), "length": n.length, "velocity": n.velocity, "channel": n.channel, "probability": n.probability})
         })
         .collect();
     serde_json::Value::Array(v)
@@ -829,6 +829,23 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             let _ = app.run("midi.notes_set", json!({"clip": cid.0, "indices": sel, "muted": !all_muted}));
             ui.close();
         }
+        // The selected notes' chance of playing on a pass (one drag is one undo step).
+        ui.add_enabled_ui(!picked.is_empty(), |ui| {
+            ui.horizontal(|ui| {
+                let mut pr = i64::from(picked.first().map_or(100, |n| n.probability));
+                let r = ui
+                    .add(egui::DragValue::new(&mut pr).range(0..=100).prefix("Probability ").suffix(" %"))
+                    .on_hover_text("The chance each selected note plays on a pass (rolled again each pass; a bounce repeats)");
+                if r.changed() {
+                    let sel = app.midi.selected.clone();
+                    let p = json!({"clip": cid.0, "indices": sel, "probability": pr});
+                    let _ = app.engine.execute_merged("midi.notes_set", &p, &format!("note_prob.{}", cid.0));
+                }
+                if r.drag_stopped() || r.lost_focus() {
+                    app.engine.end_merge();
+                }
+            });
+        });
     })
     .response
     .on_hover_text("More: Audition, controller lanes, Legato");
@@ -1385,6 +1402,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if resp.drag_stopped() {
             let length = drawn_len(start, p.x);
             let note = soundcraft_midi::Note {
+                probability: 100,
                 pitch: pitch as u8,
                 velocity: app.midi.last_velocity,
                 muted: false,
@@ -1502,6 +1520,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 let start = floor_grid(geo.tick_at(p.x));
                 let length = app.midi.last_length.unwrap_or(grid_ticks).max(1);
                 let note = soundcraft_midi::Note {
+                    probability: 100,
                     pitch: pitch as u8,
                     velocity: app.midi.last_velocity,
                     muted: false,

@@ -403,7 +403,16 @@ mod tests {
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Mono, None);
         let id = s.new_clip_id();
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 240 });
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 240,
+        });
         crate::edit::place_clip(&mut s, t, Clip::midi(id, "m", 0, 100, seq));
         s.edit.selected_tracks = vec![t];
         (Engine::new(s), t, id)

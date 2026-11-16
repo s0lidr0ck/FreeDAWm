@@ -831,7 +831,7 @@ mod tests {
     const TPM: f64 = 1.92;
 
     fn n(pitch: u8, start: i64, len: i64, vel: u8) -> Note {
-        Note { pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start, length: len }
+        Note { probability: 100, pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start, length: len }
     }
 
     fn chord(start: i64, end: i64, root: u8, pcs: &[u8]) -> ChordSpan {
@@ -1081,6 +1081,7 @@ mod tests {
         let mut r = |m: u64| rng.next_u64() % m.max(1);
         let ns = (0..notes)
             .map(|_| Note {
+                probability: 100,
                 pitch: 21 + r(88) as u8,
                 velocity: 1 + r(127) as u8,
                 muted: false,

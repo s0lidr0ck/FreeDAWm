@@ -36,6 +36,7 @@ fn audio_as_midi(e: &mut Engine, p: &Value) -> Result<Value> {
         let a = s.tempo.samples_to_ticks(r.start + d.start as i64, s.sample_rate) - base;
         let b = s.tempo.samples_to_ticks(r.start + d.end as i64, s.sample_rate) - base;
         seq.notes.push(Note {
+            probability: 100,
             pitch: d.pitch,
             velocity: d.velocity,
             muted: false,

@@ -19,10 +19,43 @@ pub struct Note {
     /// left out of MIDI export. Absent in sessions saved before notes could be muted.
     #[serde(default, skip_serializing_if = "is_false")]
     pub muted: bool,
+    /// The chance, in percent (0-100), that the note plays on a pass: rolled each pass by a
+    /// seeded generator, so a bounce repeats. 100 (always) in sessions saved before.
+    #[serde(default = "always", skip_serializing_if = "is_always")]
+    pub probability: u8,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn always() -> u8 {
+    100
+}
+
+fn is_always(p: &u8) -> bool {
+    *p >= 100
+}
+
+impl Note {
+    /// Whether the note plays on pass `pass` (its probability rolled by a generator seeded from
+    /// the note, its clip `salt` and the pass; the same answer every time for the same inputs).
+    pub fn plays_on(&self, salt: u64, pass: u64) -> bool {
+        if self.probability >= 100 {
+            return true;
+        }
+        if self.probability == 0 {
+            return false;
+        }
+        // SplitMix64 over the inputs: stable across runs and platforms.
+        let mut x =
+            salt ^ (self.start as u64).rotate_left(17) ^ (u64::from(self.pitch) << 48) ^ (u64::from(self.channel) << 56) ^ pass.rotate_left(31);
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^= x >> 31;
+        (x % 100) < u64::from(self.probability)
+    }
 }
 
 impl Note {
@@ -229,6 +262,20 @@ mod tests {
         let ramp = ev(0, 0, CtrlShape::Ramp(0.5));
         let back: CtrlEvent = serde_json::from_str(&serde_json::to_string(&ramp).unwrap()).unwrap();
         assert_eq!(back, ramp);
+    }
+
+    #[test]
+    fn a_notes_probability_defaults_to_always_and_rolls_the_same_for_the_same_pass() {
+        let old: Note = serde_json::from_str(r#"{"pitch":60,"velocity":100,"release_velocity":64,"channel":0,"start":0,"length":10}"#).unwrap();
+        assert_eq!(old.probability, 100);
+        assert!(!serde_json::to_string(&old).unwrap().contains("probability"));
+        let half = Note { probability: 50, ..old };
+        let rolls = |pass: u64| (0..1000).filter(|i| Note { start: *i, ..half }.plays_on(7, pass)).count();
+        assert!((400..=600).contains(&rolls(1)), "{}", rolls(1));
+        assert_eq!(rolls(1), rolls(1));
+        assert!((0..1000).any(|i| Note { start: i, ..half }.plays_on(7, 1) != Note { start: i, ..half }.plays_on(7, 2)));
+        assert!((0..100).all(|i| Note { start: i, ..old }.plays_on(1, i as u64)));
+        assert!((0..100).all(|i| !Note { start: i, probability: 0, ..old }.plays_on(1, i as u64)));
     }
 
     #[test]

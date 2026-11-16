@@ -1342,6 +1342,7 @@ impl<'p, R: Read + Seek> Importer<'p, '_, R> {
                     let vel = n.num("vel").map_or(100.0, |v| (v * 127.0).round()).clamp(1.0, 127.0) as u8;
                     let rel = n.num("rel").map_or(64.0, |v| (v * 127.0).round()).clamp(0.0, 127.0) as u8;
                     seq.notes.push(soundcraft_midi::Note {
+                        probability: 100,
                         pitch: key.clamp(0, 127) as u8,
                         velocity: vel,
                         muted: false,
