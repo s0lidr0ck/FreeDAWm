@@ -68,7 +68,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Per-device timing offset | ● | ◐ | ● | ● | **Missing** |
 | Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port; FreeDAWm opens no virtual port of its own |
 | MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Missing** |
-| MIDI in the browser | ○ | ○ | ○ | ○ | **Missing**: the web build has no live MIDI, though its menus still show the windows |
+| MIDI in the browser | ○ | ○ | ○ | ○ | **Missing**: the web build has no live MIDI (its menus leave the MIDI windows out) |
 | A take recorded on another computer arrives on the track | ○ | ○ | ○ | ○ | **Works** (remote recorder; the take arrives after the pass, not as a live stream) |
 
 ## B. What a track listens to, and hearing yourself
@@ -249,7 +249,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs` | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs` | `engine/src/io.rs` (`export_midi`) |
 | 22 | Settings stored that nothing reads: MIDI Merge, QuickPunch, TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, and a second set of device flags | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
-| 23 | The web build shows Musical Typing and MIDI Input Devices though it has no MIDI | `ui-egui/src/lib.rs:996-999` |
+| 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`) | `ui-egui/src/menubar.txt` |
 
 ## Suggested order of work
 
@@ -324,3 +324,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 18 fixed: Musical Typing's step mode uses the velocity and grows the clip |
 | 2026-11-16 | minor | Bug 19 fixed: MIDI Real-Time Properties shows the track's values, writes what moved and undoes |
 | 2026-11-16 | minor | Bug 21 fixed: MIDI export keeps clip trims and leaves muted clips out |
+| 2026-11-16 | minor | Bug 23 fixed: the web build's menus leave out the live MIDI windows |
