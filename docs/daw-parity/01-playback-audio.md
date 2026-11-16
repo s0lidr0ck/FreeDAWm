@@ -212,6 +212,14 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Typing a position into the counter; pause | 2–4 | **Done** (2026-11-16) |
 | Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | **Done** (2026-11-16): `engine/src/decode_cache.rs`; shrinks G-06 |
 
+**Status of tier 2 (2026-11-16).** Done: declick; loop changes while playing; held rewind and
+fast forward; a band-limited resampler for other device rates and speeds; Pause and typing a
+position into the counter; decode once, then stream. Partly: scrub (the Scrubber plays the clips it
+passes; not through the mixer, not on the ruler, not while playing); preview (Workspace files and
+Clip List clips, at a preview level; not in the import dialog, not at session tempo or in sync);
+tempo-following (audio on tick tracks moves and, on Elastic tracks, is rendered to the new length,
+with the algorithm choice working; no real-time stretch, no draggable warp markers).
+
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**varispeed done** 2026-11-16, tape style;
 no pitch-preserving option, no shuttle); per-clip transpose and non-destructive
@@ -237,6 +245,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | status of tier 2 |
 | 2026-11-16 | minor | tier 2: files that cannot stream are decoded once and then streamed |
 | 2026-11-16 | minor | audio on tick tracks follows tempo edits (offline renders) |
 | 2026-11-16 | minor | tier 3: varispeed |

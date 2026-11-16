@@ -1,6 +1,6 @@
 # Four-DAW parity, section 4: editing audio on the timeline
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -322,10 +322,18 @@ organise, with folder editing, 8–12; a sample editor with a waveform pencil, 8
 zoom and track layout, and track markers (Pro Tools), 3–5; snap to zero crossings and real-time
 pitch correction, 4–8.
 
-**Status of tiers 2 and 3 (2026-11-16).** Done: undo and redo leave the zoom, scroll and tool
-alone. First slice: clip groups select as one (see E). Not started: every other tier-2 and tier-3
-item, ARA 2 hosting included. Real stretch algorithms were not started either, so as not to
-duplicate section 1's live time-stretch work.
+**Status of tiers 2 and 3 (2026-11-16, second round).** Done: undo and redo leave the zoom,
+scroll and tool alone; clip groups select, drag, trim and fade as one; rubber-band clip selection;
+snap to clip edges, markers and zero crossings; stretch by Alt-dragging a clip edge; the Elastic
+algorithm menu chooses a different (offline) stretch; audio on tick tracks follows tempo-map
+edits; quantize audio with strength and swing; an editable clip gain line; the fade dialog with a
+shape and bend per side, presets and batch fades; Commit Selection (bounce a range in place
+through the inserts); processing keeps handles; the Clip List auditions, renames, scrolls to
+clips and finds unused files; the Scrubber plays audio. Not done: warp markers drawn and
+editable; clip transpose; real-time clip loop and reverse; overlap modes with a front/back order;
+edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
+grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
+dragging; bug 18's timecode origin and bug 13's adopt path; every tier-3 item; ARA 2 hosting.
 
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
@@ -359,6 +367,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
 | 2026-11-16 | minor | Tier 2: stretch by dragging a clip edge (Alt-trim) |
+| 2026-11-16 | minor | Status of tiers 2 and 3 after the second round |
 | 2026-11-16 | minor | Tier 2: the Elastic algorithm menu chooses a different stretch |
 | 2026-11-16 | minor | Tier 2: audio on tick tracks follows tempo-map edits |
 | 2026-11-16 | minor | Tier 2: processing keeps handles |
