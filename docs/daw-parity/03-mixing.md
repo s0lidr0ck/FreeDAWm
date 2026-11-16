@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: moves are written where they were heard) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a Touch control let go glides back) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -141,7 +141,7 @@ miss a peak, and can read pre-fader).
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Partial**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay) and moves are written where they were heard (the mix delay and output latency behind the transport); plug-in parameters are not compensated |
-| Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Missing** |
+| Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Partial**: Touch glides back over 250 ms; the time is fixed |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
@@ -265,7 +265,7 @@ one a mix engineer would not forgive.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values remain once per block, not delay-compensated |
-| Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass done; faders and pan knobs follow**; the rest remains |
+| Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: a Touch control let go glides back |
 | 2026-11-16 | minor | tier 2: moves are written where they were heard |
 | 2026-11-16 | minor | tier 2: VCA assignment from the track menu |
 | 2026-11-16 | minor | tier 2: the Automation window's write enables work |

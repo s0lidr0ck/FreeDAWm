@@ -35,6 +35,10 @@ pub const TOUCH_HOLD_SECONDS: f64 = 0.5;
 /// Points are written at most this often while playing.
 const STEP_SECONDS: f64 = 0.02;
 
+/// How long a Touch control let go takes to glide back to the automation it wrote over (Pro
+/// Tools' AutoMatch time).
+pub const RETURN_SECONDS: f64 = 0.25;
+
 /// The merge key of a pass (see [`Engine::hold_merge`]).
 const PASS: &str = "automation_pass";
 
@@ -161,6 +165,11 @@ pub struct AutoWriter {
     /// How far behind the transport the sound is heard (the mix's delay compensation and the
     /// output's latency), in samples: moves are written where they were heard.
     heard_delay: Samples,
+    /// The lanes the last step wrote (a Touch control missing from the next step was let go).
+    last_writes: Vec<(TrackId, AutoParam)>,
+    /// Each lane this pass wrote, as it was before the pass touched it (what a let-go control
+    /// glides back to).
+    before: Vec<(TrackId, soundcraft_model::AutomationLane)>,
 }
 
 impl AutoWriter {
@@ -371,6 +380,8 @@ impl Engine {
             // Touches made while stopped belong to no pass.
             self.auto_write.pulses.clear();
             self.auto_write.written.clear();
+            self.auto_write.last_writes.clear();
+            self.auto_write.before.clear();
             self.auto_write.last_at = i64::MIN;
         }
         if !playing && !stopped {
@@ -382,6 +393,22 @@ impl Engine {
         }
         let from = std::mem::replace(&mut self.auto_write.last_at, if playing { pos } else { i64::MIN });
         let writes = self.due_writes(pos, hold);
+        // Keep each lane as it was before the pass first writes it.
+        for (t, param, _) in &writes {
+            if !self.auto_write.before.iter().any(|(bt, l)| bt == t && l.param == *param) {
+                let lane = self.session().track(*t).and_then(|tr| tr.lane(param)).cloned();
+                self.auto_write.before.push((*t, lane.unwrap_or_else(|| soundcraft_model::AutomationLane::new(param.clone()))));
+            }
+        }
+        // A Touch control let go since the last step glides back to what it wrote over.
+        if playing && from != i64::MIN {
+            let let_go: Vec<(TrackId, AutoParam)> =
+                self.auto_write.last_writes.iter().filter(|(t, p)| !writes.iter().any(|(wt, wp, _)| wt == t && wp == p)).cloned().collect();
+            for (t, p) in let_go {
+                self.glide_back(t, &p, from, rate.samples(RETURN_SECONDS));
+            }
+        }
+        self.auto_write.last_writes = writes.iter().map(|(t, p, _)| (*t, p.clone())).collect();
         let mut n = 0;
         for (t, param, v) in writes {
             let mut point = json!({"track": t.0, "param": param.id(), "at": pos, "value": v});
@@ -407,11 +434,34 @@ impl Engine {
         }
         if stopped {
             self.auto_write.written.clear();
+            self.auto_write.last_writes.clear();
+            self.auto_write.before.clear();
             self.auto_write.pulses.clear();
             self.auto_write.trim.clear();
             self.end_merge();
         }
         n
+    }
+
+    /// Touch let go at `at` (the last point written): the lane ramps from there back to the
+    /// automation it had before the pass over `ret` samples, instead of jumping to wherever its
+    /// next old point is. Part of the pass's undo step. Switches (mute) jump.
+    fn glide_back(&mut self, t: TrackId, p: &AutoParam, at: Samples, ret: Samples) {
+        let Some(tr) = self.session().track(t) else { return };
+        if is_switch(p) || !matches!(tr.mixer.automation_mode, M::Touch | M::TouchLatch) {
+            return;
+        }
+        let Some(old) = self.auto_write.before.iter().find(|(bt, l)| *bt == t && l.param == *p).map(|(_, l)| l.clone()) else { return };
+        if old.points.is_empty() {
+            return;
+        }
+        let end = at.saturating_add(ret.max(1));
+        let target = old.value_at(end, current_value(tr, p));
+        let inside: Vec<Samples> = tr.lane(p).map(|l| l.points_in(at.saturating_add(1), end)).unwrap_or_default();
+        if !inside.is_empty() {
+            let _ = self.execute_merged("automation.delete", &json!({"track": t.0, "param": p.id(), "points": inside}), PASS);
+        }
+        let _ = self.execute_merged("automation.set_point", &json!({"track": t.0, "param": p.id(), "at": end, "value": target}), PASS);
     }
 
     /// The (track, lane, value) points due now, as each track's mode says.
@@ -585,7 +635,9 @@ mod tests {
         assert_eq!(play(&mut e, 21 * q), 0);
         stop(&mut e, 22 * q);
         let pan = points(&e, t, &AutoParam::Pan(0));
-        assert_eq!(pan, [(0, -1.0), (2 * q, 0.5), (3 * q, 0.5), (50 * q, -1.0)]);
+        // Let go, it glides back to the old automation over the return time.
+        let back = 3 * q + e.session().sample_rate.samples(super::RETURN_SECONDS);
+        assert_eq!(pan, [(0, -1.0), (2 * q, 0.5), (3 * q, 0.5), (back, -1.0), (50 * q, -1.0)]);
     }
 
     #[test]
