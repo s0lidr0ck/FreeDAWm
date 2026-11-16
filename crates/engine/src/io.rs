@@ -2880,6 +2880,17 @@ pub struct TakeFile {
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
 pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, PathBuf)>) -> Vec<soundcraft_model::ClipId> {
+    place_recording_with(e, plan, takes, &mut |_| None)
+}
+
+/// [`place_recording`] where `memory` gives the bytes of takes recorded in memory (the browser
+/// build has no files), by path: each becomes a new source of its own, saved with the session.
+pub fn place_recording_with(
+    e: &mut Engine,
+    plan: &Recording,
+    takes: Vec<(TrackId, PathBuf)>,
+    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
+) -> Vec<soundcraft_model::ClipId> {
     let (start, latency) = plan.placement();
     let takes = takes
         .into_iter()
@@ -2897,7 +2908,7 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
         stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
     }
     let punches: Vec<Range> = if plan.punches.is_empty() { plan.punch.into_iter().collect() } else { plan.punches.clone() };
-    add_recording_in(e, start, takes, plan.pass, &punches)
+    add_recording_from(e, start, takes, plan.pass, &punches, memory)
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -2920,9 +2931,32 @@ fn add_recording_in(
     pass: Option<Samples>,
     punches: &[Range],
 ) -> Vec<soundcraft_model::ClipId> {
+    add_recording_from(e, start, takes, pass, punches, &mut |_| None)
+}
+
+/// [`add_recording_in`] with takes recorded in memory (see [`place_recording_with`]).
+fn add_recording_from(
+    e: &mut Engine,
+    start: Samples,
+    takes: Vec<(TrackId, PathBuf, Samples)>,
+    pass: Option<Samples>,
+    punches: &[Range],
+    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
+) -> Vec<soundcraft_model::ClipId> {
     let before = e.session_arc();
     let mut out = Vec::new();
     for (tid, path, latency) in takes {
+        let name = path.file_stem().and_then(|x| x.to_str()).unwrap_or("Take");
+        if let Some(bytes) = memory(&path) {
+            let decoded = soundcraft_audio_io::decode(&bytes, None).map_err(|err| format!("{name}: {err}"));
+            let Ok((_, buf)) = decoded.inspect_err(|err| e.message(err.clone())) else { continue };
+            if e.session().track(tid).is_some_and(|t| t.frozen_audio().is_none()) {
+                let s = e.session_mut();
+                let src = add_source(s, name, buf, None, FileFormat::Wav);
+                place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
+            }
+            continue;
+        }
         // A take in a project's (or autosave's) `Audio Files`: deleted when nothing names it any
         // more (undone, or its track deleted while it recorded).
         if path.parent().and_then(Path::file_name).is_some_and(|n| n == "Audio Files") && !e.recorded_takes.contains(&path) {
@@ -2931,7 +2965,6 @@ fn add_recording_in(
         if e.session().track(tid).is_none_or(|t| t.frozen_audio().is_some()) {
             continue;
         }
-        let name = path.file_stem().and_then(|x| x.to_str()).unwrap_or("Take");
         // A take at the session rate plays from its file (its waveform read from it once).
         let rate = e.session().sample_rate.hz();
         if let Some(f) = streamable(&path, rate) {
@@ -3744,6 +3777,36 @@ mod record_tests {
         assert_eq!(live_span(1_000, None, None, 500, -100), Some((1_100, Range::new(1_100, 1_600))));
         let punch = Some(Range::new(1_200, 1_400));
         assert_eq!(live_span(1_000, None, punch, 500, 100), Some((900, Range::new(1_200, 1_400))));
+    }
+
+    #[test]
+    fn a_take_recorded_in_memory_lands_as_a_source_the_browser_keeps() {
+        // The browser build: the take's bytes, no file. It is placed as a file's would be (the
+        // round trip off its start), as a new source of the session, which the browser's store
+        // then keeps like any other.
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let path = PathBuf::from("Audio Files/Vox_01.wav");
+        let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, 4_800).unwrap();
+        bytes.extend((0..4_800).flat_map(|i| (i as f32 / 4_800.0).to_le_bytes()));
+        let plan =
+            Recording { start: 1_000, pass: None, punch: None, rate: 48_000, takes: Vec::new(), latency: 100, loop_from: None, punches: Vec::new() };
+        let mut handed = 0;
+        let mut memory = |p: &Path| {
+            handed += 1;
+            (p == path).then(|| bytes.clone())
+        };
+        let clips = place_recording_with(&mut e, &plan, vec![(vox, path.clone())], &mut memory);
+        assert_eq!((clips.len(), handed), (1, 1));
+        let s = e.session();
+        let clip = s.track(vox).unwrap().clips()[0].clone();
+        assert_eq!((clip.start, clip.length), (1_000, 4_700), "the round trip comes off its start");
+        let src = s.sources.iter().find(|x| x.name == "Vox_01").unwrap();
+        assert!(src.unsaved && s.pool.get(src.id).is_some(), "a source of the session, saved with it");
+        assert!(e.recorded_takes.is_empty(), "no file to clean up after");
+        let parts = session_store_parts(s, &Default::default()).unwrap();
+        assert_eq!(parts.new_files.len(), 1, "the browser's store keeps it");
+        assert_eq!(e.undo_label(), Some("Record"));
     }
 }
 

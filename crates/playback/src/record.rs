@@ -6,6 +6,11 @@
 //! frame has an exact timeline position ([`Recorder::start_pos`]). A writer thread streams the ring
 //! into one WAV file per take, rewriting the header every second so a crash leaves a playable file.
 //!
+//! The browser build has no threads, files or input devices of its own: its page pushes the
+//! microphone into an [`ExternalInput`] ([`Recorder::external`]), and the same writer runs a step
+//! at a time from the UI thread ([`Recorder::pump`]) into memory, the finished takes' bytes handed
+//! over by [`Recorder::take_audio`]. Capture, timing and placement are the desktop's.
+//!
 //! The input stream is the player's own when input and output are one device (duplex, see
 //! [`crate::duplex`] and [`crate::Player::duplex_recorder`]), else the [`Recorder`]'s
 //! ([`Recorder::open_with`]).
@@ -210,9 +215,109 @@ pub struct Recorder {
     pub sample_rate: u32,
     pub channels: usize,
     /// The take writer, and what each track's take holds so far.
-    writer: Option<(std::thread::JoinHandle<Takes>, Vec<(TrackId, Arc<Mutex<LiveTake>>)>)>,
-    /// The callback count last seen, and since when.
+    writer: Option<(Writer, Vec<(TrackId, Arc<Mutex<LiveTake>>)>)>,
+    /// Takes are written into memory, a step at a time ([`Recorder::external`]); the finished
+    /// ones wait in `memory` for [`Recorder::take_audio`].
+    in_memory: bool,
+    memory: Vec<(PathBuf, Vec<u8>)>,
+    /// The callback count last seen, and since when (the browser has no `Instant`: its page says
+    /// when the microphone goes, [`ExternalInput::gone`]).
+    #[cfg(not(target_arch = "wasm32"))]
     seen: (u64, Instant),
+}
+
+/// How the takes are written.
+enum Writer {
+    /// A thread streams the ring into the take files (the desktop).
+    Thread(std::thread::JoinHandle<Takes>),
+    /// No thread (the browser): [`Recorder::pump`] runs one step at a time, into memory.
+    Steps(Steps),
+}
+
+/// The writer's work between two looks at the ring: whole frames into every take.
+struct Steps {
+    takes: Vec<TakeWriter>,
+    /// Popped samples not yet a whole frame.
+    block: Vec<f32>,
+    channels: usize,
+    reported: bool,
+}
+
+impl Steps {
+    fn new(takes: Vec<TakeWriter>, channels: usize) -> Steps {
+        Steps { takes, block: Vec::new(), channels, reported: false }
+    }
+
+    /// Write what the ring holds; the first failure is reported to `shared` once.
+    fn run(&mut self, shared: &Capture) {
+        // The ring holds interleaved samples and a pop can end mid-frame: write whole frames and
+        // keep the remainder for the next pop, so channels never shift.
+        shared.ring.pop_all(&mut self.block);
+        let whole = self.block.len() - self.block.len() % self.channels.max(1);
+        let (block, channels) = (&self.block[..whole], self.channels);
+        self.takes.iter_mut().for_each(|t| t.write(block, channels));
+        self.block.drain(..whole);
+        if !self.reported
+            && let Some(e) = self.takes.iter().find_map(|t| t.error.clone())
+        {
+            *shared.failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+            self.reported = true;
+        }
+    }
+
+    /// The takes that hold audio and the first problem met; a file holding nothing is removed.
+    /// In-memory takes' bytes come back beside them.
+    fn finish(self) -> (Takes, Vec<(PathBuf, Vec<u8>)>) {
+        let (mut done, mut problem, mut memory) = (Vec::new(), None, Vec::new());
+        for mut t in self.takes {
+            t.write_header();
+            problem = problem.or(t.error);
+            match (t.frames, t.file) {
+                (0, Sink::File(_)) => {
+                    let _ = std::fs::remove_file(&t.path);
+                }
+                (0, Sink::Memory(_)) => {}
+                (_, Sink::File(_)) => done.push((t.id, t.path)),
+                (_, Sink::Memory(m)) => {
+                    memory.push((t.path.clone(), m.into_inner()));
+                    done.push((t.id, t.path));
+                }
+            }
+        }
+        ((done, problem), memory)
+    }
+}
+
+/// Live input that the host pushes in itself rather than a device stream: the browser build's
+/// microphone, which its page captures ([`Recorder::external`]). The feed is lock-free: push from
+/// any thread.
+pub struct ExternalInput {
+    feed: Arc<InputFeed>,
+    capture: Arc<Capture>,
+}
+
+impl ExternalInput {
+    /// One block of interleaved samples, [`ExternalInput::channels`] wide, at the rate the input
+    /// was opened at.
+    pub fn push(&self, interleaved: &[f32]) {
+        let feed = &self.feed;
+        self.capture.guarded(|| feed.push(interleaved));
+    }
+
+    pub fn channels(&self) -> usize {
+        self.feed.channels()
+    }
+
+    /// The input's latency from capture until it is pushed (the record offset takes it off).
+    pub fn set_latency(&self, d: Duration) {
+        self.feed.set_input_latency(d);
+    }
+
+    /// The input went away (the microphone was unplugged or its permission withdrawn): the
+    /// recorder's [`Recorder::trouble`] says so.
+    pub fn gone(&self) {
+        let _ = self.capture.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
+    }
 }
 
 /// The input stream: device samples are converted to f32 in a scratch buffer allocated here (so
@@ -367,8 +472,39 @@ impl Recorder {
             taps: 0,
             internal: false,
             writer: None,
+            in_memory: false,
+            memory: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             seen: (0, Instant::now()),
         }
+    }
+
+    /// A recorder on input the host pushes in itself (the browser's microphone, `channels` wide
+    /// at `rate`), reaching `player` through a drift-correcting feed as a split input does. Its
+    /// takes are written into memory a step at a time ([`Recorder::pump`]): no thread, no file.
+    pub fn external(player: &crate::Player, name: &str, channels: usize, rate: u32) -> (Recorder, ExternalInput) {
+        let (session_rate, channels) = (player.session_rate(), channels.clamp(1, 64));
+        let feed = InputFeed::drift(channels, rate, session_rate, player.max_block);
+        let capture = Capture::for_rate(session_rate, channels);
+        player.attach_input(Arc::clone(&feed), Arc::clone(&capture));
+        let mut r = Recorder::attached(Arc::clone(&capture), name.into(), rate, session_rate, channels);
+        r.in_memory = true;
+        (r, ExternalInput { feed, capture })
+    }
+
+    /// Writes what the input captured since the last call into the takes when they are written
+    /// in memory (call it once a frame while recording); a thread does it otherwise.
+    pub fn pump(&mut self) {
+        if let Some((Writer::Steps(s), _)) = &mut self.writer {
+            s.run(&self.capture);
+        }
+    }
+
+    /// A finished in-memory take's file (WAV or AIFF bytes, as armed), by the path
+    /// [`Recorder::finish`] gave it; once.
+    pub fn take_audio(&mut self, path: &std::path::Path) -> Option<Vec<u8>> {
+        let at = self.memory.iter().position(|(p, _)| p == path)?;
+        Some(self.memory.swap_remove(at).1)
     }
 
     /// A recorder with no input device ([`crate::Player::internal_recorder`]): its takes record
@@ -469,9 +605,13 @@ impl Recorder {
         if self.writer.is_some() {
             return Err("already recording".into());
         }
+        let (rate, in_memory) = (self.sample_rate, self.in_memory);
         let takes = takes
             .into_iter()
-            .map(|(id, inputs, path)| TakeWriter::create_as(id, inputs, path, self.sample_rate, format))
+            .map(|(id, inputs, path)| match in_memory {
+                true => TakeWriter::in_memory(id, inputs, path, rate, format),
+                false => TakeWriter::create_as(id, inputs, path, rate, format),
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let live = takes.iter().map(|t| (t.id, Arc::clone(&t.live))).collect();
         self.capture.ring.clear();
@@ -479,9 +619,14 @@ impl Recorder {
         self.capture.started.store(false, Ordering::Release);
         self.capture.armed.store(true, Ordering::Release);
         self.taps = taps;
+        self.memory.clear();
+        if in_memory {
+            self.writer = Some((Writer::Steps(Steps::new(takes, self.width())), live));
+            return Ok(());
+        }
         let (capture, channels) = (Arc::clone(&self.capture), self.width());
         match std::thread::Builder::new().name("take writer".into()).spawn(move || write_takes(&capture, takes, channels)) {
-            Ok(w) => self.writer = Some((w, live)),
+            Ok(w) => self.writer = Some((Writer::Thread(w), live)),
             Err(e) => {
                 self.capture.armed.store(false, Ordering::Release);
                 return Err(e.to_string());
@@ -529,6 +674,18 @@ impl Recorder {
             BROKEN => return Some(Trouble::Device("the audio input hit an internal error (see the log)".into())),
             _ => {}
         }
+        self.stalled()
+    }
+
+    /// The browser cannot tell (no `Instant`); its page says when the input goes.
+    #[cfg(target_arch = "wasm32")]
+    fn stalled(&mut self) -> Option<Trouble> {
+        None
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stalled(&mut self) -> Option<Trouble> {
+        let name = &self.device_name;
         let beats = self.capture.beats.load(Ordering::Relaxed);
         if beats != self.seen.0 || !self.capture.armed.load(Ordering::Relaxed) {
             self.seen = (beats, Instant::now());
@@ -555,7 +712,16 @@ impl Recorder {
 
     pub fn finish(&mut self) -> Takes {
         self.capture.armed.store(false, Ordering::Release);
-        let (takes, problem) = self.writer.take().and_then(|(w, _)| w.join().ok()).unwrap_or_default();
+        let (takes, problem) = match self.writer.take() {
+            Some((Writer::Thread(w), _)) => w.join().unwrap_or_default(),
+            Some((Writer::Steps(mut s), _)) => {
+                s.run(&self.capture);
+                let (takes, memory) = s.finish();
+                self.memory = memory;
+                takes
+            }
+            None => Takes::default(),
+        };
         let lost = self.capture.dropped.swap(0, Ordering::Relaxed) / self.width();
         let slow =
             (lost > 0).then(|| format!("{} ms of input lost: the disk was too slow", lost.saturating_mul(1000) / self.sample_rate.max(1) as usize));
@@ -569,40 +735,52 @@ impl Drop for Recorder {
     }
 }
 
-fn write_takes(shared: &Capture, mut takes: Vec<TakeWriter>, channels: usize) -> Takes {
-    let (mut block, mut header_written, mut reported) = (Vec::new(), Instant::now(), false);
+fn write_takes(shared: &Capture, takes: Vec<TakeWriter>, channels: usize) -> Takes {
+    let (mut steps, mut header_written) = (Steps::new(takes, channels), Instant::now());
     loop {
         let stopping = !shared.armed.load(Ordering::Acquire);
-        // The ring holds interleaved samples and a pop can end mid-frame: write whole frames and
-        // keep the remainder for the next pop, so channels never shift.
-        shared.ring.pop_all(&mut block);
-        let whole = block.len() - block.len() % channels.max(1);
-        takes.iter_mut().for_each(|t| t.write(&block[..whole], channels));
-        block.drain(..whole);
-        if !reported && let Some(e) = takes.iter().find_map(|t| t.error.clone()) {
-            *shared.failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
-            reported = true;
-        }
+        steps.run(shared);
         if stopping {
             break;
         }
         if header_written.elapsed() >= Duration::from_secs(1) {
             header_written = Instant::now();
-            takes.iter_mut().for_each(TakeWriter::write_header);
+            steps.takes.iter_mut().for_each(TakeWriter::write_header);
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let (mut done, mut problem) = (Vec::new(), None);
-    for mut t in takes {
-        t.write_header();
-        if t.frames == 0 {
-            let _ = std::fs::remove_file(&t.path);
-        } else {
-            done.push((t.id, t.path));
+    steps.finish().0
+}
+
+/// Where a take's bytes go: its file, or memory (the browser).
+enum Sink {
+    File(File),
+    Memory(std::io::Cursor<Vec<u8>>),
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Sink::File(f) => f.write(buf),
+            Sink::Memory(m) => m.write(buf),
         }
-        problem = problem.or(t.error);
     }
-    (done, problem)
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Sink::File(f) => f.flush(),
+            Sink::Memory(m) => m.flush(),
+        }
+    }
+}
+
+impl Seek for Sink {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Sink::File(f) => f.seek(to),
+            Sink::Memory(m) => m.seek(to),
+        }
+    }
 }
 
 /// One take's file. After an error it stops writing; its header keeps covering what was written.
@@ -610,7 +788,7 @@ struct TakeWriter {
     id: TrackId,
     inputs: Vec<usize>,
     path: PathBuf,
-    file: File,
+    file: Sink,
     rate: u32,
     format: TakeFormat,
     frames: u64,
@@ -627,6 +805,15 @@ impl TakeWriter {
     fn create_as(id: TrackId, inputs: Vec<usize>, path: PathBuf, rate: u32, format: &TakeFormat) -> Result<TakeWriter, String> {
         let file = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| File::create_new(&path));
         let file = file.map_err(|e| format!("{}: {e}", path.display()))?;
+        TakeWriter::on(id, inputs, path, Sink::File(file), rate, format)
+    }
+
+    /// A take written into memory; `path` only names it.
+    fn in_memory(id: TrackId, inputs: Vec<usize>, path: PathBuf, rate: u32, format: &TakeFormat) -> Result<TakeWriter, String> {
+        TakeWriter::on(id, inputs, path, Sink::Memory(std::io::Cursor::new(Vec::new())), rate, format)
+    }
+
+    fn on(id: TrackId, inputs: Vec<usize>, path: PathBuf, file: Sink, rate: u32, format: &TakeFormat) -> Result<TakeWriter, String> {
         let live = Arc::new(Mutex::new(vec![Vec::new(); inputs.len()]));
         let mut format = format.clone();
         if let Some(b) = &mut format.bwf {
@@ -755,7 +942,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("soundcraft-failed-take-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut take = TakeWriter::create(TrackId(1), vec![0], dir.join("Vox_01.wav"), 48_000).unwrap();
-        take.file = File::open(&take.path).unwrap();
+        take.file = Sink::File(File::open(&take.path).unwrap());
         let shared = Arc::new(Capture::new(SampleRing::new(1 << 12)));
         shared.armed.store(true, Ordering::Release);
         let mut r = recorder(&shared);
@@ -1129,5 +1316,83 @@ mod tests {
         assert_eq!((take.sample_rate, take.channels[0].len()), (48_000, 20 * 480), "48 kHz, every frame played");
         assert!(take.channels[0][19 * 480..].iter().all(|x| (x - 0.25).abs() < 1e-6), "the input, once the feed filled");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A recorder writing in memory over `capture`, as [`Recorder::external`] makes one, with its
+    /// input; `feed` is what the output callback reads.
+    fn in_memory(capture: &Arc<Capture>, feed: &Arc<InputFeed>) -> (Recorder, ExternalInput) {
+        let mut r = Recorder::attached(Arc::clone(capture), "Microphone".into(), 48_000, 48_000, 2);
+        r.in_memory = true;
+        (r, ExternalInput { feed: Arc::clone(feed), capture: Arc::clone(capture) })
+    }
+
+    #[test]
+    fn takes_record_into_memory_a_step_at_a_time() {
+        // The browser build: no thread and no file. The page pushes the input, the output
+        // callback captures it, each frame's pump writes it, and the finished takes are bytes.
+        let dir = std::env::temp_dir().join(format!("soundcraft-memory-take-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (feed, capture) = (InputFeed::fixed(2, 256), Capture::for_rate(48_000, 2));
+        let (mut r, input) = in_memory(&capture, &feed);
+        let (vox, gtr) = (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Gtr_01.wav"));
+        r.arm(vec![(TrackId(1), vec![0], vox.clone()), (TrackId(2), vec![1, 0], gtr.clone())]).unwrap();
+        let mut st = recording_state(&feed, &capture, 0);
+        let mut out = vec![0.0f32; 2 * 128];
+        let mut sent = Vec::new();
+        for b in 0..12 {
+            let block = input_block(b);
+            input.push(&block);
+            sent.extend_from_slice(&block);
+            st.fill(&mut out, 2);
+            if b % 3 == 2 {
+                r.pump();
+            }
+            if b == 5 {
+                let live = r.live_take(TrackId(1)).unwrap().clone();
+                assert_eq!(live[0].len(), 6, "the pump writes as it goes: six blocks of 128 so far");
+            }
+        }
+        assert_eq!(r.trouble(), None);
+        let (done, problem) = r.finish();
+        assert_eq!((done, problem), (vec![(TrackId(1), vox.clone()), (TrackId(2), gtr.clone())], None));
+        assert!(!dir.exists(), "nothing was written to disk");
+        let channel = |c: usize| sent.iter().skip(c).step_by(2).copied().collect::<Vec<f32>>();
+        let decoded = |b: Vec<u8>| soundcraft_audio_io::decode(&b, None).unwrap().1;
+        let v = decoded(r.take_audio(&vox).unwrap());
+        assert_eq!((v.sample_rate, v.channels), (48_000, vec![channel(0)]));
+        assert_eq!(decoded(r.take_audio(&gtr).unwrap()).channels, vec![channel(1), channel(0)]);
+        assert_eq!(r.take_audio(&vox), None, "handed over once");
+    }
+
+    #[test]
+    fn an_in_memory_take_keeps_its_format_and_an_empty_one_is_dropped() {
+        use soundcraft_audio_io::{BitDepth, FileFormat, SampleFormat};
+        let (feed, capture) = (InputFeed::fixed(2, 256), Capture::for_rate(48_000, 2));
+        let (mut r, input) = in_memory(&capture, &feed);
+        let format = TakeFormat { format: FileFormat::Aiff, depth: BitDepth::Int24, bwf: None };
+        r.arm_as(vec![(TrackId(1), vec![1], PathBuf::from("Vox_01.aif"))], 0, &format).unwrap();
+        let mut st = recording_state(&feed, &capture, 0);
+        let mut out = vec![0.0f32; 2 * 128];
+        for b in 0..4 {
+            input.push(&input_block(b));
+            st.fill(&mut out, 2);
+        }
+        let (done, _) = r.finish();
+        let info = soundcraft_audio_io::probe(&r.take_audio(&done[0].1).unwrap(), None).unwrap();
+        assert_eq!((info.format, info.sample_format, info.frames), (FileFormat::Aiff, SampleFormat::Int24, 4 * 128));
+        // Armed again, stopped before anything arrived: no take.
+        r.arm(vec![(TrackId(1), vec![0], PathBuf::from("Vox_02.wav"))]).unwrap();
+        assert_eq!(r.finish(), (Vec::new(), None));
+        assert_eq!(r.take_audio(std::path::Path::new("Vox_02.wav")), None);
+    }
+
+    #[test]
+    fn a_pushed_input_that_goes_away_is_trouble() {
+        let (feed, capture) = (InputFeed::fixed(1, 256), Capture::for_rate(48_000, 1));
+        let (mut r, input) = in_memory(&capture, &feed);
+        input.push(&[0.1; 128]);
+        assert_eq!((r.trouble(), capture.beats.load(Ordering::Relaxed)), (None, 1), "each push is a beat of the input");
+        input.gone();
+        assert_eq!(r.trouble(), Some(Trouble::Device("“Microphone” was disconnected".into())));
     }
 }
