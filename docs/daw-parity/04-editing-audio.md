@@ -1,6 +1,6 @@
 # Four-DAW parity, section 4: editing audio on the timeline
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -36,7 +36,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
-| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: **deleting two selected clips also deletes what lies between them**; edit groups do not edit together |
+| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: **pasting or duplicating a crossfaded pair destroys the crossfade**; overwrite is the only overlap mode |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups and edit lock are mostly not honoured; no clip transpose; clip effects are lost on a split |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
@@ -96,7 +96,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Range across several tracks | ● | ● | ● | ● | **Works** |
-| Select several clips as objects and act on only those | ● | ● | ● | ● | **Partial**: Delete, Cut and Copy use the span from the first clip to the last (bug 1) |
+| Select several clips as objects and act on only those | ● | ● | ● | ● | **Works**: Delete, Cut and Copy act on the selected clips only (bug 1, fixed) |
 | Rubber-band selection of clips | ◐ | ● | ● | ● | **Missing**: the rubber band picks automation points only |
 | Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Missing** except Select All |
 | Extend selection to session start or end | ● | ● | ● | ● | **Missing** |
@@ -265,7 +265,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | Selecting clips A and C and pressing Delete also removes clip B between them, on every track involved. Selecting clips sets the range from the first start to the last end, and Delete, Cut and Copy use that range whenever it is not empty | `engine/src/cmd/edit.rs:372-392, 502-517` |
+| 1 | **Fixed.** Selecting clips A and C and pressing Delete also removed clip B between them, on every track involved. Delete, Cut and Copy now act on the selected clips alone while the selection is still the span they set (`object_clips`, `edit::remove_clips`); a range passed or chosen still clears the range. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`object_clips`, `cut_copy_objects`, `clear`) |
 | 2 | Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy place clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cuts the first off | `engine/src/edit.rs:216-239` |
 | 3 | Trimming or splitting a stretched clip advances the file position by timeline samples, not source samples, so the remaining piece plays from the wrong place | `model/src/clip.rs:447-453`; `mix/src/lib.rs:3398` |
 | 4 | An edit-locked clip can still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped | `engine/src/edit.rs:82-455, 800-882` |
@@ -338,3 +338,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | major | First version: editing audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
+| 2026-11-16 | minor | Bug 1 fixed: Delete, Cut and Copy of selected clips leave the clips between them alone |

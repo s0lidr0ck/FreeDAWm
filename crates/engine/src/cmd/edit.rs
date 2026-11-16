@@ -270,6 +270,9 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
     if range.is_empty() {
         return Err(bad(id, "selection is empty"));
     }
+    if let Some(objects) = object_clips(e, p, &tracks) {
+        return cut_copy_objects(e, &objects, range, cut);
+    }
     let mut cb = Clipboard::of_range(e.session(), range);
     let follow = e.session().edit.automation_follows_edit;
     for t in &tracks {
@@ -319,6 +322,93 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
     let n: usize = cb.tracks.iter().map(Vec::len).sum();
     e.clipboard = cb;
     Ok(json!({"clips": n, "length": range.len()}))
+}
+
+/// Clips picked as objects (Grabber clicks, `edit.select {clips}`), grouped by track: the
+/// selected clips on `tracks`, when no range is passed and the edit selection is still the span
+/// they set. Delete, Cut and Copy then act on those clips only, never on what lies between them.
+fn object_clips(e: &Engine, p: &Value, tracks: &[TrackId]) -> Option<Vec<(TrackId, Vec<soundcraft_model::ClipId>)>> {
+    if ["start", "end", "length"].iter().any(|k| p.get(k).is_some()) {
+        return None;
+    }
+    let s = e.session();
+    let found: Vec<(TrackId, &soundcraft_model::Clip)> = s.edit.selected_clips.iter().filter_map(|id| s.find_clip(*id)).collect();
+    let span = found.iter().map(|(_, c)| c.range()).reduce(|a, b| soundcraft_time::Range::new(a.start.min(b.start), a.end.max(b.end)))?;
+    if span != s.edit.selection {
+        return None;
+    }
+    let mut out: Vec<(TrackId, Vec<soundcraft_model::ClipId>)> = Vec::new();
+    for (t, c) in found.into_iter().filter(|(t, _)| tracks.contains(t)) {
+        match out.iter_mut().find(|(x, _)| *x == t) {
+            Some((_, ids)) => ids.push(c.id),
+            None => out.push((t, vec![c.id])),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Cut or Copy of clips picked as objects: the clipboard holds just those clips (and, with
+/// Automation Follows Edit, the automation under them), timed from the start of `span`.
+fn cut_copy_objects(e: &mut Engine, objects: &[(TrackId, Vec<soundcraft_model::ClipId>)], span: soundcraft_time::Range, cut: bool) -> Result<Value> {
+    let mut cb = Clipboard::of_range(e.session(), span);
+    let s = e.session();
+    let follow = s.edit.automation_follows_edit;
+    for (t, ids) in objects {
+        let picked: Vec<&soundcraft_model::Clip> =
+            s.track(*t).map(|tr| tr.clips().iter().filter(|c| ids.contains(&c.id)).collect()).unwrap_or_default();
+        let under = |at: Samples| picked.iter().any(|c| c.range().contains(at));
+        cb.tracks.push(
+            picked
+                .iter()
+                .map(|c| {
+                    let mut c = (*c).clone();
+                    c.start -= span.start;
+                    c
+                })
+                .collect(),
+        );
+        let lanes = s
+            .track(*t)
+            .map(|tr| {
+                tr.automation
+                    .iter()
+                    .map(|l| {
+                        let mut l2 = l.clone();
+                        l2.points = l
+                            .points
+                            .iter()
+                            .filter(|p| follow && under(p.at))
+                            .map(|p| soundcraft_model::AutomationPoint { at: p.at - span.start, ..*p })
+                            .collect();
+                        l2
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        cb.automation.push(lanes);
+    }
+    if cut {
+        let sh = shuffle(e.session());
+        let s = e.session_mut();
+        for (t, ids) in objects {
+            let gone = ops::remove_clips(s, *t, ids, sh);
+            if follow
+                && !sh
+                && let Some(tr) = s.track_mut(*t)
+            {
+                for c in &gone {
+                    for l in &mut tr.automation {
+                        l.clear_range(c.start, c.end());
+                    }
+                }
+            }
+        }
+        s.edit.selected_clips.clear();
+        s.edit.selection = soundcraft_time::Range::point(span.start);
+    }
+    let n: usize = cb.tracks.iter().map(Vec::len).sum();
+    e.clipboard = cb;
+    Ok(json!({"clips": n, "length": span.len()}))
 }
 
 /// Remove `r` from a track, closing the gap in Shuffle mode; automation follows when `follow`.
@@ -375,6 +465,14 @@ fn clear(e: &mut Engine, p: &Value) -> Result<Value> {
     let range = range_param(e, "edit.clear", p)?;
     let ids = clip_ids_param(e, p);
     let sh = shuffle(e.session());
+    if let Some(objects) = object_clips(e, p, &tracks) {
+        let s = e.session_mut();
+        let n: usize = objects.iter().map(|(t, ids)| ops::remove_clips(s, *t, ids, sh).len()).sum();
+        // The span the clips set goes too, so pressing Delete again cannot clear what lay between them.
+        s.edit.selected_clips.clear();
+        s.edit.selection = soundcraft_time::Range::point(s.edit.selection.start);
+        return Ok(json!({"removed": n}));
+    }
     let s = e.session_mut();
     let mut n = 0;
     if range.is_empty() && !ids.is_empty() {

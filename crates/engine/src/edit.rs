@@ -137,6 +137,24 @@ pub fn clear_range(s: &mut Session, track: TrackId, range: Range, shuffle: bool)
     removed
 }
 
+/// Remove clips `ids` from a track as objects, leaving whatever lies between them alone. In
+/// Shuffle mode the clips leave the Shuffle way (later clips close each gap, see [`lift_plan`];
+/// time- and edit-locked clips stay); otherwise every clip in `ids` that is not edit-locked goes.
+/// Returns the removed clips, in time order.
+pub fn remove_clips(s: &mut Session, track: TrackId, ids: &[ClipId], shuffle: bool) -> Vec<Clip> {
+    let set: HashSet<ClipId> = ids.iter().copied().collect();
+    let mut out: Vec<Clip> = if shuffle {
+        lift_all(s, track, &set).into_iter().map(|(c, _)| c).collect()
+    } else {
+        let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return Vec::new() };
+        let (out, kept): (Vec<Clip>, Vec<Clip>) = std::mem::take(&mut pl.clips).into_iter().partition(|c| set.contains(&c.id) && !c.edit_locked);
+        pl.clips = kept;
+        out
+    };
+    out.sort_by_key(|c| (c.start, c.id));
+    out
+}
+
 /// Copy the material inside `range` (clips trimmed to the range), relative to `range.start`.
 pub fn copy_range(s: &Session, track: TrackId, range: Range) -> Vec<Clip> {
     let t = TimeCtx::of(s);
