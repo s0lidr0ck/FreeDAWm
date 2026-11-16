@@ -136,6 +136,8 @@ pub fn apply(e: &mut Engine, map: &MidiMap, value: u8) -> Result<()> {
         AutoParam::SendPan(i) => ("mix.send_level", json!({"track": t.0, "slot": i, "pan": pos * 2.0 - 1.0})),
         AutoParam::SendMute(i) => ("mix.send_level", json!({"track": t.0, "slot": i, "mute": pos >= 0.5})),
         AutoParam::Trim => ("mix.trim", json!({"tracks": [t.0], "db": pos * 48.0 - 24.0})),
+        AutoParam::Width => ("mix.width", json!({"track": t.0, "width": pos * 2.0 - 1.0})),
+        AutoParam::Balance => ("mix.balance", json!({"track": t.0, "balance": pos * 2.0 - 1.0})),
         AutoParam::Plugin { module, param } => {
             let plugin = e
                 .session()

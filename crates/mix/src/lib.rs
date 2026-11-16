@@ -2618,7 +2618,7 @@ impl MixEngine {
             let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: t.mixer.surround.as_ref() };
             let mut m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
             if src.len() == 2 {
-                shape_stereo(&mut m, t.mixer.width, t.mixer.balance);
+                shape_stereo(&mut m, shape_at(t, AutoParam::Width, t.mixer.width, at), shape_at(t, AutoParam::Balance, t.mixer.balance, at));
             }
             apply_matrix_span(src, start..end, dst, &m, 1.0);
             start = end;
@@ -5130,7 +5130,8 @@ const PAN_STEP: Samples = 64;
 /// The position to read the pan at for the frames from `start` of the block at `pos`, and the end
 /// of the frames that share it. Without pan automation the whole block shares one pan.
 fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
-    let automated = t.mixer.automation_mode.reads() && t.automation.iter().any(|l| matches!(l.param, AutoParam::Pan(_)) && !l.points.is_empty());
+    let automated = t.mixer.automation_mode.reads()
+        && t.automation.iter().any(|l| matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance) && !l.points.is_empty());
     if !automated {
         return (pos, frames);
     }
@@ -5138,6 +5139,15 @@ fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples
     let at = here.div_euclid(PAN_STEP).saturating_mul(PAN_STEP);
     let left = usize::try_from(at.saturating_add(PAN_STEP).saturating_sub(here)).unwrap_or(1).max(1);
     (at, start.saturating_add(left).min(frames))
+}
+
+/// A stereo track's width or balance (`p`) at `pos`: its lane when automation reads, else the
+/// strip's setting `base`. On the pan's grid (`pan_segment`).
+fn shape_at(t: &Track, p: AutoParam, base: f32, pos: Samples) -> f32 {
+    match t.lane(&p).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty()) {
+        Some(l) => l.value_at(pos, base).clamp(-1.0, 1.0),
+        None => base,
+    }
 }
 
 /// The next stretch of a send's block from `start`: the timeline position its automation is read

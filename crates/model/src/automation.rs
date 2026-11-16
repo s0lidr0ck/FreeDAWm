@@ -61,6 +61,10 @@ pub enum AutoParam {
     SendMute(u8),
     /// Trim offset on top of the volume curve, dB.
     Trim,
+    /// A stereo track's width on its main output: 1 as it comes, 0 mono, -1 swapped.
+    Width,
+    /// A stereo track's balance on its main output, -1..1.
+    Balance,
     /// A chain module (by stable id) + parameter id.
     Plugin {
         module: ModuleId,
@@ -79,6 +83,8 @@ impl AutoParam {
             AutoParam::SendPan(i) => format!("send {} pan", slot_letter(*i)),
             AutoParam::SendMute(i) => format!("send {} mute", slot_letter(*i)),
             AutoParam::Trim => "trim".into(),
+            AutoParam::Width => "width".into(),
+            AutoParam::Balance => "balance".into(),
             AutoParam::Plugin { module, param } => format!("module {} {param}", module.0),
         }
     }
@@ -93,6 +99,8 @@ impl AutoParam {
             AutoParam::SendPan(i) => format!("send_{}_pan", slot_letter(*i).to_ascii_lowercase()),
             AutoParam::SendMute(i) => format!("send_{}_mute", slot_letter(*i).to_ascii_lowercase()),
             AutoParam::Trim => "trim".into(),
+            AutoParam::Width => "width".into(),
+            AutoParam::Balance => "balance".into(),
             AutoParam::Plugin { module, param } => format!("plugin:m{}:{param}", module.0),
         }
     }
@@ -109,6 +117,8 @@ impl AutoParam {
             "pan2" => return Some(AutoParam::Pan(1)),
             "mute" => return Some(AutoParam::Mute),
             "trim" => return Some(AutoParam::Trim),
+            "width" => return Some(AutoParam::Width),
+            "balance" => return Some(AutoParam::Balance),
             _ => {}
         }
         if let Some(rest) = s.strip_prefix("send_") {
@@ -133,7 +143,8 @@ impl AutoParam {
     pub fn range(&self) -> (f32, f32, f32) {
         match self {
             AutoParam::Volume | AutoParam::SendLevel(_) => (-144.0, 12.0, 0.0),
-            AutoParam::Pan(_) | AutoParam::SendPan(_) => (-1.0, 1.0, 0.0),
+            AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => (-1.0, 1.0, 0.0),
+            AutoParam::Width => (-1.0, 1.0, 1.0),
             AutoParam::Mute | AutoParam::SendMute(_) => (0.0, 1.0, 0.0),
             AutoParam::Trim => (-144.0, 24.0, 0.0),
             AutoParam::Plugin { .. } => (f32::MIN, f32::MAX, 0.0),

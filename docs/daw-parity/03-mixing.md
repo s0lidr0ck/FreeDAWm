@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (plug-in automation delay-compensated) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (width and balance lanes; design for keying a track from an aux) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -66,7 +66,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Options › More › Pan Law, `mix.pan_law`) |
 | Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
-| Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; not automatable |
+| Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; automatable (width and balance lanes, on the pan's 64-sample grid; moving the controls counts as a touch for writing, not yet tried in a writing pass) |
 | Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
 | Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height; centre % and LFE have no control; mono and stereo tracks only |
 | Binaural pan | ● | ● | ● | ● | **Missing** |
@@ -267,10 +267,10 @@ one a mix engineer would not forgive.
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values are delay-compensated (2026-11-16) but still change once per block: reading them sub-block needs the plug-in interface to take a block in pieces (or timed parameter events), which the built-in `Plugin::process` does not |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
-| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain |
+| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain (owner: wanted; designed below, not built) |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
-| Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done** (width and balance are not automatable yet) |
+| Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
@@ -328,6 +328,32 @@ pre-fader sends that can ignore mute, and the solo scope (`SoloScope`).
   does not; dim and mono act on the monitor output only; a bounce is identical with the control
   room on and off; talkback reaches a cue and never the main mix.
 
+### Design: an ordinary track keyed from an aux or bus (owner decision 5, not built yet)
+
+Today strips render in two phases: the non-aux tracks in levels (a key source renders in an earlier
+level, `sidechain::resolve`), then the auxes and folders, serially, each after the busses feeding it
+are summed. A module on an ordinary track keyed from an aux is refused, because that aux has not
+rendered when the track does.
+
+- **Order.** Replace the two phases with one dependency order over all strips: an edge from every
+  strip to the busses it writes (output, sends), from a bus to the strips reading it (input), and from
+  a key source to the keyed strip. A topological sort gives the order; strips of one level still
+  render in parallel. Today's sessions sort into today's order (auxes have only bus edges in).
+- **Loops.** A key from an aux whose input is fed, directly or through other busses, by the keyed
+  track is a loop: refused at `mix.module_sidechain` with the path named, as routing loops are
+  (`Session::route_loops`); a session that has one (an older file) plays the key silent, as a
+  regressed key does now.
+- **What the keyed track may feed.** Its output and sends go to busses read after it; a bus read by
+  an aux that the order has already rendered would be one block late, which the sort rules out
+  (that aux would depend on the track).
+- **Delay compensation.** The key is read where the aux's output is: the aux's `post_at` (its bus
+  latency plus its inserts), as keys from tracks are read at theirs; `fill_key`'s alignment line
+  delays whichever side is earlier, so nothing new is needed beyond feeding it the aux's position.
+  The aux's own compensation (`aux_latency`) is fixed before the keyed track renders, so the
+  track's `out_extra` still lines its output up with the other returns.
+- **Tests.** An ordinary track keyed from an aux is ducked by it, sample-aligned with and without
+  latency on the aux; a loop is refused; bounce and playback agree.
+
 **Where FreeDAWm is already level or ahead:** solo that follows the signal path, the breadth of
 delay compensation including sidechain keys, undo for every mixer move, freeze up to a chosen
 module, live graphs on module tiles, curved automation segments (Pro Tools has none), conversion
@@ -342,6 +368,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | width and balance lanes; a design for keying an ordinary track from an aux |
 | 2026-11-16 | minor | plug-in automation is read where the module's audio is (delay-compensated) |
 | 2026-11-16 | minor | tier 3: post-fader inserts |
 | 2026-11-16 | minor | tier 3: the control room (listen bus, monitor sets, cue mixes, talkback) |

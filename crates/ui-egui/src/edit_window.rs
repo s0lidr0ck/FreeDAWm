@@ -1125,6 +1125,8 @@ fn static_value(track: &Track, p: &AutoParam) -> f32 {
         AutoParam::SendPan(i) => track.mixer.sends.get(usize::from(*i)).and_then(Option::as_ref).map_or(0.0, |s| s.pan),
         AutoParam::SendMute(i) => track.mixer.sends.get(usize::from(*i)).and_then(Option::as_ref).map_or(0.0, |s| f32::from(u8::from(s.mute))),
         AutoParam::Trim => 0.0,
+        AutoParam::Width => track.mixer.width,
+        AutoParam::Balance => track.mixer.balance,
         AutoParam::Plugin { module, param } => track.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
@@ -2901,7 +2903,8 @@ pub fn auto_value_text(param: &AutoParam, v: f32) -> String {
     match param {
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim if v <= -144.0 + 1e-3 => "-inf dB".into(),
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim => format!("{v:+.1} dB"),
-        AutoParam::Pan(_) | AutoParam::SendPan(_) => {
+        AutoParam::Width => format!("{:.0}%", v.clamp(-1.0, 1.0) * 100.0),
+        AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => {
             let n = (v.clamp(-1.0, 1.0) * 100.0).round() as i32;
             match n {
                 0 => "C".into(),
@@ -2924,7 +2927,8 @@ pub fn parse_auto_value(param: &AutoParam, text: &str) -> Option<f32> {
             let x = t.strip_suffix("db").unwrap_or(&t).trim();
             if matches!(x, "-inf" | "inf") { Some(-144.0) } else { num(x) }
         }
-        AutoParam::Pan(_) | AutoParam::SendPan(_) => {
+        AutoParam::Width => Some((num(t.strip_suffix('%').unwrap_or(&t))? / 100.0).clamp(-1.0, 1.0)),
+        AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => {
             let v = if matches!(t.as_str(), "c" | "<c>" | "center" | "centre") {
                 0.0
             } else if let Some(x) = t.strip_prefix('l').or_else(|| t.strip_suffix('l')) {

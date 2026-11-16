@@ -67,6 +67,7 @@ fn width(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some(tr) = e.session_mut().track_mut(t) {
             tr.mixer.width = v;
         }
+        e.automation_changed(t, soundcraft_model::AutoParam::Width);
     }
     Ok(json!({"width": v}))
 }
@@ -78,6 +79,7 @@ fn balance(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some(tr) = e.session_mut().track_mut(t) {
             tr.mixer.balance = v;
         }
+        e.automation_changed(t, soundcraft_model::AutoParam::Balance);
     }
     Ok(json!({"balance": v}))
 }

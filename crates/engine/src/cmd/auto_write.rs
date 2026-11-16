@@ -55,7 +55,7 @@ pub const WRITE_TYPES: [&str; 7] = ["volume", "pan", "mute", "send_level", "send
 fn write_type(p: &AutoParam) -> &'static str {
     match p {
         AutoParam::Volume | AutoParam::Trim => "volume",
-        AutoParam::Pan(_) => "pan",
+        AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance => "pan",
         AutoParam::Mute => "mute",
         AutoParam::SendLevel(_) => "send_level",
         AutoParam::SendPan(_) => "send_pan",
@@ -244,6 +244,8 @@ fn writable(s: &Session, t: TrackId, p: &AutoParam) -> bool {
         AutoParam::Volume | AutoParam::Trim => true,
         AutoParam::Mute => tr.kind != TrackKind::Master,
         AutoParam::Pan(i) => usize::from(*i) < tr.mixer.pan.len(),
+        // Width and balance shape a stereo track's main output.
+        AutoParam::Width | AutoParam::Balance => tr.mixer.pan.len() == 2,
         AutoParam::SendLevel(i) | AutoParam::SendPan(i) | AutoParam::SendMute(i) => tr.mixer.sends.get(usize::from(*i)).is_some_and(Option::is_some),
         AutoParam::Plugin { module, param } => tr.mixer.module(*module).is_some_and(|ins| !is_link_role_param(&ins.plugin, param)),
     }

@@ -824,6 +824,8 @@ pub(crate) fn current_value(tr: &soundcraft_model::Track, param: &AutoParam) -> 
         AutoParam::SendPan(i) => tr.mixer.sends.get(usize::from(*i)).and_then(Option::as_ref).map_or(0.0, |s| s.pan),
         AutoParam::SendMute(i) => tr.mixer.sends.get(usize::from(*i)).and_then(Option::as_ref).map_or(0.0, |s| f32::from(u8::from(s.mute))),
         AutoParam::Trim => 0.0,
+        AutoParam::Width => tr.mixer.width,
+        AutoParam::Balance => tr.mixer.balance,
         AutoParam::Plugin { module, param } => tr.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
