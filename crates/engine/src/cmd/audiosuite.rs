@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Process",
         [],
         None,
-        "{process: <plugin id> | normalize | reverse | invert | gain | duplicate | time_stretch | pitch_shift | varispeed | signal_generator, params?: {..}, clips?, tracks?, start?, end?} — signal_generator fills start..end (default: the selection) with a new clip on each audio track in `tracks` (default: the selected tracks)",
+        "{process: <plugin id> | normalize | reverse | invert | gain | duplicate | time_stretch | pitch_shift | varispeed | signal_generator, params?: {..}, clips?, tracks?, start?, end?, handle_ms?: 1000} — signal_generator fills start..end (default: the selection) with a new clip on each audio track in `tracks` (default: the selected tracks); processes that keep the length render up to `handle_ms` of the file beyond each edge too, so the new clip can still be trimmed open",
         has_selection,
         process
     )]
@@ -58,6 +58,10 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
         "varispeed" => longest(f64::from(to) / sr.as_f64()),
         _ => usize::MAX,
     };
+    // Processes that keep the length also process the material beyond the clip's edges (handles),
+    // up to this much each side, so the new clip can still be trimmed open.
+    let handle_ms = p.get("handle_ms").and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(1000.0).clamp(0.0, 60_000.0);
+    let keeps_length = !matches!(name.as_str(), "time_stretch" | "pitch_shift" | "varispeed");
     let mut done = 0;
     for id in ids {
         let Some((track, clip)) = e.session().find_clip(id).map(|(t, c)| (t, c.clone())) else { continue };
@@ -65,11 +69,28 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
             continue;
         }
         let channels = e.session().track(track).map_or(1, |t| t.channels());
-        crate::io::refuse_longer(e.session(), "process.run", &clip.name, "process", clip.length, most.min(crate::io::render_limit(channels)))?;
+        // The handles: material the file has before and after the clip (at its stretch), within
+        // `handle_ms`, and never before the session start.
+        let (before, after) = if keeps_length {
+            let most = sr.samples(handle_ms / 1000.0);
+            let file_before = clip.timeline_span(clip.source_offset()).max(0);
+            let file_after = crate::edit::material_len(e.session(), &clip)
+                .map_or(0, |n| clip.timeline_span(n.saturating_sub(clip.source_offset()).saturating_sub(clip.source_span(clip.length))))
+                .max(0);
+            (most.min(file_before).min(clip.start.max(0)), most.min(file_after))
+        } else {
+            (0, 0)
+        };
+        let span = Range::new(clip.start - before, clip.end().saturating_add(after));
+        crate::io::refuse_longer(e.session(), "process.run", &clip.name, "process", span.len(), most.min(crate::io::render_limit(channels)))?;
         let mut audio = soundcraft_mix::render_clips(e.session(), track, clip.range());
         // Render without the clip's own fades: re-render a copy without fades so they stay editable.
         let mut tmp = e.session().clone();
         if let Some(c) = tmp.find_clip_mut(id) {
+            if before > 0 {
+                c.trim_start_to(clip.start - before);
+            }
+            c.length = c.length.saturating_add(after);
             c.fade_in = Default::default();
             c.fade_out = Default::default();
             c.gain_db = 0.0;
@@ -79,7 +100,7 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         if let Some(pl) = tmp.track_mut(track).and_then(|t| t.playlist_mut()) {
             pl.clips.retain(|c| c.id == id);
-            audio = soundcraft_mix::render_clips(&tmp, track, clip.range());
+            audio = soundcraft_mix::render_clips(&tmp, track, span);
         }
         let srf = sr.as_f64() as f32;
         let out: Vec<Vec<f32>> = match name.as_str() {
@@ -118,9 +139,18 @@ fn process(e: &mut Engine, p: &Value) -> Result<Value> {
         let src = crate::io::add_source(s, &new_name, buf, None, FileFormat::Wav);
         let mut nc: Clip = clip.clone();
         nc.name = new_name;
-        nc.content = ClipContent::Audio { source: src, offset: 0 };
+        // Reversed, what was after the clip comes first in the new file.
+        let lead = if name == "reverse" { after } else { before };
+        nc.content = ClipContent::Audio { source: src, offset: lead };
         soundcraft_model::rebase_lyrics(&mut nc, clip.source_offset());
-        nc.length = i64::try_from(frames).unwrap_or(nc.length);
+        for w in nc.lyrics.iter_mut().flat_map(|l| l.words.iter_mut()) {
+            (w.start, w.end) = (w.start.saturating_add(lead), w.end.saturating_add(lead));
+        }
+        nc.length = if keeps_length {
+            clip.length.min(i64::try_from(frames).unwrap_or(0).saturating_sub(lead)).max(0)
+        } else {
+            i64::try_from(frames).unwrap_or(nc.length)
+        };
         // The render already has the clip's stretch applied; keeping it would stretch the new file again.
         nc.stretch = 1.0;
         // Warp markers described the old render; the new file is plain audio.
@@ -274,7 +304,9 @@ mod tests {
                 let c = e.session().tracks[0].clips()[0].clone();
                 let frames = e.session().pool.get(c.source().unwrap()).unwrap().buffer().channels[0].len();
                 assert_eq!(c.stretch, 1.0, "{process} at {stretch}");
-                assert_eq!(c.length, i64::try_from(frames).unwrap(), "{process} at {stretch}");
+                // The new file holds the clip and its handles, at unity stretch.
+                assert!(c.source_offset() + c.length <= i64::try_from(frames).unwrap(), "{process} at {stretch}");
+                assert_eq!(c.length, 64, "{process} at {stretch}: the clip keeps its length on the timeline");
             }
         }
     }

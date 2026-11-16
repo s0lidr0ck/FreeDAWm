@@ -168,7 +168,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Export clips as files | ● | ● | ● | ● | **Works**: each clip alone, a muted one as it sounds unmuted (bug 22, fixed) |
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
-| Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Missing**: only the visible part is rendered |
+| Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too; stretch, pitch and varispeed render the clip only |
 | Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
 | Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
 | Strip silence preview before committing | ● | ● | ● | ● | **Missing** |
@@ -284,7 +284,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
 | 18 | **Partly fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Left: the lines still count from sample 0, not the timecode start; that needs the start passed to every grid call. Test: `time` `frame_lines_do_not_drift_over_an_hour` | `time/src/grid.rs` (`line_at_or_before`, `next_line`) |
 | 19 | **Fixed.** "Delete Unused Playlists" removed take layers but left the comp's references to them, and the record target (an index) went stale. It now keeps the layers the comp was swiped from, re-points the comp's references and the record target at the layers that stay, and clears a target that went. (`comp.layer_delete` already re-indexed them.) Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/track.rs` (`delete_unused_playlists`) |
-| 20 | **Partly fixed.** Processing a clip did not shorten fades to the new length, clear warp markers or swap the fades on Reverse, and rendered a muted clip to silence. Fades are now kept inside the new length, warp markers cleared, Reverse swaps the fades and mirrors the sync point, and a muted clip is processed as it sounds unmuted. Left: the handles are still dropped (tier 2, "processing that keeps handles"). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/audiosuite.rs` |
+| 20 | **Fixed.** Processing a clip did not shorten fades to the new length, clear warp markers or swap the fades on Reverse, and rendered a muted clip to silence. Fades are now kept inside the new length, warp markers cleared, Reverse swaps the fades and mirrors the sync point, and a muted clip is processed as it sounds unmuted. The handles are kept now too (tier 2). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/audiosuite.rs` |
 | 21 | **Fixed.** Coalescing volume automation to clip gain changed only the active playlist, then zeroed the fader, so other playlists changed level. Every playlist and take layer's clips now take the level. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit_more.rs` (`coalesce_volume_to_clip_gain`) |
 | 22 | **Fixed.** Export Clips rendered the clip's time range, not the clip, so overlapping neighbours were in the file (and a muted clip was silence). Each clip now renders alone and unmuted. Test: `io::strip_tests::exported_clips_hold_only_their_own_audio` | `engine/src/io.rs` (`export_clips`) |
 | 23 | **Fixed.** Zoom to Selection and Fit by key or menu assumed a 1200-pixel timeline. The app now passes the timeline's width on screen when the call names none (`SoundApp::run_with`); headless callers still default to 1200. Not checked in a running GUI | `ui-egui/src/lib.rs` |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: processing keeps handles |
 | 2026-11-16 | minor | Tier 2: Commit Selection (bounce a range in place with effects) |
 | 2026-11-16 | minor | Tier 2: fade dialog with a shape for each side, presets and batch fades |
 | 2026-11-16 | minor | Tier 2: audio quantize with strength and swing |

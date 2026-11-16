@@ -664,6 +664,28 @@ fn fades_take_a_shape_for_each_side_and_batch_fades_reach_clips_inside() {
     assert!(e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 1900, "end": 2100, "in_shape": "wobbly"})).is_err());
 }
 
+// ---- tier 2: processing keeps handles ---------------------------------------------------------
+
+#[test]
+fn a_processed_clip_keeps_handles_to_trim_open() {
+    let mut e = engine("slip");
+    // 1000 samples of the file before the clip, plenty after.
+    let (t, c) = track(&mut e, &[(5000, 1000, 1000)]);
+    run(&mut e, "process.run", json!({"process": "invert", "clips": [c[0].0]}));
+    let s = e.session();
+    let nc = s.track(t).unwrap().clips()[0].clone();
+    assert_eq!((nc.start, nc.length, nc.source_offset()), (5000, 1000, 1000), "the clip sits where it was, 1000 into its new file");
+    let src = s.sources.last().unwrap();
+    assert_eq!(src.frames, 1000 + 1000 + 48_000, "1 s of handle after, all 1000 before");
+    // It can be trimmed open again.
+    run(&mut e, "edit.trim_clip", json!({"clip": nc.id.0, "start": 4000, "end": 7000}));
+    assert_eq!(clips(&e, t), vec![(4000, 3000, 0)]);
+    // A process that changes the length keeps none.
+    let (u, d) = track(&mut e, &[(5000, 1000, 1000)]);
+    run(&mut e, "process.run", json!({"process": "time_stretch", "params": {"ratio": 2.0}, "clips": [d[0].0]}));
+    assert_eq!(e.session().track(u).unwrap().clips()[0].source_offset(), 0);
+}
+
 // ---- tier 2: quantize audio with strength and swing -------------------------------------------
 
 #[test]

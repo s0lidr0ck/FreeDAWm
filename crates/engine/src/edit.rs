@@ -1017,7 +1017,7 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
 }
 
 /// Length of the file or movie under a clip; None for MIDI, which has no end.
-fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
+pub(crate) fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
     match c.content {
         ClipContent::Audio { source, .. } => s.source(source).map(|src| i64::try_from(src.frames).unwrap_or(i64::MAX)),
         ClipContent::Video { source, .. } => s.video(source).map(|v| s.sample_rate.samples(v.duration.clamp(0.0, 1e7))),
