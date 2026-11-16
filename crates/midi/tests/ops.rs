@@ -37,6 +37,24 @@ fn quantize_swing() {
 }
 
 #[test]
+fn quantize_on_counts_the_grid_and_swing_from_each_span() {
+    // A clip starting 100 ticks after a bar: the bar's lines are at -100, 140, 380 ... in the
+    // clip's ticks, not at 0, 240, 480.
+    let bar = |_: i64| (-100, 1820);
+    let mut notes = vec![n(60, 0, 10), n(60, 150, 10), n(60, 370, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 240, ..Default::default() }, 1, bar);
+    assert_eq!(starts(&notes), vec![-100, 140, 380]);
+    // Swing delays the bar's second line, not the clip's.
+    let mut notes = vec![n(60, 400, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 480, swing: 1.0, ..Default::default() }, 1, bar);
+    assert_eq!(starts(&notes), vec![540]);
+    // A 7/8 bar (3360 ticks) is not a whole number of quarters: the next bar's start is a line.
+    let mut notes = vec![n(60, 3300, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 960, ..Default::default() }, 1, |_| (0, 3360));
+    assert_eq!(starts(&notes), vec![3360]);
+}
+
+#[test]
 fn quantize_include_exclude() {
     let opts = QuantizeOptions { grid_ticks: 240, include_within: 0.5, ..Default::default() };
     // Half grid = 120; include within 60 ticks.

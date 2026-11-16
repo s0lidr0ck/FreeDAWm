@@ -422,7 +422,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
             .on_hover_text("Show CC, pitch bend and aftertouch lanes under the velocity lane");
-        if ui.button("Legato").on_hover_text("Each note lasts until the next one").clicked() {
+        if ui.button("Legato").on_hover_text("Each selected note (every note when none is) lasts until the next one").clicked() {
             op = Some(("event.change_duration", json!({"legato": 0})));
             ui.close();
         }
@@ -473,14 +473,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if lt.small_button("Join").on_hover_text("Join the selected notes of each pitch into one").clicked() {
         let _ = tools::join(app, cid);
     }
-    if lt.small_button("Quantize").on_hover_text("Quantize to the grid").clicked() {
+    if lt.small_button("Quantize").on_hover_text("Quantize the selected notes (every note when none is) to the grid").clicked() {
         op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
     }
     let grid_text = format!("Grid: {}", app.midi.grid.label(edit_grid));
     lt.menu_button(grid_text, |ui| tools::grid_menu(app, ui)).response.on_hover_text("The MIDI Editor's own grid (hold Alt while dragging: no snap)");
-    if let Some((id, mut p)) = op {
-        p["clips"] = json!([cid.0]);
-        let _ = app.run(id, p);
+    if let Some((id, p)) = op {
+        run_on_selection(app, cid, id, p);
     }
     // The clip's line, clipped short of the tools as they are laid out.
     let text_end = left_bar.min.x - 4.0;
@@ -1371,6 +1370,22 @@ fn scrollbar(ui: &mut Ui, bar: Rect, v: &mut MidiView, width: f32, len: i64, cid
         v.left = f64::from(p.x - bar.min.x) * per_px - shown / 2.0;
     }
     *v = clamp_left(*v, width, len);
+}
+
+/// An Event operation (Quantize, Legato) from the editor: on the selected notes, or every note
+/// of the clip when none is selected. The selection follows the notes through the re-sort.
+pub fn run_on_selection(app: &mut SoundApp, cid: ClipId, id: &str, mut params: serde_json::Value) {
+    params["clips"] = json!([cid.0]);
+    let had = !app.midi.selected.is_empty() && app.midi.clip == Some(cid);
+    if had {
+        params["indices"] = json!(app.midi.selected);
+    }
+    if let Ok(r) = app.run(id, params)
+        && had
+        && let Some(a) = r.get("indices").and_then(|v| v.as_array())
+    {
+        app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
+    }
 }
 
 /// Snap to Scale on the selected notes (every note when none is selected). The selection stays

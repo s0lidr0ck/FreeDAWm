@@ -224,7 +224,7 @@ fn fitting_move(seq: &Sequence, idx: &[usize], ticks: i64, semitones: i64) -> (i
 }
 
 /// Sorts `seq`'s notes; returns where the notes at `marked` (old indices) ended up.
-fn sort_tracked(seq: &mut Sequence, marked: &[usize]) -> Vec<usize> {
+pub(super) fn sort_tracked(seq: &mut Sequence, marked: &[usize]) -> Vec<usize> {
     let mut work: Vec<(Note, bool)> = seq.notes.iter().enumerate().map(|(i, n)| (*n, marked.contains(&i))).collect();
     work.sort_by_key(|(a, _)| (a.start, a.pitch, a.channel, a.length, a.velocity));
     let kept = work.iter().enumerate().filter(|(_, (_, f))| *f).map(|(i, _)| i).collect();

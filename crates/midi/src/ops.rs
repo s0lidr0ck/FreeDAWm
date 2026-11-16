@@ -74,13 +74,28 @@ fn nearest_line(t: i64, grid: i64, swing: f64) -> i64 {
     best
 }
 
-/// Quantizes note starts (and optionally ends) to a grid. See [`QuantizeOptions`].
+/// The line nearest to `t` on a grid counted (and swung) from the start `a` of the span `(a, b)`
+/// holding `t`; `b` (the next span's start, itself a line) is a candidate when `b > a`.
+fn nearest_line_in(t: i64, grid: i64, swing: f64, (a, b): (i64, i64)) -> i64 {
+    let line = a.saturating_add(nearest_line(t.saturating_sub(a), grid, swing));
+    if b > a && b.abs_diff(t) < line.abs_diff(t) { b } else { line }
+}
+
+/// Quantizes note starts (and optionally ends) to a grid counted from tick 0. See
+/// [`QuantizeOptions`].
 pub fn quantize(notes: &mut [Note], opts: &QuantizeOptions) {
     quantize_with_seed(notes, opts, DEFAULT_SEED);
 }
 
 /// [`quantize`] with an explicit seed for the `random` component.
 pub fn quantize_with_seed(notes: &mut [Note], opts: &QuantizeOptions, seed: u64) {
+    quantize_on(notes, opts, seed, |_| (0, 0));
+}
+
+/// [`quantize_with_seed`] on a grid counted from the start of each span (a bar) rather than from
+/// tick 0: `span(t)` gives the start of the span holding `t` and the next span's start, in the
+/// notes' own ticks. Swing counts from each span's start too.
+pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: impl Fn(i64) -> (i64, i64)) {
     let grid = opts.grid_ticks;
     if grid <= 0 {
         return;
@@ -96,7 +111,7 @@ pub fn quantize_with_seed(notes: &mut [Note], opts: &QuantizeOptions, seed: u64)
     for n in notes.iter_mut() {
         let old_start = n.start;
         let old_end = n.end();
-        let target = nearest_line(old_start, grid, swing);
+        let target = nearest_line_in(old_start, grid, swing, span(old_start));
         let d = target.saturating_sub(old_start);
         let dist = d.unsigned_abs() as f64;
         if include < 1.0 && dist > include * half {
@@ -111,7 +126,7 @@ pub fn quantize_with_seed(notes: &mut [Note], opts: &QuantizeOptions, seed: u64)
         }
         n.start = new_start;
         n.length = if opts.quantize_ends {
-            let end_target = nearest_line(old_end, grid, swing);
+            let end_target = nearest_line_in(old_end, grid, swing, span(old_end));
             let new_end = old_end.saturating_add(round_i64(end_target.saturating_sub(old_end) as f64 * strength));
             new_end.saturating_sub(new_start)
         } else if opts.preserve_duration {

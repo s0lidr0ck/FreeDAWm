@@ -252,7 +252,11 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
     let resp = ui.interact(r, ui.id().with(("ctrl_lane", cid.0, lane_id(kind))), Sense::click_and_drag());
     let pencil = app.engine.session().edit.tool == Tool::Pencil;
     let pointer = resp.interact_pointer_pos().or(ui.ctx().pointer_latest_pos());
-    let snap = |tick: f64| ((tick / grid.max(1) as f64).round() as i64).saturating_mul(grid.max(1)).clamp(0, len.max(0));
+    // On the grid as the roll draws it: lines counted from each bar's start, not the clip's.
+    let session = app.engine.session_arc();
+    let base = session.find_clip(cid).map_or(0, |(_, c)| session.tempo.samples_to_ticks(c.start, session.sample_rate));
+    let snap =
+        |tick: f64| crate::midi_edit_tools::snap_abs(&session.tempo, base as f64 + tick, grid.max(1)).saturating_sub(base).clamp(0, len.max(0));
     let tick_at = |x: f32| geo.tick_at(x).round().clamp(0.0, len.max(0) as f64) as i64;
     // Where the button went down, not where the drag was first noticed.
     if resp.drag_started()
