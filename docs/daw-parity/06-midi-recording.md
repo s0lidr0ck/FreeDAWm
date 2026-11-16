@@ -158,7 +158,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Metronome, optionally only while recording | ● | ● | ● | ● | **Works** |
 | Capture what was just played without having pressed Record | ● | ● | ● | ● | **Flag only**: the command exists; no buffer listens |
 | Recording starts at the first note played | ● | ○ | ○ | ○ | **Missing** |
-| The take is drawn as it is played | ● | ● | ● | ● | **Works**; it ignores the channel filter (bug 17) |
+| The take is drawn as it is played | ● | ● | ● | ● | **Works** |
 | Footswitch punch; record from a controller's transport keys | ● | ● | ● | ● | **Missing** |
 
 ## H. Processing on the way in
@@ -243,7 +243,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it` | `engine/src/midi_record.rs` (`pass_range`) |
 | 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
 | 16 | Menu items that run their command with no values and so change nothing: Input Quantize, MIDI Track Offsets. Step Input always enters the same eighth note | `ui-egui/src/menus.rs:949-965, 1075-1076`; `ui-egui/src/menubar.txt:435-440` |
-| 17 | The live drawing of a take shows notes on channels the track will not record, at the time heard, not the time they will be placed | `ui-egui/src/live_midi.rs:58-71` |
+| 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes` | `ui-egui/src/live_midi.rs` |
 | 18 | Musical Typing's step mode ignores the velocity setting, does not lengthen the clip (later notes do not play), and a position before the clip collapses to its start | `ui-egui/src/musical_typing.rs:138-151` |
 | 19 | The MIDI Real-Time Properties window never loads the selected track's values, writes all four on any change, and its changes cannot be undone | `ui-egui/src/ops_windows.rs:29-57, 283`; `engine/src/cmd/event_more.rs:116` |
 | 20 | A MIDI track's mixer strip always reads "MIDI in: all" though its input defaults to none; tracks made by MIDI import also have none and record nothing | `ui-egui/src/mix_window.rs:401-402`; `model/src/mixer.rs:1029`; `engine/src/io.rs:429` |
@@ -317,3 +317,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 8 fixed: a pedal down at the end of a take comes up, and one pressed before it is kept |
 | 2026-11-16 | minor | Bug 5 fixed: an early downbeat at a loop's end starts the next pass |
 | 2026-11-16 | minor | Bug 15 fixed: the New Tracks dialog makes instrument tracks stereo |
+| 2026-11-16 | minor | Bug 17 fixed: the live take shows only its channel, where its notes will be placed |
