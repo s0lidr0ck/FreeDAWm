@@ -27,13 +27,23 @@ pub struct Ghost {
 /// unmuted MIDI track, its own track's other clips included, that sound within the clip's time.
 /// `only` limits them to those tracks. Muted clips show none.
 pub fn ghost_notes(s: &Session, cid: ClipId, only: Option<&[TrackId]>) -> Vec<Ghost> {
+    gather(s, cid, only, None)
+}
+
+/// The notes of the other MIDI clips (of `among`, when given: the whole of each one's window,
+/// not only the part over `cid`'s time, muted or not), placed in `cid`'s ticks.
+fn gather(s: &Session, cid: ClipId, only: Option<&[TrackId]>, among: Option<&[ClipId]>) -> Vec<Ghost> {
     let Some((_, clip)) = s.find_clip(cid) else { return Vec::new() };
     let sr = s.sample_rate;
     let base = s.tempo.samples_to_ticks(clip.start, sr);
     let end = s.tempo.samples_to_ticks(clip.end(), sr).saturating_sub(base);
     let mut out = Vec::new();
-    for t in s.tracks.iter().filter(|t| t.kind.is_midi() && !t.mixer.mute && only.is_none_or(|o| o.contains(&t.id))) {
-        for c in t.clips().iter().filter(|c| c.id != cid && !c.muted && c.start < clip.end() && c.end() > clip.start) {
+    let wanted = |c: &soundcraft_model::Clip| match among {
+        Some(a) => a.contains(&c.id),
+        None => !c.muted && c.start < clip.end() && c.end() > clip.start,
+    };
+    for t in s.tracks.iter().filter(|t| t.kind.is_midi() && (among.is_some() || !t.mixer.mute) && only.is_none_or(|o| o.contains(&t.id))) {
+        for c in t.clips().iter().filter(|c| c.id != cid && wanted(c)) {
             let Some(seq) = c.midi_playing() else { continue };
             let other = s.tempo.samples_to_ticks(c.start, sr);
             let shift = other.saturating_sub(base);
@@ -41,7 +51,8 @@ pub fn ghost_notes(s: &Session, cid: ClipId, only: Option<&[TrackId]>) -> Vec<Gh
             for (index, n) in seq.notes.iter().enumerate().filter(|(_, n)| n.start >= 0 && n.start < len) {
                 let start = n.start.saturating_add(shift);
                 let length = n.length.min(len.saturating_sub(n.start)).max(1);
-                if start < end && start.saturating_add(length) > 0 && out.len() < MAX_GHOSTS {
+                let over = among.is_some() || (start < end && start.saturating_add(length) > 0);
+                if over && out.len() < MAX_GHOSTS {
                     out.push(Ghost {
                         track: t.id,
                         track_name: t.name.clone(),
@@ -69,33 +80,28 @@ pub fn shown(app: &SoundApp, s: &Session, cid: ClipId) -> Vec<Ghost> {
     v
 }
 
-/// The notes of the other selected MIDI clips over `cid`'s time: editable once their clip is
-/// made the active one (a click on one does that).
+/// The notes of the other selected MIDI clips, each clip's whole window (the roll spans them
+/// all), in `cid`'s ticks: selected, moved, resized and deleted with the edited clip's.
 pub fn siblings(s: &Session, cid: ClipId) -> Vec<Ghost> {
     let others = crate::midi_editor::selected_midi_clips(s);
-    if others.len() < 2 {
+    if others.len() < 2 || !others.contains(&cid) {
         return Vec::new();
     }
-    let mut v = ghost_notes(s, cid, None);
-    v.retain(|g| others.contains(&g.clip));
-    v
+    gather(s, cid, None, Some(&others))
 }
 
 /// Draws the other selected clips' notes: their track's colour, outlined, plainer than the
-/// active clip's but not faint.
-pub fn draw_siblings(painter: &Painter, ghosts: &[Ghost], rects: &[Rect]) {
+/// active clip's but not faint; the selected ones (`picked`) white.
+pub fn draw_siblings(painter: &Painter, ghosts: &[Ghost], rects: &[Rect], picked: &dyn Fn(&Ghost) -> bool) {
     let view = painter.clip_rect();
     for (g, r) in ghosts.iter().zip(rects) {
         if r.intersects(view) {
             let [cr, cg, cb] = g.color;
-            let a = if g.note.muted { 50 } else { 150 };
-            painter.rect(
-                *r,
-                2.0,
-                Color32::from_rgba_unmultiplied(cr, cg, cb, a),
-                egui::Stroke::new(1.0, Color32::from_gray(200)),
-                egui::StrokeKind::Inside,
-            );
+            let fill = match (picked(g), g.note.muted) {
+                (true, m) => Color32::from_white_alpha(if m { 70 } else { 230 }),
+                (false, m) => Color32::from_rgba_unmultiplied(cr, cg, cb, if m { 50 } else { 150 }),
+            };
+            painter.rect(*r, 2.0, fill, egui::Stroke::new(1.0, Color32::from_gray(200)), egui::StrokeKind::Inside);
         }
     }
 }

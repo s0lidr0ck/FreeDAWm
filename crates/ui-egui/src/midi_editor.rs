@@ -123,21 +123,27 @@ impl RollGeometry {
 /// `v` zoomed by `factor` keeping the tick under `x` (points from the roll's left) still, never
 /// wider than fitting `len` ticks into `width` points nor closer than [`MAX_PX_PER_TICK`].
 pub fn zoom_about(v: MidiView, factor: f32, x: f32, width: f32, len: i64) -> MidiView {
-    let fit = width / len.max(1) as f32;
+    zoom_about_span(v, factor, x, width, (0, len))
+}
+
+/// [`zoom_about`] over the span `lo..hi` (ticks from the edited clip's start: with several
+/// clips in the editor the roll spans them all, so `lo` can be before the clip).
+pub fn zoom_about_span(v: MidiView, factor: f32, x: f32, width: f32, (lo, hi): (i64, i64)) -> MidiView {
+    let fit = width / hi.saturating_sub(lo).max(1) as f32;
     let now = v.zoom.unwrap_or(fit).max(fit);
     let new = (now * factor).clamp(fit, MAX_PX_PER_TICK.max(fit));
     let under = v.left + f64::from(x) / f64::from(now);
     let left = under - f64::from(x) / f64::from(new);
     let zoom = (new > fit * 1.0001).then_some(new);
-    clamp_left(MidiView { zoom, left: if zoom.is_some() { left } else { 0.0 }, ..v }, width, len)
+    clamp_left(MidiView { zoom, left: if zoom.is_some() { left } else { lo as f64 }, ..v }, width, (lo, hi))
 }
 
-/// `v` with its left edge inside the clip.
-fn clamp_left(v: MidiView, width: f32, len: i64) -> MidiView {
-    let Some(z) = v.zoom else { return MidiView { left: 0.0, ..v } };
+/// `v` with its left edge inside the span `lo..hi`.
+fn clamp_left(v: MidiView, width: f32, (lo, hi): (i64, i64)) -> MidiView {
+    let Some(z) = v.zoom else { return MidiView { left: lo as f64, ..v } };
     let shown = f64::from(width) / f64::from(z.max(1e-6));
-    let max = (len as f64 - shown).max(0.0);
-    MidiView { left: v.left.clamp(0.0, max), ..v }
+    let max = (hi as f64 - shown).max(lo as f64);
+    MidiView { left: v.left.clamp(lo as f64, max), ..v }
 }
 
 /// `v`'s note height times `factor` (within [`ROW_H_RANGE`]), the pitch at `y` (points from the
@@ -170,7 +176,9 @@ pub fn owns_key(app: &SoundApp, ctx: &egui::Context, key: egui::Key, m: egui::Mo
     let clipboard = matches!(key, Key::C | Key::X | Key::V | Key::D) && m.command && !m.alt && !m.shift;
     let select_all = key == Key::A && m.command && !m.alt && !m.shift;
     let space = key == Key::Space && plain;
-    let arrows = matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight) && plain && !app.midi.selected.is_empty();
+    let arrows = matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight)
+        && plain
+        && (!app.midi.selected.is_empty() || selection_spans_clips(app));
     let escape = key == Key::Escape && plain && tools::dragging(app);
     // In its own window (or docked), keys typed into another window aren't its.
     if !app.ui.show_midi_editor
@@ -249,6 +257,10 @@ pub struct MidiEditorState {
     /// Of several selected MIDI clips, the one being edited (the others' notes show in their
     /// track's colour; a click on one makes its clip this one).
     pub active: Option<ClipId>,
+    /// With several MIDI clips in the editor: the selected notes of the clips other than the
+    /// edited one (indices in each clip's notes). Moves, resizes, deletes and quantizes take them
+    /// with [`MidiEditorState::selected`], in one undo step.
+    pub others: Vec<(ClipId, Vec<usize>)>,
     /// What a drag on empty lane space does: select points, or draw a line or a curve.
     pub ctrl_tool: crate::midi_lanes::LaneTool,
     /// Scale Points' percent (the lanes' right-click menu).
@@ -309,6 +321,7 @@ impl Default for MidiEditorState {
             keep_scale: false,
             chord: None,
             active: None,
+            others: Vec::new(),
             ctrl_tool: crate::midi_lanes::LaneTool::Select,
             ctrl_scale_pct: 100.0,
             ctrls_follow: false,
@@ -380,7 +393,12 @@ pub enum Edge {
 
 #[derive(Debug, Clone)]
 pub struct NoteDrag {
+    /// The grabbed note's index in the edited clip (in `from`'s clip when that is set).
     pub index: usize,
+    /// The grabbed note belongs to another selected clip (its notes show in the roll).
+    pub from: Option<ClipId>,
+    /// The grabbed note as it was, in the edited clip's ticks.
+    pub grabbed: soundcraft_midi::Note,
     pub edge: Edge,
     pub start: egui::Pos2,
     pub dx_ticks: i64,
@@ -401,6 +419,24 @@ pub fn edge_at(dx: f32, w: f32) -> Edge {
         Edge::Start
     } else {
         Edge::Move
+    }
+}
+
+/// Where note `n` shows while `d` drags it, as (start, length, pitch), and the copy a copying
+/// move drops; `floor` is the earliest start (the start of the note's clip in the roll's ticks).
+pub fn drag_shape(n: &soundcraft_midi::Note, d: &NoteDrag, floor: i64) -> ((i64, i64, i32), Option<(i64, i64, i32)>) {
+    let (st, ln, p) = (n.start, n.length, i32::from(n.pitch));
+    match d.edge {
+        Edge::End => ((st, ln.saturating_add(d.dx_ticks).max(1), p), None),
+        Edge::Start => {
+            let end = n.end();
+            let st = st.saturating_add(d.dx_ticks).clamp(floor, end.saturating_sub(1).max(floor));
+            ((st, end.saturating_sub(st).max(1), p), None)
+        }
+        Edge::Move => {
+            let moved = (st.saturating_add(d.dx_ticks).max(floor), ln, (p + d.dy_semi as i32).clamp(0, 127));
+            if d.copy { ((st, ln, p), Some(moved)) } else { (moved, None) }
+        }
     }
 }
 
@@ -447,7 +483,79 @@ pub fn activate_clip(app: &mut SoundApp, to: ClipId, select: Vec<usize>) {
     app.midi.active = Some(to);
     app.midi.clip = Some(to);
     app.midi.selected = select;
+    app.midi.others.clear();
     app.midi.ctrl_sel = None;
+}
+
+/// The notes an edit acts on, clip by clip: the edited clip's selection, then each other
+/// selected clip's (those with none left out).
+pub fn selection_parts(app: &SoundApp, cid: ClipId) -> Vec<(ClipId, Vec<usize>)> {
+    let mut parts = vec![(cid, app.midi.selected.clone())];
+    parts.extend(app.midi.others.iter().filter(|(c, i)| *c != cid && !i.is_empty()).cloned());
+    parts.retain(|(_, i)| !i.is_empty());
+    parts
+}
+
+/// Whether notes of more than the edited clip are selected.
+pub fn selection_spans_clips(app: &SoundApp) -> bool {
+    app.midi.others.iter().any(|(_, i)| !i.is_empty())
+}
+
+/// Runs command `id` once for each clip of `parts` (its parameters from `params`) as one undo
+/// step: every run after the first that changed the session joins that one's step. Each clip's
+/// notes as the command returns them (`indices`, where they sorted to) come back; a refusal
+/// stops there and shows in the status line.
+pub fn run_parts(
+    app: &mut SoundApp,
+    id: &str,
+    parts: &[(ClipId, Vec<usize>)],
+    params: impl Fn(ClipId, &[usize]) -> serde_json::Value,
+) -> Vec<(ClipId, Vec<usize>)> {
+    let mut out = Vec::new();
+    let mut joined = false;
+    for (clip, idx) in parts {
+        let before = app.engine.session_arc();
+        let p = params(*clip, idx);
+        let r = if joined { app.engine.execute_joined(id, &p).map_err(|e| e.to_string()) } else { app.run(id, p) };
+        match r {
+            Ok(v) => {
+                joined |= !std::sync::Arc::ptr_eq(&before, &app.engine.session_arc());
+                let back = v.get("indices").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect());
+                out.push((*clip, back.unwrap_or_else(|| idx.clone())));
+            }
+            Err(e) => {
+                app.ui.status = e;
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Every note in the windows of the other selected MIDI clips, clip by clip (Select All).
+pub fn all_sibling_notes(s: &soundcraft_model::Session, cid: ClipId) -> Vec<(ClipId, Vec<usize>)> {
+    let mut out: Vec<(ClipId, Vec<usize>)> = Vec::new();
+    for g in midi_ghosts::siblings(s, cid) {
+        match out.iter_mut().find(|(c, _)| *c == g.clip) {
+            Some((_, v)) => v.push(g.index),
+            None => out.push((g.clip, vec![g.index])),
+        }
+    }
+    out
+}
+
+/// Puts the selection back from [`run_parts`]' answer: the edited clip's into `selected`, the
+/// others' into `others`.
+pub fn set_parts(app: &mut SoundApp, cid: ClipId, parts: Vec<(ClipId, Vec<usize>)>) {
+    app.midi.selected.clear();
+    app.midi.others.clear();
+    for (c, i) in parts {
+        if c == cid {
+            app.midi.selected = i;
+        } else {
+            app.midi.others.push((c, i));
+        }
+    }
 }
 
 pub fn target_clip(app: &SoundApp) -> Option<ClipId> {
@@ -535,7 +643,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             clip.name,
             editable.iter().position(|c| *c == cid).map_or(1, |k| k + 1),
             editable.len(),
-            app.midi.selected.len()
+            app.midi.selected.len() + app.midi.others.iter().map(|(_, i)| i.len()).sum::<usize>()
         )
     } else {
         format!("{} · {} selected", clip.name, app.midi.selected.len())
@@ -759,8 +867,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let mut lt = ui.new_child(egui::UiBuilder::new().max_rect(left_bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
     lt.set_clip_rect(left_bar.intersect(lt.clip_rect()));
     lt.spacing_mut().item_spacing.x = 4.0;
-    if lt.small_button("Select all").on_hover_text("Select every note of the clip (Ctrl+A)").clicked() {
+    if lt.small_button("Select all").on_hover_text("Select every note of the clip, or of every clip shown (Ctrl+A)").clicked() {
         tools::select_all(app, cid);
+        app.midi.others = all_sibling_notes(app.engine.session(), cid);
     }
     if lt.small_button("Split").on_hover_text("Split the selected notes at the playhead (Alt-click a note: split it there)").clicked() {
         let _ = tools::split(app, cid, None);
@@ -813,6 +922,42 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let sr = s.sample_rate;
     let base_tick = s.tempo.samples_to_ticks(clip.start, sr);
     let len_ticks = (s.tempo.samples_to_ticks(clip.end(), sr) - base_tick).max(1);
+    // Several selected MIDI clips: the roll spans them all (ticks from this clip's start), each
+    // other clip at its offset; their notes are selected and edited with this one's.
+    let multi = editable.len() > 1 && editable.contains(&cid);
+    let clip_spans: Vec<(ClipId, i64, i64)> = if multi {
+        editable
+            .iter()
+            .filter_map(|id| s.find_clip(*id))
+            .map(|(_, c)| {
+                let at = s.tempo.samples_to_ticks(c.start, sr);
+                (c.id, at.saturating_sub(base_tick), s.tempo.samples_to_ticks(c.end(), sr).saturating_sub(at).max(1))
+            })
+            .collect()
+    } else {
+        vec![(cid, 0, len_ticks)]
+    };
+    let span = clip_spans.iter().fold((0, len_ticks), |(lo, hi), (_, off, len)| (lo.min(*off), hi.max(off.saturating_add(*len))));
+    let span_range = soundcraft_time::Range::new(
+        s.tempo.tick_to_samples(base_tick.saturating_add(span.0), sr),
+        s.tempo.tick_to_samples(base_tick.saturating_add(span.1), sr),
+    );
+    if multi {
+        app.midi.others.retain(|(c, _)| *c != cid && editable.contains(c));
+    } else {
+        app.midi.others.clear();
+    }
+    // Where a note drawn at `tick` goes: this clip where it covers the tick, else the other
+    // selected clip that does (in its own ticks).
+    let draw_target = |tick: i64| -> (ClipId, i64) {
+        if (0..len_ticks).contains(&tick) {
+            return (cid, tick);
+        }
+        clip_spans
+            .iter()
+            .find(|(id, off, len)| *id != cid && tick >= *off && tick < off.saturating_add(*len))
+            .map_or((cid, tick.max(0)), |(id, off, _)| (*id, tick.saturating_sub(*off)))
+    };
     let cleanup = app.midi.show_cleanup;
     let right = if cleanup { full.max.x - midi_cleanup_panel::PANEL_W - 4.0 } else { full.max.x - 4.0 };
     // The chord strip, then the ruler right above the roll; the note bar along the bottom.
@@ -863,20 +1008,20 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let edit_ppt = tools::edit_px_per_tick(&s, base_tick);
     match view_op {
         Some(ViewOp::Rows(f)) => view = row_zoom(view, f, roll.height() / 2.0),
-        Some(ViewOp::Fit) => view = MidiView { zoom: None, left: 0.0, ..view },
+        Some(ViewOp::Fit) => view = MidiView { zoom: None, left: span.0 as f64, ..view },
         Some(ViewOp::Factor(f)) => {
             // About the middle of the roll.
-            let fit = width / len_ticks as f32;
+            let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
             let now = view.zoom.unwrap_or(fit).max(fit);
-            view = zoom_about(view, (edit_ppt * f) / now, width / 2.0, width, len_ticks);
+            view = zoom_about_span(view, (edit_ppt * f) / now, width / 2.0, width, span);
         }
         None => {}
     }
-    wheel(ui, roll.union(vel).union(hbar).union(lanes_area), roll, &mut view, len_ticks);
+    wheel(ui, roll.union(vel).union(hbar).union(lanes_area), roll, &mut view, span);
     if fit_key(app, ui, roll) {
-        view = MidiView { zoom: None, left: 0.0, ..view };
+        view = MidiView { zoom: None, left: span.0 as f64, ..view };
     }
-    view = clamp_left(view, width, len_ticks);
+    view = clamp_left(view, width, span);
     // The key at the clip's start (with one on the Key ruler) and, folded, the rows kept.
     let clip_key = (!s.key_signatures.is_empty()).then(|| soundcraft_engine::vocal::key_pc_at(&s, clip.start));
     // The drum view: the instrument's drum names, one row each (only rows with hits unless
@@ -898,10 +1043,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     app.midi.fold_seen = fold;
     view.scroll = view.scroll.clamp(0.0, (n_rows * view.row_h - roll.height()).max(0.0));
-    scrollbar(ui, hbar, &mut view, width, len_ticks, cid);
+    scrollbar(ui, hbar, &mut view, width, span, cid);
     crate::midi_editor_link::follow(app, ui.ctx(), &mut view, view_before, width, base_tick);
-    view = clamp_left(view, width, len_ticks);
-    let fit = width / len_ticks as f32;
+    view = clamp_left(view, width, span);
+    let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
     let px_per_tick = view.zoom.unwrap_or(fit).max(fit);
     let geo = RollGeometry { clip: cid, roll, px_per_tick, fit, left: view.left, row_h: view.row_h, scroll: view.scroll, fold };
     app.midi.zoom_factor = tools::factor_of(view.zoom, fit, edit_ppt);
@@ -964,8 +1109,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     // Bars and beats as the meter in force sets them, and the grid's lines, those in view (beats
     // and grid lines only where they stand 4 points apart).
-    let first = (geo.tick_at(roll.min.x).floor() as i64).max(0);
-    let last_tick = (geo.tick_at(roll.max.x).ceil() as i64).min(len_ticks);
+    let first = (geo.tick_at(roll.min.x).floor() as i64).max(span.0);
+    let last_tick = (geo.tick_at(roll.max.x).ceil() as i64).min(span.1);
     let beats = s.tempo.meter_at_tick(base_tick.saturating_add(first)).ticks_per_beat() as f32 * px_per_tick > 4.0;
     let grid_lines = if snap_ticks as f32 * px_per_tick > 4.0 && snap_ticks > 1 { snap_ticks } else { 0 };
     for (tick, kind) in tools::grid_lines(&s.tempo, base_tick, first, last_tick, beats, grid_lines) {
@@ -987,7 +1132,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let notes_p = painter.with_clip_rect(roll);
     let drag = app.midi.drag.clone();
     let edits = midi_cleanup_panel::shown_edits(&clip).filter(|_| drag.is_none());
-    let in_drag = |i: usize, d: &NoteDrag| d.index == i || (app.midi.selected.contains(&i) && app.midi.selected.contains(&d.index));
+    // The grabbed note is always among the selected ones (a press selects it).
+    let in_drag = |i: usize, d: &NoteDrag| (d.from.is_none() && d.index == i) || app.midi.selected.contains(&i);
     let shade = |v: u8| {
         let k = 0.45 + 0.55 * f32::from(v) / 127.0;
         Color32::from_rgb((f32::from(base.r()) * k) as u8, (f32::from(base.g()) * k) as u8, (f32::from(base.b()) * k) as u8)
@@ -1006,23 +1152,33 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     midi_ghosts::draw(&notes_p, &ghost_notes, &ghost_rects);
     let sibling_notes = midi_ghosts::siblings(&s, cid);
     let sibling_rects = midi_ghosts::rects(&sibling_notes, &x_of, &y_of, row_h);
-    midi_ghosts::draw_siblings(&notes_p, &sibling_notes, &sibling_rects);
+    let others = app.midi.others.clone();
+    let picked = |g: &midi_ghosts::Ghost| others.iter().any(|(c, i)| *c == g.clip && i.contains(&g.index));
+    // The other clips' selected notes follow a drag, as this clip's do.
+    let mut shown_siblings = sibling_notes.clone();
+    let mut sibling_copies: Vec<midi_ghosts::Ghost> = Vec::new();
+    if let Some(d) = drag.as_ref() {
+        for g in shown_siblings.iter_mut().filter(|g| picked(g)) {
+            let floor = clip_spans.iter().find(|(c, _, _)| *c == g.clip).map_or(0, |(_, off, _)| *off);
+            let ((st, ln, p), copy) = drag_shape(&g.note, d, floor);
+            if let Some((cs, cl, cp)) = copy {
+                sibling_copies
+                    .push(midi_ghosts::Ghost { note: soundcraft_midi::Note { start: cs, length: cl, pitch: cp as u8, ..g.note }, ..g.clone() });
+            }
+            g.note = soundcraft_midi::Note { start: st, length: ln, pitch: p as u8, ..g.note };
+        }
+    }
+    let shown_rects = midi_ghosts::rects(&shown_siblings, &x_of, &y_of, row_h);
+    midi_ghosts::draw_siblings(&notes_p, &shown_siblings, &shown_rects, &picked);
+    let copy_rects = midi_ghosts::rects(&sibling_copies, &x_of, &y_of, row_h);
     let mut ghosts: Vec<Rect> = Vec::new();
     for (i, n) in sequence.notes.iter().enumerate() {
         let (mut st, mut ln, mut p) = (n.start, n.length, i32::from(n.pitch));
         if let Some(d) = drag.as_ref().filter(|d| in_drag(i, d)) {
-            match d.edge {
-                Edge::End => ln = ln.saturating_add(d.dx_ticks).max(1),
-                Edge::Start => {
-                    let end = n.end();
-                    st = st.saturating_add(d.dx_ticks).clamp(0, end.saturating_sub(1).max(0));
-                    ln = end.saturating_sub(st).max(1);
-                }
-                Edge::Move if d.copy => ghosts.push(note_rect(st.saturating_add(d.dx_ticks).max(0), ln, (p + d.dy_semi as i32).clamp(0, 127))),
-                Edge::Move => {
-                    st = st.saturating_add(d.dx_ticks).max(0);
-                    p = (p + d.dy_semi as i32).clamp(0, 127);
-                }
+            let (shape, copy) = drag_shape(n, d, 0);
+            (st, ln, p) = shape;
+            if let Some((cs, cl, cp)) = copy {
+                ghosts.push(note_rect(cs, cl, cp));
             }
         }
         if let Some(end) = edits.and_then(|e| midi_cleanup_panel::edit_of(e, i)).and_then(|e| e.new_end).filter(|end| *end < st.saturating_add(ln)) {
@@ -1049,7 +1205,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             notes_p.with_clip_rect(r.intersect(roll)).text(pos2(r.min.x + 3.0, r.center().y), Align2::LEFT_CENTER, name, regular(size), color);
         }
     }
-    for g in ghosts {
+    for g in ghosts.into_iter().chain(copy_rects) {
         notes_p.rect(g, 2.0, Color32::from_white_alpha(90), Stroke::new(1.0, Color32::WHITE), StrokeKind::Inside);
     }
     if edits.is_some() {
@@ -1061,7 +1217,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         notes_p.line_segment([pos2(x, roll.min.y), pos2(x, roll.max.y)], Stroke::new(1.0, t.accent.gamma_multiply(0.7)));
     }
     let ruler = Rect::from_min_max(pos2(roll.min.x, roll.min.y - crate::midi_editor_link::RULER_H), pos2(roll.max.x, roll.min.y));
-    crate::midi_editor_link::ruler(app, ui, ruler, &geo, base_tick, clip.range());
+    crate::midi_editor_link::ruler(app, ui, ruler, &geo, base_tick, if multi { span_range } else { clip.range() });
     // Interaction.
     let resp = ui.interact(roll, ui.id().with(("roll", cid.0)), Sense::click_and_drag());
     let pass = ui.ctx().cumulative_pass_nr();
@@ -1091,10 +1247,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let snap_rel = |tk: f64| -> i64 { if alt { free(tk) } else { ((tk / snap_ticks as f64).round() as i64).saturating_mul(snap_ticks) } };
     let floor_grid = |tk: f64| -> i64 {
         if alt {
-            return (tk.floor() as i64).max(0);
+            return (tk.floor() as i64).max(span.0);
         }
         let at = tools::snap_abs(&s.tempo, base_tick as f64 + tk, snap_ticks).saturating_sub(base_tick);
-        (if at as f64 > tk { at.saturating_sub(snap_ticks) } else { at }).max(0)
+        (if at as f64 > tk { at.saturating_sub(snap_ticks) } else { at }).max(span.0)
     };
     let pencil = s.edit.tool == Tool::Pencil;
     // Esc cancels a drag in progress: the notes stay as they were.
@@ -1113,13 +1269,28 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.hover = Some(text);
         }
     }
-    // A press on another selected clip's note makes that clip the edited one, the note selected.
-    if (resp.clicked() || resp.drag_started())
-        && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    // Another selected clip's note under `p`, and the part of it a press there takes.
+    let sibling_at = |p: egui::Pos2| -> Option<(&midi_ghosts::Ghost, Edge)> {
+        let k = midi_ghosts::hit(&sibling_rects, p)?;
+        let (g, r) = (sibling_notes.get(k)?, sibling_rects.get(k)?);
+        Some((g, if drums { Edge::Move } else { edge_at(p.x - r.min.x, r.width()) }))
+    };
+    // A click on another selected clip's note makes that clip the edited one, the note selected;
+    // Shift-click adds it to the selection, which can span the clips.
+    if resp.clicked()
+        && let Some(p) = resp.interact_pointer_pos()
         && hit(p).is_none()
-        && let Some(g) = midi_ghosts::hit(&sibling_rects, p).and_then(|g| sibling_notes.get(g))
+        && let Some((g, _)) = sibling_at(p)
     {
-        activate_clip(app, g.clip, vec![g.index]);
+        if ui.input(|i| i.modifiers.shift) {
+            match app.midi.others.iter_mut().find(|(c, _)| *c == g.clip) {
+                Some((_, v)) if !v.contains(&g.index) => v.push(g.index),
+                Some(_) => {}
+                None => app.midi.others.push((g.clip, vec![g.index])),
+            }
+        } else {
+            activate_clip(app, g.clip, vec![g.index]);
+        }
         return;
     }
     // A double-click on a ghost opens its clip.
@@ -1142,15 +1313,29 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if resp.drag_started()
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
-        match hit(p) {
-            Some((i, edge)) => {
+        let copy = |edge: Edge| alt && edge == Edge::Move;
+        match (hit(p), sibling_at(p)) {
+            (Some((i, edge)), _) => {
                 if !app.midi.selected.contains(&i) {
                     app.midi.selected = vec![i];
+                    app.midi.others.clear();
                 }
-                app.midi.drag = Some(NoteDrag { index: i, edge, start: p, dx_ticks: 0, dy_semi: 0, copy: alt && edge == Edge::Move });
+                if let Some(grabbed) = sequence.notes.get(i).copied() {
+                    app.midi.drag = Some(NoteDrag { index: i, from: None, grabbed, edge, start: p, dx_ticks: 0, dy_semi: 0, copy: copy(edge) });
+                }
             }
-            None if pencil => app.midi.draw = Some((floor_grid(geo.tick_at(p.x)), to_scale(pitch_at(p.y)).clamp(0, 127))),
-            None => app.midi.band = Some(p),
+            // Another selected clip's note: the selection (it, unless it was already among the
+            // selected notes) moves or resizes across the clips.
+            (None, Some((g, edge))) => {
+                if !picked(g) {
+                    app.midi.selected.clear();
+                    app.midi.others = vec![(g.clip, vec![g.index])];
+                }
+                let d = NoteDrag { index: g.index, from: Some(g.clip), grabbed: g.note, edge, start: p, dx_ticks: 0, dy_semi: 0, copy: copy(edge) };
+                app.midi.drag = Some(d);
+            }
+            (None, None) if pencil => app.midi.draw = Some((floor_grid(geo.tick_at(p.x)), to_scale(pitch_at(p.y)).clamp(0, 127))),
+            (None, None) => app.midi.band = Some(p),
         }
     }
     // Rubber-band selection on empty space.
@@ -1174,6 +1359,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 })
                 .map(|(i, _)| i)
                 .collect();
+            // The other clips' notes under the band too.
+            app.midi.others.clear();
+            for (g, r) in sibling_notes.iter().zip(&sibling_rects) {
+                if r.intersects(band) {
+                    match app.midi.others.iter_mut().find(|(c, _)| *c == g.clip) {
+                        Some((_, v)) => v.push(g.index),
+                        None => app.midi.others.push((g.clip, vec![g.index])),
+                    }
+                }
+            }
             app.midi.band = None;
         }
     }
@@ -1198,19 +1393,22 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 start,
                 length,
             };
-            let notes = tools::stamp(app.midi.chord, clip_key, note);
-            if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&notes, start)})).is_ok() {
+            // Into the selected clip under the note's start (this one where it covers it).
+            let (into, at) = draw_target(start);
+            let notes = tools::stamp(app.midi.chord, clip_key, soundcraft_midi::Note { start: at, ..note });
+            if app.run("midi.notes_add", json!({"clip": into.0, "notes": placed(&notes, at)})).is_ok() {
                 app.midi.last_length = Some(length);
-                audition(app, cid, &notes);
+                audition(app, into, &notes);
             }
             app.midi.selected.clear();
+            app.midi.others.clear();
             app.midi.draw = None;
         }
     }
     if resp.dragged()
         && let (Some(d), Some(p)) = (&mut app.midi.drag, resp.interact_pointer_pos())
-        && let Some(n) = sequence.notes.get(d.index)
     {
+        let n = d.grabbed;
         match d.edge {
             // A moved note keeps its offset from the grid; an edge lands on a grid line.
             Edge::Move => {
@@ -1229,35 +1427,39 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if resp.drag_stopped()
         && let Some(d) = app.midi.drag.take()
     {
-        let mut picked = app.midi.selected.clone();
-        if !picked.contains(&d.index) {
-            picked.push(d.index);
+        if d.from.is_none() && !app.midi.selected.contains(&d.index) {
+            app.midi.selected.push(d.index);
         }
-        let grabbed = sequence.notes.get(d.index).copied();
+        // Every selected note, in this clip and the other selected clips, as one undo step.
+        let parts = selection_parts(app, cid);
+        let follow = app.midi.ctrls_follow;
         let result = match d.edge {
             Edge::End | Edge::Start if d.dx_ticks != 0 => {
                 let key = if d.edge == Edge::End { "length" } else { "start" };
-                app.run("midi.notes_resize", json!({"clip": cid.0, "indices": picked, key: d.dx_ticks})).ok()
+                run_parts(app, "midi.notes_resize", &parts, |c, i| json!({"clip": c.0, "indices": i, key: d.dx_ticks}))
             }
             Edge::Move if d.dx_ticks != 0 || d.dy_semi != 0 => {
                 // Alt held at the press leaves the notes and drops copies (Alt during the drag
                 // only stops the snapping).
                 let id = if d.copy { "midi.notes_copy" } else { "midi.notes_move" };
-                app.run(
+                run_parts(
+                    app,
                     id,
-                    json!({"clip": cid.0, "indices": picked, "ticks": d.dx_ticks, "semitones": d.dy_semi, "with_ctrls": app.midi.ctrls_follow}),
+                    &parts,
+                    |c, i| json!({"clip": c.0, "indices": i, "ticks": d.dx_ticks, "semitones": d.dy_semi, "with_ctrls": follow}),
                 )
-                .ok()
             }
-            _ => None,
+            _ => Vec::new(),
         };
         // The selection stays on the notes (or moves to the copies) wherever they sorted to.
-        if let Some(a) = result.as_ref().and_then(|r| r.get("indices")).and_then(|v| v.as_array()) {
-            app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
+        let done = !result.is_empty();
+        if done {
+            set_parts(app, cid, result);
         }
-        if let Some(n) = grabbed.filter(|_| result.is_some()) {
+        if done {
+            let n = d.grabbed;
             match d.edge {
-                Edge::Move if d.dy_semi != 0 => {
+                Edge::Move if d.dy_semi != 0 && d.from.is_none() => {
                     let moved = soundcraft_midi::Note { pitch: (i64::from(n.pitch) + d.dy_semi).clamp(0, 127) as u8, ..n };
                     audition(app, cid, &[moved]);
                 }
@@ -1286,6 +1488,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                     }
                 } else {
                     app.midi.selected = vec![i];
+                    app.midi.others.clear();
                 }
                 // The Pencil's next note takes this one's length and velocity.
                 if let Some(n) = sequence.notes.get(i).copied() {
@@ -1307,14 +1510,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                     start,
                     length,
                 };
-                let notes = tools::stamp(app.midi.chord, clip_key, note);
-                if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&notes, start)})).is_ok() {
-                    audition(app, cid, &notes);
+                let (into, at) = draw_target(start);
+                let notes = tools::stamp(app.midi.chord, clip_key, soundcraft_midi::Note { start: at, ..note });
+                if app.run("midi.notes_add", json!({"clip": into.0, "notes": placed(&notes, at)})).is_ok() {
+                    audition(app, into, &notes);
                 }
                 app.midi.selected.clear();
+                app.midi.others.clear();
             }
             None => {
                 app.midi.selected.clear();
+                app.midi.others.clear();
                 app.midi.cursor = Some(snap(geo.tick_at(p.x)).clamp(0, len_ticks));
             }
         }
@@ -1336,7 +1542,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         });
         if all {
             app.midi.selected = sequence.notes.iter().enumerate().filter(|(_, n)| n.start >= 0).map(|(i, _)| i).collect();
+            app.midi.others = all_sibling_notes(&s, cid);
         }
+        let parts = selection_parts(app, cid);
+        let follow = app.midi.ctrls_follow;
         let semi = if up {
             1
         } else if down {
@@ -1351,30 +1560,24 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         } else {
             0
         };
-        if (semi != 0 || ticks != 0)
-            && !app.midi.selected.is_empty()
-            && let Ok(r) = app.run(
+        if (semi != 0 || ticks != 0) && !parts.is_empty() {
+            let r = run_parts(
+                app,
                 "midi.notes_move",
-                json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi, "with_ctrls": app.midi.ctrls_follow}),
-            )
-            && let Some(a) = r.get("indices").and_then(|v| v.as_array())
-        {
-            app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
+                &parts,
+                |c, i| json!({"clip": c.0, "indices": i, "ticks": ticks, "semitones": semi, "with_ctrls": follow}),
+            );
+            set_parts(app, cid, r);
         }
         // Alt+Left / Alt+Right: the selected notes a grid step shorter or longer.
         let (shorter, longer) = ui.input(|i| {
             let alt = i.modifiers.alt && !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.shift;
             (alt && i.key_pressed(egui::Key::ArrowLeft), alt && i.key_pressed(egui::Key::ArrowRight))
         });
-        if (shorter || longer)
-            && !app.midi.selected.is_empty()
-            && let Ok(r) = app.run(
-                "midi.notes_resize",
-                json!({"clip": cid.0, "indices": app.midi.selected, "length": if longer { grid_ticks } else { -grid_ticks }}),
-            )
-            && let Some(a) = r.get("indices").and_then(|v| v.as_array())
-        {
-            app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
+        if (shorter || longer) && !parts.is_empty() {
+            let by = if longer { grid_ticks } else { -grid_ticks };
+            let r = run_parts(app, "midi.notes_resize", &parts, |c, i| json!({"clip": c.0, "indices": i, "length": by}));
+            set_parts(app, cid, r);
         }
         clipboard_keys(app, ui, cid, &sequence.notes, grid_ticks, len_ticks, base_tick);
     }
@@ -1389,15 +1592,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     tools::piano_keys(app, ui, cid, keys, &pitch_at);
     // With the Cleanup panel showing, only for the roll: Delete pressed while using the panel
     // leaves the notes alone. Without it, anywhere in the editor as before.
-    if !app.midi.selected.is_empty()
+    if (!app.midi.selected.is_empty() || selection_spans_clips(app))
         && (!cleanup || ui.rect_contains_pointer(roll) || resp.has_focus())
         // Over a controller lane, Delete is the lane's (its selected points).
         && !(lanes_area.is_positive() && ui.rect_contains_pointer(lanes_area))
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
-        let _ = app.run("midi.note_delete", json!({"clip": cid.0, "indices": app.midi.selected}));
+        let parts = selection_parts(app, cid);
+        run_parts(app, "midi.note_delete", &parts, |c, i| json!({"clip": c.0, "indices": i}));
         app.midi.selected.clear();
+        app.midi.others.clear();
     }
     // Snap to Scale: right-click on the roll, or Ctrl+Shift+K over it.
     let mut snap = false;
@@ -1744,7 +1949,8 @@ fn fit_key(app: &SoundApp, ui: &Ui, roll: Rect) -> bool {
 
 /// The wheel over the editor (`area`): notes (plain), time (Shift or sideways), time zoom around
 /// the pointer (Ctrl) and note height (Ctrl+Alt).
-fn wheel(ui: &Ui, area: Rect, roll: Rect, v: &mut MidiView, len: i64) {
+fn wheel(ui: &Ui, area: Rect, roll: Rect, v: &mut MidiView, span: (i64, i64)) {
+    let len = span.1.saturating_sub(span.0);
     if !ui.rect_contains_pointer(area) {
         return;
     }
@@ -1773,12 +1979,12 @@ fn wheel(ui: &Ui, area: Rect, roll: Rect, v: &mut MidiView, len: i64) {
         if ctrl && (m.alt || m.shift) {
             *v = row_zoom(*v, 1.0015f32.powf(dy * 4.0), p.y - roll.min.y);
         } else if ctrl {
-            *v = zoom_about(*v, 1.0015f32.powf(dy * 4.0), (p.x - roll.min.x).clamp(0.0, width), width, len);
+            *v = zoom_about_span(*v, 1.0015f32.powf(dy * 4.0), (p.x - roll.min.x).clamp(0.0, width), width, span);
         } else {
             let dx = if m.shift { d.x + d.y } else { d.x };
             if dx != 0.0 {
                 let ppt = f64::from(v.zoom.unwrap_or(width / len.max(1) as f32).max(1e-6));
-                *v = clamp_left(MidiView { left: v.left - f64::from(dx) / ppt, ..*v }, width, len);
+                *v = clamp_left(MidiView { left: v.left - f64::from(dx) / ppt, ..*v }, width, span);
             }
             if !m.shift && d.y != 0.0 {
                 v.scroll -= d.y;
@@ -1788,13 +1994,14 @@ fn wheel(ui: &Ui, area: Rect, roll: Rect, v: &mut MidiView, len: i64) {
 }
 
 /// The horizontal scrollbar under the roll: drag the thumb, or click the track to jump there.
-fn scrollbar(ui: &mut Ui, bar: Rect, v: &mut MidiView, width: f32, len: i64, cid: ClipId) {
+fn scrollbar(ui: &mut Ui, bar: Rect, v: &mut MidiView, width: f32, span: (i64, i64), cid: ClipId) {
     let t = Tokens::current();
     ui.painter().rect_filled(bar, 3.0, t.panel_bg2);
     let Some(z) = v.zoom else { return };
-    let len_f = len.max(1) as f64;
+    let lo = span.0 as f64;
+    let len_f = span.1.saturating_sub(span.0).max(1) as f64;
     let shown = (f64::from(width) / f64::from(z)).min(len_f);
-    let to_x = |tick: f64| bar.min.x + (tick / len_f * f64::from(bar.width())) as f32;
+    let to_x = |tick: f64| bar.min.x + ((tick - lo) / len_f * f64::from(bar.width())) as f32;
     let thumb = Rect::from_min_max(pos2(to_x(v.left), bar.min.y + 1.0), pos2(to_x(v.left + shown).max(to_x(v.left) + 12.0), bar.max.y - 1.0));
     let resp = ui.interact(bar, ui.id().with(("midi_hbar", cid.0)), Sense::click_and_drag());
     let fill = if resp.dragged() || resp.hovered() { t.accent } else { t.border };
@@ -1805,16 +2012,32 @@ fn scrollbar(ui: &mut Ui, bar: Rect, v: &mut MidiView, width: f32, len: i64, cid
     } else if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        v.left = f64::from(p.x - bar.min.x) * per_px - shown / 2.0;
+        v.left = lo + f64::from(p.x - bar.min.x) * per_px - shown / 2.0;
     }
-    *v = clamp_left(*v, width, len);
+    *v = clamp_left(*v, width, span);
 }
 
 /// An Event operation (Quantize, Legato) from the editor: on the selected notes, or every note
 /// of the clip when none is selected. The selection follows the notes through the re-sort.
 pub fn run_on_selection(app: &mut SoundApp, cid: ClipId, id: &str, mut params: serde_json::Value) {
-    params["clips"] = json!([cid.0]);
-    let had = !app.midi.selected.is_empty() && app.midi.clip == Some(cid);
+    let ours = app.midi.clip == Some(cid);
+    // Notes selected in several clips: each clip's, in one undo step.
+    if ours && selection_spans_clips(app) {
+        let parts = selection_parts(app, cid);
+        let r = run_parts(app, id, &parts, |c, i| {
+            let mut p = params.clone();
+            p["clips"] = json!([c.0]);
+            p["indices"] = json!(i);
+            p
+        });
+        set_parts(app, cid, r);
+        return;
+    }
+    // None selected with several clips in the editor: every note of each.
+    let editable = selected_midi_clips(app.engine.session());
+    let all = ours && app.midi.selected.is_empty() && editable.len() > 1 && editable.contains(&cid);
+    params["clips"] = if all { json!(editable.iter().map(|c| c.0).collect::<Vec<_>>()) } else { json!([cid.0]) };
+    let had = !app.midi.selected.is_empty() && ours;
     if had {
         params["indices"] = json!(app.midi.selected);
     }

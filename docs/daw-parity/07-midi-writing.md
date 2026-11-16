@@ -77,7 +77,7 @@ The gaps are of four kinds:
 | Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
-| Edit several clips or tracks at once | ● | ● | ● | ● | **Partial**: with several MIDI clips selected, the editor edits one (the header says which, its Clip menu switches) and shows the others' notes over its time in their track's colour; a click on one makes its clip the edited one with that note selected, keeping the bars in view. One clip is edited at a time, and the roll spans only the edited clip's length |
+| Edit several clips or tracks at once | ● | ● | ● | ● | **Works**: with several MIDI clips selected, the roll spans them all, the others' notes in their track's colour. A marquee, Shift-click, Select All and Ctrl+A select notes in any of them; moving, copying, resizing, nudging, deleting and Quantize (and the MIDI Operations on the selection) act on the selected notes of every clip as one undo step; the Pencil draws into the selected clip under it. A plain click on another clip's note makes it the one the velocity and controller lanes and the note bar show (the Clip menu too); those lanes edit that clip only. Scripts run the per-clip commands |
 | Notes can run past the clip's edge and still play, or the clip grows | ● | ● | ● | ● | **Works**: an edit that puts notes past the end grows the clip to the next bar line, up to the next clip (bug 4, fixed); notes a trim left past the end stay hidden |
 | Every edit undoable, one step per drag | ● | ● | ● | ● | **Works**, the event list too (bug 21, fixed) |
 | Every edit scriptable | ○ | ◐ | ◐ | ◐ | **Works** |
@@ -390,3 +390,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | MIDI clips: per-clip transpose and velocity offset, Reverse Clip, Note Chase |
 | 2026-11-16 | minor | Mod Wheel Vibrato on the synth and sampler defaults to 0 (owner's decision): older sessions sound as before |
 | 2026-11-16 | minor | Commits noted on the third round's MIDI rows |
+| 2026-11-16 | minor | Several MIDI clips edited at once: the roll spans every selected clip; select, move, copy, resize, delete, draw and quantize act on notes in any of them, one undo step |
