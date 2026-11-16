@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: mixer snapshots) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: a control room design) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -115,7 +115,7 @@ K-system scales, and the master a loudness meter.
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
-| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Flag only** |
+| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Flag only**; designed below (control room) |
 | Momentary solo | ● | ○ | ○ | ○ | **Missing**: the menu entry behaves as latch |
 
 ## F. Automation
@@ -282,6 +282,40 @@ AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
+### Design: the control room (tier 3, not built yet)
+
+What Cubase's Control Room and Pro Tools' monitoring paths give an engineer, on FreeDAWm's
+existing pieces: hardware outputs (`Session::outputs`), sends that now reach a hardware output,
+pre-fader sends that can ignore mute, and the solo scope (`SoloScope`).
+
+- **Model.** A `ControlRoom` in the session (absent: today's behaviour, nothing changes): the
+  *monitor* output (the main mix's speakers, an index into `outputs`), a list of *monitor sets*
+  (`{name, output, level_db, trim_db}`: alternative speakers; one active), the *listen bus*
+  (`{output?, level_db, mode: afl|pfl}`), *cue mixes* (`{name, output, level_db, talkback: bool}`)
+  and *talkback* (`{input: InputPath name, level_db, latch: bool}`), plus `dim_db` (−20 default),
+  `dim`, `mono`, `mute` switches. Saved with the session; all of it commands (`monitor.*`).
+- **Listen bus (AFL/PFL).** `options.solo_mode` `afl|pfl` stops being a flag: in those modes a
+  soloed track is not soloed in place; its post-fader (AFL, after pan) or pre-fader (PFL, mono-
+  summed or as is) signal is summed into a listen buffer in `route_strip` beside the sends, and
+  the monitor path plays the listen buffer instead of the main mix while any listen is active
+  (Pro Tools' "listen replaces the mix"). The main mix, bounces and cue mixes are untouched.
+- **Cue mixes.** A cue is a hardware output fed by sends (the send menu's Output ▸ already does
+  this); the control room adds one send slot per cue on every track (made on demand, pre-fader by
+  default, starting from the track's fader with "Copy fader to cue"), a level per cue, and the
+  talkback summed in when its switch is on.
+- **Talkback.** The talkback input is read from the live input feed (it is never recorded), at
+  its level, into each cue whose talkback is on (and the monitor path, dimmed, when latched).
+- **Monitor sets.** The monitor path is the main mix (or the listen buffer) copied to the active
+  set's output after the master faders: level and trim, dim, mono (L+R)/2, mute, with 10 ms ramps.
+  The main output keeps feeding Bounce and the meters before this stage, so none of it changes a
+  render. Switching sets crossfades.
+- **Where.** A Control Room window (Window ›), the master strip's monitor knob, and the commands
+  for control surfaces. Engine work sits in `MixEngine::render` after the master stage; the
+  player needs no new channel (the outputs already are hardware buffers).
+- **Tests.** Offline: the listen buffer carries only the soloed strip; AFL follows the fader, PFL
+  does not; dim and mono act on the monitor output only; a bounce is identical with the control
+  room on and off; talkback reaches a cue and never the main mix.
+
 **Where FreeDAWm is already level or ahead:** solo that follows the signal path, the breadth of
 delay compensation including sidechain keys, undo for every mixer move, freeze up to a chosen
 module, live graphs on module tiles, curved automation segments (Pro Tools has none), conversion
@@ -296,6 +330,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 3: a control room design |
 | 2026-11-16 | minor | tier 3: mixer snapshots |
 | 2026-11-16 | minor | tier 2: group attributes in the dialog, nested VCAs |
 | 2026-11-16 | minor | tier 2: sends to outputs and tracks |
