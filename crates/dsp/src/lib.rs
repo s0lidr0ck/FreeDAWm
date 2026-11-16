@@ -27,6 +27,7 @@ mod params;
 pub mod pitch_detect;
 pub mod plugins;
 mod resample;
+pub use resample::read_with as read_band_limited;
 pub mod scout;
 pub mod slices;
 pub mod spectrum;

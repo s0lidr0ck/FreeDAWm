@@ -4248,9 +4248,11 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                         }
                     }
                 } else {
+                    // A varispeed clip reads its file at `1 / stretch` file samples a sample,
+                    // band-limited (the sampler's reader): a sped-up clip no longer aliases.
                     let f = offset as f64 + rel as f64 / stretch;
-                    let v = lerp_at(&mut src, f).unwrap_or(0.0);
-                    match cleaned.as_mut().and_then(|(w, origin, c)| lerp_at(c, f - *origin as f64).map(|cv| (*w, cv))) {
+                    let v = band_limited_at(&mut src, f, 1.0 / stretch).unwrap_or(0.0);
+                    match cleaned.as_mut().and_then(|(w, origin, c)| band_limited_at(c, f - *origin as f64, 1.0 / stretch).map(|cv| (*w, cv))) {
                         Some((w, cv)) => blend(v, cv, edges.map_or(w, |e| e.weight(w, f))),
                         None => v,
                     }
@@ -4375,18 +4377,12 @@ fn blend(dry: f32, wet: f32, w: f32) -> f32 {
     if w >= 1.0 { wet } else { (1.0 - w) * dry + w * wet }
 }
 
-/// `src` at the fractional position `f` (linear interpolation), `None` outside it (the sample after
-/// the last counts as silence, as the plain read does).
-fn lerp_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64) -> Option<f32> {
-    if !f.is_finite() || f < 0.0 {
-        return None;
-    }
-    let x0 = f.floor();
-    let fr = (f - x0) as f32;
-    let i = x0 as usize;
-    let a = src.get(i)?;
-    let b = src.get(i.saturating_add(1)).unwrap_or(0.0);
-    Some(a + (b - a) * fr)
+/// `src` at the fractional position `f`, read `step` file samples a sample: a cubic at or below
+/// the file's own speed, a windowed sinc that filters what would fold back above it
+/// ([`soundcraft_dsp::read_band_limited`]). `None` outside the audio (the sample after the last
+/// counts as silence, as the plain read does). Never allocates.
+fn band_limited_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64, step: f64) -> Option<f32> {
+    soundcraft_dsp::read_band_limited(|i| src.get(i), f, step)
 }
 
 /// The track's MIDI Track Offset (`midi.offset.<id>` in the edit values), in samples. Looked up

@@ -151,7 +151,7 @@ Varispeed is the only whole-project speed control among the four.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed with linear interpolation |
+| Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed, read through the band-limited reader (design below) |
 | Audio follows tempo changes | ● | ● | ● | ● | **Partial**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, renders them to the new length (offline, not in real time) |
 | Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
@@ -206,9 +206,9 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
 | Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | **Mostly done** (2026-11-16): held rewind / fast forward; the Scrubber plays the clips it passes (`ui-egui/src/scrub.rs`). Left: through the mixer (inserts, fader), on the ruler, while playing |
-| A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** for the device-rate and speed path (2026-11-16): `playback/src/resample.rs`, 16 frames of added delay off the direct path; stretched clips still read with linear interpolation in the mixer |
+| A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** (2026-11-16): `playback/src/resample.rs` for the device-rate and speed path (16 frames of added delay off the direct path); varispeed clips in the mixer read through the sampler's reader (`dsp::read_band_limited`: a cubic at or below the file's speed, a Kaiser-windowed sinc above it), no longer linear |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | **Partly done** (2026-11-16): Workspace files and Clip List clips at a preview level (`ui-egui/src/audition.rs`); left: the import dialog, session tempo, in sync with playback |
-| Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
+| Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | **Partly done**: tick timebase, four algorithms (offline), draggable warp markers (offline render on release). Real-time stretch: designed (below), not built |
 | Typing a position into the counter; pause | 2–4 | **Done** (2026-11-16) |
 | Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | **Done** (2026-11-16): `engine/src/decode_cache.rs`; shrinks G-06 |
 
@@ -219,6 +219,24 @@ passes; not through the mixer, not on the ruler, not while playing); preview (Wo
 Clip List clips, at a preview level; not in the import dialog, not at session tempo or in sync);
 tempo-following (audio on tick tracks moves and, on Elastic tracks, is rendered to the new length,
 with the algorithm choice working; no real-time stretch, no draggable warp markers).
+
+**Real-time stretch: the design (third round).** Not built yet; what a build should do.
+(1) *Where it runs.* In the clip read (`render_clip`), never in strip processing. A stretched or
+warped clip that has no current render reads its original file through a stateless granular
+reader: output sample `r` of the clip is two grains half a grain apart, each centred on the
+file position the warp map gives `r` and read at the file's own speed, faded sin² so they sum
+to one. Every sample depends only on `r`, so a locate, a loop wrap or a new session snapshot
+plays exactly what playing through would, with no state on the audio thread and nothing
+allocated (the clip transpose reader, `shifted_at`, is this reader with the grains read at the
+pitch ratio). The offline WSOLA render stays the high-quality result: it is made on a worker
+when the edit settles (a tempo edit, a marker drop, a stretch trim) and swapped in with the
+session, and the clip reads the render from then on. (2) *Latency.* None: grains read ahead in
+the file, centred on the nominal position, so nothing is reported to delay compensation.
+(3) *Clips with no stretch* take the run-based path they take now and are bit-identical.
+(4) *Quality.* Plain grains are phasier than WSOLA on sustained material; a later step can
+align each grain to the previous one by a short correlation search over the file (still
+stateless, as the search only reads the file). Left: building (1) and the worker that replaces
+it with the render.
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**varispeed done** 2026-11-16, tape style;
@@ -246,6 +264,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | minor | warp markers you drag (section 4) |
+| 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |
 | 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |

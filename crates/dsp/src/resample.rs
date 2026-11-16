@@ -118,6 +118,69 @@ pub(crate) fn read(x: &[f32], pos: f64, step: f64) -> f32 {
     if y.is_finite() { y } else { 0.0 }
 }
 
+/// [`read`] of audio reached through `get` (sample `i`, `None` past the end), for audio that is
+/// not one slice: a clip's file streamed from disk. `None` when `pos` is outside the audio (as a
+/// plain read past the end is silence). Never allocates.
+pub fn read_with(mut get: impl FnMut(usize) -> Option<f32>, pos: f64, step: f64) -> Option<f32> {
+    if !pos.is_finite() || pos < 0.0 {
+        return None;
+    }
+    let i0 = pos as usize;
+    let x0 = get(i0)?;
+    let mut at = |k: i64| usize::try_from(k).ok().and_then(&mut get).filter(|v| v.is_finite()).unwrap_or(0.0);
+    let step = step.abs();
+    let y = if step.is_nan() || step <= 1.0 {
+        let t = (pos - i0 as f64) as f32;
+        if t == 0.0 {
+            x0
+        } else {
+            let i = i0 as i64;
+            let (xm1, x1, x2) = (at(i - 1), at(i + 1), at(i + 2));
+            let c1 = 0.5 * (x1 - xm1);
+            let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
+            let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+            ((c3 * t + c2) * t + c1) * t + x0
+        }
+    } else {
+        let t = table();
+        let scale = (CUTOFF / step.min(MAX_STEP)).min(1.0);
+        let reach = ZEROS as f64 / scale;
+        let (lo, hi) = ((pos - reach).ceil().max(0.0) as i64, (pos + reach).floor() as i64);
+        let k = (PHASES as f64 * scale) as f32;
+        let mut acc = 0.0f32;
+        let mut d = (lo as f64 - pos) as f32 * k;
+        for j in lo..=hi {
+            let a = d.abs();
+            let i = a as usize;
+            if let (Some(&w0), Some(&w1)) = (t.get(i), t.get(i + 1)) {
+                acc += at(j) * (w0 + (w1 - w0) * (a - i as f32));
+            }
+            d += k;
+        }
+        acc * scale as f32
+    };
+    Some(if y.is_finite() { y } else { 0.0 })
+}
+
+#[cfg(test)]
+mod read_with_tests {
+    use super::*;
+
+    #[test]
+    fn read_with_matches_the_slice_read() {
+        let x: Vec<f32> = (0..4000).map(|i| ((i as f32 * 0.37).sin() + (i as f32 * 2.1).sin()) * 0.4).collect();
+        for step in [0.5, 1.0, 1.7, 3.0] {
+            for pos in [100.0, 1234.25, 2000.5, 3500.9] {
+                let a = read(&x, pos, step);
+                let b = read_with(|i| x.get(i).copied(), pos, step).unwrap();
+                assert!((a - b).abs() < 1e-5, "{step} {pos}: {a} {b}");
+            }
+        }
+        assert_eq!(read_with(|i| x.get(i).copied(), 4000.0, 1.0), None);
+        assert_eq!(read_with(|i| x.get(i).copied(), -1.0, 1.0), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
