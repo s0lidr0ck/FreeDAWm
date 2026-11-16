@@ -30,7 +30,7 @@
 
 use soundcraft_midi::Sequence;
 use soundcraft_model::{Clip, ClipId, Playlist, Route, Session, TrackId};
-use soundcraft_time::{Range, Samples};
+use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER};
 
 use crate::Engine;
 
@@ -138,18 +138,11 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         // of it, so the rest of the song stays on the track whichever pass is active.
         let base: Vec<Clip> = if take.looped.is_some() { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
         let mut placed_first = false;
+        // A downbeat played a little early, in the last moment of a pass, starts the next one.
+        let window = (TICKS_PER_QUARTER / 8).max(if quantize { opts.grid_ticks / 2 } else { 0 });
+        let mine = settle_early_notes(s, take, passes, mine, window, quantize);
         for pass in 0..=passes {
-            let range = match take.looped {
-                // The first pass runs from where recording started to the loop's end: the rest of
-                // the loop when punched in partway through it, or up to it from before it.
-                // (Stopped before ever reaching that loop: where it stopped.)
-                Some(l) if pass == 0 && take.start < l.start && passes == 0 => Some(Range::new(take.start, take.end.clamp(take.start, l.end))),
-                Some(l) if pass == 0 && take.start < l.end => Some(Range::new(take.start, l.end)),
-                Some(l) => Some(l),
-                None if pass == 0 => Some(Range::new(take.start, take.end.max(take.start))),
-                None => None,
-            };
-            let Some(range) = range.and_then(|r| r.intersect(&take.punch.unwrap_or(r))).filter(|r| !r.is_empty()) else { continue };
+            let Some(range) = pass_range(take, pass, passes) else { continue };
             // A pedal down when the range starts (pressed before the punch point or the take, or
             // held over a loop wrap) is down from its start.
             let mut list: Vec<(Samples, [u8; 3], bool)> =
@@ -202,6 +195,83 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         e.push_undo("Record", before);
     }
     out
+}
+
+/// The range pass `pass` of `passes` covers (see the module docs), cut to the punch range;
+/// `None` when it is empty.
+fn pass_range(take: &MidiTake, pass: u16, passes: u16) -> Option<Range> {
+    let range = match take.looped {
+        // The first pass runs from where recording started to the loop's end: the rest of the
+        // loop when punched in partway through it, or up to it from before it. (Stopped before
+        // ever reaching that loop: where it stopped.)
+        Some(l) if pass == 0 && take.start < l.start && passes == 0 => Some(Range::new(take.start, take.end.clamp(take.start, l.end))),
+        Some(l) if pass == 0 && take.start < l.end => Some(Range::new(take.start, l.end)),
+        Some(l) => Some(l),
+        None if pass == 0 => Some(Range::new(take.start, take.end.max(take.start))),
+        None => None,
+    };
+    range.and_then(|r| r.intersect(&take.punch.unwrap_or(r))).filter(|r| !r.is_empty())
+}
+
+/// Notes begun in the last `window` ticks of a pass and still held at its end (or, with input
+/// quantize on, which would snap them onto its end, released too) were played early for the next
+/// downbeat: in a loop they start the next pass (their note-off with them), and at the end of the
+/// take, where no pass follows, they are left out instead of being cut to a sliver. `events` are
+/// where played, with their pass.
+fn settle_early_notes(
+    s: &Session,
+    take: &MidiTake,
+    passes: u16,
+    mut events: Vec<(Samples, [u8; 3], u16)>,
+    window: i64,
+    quantize: bool,
+) -> Vec<(Samples, [u8; 3], u16)> {
+    let sr = s.sample_rate;
+    let is_on = |m: [u8; 3]| m[0] & 0xF0 == 0x90 && m[2] > 0;
+    let is_off = |m: [u8; 3]| m[0] & 0xF0 == 0x80 || (m[0] & 0xF0 == 0x90 && m[2] == 0);
+    let mut order: Vec<usize> = (0..events.len()).collect();
+    order.sort_by_key(|&i| events.get(i).map(|x| (x.2, x.0)));
+    let mut drop = vec![false; events.len()];
+    for (k, &i) in order.iter().enumerate() {
+        let Some(&(at, msg, pass)) = events.get(i) else { continue };
+        if !is_on(msg) {
+            continue;
+        }
+        let Some(range) = pass_range(take, pass, passes) else { continue };
+        let from = s.tempo.tick_to_samples(s.tempo.samples_to_ticks(range.end, sr).saturating_sub(window), sr);
+        if at < from.max(range.start) || at >= range.end {
+            continue;
+        }
+        // Its note-off in the same pass, before the pass ends.
+        let off = order
+            .get(k + 1..)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .find(|&j| events.get(j).is_some_and(|x| x.2 == pass && is_off(x.1) && x.1[0] & 0x0F == msg[0] & 0x0F && x.1[1] == msg[1]));
+        let off = off.filter(|&j| events.get(j).is_some_and(|x| x.0 < range.end));
+        if off.is_some() && !quantize {
+            continue;
+        }
+        match take.looped.filter(|_| pass < passes) {
+            Some(l) => {
+                if let Some(x) = events.get_mut(i) {
+                    *x = (l.start, msg, pass + 1);
+                }
+                if let Some(x) = off.and_then(|j| events.get_mut(j)) {
+                    *x = (l.start.saturating_add(x.0.saturating_sub(at)), x.1, pass + 1);
+                }
+            }
+            None => {
+                for j in std::iter::once(i).chain(off) {
+                    if let Some(d) = drop.get_mut(j) {
+                        *d = true;
+                    }
+                }
+            }
+        }
+    }
+    events.into_iter().zip(drop).filter(|(_, d)| !d).map(|(x, _)| x).collect()
 }
 
 /// The sustain and sostenuto pedals (CC 64, 66) down at `(pass, at)` by `events` (where played,
@@ -393,16 +463,16 @@ mod tests {
         let t = armed(&mut e, "midi:all", 0);
         let lp = Range::new(0, 4 * Q);
         let take = MidiTake { start: 0, end: 8 * Q, looped: Some(lp), punch: None, latency: 480 };
-        // Played at the end of the first pass (3 Q + 23_700), heard 480 samples later: 180
-        // samples into the second.
-        let events = vec![ev(Q + 480, "K", [0x90, 60, 100]), RecordedEvent { pass: 1, ..ev(180, "K", [0x90, 64, 100]) }];
+        // Moved at the end of the first pass (3 Q + 23_700), heard 480 samples later: 180
+        // samples into the second. (A note there would be an early downbeat for the second.)
+        let events = vec![ev(Q + 480, "K", [0x90, 60, 100]), RecordedEvent { pass: 1, ..ev(180, "K", [0xB0, 1, 64]) }];
         let ids = record_live_midi(&mut e, &take, &events);
-        assert_eq!(ids.len(), 1, "only the first pass has notes");
+        assert_eq!(ids.len(), 1, "only the first pass has anything");
         let tr = e.session().track(t).unwrap();
-        let mut notes: Vec<(u8, i64)> = tr.playlists[0].clips[0].midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect();
-        notes.sort();
+        let seq = tr.playlists[0].clips[0].midi_playing().unwrap();
         let at = e.session().tempo.samples_to_ticks(4 * Q - 300, e.session().sample_rate);
-        assert_eq!(notes, vec![(60, TICKS_PER_QUARTER), (64, at)]);
+        assert_eq!(seq.notes[0].start, TICKS_PER_QUARTER);
+        assert_eq!(seq.ctrls.iter().map(|c| c.tick).collect::<Vec<_>>(), vec![at]);
     }
 
     #[test]
@@ -507,6 +577,56 @@ mod tests {
         let q = TICKS_PER_QUARTER;
         assert_eq!(ctrls(0), vec![(3 * q, 127), (4 * q - 1, 0)]);
         assert_eq!(ctrls(1), vec![(0, 127), (2 * q, 0)]);
+    }
+
+    #[test]
+    fn a_downbeat_played_early_at_a_loop_end_starts_the_next_pass() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let lp = Range::new(0, 4 * Q);
+        let take = MidiTake { start: 0, end: 8 * Q, looped: Some(lp), punch: None, latency: 480 };
+        // Played 1,000 samples (a 96th) before the wrap, released in the next pass.
+        let events = vec![
+            ev(Q + 480, "K", [0x90, 50, 100]),
+            ev(2 * Q + 480, "K", [0x80, 50, 0]),
+            ev(4 * Q - 1_000 + 480, "K", [0x90, 36, 100]),
+            RecordedEvent { pass: 1, ..ev(Q + 480, "K", [0x80, 36, 0]) },
+        ];
+        record_live_midi(&mut e, &take, &events);
+        let tr = e.session().track(t).unwrap();
+        let notes = |p: usize| -> Vec<(u8, i64, i64)> {
+            tr.playlists[p].clips.iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start, n.length))).collect()
+        };
+        let q = TICKS_PER_QUARTER;
+        assert_eq!(notes(0), vec![(50, q, q)], "no sliver at the end of the first pass");
+        assert_eq!(notes(1), vec![(36, 0, q)], "the downbeat of the second");
+    }
+
+    #[test]
+    fn with_input_quantize_an_early_downbeat_does_not_snap_outside_the_clip() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        e.execute("event.input_quantize", &json!({"enabled": true, "grid": "1/4"})).unwrap();
+        let take = MidiTake { start: 0, end: 8 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        // A short note an eighth less a bit before the wrap: quantized to a quarter it would land on the end.
+        let events = vec![ev(Q, "K", [0x90, 50, 100]), ev(4 * Q - 9_000, "K", [0x90, 36, 100]), ev(4 * Q - 6_000, "K", [0x80, 36, 0])];
+        let ids = record_live_midi(&mut e, &take, &[events, vec![RecordedEvent { pass: 1, ..ev(2 * Q, "K", [0x90, 40, 1]) }]].concat());
+        assert_eq!(ids.len(), 2);
+        let tr = e.session().track(t).unwrap();
+        let pitches =
+            |p: usize| -> Vec<(u8, i64)> { tr.playlists[p].clips[0].midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect() };
+        assert_eq!(pitches(0), vec![(50, TICKS_PER_QUARTER)]);
+        assert_eq!(pitches(1), vec![(36, 0), (40, 2 * TICKS_PER_QUARTER)]);
+    }
+
+    #[test]
+    fn a_note_begun_just_before_stop_is_left_out() {
+        let mut e = Engine::default();
+        armed(&mut e, "midi:all", 0);
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        let ids = record_live_midi(&mut e, &take, &[ev(Q, "K", [0x90, 50, 100]), ev(4 * Q - 500, "K", [0x90, 36, 100])]);
+        let pitches: Vec<u8> = clip(&e, ids[0]).midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![50]);
     }
 
     #[test]
