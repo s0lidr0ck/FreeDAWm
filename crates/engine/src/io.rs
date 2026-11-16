@@ -579,6 +579,7 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
             if let Some(sequence) = c.midi_playing() {
                 let base = s.tempo.samples_to_ticks(c.start, sr);
                 let pq = soundcraft_mix::play_quantize(s, t, c);
+                let (dv, dp) = (dv + i64::from(c.midi_velocity), dp + i64::from(c.midi_transpose));
                 // What the clip plays: notes hidden before its start or past its end are left out,
                 // a note is cut at the end, and controllers hidden before the start set the state
                 // at it.

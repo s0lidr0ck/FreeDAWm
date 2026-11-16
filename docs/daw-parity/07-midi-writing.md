@@ -182,9 +182,9 @@ The gaps are of four kinds:
 | Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; Loop and Repeat space MIDI copies on tick tracks in bars (bug 15, fixed) |
 | Loop a clip; copies that change together | ◐ | ● | ● | ● | **Partial**: independent copies only |
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
-| Transpose and velocity offset per clip | ● | ● | ● | ● | **Missing**: per track only |
+| Transpose and velocity offset per clip | ● | ● | ● | ● | **Works**: MIDI Editor › More › Clip transpose and Clip velocity (`clip.midi_offsets`), applied as the clip plays and in MIDI export, with the track's Real-Time Properties; the notes stay as written |
 | Stretch a clip so the notes scale | ● | ● | ● | ● | **Missing** |
-| Reverse a clip | ◐ | ● | ● | ● | **Missing** |
+| Reverse a clip | ◐ | ● | ● | ● | **Works**: More › Reverse Clip (`clip.midi_reverse`): notes and controllers play backwards in the clip's window, each controller value holding over the mirror of its span |
 | Bounce a clip or selection to audio in place | ● | ● | ● | ● | **Partial**: freeze and commit work on the whole track |
 
 ## I. How written MIDI plays
@@ -193,7 +193,7 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Notes start on their exact sample | ● | ● | ● | ● | **Works**, never before their clip (bug 8, fixed) |
 | Controllers, program and bend chased on a locate | ● | ● | ● | ● | **Works**; poly aftertouch is not |
-| A long note already sounding at the play position is started | ● | ● | ● | ● | **Missing** |
+| A long note already sounding at the play position is started | ● | ● | ● | ● | **Works** as an option (More › Note Chase, `midi.note_chase`, off by default): when playback starts or locates inside a note, it starts there |
 | No hanging notes on stop, locate, loop or clip end | ● | ● | ● | ● | **Works** |
 | Two overlapping notes of one pitch each get their own end | ● | ● | ● | ● | **Works**: the later note retriggers the voice and the sound lasts to the later end (bug 19, fixed) |
 | Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
@@ -385,3 +385,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Scales and chords: fold to scale, keep to scale, chord stamp, clips that follow the chord lane (opt in) |
 | 2026-11-16 | minor | Drum view in the note editor (named rows, diamonds, rows in use); the event list shows and edits every event kind, inserts and filters |
 | 2026-11-16 | minor | Bugs 27, 29 and 30 fixed: band-limited reading of pitched-up samples, a replaced sampler sound freed off the audio thread, Juke's stereo pads and full tails; Bend Range and mod-wheel vibrato on the synth and sampler |
+| 2026-11-16 | minor | MIDI clips: per-clip transpose and velocity offset, Reverse Clip, Note Chase |

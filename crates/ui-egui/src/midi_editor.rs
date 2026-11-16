@@ -635,6 +635,40 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         })
         .response
         .on_hover_text("The Pencil draws a chord on the note clicked (its root)");
+        // The clip's own transpose and velocity, applied as it plays.
+        ui.horizontal(|ui| {
+            let mut tr = i64::from(clip.midi_transpose);
+            let r = ui
+                .add(egui::DragValue::new(&mut tr).range(-48..=48).prefix("Clip transpose "))
+                .on_hover_text("Semitones, as the clip plays; the notes stay as written");
+            if r.changed() {
+                let _ = app.engine.execute_merged("clip.midi_offsets", &json!({"clips": [cid.0], "transpose": tr}), &format!("clip_tr.{}", cid.0));
+            }
+            if r.drag_stopped() || r.lost_focus() {
+                app.engine.end_merge();
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut ve = i64::from(clip.midi_velocity);
+            let r = ui
+                .add(egui::DragValue::new(&mut ve).range(-127..=127).prefix("Clip velocity "))
+                .on_hover_text("Added to each note's velocity as the clip plays");
+            if r.changed() {
+                let _ = app.engine.execute_merged("clip.midi_offsets", &json!({"clips": [cid.0], "velocity": ve}), &format!("clip_ve.{}", cid.0));
+            }
+            if r.drag_stopped() || r.lost_focus() {
+                app.engine.end_merge();
+            }
+        });
+        if ui.button("Reverse Clip").on_hover_text("The clip's notes and controllers play backwards").clicked() {
+            let _ = app.run("clip.midi_reverse", json!({"clips": [cid.0]}));
+            app.midi.selected.clear();
+            ui.close();
+        }
+        let mut chase = app.engine.session().edit.flag("midi.note_chase");
+        if ui.checkbox(&mut chase, "Note Chase").on_hover_text("A note already sounding where playback starts is started there").changed() {
+            let _ = app.run("midi.note_chase", json!({"on": chase}));
+        }
         let mut follows = clip.follow_chords.is_some();
         if ui
             .checkbox(&mut follows, "Follow Chord Lane")

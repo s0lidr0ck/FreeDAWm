@@ -297,6 +297,16 @@ pub struct Clip {
     /// from its start). `None`: it does not follow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_chords: Option<Vec<soundcraft_midi::ops::FollowChord>>,
+    /// A MIDI clip's own transpose in semitones, applied as it plays (with its track's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub midi_transpose: i8,
+    /// A MIDI clip's own velocity offset, applied as it plays (with its track's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub midi_velocity: i8,
+}
+
+fn is_zero(v: &i8) -> bool {
+    *v == 0
 }
 
 /// The most Clip Effects settings a clip keeps (a hostile file is cut down to these).
@@ -341,6 +351,8 @@ impl Clip {
             effects_bypass: false,
             play_quantize: None,
             follow_chords: None,
+            midi_transpose: 0,
+            midi_velocity: 0,
         }
     }
 

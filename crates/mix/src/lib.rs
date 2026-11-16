@@ -3071,7 +3071,8 @@ fn process_strip(
                 inst.plugin.set_transport(&transport);
                 // A musician or module input has no clip controllers to chase (and while only live
                 // MIDI is heard, stopped, the clips wait for the transport).
-                if !live.monitor_only && musician.is_none() && !module_in && std::mem::take(&mut strip.chase) {
+                let chased = !live.monitor_only && musician.is_none() && !module_in && std::mem::take(&mut strip.chase);
+                if chased {
                     chase_controllers(s, t, pos, inst);
                 }
                 match musician {
@@ -3084,7 +3085,7 @@ fn process_strip(
                     None => {
                         // An armed MIDI track plays its clips and what is played in.
                         if !live.monitor_only {
-                            schedule_notes(s, t, pos, frames, inst, &mut strip.held);
+                            schedule_notes(s, t, pos, frames, inst, &mut strip.held, chased && s.edit.flag("midi.note_chase"));
                         }
                         if let Some(f) = live_filter {
                             deliver_live_midi(live.midi, f, inst, &mut strip.live_held);
@@ -4289,7 +4290,9 @@ pub fn quantized_start(s: &Session, base: i64, q: &soundcraft_midi::ops::PlayQua
     q.start(start, (a, b)).max(0)
 }
 
-fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mut PluginSlot, held: &mut Vec<u8>) {
+/// `chase`: playback starts here (a start or a locate) and notes already sounding at `pos`
+/// start now (Note Chase).
+fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mut PluginSlot, held: &mut Vec<u8>, chase: bool) {
     let sr = s.sample_rate;
     // MIDI Track Offsets: the track's notes sound `offset` samples later (earlier if negative), so
     // the block looks that far back into the clips.
@@ -4317,6 +4320,8 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             continue;
         }
         let Some(sequence) = clip.midi_playing() else { continue };
+        // The clip's own transpose and velocity offset, with the track's.
+        let (dv, dp) = (dv + i64::from(clip.midi_velocity), dp + i64::from(clip.midi_transpose));
         // Through the clip's end: a note-off clamped to it lands there, and when that is a block
         // boundary it plays in the block that starts on it. A negative delay plays the clip's
         // first notes before its start.
@@ -4417,7 +4422,9 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             {
                 *a = true;
             }
-            if on >= pos && on < end {
+            // A note sounding across where playback starts is started there with Note Chase.
+            let chased = chase && on < pos && off > pos;
+            if (on >= pos && on < end) || chased {
                 let offset = usize::try_from(on - pos).unwrap_or(0);
                 let retrigger = sounding_across(n0, n.pitch, ch, on);
                 if chans {
@@ -7452,6 +7459,23 @@ mod tests {
         assert!(got.contains(&(true, 0, [0x90, 64, 90])), "{got:?}");
         assert!(got.contains(&(true, 100, [0xB2, 1, 50])), "{got:?}");
         assert!(got.contains(&(true, 200, [0x82, 60, 64])), "{got:?}");
+    }
+
+    /// Note Chase: playback starting inside a note starts it there; without it the note waits.
+    #[test]
+    fn note_chase_starts_a_note_already_sounding() {
+        let seq = soundcraft_midi::Sequence {
+            notes: vec![soundcraft_midi::Note { pitch: 60, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 400 }],
+            ..Default::default()
+        };
+        let clip = || Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq.clone());
+        let (s, mut eng, heard) = taped_clip(clip());
+        render_block(&mut eng, &s, 1_000);
+        assert!(!heard.lock().unwrap().iter().any(|e| e.2[0] & 0xF0 == 0x90), "off: the note does not start mid-way");
+        let (mut s, mut eng, heard) = taped_clip(clip());
+        s.edit.set_flag("midi.note_chase", true);
+        render_block(&mut eng, &s, 1_000);
+        assert!(heard.lock().unwrap().contains(&(false, 0, [0x90, 60, 90])), "{:?}", heard.lock().unwrap());
     }
 
     /// A muted note does not play; the notes around it do.
