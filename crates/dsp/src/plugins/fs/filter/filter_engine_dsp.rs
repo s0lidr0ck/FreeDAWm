@@ -402,6 +402,56 @@ fn svf_core(c: &mut Channel, x: f64, h: f64, d: f64, nl: i32, rail: f64) {
 /// Moog transistor ladder: C dVi/dt = (Ictl/2) (tanh (V(i-1)/2Vt) - tanh (Vi/2Vt)), voltages in
 /// units of 2 Vt. Implicit trapezoidal; the Jacobian is bidiagonal plus the feedback corner,
 /// solved in closed form.
+/// The opto circuits' corner in Hz at pedal position `p` (Q-Tron when `qt`, else Mu-Tron; the
+/// High range when `hi`): the LDR and its shunt and series resistors against the range cap.
+fn ldr_corner(qt: bool, hi: bool, p: f64) -> f64 {
+    let rb = if qt { QT_LDR_BRIGHT } else { MU_LDR_BRIGHT };
+    let ga = if qt { QT_LDR_GAMMA } else { MU_LDR_GAMMA };
+    let rs = if qt { QT_RSHUNT } else { MU_RSHUNT };
+    let rldr = rb * 10.0f64.powf(3.0 * ga * (1.0 - p));
+    let r = (if qt { QT_RSER } else { MU_RSER }) + (rldr * rs) / (rldr + rs);
+    let cap = if qt {
+        if hi { QT_C_HI } else { QT_C_LO }
+    } else if hi {
+        MU_C_HI
+    } else {
+        MU_C_LO
+    };
+    1.0 / (2.0 * PI * r * cap)
+}
+
+/// How long the filter can ring after its input stops, in seconds, to 80 dB down (Rust: the
+/// C++ reports a fixed 1 s), for the parameter values `v` (by index, as stored). From the
+/// slowest pole of the circuit's small-signal model at Reso, at the lowest corner the
+/// modulation can reach (the Cutoff itself under Manual, the bottom of the range under
+/// Envelope, LFO or Steps), with a 25% margin. The SVF circuits decay at w / 2Q, the Moog
+/// ladder at w (1 - k^(1/4) / sqrt 2) and the MS-20's Korg-35 at w (2 - k) / 2; a ladder or a
+/// Korg-35 past self-oscillation never stops, which is `f64::INFINITY`. The wahs and the 303
+/// ring for well under a second (measured at their lowest corner and full Reso: at most 0.11 s
+/// and 0.4 s), so their 1 s floor covers them; every circuit keeps that floor. `filter::tests`
+/// checks it against the rendered ring.
+pub fn ring_seconds(v: impl Fn(usize) -> f32) -> f64 {
+    const FLOOR_S: f64 = 1.0;
+    const TO_80_DB: f64 = 9.2103; // ln (10^4)
+    let idx = |i: usize| (v(i) + 0.5).floor() as i32;
+    let r = f64::from(clamp_t(v(P_RESO), 0.0, 1.0));
+    let p = if idx(P_MOD_SRC) == 0 { f64::from(clamp_t(v(P_CUTOFF), 0.0, 1.0)) } else { 0.0 };
+    let w = |fc: f64| 2.0 * PI * clamp_t(fc, 10.0, 22000.0);
+    let sigma = match idx(P_CIRCUIT) {
+        0 => w(ldr_corner(true, idx(P_QT_RANGE) == 1, p)) / (2.0 * QT_Q_MIN * (QT_Q_MAX / QT_Q_MIN).powf(r)),
+        1 => w(ldr_corner(false, idx(P_MU_RANGE) == 1, p)) / (2.0 * MU_Q_MIN * (MU_Q_MAX / MU_Q_MIN).powf(r)),
+        4 => w(30.0 * 600.0f64.powf(p)) * (1.0 - (4.3 * r).powf(0.25) / 2.0f64.sqrt()),
+        5 => w(40.0 * 400.0f64.powf(p)) * (2.0 - 2.15 * r) / 2.0,
+        6 => w(30.0 * 530.0f64.powf(p)) / 24.0f64.powf(r),
+        8 => w(40.0 * 350.0f64.powf(p)) / 60.0f64.powf(r),
+        _ => return FLOOR_S,
+    };
+    if sigma <= 1.0e-9 {
+        return f64::INFINITY;
+    }
+    (1.25 * TO_80_DB / sigma).max(FLOOR_S)
+}
+
 fn moog_core(c: &mut Channel, u: f64, h: f64, k: f64) {
     let mut y1 = c.y1;
     let mut y2 = c.y2;
@@ -1366,24 +1416,35 @@ impl FilterEngineDsp {
 
     // pos 0..1 -> coefficients for channel c
     fn update_channel(&mut self, c: usize, p: f64) {
-        let mut fc;
+        let (fc, alpha) = self.corner_hz(p);
+        if let Some(a) = alpha {
+            self.alpha_c[c] = a;
+        }
+        let ci = self.circuit_idx;
+        self.fc_disp[c] = fc;
+
+        // the 303's diode ladder resonates well above its nominal corner (measured 1.48x) -- tune it so Cutoff reads where the resonance is
+        let tune = if ci == 7 { 0.68 } else { 1.0 };
+        self.h_c[c] = (PI * cmin(fc * tune, 0.3 * self.fs_os) / self.fs_os).tan();
+        self.h_c2[c] = (PI * cmin(fc * 0.25, 0.3 * self.fs_os) / self.fs_os).tan(); // MS-20 HP section in HP+LP mode
+    }
+
+    /// The corner in Hz pedal position `p` gives the circuit set (clamped to 10 Hz .. 22 kHz),
+    /// and the wahs' pot fraction (`None` for the other circuits): `update_channel`'s maths,
+    /// without writing anything.
+    fn corner_hz(&self, p: f64) -> (f64, Option<f64>) {
+        let fc;
+        let mut alpha = None;
         let ci = self.circuit_idx;
 
         if ci == 0 || ci == 1 {
-            let qt = ci == 0;
-            let rb = if qt { QT_LDR_BRIGHT } else { MU_LDR_BRIGHT };
-            let ga = if qt { QT_LDR_GAMMA } else { MU_LDR_GAMMA };
-            let rs = if qt { QT_RSHUNT } else { MU_RSHUNT };
-            let rldr = rb * 10.0f64.powf(3.0 * ga * (1.0 - p));
-            let r = (if qt { QT_RSER } else { MU_RSER }) + (rldr * rs) / (rldr + rs);
-            let cap =
-                if qt { if self.qt_range_idx == 1 { QT_C_HI } else { QT_C_LO } } else { if self.mu_range_idx == 1 { MU_C_HI } else { MU_C_LO } };
-            fc = 1.0 / (2.0 * PI * r * cap);
+            let hi = if ci == 0 { self.qt_range_idx == 1 } else { self.mu_range_idx == 1 };
+            fc = ldr_corner(ci == 0, hi, p);
         } else if ci == 2 || ci == 3 {
             // pot taper chosen so the sweep is even in octaves (what a good wah pot is for); heel = full Miller feedback
-            let a = ((1.0 + self.wah_a).powf(1.0 - p) - 1.0) / self.wah_a;
-            self.alpha_c[c] = clamp_t(a, 0.004, 1.0);
-            fc = 1.0 / (2.0 * PI * (self.wah_l0 * self.wah_cf * (1.0 + self.alpha_c[c] * self.wah_a)).sqrt());
+            let a = clamp_t(((1.0 + self.wah_a).powf(1.0 - p) - 1.0) / self.wah_a, 0.004, 1.0);
+            alpha = Some(a);
+            fc = 1.0 / (2.0 * PI * (self.wah_l0 * self.wah_cf * (1.0 + a * self.wah_a)).sqrt());
         } else if ci == 4 {
             fc = 30.0 * 600.0f64.powf(p);
         } else if ci == 5 {
@@ -1396,13 +1457,7 @@ impl FilterEngineDsp {
             fc = 40.0 * 350.0f64.powf(p);
         }
 
-        fc = clamp_t(fc, 10.0, 22000.0);
-        self.fc_disp[c] = fc;
-
-        // the 303's diode ladder resonates well above its nominal corner (measured 1.48x) -- tune it so Cutoff reads where the resonance is
-        let tune = if ci == 7 { 0.68 } else { 1.0 };
-        self.h_c[c] = (PI * cmin(fc * tune, 0.3 * self.fs_os) / self.fs_os).tan();
-        self.h_c2[c] = (PI * cmin(fc * 0.25, 0.3 * self.fs_os) / self.fs_os).tan(); // MS-20 HP section in HP+LP mode
+        (clamp_t(fc, 10.0, 22000.0), alpha)
     }
 
     // ---------------------------------------------------------------- circuit cores (oversampled rate)

@@ -945,3 +945,59 @@ fn a_reset_while_the_host_plays_is_independent_of_what_played_before() {
         assert!(all_finite(&x));
     }
 }
+
+/// The time from an impulse at the start of `s`'s output until it last rises above 80 dB under
+/// its peak (`None`: still ringing at the end of `secs`).
+fn ring_time(s: &mut Filter, secs: f64) -> Option<f64> {
+    let len = (secs * 48_000.0) as usize;
+    let mut io = vec![vec![0.0f32; len], vec![0.0f32; len]];
+    for c in &mut io {
+        c[..48].fill(0.5);
+    }
+    run(s, &mut io, 512);
+    let pk = io[0].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let last = io[0].iter().rposition(|v| v.abs() > pk * 1e-4).unwrap_or(0);
+    (last + 4_800 < len).then_some(last as f64 / 48_000.0)
+}
+
+/// Bug 6 of the built-in effects parity list: the tail was a fixed 1 s, but a resonant filter
+/// low down rings for seconds (a Moog at 90% Reso about five) and a self-oscillating one for
+/// ever, so a bounce or freeze could cut it off. The reported tail now covers the ring.
+#[test]
+fn the_tail_covers_the_ring_at_the_lowest_corner() {
+    // (circuit, reso, render seconds): the longest rings measured, and two that never stop
+    for (circuit, reso, secs) in
+        [(4, 0.9, 7.5), (5, 0.9, 2.0), (6, 1.0, 2.0), (8, 1.0, 3.0), (7, 1.0, 1.5), (2, 1.0, 1.5), (4, 1.0, 3.0), (5, 1.0, 3.0)]
+    {
+        let mut s = prepared();
+        s.set_param("circuit", circuit as f32);
+        s.set_param("modSrc", 0.0);
+        s.set_param("cutoff", 0.0);
+        s.set_param("reso", reso);
+        s.set_param("mix", 1.0);
+        let tail = s.tail_samples() as f64 / 48_000.0;
+        match ring_time(&mut s, secs) {
+            Some(t) => assert!(tail >= t && tail < 2.0 * t.max(1.0), "circuit {circuit} reso {reso}: rings {t:.2} s, tail {tail:.2} s"),
+            None => assert_eq!(tail, MAX_TAIL_S, "circuit {circuit} reso {reso} self-oscillates"),
+        }
+    }
+    // Higher up the same filter rings for less; at no Reso the C++'s 1 s floor stands.
+    let mut s = prepared();
+    s.set_param("circuit", 4.0);
+    s.set_param("modSrc", 0.0);
+    s.set_param("reso", 0.9);
+    s.set_param("cutoff", 0.0);
+    let low = s.tail_samples();
+    s.set_param("cutoff", 0.5);
+    let mid = s.tail_samples();
+    assert!(mid < low / 4 && mid >= 48_000, "{low} {mid}");
+    // A modulation source can take the corner to the bottom: the tail counts on it.
+    s.set_param("modSrc", 2.0);
+    assert_eq!(s.tail_samples(), low);
+    s.set_param("reso", 0.0);
+    assert_eq!(s.tail_samples(), 48_000);
+    // The same seconds at another rate.
+    s.set_param("reso", 0.9);
+    s.prepare(96_000.0, 512, 2);
+    assert_eq!(s.tail_samples(), 2 * low);
+}
