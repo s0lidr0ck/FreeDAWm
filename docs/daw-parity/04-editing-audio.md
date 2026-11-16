@@ -132,7 +132,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Clip gain as one value, with bypass and render | ● | ● | ● | ● | **Works** |
-| Clip gain as a drawn line | ● | ● | ◐ | ● | **Partial**: played and shown, but points cannot be added or dragged; it only arrives by converting volume automation |
+| Clip gain as a drawn line | ● | ● | ◐ | ● | **Works**: on a track showing Clip Gain a drag on the line adds a breakpoint and moves it, a breakpoint drags between its neighbours, Alt-click deletes it (`clip.gain_line`) |
 | Clip mute | ● | ● | ● | ● | **Works** |
 | Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: the clip gain line is edited on the clip |
 | 2026-11-16 | minor | Tier 2: snap to clip edges, markers and zero crossings; rubber-band clip selection; clip groups trim, fade and drag as one |
 | 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |

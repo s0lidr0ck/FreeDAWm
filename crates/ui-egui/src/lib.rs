@@ -732,6 +732,12 @@ pub enum Gesture {
         /// The clips selected before (Shift), kept under the band's.
         keep: Vec<soundcraft_model::ClipId>,
     },
+    /// A clip-gain line breakpoint dragged (made where the line was pressed if none was there).
+    GainPoint {
+        clip: soundcraft_model::ClipId,
+        /// Its offset from the clip start as it now stands.
+        at: Samples,
+    },
     ClipGain {
         clip: soundcraft_model::ClipId,
         track: TrackId,

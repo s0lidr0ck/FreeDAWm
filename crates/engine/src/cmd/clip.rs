@@ -68,6 +68,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("clip.loop", "Loop...", ["Clip"], Some("Cmd+Alt+L"), "{clips?, count?: n, length?: samples}", has_selection, loop_clips),
         cmd!("clip.rename", "Rename...", ["Clip"], Some("Cmd+Alt+Shift+R"), "{clip?, name}", has_selection, rename),
         cmd!("clip.gain", "Clip Gain", [], None, "{clips?, db | delta_db}", has_selection, gain),
+        cmd!(
+            "clip.gain_line",
+            "Clip Gain Line",
+            [],
+            None,
+            "{clip, points: [[offset, db], …]} — the clip's gain line: breakpoints at samples from the clip start, in dB over the clip gain (empty: a flat line)",
+            always,
+            gain_line
+        ),
         cmd!("clip.gain_nudge_up", "Nudge Clip Gain Up", [], Some("Ctrl+Shift+Up"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, 1.0)),
         cmd!("clip.gain_nudge_down", "Nudge Clip Gain Down", [], Some("Ctrl+Shift+Down"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, -1.0)),
         cmd!("clip.gain_render", "Render", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
@@ -365,6 +374,40 @@ fn rename(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"clips": ids.len()}))
+}
+
+/// Most breakpoints one clip-gain line keeps.
+const MAX_GAIN_POINTS: usize = 10_000;
+
+fn gain_line(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.gain_line";
+    let id = p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(C, "`clip` required"))?;
+    let raw = p.get("points").and_then(Value::as_array).ok_or_else(|| bad(C, "`points` required: [[offset, db], …]"))?;
+    if raw.len() > MAX_GAIN_POINTS {
+        return Err(bad(C, format!("at most {MAX_GAIN_POINTS} points")));
+    }
+    let len = e.session().find_clip(id).map(|(_, c)| c.length).ok_or_else(|| bad(C, "no such clip"))?;
+    let mut points = Vec::with_capacity(raw.len());
+    for v in raw {
+        let pair = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(C, "each point is [offset, db]"))?;
+        let at = pair.first().and_then(Value::as_i64).ok_or_else(|| bad(C, "an offset is a whole number of samples"))?;
+        let db = pair.get(1).and_then(Value::as_f64).filter(|d| d.is_finite()).ok_or_else(|| bad(C, "a level is a finite number of dB"))?;
+        points.push((at.clamp(0, len.max(0)), db.clamp(-144.0, 36.0) as f32));
+    }
+    points.sort_by_key(|x| x.0);
+    // One level per offset: the last given wins.
+    let mut line: Vec<(Samples, f32)> = Vec::with_capacity(points.len());
+    for (at, db) in points {
+        match line.last_mut() {
+            Some(last) if last.0 == at => last.1 = db,
+            _ => line.push((at, db)),
+        }
+    }
+    let n = line.len();
+    if let Some(c) = e.session_mut().find_clip_mut(id) {
+        c.gain_env = line;
+    }
+    Ok(json!({"points": n}))
 }
 
 fn gain(e: &mut Engine, p: &Value) -> Result<Value> {

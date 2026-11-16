@@ -2397,7 +2397,7 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
     let show_gain =
         gain_dragged || (s.edit.flag("view.clip.gain_line") && (!clip.gain_env.is_empty() || clip.gain_db.abs() > 0.01 || track.view == "clip_gain"));
     if show_gain && body_r.height() > 12.0 {
-        let gy = |db: f32| body_r.max.y - 3.0 - ((db.clamp(-36.0, 36.0) + 36.0) / 72.0) * (body_r.height() - 6.0);
+        let gy = |db: f32| gain_y(db, body_r.min.y, body_r.max.y);
         let col = Color32::from_rgba_unmultiplied(255, 255, 255, 170);
         if clip.gain_env.is_empty() {
             painter.line_segment([pos2(x0, gy(clip.gain_db)), pos2(x1, gy(clip.gain_db))], Stroke::new(1.0, col));
@@ -2744,6 +2744,43 @@ fn clips_in_band(s: &Session, tl: Rect, rows: &[(u64, [f32; 4])], band: Rect) ->
     out
 }
 
+/// The top and bottom of the clip body in `lane`, where the clip-gain line is drawn.
+fn gain_span(s: &Session, lane: Rect) -> (f32, f32) {
+    (lane.min.y + 1.0 + clip_name_height(s, lane), lane.max.y - 1.0)
+}
+
+/// The height of `db` on the clip-gain line (−36 to +36 dB over the body).
+pub fn gain_y(db: f32, top: f32, bottom: f32) -> f32 {
+    bottom - 3.0 - ((db.clamp(-36.0, 36.0) + 36.0) / 72.0) * (bottom - top - 6.0)
+}
+
+/// The level at height `y` on the clip-gain line: the inverse of [`gain_y`].
+fn gain_db_at(y: f32, top: f32, bottom: f32) -> f32 {
+    let h = (bottom - top - 6.0).max(1.0);
+    (((bottom - 3.0 - y) / h) * 72.0 - 36.0).clamp(-36.0, 36.0)
+}
+
+/// What a press at `p` on `clip` hits of its gain line: a breakpoint (its offset) within 6
+/// pixels, or the line within 5, with the offset and level (over the clip gain) under the press.
+fn gain_line_hit(s: &Session, tl: Rect, lane: Rect, clip: &Clip, p: Pos2) -> Option<(Option<Samples>, Samples, f32)> {
+    let (top, bottom) = gain_span(s, lane);
+    if bottom - top <= 12.0 {
+        return None;
+    }
+    let point = clip
+        .gain_env
+        .iter()
+        .map(|(o, db)| (*o, pos2(x_of(s, tl, clip.start.saturating_add(*o)), gain_y(clip.gain_db + db, top, bottom))))
+        .map(|(o, q)| (o, (q - p).length()))
+        .filter(|(_, d)| *d <= 6.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(o, _)| o);
+    let at = sample_at(s, tl, p.x).saturating_sub(clip.start).clamp(0, clip.length.max(0));
+    let db = soundcraft_engine::cmd::env_db(&clip.gain_env, at);
+    if point.is_none() && (gain_y(clip.gain_db + db, top, bottom) - p.y).abs() > 5.0 {
+        return None;
+    }
+    Some((point, point.unwrap_or(at), db))
 }
 
 fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
@@ -3047,6 +3084,14 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         None
     };
     let hit = fade_handle.or(curve_handle).map(|(c, _)| c).or(body_hit).cloned();
+    // On a track showing Clip Gain, the gain line and its breakpoints are grabbed.
+    let gain_point = if matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) && auto_view.is_none() && track.view == "clip_gain" {
+        body_hit
+            .filter(|_| fade_handle.is_none() && curve_handle.is_none())
+            .and_then(|c| gain_line_hit(&s, tl, lane, c, origin).map(|h| (c.clone(), h)))
+    } else {
+        None
+    };
     let upper = origin.y < lane.center().y;
     let near_edge = |c: &Clip| -> Option<bool> {
         let xs = x_of(&s, tl, c.start);
@@ -3061,7 +3106,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     };
     // Effective tool under the Smart tool; on a breakpoint every tool that edits one grabs it.
     let eff = match tool {
-        _ if point_hit.is_some() => Tool::Grabber,
+        _ if point_hit.is_some() || gain_point.is_some() => Tool::Grabber,
         Tool::Smart => {
             if let Some(c) = &hit {
                 if near_edge(c).is_some() {
@@ -3154,6 +3199,16 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         // A Grabber (or Smart, lower half) drag on an automation lane rubber-bands its breakpoints.
         app.auto_sel = None;
         app.gesture = Some(Gesture::RubberBand { track: track.id, param, origin, to: origin });
+    } else if resp.drag_started()
+        && let Some((c, (existing, at, db))) = &gain_point
+    {
+        // Pressed on the line between breakpoints: a new one there, in the same undo step as its drag.
+        if existing.is_none() {
+            let mut env = c.gain_env.clone();
+            env.push((*at, *db));
+            let _ = app.engine.execute_merged("clip.gain_line", &json!({"clip": c.id.0, "points": env}), &format!("gain_line:{}", c.id.0));
+        }
+        app.gesture = Some(Gesture::GainPoint { clip: c.id, at: existing.unwrap_or(*at) });
     } else if let Some(c) = gain_drag {
         // `clip.gain` refuses to run with nothing selected.
         if s.edit.selected_tracks.is_empty() && s.edit.selected_clips.is_empty() {
@@ -3245,6 +3300,35 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         clip_gain_popup(ui.ctx(), *fader_bottom, *pos);
+    }
+    if let Some(Gesture::GainPoint { clip, at: from }) = &mut app.gesture
+        && resp.dragged()
+        && let Some((_, c)) = s.find_clip(*clip)
+    {
+        // Between its neighbours, in the clip; the level from the height on the line's scale.
+        let env = &c.gain_env;
+        let i = env.iter().position(|x| x.0 == *from);
+        let lo = i.and_then(|i| i.checked_sub(1)).and_then(|j| env.get(j)).map_or(0, |x| x.0.saturating_add(1));
+        let hi = i.and_then(|i| env.get(i + 1)).map_or(c.length, |x| x.0.saturating_sub(1));
+        let to = sample_at(&s, tl, p.x).saturating_sub(c.start).clamp(lo, hi.max(lo));
+        let (top, bottom) = gain_span(&s, lane);
+        let db = gain_db_at(p.y, top, bottom) - c.gain_db;
+        let mut new: Vec<(Samples, f32)> = env.iter().copied().filter(|x| x.0 != *from).collect();
+        new.push((to, db));
+        if i.is_none_or(|i| env.get(i).is_some_and(|x| x.0 != to || (x.1 - db).abs() > 0.001)) {
+            let _ = app.engine.execute_merged("clip.gain_line", &json!({"clip": clip.0, "points": new}), &format!("gain_line:{}", clip.0));
+        }
+        *from = to;
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if resp.clicked()
+        && mods.alt
+        && let Some((c, (Some(at), _, _))) = &gain_point
+    {
+        // Alt-click deletes a gain line breakpoint.
+        let env: Vec<(Samples, f32)> = c.gain_env.iter().copied().filter(|x| x.0 != *at).collect();
+        let _ = app.run("clip.gain_line", json!({"clip": c.id.0, "points": env}));
+        return;
     }
     if resp.clicked()
         && let Some((param, at)) = &point_hit
@@ -4202,6 +4286,43 @@ mod tests {
         h.input_mut().max_texture_side = Some(8192);
         h.run_steps(4);
         h
+    }
+
+    /// On a track showing Clip Gain, a drag on the line makes a breakpoint and moves it (one undo
+    /// step), a drag on a breakpoint moves it between its neighbours, and Alt-click deletes it.
+    #[test]
+    fn the_clip_gain_line_takes_new_points_drags_and_deletes_them() {
+        let mut h = smart_demo();
+        let (clip, lane) = clip_on_screen(&h, |a, b| b - a > 200.0 && a > timeline(&h).min.x);
+        let track = h.state().engine.session().find_clip(clip.id).unwrap().0;
+        h.state_mut().engine.execute("track.view", &json!({"track": track.0, "view": "clip_gain"})).unwrap();
+        h.step();
+        let s = h.state().engine.session().clone();
+        let tl = timeline(&h);
+        let (top, bottom) = gain_span(&s, lane);
+        let x = x_of(&s, tl, clip.start) + 80.0;
+        let on_line = pos2(x, gain_y(clip.gain_db, top, bottom));
+        let undo_len = h.state().engine.undo_history().len();
+        drag(&mut h, on_line, on_line + vec2(0.0, -20.0));
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert_eq!(c.gain_env.len(), 1, "{:?}", c.gain_env);
+        assert!(c.gain_env[0].1 > 1.0, "dragged up: {:?}", c.gain_env);
+        assert_eq!(h.state().engine.undo_history().len(), undo_len + 1, "made and moved in one step");
+        // A second point to the right, then drag the first past it: it stops at its neighbour.
+        let right = pos2(x + 100.0, gain_y(c.gain_db + c.gain_env[0].1, top, bottom));
+        drag(&mut h, right, right + vec2(0.0, 12.0));
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert_eq!(c.gain_env.len(), 2, "{:?}", c.gain_env);
+        let first = pos2(x_of(&s, tl, c.start + c.gain_env[0].0), gain_y(c.gain_db + c.gain_env[0].1, top, bottom));
+        drag(&mut h, first, first + vec2(300.0, 0.0));
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert_eq!(c.gain_env.len(), 2);
+        assert!(c.gain_env[0].0 < c.gain_env[1].0, "kept before its neighbour: {:?}", c.gain_env);
+        // Alt-click deletes the second.
+        let second = pos2(x_of(&s, tl, c.start + c.gain_env[1].0), gain_y(c.gain_db + c.gain_env[1].1, top, bottom));
+        click_with(&mut h, second, egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.gain_env.len(), 1);
     }
 
     /// A Grabber drag from empty space boxes clips across tracks; Shift adds to what was selected.
