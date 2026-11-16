@@ -15,6 +15,7 @@ pub mod chamber_plan;
 pub mod channel_width;
 pub mod cleanq_ceiling;
 pub mod control;
+pub mod control_room;
 pub mod credits;
 pub mod curve_worker;
 pub mod dawproject_report;
@@ -180,6 +181,16 @@ pub struct UiState {
     /// Window › Mix Snapshots.
     #[serde(default)]
     pub show_mix_snapshots: bool,
+    /// Window › Control Room.
+    #[serde(default)]
+    pub show_control_room: bool,
+    /// Talkback is on because F11 is held, the Talk button is held, or Latch is on.
+    #[serde(skip)]
+    pub talk_held: bool,
+    #[serde(skip)]
+    pub talk_button: bool,
+    #[serde(skip)]
+    pub talk_latched: bool,
     pub show_undo_history: bool,
     /// The Notes tab (Window › Notes).
     pub show_notes: bool,
@@ -501,6 +512,10 @@ impl Default for UiState {
             show_big_counter: false,
             show_loudness: false,
             show_mix_snapshots: false,
+            show_control_room: false,
+            talk_held: false,
+            talk_button: false,
+            talk_latched: false,
             show_undo_history: false,
             show_notes: false,
             notes_show: "open".into(),

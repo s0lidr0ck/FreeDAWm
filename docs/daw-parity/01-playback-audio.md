@@ -109,7 +109,7 @@ Varispeed is the only whole-project speed control among the four.
 | No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
 | Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: plug-ins (built-in and hosted) and Clip Effects modules are made on the UI thread and handed over with the session; a new track's own buffers and delay lines are still sized on the audio thread |
 | Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only |
-| Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Missing** (belongs to the mixing section) |
+| Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Works**: Window › Control Room (section 3, E) |
 | Runs in a browser | ○ | ○ | ○ | ○ | **Works**, single-threaded |
 
 ## E. Media and formats
@@ -189,7 +189,7 @@ All in features the docs count as done. Each needs a regression test with its fi
 | 7 | **Fixed:** Elastic Properties on a non-elastic track changed speed but not length, so the tail was cut or ran into silence; the length now follows (Remove Warp restores it) | `cmd/clip.rs:202` |
 | 8 | **Fixed:** Clip Gain › Bypass erased the gain and its envelope; it is now a bypass toggle (checked in the menu) that keeps them | `cmd/clip.rs:83` |
 | 9 | **Fixed:** Reconnect opened the new device before closing the old one (ASIO allows one); it now closes first, as applying new settings already did (untested on hardware) | `crates/ui-egui/src/lib.rs:2080` |
-| 10 | Solo modes AFL, PFL, Latch and Momentary do nothing; only SIP and X-OR work | `cmd/options.rs:258`, `menus.rs:953` |
+| 10 | **Partly fixed:** Solo modes AFL, PFL, Latch and Momentary did nothing. AFL and PFL now listen on the control room's listen bus (section 3, E); Latch and Momentary still behave as latch | `cmd/options.rs`, `crates/mix/src/monitor.rs` |
 | 11 | **Fixed:** a missing configured device fell back to the system default with only a log line; the status line now says so once, and the Playback Engine window while it holds | `crates/playback/src/devices.rs:355` |
 | 12 | **Fixed:** Clip effects allocated on the audio thread the first time a clip played. They, built-in inserts and instruments are now made and prepared on the UI thread (`BuiltinPrep`, `crates/mix/src/prepare.rs`) and handed over with the session, as hosted plug-ins were; the audio thread's `sync` only seats them and retires what it replaces. Left on the audio thread: sizing a new track's strip buffers and delay lines, and a drum kit's per-pad effects. Tests: `mix` `sync_on_the_render_path_makes_no_builtin_module` (also checks the sound is identical), `playback` `the_audio_thread_creates_no_builtin_module` | `crates/mix/src/prepare.rs`; `MixEngine::adopt_prepared`; `Side::send_session` in `crates/playback/src/lib.rs` |
 
@@ -245,6 +245,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |
 | 2026-11-16 | minor | tier 2: files that cannot stream are decoded once and then streamed |

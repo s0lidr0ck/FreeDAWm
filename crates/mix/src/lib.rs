@@ -77,6 +77,7 @@ pub mod external_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
+mod monitor;
 mod prepare;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
 pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx};
@@ -767,6 +768,8 @@ pub struct MixEngine {
     llm: LlmScope,
     /// Which tracks a solo leaves audible (reserved by `sync`, filled each block).
     solo: SoloScope,
+    /// The control room: listen bus, monitor path, cues and talkback (see `monitor`).
+    monitor: monitor::Monitor,
     /// The largest strip compensation with low-latency monitoring off, whatever it is now
     /// (`reserve_delays` sizes the lines for it, so a toggle never grows them).
     full_latency: usize,
@@ -1062,6 +1065,7 @@ impl MixEngine {
             master_latency: 0,
             llm: LlmScope::default(),
             solo: SoloScope::default(),
+            monitor: monitor::Monitor::default(),
             full_latency: 0,
             full_master_latency: 0,
             offline: false,
@@ -1613,6 +1617,7 @@ impl MixEngine {
         self.hw_delay.resize_with(s.outputs.len(), DelayLine::default);
         self.llm.reserve(s);
         self.solo.reserve(s);
+        self.monitor.reserve(s, main_ch, mb);
         for (i, (h, o)) in self.hw.iter_mut().zip(&s.outputs).enumerate() {
             let n = if i == 0 { 0 } else { o.format.channels().clamp(1, MAX_CHANNELS) };
             if h.len() != n || h.iter().any(|c| c.len() != mb) {
@@ -2004,7 +2009,10 @@ impl MixEngine {
         for c in self.main.iter_mut().chain(self.hw.iter_mut().flatten()) {
             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
         }
-        // Solo follows the signal path; read every block (a solo toggle never re-syncs).
+        // Solo follows the signal path; read every block (a solo toggle never re-syncs). In the
+        // AFL and PFL modes a solo is heard on the listen bus instead and mutes nothing.
+        self.monitor.begin(s, frames, self.offline);
+        let listening = self.monitor.mode != monitor::Listen::Off;
         let mut solo = std::mem::take(&mut self.solo);
         solo.fill(s);
         let order = std::mem::take(&mut self.order);
@@ -2071,7 +2079,7 @@ impl MixEngine {
             }
             run_strips(run, |(i, st)| {
                 if let Some(t) = s.tracks.get(*i) {
-                    process_strip(s, t, st, &busses, &live_in, pos, frames, solo.muted(*i));
+                    process_strip(s, t, st, &busses, &live_in, pos, frames, solo.muted(*i) && !listening);
                 }
                 st.stamp = block;
             });
@@ -2169,6 +2177,7 @@ impl MixEngine {
         for (i, st) in work.iter_mut() {
             if let Some(t) = s.tracks.get(*i) {
                 self.route_strip(s, t, st, pos, frames);
+                self.listen_strip(t, st, pos, frames);
             }
         }
         for (i, st) in work.drain(..) {
@@ -2211,7 +2220,7 @@ impl MixEngine {
                 let src = k.source.and_then(|(_, id)| self.strips.get(&id)).map(Strip::key_source);
                 fill_key(k, src, block, frames);
             }
-            process_strip(s, t, &mut st, &self.busses, &live_in, pos, frames, solo.muted(i));
+            process_strip(s, t, &mut st, &self.busses, &live_in, pos, frames, solo.muted(i) && !listening);
             st.stamp = block;
             fits &= !std::mem::take(&mut st.key_regrow);
             let ch = st.buf.len();
@@ -2221,6 +2230,7 @@ impl MixEngine {
             st.post_at = st.base.saturating_add(st.latency.max(lmax));
             fits &= st.out_extra.set(0, ch, xf);
             self.route_strip(s, t, &mut st, pos, frames);
+            self.listen_strip(t, &st, pos, frames);
             self.strips.insert(t.id, st);
         }
         self.order = order;
@@ -2322,6 +2332,7 @@ impl MixEngine {
                 l.process(h, frames);
             }
         }
+        self.cue_stage(s, frames);
         self.regrow |= !fits;
         // Before the clicks: they are not the mix's tail, nor what the output meter shows.
         self.track_tail(s, frames);
@@ -2362,6 +2373,8 @@ impl MixEngine {
                 }
             }
         }
+        // The control room's monitor path (live only: after the meters, never in a bounce).
+        self.monitor_stage(s, frames, out);
         if let Some(r) = &mut self.scout {
             r.advance(pos, frames, scout_win, !self.monitor_only);
         }
@@ -3260,7 +3273,8 @@ fn process_strip(
     let mute_lane = t.lane(&AutoParam::Mute).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty());
     let auto_mute = mute_lane.is_some_and(|l| l.value_at(apos, 0.0) >= 0.5);
     strip.muted = t.mixer.mute || auto_mute || solo_muted;
-    if strip.pre_key || s.edit.pre_fader_metering || t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
+    let pfl = t.mixer.solo && monitor::listen_mode(s) == monitor::Listen::Pfl;
+    if strip.pre_key || pfl || s.edit.pre_fader_metering || t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
         strip.pre.resize_with(strip.buf.len(), Vec::new);
         for (d, src) in strip.pre.iter_mut().zip(strip.buf.iter()) {
             d.clear();

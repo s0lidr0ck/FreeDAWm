@@ -604,6 +604,7 @@ Window > Transport
 Window > Big Counter
 Window > Loudness Meter = @window.loudness
 Window > Mix Snapshots = @window.mix_snapshots
+Window > Control Room = @window.control_room
 Window > Memory Locations
 Window > Notes = @window.notes
 Window > Lyrics = @window.lyrics

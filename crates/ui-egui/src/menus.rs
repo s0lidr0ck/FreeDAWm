@@ -32,6 +32,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.notes", "Notes", "", None),
     ("window.loudness", "Loudness Meter", "", None),
     ("window.mix_snapshots", "Mix Snapshots", "", None),
+    ("window.control_room", "Control Room", "", None),
     ("ui.loudness_reset", "Reset Loudness Meter", "", None),
     ("window.lyrics", "Lyrics", "", None),
     ("window.teleprompter", "Teleprompter", "", None),
@@ -711,6 +712,7 @@ fn hover_text(id: &str) -> Option<&'static str> {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
+        "window.control_room" => Some("Monitor speakers with level, dim and mono; AFL/PFL listen; cue mixes and talkback"),
         "window.loudness" => Some("The master's loudness (momentary, short-term, integrated LUFS) and true peak while it plays"),
         "window.teleprompter" => Some("Big lyrics that follow the playhead through the lines on the Lyrics ruler"),
         "window.teleprompter_separate" => Some("The Teleprompter in its own window (e.g. on the singer's screen); closing it docks it back"),
@@ -877,6 +879,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.notes") => app.ui.show_notes,
         Some("window.loudness") => app.ui.show_loudness,
         Some("window.mix_snapshots") => app.ui.show_mix_snapshots,
+        Some("window.control_room") => app.ui.show_control_room,
         Some("window.lyrics") => app.ui.show_lyrics,
         Some("window.teleprompter") => app.ui.show_teleprompter,
         Some("window.teleprompter_separate") => app.ui.teleprompter_separate,
@@ -1331,6 +1334,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.notes" => toggle(&mut app.ui.show_notes),
         "window.loudness" => toggle(&mut app.ui.show_loudness),
         "window.mix_snapshots" => toggle(&mut app.ui.show_mix_snapshots),
+        "window.control_room" => toggle(&mut app.ui.show_control_room),
         "ui.loudness_reset" => {
             if let Some(p) = &app.player {
                 p.reset_loudness();

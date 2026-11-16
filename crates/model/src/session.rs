@@ -393,6 +393,9 @@ pub struct Session {
     /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mix_snapshots: Vec<crate::MixSnapshot>,
+    /// The control room (Window › Control Room; omitted from the file while there is none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_room: Option<crate::ControlRoom>,
     #[serde(skip)]
     pub pool: SourcePool,
     /// Module assets made ready for their plugins (`Insert::assets`), by reference and rate.
@@ -447,6 +450,7 @@ impl Session {
             studio_tuning: crate::StudioTuning::default(),
             midi_maps: Vec::new(),
             mix_snapshots: Vec::new(),
+            control_room: None,
             pool: SourcePool::default(),
             assets: crate::AssetPool::default(),
             folder: None,

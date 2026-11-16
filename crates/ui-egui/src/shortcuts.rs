@@ -480,6 +480,8 @@ fn fixed(app: &mut SoundApp, window: MainWindow, key: Key, m: Modifiers, mac: bo
             let _ = app.run(if m.alt { "view.nudge" } else { "view.grid" }, json!({"step": step}));
             true
         }
+        // Held to talk, while the session has a control room with a talkback input.
+        Key::F11 if plain && crate::control_room::talk_key(app) => true,
         Key::F12 if plain => {
             let _ = app.run("transport.record", json!({}));
             true

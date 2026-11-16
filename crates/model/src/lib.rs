@@ -9,6 +9,7 @@ mod automation;
 pub mod b64;
 mod band;
 mod clip;
+mod control_room;
 pub mod disk;
 mod ids;
 mod lyrics;
@@ -29,6 +30,7 @@ pub mod vocal;
 pub use automation::{AutoParam, AutomationLane, AutomationMode, AutomationPoint, CURVE_EPSILON, curve_shape, letter_slot};
 pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
 pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MidiCleanup, PatternClip};
+pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use lyrics::{
     LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,

@@ -114,9 +114,9 @@ what a user can do, apart from punch out on the fly.
 | Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything |
 | Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Missing** |
 | Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Works**: silent within the take, heard in the pre- and post-roll |
-| Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Partial**: sends reach busses only; a cue mix needs a send, a bus, an aux and an output |
+| Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Works**: Window › Control Room's cue mixes, fed by pre-fader sends to a hardware output, with a level and mute each (section 3) |
 | Click on its own output | ● | ● | ● | ● | **Missing**: the click is summed into the main mix |
-| Talkback | ◐ | ◐ | ○ | ● | **Missing** |
+| Talkback | ◐ | ◐ | ○ | ● | **Works**: a talkback input into the cues, held (Talk button or F11) or latched, dimming the monitor (Control Room) |
 | Input meters before the fader | ● | ● | ● | ● | **Flag only**: meters are always post-fader, so the clip light does not show a clipped input |
 | Tuner | ● | ● | ● | ● | **Missing** |
 
@@ -220,5 +220,6 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

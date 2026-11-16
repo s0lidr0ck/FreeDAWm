@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: a control room design) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: the control room) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -34,7 +34,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
-| E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes, nested VCAs | Medium: no listen bus |
+| E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, relative groups with a choice of attributes, nested VCAs | Small: no momentary solo |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
@@ -98,7 +98,7 @@ K-system scales, and the master a loudness meter.
 | A new send comes with its return | ● | ● | ● | ● | **Works**: a send to a new bus from the Mix window makes its aux (`mix.send` `return: true`) |
 | Default send level setting | ● | ◐ | ● | ◐ | **Works**: silent or 0 dB (Options › More › Default Send Level; any level by `mix.default_send_level`) |
 | Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Options › More › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
-| Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Partial**: copies volume only and ignores the selected range |
+| Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Partial**: copies volume only and ignores the selected range; the Control Room's Add Cue Sends makes a pre-fader send to a cue on every track at its fader level (`monitor.cue_sends`) |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
 | Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** |
 | Refuse or warn about a feedback loop | ● | ● | ● | ● | **Works**: refused, for outputs, inputs and sends |
@@ -115,7 +115,7 @@ K-system scales, and the master a loudness meter.
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
-| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Flag only**; designed below (control room) |
+| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Works**: in the AFL and PFL solo modes (Options › Solo Mode, or the Control Room) a solo mutes nothing; the soloed tracks are summed after the fader and pan (AFL) or before the fader (PFL) into a listen bus that replaces the mix on the monitor path while any is soloed, at its own level; the mix, bounces and cue mixes are untouched |
 | Momentary solo | ● | ○ | ○ | ○ | **Missing**: the menu entry behaves as latch |
 
 ## F. Automation
@@ -278,11 +278,23 @@ one a mix engineer would not forgive.
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12 (**done**); a listen bus for
-AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation (**deactivation done**), 5–8; hardware
+AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**deactivation done**), 5–8; hardware
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
-### Design: the control room (tier 3, not built yet)
+### The control room (tier 3, built 2026-11-16 to this design)
+
+**Built:** `ControlRoom` in the session (`crates/model/src/control_room.rs`), the engine's monitor
+path, listen bus, cue levels and talkback (`crates/mix/src/monitor.rs`), the `monitor.*` commands
+(`crates/engine/src/cmd/monitor.rs`) and Window › Control Room (`crates/ui-egui/src/control_room.rs`,
+F11 held to talk). Differences from the design: sets and cues name their output (as routes do)
+rather than index it; a cue's sends are ordinary sends to its output (Add Cue Sends makes them,
+pre-fader, at the track's fader level), not extra slots; switching sets cuts rather than
+crossfades (level, dim, mono, mute and talkback ramp over 10 ms); talkback is not latched into the
+monitor speakers. Not verified by listening or on hardware outputs. Tests: `mix` `tests/control_room.rs`,
+`engine` `monitor::tests`.
+
+The design as written:
 
 What Cubase's Control Room and Pro Tools' monitoring paths give an engineer, on FreeDAWm's
 existing pieces: hardware outputs (`Session::outputs`), sends that now reach a hardware output,
@@ -330,6 +342,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 3: the control room (listen bus, monitor sets, cue mixes, talkback) |
 | 2026-11-16 | minor | MIDI learn for faders, pan, send levels and plug-in knobs |
 | 2026-11-16 | minor | Control surfaces (Mackie Control, HUI) write automation from their faders and V-Pots |
 | 2026-11-16 | minor | tier 3: a control room design |
