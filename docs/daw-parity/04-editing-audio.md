@@ -157,7 +157,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
 | Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Missing**: the fade lengths silently differ |
 | Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback (1 ms default); not applied when consolidating or exporting |
-| Delete fades in a selection | ● | ● | ● | ● | **Partial**: also damages crossfades outside the selection (bug 9) |
+| Delete fades in a selection | ● | ● | ● | ● | **Works**: only the fades and crossfades in the selection go (bug 9, fixed) |
 
 ## G. Consolidate and offline processing
 
@@ -273,7 +273,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 6 | **Fixed.** Heal joined two pieces when only their clip gain matched, dropping the second piece's gain line, mute, stretch and channel. It now joins only pieces of the same file continuing at the same stretch whose gain, bypass, mute, channel, clip effects, Clean Vocal and tuning match and with no fade at the join, and joins their clip-gain lines (`Clip::joined_env`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`heal`, `heals`); `model/src/clip.rs` (`joined_env`) |
 | 7 | Insert Time and Cut Time move the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures | `engine/src/cmd/event.rs:244-293` |
 | 8 | Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end | `engine/src/cmd/event_more.rs:702, 723` |
-| 9 | Deleting fades in a selection trims every crossfade on the track back to its midpoint, including those outside the selection | `engine/src/edit.rs:866-877` |
+| 9 | **Fixed.** Deleting fades in a selection trimmed every crossfade on the track back to its midpoint, including those outside the selection. Only fades and crossfades that lie in the selection go now (with a point, those of the clip under it). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`delete_fades`) |
 | 10 | Commit / Bounce copies volume, output and sends to the new track but not pan or automation, then hides the original | `engine/src/io.rs:1191-1202` |
 | 11 | Strip Silence treats muted clips as silence and deletes them | `engine/src/io.rs:979-992` |
 | 12 | Conform to Tempo sets a varispeed ratio, so pitch changes even on a pitch-preserving (Elastic) track | `engine/src/cmd/clip_more.rs:255-260` |
@@ -344,3 +344,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 4 fixed: edits that would change an edit-locked clip are refused |
 | 2026-11-16 | minor | Bug 5 fixed: clip effects live on the clip, so splits and copies keep them. Bug 13 partly: clip effects are made at sync, not in render |
 | 2026-11-16 | minor | Bug 6 fixed: Heal joins only pieces that sound alike and keeps both clip-gain lines |
+| 2026-11-16 | minor | Bug 9 fixed: deleting fades leaves crossfades outside the selection alone |

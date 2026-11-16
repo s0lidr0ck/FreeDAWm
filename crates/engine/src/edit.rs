@@ -943,31 +943,46 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
     made
 }
 
-/// Remove fades on clips touching `range`.
+/// Remove the fades in `range`: each fade that lies in it (with an empty range, every fade of
+/// the clip under the point). A crossfade in it is taken apart: both clips are trimmed back to
+/// its midpoint and lose the fades that made it. Fades and crossfades outside the range stay.
 pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
+    pl.sort();
+    let hit = |c: &Clip, start: Samples, end: Samples| {
+        if range.is_empty() { c.range().contains(range.start) } else { Range::new(start, end).overlaps(&range) }
+    };
+    // Crossfades first, from the clips as they are: the overlap of each neighbouring pair.
     let mut n = 0;
+    for i in 0..pl.clips.len().saturating_sub(1) {
+        let (Some(a), Some(b)) = (pl.clips.get(i), pl.clips.get(i + 1)) else { continue };
+        let (a_end, b_start) = (a.end(), b.start);
+        if a_end <= b_start || !(hit(a, b_start, a_end) || hit(b, b_start, a_end)) {
+            continue;
+        }
+        let mid = b_start + (a_end - b_start) / 2;
+        if let Some(a) = pl.clips.get_mut(i) {
+            a.trim_end_to(mid);
+            a.fade_out = Fade::default();
+        }
+        if let Some(b) = pl.clips.get_mut(i + 1) {
+            b.trim_start_to(mid);
+            b.fade_in = Fade::default();
+        }
+        n += 1;
+    }
     for c in &mut pl.clips {
-        if c.range().overlaps(&range) || (range.is_empty() && c.range().contains(range.start)) {
-            if c.fade_in.len > 0 || c.fade_out.len > 0 {
-                n += 1;
-            }
+        let (fi, fo) = (c.fade_in.len, c.fade_out.len);
+        let fade_in = fi > 0 && hit(c, c.start, c.start.saturating_add(fi));
+        let fade_out = fo > 0 && hit(c, c.end().saturating_sub(fo), c.end());
+        if fade_in {
             c.fade_in = Fade::default();
+        }
+        if fade_out {
             c.fade_out = Fade::default();
         }
-    }
-    // Overlapping (crossfaded) neighbours are trimmed back to the midpoint.
-    pl.sort();
-    for i in 0..pl.clips.len().saturating_sub(1) {
-        let (Some(a_end), Some(b_start)) = (pl.clips.get(i).map(Clip::end), pl.clips.get(i + 1).map(|c| c.start)) else { continue };
-        if a_end > b_start {
-            let mid = b_start + (a_end - b_start) / 2;
-            if let Some(a) = pl.clips.get_mut(i) {
-                a.trim_end_to(mid);
-            }
-            if let Some(b) = pl.clips.get_mut(i + 1) {
-                b.trim_start_to(mid);
-            }
+        if fade_in || fade_out {
+            n += 1;
         }
     }
     // A clip trimmed from the left can now start after its next neighbour (several short

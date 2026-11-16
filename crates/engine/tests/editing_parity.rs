@@ -315,3 +315,20 @@ fn heal_joins_the_clip_gain_lines_of_both_pieces() {
     assert_eq!(clips(&e, t), vec![(0, 2000, 0)]);
     assert!(e.session().track(t).unwrap().clips()[0].gain_env.is_empty());
 }
+
+// ---- bug 9: deleting fades in a selection took apart every crossfade on the track ----------
+
+#[test]
+fn deleting_fades_leaves_crossfades_outside_the_selection() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1100, 0), (1000, 1100, 5000), (2000, 1000, 9000)]);
+    let x = Fade { len: 100, shape: FadeShape::EqualPower, curvature: 0.0 };
+    let s = e.session_mut();
+    s.find_clip_mut(c[0]).unwrap().fade_out = x;
+    s.find_clip_mut(c[1]).unwrap().fade_in = x;
+    s.find_clip_mut(c[1]).unwrap().fade_out = x;
+    s.find_clip_mut(c[2]).unwrap().fade_in = x;
+    run(&mut e, "edit.fades_delete", json!({"tracks": [t.0], "start": 900, "end": 1200}));
+    let got: Vec<_> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end(), c.fade_in.len, c.fade_out.len)).collect();
+    assert_eq!(got, vec![(0, 1050, 0, 0), (1050, 2100, 0, 100), (2000, 3000, 100, 0)], "the second crossfade stays");
+}
