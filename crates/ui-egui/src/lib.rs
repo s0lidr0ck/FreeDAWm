@@ -805,6 +805,13 @@ pub enum Gesture {
         /// The clips selected before (Shift), kept under the band's.
         keep: Vec<soundcraft_model::ClipId>,
     },
+    /// A warp marker dragged on a track showing Warp: marker `index` of `clip` goes to `to` on
+    /// release (the material re-stretches then).
+    WarpMarker {
+        clip: soundcraft_model::ClipId,
+        index: usize,
+        to: Samples,
+    },
     /// A clip-gain line breakpoint dragged (made where the line was pressed if none was there).
     GainPoint {
         clip: soundcraft_model::ClipId,

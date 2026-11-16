@@ -89,6 +89,7 @@ mod transport;
 mod video;
 mod view;
 mod view_more;
+pub mod warp;
 mod vocal;
 mod vocal_studio;
 mod vst3;
@@ -231,6 +232,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(track_more::specs());
         v.extend(chain::specs());
         v.extend(clip_more::specs());
+        v.extend(warp::specs());
         v.extend(clip_list::specs());
         v.extend(event_more::specs());
         v.extend(tempo::specs());

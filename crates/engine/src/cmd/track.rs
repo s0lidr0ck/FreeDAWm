@@ -923,7 +923,7 @@ fn height_step(e: &mut Engine, p: &Value, taller: bool) -> Result<Value> {
 fn view(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.view", p)?;
     let v = str_param(p, "view").ok_or_else(|| bad("track.view", "`view` required"))?.to_string();
-    let plain = matches!(v.as_str(), "waveform" | "pitch" | "blocks" | "notes" | "regions" | "clip_gain" | "playlists");
+    let plain = matches!(v.as_str(), "waveform" | "pitch" | "blocks" | "notes" | "regions" | "clip_gain" | "warp" | "playlists");
     // Automation views are stored by text id; a legacy chain position becomes the module's id.
     let mut views = Vec::new();
     for t in &tracks {

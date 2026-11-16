@@ -188,6 +188,8 @@ fn tempo_conform(e: &mut Engine, p: &Value) -> Result<Value> {
                 s.edit.values.insert(key("len"), c.length as f64);
                 s.edit.values.insert(key("start"), c.start as f64);
             }
+            // Where the clip starts in the shared render: its warp markers count from there.
+            s.edit.values.insert(key("roff"), (ns - start) as f64);
             let mut nc = c.clone();
             nc.content = soundcraft_model::ClipContent::Audio { source: src, offset: ns - start };
             nc.start = ns;

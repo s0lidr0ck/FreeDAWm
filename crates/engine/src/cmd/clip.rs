@@ -338,7 +338,7 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
                 n += 1;
             }
         }
-        for k in ["src", "off", "len", "ratio", "start"] {
+        for k in ["src", "off", "len", "ratio", "start", "roff"] {
             s.edit.values.remove(&key(k));
         }
     }
@@ -346,7 +346,7 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 /// The audio a warped clip was rendered from, while that file is still in the session.
-fn warp_original(s: &soundcraft_model::Session, id: ClipId) -> Option<(soundcraft_model::SourceId, Samples, Samples)> {
+pub(crate) fn warp_original(s: &soundcraft_model::Session, id: ClipId) -> Option<(soundcraft_model::SourceId, Samples, Samples)> {
     let v = |k: &str| s.edit.values.get(&format!("elastic.{}.{k}", id.0)).copied();
     let src = soundcraft_model::SourceId(v("src")? as u64);
     s.source(src)?;

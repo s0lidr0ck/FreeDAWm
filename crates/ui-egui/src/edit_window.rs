@@ -1851,7 +1851,7 @@ pub fn view_options(track: &Track) -> Vec<&'static str> {
     if track.kind.is_midi() {
         opts.extend(["notes", "regions", "blocks"]);
     } else if track.kind == TrackKind::Audio {
-        opts.extend(["waveform", "pitch", "blocks", "clip_gain", "playlists"]);
+        opts.extend(["waveform", "pitch", "blocks", "clip_gain", "warp", "playlists"]);
     } else if track.kind.has_playlist() {
         opts.extend(["waveform", "blocks", "clip_gain", "playlists"]);
     }
@@ -2419,6 +2419,24 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
             painter.add(Shape::line(pts, Stroke::new(1.0, col)));
         }
     }
+    // Warp markers, on a track showing Warp (and the one being dragged where it will go).
+    if track.view == "warp" && body_r.height() > 8.0 {
+        let dragged = match app.gesture {
+            Some(Gesture::WarpMarker { clip: c, index, to }) if c == clip.id => Some((index, to)),
+            _ => None,
+        };
+        let col = Color32::from_rgb(255, 196, 64);
+        for (i, at) in warp_positions(s, clip).into_iter().enumerate() {
+            let at = dragged.filter(|d| d.0 == i).map_or(at, |d| d.1);
+            let x = x_of(s, tl, at);
+            if x < x0 - 1.0 || x > x1 + 1.0 || !vis.x_range().contains(x) {
+                continue;
+            }
+            painter.line_segment([pos2(x, body_r.min.y), pos2(x, body_r.max.y)], Stroke::new(1.0, col));
+            let y = body_r.min.y;
+            painter.add(Shape::convex_polygon(vec![pos2(x - 4.0, y), pos2(x + 4.0, y), pos2(x, y + 6.0)], col, Stroke::NONE));
+        }
+    }
     if !dim && let (Some(b), Some(text)) = (clean_badge(s, tl, lane, clip), clean_badge_text(s, clip)) {
         let on = clip.clean_alt().is_some_and(|k| !k.bypass);
         let fill = if s.clean_missing(clip) {
@@ -2790,6 +2808,25 @@ fn gain_line_hit(s: &Session, tl: Rect, lane: Rect, clip: &Clip, p: Pos2) -> Opt
     Some((point, point.unwrap_or(at), db))
 }
 
+/// The timeline positions of `clip`'s warp markers (none for a clip without any).
+fn warp_positions(s: &Session, clip: &Clip) -> Vec<Samples> {
+    if clip.warp.is_empty() {
+        return Vec::new();
+    }
+    soundcraft_engine::cmd::warp::warp_state(s, clip.id).map(|st| st.positions(clip)).unwrap_or_default()
+}
+
+/// The warp marker of `clip` within 5 pixels of `x`, by index.
+fn warp_marker_at(s: &Session, tl: Rect, clip: &Clip, x: f32) -> Option<usize> {
+    warp_positions(s, clip)
+        .into_iter()
+        .enumerate()
+        .map(|(i, at)| (i, (x_of(s, tl, at) - x).abs()))
+        .filter(|(_, d)| *d <= 5.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
 fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
     track.clips().iter().rev().find(|c| c.range().contains(at))
 }
@@ -3101,6 +3138,12 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     } else {
         None
     };
+    // On a track showing Warp, the warp markers are grabbed (within 5 pixels).
+    let warp_hit = if track.view == "warp" && auto_view.is_none() && matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil | Tool::Trim) {
+        body_hit.map(|c| (c.clone(), warp_marker_at(&s, tl, c, origin.x)))
+    } else {
+        None
+    };
     let upper = origin.y < lane.center().y;
     let near_edge = |c: &Clip| -> Option<bool> {
         let xs = x_of(&s, tl, c.start);
@@ -3208,6 +3251,10 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         // A Grabber (or Smart, lower half) drag on an automation lane rubber-bands its breakpoints.
         app.auto_sel = None;
         app.gesture = Some(Gesture::RubberBand { track: track.id, param, origin, to: origin });
+    } else if resp.drag_started()
+        && let Some((c, Some(index))) = &warp_hit
+    {
+        app.gesture = Some(Gesture::WarpMarker { clip: c.id, index: *index, to: at_origin });
     } else if resp.drag_started()
         && let Some((c, (existing, at, db))) = &gain_point
     {
@@ -3333,6 +3380,17 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         }
         *from = to;
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if resp.clicked()
+        && let Some((c, marker)) = &warp_hit
+    {
+        // A click adds a warp marker; Alt-click on one deletes it.
+        let _ = match (marker, mods.alt) {
+            (Some(i), true) => app.run("clip.warp_marker", json!({"clip": c.id.0, "op": "delete", "index": i})),
+            (None, false) => app.run("clip.warp_marker", json!({"clip": c.id.0, "op": "add", "at": snap_on(&s, at, track.id)})),
+            _ => Ok(json!(null)),
+        };
+        return;
     }
     if resp.clicked()
         && mods.alt
@@ -3570,7 +3628,9 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.ui.status = "Copy".into();
             }
         }
-        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. }) => *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. } | Gesture::WarpMarker { to, .. }) => {
+            *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command))
+        }
         Some(Gesture::MidiClip { to, .. }) => *to = at,
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
             if let Some(range) = s.find_clip(*clip).and_then(|(_, c)| fade_drag_range(c, *fade_in, at)) {
@@ -3792,6 +3852,9 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         // Alt at the press: a stretch trim, the material stretched to the new edge.
         Some(Gesture::TrimStart { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, false),
+        Some(Gesture::WarpMarker { clip, index, to }) => {
+            let _ = app.run("clip.warp_marker", json!({"clip": clip.0, "op": "move", "index": index, "to": to}));
+        }
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, .. }) => trim_clip(app, clip, to, false),
         Some(Gesture::MidiClip { track, from, to }) => new_midi_clip(app, s, track, from, to),
@@ -4357,6 +4420,38 @@ mod tests {
         click_with(&mut h, second, egui::Modifiers::ALT);
         h.run_steps(2);
         assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.gain_env.len(), 1);
+    }
+
+    /// On a track showing Warp, a click on a clip adds a warp marker, a drag moves it (the clip
+    /// re-renders once, on release) and Alt-click deletes it.
+    #[test]
+    fn warp_markers_are_added_dragged_and_deleted_on_the_clip() {
+        let mut h = smart_demo();
+        let tl = timeline(&h);
+        let (clip, lane) = clip_on_screen(&h, |a, b| b - a > 300.0 && a > tl.min.x + 10.0 && b < tl.max.x - 10.0);
+        let track = h.state().engine.session().find_clip(clip.id).unwrap().0;
+        h.state_mut().engine.execute("track.view", &json!({"track": track.0, "view": "warp"})).unwrap();
+        h.step();
+        let s = h.state().engine.session().clone();
+        let x = x_of(&s, tl, clip.start) + 150.0;
+        let y = lane.center().y + lane.height() / 4.0;
+        click_with(&mut h, pos2(x, y), egui::Modifiers::NONE);
+        h.run_steps(2);
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert_eq!(c.warp.len(), 3, "first, the new one, last: {:?}", c.warp);
+        assert_eq!(c.source(), clip.source(), "adding a marker renders nothing");
+        let at = warp_positions(h.state().engine.session(), &c)[1];
+        let undo_len = h.state().engine.undo_history().len();
+        drag(&mut h, pos2(x_of(&s, tl, at), y), pos2(x_of(&s, tl, at) + 40.0, y));
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        let moved = warp_positions(h.state().engine.session(), &c)[1];
+        assert!(moved > at, "{at} → {moved}");
+        assert_ne!(c.source(), clip.source(), "the clip plays the warped render");
+        assert_eq!((c.start, c.length), (clip.start, clip.length), "the clip keeps its place");
+        assert_eq!(h.state().engine.undo_history().len(), undo_len + 1, "one step");
+        click_with(&mut h, pos2(x_of(&s, tl, moved), y), egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.warp.len(), 2);
     }
 
     /// Alt held as a trim starts makes it a stretch trim: the clip takes the new length by

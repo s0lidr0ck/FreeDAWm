@@ -42,7 +42,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
-| I. Timing | Tempo detection and phase-coherent multitrack straightening work | **Large**: no warp markers to drag, the stretch-algorithm menu is a label, audio never follows tempo edits |
+| I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag | Medium: stretching is rendered offline, not heard while dragging |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
 | L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
@@ -192,7 +192,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Warp markers you drag to move a hit | ● | ● | ● | ● | **Flag only**: markers are stored by Straighten, never drawn or editable |
+| Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). The re-render happens on release, not while dragging |
 | Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Works** offline: the track's algorithm sets how the stretch splices (Rhythmic short and tight, Monophonic searching wide, Polyphonic general, X-Form long and smooth); varispeed plays in real time through the band-limited resampler (section 1). Not real-time |
 | Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
 | Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
@@ -329,8 +329,8 @@ algorithm menu chooses a different (offline) stretch; audio on tick tracks follo
 edits; quantize audio with strength and swing; an editable clip gain line; the fade dialog with a
 shape and bend per side, presets and batch fades; Commit Selection (bounce a range in place
 through the inserts); processing keeps handles; the Clip List auditions, renames, scrolls to
-clips and finds unused files; the Scrubber plays audio. Not done: warp markers drawn and
-editable; clip transpose; real-time clip loop and reverse; overlap modes with a front/back order;
+clips and finds unused files; the Scrubber plays audio; warp markers drawn and editable (third
+round). Not done: clip transpose; real-time clip loop and reverse; overlap modes with a front/back order;
 edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; bug 18's timecode origin; every tier-3 item; ARA 2 hosting.
@@ -379,3 +379,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |
 | 2026-11-16 | minor | Bug 13 fixed: Clip Effects modules are made off the audio thread |
+| 2026-11-16 | minor | Tier 2: warp markers drawn on the clip, added, dragged and deleted |

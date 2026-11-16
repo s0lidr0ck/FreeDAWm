@@ -441,6 +441,15 @@ pub fn wsola_plan_mode(guide: &[f32], ratio: f64, sample_rate: f32, mode: Stretc
         return WsolaPlan { reads: Vec::new(), frame, hop, out_len, identity: true };
     }
     let tol = ((sr * reach_s) as usize).clamp(8, 2048) as i64;
+    let reads = wsola_reads(guide, out_len, frame, tol, false, |out_pos| (out_pos as f64 / ratio).round() as i64);
+    WsolaPlan { reads, frame, hop, out_len, identity: false }
+}
+
+/// The input start of each output frame of a WSOLA stretch: frame `k` (output `k * frame / 2`)
+/// reads near `nominal(k * frame / 2)`, at the start within `tol` most like the natural
+/// continuation of the frame before.
+fn wsola_reads(guide: &[f32], out_len: usize, frame: usize, tol: i64, hold: bool, nominal: impl Fn(usize) -> i64) -> Vec<i64> {
+    let hop = frame / 2;
     let g = |i: i64| -> f32 { if i < 0 { 0.0 } else { guide.get(i as usize).copied().filter(|v| v.is_finite()).unwrap_or(0.0) } };
     let mut reads = Vec::with_capacity(out_len / hop.max(1) + 1);
     let mut prev_in: i64 = 0;
@@ -451,9 +460,9 @@ pub fn wsola_plan_mode(guide: &[f32], ratio: f64, sample_rate: f32, mode: Stretc
             break;
         }
         let in_pos = if k == 0 {
-            0
+            nominal(0).max(0)
         } else {
-            let nominal = (out_pos as f64 / ratio).round() as i64;
+            let nominal = nominal(out_pos);
             let natural = prev_in + hop as i64;
             // Similarity of candidate start `p` with the natural continuation (stride 2).
             let score = |p: i64| -> f32 {
@@ -471,7 +480,9 @@ pub fn wsola_plan_mode(guide: &[f32], ratio: f64, sample_rate: f32, mode: Stretc
             let lo = (nominal - tol).max(0);
             let hi = nominal + tol;
             let mut best = nominal.max(0);
-            let mut best_s = f32::NEG_INFINITY;
+            // A warp holds the nominal read unless a candidate is clearly more alike, so silence
+            // and noise do not drift the timing by the search reach.
+            let mut best_s = if hold { score(best) + 1e-3 } else { f32::NEG_INFINITY };
             let mut p = lo;
             while p <= hi {
                 let s = score(p);
@@ -495,7 +506,91 @@ pub fn wsola_plan_mode(guide: &[f32], ratio: f64, sample_rate: f32, mode: Stretc
         prev_in = in_pos;
         k += 1;
     }
-    WsolaPlan { reads, frame, hop, out_len, identity: false }
+    reads
+}
+
+/// Where output position `out` of a warp reads its input: the piecewise-linear map through
+/// `markers` (`(input, output)` pairs, both rising), held at the ends' slope beyond them.
+fn warp_inverse(markers: &[(f64, f64)], out: f64) -> f64 {
+    let seg = markers.windows(2).find(|w| w.get(1).is_some_and(|b| out < b.1)).or_else(|| markers.windows(2).last());
+    match seg {
+        Some([a, b]) if b.1 > a.1 => a.0 + (out - a.1) * (b.0 - a.0) / (b.1 - a.1),
+        _ => out,
+    }
+}
+
+/// Clean warp markers: finite, inside the input and output, both coordinates strictly rising,
+/// at most 4096. `None` when fewer than two are left.
+fn warp_markers(markers: &[(usize, usize)], len: usize) -> Option<Vec<(f64, f64)>> {
+    let mut m: Vec<(f64, f64)> = Vec::new();
+    for &(i, o) in markers.iter().take(4096) {
+        if i > len || o > MAX_OFFLINE_SAMPLES {
+            continue;
+        }
+        if m.last().is_none_or(|l| (i as f64) > l.0 && (o as f64) > l.1) {
+            m.push((i as f64, o as f64));
+        }
+    }
+    (m.len() >= 2).then_some(m)
+}
+
+/// Warp `ch` by `markers`: `(input, output)` sample pairs, both rising, from the first marker to
+/// the last (the output is as long as the last marker's output position, the input read from the
+/// first marker's). Between two markers the material stretches evenly to fit; `mode` chooses the
+/// pitch-preserving splice ([`StretchMode`]), `None` reads it at speed (varispeed: the pitch moves
+/// with each segment's ratio). One WSOLA pass over the whole warp, so there are no joins.
+pub fn warp_render(ch: &[Vec<f32>], markers: &[(usize, usize)], sample_rate: f32, mode: Option<StretchMode>) -> Vec<Vec<f32>> {
+    let len = max_len(ch);
+    let Some(m) = warp_markers(markers, len) else { return ch.to_vec() };
+    let (first_out, last_out) = (m.first().map_or(0.0, |x| x.1), m.last().map_or(0.0, |x| x.1));
+    let out_len = (last_out as usize).min(MAX_OFFLINE_SAMPLES);
+    if ch.is_empty() || len == 0 {
+        return ch.iter().map(|_| vec![0.0; out_len]).collect();
+    }
+    let inv = |o: f64| warp_inverse(&m, o.max(first_out));
+    let Some(mode) = mode else {
+        // Varispeed: read the input at each output sample's position (cubic interpolation).
+        return ch
+            .iter()
+            .map(|c| {
+                let at = |i: i64| -> f32 { usize::try_from(i).ok().and_then(|i| c.get(i)).copied().filter(|v| v.is_finite()).unwrap_or(0.0) };
+                (0..out_len)
+                    .map(|k| {
+                        if (k as f64) < first_out {
+                            return 0.0;
+                        }
+                        let x = inv(k as f64);
+                        let i = x.floor();
+                        let t = (x - i) as f32;
+                        let i = i as i64;
+                        let (y0, y1, y2, y3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+                        let a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+                        let b = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+                        let c2 = -0.5 * y0 + 0.5 * y2;
+                        ((a * t + b) * t + c2) * t + y1
+                    })
+                    .collect()
+            })
+            .collect();
+    };
+    let nch = ch.len() as f32;
+    let guide: Vec<f32> = (0..len).map(|i| ch.iter().map(|c| c.get(i).copied().unwrap_or(0.0)).sum::<f32>() / nch).collect();
+    let sr = f64::from(sane_sr(sample_rate));
+    let (frame_s, reach_s) = mode.frame_and_reach();
+    let frame = (((sr * frame_s) as usize) & !1).clamp(64, 8192);
+    let tol = ((sr * reach_s) as usize).clamp(8, 2048) as i64;
+    // Output frames are centred on the position they stand for, so a marker's sample lands at
+    // its output position whatever the frame length.
+    let half = (frame / 2) as f64;
+    let reads = wsola_reads(&guide, out_len, frame, tol, true, |o| (inv(o as f64 + half) - half).round() as i64);
+    let plan = WsolaPlan { reads, frame, hop: frame / 2, out_len, identity: false };
+    let mut out = wsola_apply(ch, &plan);
+    // Before the first marker nothing plays.
+    let silent = (first_out as usize).min(out_len);
+    for o in &mut out {
+        o.iter_mut().take(silent).for_each(|v| *v = 0.0);
+    }
+    out
 }
 
 /// Stretch `ch` by `plan` (made from a guide of the same length).
@@ -851,6 +946,63 @@ fn render(ch: &[Vec<f32>], plugin: &mut dyn Plugin, sample_rate: f32, out_len: u
 /// Peak level of the buffers in dBFS (-144 for silence).
 pub fn peak_db(ch: &[Vec<f32>]) -> f32 {
     gain_to_db(peak(ch))
+}
+
+#[cfg(test)]
+mod warp_tests {
+    use super::*;
+
+    fn clicks(len: usize, at: &[usize]) -> Vec<f32> {
+        let mut v = vec![0.0f32; len];
+        for &a in at {
+            for k in 0..256 {
+                if let Some(x) = v.get_mut(a + k) {
+                    *x = (1.0 - k as f32 / 256.0) * (k as f32 * 0.13 + 1.0).sin();
+                }
+            }
+        }
+        v
+    }
+
+    fn onset(v: &[f32]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut quiet = usize::MAX / 2;
+        for (i, x) in v.iter().enumerate() {
+            if x.abs() > 0.05 && quiet > 2000 {
+                out.push(i);
+            }
+            quiet = if x.abs() > 0.05 { 0 } else { quiet + 1 };
+        }
+        out
+    }
+
+    #[test]
+    fn a_warp_moves_each_hit_to_its_marker_in_every_mode() {
+        let sr = 48_000.0;
+        let x = vec![clicks(96_000, &[0, 24_000, 48_000, 72_000])];
+        // The hit at 24 000 goes to 30 000; the one at 48 000 stays; the end stays.
+        let m = [(0, 0), (24_000, 30_000), (48_000, 48_000), (96_000, 96_000)];
+        for mode in [Some(StretchMode::Polyphonic), Some(StretchMode::Rhythmic), Some(StretchMode::XForm), None] {
+            let y = warp_render(&x, &m, sr, mode);
+            assert_eq!(y[0].len(), 96_000);
+            let hits = onset(&y[0]);
+            assert_eq!(hits.len(), 4, "{mode:?}: {hits:?}");
+            for (want, got) in [0usize, 30_000, 48_000, 72_000].iter().zip(hits.iter()) {
+                assert!(want.abs_diff(*got) < 600, "{mode:?}: hit at {got}, wanted {want} ({hits:?})");
+            }
+        }
+    }
+
+    #[test]
+    fn identity_markers_keep_the_audio() {
+        let x = vec![(0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect::<Vec<f32>>()];
+        let y = warp_render(&x, &[(0, 0), (4800, 4800)], 48_000.0, Some(StretchMode::Polyphonic));
+        let err = x[0].iter().zip(&y[0]).skip(100).take(4600).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(err < 1e-3, "{err}");
+        // Hostile markers: falling, outside the input, or too few.
+        assert_eq!(warp_render(&x, &[(10, 10)], 48_000.0, None), x);
+        assert_eq!(warp_render(&x, &[(0, 0), (99_999, 10)], 48_000.0, None), x);
+    }
 }
 
 #[cfg(test)]

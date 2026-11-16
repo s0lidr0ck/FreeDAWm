@@ -134,7 +134,7 @@ pub fn set_clip_env(c: &mut Clip, mut pts: Vec<(Samples, f32)>) {
 
 /// Longest audio we render in one stretch: one hour at the session rate, and no more than
 /// `time_stretch` makes.
-fn max_render(s: &Session) -> Samples {
+pub(crate) fn max_render(s: &Session) -> Samples {
     s.sample_rate.samples(3600.0).min(soundcraft_dsp::offline::MAX_OFFLINE_SAMPLES as Samples)
 }
 

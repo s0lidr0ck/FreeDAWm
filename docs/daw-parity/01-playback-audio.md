@@ -154,7 +154,7 @@ Varispeed is the only whole-project speed control among the four.
 | Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed with linear interpolation |
 | Audio follows tempo changes | ● | ● | ● | ● | **Partial**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, renders them to the new length (offline, not in real time) |
 | Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
-| Warp markers you can drag | ● | ● | ● | ● | **Missing**: markers are written by Straighten and never edited or read |
+| Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
 | Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
 | Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Partial**: once, as varispeed, so the pitch changes |
@@ -245,6 +245,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | warp markers you drag (section 4) |
 | 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |
