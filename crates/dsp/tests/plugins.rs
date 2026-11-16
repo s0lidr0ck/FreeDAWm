@@ -495,6 +495,32 @@ fn hidden_stock_effects_bug_17() {
     assert!((peak(&out[0]) - peak(&quiet)).abs() < 1e-4, "no stale gain reduction");
 }
 
+/// Built-in effects parity, bug 18: a delay change that came while a crossfade ran jumped the
+/// tap it was fading to, which clicked.
+#[test]
+fn time_shift_changes_during_a_crossfade_do_not_click() {
+    let mut p = prepared("time_shift");
+    let x = sine(220.0, 0.5, 48_000);
+    let smooth = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let mut out = Vec::new();
+    let mut buf = vec![vec![0.0f32; 64]];
+    for (k, chunk) in x.chunks(64).enumerate() {
+        // A new delay every 64 samples, well inside the 256-sample crossfade.
+        p.set_param("delay_samples", (k % 7) as f32 * 37.0);
+        buf[0][..chunk.len()].copy_from_slice(chunk);
+        p.process(&mut buf, chunk.len());
+        out.extend_from_slice(&buf[0][..chunk.len()]);
+    }
+    let jump = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(jump < 1.5 * smooth, "largest step {jump} against the signal's {smooth}");
+    // And it settles on the last delay asked for.
+    p.set_param("delay_samples", 100.0);
+    let mut imp = vec![0.0f32; 2000];
+    imp[1000] = 1.0;
+    let out = run(p.as_mut(), &[imp]);
+    assert!((out[0][1100] - 1.0).abs() < 1e-6);
+}
+
 #[test]
 fn dc_removal_removes_dc() {
     let mut p = prepared("dc_offset_removal");

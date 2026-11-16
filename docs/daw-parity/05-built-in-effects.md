@@ -274,7 +274,7 @@ them is the owner's decision, not a repair.
 | 15 | **Fixed.** Mod's tempo-synced LFO took its rate from the tempo but not its phase; while the host plays with Sync on, its phase now comes from the song position (a cycle starts on every multiple of the Division). Test: mod `tests.rs` | `dsp/src/plugins/fs/mod_engine/mod.rs:45` |
 | 16 | **Fixed.** IIR bells and shelves (CleanQ and the hidden EQs) narrowed and lost gain near the top of the range at 44.1 and 48 kHz. They are now matched to their analog shape up to Nyquist (`biquad::matched`, after Vicanek): at most half the bilinear design's error and under 2 dB in the tested cases; low down they equal the old design, and a shelf whose poles would pass Nyquist keeps it. CleanQ's Ceiling fit keeps the C++ maths. Tests: `biquad.rs`, `clean_q_dsp.rs` | `dsp/src/biquad.rs:47-99`; `dsp/src/plugins/fs/cleanq/clean_q_dsp.rs:422-433` |
 | 17 | **Fixed.** Hidden effects that old sessions still load: the stock Limit switch is a brickwall now; a look-ahead change crossfades; the Maximizer limits the true peak (4x interpolated, within about 0.5 dB of the ceiling); the stock gate and compressor link the front pair only (each other channel on its own), so a loud LFE no longer ducks the rest; Lo-Fi's top rate means no reduction at any session rate; Channel Strip resets a section switched back on. Test: `dsp/tests/plugins.rs` | `dsp/src/plugins/dynamics.rs:120-195, 648`; `harmonic.rs:132`; `strip.rs:177-182` |
-| 18 | Time Shift clicks if its delay changes again during a crossfade | `dsp/src/plugins/utility.rs:86-94` |
+| 18 | **Fixed.** Time Shift clicked if its delay changed again during a crossfade; a change now waits for the crossfade before it. Test: `dsp/tests/plugins.rs` | `dsp/src/plugins/utility.rs:86-94` |
 
 ## Suggested order of work
 
@@ -337,3 +337,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 15 fixed: Mod's synced LFO locks to the song position |
 | 2026-11-16 | minor | Bug 16 fixed: bells and shelves keep their shape near 20 kHz |
 | 2026-11-16 | minor | Bug 17 fixed: the hidden stock dynamics, Lo-Fi and Channel Strip |
+| 2026-11-16 | minor | Bug 18 fixed: Time Shift changes during a crossfade do not click |
