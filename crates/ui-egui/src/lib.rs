@@ -1506,8 +1506,16 @@ impl SoundApp {
         let rate = self.recorder.as_ref().map_or(0, |r| r.sample_rate);
         self.take_reported = None;
         let latency = self.take_latency();
-        self.take_plan =
-            Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes, latency, loop_from });
+        self.take_plan = Some(soundcraft_engine::io::Recording {
+            start: self.record_start,
+            pass,
+            punch: self.punch,
+            rate,
+            takes,
+            latency,
+            loop_from,
+            tap_latency: 0,
+        });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -1519,11 +1527,12 @@ impl SoundApp {
     fn refine_take_plan(&mut self) {
         let Some(start) = self.recorder.as_ref().and_then(soundcraft_playback::record::Recorder::start_pos) else { return };
         let latency = self.take_latency();
+        let tap = self.recorder.as_ref().and_then(soundcraft_playback::record::Recorder::start_tap_latency).map_or(0, i64::from);
         let Some(plan) = &mut self.take_plan else { return };
-        if (plan.start, plan.latency) == (start, latency) {
+        if (plan.start, plan.latency, plan.tap_latency) == (start, latency, tap) {
             return;
         }
-        (plan.start, plan.latency) = (start, latency);
+        (plan.start, plan.latency, plan.tap_latency) = (start, latency, tap);
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -1531,19 +1540,37 @@ impl SoundApp {
 
     /// Arm the input for the record-enabled tracks; a session never saved records into its
     /// autosave folder. Returns the takes it records.
+    /// A track whose input is a bus records it from the mix (internal recording), with no input
+    /// device if need be.
     fn arm_recorder(&mut self) -> Result<Vec<soundcraft_engine::io::Take>, String> {
         let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
         let unsaved_dir = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
-        let Some(r) = &mut self.recorder else { return Err("no audio input device".into()) };
-        let plan = soundcraft_engine::io::plan_takes(&self.engine, &unsaved_dir, r.channels)?;
-        if plan.is_empty() {
+        let device = self.recorder.as_ref().map_or(0, |r| r.channels);
+        let plan = soundcraft_engine::io::plan_recording(&self.engine, &unsaved_dir, device)?;
+        if plan.takes.is_empty() {
             return Err("no audio track is record-enabled".into());
         }
+        if self.recorder.is_none() {
+            // Busses only (a hardware input was refused above): no input device is needed.
+            let Some(p) = &self.player else { return Err("no audio device".into()) };
+            self.recorder = Some(p.internal_recorder());
+        }
+        let Some(r) = &mut self.recorder else { return Err("no audio input device".into()) };
         let takes = plan
+            .takes
             .iter()
-            .map(|(track, inputs, path)| soundcraft_engine::io::Take { track: *track, path: path.clone(), channels: inputs.len() })
+            .map(|(track, inputs, path)| soundcraft_engine::io::Take {
+                track: *track,
+                path: path.clone(),
+                channels: inputs.len(),
+                internal: plan.is_tap(*track),
+            })
             .collect();
-        r.arm(plan)?;
+        if let Some(p) = &self.player {
+            p.set_record_taps(r.channels, &plan.taps);
+        }
+        let width = plan.tap_channels();
+        r.arm_with_taps(plan.takes, width)?;
         Ok(takes)
     }
 
@@ -1981,7 +2008,9 @@ impl SoundApp {
     /// Open the input device once (for recording and input monitoring) and feed the player.
     fn ensure_input(&mut self) {
         let Some(p) = &self.player else { return };
-        if self.recorder.is_some() || self.recorder_failed {
+        // A recorder of busses only (no input device then) gives way to a device, between takes.
+        let internal = self.recorder.as_ref().is_some_and(soundcraft_playback::record::Recorder::is_internal);
+        if (self.recorder.is_some() && !(internal && !self.engine.transport.recording)) || self.recorder_failed {
             return;
         }
         // The input opened with the output (one clock) when there is one, else its own stream
@@ -2115,6 +2144,7 @@ impl SoundApp {
             takes: Vec::new(),
             latency,
             loop_from: None,
+            tap_latency: 0,
         });
         self.punch = None;
         self.autosaved_rev = 0;

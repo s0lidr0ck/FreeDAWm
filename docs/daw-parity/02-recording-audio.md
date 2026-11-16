@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 9 was not a bug) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (internal recording from a bus; bug 2 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -29,7 +29,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Arming and inputs | Arming works; inputs are mono or stereo hardware only | Medium: no internal (bus) recording, wrong channels in two cases |
+| A. Arming and inputs | Arming works; inputs are mono or stereo hardware, or a bus | Medium: wrong channels with more than two (bug 10) |
 | B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly | Small: no discard-take |
 | C. Punching | Automatic punch with handles works | Medium: no punch out on the fly, no punch crossfades, four modes are labels |
 | D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
@@ -54,7 +54,7 @@ depth and write a timestamp into it**, and **smooth the punch points**.
 | Named hardware inputs, mono and stereo | ● | ● | ● | ● | **Works** (Setup › I/O) |
 | Multichannel (surround) inputs | ● | ● | ● | ● | **Missing**: inputs are one or two channels wide |
 | One input on several tracks | ● | ● | ● | ● | **Works** |
-| A bus or another track's output as the input | ● | ● | ● | ● | **Missing, and wrong**: the menu offers busses, but the track then hears and records hardware inputs 1..n |
+| A bus or another track's output as the input | ● | ● | ● | ● | **Works** for a bus: the track hears and records it as the mix renders it, with no input device needed, placed by the bus's delay compensation; a track's output is recorded by routing it (or a send) to a bus, as in Pro Tools |
 | Record with effects (print) | ◐ | ● | ◐ | ● | **Missing**: trim, polarity and inserts are monitor-only |
 | Record many inputs at once | ● | ● | ● | ● | **Works** in code (up to 64 named inputs, one writer thread); never measured on a large interface |
 
@@ -171,7 +171,7 @@ Lines move while section 1's work is in progress, so functions are named.
 | # | Bug | Where |
 |---|---|---|
 | 1 | **Fixed:** a stereo track with no input chosen monitored input 1 on both sides but recorded inputs 1 and 2; both now use the device's first channels (In 1-2; In 1 twice on a mono device) | `crates/mix/src/lib.rs` (input span for no input) against `plan_takes` in `crates/engine/src/io.rs` |
-| 2 | An audio track whose input is a bus hears and records hardware inputs instead; the menu offers busses to every track | the same two places; `crates/ui-egui/src/mix_window.rs` input menu |
+| 2 | **Fixed:** an audio track whose input is a bus heard and recorded hardware inputs instead; it now hears and records the bus, and the menu no longer offers busses to instrument and MIDI tracks | the same two places; `crates/ui-egui/src/mix_window.rs` input menu |
 | 3 | **Fixed:** Record pressed while a loop is playing placed the take as one straight clip running past the loop end; it now splits into that loop's passes (`record_start` in `crates/engine/src/io.rs`) | `start_recording` in `crates/ui-egui/src/lib.rs` (the plan has no pass) |
 | 4 | **Fixed:** loop record on a plain track left playlists that held only the loop, so the track was silent elsewhere; each pass's playlist now copies the track's playlist from before the take | `place_take` in `crates/engine/src/io.rs` |
 | 5 | **Fixed:** pre-roll with no selection recorded and placed the pre-roll, overwriting what was there; the take is now kept from the insertion point on | `start_recording`, `place_take` |
@@ -191,7 +191,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 
 | Work | Est. (h) | Notes |
 |---|---:|---|
-| Record from a bus or a track's output (internal recording) | 10–16 | Needs the take to be captured after the mix, not from the device input; closes bug 2 and opens printing |
+| Record from a bus or a track's output (internal recording) | 10–16 | **Done** (bus input; a track's output via a bus); closed bug 2 |
 | Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | Follows the row above |
 | Bit depth and file type for takes; BWF timestamp and originator | 5–8 | The remote path already honours bit depth |
 | Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | QuickPunch can then mean something or go |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

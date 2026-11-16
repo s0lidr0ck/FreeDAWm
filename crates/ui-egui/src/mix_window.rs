@@ -2103,6 +2103,10 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         crate::band::input_menu(app, ui, id);
         crate::band::module_input_menu(app, ui, id);
     }
+    // An instrument or MIDI track plays its instrument: a bus is no input for it.
+    if input && session.track(id).is_some_and(|t| t.kind.is_midi()) {
+        return;
+    }
     ui.separator();
     let busses: Vec<String> = app.engine.session().busses.iter().map(|b| b.name.clone()).collect();
     ui.strong("Bus");

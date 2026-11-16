@@ -2165,9 +2165,39 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
 /// hardware input records the device's first channels, as it monitors them
 /// ([`default_input_channel`](soundcraft_model::default_input_channel)).
 pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std::result::Result<Vec<(TrackId, Vec<usize>, PathBuf)>, String> {
+    plan_recording(e, unsaved_dir, input_channels).map(|p| p.takes)
+}
+
+/// What a recording records: each take's track, the channels of a recording frame it records,
+/// and its file ([`plan_takes`]); and the tracks recording a bus (internal recording), whose
+/// channels follow the device's `input_channels` in each frame, in this order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TakePlan {
+    pub takes: Vec<(TrackId, Vec<usize>, PathBuf)>,
+    pub taps: Vec<(TrackId, usize)>,
+}
+
+impl TakePlan {
+    /// Whether `track`'s take records its bus input (internal recording).
+    pub fn is_tap(&self, track: TrackId) -> bool {
+        self.taps.iter().any(|(t, _)| *t == track)
+    }
+
+    /// Channels the taps add to each frame.
+    pub fn tap_channels(&self) -> usize {
+        self.taps.iter().map(|(_, c)| *c).sum()
+    }
+}
+
+/// [`plan_takes`] with the bus-input tracks too: an armed audio track whose input is a bus
+/// records that bus as the mix renders it (no input device needed), its channels after the
+/// device's `input_channels` in each frame. With no input device (`input_channels` 0) only those
+/// can record; a track on a hardware input is refused.
+pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std::result::Result<TakePlan, String> {
     let dir = e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir);
     let s = e.session();
     let mut plan: Vec<(TrackId, Vec<usize>, PathBuf)> = Vec::new();
+    let mut taps: Vec<(TrackId, usize)> = Vec::new();
     // A frozen track plays its render: a take on it would go unheard (and edit what was frozen).
     if let Some(t) = s.tracks.iter().find(|t| t.mixer.record_arm && t.frozen_audio().is_some()) {
         return Err(format!("`{}` is frozen. {}", t.name, crate::cmd::freeze::UNFREEZE_TO_RECORD));
@@ -2176,6 +2206,16 @@ pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std:
         let inputs: Vec<usize> = match &t.mixer.input {
             // Recorded on a remote recorder: its take lands here when it stops.
             soundcraft_model::Route::Hardware(name) if is_remote_input(name) => continue,
+            // A bus: recorded from the mix, after the device's channels and the taps before it.
+            soundcraft_model::Route::Bus(_) => {
+                if taps.len() >= MAX_BUS_TAKES {
+                    return Err(format!("{}: at most {MAX_BUS_TAKES} tracks can record busses at once", t.name));
+                }
+                let first = input_channels.saturating_add(taps.iter().map(|(_, c)| *c).sum::<usize>());
+                taps.push((t.id, t.channels()));
+                (0..t.channels()).map(|k| first.saturating_add(k)).collect()
+            }
+            _ if input_channels == 0 => return Err("no audio input device".into()),
             soundcraft_model::Route::Hardware(name) => {
                 let refuse = || format!("{}: input “{name}” is not available on this device ({input_channels} inputs)", t.name);
                 let (first, width) = s.input_channels(name).ok_or_else(refuse)?;
@@ -2199,8 +2239,11 @@ pub fn plan_takes(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> std:
             .unwrap_or_else(|| file(take_no));
         plan.push((t.id, inputs, path));
     }
-    Ok(plan)
+    Ok(TakePlan { takes: plan, taps })
 }
+
+/// Tracks that can record busses at once (the player's limit, `soundcraft_playback::record::MAX_TAPS`).
+pub const MAX_BUS_TAKES: usize = 32;
 
 /// The number of take `name` (a source's name, `<stem>_<NN>`) of a track whose takes are named
 /// `<stem>_…`.
@@ -2245,18 +2288,31 @@ pub struct Recording {
     /// that loop. `None` (and plans saved before it existed): `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_from: Option<Samples>,
+    /// How far behind the timeline the recorded busses ran (their delay compensation): an
+    /// internal take's frame `k` belongs at `start + k - tap_latency` ([`Take::internal`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tap_latency: Samples,
+}
+
+fn is_zero(x: &Samples) -> bool {
+    *x == 0
 }
 
 impl Recording {
-    /// Where the takes are placed from and the frames skipped at their head, as
-    /// [`add_recording`] takes them: a take started `lead` samples into its loop is placed as if
-    /// it had started at the loop's start, its first `lead` frames missing.
+    /// Where the takes on hardware inputs are placed from and the frames skipped at their head,
+    /// as [`add_recording`] takes them: a take started `lead` samples into its loop is placed as
+    /// if it had started at the loop's start, its first `lead` frames missing.
     pub fn placement(&self) -> (Samples, Samples) {
+        self.placement_for(self.latency)
+    }
+
+    /// [`Recording::placement`] of a take whose frames run `latency` behind the timeline.
+    pub fn placement_for(&self, latency: Samples) -> (Samples, Samples) {
         match (self.pass, self.loop_from) {
             (Some(p), Some(from)) if from <= self.start && self.start.saturating_sub(from) < p => {
-                (from, self.latency.saturating_sub(self.start.saturating_sub(from)))
+                (from, latency.saturating_sub(self.start.saturating_sub(from)))
             }
-            _ => (self.start, self.latency),
+            _ => (self.start, latency),
         }
     }
 }
@@ -2321,12 +2377,25 @@ pub struct Take {
     pub track: TrackId,
     pub path: PathBuf,
     pub channels: usize,
+    /// It records the track's bus input (internal recording): placed by the busses' delay
+    /// ([`Recording::tap_latency`]), not by the input's round trip.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
 }
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
 pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, PathBuf)>) -> Vec<soundcraft_model::ClipId> {
     let (start, latency) = plan.placement();
-    add_recording_in(e, start, takes, plan.pass, plan.punch, latency)
+    let (_, tap) = plan.placement_for(plan.tap_latency);
+    let takes = takes
+        .into_iter()
+        .map(|(t, p)| {
+            let internal = plan.takes.iter().any(|x| x.internal && x.path == p);
+            let l = if internal { tap } else { latency };
+            (t, p, l)
+        })
+        .collect();
+    add_recording_in(e, start, takes, plan.pass, plan.punch)
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -2334,25 +2403,24 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
 /// 1000), each pass after the first on a new playlist that copies the track's playlist from
 /// before the take (so only the loop differs between them).
 pub fn add_recording(e: &mut Engine, start: Samples, takes: Vec<(TrackId, PathBuf)>, pass: Option<Samples>) -> Vec<soundcraft_model::ClipId> {
-    add_recording_in(e, start, takes, pass, None, 0)
+    add_recording_in(e, start, takes.into_iter().map(|(t, p)| (t, p, 0)).collect(), pass, None)
 }
 
 /// [`add_recording`] limited to the `punch` range (each clip is cut to it before it's placed, so
-/// the material around the punch isn't overwritten) and shifted by the recording `latency`: take
-/// frame `k` belongs at timeline `start + k - latency`, so the first `latency` frames are skipped
-/// (a negative latency places the take later instead). Loop passes split on that shifted
-/// timeline: pass `i` holds frames `i * pass + latency ..`.
+/// the material around the punch isn't overwritten) and shifted by each take's recording
+/// `latency` (the third of each take): take frame `k` belongs at timeline `start + k - latency`,
+/// so the first `latency` frames are skipped (a negative latency places the take later instead).
+/// Loop passes split on that shifted timeline: pass `i` holds frames `i * pass + latency ..`.
 fn add_recording_in(
     e: &mut Engine,
     start: Samples,
-    takes: Vec<(TrackId, PathBuf)>,
+    takes: Vec<(TrackId, PathBuf, Samples)>,
     pass: Option<Samples>,
     punch: Option<Range>,
-    latency: Samples,
 ) -> Vec<soundcraft_model::ClipId> {
     let before = e.session_arc();
     let mut out = Vec::new();
-    for (tid, path) in takes {
+    for (tid, path, latency) in takes {
         // A take in a project's (or autosave's) `Audio Files`: deleted when nothing names it any
         // more (undone, or its track deleted while it recorded).
         if path.parent().and_then(Path::file_name).is_some_and(|n| n == "Audio Files") && !e.recorded_takes.contains(&path) {
@@ -2675,9 +2743,10 @@ mod record_tests {
             pass: None,
             punch: Some(Range::new(1_400, 1_600)),
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1 }],
+            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false }],
             latency: 0,
             loop_from: None,
+            tap_latency: 0,
         };
         place_recording(&mut e, &plan, vec![(vox, take)]);
         let clips: Vec<_> = e.session().track(vox).unwrap().clips().iter().map(|c| (c.start, c.length, c.source_offset())).collect();
@@ -2691,9 +2760,10 @@ mod record_tests {
             pass: rs.pass,
             punch: rs.punch,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1 }],
+            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false }],
             latency: 0,
             loop_from: rs.loop_from,
+            tap_latency: 0,
         }
     }
 
@@ -2802,6 +2872,50 @@ mod record_tests {
     }
 
     #[test]
+    fn a_track_on_a_bus_input_records_the_bus_after_the_device_channels() {
+        // Bug 2: it heard and recorded hardware inputs instead of its bus.
+        let dir = test_dir("bus-takes");
+        let mut e = Engine::default();
+        e.session_mut().add_bus("Print Bus", ChannelFormat::Stereo);
+        e.execute("track.new", &json!({"name": "Synth", "format": "stereo"})).unwrap();
+        e.execute("track.output", &json!({"track": "Synth", "output": "Print Bus"})).unwrap();
+        let vox = armed(&mut e, "Vox", "mono", "In 2");
+        let print = armed(&mut e, "Print", "stereo", "Print Bus");
+        assert!(matches!(e.session().track(print).unwrap().mixer.input, soundcraft_model::Route::Bus(_)));
+        let plan = plan_recording(&e, &dir, 4).unwrap();
+        assert_eq!(plan.takes[0].1, vec![1]);
+        assert_eq!((plan.takes[1].0, plan.takes[1].1.clone()), (print, vec![4, 5]), "after the device's four channels");
+        assert_eq!((plan.taps.clone(), plan.tap_channels()), (vec![(print, 2)], 2));
+        assert!(plan.is_tap(print) && !plan.is_tap(vox));
+        // No input device: the bus records; a hardware input cannot.
+        assert_eq!(plan_recording(&e, &dir, 0).unwrap_err(), "no audio input device");
+        e.execute("mix.record_arm", &json!({"tracks": [vox.0], "value": false})).unwrap();
+        let plan = plan_recording(&e, &dir, 0).unwrap();
+        assert_eq!(plan.takes[0].1, vec![0, 1]);
+        // An internal take is placed by the busses' delay, a hardware one by the round trip.
+        let (hw, bus) = (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Print_01.wav"));
+        write_take(&hw, 1_000);
+        write_take(&bus, 1_000);
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![
+                Take { track: vox, path: hw.clone(), channels: 1, internal: false },
+                Take { track: print, path: bus.clone(), channels: 1, internal: true },
+            ],
+            latency: 300,
+            loop_from: None,
+            tap_latency: 20,
+        };
+        place_recording(&mut e, &rec, vec![(vox, hw), (print, bus)]);
+        assert_eq!(clip_rows(&e, vox), vec![(1_000, 700, 300)]);
+        assert_eq!(clip_rows(&e, print), vec![(1_000, 980, 20)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn arming_an_unavailable_input_is_refused_by_name() {
         let mut e = Engine::default();
         e.execute("setup.io", &json!({"action": "create_input", "name": "X32 17", "format": "mono", "first_channel": 16})).unwrap();
@@ -2839,7 +2953,7 @@ mod record_tests {
         write_samples(&path, &take);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 1_000, vec![(vox, path)], None, None, 100);
+        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, None);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 900, 100)]);
         let clip = e.session().track(vox).unwrap().clips()[0].clone();
         let buf = &e.session().pool.get(clip.source().unwrap()).unwrap().buffer();
@@ -2855,7 +2969,7 @@ mod record_tests {
         write_samples(&path, &vec![0.25; 2_550]);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 4_000, vec![(vox, path)], Some(1_000), None, 50);
+        add_recording_in(&mut e, 4_000, vec![(vox, path, 50)], Some(1_000), None);
         assert_eq!(clip_rows(&e, vox), vec![(4_000, 1_000, 50), (4_000, 1_000, 1_050), (4_000, 500, 2_050)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2868,7 +2982,7 @@ mod record_tests {
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
         // Frame k is at timeline 1000 + k - 100; the punch keeps 1400..1600 = frames 500..700.
-        add_recording_in(&mut e, 1_000, vec![(vox, path)], None, Some(Range::new(1_400, 1_600)), 100);
+        add_recording_in(&mut e, 1_000, vec![(vox, path, 100)], None, Some(Range::new(1_400, 1_600)));
         assert_eq!(clip_rows(&e, vox), vec![(1_400, 200, 500)]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2880,13 +2994,13 @@ mod record_tests {
         write_samples(&path, &vec![0.25; 1_000]);
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        add_recording_in(&mut e, 1_000, vec![(vox, path.clone())], None, None, -30);
+        add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), -30)], None, None);
         assert_eq!(clip_rows(&e, vox), vec![(1_030, 1_000, 0)]);
         // A hostile latency places nothing rather than overflowing.
         let mut e = Engine::default();
         let vox = armed(&mut e, "Vox", "mono", "In 1");
-        assert!(add_recording_in(&mut e, 1_000, vec![(vox, path.clone())], None, None, Samples::MAX).is_empty());
-        add_recording_in(&mut e, 1_000, vec![(vox, path)], Some(400), None, Samples::MIN);
+        assert!(add_recording_in(&mut e, 1_000, vec![(vox, path.clone(), Samples::MAX)], None, None).is_empty());
+        add_recording_in(&mut e, 1_000, vec![(vox, path, Samples::MIN)], Some(400), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

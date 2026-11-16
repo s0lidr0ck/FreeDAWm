@@ -2,8 +2,8 @@
 //! ([`Insert::sidechain`](soundcraft_model::Insert::sidechain)).
 //!
 //! - **Order.** A source renders before its consumer. Non-aux tracks render in levels: a track
-//!   keyed by another non-aux track renders in a later level (each level in parallel). Auxes and
-//!   folders render after every other track, in an order where bus producers and sidechain sources
+//!   keyed by another non-aux track renders in a later level (each level in parallel). Auxes,
+//!   folders and audio tracks recording a bus render after every other track, in an order where bus producers and sidechain sources
 //!   come first. So an aux can be keyed from any track, but a non-aux track cannot be keyed from an
 //!   aux (that is reported as unsupported).
 //! - **Cycles.** Sidechains are resolved in session order (tracks, then chain order). One whose
@@ -168,8 +168,15 @@ impl Plan {
     }
 }
 
+/// Strips that render after every other track, in bus order: auxes and folders, and an audio
+/// track whose input is a bus (it hears and records that bus, so it waits for what feeds it).
 pub(crate) fn is_aux(t: &Track) -> bool {
-    matches!(t.kind, TrackKind::Aux | TrackKind::Folder)
+    matches!(t.kind, TrackKind::Aux | TrackKind::Folder) || reads_bus(t)
+}
+
+/// An audio track whose input is a bus: it monitors and records the bus (internal recording).
+pub(crate) fn reads_bus(t: &Track) -> bool {
+    t.kind == TrackKind::Audio && matches!(t.mixer.input, Route::Bus(_))
 }
 
 /// Strips `render` runs through `process_strip`.

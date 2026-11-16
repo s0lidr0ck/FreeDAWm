@@ -98,6 +98,8 @@ pub struct PreviewAudio {
     pub rate: u32,
 }
 
+// `Taps` is the largest: a fixed array, so the audio thread takes it without freeing anything.
+#[allow(clippy::large_enum_variant)]
 enum Cmd {
     /// A new snapshot plus the third-party instances it needs (created on the UI thread).
     Session(Arc<Session>, Vec<PreparedInstance>),
@@ -108,6 +110,8 @@ enum Cmd {
     Input(Arc<feed::InputFeed>, Vec<Vec<f32>>),
     /// Where recording blocks are captured; the old one goes back as garbage.
     Capture(Arc<record::Capture>),
+    /// What a recording frame holds ([`Player::set_record_taps`]).
+    Taps(record::Taps),
     Recording(bool),
     /// The range a recording punches into ([`Player::set_punch`]).
     Punch(Option<Range>),
@@ -439,6 +443,8 @@ struct AudioState {
     /// Where recording blocks are captured, and the samples it still owes as silence.
     capture: Option<Arc<record::Capture>>,
     owed: usize,
+    /// A recording frame: the device input's channels, then each bus-input track's tap.
+    taps: record::Taps,
     /// Input is heard: an input and an armed or monitored track (set each fill).
     monitoring: bool,
     /// Input was heard and no longer is: the mix renders one more block, so the strips let go
@@ -569,6 +575,7 @@ impl AudioState {
             shut: false,
             capture: None,
             owed: 0,
+            taps: record::Taps::default(),
             monitoring: false,
             let_go: false,
             heard: false,
@@ -610,6 +617,7 @@ impl AudioState {
                         let _ = self.garbage.send(Garbage { capture: Some(old), ..Garbage::default() });
                     }
                 }
+                Cmd::Taps(t) => self.taps = t,
                 Cmd::Recording(r) => {
                     self.recording = r;
                     self.punch = None;
@@ -904,6 +912,46 @@ impl AudioState {
         }
     }
 
+    /// Captures this block of `n` frames while a take records (see [`record::Taps`]); true for
+    /// the take's first block. No allocation.
+    fn capture_block(&mut self, n: usize) -> bool {
+        let Some(cap) = self.capture.as_ref().filter(|c| self.recording && self.playing && c.armed.load(Ordering::Acquire)) else {
+            self.owed = 0;
+            return false;
+        };
+        let first = !cap.started.load(Ordering::Relaxed);
+        let taps = &self.taps;
+        let mut tapped: [Option<&[Vec<f32>]>; record::MAX_TAPS] = [None; record::MAX_TAPS];
+        let mut late = 0usize;
+        for (slot, (track, _)) in tapped.iter_mut().zip(taps.list()) {
+            if let Some((bufs, l)) = self.mix.record_tap(*track) {
+                *slot = Some(bufs);
+                late = late.max(l);
+            }
+        }
+        if first {
+            cap.start_pos.store(self.pos, Ordering::Relaxed);
+            // The feed's latency now, at the take's start (a drift feed's moves).
+            cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
+            cap.start_tap.store(u32::try_from(late).unwrap_or(u32::MAX), Ordering::Relaxed);
+        }
+        let input = &self.mix.input;
+        // Without taps the frame is the input as it is (its width is the device's).
+        let (dev, width) = if taps.is_empty() { (input.len(), input.len()) } else { (taps.device, taps.width()) };
+        if width > 0 {
+            let sample = |i: usize| {
+                let (f, c) = (i / width, i % width);
+                if c < dev {
+                    return input.get(c).and_then(|x| x.get(f)).copied().unwrap_or(0.0);
+                }
+                let (k, ch) = taps.locate(c - dev);
+                tapped.get(k).copied().flatten().and_then(|b| b.get(ch)).and_then(|x| x.get(f)).copied().unwrap_or(0.0)
+            };
+            cap.capture_with(n * width, sample, &mut self.owed);
+        }
+        first
+    }
+
     /// Pop `frames` of input that nothing hears, so the feed keeps its timing.
     fn discard_input(&mut self, frames: usize) {
         let Some(feed) = &self.feed else { return };
@@ -956,25 +1004,6 @@ impl AudioState {
             feed.pop_into(&mut self.mix.input, n);
             self.popped += n;
         }
-        // A recording block: the very input frames the mix hears, captured with the block's
-        // position (the take's first frame has an exact timeline position).
-        let mut first = false;
-        match &self.capture {
-            Some(cap) if self.recording && self.playing && cap.armed.load(Ordering::Acquire) => {
-                if !cap.started.load(Ordering::Relaxed) {
-                    first = true;
-                    cap.start_pos.store(self.pos, Ordering::Relaxed);
-                    // The feed's latency now, at the take's start (a drift feed's moves).
-                    cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
-                }
-                let input = &self.mix.input;
-                let ch = input.len();
-                if ch > 0 {
-                    cap.capture_with(n * ch, |i| input.get(i % ch).and_then(|c| c.get(i / ch)).copied().unwrap_or(0.0), &mut self.owed);
-                }
-            }
-            _ => self.owed = 0,
-        }
         self.mix.monitor_only = !self.playing;
         self.mix.recording = self.recording;
         self.mix.punch = self.punch;
@@ -1025,6 +1054,10 @@ impl AudioState {
         }
         self.let_go = false;
         self.out.map(main, self.mix.hardware_out(), &mut self.pending, n);
+        // A recording block: the very input frames the mix heard, and what each bus-input track
+        // took from its bus (internal recording), captured with the block's position (the take's
+        // first frame has an exact timeline position).
+        let first = self.capture_block(n);
         let mix_latency = u32::try_from(self.mix.latency).unwrap_or(u32::MAX);
         self.shared.mix_latency.store(mix_latency, Ordering::Relaxed);
         if first && let Some(cap) = &self.capture {
@@ -2531,6 +2564,22 @@ impl Player {
         let buffers = vec![vec![0.0; self.max_block]; feed.channels()];
         let _ = self.tx.send(Cmd::Input(feed, buffers));
         let _ = self.tx.send(Cmd::Capture(capture));
+    }
+
+    /// Records the bus-input tracks `taps` (track, channels) after the `device` input channels in
+    /// each recording frame from now on (the frame a take's channel indices count in). At most
+    /// [`record::MAX_TAPS`]; the rest are left out.
+    pub fn set_record_taps(&self, device: usize, taps: &[(TrackId, usize)]) {
+        let _ = self.tx.send(Cmd::Taps(record::Taps::new(device, taps)));
+    }
+
+    /// A recorder with no input device, for takes that only record busses (internal recording):
+    /// the mix's taps are captured as they render.
+    pub fn internal_recorder(&self) -> record::Recorder {
+        let rate = self.session_rate();
+        let capture = record::Capture::for_rate(rate, 0);
+        let _ = self.tx.send(Cmd::Capture(Arc::clone(&capture)));
+        record::Recorder::internal(capture, rate)
     }
 
     /// A recorder on the input opened with the output (duplex), when there is one: it captures

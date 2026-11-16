@@ -35,6 +35,8 @@ const LIVE_BLOCKS: usize = 1 << 22;
 pub type LiveTake = Vec<Vec<(f32, f32)>>;
 
 const RING_SECONDS: usize = 4;
+/// Ring room for recorded bus channels besides the device's (more fit, for less time).
+const TAP_ROOM: usize = 8;
 /// How long a recording input may go without a callback before it counts as gone.
 const STALL: Duration = Duration::from_secs(2);
 const GONE: u8 = 1;
@@ -68,13 +70,66 @@ pub(crate) struct Capture {
     pub(crate) start_feed: AtomicU32,
     /// The mix's own delay (PDC, frames) after the take's first block rendered, once `started`.
     pub(crate) start_mix: AtomicU32,
+    /// How far behind the timeline the recorded busses ran when the take's first frame was
+    /// captured (their delay compensation, frames), once `started`.
+    pub(crate) start_tap: AtomicU32,
     pub(crate) started: AtomicBool,
 }
 
+/// Bus-input tracks recorded at most at once (internal recording).
+pub const MAX_TAPS: usize = 32;
+
+/// What a recording frame holds: `device` input channels, then each tapped track's channels in
+/// order (a bus-input track's tap, [`soundcraft_mix::MixEngine::record_tap`]). Fixed size, so the
+/// audio thread takes it without allocating.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Taps {
+    pub device: usize,
+    taps: [(TrackId, usize); MAX_TAPS],
+    n: usize,
+}
+
+impl Taps {
+    pub fn new(device: usize, list: &[(TrackId, usize)]) -> Taps {
+        let mut t = Taps { device, ..Taps::default() };
+        for (slot, x) in t.taps.iter_mut().zip(list) {
+            *slot = (x.0, x.1.min(64));
+        }
+        t.n = list.len().min(MAX_TAPS);
+        t
+    }
+
+    pub fn list(&self) -> &[(TrackId, usize)] {
+        self.taps.get(..self.n).unwrap_or_default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+
+    /// The frame's width: the device channels and every tap's.
+    pub fn width(&self) -> usize {
+        self.list().iter().fold(self.device, |w, (_, c)| w.saturating_add(*c))
+    }
+
+    /// Which tap (index) and which of its channels the `k`-th channel after the device's is.
+    pub(crate) fn locate(&self, mut k: usize) -> (usize, usize) {
+        for (i, (_, c)) in self.list().iter().enumerate() {
+            if k < *c {
+                return (i, k);
+            }
+            k -= c;
+        }
+        (MAX_TAPS, 0)
+    }
+}
+
 impl Capture {
-    /// A capture with room for a few seconds of `channels` at `rate`.
+    /// A capture with room for a few seconds of `channels` at `rate`, and of a few recorded
+    /// busses besides ([`Taps`]).
     pub(crate) fn for_rate(rate: u32, channels: usize) -> Arc<Capture> {
-        Arc::new(Capture::new(SampleRing::new((rate as usize).saturating_mul(channels.max(1) * RING_SECONDS).min(1 << 25))))
+        let width = channels.saturating_add(TAP_ROOM).max(1);
+        Arc::new(Capture::new(SampleRing::new((rate as usize).saturating_mul(width * RING_SECONDS).min(1 << 25))))
     }
 
     fn new(ring: SampleRing) -> Capture {
@@ -89,6 +144,7 @@ impl Capture {
             start_pos: AtomicI64::new(0),
             start_feed: AtomicU32::new(0),
             start_mix: AtomicU32::new(0),
+            start_tap: AtomicU32::new(0),
             started: AtomicBool::new(false),
         }
     }
@@ -120,6 +176,10 @@ impl Capture {
 
 pub struct Recorder {
     capture: Arc<Capture>,
+    /// Takes the frame holds besides the device's channels ([`Taps`]), set by [`Recorder::arm`].
+    taps: usize,
+    /// No input device: it records busses only (internal recording), so no input callback beats.
+    internal: bool,
     /// The input stream when the recorder owns it (split); a duplex input is the player's.
     #[cfg(not(target_os = "freebsd"))]
     _stream: Option<cpal::Stream>,
@@ -287,9 +347,30 @@ impl Recorder {
             device_rate,
             sample_rate: session_rate.max(1),
             channels: channels.max(1),
+            taps: 0,
+            internal: false,
             writer: None,
             seen: (0, Instant::now()),
         }
+    }
+
+    /// A recorder with no input device ([`crate::Player::internal_recorder`]): its takes record
+    /// busses only, so `channels` is 0.
+    pub(crate) fn internal(capture: Arc<Capture>, session_rate: u32) -> Recorder {
+        let mut r = Recorder::attached(capture, "Internal".into(), session_rate, session_rate, 1);
+        (r.channels, r.internal) = (0, true);
+        r
+    }
+
+    /// Whether it has no input device (it records busses only).
+    pub fn is_internal(&self) -> bool {
+        self.internal
+    }
+
+    /// How far behind the timeline the recorded busses ran at the current take's first frame
+    /// (frames), once it has one: their takes are placed earlier by this.
+    pub fn start_tap_latency(&self) -> Option<u32> {
+        self.capture.started.load(Ordering::Acquire).then(|| self.capture.start_tap.load(Ordering::Relaxed))
     }
 
     /// Open the input device `audio` chooses (else the default) as its own stream (split: not the
@@ -356,6 +437,12 @@ impl Recorder {
     /// Create each take's file and start recording into them: a track's take records the given
     /// input channels into a new file.
     pub fn arm(&mut self, takes: Vec<(TrackId, Vec<usize>, PathBuf)>) -> Result<(), String> {
+        self.arm_with_taps(takes, 0)
+    }
+
+    /// [`Recorder::arm`] with `taps` channels of recorded busses after the device's in each frame
+    /// (the player told the same with [`crate::Player::set_record_taps`]).
+    pub fn arm_with_taps(&mut self, takes: Vec<(TrackId, Vec<usize>, PathBuf)>, taps: usize) -> Result<(), String> {
         if self.writer.is_some() {
             return Err("already recording".into());
         }
@@ -366,7 +453,8 @@ impl Recorder {
         *self.capture.failed.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.capture.started.store(false, Ordering::Release);
         self.capture.armed.store(true, Ordering::Release);
-        let (capture, channels) = (Arc::clone(&self.capture), self.channels);
+        self.taps = taps;
+        let (capture, channels) = (Arc::clone(&self.capture), self.width());
         match std::thread::Builder::new().name("take writer".into()).spawn(move || write_takes(&capture, takes, channels)) {
             Ok(w) => self.writer = Some((w, live)),
             Err(e) => {
@@ -407,6 +495,9 @@ impl Recorder {
         if let Some(e) = self.capture.failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
             return Some(Trouble::Disk(e));
         }
+        if self.internal {
+            return None;
+        }
         let name = &self.device_name;
         match self.capture.fault.load(Ordering::Relaxed) {
             GONE => return Some(Trouble::Device(format!("“{name}” was disconnected"))),
@@ -427,15 +518,20 @@ impl Recorder {
         self.capture.beats.load(Ordering::Relaxed)
     }
 
+    /// A recording frame's width: the device's channels and the recorded busses'.
+    fn width(&self) -> usize {
+        self.channels.saturating_add(self.taps).max(1)
+    }
+
     pub fn lost_ms(&self) -> u64 {
-        let frames = self.capture.dropped.load(Ordering::Relaxed) / self.channels.max(1);
+        let frames = self.capture.dropped.load(Ordering::Relaxed) / self.width();
         (frames as u64).saturating_mul(1000) / u64::from(self.sample_rate.max(1))
     }
 
     pub fn finish(&mut self) -> Takes {
         self.capture.armed.store(false, Ordering::Release);
         let (takes, problem) = self.writer.take().and_then(|(w, _)| w.join().ok()).unwrap_or_default();
-        let lost = self.capture.dropped.swap(0, Ordering::Relaxed) / self.channels.max(1);
+        let lost = self.capture.dropped.swap(0, Ordering::Relaxed) / self.width();
         let slow =
             (lost > 0).then(|| format!("{} ms of input lost: the disk was too slow", lost.saturating_mul(1000) / self.sample_rate.max(1) as usize));
         (takes, problem.or(slow))
@@ -769,6 +865,100 @@ mod tests {
         assert_eq!((done.len(), problem), (0, None), "no take");
         assert!(!dir.join("Vox_01.wav").exists(), "its empty file is gone");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An offline output callback recording a mono "Print" track whose input is a bus that a
+    /// constant 0.5 clip plays into, with or without a device input; its tap after the device's
+    /// channels in each frame. Returns the state, the print track and its command channel.
+    fn bus_recording_state(capture: &Arc<Capture>, feed: Option<&Arc<InputFeed>>) -> (crate::AudioState, TrackId) {
+        use soundcraft_model::{ChannelFormat, Clip, Route, Session, SourceAudio, SourceId, TrackKind};
+        let mut s = Session::default();
+        s.edit.click = false;
+        let print = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Print"));
+        let src = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Synth"));
+        let bus = s.add_bus("Print Bus", ChannelFormat::Mono);
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 48_000]] };
+        s.pool.insert(SourceId(7), Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        let t = s.track_mut(src).unwrap();
+        t.mixer.output = Route::Bus(bus);
+        t.mixer.pan = vec![0.0];
+        t.playlist_mut().unwrap().clips.push(Clip::audio(id, "dc", SourceId(7), 0, 0, 48_000));
+        let p = s.track_mut(print).unwrap();
+        p.mixer.input = Route::Bus(bus);
+        p.mixer.record_arm = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let st = crate::AudioState::new(rx, Arc::new(crate::Shared::new()), Arc::new(s), 48_000.0, 256, std::sync::mpsc::channel().0);
+        let device = feed.map_or(0, |f| f.channels());
+        if let Some(f) = feed {
+            tx.send(crate::Cmd::Input(Arc::clone(f), vec![vec![0.0; 256]; f.channels()])).unwrap();
+        }
+        tx.send(crate::Cmd::Capture(Arc::clone(capture))).unwrap();
+        tx.send(crate::Cmd::Taps(Taps::new(device, &[(print, 1)]))).unwrap();
+        tx.send(crate::Cmd::Recording(true)).unwrap();
+        tx.send(crate::Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        // The state drops its receiver otherwise: keep the sender alive with it.
+        std::mem::forget(tx);
+        (st, print)
+    }
+
+    #[test]
+    fn a_bus_input_track_records_the_bus_with_no_input_device() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-bus-take-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let capture = Capture::for_rate(48_000, 0);
+        let mut r = Recorder::internal(Arc::clone(&capture), 48_000);
+        assert!(r.is_internal() && r.channels == 0);
+        let (mut st, print) = bus_recording_state(&capture, None);
+        r.arm_with_taps(vec![(print, vec![0], dir.join("Print_01.wav"))], 1).unwrap();
+        let mut out = vec![0.0f32; 2 * 128];
+        for _ in 0..8 {
+            st.fill(&mut out, 2);
+        }
+        assert_eq!(r.start_pos(), Some(0));
+        assert_eq!(r.start_tap_latency(), Some(0));
+        // No input callback ever beats: not a stalled device.
+        r.seen.1 = Instant::now().checked_sub(STALL).unwrap();
+        assert_eq!(r.trouble(), None);
+        let (done, problem) = r.finish();
+        assert_eq!((done.len(), problem), (1, None));
+        let take = decode(&done[0].1);
+        assert_eq!(take[0].len(), 8 * 128);
+        let level = take[0][500];
+        assert!(level > 0.3 && level <= 0.5 + 1e-6 && take[0].iter().all(|x| (x - level).abs() < 1e-6), "{level}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bus_tap_follows_the_device_channels_in_each_frame() {
+        let (feed, capture) = (InputFeed::fixed(2, 256), Capture::for_rate(48_000, 2));
+        capture.armed.store(true, Ordering::Release);
+        let (mut st, _) = bus_recording_state(&capture, Some(&feed));
+        let mut out = vec![0.0f32; 2 * 128];
+        let mut sent = Vec::new();
+        for b in 0..4 {
+            let block = input_block(b);
+            feed.push(&block);
+            sent.extend_from_slice(&block);
+            st.fill(&mut out, 2);
+        }
+        let mut got = Vec::new();
+        capture.ring.pop_all(&mut got);
+        assert_eq!(got.len(), 3 * 4 * 128, "two device channels and one tapped");
+        let device: Vec<f32> = got.chunks_exact(3).flat_map(|f| [f[0], f[1]]).collect();
+        assert_eq!(device, sent, "the device's frames as they came");
+        let tap: Vec<f32> = got.chunks_exact(3).map(|f| f[2]).collect();
+        assert!(tap.iter().all(|x| (x - tap[0]).abs() < 1e-6) && tap[0] > 0.3, "{}", tap[0]);
+    }
+
+    #[test]
+    fn taps_lay_out_their_channels_after_the_devices() {
+        let t = Taps::new(4, &[(TrackId(1), 2), (TrackId(2), 1)]);
+        assert_eq!((t.width(), t.list().len()), (7, 2));
+        assert_eq!([t.locate(0), t.locate(1), t.locate(2)], [(0, 0), (0, 1), (1, 0)]);
+        assert_eq!(t.locate(3), (MAX_TAPS, 0), "past the last: nothing");
+        let many: Vec<_> = (0..40).map(|i| (TrackId(i), 1)).collect();
+        assert_eq!(Taps::new(0, &many).list().len(), MAX_TAPS);
     }
 
     /// Block `b` of a stereo input: 128 interleaved frames, every sample distinct and non-zero.

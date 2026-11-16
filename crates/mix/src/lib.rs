@@ -447,6 +447,10 @@ struct Strip {
     /// A module's input while low-latency monitoring crossfades it (channels x `max_block`,
     /// sized in `sync` for strips with modules).
     llm_dry: Vec<Vec<f32>>,
+    /// An audio track whose input is a bus: this block of that bus, at the track's width (sized
+    /// in `sync`; empty otherwise). It is what the track monitors and what its take records
+    /// ([`MixEngine::record_tap`]).
+    bus_in: Vec<Vec<f32>>,
     /// How many chain modules (from the top) the frozen render held last block: a module that
     /// comes back to life (thawed, or a freeze point moved up) starts clean.
     frozen_mods: usize,
@@ -602,6 +606,7 @@ impl Strip {
             llm_bits: 0,
             llm_latency: 0,
             llm_dry: Vec::new(),
+            bus_in: Vec::new(),
             frozen_mods: 0,
             frozen_inst: false,
             live_tail: 0,
@@ -1246,6 +1251,15 @@ impl MixEngine {
     /// What the last `render` put on each hardware output, indexed like `Session::outputs`
     /// (index 0, the main, is empty). The player maps them onto device channels. Each channel
     /// holds `max_block` samples, of which the rendered frames lead.
+    /// What audio track `t` recorded from its bus input in the last block (internal recording):
+    /// its channels (the block's first frames) and how late that bus runs behind the timeline
+    /// (the delay compensation it carries, in frames). `None` when `t` does not read a bus.
+    /// Audio thread: no allocation.
+    pub fn record_tap(&self, t: TrackId) -> Option<(&[Vec<f32>], usize)> {
+        let st = self.strips.get(&t).filter(|st| !st.bus_in.is_empty())?;
+        Some((st.bus_in.as_slice(), st.base))
+    }
+
     pub fn hardware_out(&self) -> &[Vec<Vec<f32>>] {
         &self.hw
     }
@@ -1493,6 +1507,10 @@ impl MixEngine {
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
                 strip.llm_dry = vec![vec![0.0; mb]; n];
             }
+            let n = if sidechain::reads_bus(t) { ch } else { 0 };
+            if strip.bus_in.len() != n || strip.bus_in.iter().any(|b| b.len() != mb) {
+                strip.bus_in = vec![vec![0.0; mb]; n];
+            }
             strip.dest = out_dest(s, &t.mixer.output);
             // A named input (or a legacy "In N" / "In N-M") gives its device channels; any other
             // route (no input, and the Band's musicians and a module's MIDI, which have no audio
@@ -1693,7 +1711,7 @@ impl MixEngine {
         solo.fill(s);
         let order = std::mem::take(&mut self.order);
         let live = |t: &Track| !(t.kind == TrackKind::Master || t.inactive || t.kind == TrackKind::Vca);
-        let is_aux = |t: &Track| matches!(t.kind, TrackKind::Aux | TrackKind::Folder);
+        let is_aux = sidechain::is_aux;
         // Phase 1: independent strips (audio, instrument, MIDI) in parallel.
         let mut work = std::mem::take(&mut self.work);
         work.clear();
@@ -1860,7 +1878,7 @@ impl MixEngine {
             }
         }
         self.work = work;
-        let is_aux = |t: &Track| matches!(t.kind, TrackKind::Aux | TrackKind::Folder);
+        let is_aux = sidechain::is_aux;
         // Phase 2: auxes in dependency order (they read busses).
         for (i, t) in order.iter().filter_map(|&i| Some((i, s.tracks.get(i)?))).filter(|(_, t)| live(t) && is_aux(t)) {
             let Some(mut st) = self.strips.remove(&t.id) else { continue };
@@ -2519,6 +2537,17 @@ fn process_strip(
         }
     }
     strip.frozen_mods = frozen_mods;
+    // An audio track on a bus input: this block of the bus, monitored or not (its take records it).
+    if let Route::Bus(b) = &t.mixer.input
+        && !strip.bus_in.is_empty()
+    {
+        for c in strip.bus_in.iter_mut() {
+            c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+        }
+        if let Some(src) = busses.get(b) {
+            read_bus(src, t, &mut strip.bus_in, frames);
+        }
+    }
     // The instrument ran its release this block: a strip whose instrument did not run (frozen,
     // failed, gone, or no longer an instrument track) has no release to wait for.
     let mut tail_ran = false;
@@ -2528,7 +2557,18 @@ fn process_strip(
                 play_frozen(s, fz, pos, frames, &mut strip.buf);
             }
         }
-        TrackKind::Audio if !live.input.is_empty() && t.mixer.hears_input(live.monitor_only, live.auto_input) => {
+        TrackKind::Audio if !strip.bus_in.is_empty() && t.mixer.hears_input(live.monitor_only, live.auto_input) => {
+            // Input monitoring of a bus: the track hears the bus instead of its clips.
+            strip.hears_live = true;
+            for (dst, src) in strip.buf.iter_mut().zip(&strip.bus_in) {
+                for (d, x) in dst.iter_mut().zip(src.iter()).take(frames) {
+                    *d = *x;
+                }
+            }
+        }
+        TrackKind::Audio
+            if !live.input.is_empty() && !matches!(t.mixer.input, Route::Bus(_)) && t.mixer.hears_input(live.monitor_only, live.auto_input) =>
+        {
             // Input monitoring: the track hears its hardware input instead of its clips. A named
             // input (or a legacy "In N" / "In N-M") gives its device channels; with no hardware
             // input, `default_input_channel` (the channels its take records).
@@ -2585,21 +2625,7 @@ fn process_strip(
             if let Route::Bus(b) = &t.mixer.input
                 && let Some(src) = busses.get(b)
             {
-                let (ns, nd) = (src.buf.len(), strip.buf.len());
-                let dst_fmt = strip_format(t, nd);
-                let m = if src.fmt == dst_fmt && ns == nd {
-                    identity_matrix(ns)
-                } else if ns == 1 && nd == 2 {
-                    // A mono bus feeds both sides of a stereo aux.
-                    let mut m = [[0.0; MAX_CHANNELS]; MAX_CHANNELS];
-                    m[0][0] = 1.0;
-                    m[0][1] = 1.0;
-                    m
-                } else {
-                    let stereo = if ns == 1 { [0.0, 0.0] } else { [-1.0, 1.0] };
-                    build_matrix(src.fmt, ns, dst_fmt, nd, &PanSpec { stereo, surround: None }, PanLaw::Minus3)
-                };
-                apply_matrix(&src.buf, frames, &mut strip.buf, &m, 1.0);
+                read_bus(src, t, &mut strip.buf, frames);
             }
         }
         TrackKind::Instrument | TrackKind::Midi => {
@@ -3094,6 +3120,26 @@ fn strip_channels(t: &Track, main_ch: usize) -> usize {
 }
 
 /// The format a strip's buffer actually carries (a mono instrument renders in stereo).
+/// Adds `frames` of bus `src` into `dst` (the strip of `t`, `dst.len()` channels wide): as is
+/// when the formats match, a mono bus on both sides of a stereo strip, else down- or up-mixed.
+fn read_bus(src: &BusBuf, t: &Track, dst: &mut [Vec<f32>], frames: usize) {
+    let (ns, nd) = (src.buf.len(), dst.len());
+    let dst_fmt = strip_format(t, nd);
+    let m = if src.fmt == dst_fmt && ns == nd {
+        identity_matrix(ns)
+    } else if ns == 1 && nd == 2 {
+        // A mono bus feeds both sides of a stereo strip.
+        let mut m = [[0.0; MAX_CHANNELS]; MAX_CHANNELS];
+        m[0][0] = 1.0;
+        m[0][1] = 1.0;
+        m
+    } else {
+        let stereo = if ns == 1 { [0.0, 0.0] } else { [-1.0, 1.0] };
+        build_matrix(src.fmt, ns, dst_fmt, nd, &PanSpec { stereo, surround: None }, PanLaw::Minus3)
+    };
+    apply_matrix(&src.buf, frames, dst, &m, 1.0);
+}
+
 fn strip_format(t: &Track, n: usize) -> ChannelFormat {
     if t.format.channels().min(MAX_CHANNELS) == n { t.format } else { ChannelFormat::for_channels(n) }
 }
@@ -7256,6 +7302,38 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    #[test]
+    fn an_audio_track_on_a_bus_input_hears_and_taps_that_bus() {
+        // Internal recording: the "Print" track's input is the bus the DC track plays into. It is
+        // first in the session but renders after what feeds the bus.
+        let mut s = Session::default();
+        let print = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Print"));
+        let src = add_dc_track(&mut s, 0.5, 4800);
+        let bus = s.add_bus("Print Bus", ChannelFormat::Mono);
+        s.track_mut(src).unwrap().mixer.output = Route::Bus(bus);
+        let p = s.track_mut(print).unwrap();
+        p.mixer.input = Route::Bus(bus);
+        p.mixer.record_arm = true;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut out = vec![vec![0.0; 512]; 2];
+        // Recording, armed on Auto: the track hears the bus (no audio device is needed).
+        eng.recording = true;
+        eng.render(&s, 0, 512, &mut out);
+        let (tap, late) = eng.record_tap(print).unwrap();
+        assert_eq!(late, 0);
+        // The DC track centred into a mono bus: its level at the -3 dB pan law, or as is.
+        let heard = tap[0][100];
+        assert!(heard > 0.3 && heard <= 0.5 + 1e-6, "{heard}");
+        assert!((out[0][100] - heard * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3, "{}", out[0][100]);
+        // Monitoring Off: silent, but the tap still holds the bus (the take records it).
+        s.track_mut(print).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Off;
+        eng.render(&s, 512, 512, &mut out);
+        assert!(out[0][100].abs() < 1e-6, "{}", out[0][100]);
+        assert!((eng.record_tap(print).unwrap().0[0][100] - heard).abs() < 1e-6);
+        // A track on a hardware input has no tap; neither does an aux.
+        assert!(eng.record_tap(src).is_none());
     }
 
     #[test]

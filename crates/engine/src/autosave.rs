@@ -580,9 +580,10 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track, path: take, channels: 1 }],
+            takes: vec![Take { track, path: take, channels: 1, internal: false }],
             latency: 0,
             loop_from: None,
+            tap_latency: 0,
         };
         let clips = |e: &Engine| e.session().track(track).unwrap().clips().iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
         let w = Autosaver::new(root.clone());
@@ -635,9 +636,10 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: paths.iter().map(|p| Take { track, path: p.clone(), channels: 1 }).collect(),
+            takes: paths.iter().map(|p| Take { track, path: p.clone(), channels: 1, internal: false }).collect(),
             latency: 0,
             loop_from: None,
+            tap_latency: 0,
         };
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan));
