@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: automation is thinned after a writing pass) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: Mix faders and pan knobs follow their automation) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -35,14 +35,14 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
-| F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated | **Large**: plug-in values block-rate, faders do not follow, no controller input |
+| F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader | **Large**: one scale, no RMS |
 | H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
 
-Three things every one of the four does and FreeDAWm does not: **automation that is
-sample-accurate, delay-compensated and shown on the faders**; **a key input on the stock
+Three things every one of the four does and FreeDAWm does not: **plug-in automation that is
+sample-accurate and delay-compensated** (the fader section's now is, and the faders follow it); **a key input on the stock
 compressor and on third-party plug-ins**; and **meters with more than one scale** (meters no longer
 miss a peak, and can read pre-fader).
 
@@ -137,7 +137,7 @@ miss a peak, and can read pre-fader).
 |---|:-:|:-:|:-:|:-:|---|
 | Read, Touch, Latch, Write | ● | ● | ● | ● | **Works**, one undo step per pass |
 | Trim automation | ● | ○ | ● | ● | **Works** for volume |
-| Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Missing**: the fader shows its resting value; only the lane shows the automated one |
+| Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Partial**: the Mix window's faders and pan knobs follow their lanes; plug-in controls and send knobs do not |
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written 20 ms earlier |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Partial**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay); moves are still written early by the output latency |
@@ -265,7 +265,7 @@ one a mix engineer would not forgive.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values remain once per block, not delay-compensated |
-| Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass done**; the rest remains |
+| Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass done; faders and pan knobs follow**; the rest remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: Mix faders and pan knobs follow their automation |
 | 2026-11-16 | minor | tier 2: automation is thinned after a writing pass |
 | 2026-11-16 | minor | tier 3: a module can be made inactive |
 | 2026-11-16 | minor | tier 2: a new send brings its return and takes a default level |

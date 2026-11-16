@@ -601,7 +601,11 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             let cx = if n == 2 { x0 + inner_w * (0.25 + 0.5 * i as f32) } else { x0 + inner_w * 0.5 };
             let kr = Rect::from_center_size(pos2(cx, y + 17.0), vec2(ks, ks));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(kr));
-            let mut v = track.mixer.pan.get(i).copied().unwrap_or(0.0);
+            // The knob follows its automation as the fader does.
+            let mut v = app
+                .engine
+                .automation_shown(id, &soundcraft_model::AutoParam::Pan(i as u8))
+                .unwrap_or_else(|| track.mixer.pan.get(i).copied().unwrap_or(0.0));
             let before = v;
             let resp = pan_knob(&mut c, ks, &mut v, "Pan (drag; double-click centres)");
             if (v - before).abs() > f32::EPSILON {
@@ -686,7 +690,12 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     // In Trim mode the fader sets the trim the pass writes to the trim lane (centred on 0 dB),
     // as in Pro Tools; the volume stays where it is.
     let trim_mode = track.mixer.automation_mode == soundcraft_model::AutomationMode::Trim;
-    let shown_db = if trim_mode { app.engine.trim_shown(id) } else { track.mixer.volume_db };
+    // A fader follows its automation while the track reads it and the fader is not held.
+    let shown_db = if trim_mode {
+        app.engine.trim_shown(id)
+    } else {
+        app.engine.automation_shown(id, &soundcraft_model::AutoParam::Volume).unwrap_or(track.mixer.volume_db)
+    };
     if let Some(db) = fader(ui, fr, shown_db, ui.id().with(("fader", id.0))) {
         app.gesture = Some(crate::Gesture::Fader { track: id, start_db: shown_db });
         if trim_mode {

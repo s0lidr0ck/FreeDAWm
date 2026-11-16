@@ -278,6 +278,20 @@ impl Engine {
         self.auto_write.playing && !self.auto_write.written.is_empty()
     }
 
+    /// The value a control shows now: what its lane plays at the transport while the track reads
+    /// automation and the control is not touched (so a fader moves with its automation, as in
+    /// the four reference DAWs); `None` when the control shows its own value (no lane, Off,
+    /// Write, or held).
+    pub fn automation_shown(&self, track: TrackId, param: &AutoParam) -> Option<f32> {
+        let tr = self.session().track(track)?;
+        let mode = tr.mixer.automation_mode;
+        if !mode.reads() || mode == M::Write || self.automation_touched(track, param) {
+            return None;
+        }
+        let lane = tr.lane(param).filter(|l| !l.points.is_empty())?;
+        Some(lane.value_at(self.transport.position, current_value(tr, param)))
+    }
+
     /// Whether a control of the track is touched now (for a host that lights it).
     pub fn automation_touched(&self, track: TrackId, param: &AutoParam) -> bool {
         let hold = self.session().sample_rate.samples(TOUCH_HOLD_SECONDS);
@@ -566,6 +580,22 @@ mod tests {
         e.automation_ui_held(Vec::new());
         stop(&mut e, 21 * q);
         assert!(points(&e, t, &AutoParam::Volume).len() >= 20);
+    }
+
+    /// Tier 2: a control shows what its automation plays, except while it is touched or written.
+    #[test]
+    fn a_control_shows_what_its_automation_plays() {
+        let (mut e, t, _, q) = kick("read");
+        assert_eq!(e.automation_shown(t, &AutoParam::Volume), None, "no lane: the fader's own value");
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": 0, "value": 0.0})).unwrap();
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": 10 * q, "value": -10.0})).unwrap();
+        e.transport.position = 5 * q;
+        assert_eq!(e.automation_shown(t, &AutoParam::Volume), Some(-5.0));
+        e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+        assert_eq!(e.automation_shown(t, &AutoParam::Volume), None, "held: the fader's own value");
+        e.automation_ui_held(Vec::new());
+        e.execute("mix.automation_mode", &json!({"tracks": [t.0], "mode": "off"})).unwrap();
+        assert_eq!(e.automation_shown(t, &AutoParam::Volume), None);
     }
 
     /// Mix bug 6: the members of a group stopped writing half a second after the dragged fader
