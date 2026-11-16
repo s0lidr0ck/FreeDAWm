@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: a choice of pan law) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: pre-fader metering) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -36,15 +36,15 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
 | F. Automation | All modes write; trim lane; wide editing set | **Large**: block-rate, not delay-compensated, faders do not follow, no controller input |
-| G. Metering | Peak with hold and clip lights, no peak missed | **Large**: one scale; post-fader only |
+| G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader | **Large**: one scale, no RMS |
 | H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
 
 Three things every one of the four does and FreeDAWm does not: **automation that is
 sample-accurate, delay-compensated and shown on the faders**; **a key input on the stock
-compressor and on third-party plug-ins**; and **meters with a pre-fader option and more than one
-scale** (meters no longer miss a peak).
+compressor and on third-party plug-ins**; and **meters with more than one scale** (meters no longer
+miss a peak, and can read pre-fader).
 
 ## A. Channels and the strip
 
@@ -169,7 +169,7 @@ scale** (meters no longer miss a peak).
 |---|:-:|:-:|:-:|:-:|---|
 | Peak meters that catch every peak | ● | ● | ● | ● | **Works**: each screen update shows the loudest block since the last one |
 | Peak hold and clip lights | ● | ● | ● | ● | **Works**; one bar per channel on surround tracks |
-| Pre-fader metering | ● | ● | ● | ● | **Flag only** |
+| Pre-fader metering | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering; track strips only (the master meter stays post-fader) |
 | RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Missing**: one scale that stops at 0 dBFS |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
 | Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Partial**: only inside the LevelUp module, or as two numbers after a bounce |
@@ -269,7 +269,7 @@ one a mix engineer would not forgive.
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13 |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
-| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | |
+| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Pre-fader option and click-free output meter done**; RMS, scales and a master loudness meter remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Pan law done**; balance, width and per-track delay remain |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: pre-fader metering |
 | 2026-11-16 | minor | tier 2: a choice of pan law |
 | 2026-11-16 | minor | bug 16 fixed: Audio Units are told a render is offline |
 | 2026-11-16 | minor | bug 15 fixed: routing loops are refused |

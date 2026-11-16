@@ -538,6 +538,7 @@ Options > Delay Compensation
 Options > Edit/Tool Mode Keyboard Lock
 Options > ---
 Options > More > Prepare DPE Tracks = Options > Prepare DPE Tracks
+Options > More > Pre-Fader Metering = Options > Pre-Fader Metering
 Options > More > Pan Law > 0 dB = @mix.pan_law
 Options > More > Pan Law > -3 dB = @mix.pan_law
 Options > More > Pan Law > -4.5 dB = @mix.pan_law

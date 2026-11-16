@@ -1473,6 +1473,11 @@ impl MixEngine {
             if strip.buf.len() != ch || strip.buf.first().map_or(0, Vec::len) != mb {
                 strip.buf = vec![vec![0.0; mb]; ch];
             }
+            // Room for the pre-fader copy (pre-fader sends, keys and meters), so filling it never
+            // allocates while rendering.
+            if strip.pre.len() != ch || strip.pre.iter().any(|b| b.capacity() < mb) {
+                strip.pre = vec![Vec::with_capacity(mb); ch];
+            }
             sync_clip_fx(strip, t, cx.sr, mb, cx.retired);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
@@ -2208,7 +2213,9 @@ impl MixEngine {
     /// Send, meter and pan a processed strip into the busses / main mix / hardware outputs.
     fn route_strip(&mut self, s: &Session, t: &Track, strip: &mut Strip, pos: Samples, frames: usize) {
         let m = self.meters.entry(t.id).or_default();
-        m.measure(&strip.buf, frames, strip.gr, self.meters_held);
+        // Options › Pre-Fader Metering: the strip's level before its fader (and mute).
+        let metered = if s.edit.pre_fader_metering && strip.pre.len() == strip.buf.len() { &strip.pre } else { &strip.buf };
+        m.measure(metered, frames, strip.gr, self.meters_held);
         m.llm_bypassed = strip.llm_bits;
         m.plugin_failures = strip.failures;
         m.modules.clone_from(&strip.mods);
@@ -2918,7 +2925,7 @@ fn process_strip(
     strip.pre_at = strip.post_at;
     let auto_mute = t.mixer.automation_mode.reads() && t.lane(&AutoParam::Mute).is_some_and(|l| l.value_at(pos, 0.0) >= 0.5);
     strip.muted = t.mixer.mute || auto_mute || solo_muted;
-    if strip.pre_key || t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
+    if strip.pre_key || s.edit.pre_fader_metering || t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
         strip.pre.resize_with(strip.buf.len(), Vec::new);
         for (d, src) in strip.pre.iter_mut().zip(strip.buf.iter()) {
             d.clear();
@@ -5907,6 +5914,21 @@ mod tests {
         eng.render(&s, 1024, 512, &mut buf);
         assert_eq!(eng.meters[&t].peak[0], 0.0, "taken: the next block starts afresh");
         assert_eq!(eng.main_meter.peak, [0.0; 2]);
+    }
+
+    /// Options › Pre-Fader Metering: a strip's meter reads its level before the fader.
+    #[test]
+    fn pre_fader_metering_reads_the_level_before_the_fader() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.track_mut(t).unwrap().mixer.volume_db = -20.0;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut buf = vec![vec![0.0; 512]; 2];
+        eng.render(&s, 0, 512, &mut buf);
+        assert!((eng.meters[&t].peak[0] - 0.5 * db_to_gain(-20.0)).abs() < 1e-3, "post-fader by default");
+        s.edit.pre_fader_metering = true;
+        eng.render(&s, 512, 512, &mut buf);
+        assert!((eng.meters[&t].peak[0] - 0.5).abs() < 1e-3, "pre-fader: {}", eng.meters[&t].peak[0]);
+        assert!((buf[0][100] - 0.5 * std::f32::consts::FRAC_1_SQRT_2 * db_to_gain(-20.0)).abs() < 1e-3, "what plays is unchanged");
     }
 
     /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).
