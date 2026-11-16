@@ -52,13 +52,13 @@ fn the_keys_change_neither_the_session_nor_its_undo_history() {
     save_me(&mut app);
     let r = app.run("monitor.ear", json!({})).unwrap();
     assert_eq!(r["ear"], json!({"value": true, "profile": "Me"}));
-    let r = app.run("monitor.sim", json!({"profile": "generic phone speaker"})).unwrap();
-    assert_eq!(r["sim"], json!({"value": true, "profile": "Generic Phone Speaker"}));
+    let r = app.run("monitor.sim", json!({"profile": "IPHONE23"})).unwrap();
+    assert_eq!(r["sim"], json!({"value": true, "profile": "iphone23"}));
     assert!(app.ui.monitor_ear && app.ui.monitor_sim);
     assert_eq!((app.engine.revision, app.engine.can_undo()), (rev, undo));
     assert!(!app.engine.is_dirty());
     // Off again; a value alone keeps the profile.
-    assert_eq!(app.run("monitor.sim", json!({"value": false})).unwrap()["sim"], json!({"value": false, "profile": "Generic Phone Speaker"}));
+    assert_eq!(app.run("monitor.sim", json!({"value": false})).unwrap()["sim"], json!({"value": false, "profile": "iphone23"}));
     assert!(app.run("monitor.sim", json!({"profile": "No Such Thing"})).is_err());
     assert!(app.run("monitor.ear", json!({"profile": "Nobody"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
@@ -73,7 +73,7 @@ fn profiles_live_in_the_library_folder_and_are_listed_with_the_built_in_outputs(
     let r = app.run("monitor.profiles", json!({})).unwrap();
     assert_eq!(r["hearing"], json!([{"name": "Me", "headphones": "HD 600"}]));
     let names: Vec<&str> = r["devices"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"Mono") && names.contains(&"Generic Car Stereo"), "{names:?}");
+    assert!(names.contains(&"Mono") && names.contains(&"StandardCarDriver"), "{names:?}");
     assert!(r["devices"].as_array().unwrap().iter().all(|d| d["builtin"] == json!(true)));
     assert!(app.run("monitor.ear_profile.save", json!({"name": "", "left": []})).is_err());
     assert!(app.run("monitor.ear_profile.save", json!({"name": "x", "left": [[1000]]})).is_err());
@@ -141,7 +141,7 @@ fn a_bounce_is_the_same_file_with_both_keys_on() {
     let mut h = harness(app);
     let plain = bounce(&mut h, &dir.join("Plain.wav"));
     h.state_mut().run("monitor.ear", json!({"value": true})).unwrap();
-    h.state_mut().run("monitor.sim", json!({"profile": "Generic Phone Speaker"})).unwrap();
+    h.state_mut().run("monitor.sim", json!({"profile": "iphone23"})).unwrap();
     h.run_steps(3);
     assert!(h.state().ui.monitor_ear && h.state().ui.monitor_sim);
     let monitored = bounce(&mut h, &dir.join("Monitored.wav"));

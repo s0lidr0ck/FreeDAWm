@@ -45,45 +45,35 @@ pub fn hearing(dir: &Path) -> Vec<HearingProfile> {
     out
 }
 
-/// The simulated outputs that come with the app: rough, generic shapes (not measurements of any
-/// product), there so the stage does something before the user has profiles of their own.
+/// The measured outputs that come with the app (`monitor_devices/*.json`), in name order: each the
+/// frequency response and stereo width of one of the project owner's captures of the capture test
+/// file, level-trimmed so nothing is boosted above the mix.
+const MEASURED: &[&str] = &[
+    include_str!("monitor_devices/AirPods.json"),
+    include_str!("monitor_devices/AL5.json"),
+    include_str!("monitor_devices/BTANC45.json"),
+    include_str!("monitor_devices/GamingLaptop15.json"),
+    include_str!("monitor_devices/Genilux4.json"),
+    include_str!("monitor_devices/IEM.json"),
+    include_str!("monitor_devices/iphone23.json"),
+    include_str!("monitor_devices/PASpeakers.json"),
+    include_str!("monitor_devices/SmallBluetooth.json"),
+    include_str!("monitor_devices/SmallRadio.json"),
+    include_str!("monitor_devices/StandardCarDriver.json"),
+    include_str!("monitor_devices/Studio701.json"),
+    include_str!("monitor_devices/Studio7506.json"),
+    include_str!("monitor_devices/Studio77.json"),
+    include_str!("monitor_devices/StudioD900.json"),
+    include_str!("monitor_devices/TV22.json"),
+    include_str!("monitor_devices/TV37.json"),
+    include_str!("monitor_devices/WhiteVintage7.json"),
+    include_str!("monitor_devices/YellowProV8.json"),
+];
+
+/// The simulated outputs that come with the app: Mono, then the measured ones.
 pub fn builtin_devices() -> Vec<DeviceProfile> {
-    let d = |name: &str, curve: &[[f32; 2]], hp: Option<f32>, lp: Option<f32>, width: f32, notes: &str| DeviceProfile {
-        name: name.into(),
-        curve: curve.to_vec(),
-        highpass_hz: hp,
-        lowpass_hz: lp,
-        width,
-        trim_db: 0.0,
-        notes: notes.into(),
-    };
-    vec![
-        d("Mono", &[], None, None, 0.0, "Both sides summed, nothing else."),
-        d(
-            "Generic Phone Speaker",
-            &[[400.0, -6.0], [800.0, -2.0], [2000.0, 0.0], [4000.0, 0.0], [8000.0, -4.0]],
-            Some(350.0),
-            Some(12_000.0),
-            0.0,
-            "A rough shape of a small phone speaker: no bass, mono. Not a measurement.",
-        ),
-        d(
-            "Generic Laptop Speakers",
-            &[[200.0, -6.0], [500.0, -2.0], [1500.0, 0.0], [5000.0, -1.0], [10_000.0, -4.0]],
-            Some(180.0),
-            Some(15_000.0),
-            0.6,
-            "A rough shape of laptop speakers: thin lows, narrow. Not a measurement.",
-        ),
-        d(
-            "Generic Car Stereo",
-            &[[60.0, 0.0], [120.0, -1.0], [400.0, -5.0], [1500.0, -4.0], [4000.0, -6.0], [10_000.0, -9.0]],
-            None,
-            None,
-            0.8,
-            "A rough shape of a car system: heavy lows, soft highs. Not a measurement.",
-        ),
-    ]
+    let mono = DeviceProfile { name: "Mono".into(), width: 0.0, notes: "Both sides summed, nothing else.".into(), ..DeviceProfile::default() };
+    std::iter::once(mono).chain(MEASURED.iter().filter_map(|json| DeviceProfile::from_json(json).ok())).filter(|d| !d.name.is_empty()).collect()
 }
 
 /// Every simulated output: the user's files in the library `dir` (sorted by name), then the
@@ -198,14 +188,15 @@ mod tests {
 
     #[test]
     fn a_plan_holds_each_stage_only_with_its_profile() {
-        let phone = find_device(None, "Generic Phone Speaker").unwrap();
+        let phone = find_device(None, "iphone23").unwrap();
         let p = plan(48_000.0, None, true, Some(&phone), true);
         assert!(p.sim_on && !p.ear_on && p.ear.is_none());
         let s = p.sim.unwrap();
-        assert_eq!(s.width, 0.0);
-        assert!(s.curve.magnitude_db(80.0, 48_000.0) < -40.0 && s.curve.magnitude_db(2500.0, 48_000.0).abs() < 1.5);
+        assert!(s.width < 0.1);
+        assert!(s.curve.magnitude_db(80.0, 48_000.0) < -35.0 && s.curve.magnitude_db(4000.0, 48_000.0) > -6.0);
         assert!(plan(48_000.0, None, true, None, true).is_idle());
-        // The built-in shapes never boost the mix.
+        // Every embedded file reads, and none boosts the mix.
+        assert_eq!(builtin_devices().len(), MEASURED.len() + 1);
         for d in builtin_devices() {
             let c = plan(48_000.0, None, false, Some(&d), true).sim.unwrap().curve;
             assert!((0..120).all(|i| c.magnitude_db(20.0 * 2f32.powf(i as f32 / 12.0), 48_000.0) < 0.6), "{}", d.name);
