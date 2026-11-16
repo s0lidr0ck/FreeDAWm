@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 1 fixed: meters keep every peak between screen updates) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -36,15 +36,15 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only; a stereo send ignores its pan |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
 | F. Automation | All modes write; trim lane; wide editing set | **Large**: block-rate, not delay-compensated, faders do not follow, no controller input |
-| G. Metering | Peak with hold and clip lights | **Large**: peaks are missed between screen updates; one scale; post-fader only |
+| G. Metering | Peak with hold and clip lights, no peak missed | **Large**: one scale; post-fader only |
 | H. Mixdown and export | Offline bounce to five formats, stems, DAWproject | Medium: main mix only in the dialog, no tail, no metadata, stems freeze the window |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets | Small to medium: no snapshots, no per-track delay |
 
 Three things every one of the four does and FreeDAWm does not: **automation that is
 sample-accurate, delay-compensated and shown on the faders**; **a key input on the stock
-compressor and on third-party plug-ins**; and **meters that cannot miss a peak, with a pre-fader
-option**.
+compressor and on third-party plug-ins**; and **meters with a pre-fader option and more than one
+scale** (meters no longer miss a peak).
 
 ## A. Channels and the strip
 
@@ -167,8 +167,8 @@ option**.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Peak meters that catch every peak | ● | ● | ● | ● | **Partial**: the meter shows the latest audio block only; peaks and clips between screen updates are lost |
-| Peak hold and clip lights | ● | ● | ● | ● | **Works** (with the limit above); one bar per channel on surround tracks |
+| Peak meters that catch every peak | ● | ● | ● | ● | **Works**: each screen update shows the loudest block since the last one |
+| Peak hold and clip lights | ● | ● | ● | ● | **Works**; one bar per channel on surround tracks |
 | Pre-fader metering | ● | ● | ● | ● | **Flag only** |
 | RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Missing**: one scale that stops at 0 dBFS |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
@@ -236,7 +236,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | Meters and clip lights show only the latest block; anything between screen updates is lost | `StripMeter::measure` in `crates/mix/src/lib.rs`; the meter copy in `crates/playback/src/lib.rs` |
+| 1 | **Fixed:** meters and clip lights showed only the latest block. The engine and the player now keep the loudest block until the UI takes it (`StripMeter::merge_from`, `Player::copy_meters`), and a block the audio thread could not publish is folded into the next | `StripMeter::measure` in `crates/mix/src/lib.rs`; the meter copy in `crates/playback/src/lib.rs` |
 | 2 | On a stereo track the send pan does nothing, though the knob is shown | `route_strip` in `crates/mix/src/lib.rs` |
 | 3 | Soloing a VCA mutes everything | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
 | 4 | The trim automation lane plays with automation Off | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
@@ -296,4 +296,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 1 fixed: meters keep every peak between screen updates |
 | 2026-11-16 | major | First version: mixing against Pro Tools, Studio Pro, Logic Pro and Cubase |

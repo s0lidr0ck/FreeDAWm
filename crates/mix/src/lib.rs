@@ -286,16 +286,48 @@ impl StripMeter {
         self.instrument = o.instrument;
     }
 
-    fn measure(&mut self, bufs: &[Vec<f32>], frames: usize, gr: f32) {
+    /// Measures one block. With `hold`, the peaks and gain reduction are the maxima of this block
+    /// and the ones before it (the earlier blocks were not taken yet: see
+    /// [`MixEngine::meters_held`]); otherwise they are this block's.
+    fn measure(&mut self, bufs: &[Vec<f32>], frames: usize, gr: f32, hold: bool) {
+        let hold = hold && self.peaks.len() == bufs.len();
         if self.peaks.len() != bufs.len() {
             self.peaks.resize(bufs.len(), 0.0);
         }
         for (p, b) in self.peaks.iter_mut().zip(bufs.iter()) {
-            *p = peak(b.get(..frames).unwrap_or(&[]));
+            let now = peak(b.get(..frames).unwrap_or(&[]));
+            *p = if hold { p.max(now) } else { now };
         }
         let last = self.peaks.len().saturating_sub(1);
         self.peak = [self.peaks.first().copied().unwrap_or(0.0), self.peaks.get(1.min(last)).copied().unwrap_or(0.0)];
-        self.gain_reduction_db = gr;
+        self.gain_reduction_db = if hold { self.gain_reduction_db.max(gr) } else { gr };
+    }
+
+    /// Folds `o`'s peaks and gain reduction into this one's (the maximum of each), and takes the
+    /// rest of `o` as it is: a reader that polls less often than blocks are rendered still sees
+    /// the loudest block in between. Allocates only when the channel count changes.
+    pub fn merge_from(&mut self, o: &StripMeter) {
+        if self.peaks.len() != o.peaks.len() {
+            self.copy_from(o);
+            return;
+        }
+        for (p, n) in self.peaks.iter_mut().zip(&o.peaks) {
+            *p = p.max(*n);
+        }
+        self.peak = [self.peak[0].max(o.peak[0]), self.peak[1].max(o.peak[1])];
+        self.gain_reduction_db = self.gain_reduction_db.max(o.gain_reduction_db);
+        self.plugin_failures = o.plugin_failures;
+        self.modules.clone_from(&o.modules);
+        self.analysis.clone_from(&o.analysis);
+        self.llm_bypassed = o.llm_bypassed;
+        self.instrument = o.instrument;
+    }
+
+    /// Forgets the peaks and gain reduction (after a reader took them), keeping the storage.
+    pub fn clear_peaks(&mut self) {
+        self.peaks.iter_mut().for_each(|p| *p = 0.0);
+        self.peak = [0.0; 2];
+        self.gain_reduction_db = 0.0;
     }
 }
 
@@ -664,6 +696,9 @@ pub struct MixEngine {
     offline: bool,
     pub meters: HashMap<TrackId, StripMeter>,
     pub main_meter: StripMeter,
+    /// The meters of the blocks rendered so far were not taken (the realtime side could not
+    /// publish them): the next block's peaks are folded into them instead of replacing them.
+    pub meters_held: bool,
     pub pan_law: PanLaw,
     /// Last rendered position end (to detect seeks).
     last_end: Samples,
@@ -917,6 +952,7 @@ impl MixEngine {
             offline: false,
             meters: HashMap::new(),
             main_meter: StripMeter::default(),
+            meters_held: false,
             pan_law: PanLaw::Minus3,
             last_end: 0,
             last_start: 0,
@@ -2030,7 +2066,7 @@ impl MixEngine {
                 }
                 strip.llm_bits = bits;
                 let m = self.meters.entry(t.id).or_default();
-                m.measure(&self.main, frames, 0.0);
+                m.measure(&self.main, frames, 0.0, self.meters_held);
                 m.llm_bypassed = bits;
                 m.plugin_failures = strip.failures;
                 m.modules.clone_from(&strip.mods);
@@ -2076,7 +2112,7 @@ impl MixEngine {
                 }
             }
         }
-        self.main_meter.measure(&self.main, frames, 0.0);
+        self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
         if let Some(r) = &mut self.scout {
             r.advance(pos, frames, scout_win, !self.monitor_only);
         }
@@ -2157,7 +2193,7 @@ impl MixEngine {
     /// Send, meter and pan a processed strip into the busses / main mix / hardware outputs.
     fn route_strip(&mut self, s: &Session, t: &Track, strip: &mut Strip, pos: Samples, frames: usize) {
         let m = self.meters.entry(t.id).or_default();
-        m.measure(&strip.buf, frames, strip.gr);
+        m.measure(&strip.buf, frames, strip.gr, self.meters_held);
         m.llm_bypassed = strip.llm_bits;
         m.plugin_failures = strip.failures;
         m.modules.clone_from(&strip.mods);
@@ -5773,6 +5809,25 @@ mod tests {
             pl.clips.push(Clip::audio(id, "dc", SourceId(900), 0, 0, frames as i64));
         }
         t
+    }
+
+    /// Mix bug 1: while the meters are held (not taken by the realtime side), a block's peaks are
+    /// folded into the earlier ones instead of replacing them.
+    #[test]
+    fn held_meters_keep_the_loudest_block() {
+        let (s, t) = session_with_dc(0.5, 512);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut buf = vec![vec![0.0; 512]; 2];
+        eng.render(&s, 0, 512, &mut buf);
+        assert!((eng.meters[&t].peak[0] - 0.5).abs() < 1e-3);
+        eng.meters_held = true;
+        eng.render(&s, 512, 512, &mut buf);
+        assert!((eng.meters[&t].peak[0] - 0.5).abs() < 1e-3, "the silent block does not hide the loud one");
+        assert!(eng.main_meter.peak[0] > 0.3);
+        eng.meters_held = false;
+        eng.render(&s, 1024, 512, &mut buf);
+        assert_eq!(eng.meters[&t].peak[0], 0.0, "taken: the next block starts afresh");
+        assert_eq!(eng.main_meter.peak, [0.0; 2]);
     }
 
     #[test]

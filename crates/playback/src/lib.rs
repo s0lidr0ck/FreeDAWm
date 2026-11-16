@@ -197,6 +197,10 @@ struct Shared {
     /// Speed × 1000.
     speed: AtomicU32,
     meters: Mutex<MeterSnapshot>,
+    /// `meters` holds peaks [`Player::copy_meters`] has not taken yet: the callback folds each
+    /// block's peaks into them (the maximum) instead of replacing them, so a peak or clip between
+    /// two UI polls is not lost. Written only with `meters` locked.
+    meters_unread: AtomicBool,
     /// Callbacks that came late or after a gap (at most one per callback).
     underruns: AtomicU64,
     /// The peak share of a callback's period spent filling it since the last read, in ‰.
@@ -239,6 +243,7 @@ impl Shared {
             countoff_at: AtomicI64::new(0),
             speed: AtomicU32::new(1000),
             meters: Mutex::new(MeterSnapshot::default()),
+            meters_unread: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
             load_permille: AtomicU32::new(0),
             direct: AtomicBool::new(false),
@@ -1250,17 +1255,12 @@ impl AudioState {
         let mut meters_copied = false;
         if let Ok(mut m) = self.shared.meters.try_lock() {
             meters_copied = true;
-            m.main.copy_from(&self.mix.main_meter);
-            for (k, v) in &self.mix.meters {
-                match m.tracks.get_mut(k) {
-                    Some(d) => d.copy_from(v),
-                    None => {
-                        m.tracks.insert(*k, v.clone());
-                    }
-                }
-            }
-            // Meters of tracks the engine no longer has (an engine swap) must not keep handles.
-            m.tracks.retain(|k, _| self.mix.meters.contains_key(k));
+            publish_meters(&mut m, &self.mix.meters, &self.mix.main_meter, self.shared.meters_unread.swap(true, Ordering::Relaxed));
+            // Taken: the engine's next block starts its peaks afresh.
+            self.mix.meters_held = false;
+        } else {
+            // Not published: the next block's peaks are folded into these, not lost.
+            self.mix.meters_held = true;
         }
         // After the meter copy: the snapshot no longer holds retired analysis handles.
         self.send_garbage(meters_copied);
@@ -1376,7 +1376,10 @@ impl AudioState {
         let capturing = self.mix.scout_armed();
         if self.lent || (!self.playing && !monitoring && !capturing) {
             out.iter_mut().for_each(|x| *x = 0.0);
-            if let Ok(mut m) = self.shared.meters.try_lock() {
+            // Peaks the UI has not taken yet (the last block before a stop) stay until it does.
+            if let Ok(mut m) = self.shared.meters.try_lock()
+                && !self.shared.meters_unread.load(Ordering::Relaxed)
+            {
                 m.main = StripMeter::default();
                 m.tracks.clear();
             }
@@ -3024,10 +3027,40 @@ impl Player {
 
     /// Copy meters into reusable UI storage. Once track/channel counts are stable this performs
     /// no allocation, unlike cloning a new snapshot every video frame.
+    ///
+    /// The peaks are those of every block rendered since the previous call (the loudest of
+    /// them), not only the latest block's, and this call takes them: the next one starts afresh.
+    /// Call it from one place (the UI's meter poll); [`Player::meters`] only looks.
     pub fn copy_meters(&self, out: &mut MeterSnapshot) {
-        let source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
         copy_meter_snapshot(&source, out);
+        take_meter_peaks(&mut source, &self.shared.meters_unread);
     }
+}
+
+/// Publishes the engine's meters into the shared snapshot (the audio callback, with it locked).
+/// While `unread`, the snapshot's peaks are folded with the new ones (see
+/// [`StripMeter::merge_from`]); otherwise they are replaced. Allocates only when a track appears.
+fn publish_meters(m: &mut MeterSnapshot, tracks: &HashMap<TrackId, StripMeter>, main: &StripMeter, unread: bool) {
+    let put = |d: &mut StripMeter, v: &StripMeter| if unread { d.merge_from(v) } else { d.copy_from(v) };
+    put(&mut m.main, main);
+    for (k, v) in tracks {
+        match m.tracks.get_mut(k) {
+            Some(d) => put(d, v),
+            None => {
+                m.tracks.insert(*k, v.clone());
+            }
+        }
+    }
+    // Meters of tracks the engine no longer has (an engine swap) must not keep handles.
+    m.tracks.retain(|k, _| tracks.contains_key(k));
+}
+
+/// After a reader copied the snapshot: its peaks are taken, the next block starts them afresh.
+fn take_meter_peaks(m: &mut MeterSnapshot, unread: &AtomicBool) {
+    m.main.clear_peaks();
+    m.tracks.values_mut().for_each(StripMeter::clear_peaks);
+    unread.store(false, Ordering::Relaxed);
 }
 
 fn copy_meter_snapshot(source: &MeterSnapshot, out: &mut MeterSnapshot) {
@@ -3699,6 +3732,54 @@ mod tests {
         assert_eq!(out.tracks.len(), 1);
         assert_eq!(out.tracks[&keep], source.tracks[&keep]);
         assert_eq!(out.main, source.main);
+    }
+
+    /// Mix bug 1: the meter showed the latest block only, so a peak (or a clip) in a block the
+    /// UI did not poll right after was lost.
+    #[test]
+    fn a_peak_between_two_meter_polls_is_kept_until_it_is_taken() {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = soundcraft_model::Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        // Quiet, with one loud sample in the first block and one in the fifth.
+        let mut x = vec![0.1f32; 48_000];
+        x[100] = 0.95;
+        x[4 * 256 + 50] = 0.9;
+        s.pool.insert(SourceId(5), Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![x] })));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(5), 0, 0, 48_000));
+        let shared = Arc::new(Shared::new());
+        let (tx, rx) = channel();
+        let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s), 48_000.0, max_block_for(None), channel().0);
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        let mut out = vec![0.0f32; 2 * 256];
+        let take = || {
+            let mut snap = MeterSnapshot::default();
+            let mut m = shared.meters.lock().unwrap();
+            copy_meter_snapshot(&m, &mut snap);
+            take_meter_peaks(&mut m, &shared.meters_unread);
+            snap
+        };
+        // The loud block, then two quiet ones before the UI looks.
+        for _ in 0..3 {
+            st.fill(&mut out, 2);
+        }
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] > 0.9, "the track's peak survives two later blocks: {:?}", seen.tracks[&t].peak);
+        assert!(seen.main.peak[0] > 0.5, "and the main mix's: {:?}", seen.main.peak);
+        // Taken: the next poll sees only what came after.
+        st.fill(&mut out, 2);
+        assert!(take().tracks[&t].peak[0] < 0.2);
+        let m = shared.meters.lock().unwrap();
+        // While the UI holds the lock, the callback cannot publish: the block is kept in the engine.
+        st.fill(&mut out, 2);
+        drop(m);
+        st.fill(&mut out, 2);
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] > 0.85, "a block that could not be published is folded into the next: {:?}", seen.tracks[&t].peak);
+        st.fill(&mut out, 2);
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] < 0.2, "and then forgotten: {:?}", seen.tracks[&t].peak);
     }
 
     #[test]
