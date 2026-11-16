@@ -2067,6 +2067,28 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             }
         });
     }
+    // A VCA master to follow (Pro Tools' VCA assignment), or none.
+    let vcas: Vec<(u64, String)> = app
+        .engine
+        .session()
+        .tracks
+        .iter()
+        .filter(|track| track.kind == soundcraft_model::TrackKind::Vca && !selection.contains(&track.id.0))
+        .map(|track| (track.id.0, track.name.clone()))
+        .collect();
+    if !vcas.is_empty() {
+        let current = app.engine.session().track(id).and_then(|t| t.mixer.vca);
+        ui.menu_button("VCA", |ui| {
+            if ui.add(egui::Button::selectable(current.is_none(), "None")).clicked() {
+                let _ = app.run("track.vca", json!({"tracks": selection, "vca": null}));
+            }
+            for (vca, name) in &vcas {
+                if ui.add(egui::Button::selectable(current == Some(*vca), name)).clicked() {
+                    let _ = app.run("track.vca", json!({"tracks": selection, "vca": vca}));
+                }
+            }
+        });
+    }
     if app.engine.session().track(id).is_some_and(|track| track.folder.is_some()) && ui.button("Remove from Folder").clicked() {
         let _ = app.run("track.remove_from_folder", json!({"tracks": selection}));
     }

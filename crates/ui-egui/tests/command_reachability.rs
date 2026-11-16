@@ -24,7 +24,6 @@ const KNOWN_UNREACHED: &[&str] = &[
     "setup.reset_edit_state",
     "track.pin",
     "track.trim_automation_write",
-    "track.vca",
     "transport.pause",
     "transport.status",
     "video.offset",

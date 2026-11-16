@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: the Automation window's write enables work) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: VCA assignment from the track menu) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -111,7 +111,7 @@ miss a peak, and can read pre-fader).
 | Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
 | Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Partial**: volume, mute, solo, record, pan, sends and automation mode, by command (`track.group`, `track.group_modify` `attributes`); the Group dialog does not offer them yet; inserts are not linked |
 | Suspend all groups | ● | ● | ● | ● | **Works**: Options › More › Suspend All Groups |
-| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned by command only, no control in the mixer; its solo solos its members |
+| VCA masters | ● | ● | ● | ● | **Partial**: one level; no nesting; assigned from the track menu (VCA ▸, in the Edit and Mix windows); its solo solos its members |
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
@@ -274,7 +274,7 @@ one a mix engineer would not forgive.
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Return, default level and loop refusal done**; sends to tracks and hardware outputs remain |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
-| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command) and suspend all done**; attributes in the Group dialog, VCA assignment in the mixer and nested VCAs remain |
+| Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command), suspend all and VCA assignment done**; attributes in the Group dialog and nested VCAs remain |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: VCA assignment from the track menu |
 | 2026-11-16 | minor | tier 2: the Automation window's write enables work |
 | 2026-11-16 | minor | tier 2: bounce a bus, with a tail |
 | 2026-11-16 | minor | tier 2: Mix faders and pan knobs follow their automation |
