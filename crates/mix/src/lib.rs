@@ -418,6 +418,13 @@ struct Strip {
     /// The instrument's next block starts somewhere new: send it the controllers in effect there.
     chase: bool,
     muted: bool,
+    /// The mute's own gain (0 muted, 1 open), ramped over [`MUTE_RAMP`] samples so a mute that
+    /// switches mid-play does not click; snapped to the mute when `mute_settled` is false.
+    mute_gain: f32,
+    mute_settled: bool,
+    /// Muted, and the ramp to silence was over before this block: nothing of the strip (not
+    /// even a send) is heard.
+    silent: bool,
     gr: f32,
     /// Per-clip effect chains (Clip Effects) and a scratch buffer to render clips into.
     clip_fx: HashMap<u64, ClipFx>,
@@ -611,6 +618,9 @@ impl Strip {
             midi_held: Vec::with_capacity(MIDI_HELD),
             chase: true,
             muted: false,
+            mute_gain: 1.0,
+            mute_settled: false,
+            silent: false,
             gr: 0.0,
             clip_fx: HashMap::new(),
             clipbuf: Vec::new(),
@@ -1372,6 +1382,8 @@ impl MixEngine {
             s.held.clear();
             s.midi_held.clear();
             s.chase = true;
+            // A fresh start has nothing to ramp from.
+            s.mute_settled = false;
             // Every voice was just let go: no release is left to run.
             s.live_tail = 0;
             s.tail_quiet = 0;
@@ -2203,7 +2215,7 @@ impl MixEngine {
         let law = self.pan_law;
         for (i, snd) in t.mixer.sends.iter().enumerate() {
             let Some(snd) = snd else { continue };
-            if send_muted(t, i, snd.mute, pos) || strip.muted {
+            if send_muted(t, i, snd.mute, pos) || strip.silent {
                 continue;
             }
             let lvl = send_level(t, i, snd.level_db, pos);
@@ -2932,14 +2944,46 @@ fn process_strip(
             strip.muted = true;
         }
     }
-    let (g0, g1) = if strip.muted { (-144.0, -144.0) } else { (v0.min(12.0), v1.min(12.0)) };
+    // The mute ramps (from where the last block left it) rather than switching.
+    let target = if strip.muted { 0.0 } else { 1.0 };
+    if !strip.mute_settled {
+        strip.mute_gain = target;
+        strip.mute_settled = true;
+    }
+    let from = strip.mute_gain;
+    strip.silent = strip.muted && from <= 0.0;
+    let (g0, g1) = if strip.silent { (-144.0, -144.0) } else { (v0.min(12.0), v1.min(12.0)) };
+    let mut end = from;
     for c in strip.buf.iter_mut() {
+        let mut m = from;
         for i in 0..frames {
+            m = mute_step(m, target);
             if let Some(x) = c.get_mut(i) {
-                *x *= lerp_gain(g0, g1, i, frames.saturating_sub(1));
+                *x *= lerp_gain(g0, g1, i, frames.saturating_sub(1)) * m;
+            }
+        }
+        end = m;
+    }
+    // Pre-fader sends (and keys) skip the fader, not the mute: the same ramp.
+    if from != target && !strip.silent {
+        for c in strip.pre.iter_mut() {
+            let mut m = from;
+            for x in c.iter_mut().take(frames) {
+                m = mute_step(m, target);
+                *x *= m;
             }
         }
     }
+    strip.mute_gain = if strip.buf.is_empty() { target } else { end };
+}
+
+/// Samples a mute takes to close or open (5 ms at 48 kHz): short enough to sound like a switch,
+/// long enough not to click.
+const MUTE_RAMP: f32 = 240.0;
+
+/// The mute gain one sample on from `m`, towards `target` (0 or 1).
+fn mute_step(m: f32, target: f32) -> f32 {
+    if m < target { (m + 1.0 / MUTE_RAMP).min(target) } else { (m - 1.0 / MUTE_RAMP).max(target) }
 }
 
 /// Whether a frozen track plays its render: audio tracks, and MIDI and instrument tracks with an
@@ -7434,6 +7478,33 @@ mod tests {
         s.track_mut(t).unwrap().mixer.automation_mode = soundcraft_model::AutomationMode::Off;
         let out = render_range(&s, Range::new(0, 4800), 512);
         assert!((out[0][2000] - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3, "{}", out[0][2000]);
+    }
+
+    /// Mix bug 5: a mute that switched mid-play jumped from full level to silence in one sample.
+    #[test]
+    fn a_mute_ramps_instead_of_clicking() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        let full = 0.5 * db_to_gain(-3.0);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut buf = vec![vec![0.0; 512]; 2];
+        eng.render(&s, 0, 512, &mut buf);
+        assert!((buf[0][511] - full).abs() < 1e-4);
+        s.track_mut(t).unwrap().mixer.mute = true;
+        eng.render(&s, 512, 512, &mut buf);
+        let steps = buf[0].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+        assert!(steps < full / 100.0, "no jump: {steps}");
+        assert!(buf[0][0] > full * 0.9 && buf[0][300].abs() < 1e-6, "{} .. {}", buf[0][0], buf[0][300]);
+        eng.render(&s, 1024, 512, &mut buf);
+        assert!(buf[0].iter().all(|x| *x == 0.0), "then silent");
+        // Opening ramps up the same way.
+        s.track_mut(t).unwrap().mixer.mute = false;
+        eng.render(&s, 1536, 512, &mut buf);
+        assert!(buf[0][0] < full * 0.1 && (buf[0][400] - full).abs() < 1e-4);
+        // A strip muted when the transport starts is silent from its first sample.
+        s.track_mut(t).unwrap().mixer.mute = true;
+        eng.reset();
+        eng.render(&s, 0, 512, &mut buf);
+        assert!(buf[0].iter().all(|x| *x == 0.0));
     }
 
     #[test]

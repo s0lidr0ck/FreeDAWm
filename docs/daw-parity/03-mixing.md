@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 4 fixed: the trim lane is silent with automation Off) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 5 fixed: mutes ramp instead of clicking) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -240,7 +240,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 2 | **Fixed:** on a stereo track the send pan did nothing; it now balances the send (turned left, the right side moves left until both are hard left) | `route_strip` in `crates/mix/src/lib.rs` |
 | 3 | **Fixed:** soloing a VCA muted everything; a soloed VCA master now solos its members and what their paths reach (`SoloScope::fill`, which the engine and the S keys share) | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
 | 4 | **Fixed:** the trim lane played with automation Off; it now reads like every other lane | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
-| 5 | Mute automation switches with no ramp and can click | the same place |
+| 5 | **Fixed:** a mute switched in one sample and could click; it now ramps over 5 ms (240 samples), from where the last block left it | the same place |
 | 6 | Group members stop writing automation after half a second while the dragged fader is held still | `mix.volume` grouping in `crates/engine/src/cmd/mix.rs`; `auto_write.rs` |
 | 7 | Paste and duplicate drop automation curves and leave the old points under the new ones | `edit.paste`, `edit.duplicate`, `automation.paste` |
 | 8 | Commit puts a surround track on a stereo track and drops pan and all automation | `commit_track` in `crates/engine/src/io.rs` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 5 fixed: mutes ramp instead of clicking |
 | 2026-11-16 | minor | bug 4 fixed: the trim lane is silent with automation Off |
 | 2026-11-16 | minor | bug 3 fixed: soloing a VCA solos its members |
 | 2026-11-16 | minor | bug 2 fixed: a stereo send follows its pan |
