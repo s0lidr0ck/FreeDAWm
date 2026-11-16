@@ -134,7 +134,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
 | Modulators for any parameter | **Missing** | |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
-| Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (COMMIT2); no video |
+| Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (4d3e275); no video |
 | ARA 2 and spectral editing | **Missing** | A view flag exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | A read-only score with print and MusicXML export; drum step sequencer only |
 | Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; export to a ProRes movie; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
@@ -164,7 +164,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Feature | Status | What it is, and its limits |
 |---|---|---|
 | Every command open to scripts and AI agents | **Works** | About 330 commands with documented parameters. A command-line tool runs them on a session without the window; a running app accepts them on a local port; an MCP server lets an AI agent list commands, run them, look at the session, take screenshots and click. Any menu item can be invoked by its path |
-| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. On a local network PCs pair and connect over an encrypted link bound to their keys (COMMIT2); the phone's page stays on the plain link. Talkback: the control room's talk key mixes its input into the stream the performer hears, the music dimmed, while stopped too; never recorded (COMMIT2). No video. A paired computer can run any command; the Network window says so and which link each uses |
+| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. On a local network PCs pair and connect over an encrypted link bound to their keys (4d3e275); the phone's page stays on the plain link. Talkback: the control room's talk key mixes its input into the stream the performer hears, the music dimmed, while stopped too; never recorded (4d3e275). No video. A paired computer can run any command; the Network window says so and which link each uses |
 | Scout: measured mix advice from an AI model | **Works** | Captures loudness, true peak, spectrum, stereo and transient measures of a mix or a channel, sends them with the channel's settings to Claude using the user's own key, and draws the returned EQ suggestions on the EQ as guides. It changes nothing by itself; each suggestion can be applied on request, one undo step each. Reference profiles can be built from other recordings, per stem |
 | Local models beyond stems | **Works** | Lead from backing vocals; drums into six parts; audio to MIDI by four models (general, piano with pedal, drums, voice) with a live preview; MIDI from a text description; a whole song from a prompt. All run on the user's machine after a download; each model's licence is shown, and non-commercial ones ask for confirmation |
 | Mend: vocal de-noise and de-reverb on a live insert | **Works** | The same model as Clean Vocal, running in the chain with about 2.9 s latency or a lighter live mode. Desktop only |
@@ -174,7 +174,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
-| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads. No recording, hardware MIDI, third-party plug-ins, models or networking, and nothing is kept between visits |
+| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (COMMIT3). No recording yet (design below), no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
@@ -188,7 +188,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
 | 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a) |
-| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (COMMIT2, below) |
+| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (4d3e275, below) |
 | 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (3b781d6): Bounce to Movie uses both |
 
 ## Suggested order of work
@@ -226,8 +226,9 @@ public documentation; DAWproject covers the modern case); a live-show page and f
 workflow (specialist; revisit if users ask); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
-sessions kept between visits (12–18; not started, design below); talkback and encrypted local links for remote recording
-(10–16): **done** (COMMIT2, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
+sessions kept between visits (12–18): sessions kept **done** (COMMIT3), recording not started
+(design below); talkback and encrypted local links for remote recording
+(10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
 and the scan helper is a start; not started, design below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
 
 **Designs for the larger items, not built yet.** Each was judged too big to finish well in the
@@ -240,13 +241,32 @@ same pass as the items above; these are the starting points.
   `RangeRender`. A `release.*` command family (add, move, remove, set, render) and a page that
   shows the songs in a row with their integrated loudness, true peak and the album's. Export:
   one file per song plus one continuous file with a cue sheet; DDP later.
-- *Recording and sessions kept in the browser build (12–18 h).* Input through `getUserMedia`
-  into an `AudioWorklet` that posts 128-frame blocks over a `MessagePort` (a `SharedArrayBuffer`
-  ring needs cross-origin isolation from the host, which the page cannot assume), into the same
-  `Recorder` take buffer the desktop uses; latency from `AudioContext.outputLatency` plus
-  `baseLatency`. Sessions and takes kept in the origin-private file system (OPFS) as the autosave
-  folder, so a visit picks up where the last left off; the Record refusal added here goes away.
-- *Encrypted local link (built, COMMIT2; owner-approved UDP port).* The internet path's QUIC
+- *Sessions kept in the browser build (built, COMMIT3).* The origin-private file system (OPFS),
+  through a small script in the page (`window.freedawmStore`): `session.json`, `meta.json` and
+  `Audio Files/<source>-<fingerprint>.wav`, each audio file written once
+  (`io::session_store_parts`), the session 3 s after a change and never while the transport
+  rolls, audio before the session that points at it, unused files removed after. The next visit
+  opens it (`io::open_session_parts`, the bundle opener's own path) instead of the demo; `?demo`
+  and `?empty` still start fresh. A notice at the bottom right says "Kept in this browser only"
+  (or why not: no OPFS, a failed write), with Export (a `.fdawmz` download) and Clear. Not run in
+  a browser here: the Rust side builds for wasm and its parts are tested natively
+  (`io` tests); the script and the page need a browser (Chrome, Edge, Firefox; Safari before 18
+  lacks `createWritable`, and the notice then says the session is not kept).
+- *Recording in the browser build (not started; 10–14 h).* The parts, in order: (1) the page:
+  `getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl:
+  false}})` asked on the first Record (the browser asks the person; a refusal or no device is
+  said plainly on the Record button and the status line, and Record stays refused, as now), an
+  `AudioWorklet` that posts its 128-frame blocks over a `MessagePort` (a `SharedArrayBuffer` ring
+  needs cross-origin isolation the host cannot be assumed to give); (2) the player: an external
+  input feed (`Player` takes an `InputFeed` the page pushes into, as the desktop's input callback
+  does), so monitoring and capture run in the same output callback as on the desktop; (3) the
+  recorder: wasm has no threads and no files, so the take writer runs a step a frame from the UI
+  thread into memory, and a finished take lands as a pooled source (kept by the store like any
+  other); (4) latency from `AudioContext.baseLatency` + `outputLatency` for the output and the
+  worklet's block for the input, taken off as the desktop's reported latencies are. Steps 2 and 3
+  change `crates/playback/src/record.rs` and the UI's take landing, shared with the desktop
+  recorder; they were left for a pass of their own.
+- *Encrypted local link (built, 4d3e275; owner-approved UDP port).* The internet path's QUIC
   (TLS 1.3, iroh) on the local network: a UDP socket on the network port's number beside the TCP
   listener, with no relays, no address lookup and no router port mapping, so nothing leaves the
   local network. Each PC's key is the one it already keeps for the internet. The booth adds its
@@ -262,7 +282,7 @@ same pass as the items above; these are the starting points.
   middle of that one pairing, as it can on the plain link today; once paired the keys are pinned.
   PCs paired over the plain link keep working there until paired again. The phone's page stays
   on plain HTTP (a browser cannot speak this link).
-- *Talkback (built, COMMIT2).* The control room's talkback (its input, level and talk key, F11 or
+- *Talkback (built, 4d3e275).* The control room's talkback (its input, level and talk key, F11 or
   the Network window's Talk to the performer, held) is mixed into the copy of the mix the stream
   sends, the music dimmed by the control room's dim (once: the monitor's own dim already counts
   when talkback dims), ramped over 10 ms. While the transport is stopped the stream carries the
@@ -293,6 +313,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Browser build: the session kept between visits, with a notice, Export and Clear; a design for recording |
 | 2026-11-16 | minor | Remote recording: the encrypted local link and talkback |
 | 2026-11-16 | minor | Timing alignment of stacked vocals built (Align timing in the Vocal Studio) |
 | 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target; Scout applies a suggestion when asked; search the transcript; video export; a first-run tour; where the rest stands, and designs for the larger items |

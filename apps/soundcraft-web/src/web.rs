@@ -38,10 +38,17 @@ pub fn start() {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("soundcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
-                    let engine = if query().contains("empty") { Engine::default() } else { soundcraft_engine::demo::demo_engine() };
+                    let q = query();
+                    let engine = if q.contains("empty") { Engine::default() } else { soundcraft_engine::demo::demo_engine() };
                     let player = soundcraft_playback::Player::new(Arc::new(engine.session().clone()));
                     let app = SoundApp::new(engine, Some(player), Services::default());
-                    Ok(Box::new(WebShell { app, inbox: Rc::default(), samples: Rc::default() }))
+                    // The session kept in this browser opens instead, unless the URL asks for
+                    // the demo or an empty session.
+                    let store = crate::store::Shared::default();
+                    crate::store::mark_kept(&store, &app.engine);
+                    let ctx = cc.egui_ctx.clone();
+                    crate::store::start(&store, !q.contains("empty") && !q.contains("demo"), move || ctx.request_repaint());
+                    Ok(Box::new(WebShell { app, inbox: Rc::default(), samples: Rc::default(), store }))
                 }),
             )
             .await;
@@ -116,6 +123,8 @@ struct WebShell {
     app: SoundApp,
     inbox: Inbox,
     samples: SampleInbox,
+    /// The session kept in this browser between visits.
+    store: crate::store::Shared,
 }
 
 impl WebShell {
@@ -207,6 +216,17 @@ impl eframe::App for WebShell {
         self.app.logic(ctx);
         // A prompt opened during this frame becomes a picker on the next one.
         self.take_path_prompt(ctx);
+        if let Some(said) = crate::store::open_restored(&self.store, &mut self.app.engine) {
+            self.app.ui.status = said;
+        }
+        if let Some(said) = self.store.borrow_mut().said.take() {
+            self.app.ui.status = said;
+        }
+        let rolling = self.app.is_playing() || self.app.engine.transport.recording;
+        crate::store::tick(&self.store, &self.app.engine, rolling);
+        if self.store.borrow().busy_or_waiting() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -215,6 +235,59 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        self.store_notice(ui.ctx());
+    }
+}
+
+impl WebShell {
+    /// "Kept in this browser only", with Export and Clear: bottom right, above the status line.
+    fn store_notice(&mut self, ctx: &egui::Context) {
+        let (available, failed) = {
+            let s = self.store.borrow();
+            (s.available, s.failed.clone())
+        };
+        let (text, tip) = match (&failed, available) {
+            (Some(e), _) => (
+                "Not kept in this browser: Export to keep it".to_string(),
+                format!("Keeping the session in this browser failed ({e}). Export downloads it as a .fdawmz file."),
+            ),
+            (None, true) => (
+                "Kept in this browser only".to_string(),
+                "Your session is kept in this browser's own storage on this computer (nothing is sent anywhere) and opens again on your next visit. \
+                 Clearing the browser's site data removes it: Export downloads a copy to keep."
+                    .to_string(),
+            ),
+            (None, false) => (
+                "Not kept: this browser has no storage for it".to_string(),
+                "This browser cannot keep files for a page. Export (or File › Save) downloads the session as a .fdawmz file.".to_string(),
+            ),
+        };
+        let mut export = false;
+        let mut clear = false;
+        egui::Area::new(egui::Id::new("web-store-notice")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-8.0, -30.0)).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(text).small()).on_hover_text(tip);
+                    export = ui.small_button("Export").on_hover_text("Download the session as a .fdawmz file").clicked();
+                    if available && failed.is_none() {
+                        clear = ui.small_button("Clear").on_hover_text("Forget the copy kept in this browser (the session stays open)").clicked();
+                    }
+                });
+            });
+        });
+        if export {
+            let name = self.app.engine.path.clone().unwrap_or_else(|| format!("{}.{}", self.app.engine.session().name, io::BUNDLE_EXTENSION));
+            self.app.ui.status = match io::session_bundle(self.app.engine.session()) {
+                Ok((bytes, _)) => match download(&name, &bytes) {
+                    Ok(()) => format!("Exported {name}"),
+                    Err(e) => e,
+                },
+                Err(e) => e.to_string(),
+            };
+        }
+        if clear {
+            crate::store::clear(&self.store, &self.app.engine);
+        }
     }
 }
 
