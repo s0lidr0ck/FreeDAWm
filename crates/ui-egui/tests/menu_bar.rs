@@ -20,7 +20,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Event", 15),
     ("Process", 14),
     ("AI", 13),
-    ("Options", 16),
+    ("Options", 17),
     ("Setup", 9),
     ("Window", 33),
 ];
@@ -99,7 +99,8 @@ fn greyed_out_items_say_why() {
 }
 
 /// Ids whose menu item names its parameter in the label (a ruler, a width, a rating…).
-const PARAMETERISED: [&str; 10] = [
+const PARAMETERISED: [&str; 11] = [
+    "options.record_mode",
     "view.ruler",
     "mix.default_send_level",
     "mix.pan_law",

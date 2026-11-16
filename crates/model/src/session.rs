@@ -223,6 +223,9 @@ pub struct EditState {
     pub countoff: bool,
     pub countoff_bars: u32,
     pub midi_merge: bool,
+    /// What a take does to the audio it records over (`options.record_mode`): `replace` (the
+    /// default; `normal` in older sessions), `lanes` (each take a take lane, comped) or
+    /// `playlists` (each take on a new playlist that copies the track's).
     pub record_mode: String,
     pub loop_record: bool,
     pub quickpunch: bool,

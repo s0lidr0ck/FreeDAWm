@@ -814,6 +814,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         // `video.online` keeps the opposite flag (the engine's `OFFLINE_FLAG`).
         Some("video.online") => !e.flag("video.offline"),
         Some("options.scrolling") => e.scrolling == scrolling_mode(leaf),
+        Some("options.record_mode") => record_mode(leaf) == if e.record_mode == "normal" { "replace" } else { e.record_mode.as_str() },
         // Only Solo in Place and X-OR are offered: X-OR is on or it isn't.
         Some("options.solo_mode") => e.solo_mode.contains("xor") == leaf.starts_with("X-OR"),
         Some("mix.pan_law") => Some(soundcraft_engine::cmd::pan_law::current(app.engine.session())) == pan_law_db(leaf),
@@ -911,6 +912,15 @@ fn pan_law_db(leaf: &str) -> Option<f64> {
     leaf.trim_end_matches("dB").trim().parse().ok()
 }
 
+/// `options.record_mode`'s mode for a Record Mode item.
+fn record_mode(leaf: &str) -> &'static str {
+    match leaf {
+        "Keep Takes as Lanes" => "lanes",
+        "New Playlist per Take" => "playlists",
+        _ => "replace",
+    }
+}
+
 /// `options.scrolling`'s mode for an Edit Window Scrolling item.
 fn scrolling_mode(leaf: &str) -> &'static str {
     match leaf {
@@ -968,6 +978,7 @@ fn params_for(path: &str, id: &str) -> Value {
         "view.ruler" => json!({"ruler": ruler_id(leaf)}),
         "view.main_counter" => json!({"format": ruler_id(leaf)}),
         "options.scrolling" => json!({"mode": scrolling_mode(leaf)}),
+        "options.record_mode" => json!({"mode": record_mode(leaf)}),
         "mix.pan_law" => json!({"law": pan_law_db(leaf)}),
         "mix.default_send_level" => json!({"db": default_send_db(leaf)}),
         "options.solo_mode" => {

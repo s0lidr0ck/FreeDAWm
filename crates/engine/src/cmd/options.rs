@@ -55,6 +55,26 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.values.insert("playback.auto_fade_ms".into(), ms);
             Ok(json!({"value": ms > 0.0, "ms": ms}))
         }),
+        cmd!(
+            noundo "options.record_mode",
+            "Record Mode",
+            ["Options", "Record Mode"],
+            None,
+            "{mode: replace|lanes|playlists}: what a take does to the audio it records over: replaces it, goes on a take lane (comped), or goes on a new playlist each take → {mode}",
+            always,
+            |e, p| {
+                const C: &str = "options.record_mode";
+                let mode = match p.get("mode").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
+                    Some("replace" | "normal") => "replace",
+                    Some("lanes" | "takes" | "keep_takes") => "lanes",
+                    Some("playlists" | "playlist") => "playlists",
+                    Some(other) => return Err(bad(C, format!("unknown mode `{other}` (replace, lanes or playlists)"))),
+                    None => return Err(bad(C, "`mode` required (replace, lanes or playlists)")),
+                };
+                e.session_mut().edit.record_mode = mode.into();
+                Ok(json!({"mode": mode}))
+            }
+        ),
         cmd!(noundo "options.destructive_record", "Destructive Record", ["Options"], None, "{value?: bool}", always, |e, p| record_mode(e, p, "destructive")),
         cmd!(noundo "options.trackpunch", "TrackPunch", ["Options"], Some("Cmd+Shift+T"), "{value?: bool}", always, |e, p| record_mode(e, p, "trackpunch")),
         cmd!(noundo "options.scrolling", "Edit Window Scrolling", ["Options", "Edit Window Scrolling"], None, "{mode: none|after_playback|page|continuous|center}", always, |e, p| {
@@ -122,11 +142,15 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Destructive Record and TrackPunch: a stored flag nothing reads yet (FreeDAWm records
+/// non-destructively, every track at once). Kept apart from `record_mode`, which they used to
+/// overwrite.
 fn record_mode(e: &mut Engine, p: &Value, mode: &str) -> Result<Value> {
     let s = e.session_mut();
-    let on = p.get("value").and_then(Value::as_bool).unwrap_or(s.edit.record_mode != mode);
-    s.edit.record_mode = if on { mode.to_string() } else { "normal".into() };
-    Ok(json!({"record_mode": s.edit.record_mode}))
+    let key = format!("options.{mode}");
+    let on = p.get("value").and_then(Value::as_bool).unwrap_or(!s.edit.flag(&key));
+    s.edit.set_flag(&key, on);
+    Ok(json!({"value": on}))
 }
 
 fn session_setup(e: &mut Engine, p: &Value) -> Result<Value> {

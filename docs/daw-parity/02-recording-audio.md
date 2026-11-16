@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (QuickPunch punches out and in on the fly; crossfades at punch points) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (record modes; loop record from the loop range) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Arming and inputs | Arming works; inputs are mono or stereo hardware, or a bus | Medium: wrong channels with more than two (bug 10) |
 | B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly | Small: no discard-take |
 | C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
-| D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
+| D. Loop recording and takes | Takes to layers, swipe comping, three record modes | Small: no audition of a take that is not active |
 | E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
 | G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float | Small: no per-track record folders |
@@ -96,9 +96,9 @@ what a user can do, apart from punch out on the fly.
 | Loop record, one take per pass | ● | ● | ● | ● | **Works**: one continuous file, split into passes; up to 1,000 |
 | Takes kept as lanes under the track | ● | ● | ● | ● | **Works** on a comping track |
 | Swipe comping | ● | ● | ● | ● | **Works** |
-| Choice of what a new take does to old audio (replace, keep as takes, layer) | ● | ● | ● | ● | **Partial**: a comping track keeps takes, a plain track replaces; there is no setting, and the record-mode value is unused |
+| Choice of what a new take does to old audio (replace, keep as takes, layer) | ● | ● | ● | ● | **Works**: Options › Record Mode: Replace, Keep Takes as Lanes (the track becomes a comping one) or New Playlist per Take; a comping track always keeps takes. No overlapping "layer" mode as in Cubase's stacked mix |
 | Loop record on a track without lanes | ● | ● | ● | ● | **Works**: each pass goes to a new playlist that copies the track's playlist, so only the loop differs |
-| Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Missing**: it falls back to a normal take |
+| Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Works** |
 | Take names and numbers per track | ● | ● | ● | ● | **Works**: `Vox_01`, `Vox_02`… per track, skipping files already there |
 | Audition a take without making it active | ● | ● | ● | ● | **Missing** (also in section 1) |
 
@@ -195,7 +195,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Record through input effects (an input strip, or a "record with inserts" switch) | 8–12 | **Done** (the switch) |
 | Bit depth and file type for takes; BWF timestamp and originator | 5–8 | **Done** |
 | Punch out on the fly, several punches per pass, crossfades at punch points | 8–12 | **Done** (QuickPunch) |
-| Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | Replaces the unused record-mode value; closes bug 4 by design |
+| Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | **Done** (replace, lanes, playlists) |
 | Discard take; delete files of undone takes when the session closes | 3–5 | |
 | A small buffer for live tracks and a large one for playback | 15–22 | The largest item; shared with section 1's engine work |
 | Cue mixes: sends to hardware outputs, click to its own output | 6–10 | Shared with the mixing section |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

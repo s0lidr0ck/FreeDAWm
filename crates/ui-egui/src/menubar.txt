@@ -515,6 +515,9 @@ Options > Click
 Options > Loop Playback
 Options > Loop Record
 Options > QuickPunch
+Options > Record Mode > Replace
+Options > Record Mode > Keep Takes as Lanes
+Options > Record Mode > New Playlist per Take
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Video Track Online

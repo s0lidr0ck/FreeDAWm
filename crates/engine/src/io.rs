@@ -2564,7 +2564,8 @@ pub struct RecordStart {
 ///
 /// - Rolling: punch in on the fly at the position. Inside a playing loop the take splits into
 ///   that loop's passes (the first is the rest of the loop it started in).
-/// - Loop Record with a selection: the selection loops, a pass each time round.
+/// - Loop Record with a selection (or, with none, the loop range): it loops, a pass each time
+///   round.
 /// - A selection: recorded there (punch), with the pre- and post-roll around it if they are on.
 /// - No selection: from the insertion point on; a pre-roll before it plays and is not recorded.
 pub fn record_start(edit: &soundcraft_model::EditState, rolling: Option<(Samples, Option<Range>)>) -> RecordStart {
@@ -2573,6 +2574,11 @@ pub fn record_start(edit: &soundcraft_model::EditState, rolling: Option<(Samples
         return RecordStart { start: at, punch: None, pass: lp.map(|l| l.len()), loop_from: lp.map(|l| l.start), play: None };
     }
     let sel = edit.selection;
+    // Loop Record with no selection loops the loop range, when there is one.
+    let sel = match edit.loop_range {
+        Some(lp) if edit.loop_record && sel.is_empty() && !lp.is_empty() => lp,
+        _ => sel,
+    };
     if edit.loop_record && !sel.is_empty() {
         return RecordStart {
             start: sel.start,
@@ -2729,9 +2735,20 @@ fn place_take(
     {
         let Some(x) = s.sources.iter().find(|x| x.id == src) else { return };
         let len = i64::try_from(x.frames).unwrap_or(0);
+        let mode = s.edit.record_mode.clone();
+        // Record Mode › Keep Takes as Lanes: a plain track becomes a comping one (its audio the
+        // first take, a blank lane the record target) before the take goes on a lane.
+        if mode == "lanes"
+            && s.track(tid).is_some_and(|t| t.kind == TrackKind::Audio && !crate::cmd::comp::comping(t))
+            && crate::cmd::comp::add_layer(s, tid, None).is_none()
+        {
+            return;
+        }
+        // Record Mode › New Playlist per Take: the take's first pass, too, goes on a new playlist.
+        let first_new = mode == "playlists";
         // A plain track's playlist as it was before this take: each loop pass after the first goes
         // on a copy of it, so the rest of the song stays on the track whichever pass is active.
-        let base: Vec<Clip> = if pass.is_some() { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
+        let base: Vec<Clip> = if pass.is_some() || first_new { s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default() } else { Vec::new() };
         // Without loop recording the whole take is one pass.
         let step = pass.map_or(Samples::MAX, |p| p.max(1));
         for i in 0..1_000i64 {
@@ -2774,7 +2791,7 @@ fn place_take(
                 }
                 continue;
             }
-            if i > 0 {
+            if i > 0 || first_new {
                 let mut clips = base.clone();
                 for c in &mut clips {
                     c.id = s.new_clip_id();
@@ -3314,6 +3331,56 @@ mod record_tests {
         let old: Vec<_> = t.clips().iter().filter(|c| !ids.contains(&c.id)).map(|c| (c.start, c.end())).collect();
         assert_eq!(old, [(0, 1_000 + h), (3_000 - h, 5_000 + h), (6_000 - h, 8_000 + h), (9_000, 10_000)]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_record_mode_replaces_keeps_lanes_or_makes_playlists() {
+        let dir = test_dir("record-modes");
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let base = dir.join("Audio Files/Base.wav");
+        write_take(&base, 3_000);
+        add_recording(&mut e, 0, vec![(vox, base)], None);
+        let take = |n: usize| {
+            let p = dir.join(format!("Audio Files/Vox_{n:02}.wav"));
+            write_take(&p, 1_000);
+            p
+        };
+        // Replace (the default): over what was there, on the same playlist.
+        assert_eq!(e.session().edit.record_mode, "normal");
+        add_recording(&mut e, 1_000, vec![(vox, take(1))], None);
+        let t = e.session().track(vox).unwrap();
+        assert_eq!((t.playlists.len(), t.clips().len()), (1, 3));
+        // New Playlist per Take: a new playlist, the song kept around the take.
+        e.execute("options.record_mode", &json!({"mode": "playlists"})).unwrap();
+        add_recording(&mut e, 500, vec![(vox, take(2))], None);
+        let t = e.session().track(vox).unwrap();
+        assert_eq!((t.playlists.len(), t.active_playlist), (2, 1));
+        assert_eq!(t.playlists[0].clips.len(), 3, "the old playlist as it was");
+        let rows: Vec<_> = t.clips().iter().map(|c| (c.start, c.end())).collect();
+        assert_eq!(rows, [(0, 500), (500, 1_500), (1_500, 2_000), (2_000, 3_000)]);
+        // Keep Takes as Lanes: the track becomes a comping one; the take on a lane, in the comp.
+        e.execute("options.record_mode", &json!({"mode": "lanes"})).unwrap();
+        add_recording(&mut e, 2_000, vec![(vox, take(3))], None);
+        let t = e.session().track(vox).unwrap();
+        assert!(crate::cmd::comp::comping(t));
+        assert!(t.clips().iter().any(|c| c.start == 2_000 && c.from_layer.is_some()));
+        assert!(e.execute("options.record_mode", &json!({"mode": "overdub"})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loop_record_with_no_selection_loops_the_loop_range() {
+        let mut ed = soundcraft_model::EditState { loop_record: true, selection: Range::point(100), ..Default::default() };
+        // No loop range: a straight take, as before.
+        assert_eq!(record_start(&ed, None).pass, None);
+        ed.loop_range = Some(Range::new(48_000, 96_000));
+        let rs = record_start(&ed, None);
+        assert_eq!((rs.start, rs.pass, rs.loop_from), (48_000, Some(48_000), Some(48_000)));
+        assert_eq!(rs.play, Some((48_000, None, Some(Range::new(48_000, 96_000)))));
+        // Without Loop Record the loop range is no matter.
+        ed.loop_record = false;
+        assert_eq!(record_start(&ed, None).pass, None);
     }
 
     #[test]
