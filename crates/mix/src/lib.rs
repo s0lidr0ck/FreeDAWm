@@ -422,6 +422,9 @@ struct Strip {
     /// switches mid-play does not click; snapped to the mute when `mute_settled` is false.
     mute_gain: f32,
     mute_settled: bool,
+    /// Per-sample fader and mute gains of the block (reserved in `sync`, filled by the fader).
+    fader_gain: Vec<f32>,
+    mute_gains: Vec<f32>,
     /// Muted, and the ramp to silence was over before this block: nothing of the strip (not
     /// even a send) is heard.
     silent: bool,
@@ -620,6 +623,8 @@ impl Strip {
             muted: false,
             mute_gain: 1.0,
             mute_settled: false,
+            fader_gain: Vec::new(),
+            mute_gains: Vec::new(),
             silent: false,
             gr: 0.0,
             clip_fx: HashMap::new(),
@@ -1473,6 +1478,11 @@ impl MixEngine {
             if strip.buf.len() != ch || strip.buf.first().map_or(0, Vec::len) != mb {
                 strip.buf = vec![vec![0.0; mb]; ch];
             }
+            for g in [&mut strip.fader_gain, &mut strip.mute_gains] {
+                if g.capacity() < mb {
+                    *g = Vec::with_capacity(mb);
+                }
+            }
             // Room for the pre-fader copy (pre-fader sends, keys and meters), so filling it never
             // allocates while rendering.
             if strip.pre.len() != ch || strip.pre.iter().any(|b| b.capacity() < mb) {
@@ -2223,28 +2233,44 @@ impl MixEngine {
         m.instrument = strip.inst_readouts;
         let src_fmt = strip_format(t, strip.buf.len());
         let law = self.pan_law;
+        // Automation is read where the audio in the buffer is on the timeline (see `apos` in
+        // `process_strip`): the post-fader buffer `post_at` samples back, the pre-fader copy
+        // `pre_at`.
+        let back = |d: usize| pos.saturating_sub(i64::try_from(d).unwrap_or(0));
         for (i, snd) in t.mixer.sends.iter().enumerate() {
             let Some(snd) = snd else { continue };
-            if send_muted(t, i, snd.mute, pos) || strip.silent {
+            if strip.silent {
                 continue;
             }
-            let lvl = send_level(t, i, snd.level_db, pos);
-            let gain = db_to_gain(lvl);
             let src = if snd.pre_fader { &strip.pre } else { &strip.buf };
             let Route::Bus(b) = &snd.target else { continue };
             let Some(dst) = self.busses.get_mut(b) else { continue };
-            if gain <= 0.0 {
-                continue;
-            }
-            // Mono sends use the send's own pan; a stereo send's pan balances it (see
-            // `stereo_send_pans`).
-            let p = send_pan(t, i, snd.pan, pos);
-            let stereo = if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) };
+            let apos = back(if snd.pre_fader { strip.pre_at } else { strip.post_at });
             let surround = snd.surround.as_ref().or(if snd.follow_main_pan { t.mixer.surround.as_ref() } else { None });
-            let m = build_matrix(src_fmt, src.len(), dst.fmt, dst.buf.len(), &PanSpec { stereo, surround }, law);
-            apply_matrix(src, frames, &mut dst.buf, &m, gain);
+            // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
+            // block size (playback or bounce) sends the same.
+            let mut start = 0;
+            while start < frames {
+                let (at, end) = send_segment(t, i, apos, start, frames);
+                let span = start..end;
+                start = end;
+                if send_muted(t, i, snd.mute, at) {
+                    continue;
+                }
+                let gain = db_to_gain(send_level(t, i, snd.level_db, at));
+                if gain <= 0.0 {
+                    continue;
+                }
+                // Mono sends use the send's own pan; a stereo send's pan balances it (see
+                // `stereo_send_pans`).
+                let p = send_pan(t, i, snd.pan, at);
+                let stereo = if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) };
+                let m = build_matrix(src_fmt, src.len(), dst.fmt, dst.buf.len(), &PanSpec { stereo, surround }, law);
+                apply_matrix_span(src, span, &mut dst.buf, &m, gain);
+            }
         }
         let dest = strip.dest;
+        let extra = if matches!(dest, Dest::Main | Dest::Bus(_) | Dest::Hw(_)) && strip.out_extra.active() { strip.out_extra.delay() } else { 0 };
         let src: &[Vec<f32>] = match dest {
             // The line runs even at delay 0, so it keeps the history a later change crossfades from.
             Dest::Main | Dest::Bus(_) | Dest::Hw(_) if strip.out_extra.active() => {
@@ -2273,9 +2299,12 @@ impl MixEngine {
             },
             Dest::None => return,
         };
+        // The pan reads where its audio is on the timeline: behind by the strip's delay and the
+        // extra wait of a direct output.
+        let apos = back(strip.post_at.saturating_add(extra));
         let mut start = 0;
         while start < frames {
-            let (at, end) = pan_segment(t, pos, start, frames);
+            let (at, end) = pan_segment(t, apos, start, frames);
             let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: t.mixer.surround.as_ref() };
             let m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
             apply_matrix_span(src, start..end, dst, &m, 1.0);
@@ -2923,7 +2952,11 @@ fn process_strip(
     strip.latency = latency.min(MAX_LATENCY);
     strip.post_at = strip.base.saturating_add(strip.latency);
     strip.pre_at = strip.post_at;
-    let auto_mute = t.mixer.automation_mode.reads() && t.lane(&AutoParam::Mute).is_some_and(|l| l.value_at(pos, 0.0) >= 0.5);
+    // The fader section reads its automation where the audio now in the buffer is on the
+    // timeline: `post_at` samples back (the inserts' delay), so a move lines up with what it moves.
+    let apos = pos.saturating_sub(i64::try_from(strip.post_at).unwrap_or(0));
+    let mute_lane = t.lane(&AutoParam::Mute).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty());
+    let auto_mute = mute_lane.is_some_and(|l| l.value_at(apos, 0.0) >= 0.5);
     strip.muted = t.mixer.mute || auto_mute || solo_muted;
     if strip.pre_key || s.edit.pre_fader_metering || t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
         strip.pre.resize_with(strip.buf.len(), Vec::new);
@@ -2932,59 +2965,111 @@ fn process_strip(
             d.extend_from_slice(src.get(..frames).unwrap_or(&[]));
         }
     }
-    // Endpoints are the first and last sample of this block. The next block starts on its own
-    // first sample, so a breakpoint there does not ramp the block before it.
-    let last = pos.saturating_add(frames.saturating_sub(1) as i64);
-    let mut v0 = volume_db_at(t, pos);
-    let mut v1 = volume_db_at(t, last);
-    // Trim automation (an offset on top of the volume curve), read like every other lane.
-    if t.mixer.automation_mode.reads()
-        && let Some(l) = t.automation.iter().find(|l| l.param == AutoParam::Trim).filter(|l| !l.points.is_empty())
-    {
-        v0 += l.value_at(pos, 0.0);
-        v1 += l.value_at(last, 0.0);
-    }
-    // VCA master: its fader offsets the member's, and its mute mutes the member.
-    if let Some(vid) = t.mixer.vca
-        && let Some(vca) = s.tracks.iter().find(|x| x.id.0 == vid && x.kind == TrackKind::Vca)
-    {
-        v0 += volume_db_at(vca, pos);
-        v1 += volume_db_at(vca, last);
-        if vca.mixer.mute {
-            strip.muted = true;
-        }
-    }
-    // The mute ramps (from where the last block left it) rather than switching.
-    let target = if strip.muted { 0.0 } else { 1.0 };
+    let vca = t.mixer.vca.and_then(|vid| s.tracks.iter().find(|x| x.id.0 == vid && x.kind == TrackKind::Vca));
+    // VCA master: its mute mutes the member (its fader offsets the member's, below).
+    let held_mute = t.mixer.mute || solo_muted || vca.is_some_and(|v| v.mixer.mute);
+    strip.muted = strip.muted || held_mute;
+    fader_gains(t, vca, apos, frames, &mut strip.fader_gain);
+    // The mute: from where the last block left it, ramping (never switching) to what the mute,
+    // the solo, the VCA and the mute lane ask, sample by sample.
     if !strip.mute_settled {
-        strip.mute_gain = target;
+        strip.mute_gain = if strip.muted { 0.0 } else { 1.0 };
         strip.mute_settled = true;
     }
     let from = strip.mute_gain;
-    strip.silent = strip.muted && from <= 0.0;
-    let (g0, g1) = if strip.silent { (-144.0, -144.0) } else { (v0.min(12.0), v1.min(12.0)) };
-    let mut end = from;
+    let (end, open) = mute_gains(mute_lane.filter(|_| !held_mute), held_mute, apos, frames, from, &mut strip.mute_gains);
+    // Muted all through: nothing of the strip (not even a send) is heard.
+    strip.silent = !open;
+    let (fg, mg) = (&strip.fader_gain, &strip.mute_gains);
     for c in strip.buf.iter_mut() {
-        let mut m = from;
-        for i in 0..frames {
-            m = mute_step(m, target);
-            if let Some(x) = c.get_mut(i) {
-                *x *= lerp_gain(g0, g1, i, frames.saturating_sub(1)) * m;
-            }
+        if !open {
+            c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+            continue;
         }
-        end = m;
+        for ((x, f), m) in c.iter_mut().take(frames).zip(fg).zip(mg) {
+            *x *= f * m;
+        }
     }
-    // Pre-fader sends (and keys) skip the fader, not the mute: the same ramp.
-    if from != target && !strip.silent {
+    // Pre-fader sends, keys and meters skip the fader, not the mute.
+    if open && mg.iter().any(|m| *m < 1.0) {
         for c in strip.pre.iter_mut() {
-            let mut m = from;
-            for x in c.iter_mut().take(frames) {
-                m = mute_step(m, target);
+            for (x, m) in c.iter_mut().take(frames).zip(mg) {
                 *x *= m;
             }
         }
     }
-    strip.mute_gain = if strip.buf.is_empty() { target } else { end };
+    strip.mute_gain = end;
+}
+
+/// Fills `out` with the fader's linear gain for each of `frames` samples from timeline position
+/// `at`: the volume lane (or the fader), the trim lane and the VCA master's fader, capped at
+/// +12 dB. A block whose lanes bend or have a breakpoint inside it is read sample by sample, so a
+/// breakpoint is honoured wherever it falls and any block size plays the same; otherwise it ramps
+/// linearly between its first and last samples. `out` has room for `frames` (reserved in `sync`).
+fn fader_gains(t: &Track, vca: Option<&Track>, at: Samples, frames: usize, out: &mut Vec<f32>) {
+    out.clear();
+    let last = at.saturating_add(frames.saturating_sub(1) as i64);
+    let reads = |tr: &Track| tr.mixer.automation_mode.reads();
+    let trim = t.lane(&AutoParam::Trim).filter(|l| reads(t) && !l.points.is_empty());
+    let vol =
+        t.lane(&AutoParam::Volume).filter(|l| reads(t) && t.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty());
+    let vca_vol = vca.and_then(|v| {
+        v.lane(&AutoParam::Volume).filter(|l| reads(v) && v.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty())
+    });
+    let db = |p: Samples| {
+        let mut d = volume_db_at(t, p);
+        if let Some(l) = trim {
+            d += l.value_at(p, 0.0);
+        }
+        if let Some(v) = vca {
+            d += volume_db_at(v, p);
+        }
+        d.min(12.0)
+    };
+    let exact = [vol, trim, vca_vol].into_iter().flatten().any(|l| bends_within(l, at, last));
+    if exact {
+        out.extend((0..frames).map(|i| db_to_gain(db(at.saturating_add(i as i64)))));
+    } else {
+        let (g0, g1) = (db_to_gain(db(at)), db_to_gain(db(last)));
+        let n = frames.saturating_sub(1).max(1) as f32;
+        out.extend((0..frames).map(|i| g0 + (g1 - g0) * (i as f32 / n)));
+    }
+}
+
+/// Whether `l` changes course inside `[a, b]`: a breakpoint after `a` and before `b`, or a bent
+/// segment under it (a straight line between the ends would not follow either).
+fn bends_within(l: &soundcraft_model::AutomationLane, a: Samples, b: Samples) -> bool {
+    let k = l.points.partition_point(|p| p.at <= a);
+    let inside = l.points.get(k).is_some_and(|p| p.at < b);
+    let bent = k > 0 && l.points.get(k - 1).is_some_and(|p| p.curve != 0.0) && l.points.get(k).is_some();
+    inside || bent
+}
+
+/// Fills `out` with the mute's gain for each of `frames` samples from `at`, ramping from `from`
+/// towards 0 while muted (`held`, or the mute `lane` at that sample) and 1 while not, over
+/// [`MUTE_RAMP`] samples. Returns the gain after the block and whether any sample is open.
+fn mute_gains(lane: Option<&soundcraft_model::AutomationLane>, held: bool, at: Samples, frames: usize, from: f32, out: &mut Vec<f32>) -> (f32, bool) {
+    out.clear();
+    let mut m = from;
+    let mut open = false;
+    // The lane is a step: walk its points as the samples reach them.
+    let (mut on, mut k) = match lane {
+        Some(l) => (l.value_at(at, 0.0) >= 0.5, l.points.partition_point(|p| p.at <= at)),
+        None => (false, 0),
+    };
+    for i in 0..frames {
+        let here = at.saturating_add(i as i64);
+        if let Some(l) = lane {
+            while let Some(p) = l.points.get(k).filter(|p| p.at <= here) {
+                on = p.value >= 0.5;
+                k += 1;
+            }
+        }
+        m = mute_step(m, if held || on { 0.0 } else { 1.0 });
+        open |= m > 0.0;
+        out.push(m);
+    }
+    (m, open || (frames == 0 && m > 0.0))
 }
 
 /// Samples a mute takes to close or open (5 ms at 48 kHz): short enough to sound like a switch,
@@ -4438,6 +4523,24 @@ fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples
     let automated = t.mixer.automation_mode.reads() && t.automation.iter().any(|l| matches!(l.param, AutoParam::Pan(_)) && !l.points.is_empty());
     if !automated {
         return (pos, frames);
+    }
+    let here = pos.saturating_add(start as i64);
+    let at = here.div_euclid(PAN_STEP).saturating_mul(PAN_STEP);
+    let left = usize::try_from(at.saturating_add(PAN_STEP).saturating_sub(here)).unwrap_or(1).max(1);
+    (at, start.saturating_add(left).min(frames))
+}
+
+/// The next stretch of a send's block from `start`: the timeline position its automation is read
+/// at and where the stretch ends. An automated send (level, pan or mute lane) steps on the
+/// [`PAN_STEP`] grid; one without lanes takes the whole block, read at its start.
+fn send_segment(t: &Track, i: usize, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
+    let k = u8::try_from(i).unwrap_or(0);
+    let automated = t.mixer.automation_mode.reads()
+        && t.automation
+            .iter()
+            .any(|l| matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k) && !l.points.is_empty());
+    if !automated {
+        return (pos.saturating_add(start as i64), frames);
     }
     let here = pos.saturating_add(start as i64);
     let at = here.div_euclid(PAN_STEP).saturating_mul(PAN_STEP);
@@ -7606,6 +7709,98 @@ mod tests {
         s.edit.delay_compensation = false;
         let out = render_range(&s, Range::new(0, 8000), 512);
         assert_ne!(argmax(&out[0]), argmax(&out[1]));
+    }
+
+    /// Automation playback: a fader move on a latent track plays when its audio does, not the
+    /// plug-in delay earlier.
+    #[test]
+    fn fader_automation_is_delay_compensated() {
+        let lat = soundcraft_dsp::create("maximizer").unwrap().latency() as i64;
+        assert!(lat > 0, "test needs a latent plugin");
+        let mut s = Session::default();
+        let mut imp = vec![0.0f32; 48_000];
+        imp[2000] = 0.5;
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![imp] })));
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let cid = s.new_clip_id();
+        let tr = s.track_mut(t).unwrap();
+        tr.playlist_mut().unwrap().clips.push(Clip::audio(cid, "i", SourceId(900), 0, 0, 48_000));
+        tr.mixer.add_module(Insert::new("maximizer"), None).unwrap();
+        // Full level until just after the impulse, then down: the impulse is heard.
+        let step = 2000 + (lat / 2).max(1);
+        let lane = tr.lane_mut(&AutoParam::Volume);
+        lane.set_point(0, 0.0);
+        lane.set_point(step - 1, 0.0);
+        lane.set_point(step, -144.0);
+        let out = render_range(&s, Range::new(0, 8000), 512);
+        let peak = out[0].iter().fold(0f32, |a, x| a.max(x.abs()));
+        assert!(peak > 0.1, "the impulse plays before the fade it comes before: {peak}");
+    }
+
+    /// Automation playback: a volume breakpoint inside a block is honoured where it is, and any
+    /// block size plays the same.
+    #[test]
+    fn a_volume_breakpoint_inside_a_block_is_honoured() {
+        let (mut s, t) = session_with_dc(0.5, 8000);
+        let lane = s.track_mut(t).unwrap().lane_mut(&AutoParam::Volume);
+        lane.set_point(0, 0.0);
+        lane.set_point(1000, 0.0);
+        lane.set_point(1001, -144.0);
+        lane.set_point(3000, -144.0);
+        lane.set_point(3001, 0.0);
+        let big = render_range(&s, Range::new(0, 8000), 4096);
+        let small = render_range(&s, Range::new(0, 8000), 97);
+        let full = 0.5 * db_to_gain(-3.0);
+        assert!(
+            (big[0][1000] - full).abs() < 1e-4 && big[0][1002].abs() < 1e-4 && (big[0][3002] - full).abs() < 1e-4,
+            "{} {} {}",
+            big[0][1000],
+            big[0][1002],
+            big[0][3002]
+        );
+        for i in 0..8000 {
+            assert!((big[0][i] - small[0][i]).abs() < 1e-5, "{i}: {} vs {}", big[0][i], small[0][i]);
+        }
+    }
+
+    /// Automation playback: a mute lane switches at its point, not at the next block.
+    #[test]
+    fn a_mute_point_inside_a_block_mutes_there() {
+        let (mut s, t) = session_with_dc(0.5, 8000);
+        let lane = s.track_mut(t).unwrap().lane_mut(&AutoParam::Mute);
+        lane.set_point(0, 0.0);
+        lane.set_point(1000, 1.0);
+        let out = render_range(&s, Range::new(0, 8000), 4096);
+        let full = 0.5 * db_to_gain(-3.0);
+        assert!((out[0][999] - full).abs() < 1e-4, "open before the point");
+        assert!(out[0][1000] < full && out[0][1000 + MUTE_RAMP as usize] == 0.0, "closing from the point: {}", out[0][1000 + MUTE_RAMP as usize]);
+        assert_eq!(out, render_range(&s, Range::new(0, 8000), 97), "any block size");
+    }
+
+    /// Automation playback: send automation plays the same whatever the block size.
+    #[test]
+    fn send_automation_does_not_depend_on_the_block_size() {
+        let (mut s, t) = session_with_dc(0.5, 8000);
+        let bus = s.add_bus("Verb", ChannelFormat::Stereo);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Verb"));
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        let tr = s.track_mut(t).unwrap();
+        tr.mixer.output = Route::None;
+        let mut snd = soundcraft_model::SendSlot::new(Route::Bus(bus));
+        snd.level_db = 0.0;
+        tr.mixer.sends[0] = Some(snd);
+        let lane = tr.lane_mut(&AutoParam::SendLevel(0));
+        lane.set_point(0, 0.0);
+        lane.set_point(4000, -40.0);
+        let lane = tr.lane_mut(&AutoParam::SendMute(0));
+        lane.set_point(0, 0.0);
+        lane.set_point(6000, 1.0);
+        let a = render_range(&s, Range::new(0, 8000), 4096);
+        let b = render_range(&s, Range::new(0, 8000), 100);
+        for i in 0..8000 {
+            assert!((a[0][i] - b[0][i]).abs() < 1e-6, "{i}: {} vs {}", a[0][i], b[0][i]);
+        }
+        assert!(a[0][2000] > a[0][3900] && a[0][3900] > 0.0 && a[0][7000] == 0.0);
     }
 
     /// A reset (stop, locate) must not leave the previous position's audio in the alignment delay.
