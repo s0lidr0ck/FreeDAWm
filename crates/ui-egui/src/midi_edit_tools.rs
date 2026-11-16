@@ -691,6 +691,46 @@ pub fn release_key(app: &mut SoundApp) {
     }
 }
 
+/// The drum names of a track's instrument, by pitch: Juke's pads (each pad's name on its trigger
+/// note), the drum synth's General MIDI names; `None` for other instruments (no drum view).
+pub fn drum_names(track: &soundcraft_model::Track) -> Option<Vec<Option<String>>> {
+    let ins = track.instrument.as_ref()?;
+    let mut names: Vec<Option<String>> = vec![None; 128];
+    match ins.plugin.as_str() {
+        "juke" => {
+            for pad in (0..soundcraft_dsp::plugins::juke::PADS).rev() {
+                let note = usize::from(crate::juke_window::pad_note(ins, pad));
+                if let Some(slot) = names.get_mut(note) {
+                    *slot = Some(soundcraft_engine::cmd::juke::pad_layout(ins, pad).name);
+                }
+            }
+        }
+        "drum_synth" => {
+            for (p, slot) in (0u8..).zip(names.iter_mut()) {
+                *slot = soundcraft_midi::gm_drum_name(p).map(str::to_string);
+            }
+        }
+        _ => return None,
+    }
+    Some(names)
+}
+
+/// The rows the drum view keeps: the pitches with notes, and with `all` every named drum.
+pub fn drum_mask(names: &[Option<String>], seq: &soundcraft_midi::Sequence, all: bool) -> u128 {
+    let mut m: u128 = 0;
+    for n in seq.notes.iter().filter(|n| n.start >= 0) {
+        m |= 1u128 << u32::from(n.pitch.min(127));
+    }
+    if all || m == 0 {
+        for (p, name) in (0u32..128).zip(names) {
+            if name.is_some() {
+                m |= 1u128 << p;
+            }
+        }
+    }
+    m
+}
+
 /// A chord the Pencil can stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chord {

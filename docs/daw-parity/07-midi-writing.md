@@ -146,9 +146,9 @@ The gaps are of four kinds:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Missing** in the note editor |
-| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Missing**: only C rows are labelled |
-| Show only the rows in use | ◐ | ● | ● | ● | **Missing** |
+| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Works** in the note editor for Juke and the drum synth (More › Drum View, on by default there): a named row per drum, hits drawn as diamonds on their start and moved, not resized |
+| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Partial**: Juke's pad names on their trigger notes, General MIDI names for the drum synth; no editable drum maps, and hosted instruments get none |
+| Show only the rows in use | ◐ | ● | ● | ● | **Works**: the drum view shows the rows with hits (every named drum while the clip is empty, or with More › Every Drum Row) |
 | Step sequencer with pattern clips | ○ | ● | ● | ● | **Works** (Juke Steps) |
 | Per-step velocity, probability, repeats, nudge | ○ | ● | ● | ● | **Works**, plus flam, accent and conditions (every Nth, fills) |
 | Rows of different lengths, rates and directions | ○ | ● | ● | ◐ | **Works**, up to 64 steps |
@@ -160,7 +160,7 @@ The gaps are of four kinds:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Event list of every kind of event, typed values, insert, filter | ● | ○ | ● | ● | **Partial**: notes only; only velocity can be changed |
+| Event list of every kind of event, typed values, insert, filter | ● | ○ | ● | ● | **Works**: notes, CC, pitch bend, aftertouch, poly pressure and program changes in time order; position (written when the drag or typing ends), channel, note or number, velocity or value and length typed; an Insert row for each kind at the insertion point; filters by kind and channel. No SysEx (the model keeps none) |
 | Score view | ● | ● | ● | ● | **Partial**: a read-only grand staff |
 | Enter and edit notes in the score | ● | ● | ● | ● | **Missing** |
 | Print the score | ● | ● | ● | ● | **Works** |
@@ -383,3 +383,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Controller lanes: Line and Curve tools, ramps between points, scale and thin, program change and poly pressure lanes, controllers that follow their notes |
 | 2026-11-16 | minor | Several selected MIDI clips in the editor: the others show in their colour, a click switches to one |
 | 2026-11-16 | minor | Scales and chords: fold to scale, keep to scale, chord stamp, clips that follow the chord lane (opt in) |
+| 2026-11-16 | minor | Drum view in the note editor (named rows, diamonds, rows in use); the event list shows and edits every event kind, inserts and filters |

@@ -232,6 +232,11 @@ pub struct MidiEditorState {
     pub ctrl_channel: Option<u8>,
     /// With a key on the Key ruler: only the scale's rows (and those of pitches with notes).
     pub fold_scale: bool,
+    /// The drum view (named rows, hits as diamonds): `None` follows the instrument (on for Juke
+    /// and the drum synth).
+    pub drum_view: Option<bool>,
+    /// The drum view shows every named drum, not only the rows with hits.
+    pub drum_all_rows: bool,
     /// The rows the roll was last folded to (0: none), to centre the notes when folding turns
     /// on or off.
     pub fold_seen: u128,
@@ -295,6 +300,8 @@ impl Default for MidiEditorState {
             ctrl_sel: None,
             ctrl_channel: None,
             fold_scale: false,
+            drum_view: None,
+            drum_all_rows: false,
             fold_seen: 0,
             keep_scale: false,
             chord: None,
@@ -568,6 +575,25 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
             .on_hover_text("Show CC, pitch bend, aftertouch, poly pressure and program lanes under the velocity lane");
+        // The drum view.
+        let has_drums = app.engine.session().track(track).and_then(tools::drum_names).is_some();
+        let mut dv = app.midi.drum_view.unwrap_or(true) && has_drums;
+        if ui
+            .add_enabled(has_drums, egui::Checkbox::new(&mut dv, "Drum View"))
+            .on_hover_text("A named row per drum, hits as diamonds")
+            .on_disabled_hover_text("For Juke and the drum synth")
+            .changed()
+        {
+            app.midi.drum_view = Some(dv);
+        }
+        let mut all_rows = app.midi.drum_all_rows;
+        if ui
+            .add_enabled(dv, egui::Checkbox::new(&mut all_rows, "Every Drum Row"))
+            .on_hover_text("Show every drum, not only the rows with hits")
+            .changed()
+        {
+            app.midi.drum_all_rows = all_rows;
+        }
         // Scale and chords.
         let keyed = !app.engine.session().key_signatures.is_empty();
         let mut fold = app.midi.fold_scale;
@@ -809,10 +835,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     view = clamp_left(view, width, len_ticks);
     // The key at the clip's start (with one on the Key ruler) and, folded, the rows kept.
     let clip_key = (!s.key_signatures.is_empty()).then(|| soundcraft_engine::vocal::key_pc_at(&s, clip.start));
-    let fold = match clip_key.filter(|_| app.midi.fold_scale) {
-        Some((k, sc)) => tools::fold_mask(soundcraft_engine::vocal::key_set(k, sc), sequence),
-        None => 0,
+    // The drum view: the instrument's drum names, one row each (only rows with hits unless
+    // every drum is asked for); it folds the roll in place of the scale.
+    let drum_names = s.track(track).and_then(tools::drum_names).filter(|_| app.midi.drum_view != Some(false));
+    let fold = match (&drum_names, clip_key.filter(|_| app.midi.fold_scale)) {
+        (Some(names), _) => tools::drum_mask(names, sequence, app.midi.drum_all_rows),
+        (None, Some((k, sc))) => tools::fold_mask(soundcraft_engine::vocal::key_set(k, sc), sequence),
+        (None, None) => 0,
     };
+    let drums = drum_names.is_some();
     let n_rows = if fold == 0 { 128.0 } else { fold.count_ones() as f32 };
     // Folding or unfolding changes what a scroll means: the notes are centred again.
     if (fold != 0) != (app.midi.fold_seen != 0) {
@@ -863,7 +894,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         painter.rect_filled(row, 0.0, fill);
         let key = Rect::from_min_size(pos2(keys.min.x, y), vec2(KEY_W - 2.0, row_h - 1.0));
         painter.rect_filled(key, 1.0, if is_black(pitch) { Color32::from_rgb(20, 20, 20) } else { Color32::from_rgb(225, 225, 225) });
-        if pitch.rem_euclid(12) == 0 && (0..=127).contains(&pitch) {
+        if let Some(name) = drum_names.as_ref().and_then(|n| n.get(usize::try_from(pitch).ok()?)).and_then(|n| n.as_deref()) {
+            // The drum's name across the key, and a line under its row.
+            painter.with_clip_rect(key.intersect(painter.clip_rect())).text(
+                pos2(key.min.x + 3.0, key.center().y),
+                Align2::LEFT_CENTER,
+                name,
+                regular(8.5),
+                Color32::from_rgb(30, 30, 30),
+            );
+            painter.line_segment([pos2(roll.min.x, y + row_h), pos2(roll.max.x, y + row_h)], Stroke::new(1.0, Color32::from_rgb(54, 54, 58)));
+        } else if pitch.rem_euclid(12) == 0 && (0..=127).contains(&pitch) {
             painter.text(
                 pos2(key.max.x - 3.0, key.center().y),
                 Align2::RIGHT_CENTER,
@@ -907,7 +948,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         let k = 0.45 + 0.55 * f32::from(v) / 127.0;
         Color32::from_rgb((f32::from(base.r()) * k) as u8, (f32::from(base.g()) * k) as u8, (f32::from(base.b()) * k) as u8)
     };
+    // In the drum view a hit is a diamond on its start, its length not shown.
     let note_rect = |st: i64, ln: i64, p: i32| {
+        if drums {
+            let h = (row_h - 2.0).max(4.0);
+            return Rect::from_center_size(pos2(x_of(st), y_of(p) + row_h / 2.0), vec2(h, h));
+        }
         Rect::from_min_max(pos2(x_of(st), y_of(p) + 1.0), pos2(x_of(st.saturating_add(ln)).max(x_of(st) + 3.0), y_of(p) + row_h - 1.0))
     };
     // Ghost notes of the other clips, behind this clip's.
@@ -943,6 +989,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         // A muted note is drawn faint, with its outline.
         let (fill, edge) = if n.muted { (fill.gamma_multiply(0.25), Color32::from_gray(150)) } else { (fill, Color32::BLACK) };
         let r = note_rect(st, ln, p);
+        if drums {
+            let c = r.center();
+            let h = r.width() / 2.0;
+            let pts = vec![pos2(c.x, c.y - h), pos2(c.x + h, c.y), pos2(c.x, c.y + h), pos2(c.x - h, c.y)];
+            notes_p.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, edge)));
+            continue;
+        }
         notes_p.rect(r, 2.0, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
         // The note's name, when it fits.
         if r.width() >= 24.0 && r.height() >= 8.0 && r.intersects(roll) {
@@ -975,6 +1028,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     });
     let hit = |pos: egui::Pos2| -> Option<(usize, Edge)> {
         sequence.notes.iter().enumerate().rev().find_map(|(i, n)| {
+            // A drum hit is only moved: its diamond has no edges to resize.
+            if drums {
+                return note_rect(n.start, n.length, i32::from(n.pitch)).contains(pos).then_some((i, Edge::Move));
+            }
             let r = Rect::from_min_max(
                 pos2(x_of(n.start), y_of(i32::from(n.pitch))),
                 pos2(x_of(n.end()).max(x_of(n.start) + 3.0), y_of(i32::from(n.pitch)) + row_h),
