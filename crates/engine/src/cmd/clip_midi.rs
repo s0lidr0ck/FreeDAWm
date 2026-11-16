@@ -4,7 +4,7 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_midi::{CtrlEvent, Sequence};
+use soundcraft_midi::{CtrlEvent, CtrlShape, Sequence};
 use soundcraft_model::{ClipContent, ClipId};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -70,9 +70,10 @@ fn offsets(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 /// `seq` played backwards in `[0, len)`: each note ends where it started from the end; each
-/// controller's value holds over the mirror of the span it held (the state before its first
-/// event in the window, from an event before it, closes the reversed lane). Events outside the
-/// window stay.
+/// controller lane's curve is mirrored. A held value holds over the mirror of the span it held (the
+/// state before the window's first event, from an event before it, closes the reversed lane); a
+/// ramp runs the other way, from where it ended to where it began, its curve bent the other way,
+/// so the reversed lane is the original's mirror image. Events outside the window stay.
 pub fn reversed(seq: &Sequence, len: i64) -> Sequence {
     let mut out = seq.clone();
     for n in out.notes.iter_mut().filter(|n| n.start >= 0 && n.start < len) {
@@ -80,30 +81,78 @@ pub fn reversed(seq: &Sequence, len: i64) -> Sequence {
         n.start = len.saturating_sub(end).max(0);
     }
     let inside = |c: &CtrlEvent| c.tick >= 0 && c.tick < len;
-    let mut ctrls: Vec<CtrlEvent> = seq.ctrls.iter().filter(|c| !inside(c)).copied().collect();
     let mut lanes: Vec<(soundcraft_midi::CtrlKind, u8)> = Vec::new();
     for c in seq.ctrls.iter().filter(|c| inside(c)) {
         if !lanes.contains(&(c.kind, c.channel)) {
             lanes.push((c.kind, c.channel));
         }
     }
+    // The reversed lanes first, so a ramp's end point on the window's edge comes before an event
+    // already there (the sort below keeps equal ticks in order).
+    let mut ctrls: Vec<CtrlEvent> = Vec::new();
     for (kind, ch) in lanes {
-        let lane: Vec<&CtrlEvent> = seq.ctrls.iter().filter(|c| c.kind == kind && c.channel == ch).collect();
-        let within: Vec<&&CtrlEvent> = lane.iter().filter(|c| inside(c)).collect();
-        for (k, c) in within.iter().enumerate() {
-            let next = within.get(k + 1).map_or(len, |n| n.tick);
-            ctrls.push(CtrlEvent { tick: len.saturating_sub(next).max(0), ..***c });
-        }
-        // The value before the window's first event, from the last one before the window.
-        if let (Some(first), Some(prior)) = (within.first(), lane.iter().filter(|c| c.tick < 0).max_by_key(|c| c.tick))
-            && first.tick > 0
-        {
-            ctrls.push(CtrlEvent { tick: len.saturating_sub(first.tick), ..**prior });
+        let mut lane: Vec<&CtrlEvent> = seq.ctrls.iter().filter(|c| c.kind == kind && c.channel == ch).collect();
+        lane.sort_by_key(|c| c.tick);
+        let mut cuts: Vec<i64> = vec![0];
+        cuts.extend(lane.iter().filter(|c| inside(c)).map(|c| c.tick));
+        cuts.push(len);
+        cuts.dedup();
+        let segments: Vec<Segment> = cuts.windows(2).filter_map(|w| segment(&lane, *w.first()?, *w.get(1)?)).collect();
+        for (k, s) in segments.iter().enumerate().rev() {
+            let shape = match s.shape {
+                CtrlShape::Ramp(c) => CtrlShape::Ramp(-c),
+                CtrlShape::Step => CtrlShape::Step,
+            };
+            ctrls.push(CtrlEvent { tick: len.saturating_sub(s.to), value: round(s.b), shape, ..*s.event });
+            // A ramp ends on a point with the value it started from, unless the next reversed
+            // span starts there on that value already.
+            if !s.shape.is_step() {
+                let joined = k.checked_sub(1).and_then(|j| segments.get(j)).is_some_and(|n| n.to == s.from && round(n.b) == round(s.a));
+                if !joined {
+                    ctrls.push(CtrlEvent { tick: len.saturating_sub(s.from), value: round(s.a), shape: CtrlShape::Step, ..*s.event });
+                }
+            }
         }
     }
+    ctrls.extend(seq.ctrls.iter().filter(|c| !inside(c)).copied());
     out.ctrls = ctrls;
     out.sort();
     out
+}
+
+/// A span `from..to` of a controller lane: its value `a` at the start going to `b` at the end,
+/// held (`Step`) or by a ramp with the curve of that part of the ramp.
+struct Segment<'a> {
+    from: i64,
+    to: i64,
+    a: f64,
+    b: f64,
+    shape: CtrlShape,
+    event: &'a CtrlEvent,
+}
+
+fn round(v: f64) -> i32 {
+    v.round() as i32
+}
+
+/// The span `from..to` of `lane` (sorted by tick; no event strictly inside the span): the event
+/// that sets it and what it does there. None before the lane's first event.
+fn segment<'a>(lane: &[&'a CtrlEvent], from: i64, to: i64) -> Option<Segment<'a>> {
+    if to <= from {
+        return None;
+    }
+    let i = lane.iter().rposition(|c| c.tick <= from)?;
+    let g = *lane.get(i)?;
+    let held = Segment { from, to, a: f64::from(g.value), b: f64::from(g.value), shape: CtrlShape::Step, event: g };
+    let (CtrlShape::Ramp(c), Some(h)) = (g.shape, lane.get(i + 1)) else { return Some(held) };
+    if h.tick <= g.tick {
+        return Some(held);
+    }
+    let span = (h.tick - g.tick) as f64;
+    let (x0, x1) = ((from - g.tick) as f64 / span, ((to - g.tick) as f64 / span).min(1.0));
+    let v = |x: f64| f64::from(g.value) + f64::from(h.value - g.value) * g.shape.at(x);
+    // Part of an exponential ramp is the same ramp with its bend scaled by the part's share.
+    Some(Segment { a: v(x0), b: v(x1), shape: CtrlShape::Ramp(c * (x1 - x0) as f32), ..held })
 }
 
 fn reverse(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -153,6 +202,50 @@ mod tests {
         let mut sorted = seq.clone();
         sorted.sort();
         assert_eq!(reversed(&r, 1000).notes, sorted.notes, "reversed twice, as it was");
+    }
+
+    /// The value a lane plays at `t`: the last event at or before it, ramping to the next.
+    fn lane_value(seq: &Sequence, t: i64) -> Option<f64> {
+        let i = seq.ctrls.iter().rposition(|c| c.tick <= t)?;
+        let a = seq.ctrls.get(i)?;
+        match seq.next_in_lane(i) {
+            Some(b) if !a.shape.is_step() && b.tick > a.tick => {
+                let x = (t - a.tick) as f64 / (b.tick - a.tick) as f64;
+                Some(f64::from(a.value) + f64::from(b.value - a.value) * a.shape.at(x))
+            }
+            _ => Some(f64::from(a.value)),
+        }
+    }
+
+    #[test]
+    fn a_reversed_ramp_is_the_mirror_image() {
+        let c = |tick, value, shape| CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(1), value, shape };
+        // A curved ramp up, held, a straight ramp down, held; one ramp crosses the clip's end.
+        let seq = Sequence {
+            notes: vec![],
+            ctrls: vec![
+                c(100, 0, CtrlShape::Ramp(0.6)),
+                c(400, 100, CtrlShape::Step),
+                c(600, 90, CtrlShape::Ramp(0.0)),
+                c(700, 20, CtrlShape::Step),
+                c(900, 30, CtrlShape::Ramp(-0.4)),
+                c(1200, 127, CtrlShape::Step),
+            ],
+        };
+        let len = 1000;
+        let r = reversed(&seq, len);
+        // (Where the original jumps, the mirror takes the other side of the jump: not compared.)
+        for t in (1..len - 100).step_by(7).filter(|t| seq.ctrls.iter().all(|c| c.tick != len - t)) {
+            let (want, got) = (lane_value(&seq, len - t), lane_value(&r, t));
+            let (want, got) = (want.unwrap_or(f64::NAN), got.unwrap_or(f64::NAN));
+            assert!((want - got).abs() <= 1.0, "at {t}: reversed {got}, mirror of the original {want}");
+        }
+        // Twice reversed plays as the original.
+        let rr = reversed(&r, len);
+        for t in (101..len).step_by(7) {
+            let (want, got) = (lane_value(&seq, t).unwrap_or(f64::NAN), lane_value(&rr, t).unwrap_or(f64::NAN));
+            assert!((want - got).abs() <= 1.0, "at {t}: twice reversed {got}, original {want}");
+        }
     }
 
     #[test]

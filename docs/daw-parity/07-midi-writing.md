@@ -187,7 +187,7 @@ The gaps are of four kinds:
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
 | Transpose and velocity offset per clip | ● | ● | ● | ● | **Works**: MIDI Editor › More › Clip transpose and Clip velocity (`clip.midi_offsets`), applied as the clip plays and in MIDI export, with the track's Real-Time Properties; the notes stay as written |
 | Stretch a clip so the notes scale | ● | ● | ● | ● | **Works**: trimming a MIDI clip's edge with Alt held (as for audio; `clip.stretch_to`) scales its notes' starts and lengths and its controllers in ticks from its start, the other edge staying; one undo step. A Juke pattern clip is refused |
-| Reverse a clip | ◐ | ● | ● | ● | **Works**: More › Reverse Clip (`clip.midi_reverse`): notes and controllers play backwards in the clip's window, each controller value holding over the mirror of its span |
+| Reverse a clip | ◐ | ● | ● | ● | **Works**: More › Reverse Clip (`clip.midi_reverse`): notes and controllers play backwards in the clip's window, each controller value holding over the mirror of its span; a ramp runs the other way with its curve bent the other way, so the reversed controller curve is the mirror image (it kept each point's ramp on the same point before, so a reversed ramp did not mirror) |
 | Bounce a clip or selection to audio in place | ● | ● | ● | ● | **Partial**: freeze and commit work on the whole track |
 
 ## I. How written MIDI plays
@@ -396,3 +396,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Shared MIDI clip copies that change together (Make Independent ends it); an Alt-trim stretches a MIDI clip, its notes scaling; a design for indexing dense clips |
 | 2026-11-16 | minor | Per-note probability, rolled each pass with a seeded generator; Export Clip as MIDI (a clip cannot be dragged out to the desktop) |
 | 2026-11-16 | minor | MIDI effects on a track (section 6): the row on MIDI effects is Partial |
+| 2026-11-16 | minor | Reverse Clip mirrors controller ramps (a ramp runs the other way, its curve bent the other way) |
