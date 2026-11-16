@@ -137,7 +137,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Gated / non-linear | ● | ◐ | ● | ◐ | **Missing** |
 | Convolution with your own impulse responses | ● | ● | ● | ● | **Works** (Vault): zero latency, true stereo, up to 10 s |
 | Bundled impulse-response library | ● | ● | ● | ● | **Missing**: one generated hall |
-| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only; auto-trim also removes the gap before the first reflection |
+| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only |
 | Capture your own impulse responses | ○ | ● | ● | ○ | **Works** (Imprint) |
 | Pre-delay synced to tempo | ◐ | ● | ● | ● | **Works** in Reverb; not in Vault or ChamberMade |
 | Freeze, ducking, modulation, damping | ◐ | ◐ | ● | ● | **Works** in Reverb; the duck follows the reverb's own input only |
@@ -267,9 +267,9 @@ them is the owner's decision, not a repair.
 | 8 | *By design.* Dist and Filter oversample four times behind a filter that rejects only about 16 dB at the original Nyquist, so high-gain settings alias | `dsp/src/plugins/fs/dist/dist_engine_dsp.rs:1191-1200`; `fs/filter/filter_engine_dsp.rs:920-929` |
 | 9 | *By design.* Reverb's output cuts and colour filters keep coefficients computed for 48 kHz; at 96 kHz they sit at about twice the labelled frequency | `dsp/src/plugins/fs/reverb/reverb_engine_dsp.rs:838-845, 2139-2146` |
 | 10 | A factory preset that lists only some parameters sounds different depending on where it is loaded: the Comp wide editor fills in the split mode and crossovers; the drawer menu and the browser do not | `ui-egui/src/fs_presets.rs:20-23, 77`; `ui-egui/src/browser/presets.rs:260, 277` |
-| 11 | Vault keeps playing an impulse response prepared for the old sample rate after the rate changes | `dsp/src/plugins/vault.rs:169-171` |
-| 12 | Vault's pre-delay moves in whole-sample steps with no smoothing; automating it clicks | `dsp/src/plugins/vault.rs:228, 236` |
-| 13 | Vault trims the silence before the first reflection of a loaded impulse response | `dsp/src/plugins/vault/ir.rs:143-145` |
+| 11 | **Fixed** at the plugin. After a rate change Vault kept playing an impulse response made for the old rate until the host sent a new one; it now plays its built-in space meanwhile. The mixer never prepares an instance again at a new rate with an old response, so nothing audible changes in the app. Test: `vault.rs` | `dsp/src/plugins/vault.rs:169-171` |
+| 12 | **Fixed.** Vault's pre-delay moved in whole-sample steps with no smoothing, so automating it clicked. A change now crossfades between the two delays over 20 ms. Test: `vault.rs` | `dsp/src/plugins/vault.rs:228, 236` |
+| 13 | **Fixed.** Vault trimmed the silence before the first reflection of a loaded impulse response; it now keeps the start and trims only the quiet end. Test: `vault.rs`, `vault/ir.rs` | `dsp/src/plugins/vault/ir.rs:143-145` |
 | 14 | Loading a chain preset clears the inserts directly and leaves the old modules' automation lanes behind | `engine/src/cmd/chain.rs:228-229` |
 | 15 | Mod's tempo-synced LFO takes its rate from the tempo but not its phase from the bar | `dsp/src/plugins/fs/mod_engine/mod.rs:45` |
 | 16 | IIR EQs (CleanQ and the hidden EQs) narrow and lose gain near the top of the range at 44.1 and 48 kHz | `dsp/src/biquad.rs:47-99`; `dsp/src/plugins/fs/cleanq/clean_q_dsp.rs:422-433` |
@@ -331,3 +331,6 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 4 fixed: bypass crossfades, keeps the insert's latency and resets the plugin when it comes back |
 | 2026-11-16 | minor | Bug 6 mostly fixed: Delay, Mod and ChamberMade report tails that follow their feedback (Filter still to do) |
 | 2026-11-16 | minor | Bug 7 fixed: the Delay holds 10.9 s at every sample rate |
+| 2026-11-16 | minor | Bug 11 fixed: Vault never plays a response made for another rate |
+| 2026-11-16 | minor | Bug 12 fixed: Vault's pre-delay crossfades |
+| 2026-11-16 | minor | Bug 13 fixed: Vault keeps the gap before an impulse response's first reflection |
