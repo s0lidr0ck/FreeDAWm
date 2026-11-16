@@ -954,6 +954,15 @@ pub fn transients_in(s: &Session, t: TrackId, r: Range, sens: f32) -> Vec<Sample
 pub fn strip_silence(s: &mut Session, t: TrackId, r: Range, thr: f32, min_len: Samples, pre: Samples, post: Samples) -> Result<usize> {
     let r = bounded_to_track(s, t, r);
     let keep = non_silent(s, t, r, thr, min_len, pre, post)?;
+    // Muted clips are not silence: they stay whole, outside the stripping, and come back after.
+    let muted: Vec<Clip> = match s.track_mut(t).and_then(|x| x.playlist_mut()) {
+        Some(pl) => {
+            let (muted, rest): (Vec<Clip>, Vec<Clip>) = std::mem::take(&mut pl.clips).into_iter().partition(|c| c.muted);
+            pl.clips = rest;
+            muted
+        }
+        None => Vec::new(),
+    };
     let mut cut_points = vec![r.start];
     for (a, b) in &keep {
         cut_points.push(*a);
@@ -977,6 +986,8 @@ pub fn strip_silence(s: &mut Session, t: TrackId, r: Range, thr: f32, min_len: S
     }
     if let Some(pl) = s.track_mut(t).and_then(|x| x.playlist_mut()) {
         pl.clips.retain(|c| !gaps.iter().any(|g| c.start >= g.start && c.end() <= g.end));
+        pl.clips.extend(muted);
+        pl.sort();
     }
     Ok(keep.len())
 }
@@ -1188,8 +1199,20 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
         s.tracks.insert((idx + 1).min(s.tracks.len()), tr);
     }
     let cid = s.new_clip_id();
+    // What comes after the inserts carries over: fader, pan, trim, output, sends and their
+    // automation (the inserts' own automation is in the render).
+    let automation: Vec<soundcraft_model::AutomationLane> =
+        tr.automation.iter().filter(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. })).cloned().collect();
+    let automation_mode = mixer.automation_mode;
     if let Some(ntr) = s.track_mut(nt) {
         ntr.mixer.volume_db = mixer.volume_db;
+        ntr.mixer.trim_db = mixer.trim_db;
+        if ntr.mixer.pan.len() == mixer.pan.len() {
+            ntr.mixer.pan.clone_from(&mixer.pan);
+        }
+        ntr.mixer.surround.clone_from(&mixer.surround);
+        ntr.mixer.automation_mode = automation_mode;
+        ntr.automation = automation;
         ntr.mixer.output = mixer.output.clone();
         ntr.mixer.sends = mixer.sends.clone();
         if let Some(pl) = ntr.playlist_mut() {
@@ -1206,10 +1229,14 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
 pub fn export_clips(e: &Engine, ids: &[soundcraft_model::ClipId], dir: &str) -> Result<usize> {
     let s = e.session();
     make_dir(dir)?;
+    // Each clip renders alone (a neighbour's crossfade is not part of it) and as if unmuted.
+    let mut solo = s.clone();
     let mut n = 0;
     for id in ids {
         let Some((t, c)) = s.find_clip(*id) else { continue };
-        let audio = soundcraft_mix::render_clips(s, t, c.range());
+        let Some(pl) = solo.track_mut(t).and_then(|x| x.playlist_mut()) else { continue };
+        pl.clips = vec![Clip { muted: false, ..c.clone() }];
+        let audio = soundcraft_mix::render_clips(&solo, t, c.range());
         let buf = AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
         let bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).map_err(|err| EngineError::Io(err.to_string()))?;
         let stem = sanitize_name(&c.name);
@@ -3658,6 +3685,66 @@ mod strip_tests {
         let r = e.execute("edit.strip_silence", &json!({"track": t.0, "start": 0, "end": far + 96_000})).unwrap();
         assert_eq!(r["clips"], 2);
         assert!(e.session().track(t).unwrap().clips().iter().any(|c| c.start >= far));
+    }
+
+    /// Parity bug 11: a muted clip is not silence to strip.
+    #[test]
+    fn muted_clips_are_left_whole() {
+        let (mut e, t) = tones(&[0, 96_000], 48_000);
+        let muted = e.session().track(t).unwrap().clips()[1].id;
+        e.session_mut().find_clip_mut(muted).unwrap().muted = true;
+        e.execute("edit.strip_silence", &json!({"track": t.0, "start": 0, "end": 200_000})).unwrap();
+        let c = e.session().track(t).unwrap().clips();
+        assert_eq!(c.iter().map(|c| (c.start, c.length, c.muted)).collect::<Vec<_>>(), vec![(0, 48_000, false), (96_000, 48_000, true)]);
+    }
+
+    /// Parity bug 22: Export Clips writes the clip alone, not its neighbour's crossfade, and a
+    /// muted clip as it would sound unmuted.
+    #[test]
+    fn exported_clips_hold_only_their_own_audio() {
+        let (mut e, t) = tones(&[0, 40_000], 8_000);
+        let ids: Vec<_> = e.session().track(t).unwrap().clips().iter().map(|c| c.id).collect();
+        let s = e.session_mut();
+        // The second clip overlaps the first's last 2000 samples, as a crossfade does.
+        s.find_clip_mut(ids[1]).unwrap().start = 6_000;
+        s.find_clip_mut(ids[0]).unwrap().muted = true;
+        let dir = std::env::temp_dir().join(format!("sc-export-alone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(export_clips(&e, &ids[..1], &dir.to_string_lossy()).unwrap(), 1);
+        let bytes = std::fs::read(dir.join("tone.wav")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (_, buf) = soundcraft_audio_io::decode(&bytes, Some("wav")).unwrap();
+        let ch = &buf.channels[0];
+        assert_eq!(ch.len(), 8_000);
+        // Steady tone throughout (clip gain 0 dB): no muted silence, no neighbour added on top.
+        let edge = ch.len() - 10;
+        assert!((ch[4_000] - 0.5).abs() < 0.02 && (ch[edge] - ch[4_000]).abs() < 0.02, "{} {}", ch[4_000], ch[edge]);
+    }
+
+    /// Parity bug 10: Commit carries the pan, trim and fader/pan/send automation to the new
+    /// track; the inserts' automation is in the render and stays behind.
+    #[test]
+    fn commit_carries_pan_trim_and_automation() {
+        use soundcraft_model::AutoParam;
+        let (mut e, t) = tones(&[0], 48_000);
+        e.execute("mix.insert", &json!({"track": t.0, "slot": 0, "plugin": "gain"})).unwrap();
+        let s = e.session_mut();
+        let tr = s.track_mut(t).unwrap();
+        tr.mixer.pan = vec![-0.5, 0.25];
+        tr.mixer.trim_db = -3.0;
+        tr.lane_mut(&AutoParam::Volume).set_point(0, -6.0);
+        tr.lane_mut(&AutoParam::Pan(0)).set_point(1000, 0.5);
+        let module = tr.mixer.inserts.first().map(|i| i.id);
+        if let Some(module) = module {
+            tr.lane_mut(&AutoParam::Plugin { module, param: "gain".into() }).set_point(0, 0.0);
+        }
+        let nt = commit_track(&mut e, t).unwrap().unwrap();
+        let n = e.session().track(nt).unwrap();
+        assert_eq!(n.mixer.pan, vec![-0.5, 0.25]);
+        assert_eq!(n.mixer.trim_db, -3.0);
+        let mut lanes: Vec<String> = n.automation.iter().filter(|l| !l.points.is_empty()).map(|l| l.param.label()).collect();
+        lanes.sort();
+        assert_eq!(lanes, vec!["pan".to_string(), "volume".to_string()]);
     }
 
     #[test]

@@ -164,13 +164,13 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Consolidate a selection to one new file | ● | ● | ● | ● | **Works** |
-| Bounce a clip or range in place, with or without effects | ● | ● | ● | ● | **Partial**: whole track only, always through its inserts; pan and automation are not carried to the new track (bug 10) |
-| Export clips as files | ● | ● | ● | ● | **Partial**: a neighbour's crossfade audio is included; a muted clip exports as silence |
+| Bounce a clip or range in place, with or without effects | ● | ● | ● | ● | **Partial**: whole track only, always through its inserts; the new track keeps the pan, trim and fader, pan and send automation (bug 10, fixed) |
+| Export clips as files | ● | ● | ● | ● | **Works**: each clip alone, a muted one as it sounds unmuted (bug 22, fixed) |
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
 | Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Missing**: only the visible part is rendered |
 | Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
-| Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; it also deletes muted clips (bug 11) |
+| Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
 | Strip silence preview before committing | ● | ● | ● | ● | **Missing** |
 
 ## H. Takes and comping
@@ -274,8 +274,8 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 7 | **Fixed.** Insert Time and Cut Time moved the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures. They now work on every playlist, move key changes, and insert or remove ticks in the tempo and meter map (`TempoMap::insert_ticks`, `remove_ticks`; inserted time plays at the tempo where it goes in, a moved meter change goes to the next bar line). A point inside a tempo ramp is refused. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/event.rs` (`insert_time`, `cut_time`); `time/src/tempo.rs` |
 | 8 | **Fixed.** Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end. Both now make the selection that many beats at the new tempo and resume the tempo in effect at its end there, moving later changes with it (`TempoMap::set_span`), so what follows stays where it was in time. Ends inside a ramp are refused. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/event_more.rs`; `time/src/tempo.rs` (`set_span`) |
 | 9 | **Fixed.** Deleting fades in a selection trimmed every crossfade on the track back to its midpoint, including those outside the selection. Only fades and crossfades that lie in the selection go now (with a point, those of the clip under it). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`delete_fades`) |
-| 10 | Commit / Bounce copies volume, output and sends to the new track but not pan or automation, then hides the original | `engine/src/io.rs:1191-1202` |
-| 11 | Strip Silence treats muted clips as silence and deletes them | `engine/src/io.rs:979-992` |
+| 10 | **Fixed.** Commit / Bounce copied volume, output and sends to the new track but not pan or automation, then hid the original. It now also carries the pan, trim, surround panner, automation mode and every automation lane but the inserts' own (which is in the render). Test: `io::strip_tests::commit_carries_pan_trim_and_automation` | `engine/src/io.rs` (`commit_track`) |
+| 11 | **Fixed.** Strip Silence treated muted clips as silence and deleted them. Muted clips are now set aside before stripping and put back whole. Test: `io::strip_tests::muted_clips_are_left_whole` | `engine/src/io.rs` (`strip_silence`) |
 | 12 | Conform to Tempo sets a varispeed ratio, so pitch changes even on a pitch-preserving (Elastic) track | `engine/src/cmd/clip_more.rs:255-260` |
 | 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
 | 14 | Send to Back / Bring to Front reorder the playlist without re-sorting; code that assumes time order can misbehave until the next edit | `engine/src/cmd/clip.rs:305-315` |
@@ -286,7 +286,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 19 | "Delete Unused Playlists" removes take layers but leaves the comp's references to them; the stored target playlist is an index that goes stale | `engine/src/cmd/track.rs:159-173`; `engine/src/cmd/comp.rs:325` |
 | 20 | Processing a clip does not shorten fades to the new length, clear warp markers or swap the fades on Reverse; and it drops the handles | `engine/src/cmd/audiosuite.rs:69-121` |
 | 21 | Coalescing volume automation to clip gain changes only the active playlist, then zeroes the fader, so other playlists change level | `engine/src/cmd/edit_more.rs:812-826` |
-| 22 | Export Clips renders the clip's time range, not the clip, so overlapping neighbours are in the file | `engine/src/io.rs:1212` |
+| 22 | **Fixed.** Export Clips rendered the clip's time range, not the clip, so overlapping neighbours were in the file (and a muted clip was silence). Each clip now renders alone and unmuted. Test: `io::strip_tests::exported_clips_hold_only_their_own_audio` | `engine/src/io.rs` (`export_clips`) |
 | 23 | Zoom to Selection and Fit by key assume a 1200-pixel timeline | `engine/src/cmd/view.rs:32, 42` |
 | 24 | Smaller: "+" on a US keyboard changes the grid, not nudge; default marker names repeat after a delete; Enter while playing can make a marker with a stray length; a view-only location still moves the playhead; a dragged fade defaults to S-curve and a commanded one to equal power | `ui-egui/src/shortcuts.rs:478, 517`; `engine/src/cmd/event.rs:404-424, 518-521`; `ui-egui/src/edit_window.rs:3301` |
 
@@ -346,3 +346,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 6 fixed: Heal joins only pieces that sound alike and keeps both clip-gain lines |
 | 2026-11-16 | minor | Bug 9 fixed: deleting fades leaves crossfades outside the selection alone |
 | 2026-11-16 | minor | Bugs 7 and 8 fixed: Insert/Cut Time move every playlist, the tempo and meter map and keys; Identify Beat restores the tempo after the selection |
+| 2026-11-16 | minor | Bugs 10, 11 and 22 fixed: Commit keeps pan and automation, Strip Silence keeps muted clips, Export Clips writes each clip alone |
