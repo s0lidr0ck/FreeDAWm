@@ -1,6 +1,6 @@
 # Four-DAW parity, section 8: what only one of them has
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (controls made honest) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (signature features) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Other product names below (Dolby Atmos, Melodyne, Splice,
@@ -137,7 +137,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F); no talkback, no video |
 | ARA 2 and spectral editing | **Missing** | A view flag exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | A read-only score with print and MusicXML export; drum step sequencer only |
-| Video export; loudness track and normalising on export; metering suite | **Partial** | No video export; no loudness target on bounce; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
+| Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
 | Vocal synthesis (Omnivocal, beta) | **Missing** | Song generation produces finished audio, not an editable sung part |
 
 ## E. Where three or four now agree
@@ -206,7 +206,7 @@ local link allows in the Network window (row 6).
 | Work | Est. (h) | Why | Status |
 |---|---:|---|---|
 | Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) |  |
-| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) |  |
+| Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (COMMIT_loudness): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export: see below |
 | Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel |  |
 | Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option |  |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow |  |
@@ -247,5 +247,5 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows |
+| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do; Ambisonics: 2nd and 3rd order encoded, 4th to 7th not offered; stored-only settings say so to agents; the video sync offset was read all along; the browser build says it cannot record; the Network window says what pairing allows; bounce to a loudness target |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |

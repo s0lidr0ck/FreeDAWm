@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
-        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false, dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30)}", always, bounce),
+        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30)}", always, bounce),
         cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo}", has_tracks, |e, p| {
             let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
@@ -319,6 +319,7 @@ fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
         "peak_db": done.peak_db,
         "lufs": done.lufs,
         "true_peak_db": done.true_peak_db,
+        "measured": done.measured.map(|m| json!({"lufs": m.lufs, "true_peak_db": m.true_peak_db, "gain_db": m.gain_db, "held_by_ceiling": m.held_by_ceiling})),
     }))
 }
 
@@ -352,7 +353,28 @@ fn bitrate_param(id: &str, p: &Value, format: soundcraft_audio_io::FileFormat) -
     Ok(kbps)
 }
 
-/// The bounce `file.bounce_mix` runs for `p`, not rendered yet.
+/// `loudness` (a LUFS target, with `true_peak` its ceiling) or `normalize` (peak).
+fn normalize_param(p: &Value) -> Result<crate::io::Normalize> {
+    let id = "file.bounce_mix";
+    let num = |k: &str| {
+        p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(id, format!("`{k}` must be a number"))))
+    };
+    match num("loudness").transpose()? {
+        Some(l) => {
+            if !(-40.0..=0.0).contains(&l) {
+                return Err(bad(id, "`loudness` is a target from -40 to 0 LUFS"));
+            }
+            let ceiling = num("true_peak").transpose()?.unwrap_or(-1.0);
+            if !(-9.0..=0.0).contains(&ceiling) {
+                return Err(bad(id, "`true_peak` is a ceiling from -9 to 0 dBTP"));
+            }
+            Ok(crate::io::Normalize::Loudness { lufs: l as f32, ceiling_db: ceiling as f32 })
+        }
+        None if bool_or(p, "normalize", false) => Ok(crate::io::Normalize::Peak),
+        None => Ok(crate::io::Normalize::Off),
+    }
+}
+
 /// The export `file.bounce_stems` runs for `p`, as a job a host steps behind a progress window
 /// ([`crate::io::StemsJob`]); the command itself runs it to the end.
 pub fn stems_job(e: &Engine, p: &Value) -> Result<crate::io::StemsJob> {
@@ -374,6 +396,7 @@ pub fn stems_job(e: &Engine, p: &Value) -> Result<crate::io::StemsJob> {
 /// The longest tail a bounce takes past its range (`file.bounce_mix`'s `tail`), seconds.
 pub const MAX_TAIL_SECS: f64 = 30.0;
 
+/// The bounce `file.bounce_mix` runs for `p`, not rendered yet.
 pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.bounce_mix", "`path` required"))?.to_string();
     // The range given; else the loop when there is one; else the whole session. The edit
@@ -396,7 +419,7 @@ pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
         bwf: None,
         bitrate_kbps: bitrate_param("file.bounce_mix", p, format)?,
     };
-    let normalize = bool_or(p, "normalize", false);
+    let normalize = normalize_param(p)?;
     let fold = fold_down_param(p, "file.bounce_mix")?;
     let bus = bounce_bus(e, p)?;
     crate::io::Bounce::new(e.session_arc(), std::path::Path::new(&path), r, &opts, bus, normalize, fold).map(|b| b.with_band(e.band_library()))
@@ -499,6 +522,45 @@ mod tests {
         assert_eq!(e.session().tracks[0].format, ChannelFormat::Mono);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bounce_reaches_a_loudness_target_under_its_true_peak_ceiling() {
+        let dir = std::env::temp_dir().join(format!("sc-bounce-loudness-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Three seconds of tone: integrated loudness needs more than a few gating blocks.
+        let tone: Vec<f32> = (0..144_000).map(|i| (i as f32 * 0.0577).sin() * 0.2).collect();
+        let wav = dir.join("tone.wav");
+        std::fs::write(
+            &wav,
+            soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::default()).unwrap(),
+        )
+        .unwrap();
+        let mut e = Engine::default();
+        e.execute("file.import_audio", &json!({"path": wav.to_string_lossy()})).unwrap();
+        let bounce = |e: &mut Engine, name: &str, extra: Value| {
+            let mut p = json!({"path": dir.join(name).to_string_lossy(), "start": 0, "end": 144_000, "bit_depth": "32f", "dither": false});
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            e.execute("file.bounce_mix", &p)
+        };
+        let plain = bounce(&mut e, "plain.wav", json!({})).unwrap();
+        assert!(plain["measured"].is_null());
+        let as_mixed = plain["lufs"].as_f64().unwrap();
+        // Quieter than the mix: reached exactly, the ceiling not in the way.
+        let quiet = bounce(&mut e, "quiet.wav", json!({"loudness": -30.0})).unwrap();
+        assert!((quiet["lufs"].as_f64().unwrap() + 30.0).abs() < 0.3, "{quiet}");
+        assert!((quiet["measured"]["lufs"].as_f64().unwrap() - as_mixed).abs() < 0.3, "{quiet}");
+        assert_eq!(quiet["measured"]["held_by_ceiling"], json!(false));
+        // Louder than the ceiling allows: held at the ceiling, short of the target, and said so.
+        let loud = bounce(&mut e, "loud.wav", json!({"loudness": -0.5, "true_peak": -1.0})).unwrap();
+        assert_eq!(loud["measured"]["held_by_ceiling"], json!(true), "{loud}");
+        assert!(loud["true_peak_db"].as_f64().unwrap() < -0.9, "{loud}");
+        assert!(loud["lufs"].as_f64().unwrap() < -1.0, "{loud}");
+        // Out of range.
+        assert!(bounce(&mut e, "bad.wav", json!({"loudness": -60.0})).is_err());
+        assert!(bounce(&mut e, "bad.wav", json!({"loudness": -14.0, "true_peak": 3.0})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

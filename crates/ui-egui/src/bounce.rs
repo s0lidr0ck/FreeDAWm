@@ -83,11 +83,25 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
             return;
         }
         Ok(Some(done)) => {
-            format!("Bounced {} (peak {:.1} dBFS, {:.1} LUFS)", job.path().file_name().unwrap_or_default().to_string_lossy(), done.peak_db, done.lufs)
+            let name = job.path().file_name().unwrap_or_default().to_string_lossy().into_owned();
+            done_line(&name, &done)
         }
         Err(e) => e.to_string(),
     };
     app.bounce = None;
+}
+
+/// The status line for a finished bounce: its levels, and for a loudness target held back by the
+/// true-peak ceiling, by how much.
+pub fn done_line(name: &str, done: &soundcraft_engine::io::Bounced) -> String {
+    let mut line = format!("Bounced {name} (peak {:.1} dBFS, {:.1} LUFS, true peak {:.1} dBTP)", done.peak_db, done.lufs, done.true_peak_db);
+    if let Some(m) = done.measured.filter(|m| m.held_by_ceiling) {
+        line.push_str(&format!(
+            ". The true-peak ceiling held the gain at {:+.1} dB, short of the loudness target: a limiter on the master would let it get there",
+            m.gain_db
+        ));
+    }
+    line
 }
 
 /// Refuses to replace the session while a render runs (it holds the player's instances, and a

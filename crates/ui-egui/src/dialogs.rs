@@ -84,6 +84,8 @@ pub enum Dialog {
         /// kbps, for MP3 and Opus.
         bitrate: u32,
         normalize: bool,
+        /// A loudness target in LUFS (integrated), when on; it replaces `normalize`.
+        loudness: Option<f32>,
         range: BounceRange,
         /// What is bounced: "main" or a bus name.
         source: String,
@@ -400,6 +402,7 @@ impl Dialogs {
                     bit_depth: "24".into(),
                     bitrate: 0,
                     normalize: false,
+                    loudness: None,
                     range: BounceRange::default_for(e.session()),
                     source: "main".into(),
                     tail: 0.0,
@@ -801,7 +804,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range, source, tail } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -882,7 +885,19 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label(egui::RichText::new(why).color(Tokens::current().text_dim));
                     }
                     bounce_range_choice(app, ui, range);
-                    crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
+                    ui.horizontal(|ui| {
+                        let mut on = loudness.is_some();
+                        if crate::widgets::checkbox(ui, &mut on, "Loudness target").changed() {
+                            *loudness = on.then_some(-14.0);
+                        }
+                        if let Some(l) = loudness.as_mut() {
+                            ui.add(egui::DragValue::new(l).range(-40.0..=0.0).speed(0.1).fixed_decimals(1).suffix(" LUFS"));
+                            ui.label(egui::RichText::new("true peak at most -1 dBTP; gain only, no limiter").color(Tokens::current().text_dim));
+                        }
+                    });
+                    if loudness.is_none() {
+                        crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
+                    }
                     let chosen = range.range(app.engine.session());
                     if buttons_enabled(ui, "Bounce", enter, chosen.is_some() && refused.is_none())
                         && let Some(r) = chosen
@@ -890,6 +905,10 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         let p = std::path::Path::new(path.as_str()).with_extension(if format == "aiff" { "aif" } else { format.as_str() });
                         let mut params = json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize,
                             "start": r.start, "end": r.end, "source": source, "tail": tail});
+                        if let Some(l) = loudness {
+                            params["loudness"] = json!(l);
+                            params["normalize"] = json!(false);
+                        }
                         if matches!(format.as_str(), "mp3" | "opus") {
                             params["bitrate"] = json!(bitrate);
                             if width > 2 {
