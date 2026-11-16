@@ -120,7 +120,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; ignores Shuffle |
 | Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Partial**: the tempo and meter map, key signatures, take layers and other playlists do not move (bug 7) |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
-| Heal a separation | ● | ◐ | ● | ● | **Partial**: loses the second piece's settings (bug 6) |
+| Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
 | Trim clips to close gaps | ◐ | ● | ● | ● | **Missing** |
 | Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Partial**: always overwrite |
@@ -270,7 +270,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 3 | **Fixed.** Trimming or splitting a stretched clip advanced the file position by timeline samples, not source samples, so the remaining piece played from the wrong place. `Clip::trim_start_to` now moves the offset by `source_span` (timeline ÷ ratio, as playback reads it), and the Trim tool, Trim to File, Trim to Fill and crossfade handles measure the file at the clip's ratio. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs` (`trim_start_to`, `source_span`, `timeline_span`); `engine/src/edit.rs` (`trim_clip`, `create_fades`) |
 | 4 | **Fixed.** An edit-locked clip could still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped. One check after every command (`edit::locked_edit_refused`, next to the frozen-track check in `Engine::execute`) refuses and undoes any command that changed or removed a clip it left edit-locked; renaming, colouring, unlocking, deleting the track or playlist, and Insert/Cut Time moving it are allowed. Recording does not run through commands and still overwrites. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`locked_edit_refused`); `engine/src/lib.rs` (`execute`) |
 | 5 | **Fixed.** Per-clip effects were stored under the clip's id (`clip_fx.<clip>.*` edit values), so a split's right half and every copy played without them. They are now carried on the clip (`Clip::effects`, `Clip::effects_bypass`), which the mixer reads; older sessions are moved over on load (`Session::sanitize`). Edit Lock protects them too. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs`; `model/src/session.rs` (`migrate_clip_effects`); `mix/src/lib.rs` (`clip_fx_params`) |
-| 6 | Heal joins two pieces when only their clip gain matches; the second piece's gain line, mute, stretch and channel are dropped | `engine/src/edit.rs:432-455` |
+| 6 | **Fixed.** Heal joined two pieces when only their clip gain matched, dropping the second piece's gain line, mute, stretch and channel. It now joins only pieces of the same file continuing at the same stretch whose gain, bypass, mute, channel, clip effects, Clean Vocal and tuning match and with no fade at the join, and joins their clip-gain lines (`Clip::joined_env`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`heal`, `heals`); `model/src/clip.rs` (`joined_env`) |
 | 7 | Insert Time and Cut Time move the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures | `engine/src/cmd/event.rs:244-293` |
 | 8 | Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end | `engine/src/cmd/event_more.rs:702, 723` |
 | 9 | Deleting fades in a selection trims every crossfade on the track back to its midpoint, including those outside the selection | `engine/src/edit.rs:866-877` |
@@ -343,3 +343,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 3 fixed: trimming or splitting a stretched clip keeps each piece on its audio |
 | 2026-11-16 | minor | Bug 4 fixed: edits that would change an edit-locked clip are refused |
 | 2026-11-16 | minor | Bug 5 fixed: clip effects live on the clip, so splits and copies keep them. Bug 13 partly: clip effects are made at sync, not in render |
+| 2026-11-16 | minor | Bug 6 fixed: Heal joins only pieces that sound alike and keeps both clip-gain lines |

@@ -499,23 +499,50 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
     let mut out: Vec<Clip> = Vec::with_capacity(pl.clips.len());
     let mut healed = 0;
     for c in pl.clips.drain(..) {
-        if let Some(prev) = out.last_mut() {
-            let contiguous = prev.end() == c.start && c.start >= range.start && c.start <= range.end;
-            let same = match (&prev.content, &c.content) {
-                (ClipContent::Audio { source: a, offset: oa }, ClipContent::Audio { source: b, offset: ob }) => a == b && oa + prev.length == *ob,
-                _ => false,
-            };
-            if contiguous && same && (prev.gain_db - c.gain_db).abs() < 1e-6 {
-                prev.length += c.length;
-                prev.fade_out = c.fade_out;
-                healed += 1;
-                continue;
+        if let Some(prev) = out.last_mut()
+            && prev.end() == c.start
+            && c.start >= range.start
+            && c.start <= range.end
+            && heals(prev, &c)
+        {
+            prev.gain_env = prev.joined_env(&c);
+            if prev.sync_point == 0 && c.sync_point != 0 {
+                prev.sync_point = c.sync_point.saturating_add(prev.length);
             }
+            prev.length += c.length;
+            prev.fade_out = c.fade_out;
+            healed += 1;
+            continue;
         }
         out.push(c);
     }
     pl.clips = out;
     healed
+}
+
+/// Whether `next`, starting where `prev` ends, is the rest of `prev` and sounds like it: the same
+/// file continuing at the same stretch, and everything that shapes the sound but the clip-gain
+/// envelope (which [`Clip::joined_env`] joins) the same, with no fade at the join. Pieces that
+/// differ stay apart rather than one of them losing its settings.
+fn heals(prev: &Clip, next: &Clip) -> bool {
+    let (ClipContent::Audio { source: a, offset: oa }, ClipContent::Audio { source: b, offset: ob }) = (&prev.content, &next.content) else {
+        return false;
+    };
+    a == b
+        && oa.saturating_add(prev.source_span(prev.length)) == *ob
+        && prev.stretch.to_bits() == next.stretch.to_bits()
+        && (prev.gain_db - next.gain_db).abs() < 1e-6
+        && prev.gain_bypass == next.gain_bypass
+        && prev.muted == next.muted
+        && prev.source_channel == next.source_channel
+        && prev.effects == next.effects
+        && prev.effects_bypass == next.effects_bypass
+        && prev.clean == next.clean
+        && prev.tune == next.tune
+        && prev.warp.is_empty()
+        && next.warp.is_empty()
+        && prev.fade_out.len == 0
+        && next.fade_in.len == 0
 }
 
 /// Move clips by `delta`, overwriting what they land on; `dest` sends whole tracks of them

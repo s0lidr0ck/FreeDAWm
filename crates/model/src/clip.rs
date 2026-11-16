@@ -485,6 +485,25 @@ impl Clip {
         g
     }
 
+    /// The clip-gain envelope of this clip followed by `next`'s (which starts where this one
+    /// ends), as one envelope over both that sounds as the two did apart: empty when both are.
+    pub fn joined_env(&self, next: &Clip) -> Vec<(Samples, f32)> {
+        if self.gain_env.is_empty() && next.gain_env.is_empty() {
+            return Vec::new();
+        }
+        let last = self.length.saturating_sub(1).max(0);
+        let mut out: Vec<(Samples, f32)> = self.gain_env.iter().copied().filter(|(t, _)| *t <= last).collect();
+        // Hold this clip's level to its last sample, then step to the next clip's first level.
+        if out.last().is_none_or(|(t, _)| *t < last) {
+            out.push((last, env_value(&self.gain_env, last)));
+        }
+        if next.gain_env.first().is_none_or(|(t, _)| *t > 0) {
+            out.push((self.length, env_value(&next.gain_env, 0)));
+        }
+        out.extend(next.gain_env.iter().map(|(t, v)| (t.saturating_add(self.length), *v)));
+        out
+    }
+
     /// The stretch ratio playback applies to an audio clip (timeline samples per file sample):
     /// [`Clip::stretch`] when it is usable, else 1. MIDI and video clips are never stretched.
     pub fn stretch_ratio(&self) -> f64 {

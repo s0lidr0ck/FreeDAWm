@@ -271,3 +271,47 @@ fn sessions_with_effects_kept_by_clip_id_load_them_onto_the_clips() {
     assert!(!s.edit.values.keys().chain(s.edit.flags.iter()).any(|k| k.starts_with("clip_fx.")), "the old keys are gone");
     assert_eq!(s.edit.values.get("other.value"), Some(&2.0));
 }
+
+// ---- bug 6: Heal joined pieces whose settings differed and dropped the second piece's -------
+
+/// One clip split at 1000 into two pieces, the second changed by `change`.
+fn split_pair(change: impl Fn(&mut Clip)) -> (Engine, TrackId) {
+    let mut e = engine("slip");
+    let (t, _) = track(&mut e, &[(0, 2000, 0)]);
+    run(&mut e, "edit.separate", json!({"tracks": [t.0], "at": 1000}));
+    let right = e.session().track(t).unwrap().clips()[1].id;
+    change(e.session_mut().find_clip_mut(right).unwrap());
+    (e, t)
+}
+
+#[test]
+fn heal_leaves_pieces_that_sound_different_apart() {
+    let changes: Vec<(&str, Box<dyn Fn(&mut Clip)>)> = vec![
+        ("mute", Box::new(|c: &mut Clip| c.muted = true)),
+        ("stretch", Box::new(|c: &mut Clip| c.stretch = 2.0)),
+        ("channel", Box::new(|c: &mut Clip| c.source_channel = Some(1))),
+        ("effects", Box::new(|c: &mut Clip| c.set_effect("gain", -3.0))),
+        ("fade at the join", Box::new(|c: &mut Clip| c.fade_in = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 })),
+    ];
+    for (what, change) in changes {
+        let (mut e, t) = split_pair(change);
+        let before = e.session().track(t).unwrap().clips().to_vec();
+        run(&mut e, "edit.heal", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+        assert_eq!(e.session().track(t).unwrap().clips(), before.as_slice(), "{what}: left apart, nothing dropped");
+    }
+}
+
+#[test]
+fn heal_joins_the_clip_gain_lines_of_both_pieces() {
+    let (mut e, t) = split_pair(|c| c.gain_env = vec![(0, -6.0), (500, -12.0)]);
+    run(&mut e, "edit.heal", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    let c = e.session().track(t).unwrap().clips().to_vec();
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].gain_env, vec![(999, 0.0), (1000, -6.0), (1500, -12.0)]);
+    assert_eq!((c[0].start, c[0].length, c[0].source_offset()), (0, 2000, 0));
+    // A plain split heals back to the one clip it was.
+    let (mut e, t) = split_pair(|_| {});
+    run(&mut e, "edit.heal", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    assert_eq!(clips(&e, t), vec![(0, 2000, 0)]);
+    assert!(e.session().track(t).unwrap().clips()[0].gain_env.is_empty());
+}
