@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Step Input...",
             ["Event", "MIDI Operations"],
             None,
-            "{track?, pitch?: 60 | pitches?: [..], duration?: '1/8'|ticks, velocity?: 100, rest?: bool, advance?: true}",
+            "{track?, pitch?: 60 | pitches?: [..], duration?: '1/8'|ticks, velocity?: 100, rest?: bool, tie?: bool (lengthen the notes ending at the insertion point by the duration), advance?: true}",
             has_tracks,
             step_input
         ),
@@ -446,6 +446,7 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
     let dur = note_ticks(p.get("duration"), TICKS_PER_QUARTER / 2);
     let vel = i64_or(p, "velocity", 100).clamp(1, 127) as u8;
     let rest = bool_or(p, "rest", false);
+    let tie = bool_or(p, "tie", false);
     let pitches: Vec<u8> = match p.get("pitches").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(Value::as_i64).map(|x| x.clamp(0, 127) as u8).take(16).collect(),
         None => vec![i64_or(p, "pitch", 60).clamp(0, 127) as u8],
@@ -477,7 +478,13 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(c) = s.find_clip_mut(host) {
         let base = tempo.samples_to_ticks(c.start, sr);
         if let ClipContent::Midi { sequence } = &mut c.content {
-            if !rest {
+            if tie {
+                // The notes just entered (ending here) go on another step.
+                for n in sequence.notes.iter_mut().filter(|n| n.start.saturating_add(n.length) == tick - base) {
+                    n.length = n.length.saturating_add(dur);
+                    added += 1;
+                }
+            } else if !rest {
                 for pitch in &pitches {
                     sequence.notes.push(Note {
                         pitch: *pitch,
@@ -923,16 +930,20 @@ mod tests {
         e.execute("edit.select", &json!({"tracks": [t.0], "start": 0})).unwrap();
         e.execute("event.step_input", &json!({"pitch": 60, "duration": "1/4"})).unwrap();
         e.execute("event.step_input", &json!({"pitches": [64, 67], "duration": "1/4"})).unwrap();
+        // A tie lengthens the chord just entered (what ends at the insertion point) and moves on.
+        assert_eq!(e.execute("event.step_input", &json!({"tie": true, "duration": "1/4"})).unwrap()["notes"], 2);
         e.execute("event.step_input", &json!({"rest": true, "duration": "1/4"})).unwrap();
         let tr = e.session().track(t).unwrap();
         assert_eq!(tr.clips().len(), 1);
         let c = &tr.clips()[0];
-        assert_eq!(c.length, 3 * 24_000);
+        assert_eq!(c.length, 4 * 24_000);
         match &c.content {
-            ClipContent::Midi { sequence } => assert_eq!(sequence.notes.iter().map(|n| n.start).collect::<Vec<_>>(), vec![0, 960, 960]),
+            ClipContent::Midi { sequence } => {
+                assert_eq!(sequence.notes.iter().map(|n| (n.start, n.length)).collect::<Vec<_>>(), vec![(0, 960), (960, 1920), (960, 1920)])
+            }
             _ => panic!(),
         }
-        assert_eq!(e.session().edit.selection.start, 3 * 24_000);
+        assert_eq!(e.session().edit.selection.start, 4 * 24_000);
     }
 
     #[test]

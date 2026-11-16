@@ -97,6 +97,7 @@ pub mod slider_drag;
 pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
+pub mod step_input;
 pub mod surfaces;
 pub mod swale_ui;
 pub mod teleprompter;
@@ -921,6 +922,8 @@ pub struct SoundApp {
     pub net: Option<net_ui::NetState>,
     /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
+    /// Event › More MIDI › Step Input: its window and the chord being played.
+    pub step: step_input::StepInput,
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,
     record_start: Samples,
@@ -1147,6 +1150,7 @@ impl SoundApp {
             #[cfg(not(target_arch = "wasm32"))]
             net: None,
             typing: musical_typing::TypingState::default(),
+            step: step_input::StepInput::default(),
             recorder: None,
             record_start: 0,
             punch: None,
@@ -2899,6 +2903,7 @@ impl SoundApp {
         windows::show(self, &ctx);
         video_window::show(self, &ctx);
         ops_windows::show(self, &ctx);
+        step_input::show(self, &ctx);
         extra_windows::show(self, &ctx);
         recovery::show(self, &ctx);
         score_editor::show(self, &ctx);

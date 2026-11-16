@@ -180,9 +180,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Play and record from the computer keys, with octave and velocity | ● | ● | ● | ● | **Works** (Musical Typing; also a sustain key) |
 | On-screen piano you can click | ● | ● | ● | ● | **Works** |
-| Step entry from a MIDI keyboard, transport stopped | ● | ● | ● | ● | **Missing** |
-| Step entry with chosen length, rests, ties and chords | ● | ● | ● | ● | **Partial**: the command supports length, chords and rests; Musical Typing's step mode enters one eighth note per key, and the menu item always enters the same note |
-| Step entry inside the note editor | ● | ● | ● | ● | **Missing** |
+| Step entry from a MIDI keyboard, transport stopped | ● | ● | ● | ● | **Works**: Event › More MIDI › Step Input… (any input the target track listens to, its transform applied) |
+| Step entry with chosen length, rests, ties and chords | ● | ● | ● | ● | **Works**: lengths 1/1 to 1/32 and triplets, velocity as played or fixed, Rest, Tie (`event.step_input` `tie`), keys held together entered as a chord when the last is let go; Musical Typing's own step mode still enters eighths |
+| Step entry inside the note editor | ● | ● | ● | ● | **Works**: the MIDI editor's Step button opens Step Input on the clip it shows |
 | The editor shows the take while it is recorded | ● | ● | ● | ● | **Partial**: follows the playhead; the take is in the editor only after Stop |
 
 ## J. Instruments to play
@@ -242,7 +242,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs`. Commit `ac4252a`. | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it`. Commit `120c0de`. | `engine/src/midi_record.rs` (`pass_range`) |
 | 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading. Commit `b1f5bbc`. | `ui-egui/src/dialogs.rs` |
-| 16 | **Partly fixed.** Event › More MIDI › Input Quantize opens a window (on/off, grid, strength, swing) and MIDI Track Offsets one (milliseconds per MIDI track); Setup › Click/Countoff… opens one too (level, sounds, only while recording, count-off bars) instead of being greyed out. Step Input still runs its command with defaults (step entry is its own tier-2 item). Commit `6d66dce`. | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `ui-egui/src/menubar.txt` |
+| 16 | **Partly fixed.** Event › More MIDI › Input Quantize opens a window (on/off, grid, strength, swing) and MIDI Track Offsets one (milliseconds per MIDI track); Setup › Click/Countoff… opens one too (level, sounds, only while recording, count-off bars) instead of being greyed out. Step Input opens its window now (tier 2). Commit `6d66dce`. | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `ui-egui/src/menubar.txt` |
 | 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes`. Commit `83ce5f3`. | `ui-egui/src/live_midi.rs` |
 | 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip`. Commits `f6a245f`, `0f4e38a`. | `ui-egui/src/musical_typing.rs` |
 | 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading. Commits `149f728`, `f2ecfd9`. | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
@@ -277,7 +277,7 @@ either wire the control or take it off the menu.
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
-| Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Not started (Musical Typing's step mode fixed: bug 18) |
+| Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Done: the Step Input window and the editor's Step button (Musical Typing's step mode fixed: bug 18) |
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Not started; bug 12 open |
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
@@ -362,3 +362,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Capture MIDI with the transport stopped; notes played in the count-off kept as a pickup when asked |
 | 2026-11-16 | minor | MIDI output ports start disabled; a port a track sends to still opens |
 | 2026-11-16 | minor | MIDI input filter wired; per-track input transforms (transpose, velocity, curve, fixed velocity, key range, channel) for thru and take |
+| 2026-11-16 | minor | Step input from a MIDI keyboard with lengths, rests, ties and chords; the MIDI editor's Step button |

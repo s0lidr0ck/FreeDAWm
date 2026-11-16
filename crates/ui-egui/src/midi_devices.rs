@@ -83,8 +83,14 @@ const CAPTURE_MAX: usize = 100_000;
 /// While not recording (each frame): what the audio thread heard while playing, kept for Capture
 /// MIDI (the newest [`CAPTURE_MAX`]).
 pub(crate) fn collect_capture(app: &mut SoundApp) {
+    let from = app.midi_capture.len();
     if let Some(h) = &app.midi_hub {
         h.take_captured(&mut app.midi_capture);
+    }
+    // Step Input enters what was played with the transport stopped.
+    if app.step.open && app.midi_capture.len() > from {
+        let new = app.midi_capture.get(from..).unwrap_or_default().to_vec();
+        crate::step_input::feed(app, &new);
     }
     if app.midi_capture.len() > CAPTURE_MAX {
         let extra = app.midi_capture.len() - CAPTURE_MAX;
