@@ -53,6 +53,7 @@ pub mod midi_edit_tools;
 pub mod midi_editor;
 pub mod midi_editor_link;
 pub mod midi_editor_window;
+pub mod midi_event_list;
 pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;

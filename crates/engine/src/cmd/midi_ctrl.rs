@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             add
         ),
-        cmd!("midi.ctrl_edit", "Edit Controller Event", [], None, "{clip, index, tick?, value?} -> {index}", always, edit),
+        cmd!("midi.ctrl_edit", "Edit Controller Event", [], None, "{clip, index, tick?, value?, channel?: 0..15} -> {index}", always, edit),
         cmd!(
             "midi.ctrl_move",
             "Move Controller Events",
@@ -219,6 +219,9 @@ fn edit(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("value").and_then(Value::as_i64) {
         c.value = clamp_value(c.kind, v);
+    }
+    if let Some(ch) = p.get("channel").and_then(Value::as_i64) {
+        c.channel = ch.clamp(0, 15) as u8;
     }
     let kept = sort_tracked(seq, &[idx]);
     Ok(json!({"index": kept.first()}))

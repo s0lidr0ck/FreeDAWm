@@ -232,6 +232,8 @@ pub struct MidiEditorState {
     pub ctrl_channel: Option<u8>,
     /// With a key on the Key ruler: only the scale's rows (and those of pitches with notes).
     pub fold_scale: bool,
+    /// The MIDI Event List's filters, Insert row and a position being typed.
+    pub event_list: crate::midi_event_list::EventListState,
     /// The drum view (named rows, hits as diamonds): `None` follows the instrument (on for Juke
     /// and the drum synth).
     pub drum_view: Option<bool>,
@@ -300,6 +302,7 @@ impl Default for MidiEditorState {
             ctrl_sel: None,
             ctrl_channel: None,
             fold_scale: false,
+            event_list: crate::midi_event_list::EventListState::default(),
             drum_view: None,
             drum_all_rows: false,
             fold_seen: 0,

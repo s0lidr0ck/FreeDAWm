@@ -1,10 +1,10 @@
 //! Secondary floating windows (Window menu).
 
 use crate::SoundApp;
-use crate::theme::{Tokens, mono, rgb};
+use crate::theme::{Tokens, rgb};
 use egui::{Color32, Sense, vec2};
 use serde_json::json;
-use soundcraft_model::{AutomationMode, ChannelFormat, ClipContent};
+use soundcraft_model::{AutomationMode, ChannelFormat};
 use soundcraft_playback::AudioConfig;
 use soundcraft_playback::devices::{AudioSystem, DeviceInfo};
 use std::sync::Arc;
@@ -347,43 +347,7 @@ pub fn is_midi_file(name: &str) -> bool {
 
 fn event_list(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_event_list;
-    win(ctx, &mut open, "MIDI Event List", vec2(420.0, 360.0), |ui| {
-        let Some(cid) = crate::midi_editor::target_clip(app) else {
-            ui.label("Select a MIDI clip.");
-            return;
-        };
-        let notes = match app.engine.session().find_clip(cid).map(|(_, c)| c.content.clone()) {
-            Some(ClipContent::Midi { sequence }) => sequence.notes,
-            _ => Vec::new(),
-        };
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("evl").num_columns(5).striped(true).show(ui, |ui| {
-                for h in ["Start (ticks)", "Note", "Vel", "Length", ""] {
-                    ui.label(egui::RichText::new(h).strong());
-                }
-                ui.end_row();
-                for (i, n) in notes.iter().enumerate() {
-                    ui.label(egui::RichText::new(n.start.to_string()).font(mono(11.0)));
-                    ui.label(soundcraft_midi::note_name(n.pitch));
-                    let mut v = i64::from(n.velocity);
-                    let r = ui.add(egui::DragValue::new(&mut v).range(1..=127));
-                    if r.changed() {
-                        // One undo step per drag (each frame of it joins the first), not per frame.
-                        let key = format!("evl.velocity.{}.{i}", cid.0);
-                        let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &key);
-                    }
-                    if r.drag_stopped() || r.lost_focus() {
-                        app.engine.end_merge();
-                    }
-                    ui.label(n.length.to_string());
-                    if ui.small_button("✕").clicked() {
-                        let _ = app.run("midi.note_delete", json!({"clip": cid.0, "indices": [i]}));
-                    }
-                    ui.end_row();
-                }
-            });
-        });
-    });
+    win(ctx, &mut open, "MIDI Event List", vec2(640.0, 420.0), |ui| crate::midi_event_list::show(app, ui));
     app.ui.show_event_list = open;
 }
 
