@@ -17,9 +17,9 @@ pub const TAKE_COLORS: [[u8; 3]; 8] =
 /// The dimming of a layer's unused material.
 const DIM: f32 = 0.32;
 
-/// Whether the track can comp with layers (audio tracks).
+/// Whether the track can comp with layers (audio, MIDI and instrument tracks).
 pub fn can_comp(t: &Track) -> bool {
-    t.kind == TrackKind::Audio
+    t.kind == TrackKind::Audio || t.kind.is_midi()
 }
 
 /// Whether the track shows its take layers.
@@ -223,16 +223,55 @@ fn draw_layer(painter: &egui::Painter, s: &Session, track: &Track, layer: usize,
     }
 }
 
-/// `clip`'s waveform over `body`, shown only inside `shown`.
+/// `clip`'s waveform (or, for a MIDI take, its notes) over `body`, shown only inside `shown`.
 fn wave(painter: &egui::Painter, s: &Session, track: &Track, clip: &Clip, tl: Rect, body: Rect, shown: Rect, color: Color32) {
-    if let ClipContent::Audio { source, .. } = &clip.content
-        && let Some(audio) = s.pool.get(*source)
-    {
-        let vis = shown.intersect(body).intersect(painter.clip_rect());
-        if vis.width() > 0.0 && vis.height() > 2.0 {
-            crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, clip, audio, track.channels(), body.shrink2(vec2(0.0, 3.0)), color);
-        }
+    let vis = shown.intersect(body).intersect(painter.clip_rect());
+    if vis.width() <= 0.0 || vis.height() <= 2.0 {
+        return;
     }
+    match &clip.content {
+        ClipContent::Audio { source, .. } => {
+            if let Some(audio) = s.pool.get(*source) {
+                crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, clip, audio, track.channels(), body.shrink2(vec2(0.0, 3.0)), color);
+            }
+        }
+        ClipContent::Midi { .. } => {
+            let p = painter.with_clip_rect(vis);
+            for r in note_rects(s, clip, tl, body.shrink2(vec2(0.0, 3.0))) {
+                if r.max.x >= vis.min.x && r.min.x <= vis.max.x {
+                    p.rect_filled(r, 1.0, color);
+                }
+            }
+        }
+        ClipContent::Video { .. } => {}
+    }
+}
+
+/// A MIDI take's notes as small bars over `body` (pitch upwards, its lowest to its highest note
+/// filling the height), as the timeline draws a MIDI clip.
+pub fn note_rects(s: &Session, clip: &Clip, tl: Rect, body: Rect) -> Vec<Rect> {
+    let ClipContent::Midi { sequence } = &clip.content else { return Vec::new() };
+    let (lo, hi) = sequence.notes.iter().fold((127u8, 0u8), |(lo, hi), n| (lo.min(n.pitch), hi.max(n.pitch)));
+    let (lo, hi) = if lo > hi { (48, 72) } else { (lo.saturating_sub(1), hi.saturating_add(1)) };
+    let span = f32::from(hi.saturating_sub(lo).max(1));
+    let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
+    let nh = (body.height() / span).clamp(1.5, 5.0);
+    sequence
+        .notes
+        .iter()
+        .filter(|n| n.start >= 0)
+        .filter_map(|n| {
+            let a = s.tempo.tick_to_samples(base.saturating_add(n.start), s.sample_rate);
+            if a >= clip.end() {
+                return None;
+            }
+            let b = s.tempo.tick_to_samples(base.saturating_add(n.end()), s.sample_rate).min(clip.end());
+            let x0 = x_of(s, tl, a);
+            let x1 = x_of(s, tl, b).max(x0 + 2.0);
+            let y = body.max.y - nh * 0.5 - (f32::from(n.pitch.saturating_sub(lo)) / span) * (body.height() - nh);
+            Some(Rect::from_min_max(pos2(x0, y - nh * 0.5), pos2(x1, y + nh * 0.5)))
+        })
+        .collect()
 }
 
 /// The "+ New Layer" row: adds an empty layer (the record target).

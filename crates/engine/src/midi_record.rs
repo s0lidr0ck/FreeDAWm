@@ -28,7 +28,11 @@
 //!   session's grid when it is on; the played performance is kept to restore.
 //! - **Record mode** ([`RecordMode`]): Replace clears what the take covers; Merge (the MIDI Merge
 //!   switch) joins the take into the MIDI clips it overlaps, loop passes adding up in one clip;
-//!   New Playlist puts the take on a copy of the track's playlist, the old one kept.
+//!   New Playlist puts the take on a copy of the track's playlist, the old one kept; Keep Takes
+//!   as Lanes puts each take (each loop pass) on a take lane of its own, as audio takes are
+//!   ([`crate::cmd::comp::record_pass`]): the comp plays the newest, and the earlier ones stay
+//!   to pick or swipe from. A track that already comps (its lanes open, a record target, take
+//!   lanes) records into lanes in every mode but Merge.
 //! - One undo step, "Record".
 
 use soundcraft_midi::Sequence;
@@ -189,7 +193,9 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
         // The playlist as it was before this take: each loop pass after the first goes on a copy
         // of it, so the rest of the song stays on the track whichever pass is active (and with
         // New Playlist, the first too).
-        let base: Vec<Clip> = if take.looped.is_some() || mode == RecordMode::NewPlaylist {
+        // Into take lanes: each pass on a lane of its own, the comp playing the newest.
+        let lanes = mode == RecordMode::TakeLanes || (mode != RecordMode::Merge && s.track(tid).is_some_and(crate::cmd::comp::comping));
+        let base: Vec<Clip> = if !lanes && (take.looped.is_some() || mode == RecordMode::NewPlaylist) {
             s.track(tid).map(|t| t.clips().to_vec()).unwrap_or_default()
         } else {
             Vec::new()
@@ -229,7 +235,7 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
             // Each pass after the first that went down on this track (and with New Playlist the
             // first): a new playlist, holding what the track held before the take. Merged passes
             // add up in one clip instead.
-            if mode != RecordMode::Merge && (placed_first || mode == RecordMode::NewPlaylist) {
+            if !lanes && mode != RecordMode::Merge && (placed_first || mode == RecordMode::NewPlaylist) {
                 let mut clips = base.clone();
                 for c in &mut clips {
                     c.id = s.new_clip_id();
@@ -243,6 +249,12 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
             }
             let id = if mode == RecordMode::Merge {
                 merge_take(s, tid, range, seq)
+            } else if lanes {
+                let id = s.new_clip_id();
+                let name = s.track(tid).map(|t| t.name.clone()).unwrap_or_default();
+                let mut clip = Clip::midi(id, name, range.start, range.len(), seq);
+                clip.midi_channels = true;
+                crate::cmd::comp::record_pass(s, tid, clip)
             } else {
                 let id = s.new_clip_id();
                 let name = s.track(tid).map(|t| t.name.clone()).unwrap_or_default();
@@ -278,11 +290,18 @@ pub enum RecordMode {
     /// The take goes on a new playlist that starts as a copy of the track's; the playlist it
     /// replaced keeps what was there.
     NewPlaylist,
+    /// Keep Takes as Lanes: each take (each loop pass) goes on a take lane of its own and the
+    /// comp plays the newest; the takes before stay on their lanes to pick or swipe from.
+    TakeLanes,
 }
 
 impl RecordMode {
-    pub const ALL: [(RecordMode, &'static str); 3] =
-        [(RecordMode::Replace, "replace"), (RecordMode::Merge, "merge"), (RecordMode::NewPlaylist, "new_playlist")];
+    pub const ALL: [(RecordMode, &'static str); 4] = [
+        (RecordMode::Replace, "replace"),
+        (RecordMode::Merge, "merge"),
+        (RecordMode::NewPlaylist, "new_playlist"),
+        (RecordMode::TakeLanes, "take_lanes"),
+    ];
 
     /// Its name in commands and the session (`replace`, `merge`, `new_playlist`).
     pub fn name(self) -> &'static str {
@@ -291,12 +310,15 @@ impl RecordMode {
 }
 
 /// The session's MIDI record mode: Merge while MIDI Merge is on, else the stored one
-/// (`midi.record_mode`: 2 New Playlist, else Replace).
+/// (`midi.record_mode`: 2 New Playlist, 3 Keep Takes as Lanes, else Replace).
 pub fn record_mode(s: &Session) -> RecordMode {
+    let stored = s.edit.value("midi.record_mode", 0.0);
     if s.edit.midi_merge {
         RecordMode::Merge
-    } else if s.edit.value("midi.record_mode", 0.0) == 2.0 {
+    } else if stored == 2.0 {
         RecordMode::NewPlaylist
+    } else if stored == 3.0 {
+        RecordMode::TakeLanes
     } else {
         RecordMode::Replace
     }
@@ -306,6 +328,7 @@ pub fn record_mode(s: &Session) -> RecordMode {
 pub fn set_record_mode(s: &mut Session, mode: RecordMode) {
     s.edit.midi_merge = mode == RecordMode::Merge;
     let v = match mode {
+        RecordMode::TakeLanes => 3.0,
         RecordMode::NewPlaylist => 2.0,
         RecordMode::Merge => 1.0,
         RecordMode::Replace => 0.0,
@@ -322,8 +345,8 @@ pub fn set_record_mode(s: &mut Session, mode: RecordMode) {
 /// finished pass out of the preview and of the take ([`LoopPreview::undo_last_pass`]).
 #[derive(Debug, Clone, Default)]
 pub struct LoopPreview {
-    /// Each armed track's playlists and active playlist before the take.
-    saved: Vec<(TrackId, Vec<Playlist>, usize)>,
+    /// Each armed track's playlists, active playlist, record target and open lanes before the take.
+    saved: Vec<(TrackId, Vec<Playlist>, usize, Option<usize>, bool)>,
     /// Clips the preview made (their kept performances go with them).
     made: Vec<ClipId>,
     /// The passes before this one are shown.
@@ -337,7 +360,10 @@ pub struct LoopPreview {
 impl LoopPreview {
     /// For a take on `tracks` of `s` as it is now (before anything was placed).
     pub fn new(s: &Session, tracks: &[TrackId]) -> LoopPreview {
-        let saved = tracks.iter().filter_map(|t| s.track(*t).map(|tr| (*t, tr.playlists.clone(), tr.active_playlist))).collect();
+        let saved = tracks
+            .iter()
+            .filter_map(|t| s.track(*t).map(|tr| (*t, tr.playlists.clone(), tr.active_playlist, tr.record_layer, tr.layers_open)))
+            .collect();
         LoopPreview { saved, ..LoopPreview::default() }
     }
 
@@ -387,10 +413,12 @@ impl LoopPreview {
         if !std::mem::take(&mut self.applied) {
             return;
         }
-        for (tid, playlists, active) in &self.saved {
+        for (tid, playlists, active, record_layer, layers_open) in &self.saved {
             if let Some(t) = s.track_mut(*tid) {
                 t.playlists = playlists.clone();
                 t.active_playlist = *active;
+                t.record_layer = *record_layer;
+                t.layers_open = *layers_open;
             }
         }
         for id in self.made.drain(..) {
@@ -968,6 +996,74 @@ mod tests {
         assert_eq!(ids, vec![tr.clips()[0].id]);
         let pitches: Vec<u8> = tr.clips()[0].midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect();
         assert_eq!(pitches, vec![36, 38, 42]);
+    }
+
+    /// Keep Takes as Lanes: each loop pass is a take lane of its own, the comp plays the newest,
+    /// a swipe brings part of an earlier take into the comp (a note across the join ends there on
+    /// the outgoing side and sounds from it on the incoming one), and cycling picks the take below.
+    #[test]
+    fn take_lanes_keep_each_pass_to_pick_and_swipe_between() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let out = e.execute("options.midi_record_mode", &json!({"mode": "take_lanes"})).unwrap();
+        assert_eq!(out["mode"], "take_lanes");
+        let take = MidiTake { start: 0, end: 8 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        let events = vec![
+            ev(0, "K", [0x90, 36, 100]),
+            ev(3 * Q, "K", [0x90, 37, 100]),
+            ev(4 * Q - 100, "K", [0x80, 37, 0]),
+            RecordedEvent { pass: 1, ..ev(0, "K", [0x90, 48, 100]) },
+            RecordedEvent { pass: 1, ..ev(3 * Q, "K", [0x90, 49, 100]) },
+        ];
+        let ids = record_live_midi(&mut e, &take, &events);
+        assert_eq!(ids.len(), 2);
+        let pitches = |c: &Clip| -> Vec<u8> { c.midi_playing().map(|m| m.notes.iter().map(|n| n.pitch).collect()).unwrap_or_default() };
+        {
+            let tr = e.session().track(t).unwrap();
+            let layers: Vec<usize> = tr.layers().map(|(i, _)| i).collect();
+            assert_eq!(layers.len(), 2, "a lane per pass");
+            assert!(tr.layers_open, "the lanes are shown");
+            assert_eq!(tr.clips().len(), 1, "the comp plays one take");
+            assert_eq!(pitches(&tr.clips()[0]), vec![48, 49], "the newest");
+            assert_eq!(tr.clips()[0].from_layer, Some(layers[1]));
+            assert_eq!(pitches(&tr.playlists[layers[0]].clips[0]), vec![36, 37]);
+        }
+        assert_eq!(e.undo_label(), Some("Record"));
+        // Swipe the last beat of the first take into the comp.
+        let first = e.session().track(t).unwrap().layers().map(|(i, _)| i).next().unwrap();
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": first, "start": 3 * Q, "end": 4 * Q})).unwrap();
+        let tr = e.session().track(t).unwrap();
+        let comp: Vec<(Samples, Vec<u8>, Option<usize>)> = tr.clips().iter().map(|c| (c.start, pitches(c), c.from_layer)).collect();
+        assert_eq!(comp.len(), 2);
+        assert_eq!(comp[0].1, vec![48], "the second take up to the swipe");
+        // The first take's last beat: its note held over the join sounds from it, then its own.
+        assert_eq!((comp[1].0, comp[1].1.clone(), comp[1].2), (3 * Q, vec![36, 37], Some(first)));
+        assert!(tr.clips().iter().all(|c| c.fade_in.len == 0 && c.fade_out.len == 0), "MIDI joins get no crossfade");
+        // Pick the take below back over that beat.
+        let back = e.execute("comp.cycle", &json!({"track": t.0, "start": 3 * Q, "end": 4 * Q, "dir": "down"})).unwrap();
+        assert_ne!(back["layer"].as_u64(), Some(first as u64));
+        let tr = e.session().track(t).unwrap();
+        assert!(tr.clips().iter().all(|c| c.from_layer != Some(first)));
+        let last: Vec<u8> = tr.clips().iter().filter(|c| c.start == 3 * Q).flat_map(pitches).collect();
+        assert_eq!(last, vec![48, 49], "the second take's last beat again");
+    }
+
+    /// A MIDI track whose lanes are open records into a new lane in Replace mode too; Merge
+    /// still merges into the clip under it.
+    #[test]
+    fn a_comping_midi_track_records_into_lanes_unless_merging() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        e.execute("comp.layers", &json!({"track": t.0, "open": true})).unwrap();
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        record_live_midi(&mut e, &take, &[ev(0, "K", [0x90, 60, 100])]);
+        record_live_midi(&mut e, &take, &[ev(Q, "K", [0x90, 62, 100])]);
+        assert_eq!(e.session().track(t).unwrap().layers().count(), 2);
+        set_record_mode(e.session_mut(), RecordMode::Merge);
+        record_live_midi(&mut e, &take, &[ev(2 * Q, "K", [0x90, 64, 100])]);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!(tr.layers().count(), 2, "merge adds no lane");
+        assert_eq!(tr.clips().len(), 1);
     }
 
     #[test]

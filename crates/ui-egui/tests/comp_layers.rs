@@ -227,3 +227,52 @@ fn the_new_layer_row_and_the_layer_menu() {
     click(&mut h, rec, Modifiers::NONE);
     assert_eq!(vox(&h).record_layer, Some(1));
 }
+
+/// MIDI take lanes: an instrument track "Keys2" recorded in Keep Takes as Lanes shows its takes
+/// under it, each take's notes drawn on its lane, and a drag on a lane swipes that range into the
+/// comp as on an audio track.
+#[test]
+fn an_instrument_tracks_midi_takes_show_as_lanes_and_swipe() {
+    use soundcraft_engine::midi_record::{MidiTake, RecordedEvent, record_live_midi};
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    app.run("track.delete", json!({"tracks": ["Kick", "Snare", "Hats", "Bass", "Pad", "Keys", "Lead", "Verb"]})).unwrap();
+    let t = TrackId(app.run("track.new", json!({"kind": "instrument", "name": "Keys2"})).unwrap()["tracks"][0].as_u64().unwrap());
+    app.run("track.input", json!({"tracks": [t.0], "input": "midi:all", "channel": 0})).unwrap();
+    app.run("mix.record_arm", json!({"tracks": [t.0], "value": true})).unwrap();
+    app.run("options.midi_record_mode", json!({"mode": "take_lanes"})).unwrap();
+    let ev = |at: i64, pass: u16, msg: [u8; 3]| RecordedEvent { at, port: "K".into(), msg, pass };
+    let take = MidiTake { start: 0, end: 2 * LEN, looped: Some(Range::new(0, LEN)), punch: None, latency: 0 };
+    let events = [ev(0, 0, [0x90, 60, 100]), ev(LEN / 2, 0, [0x80, 60, 0]), ev(0, 1, [0x90, 72, 100]), ev(LEN / 2, 1, [0x80, 72, 0])];
+    record_live_midi(&mut app.engine, &take, &events);
+    app.run("track.height", json!({"tracks": [t.0], "height": "medium"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    steps(&mut h, 6);
+    let tl = h.state().edit_layout.timeline;
+    let z = &mut h.state_mut().engine.session_mut().edit.zoom;
+    z.scroll = 0;
+    z.samples_per_px = LEN as f64 * 1.2 / f64::from(tl[2] - tl[0]);
+    steps(&mut h, 4);
+    let keys = |h: &Harness<'_, SoundApp>| h.state().engine.session().track(t).cloned().unwrap();
+    assert!(keys(&h).layers_open);
+    let r = row(&h, t);
+    let height = keys(&h).height.points();
+    assert_eq!(r[3] - r[1], height + 3.0 * LAYER_H, "two take lanes and the New Layer row");
+    h.get_by_label("Keys2 layer Take 1");
+    h.get_by_label("Keys2 layer Take 2");
+    let first = keys(&h).layers().map(|(i, _)| i).next().unwrap();
+    // Drag over the first lane's first quarter: that part of take 1 goes into the comp.
+    let z = h.state().engine.session().edit.zoom;
+    let x = |at: i64| tl[0] + ((at - z.scroll) as f64 / z.samples_per_px) as f32;
+    let y = r[1] + height + 0.5 * LAYER_H;
+    drag(&mut h, pos2(x(0), y), pos2(x(LEN / 4), y), Modifiers::NONE);
+    let comp: Vec<Option<usize>> = keys(&h).clips().iter().map(|c| c.from_layer).collect();
+    assert_eq!(comp.first().copied().flatten(), Some(first), "{comp:?}");
+    assert_eq!(h.state().engine.undo_label(), Some("Comp"));
+}

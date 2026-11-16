@@ -125,8 +125,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 |---|:-:|:-:|:-:|:-:|---|
 | Replace what is under the take | ● | ● | ● | ● | **Works** (Replace in the MIDI Merge switch's menu; the default before 2026-11-16, and sessions saved with it keep it) |
 | Merge into the existing clip (overdub) | ● | ● | ● | ● | **Works**: MIDI Merge joins the take and the MIDI clips it overlaps into one clip. The default for new sessions (owner's decision); a saved session keeps the switch it stored |
-| New clip on top, old one kept | ◐ | ● | ● | ● | **Partial**: New Playlist puts the take on a copy of the track's playlist and keeps the old one; clips do not overlap on one playlist |
-| Choose the mode | ● | ● | ● | ● | **Works**: the MIDI Merge switch, its right-click menu (Replace, Merge, New Playlist), `options.midi_record_mode` |
+| New clip on top, old one kept | ◐ | ● | ● | ● | **Works** as take lanes: Keep Takes as Lanes puts each take on a lane of its own under the track, the comp playing the newest; New Playlist still keeps the old part on its own playlist. Clips do not overlap on one playlist |
+| Choose the mode | ● | ● | ● | ● | **Works**: the MIDI Merge switch, its right-click menu (Replace, Merge, New Playlist, Keep Takes as Lanes), `options.midi_record_mode` |
 | The existing part is heard while you record over it | ● | ● | ● | ● | **Works**, which makes replace surprising: you hear the old part, then lose it under the whole take |
 | MIDI and audio recorded in one pass | ● | ● | ● | ● | **Works**, as separate undo steps |
 | Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Partial**: only a chain module's MIDI output (the drum gate's triggers) |
@@ -141,7 +141,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Passes add up into one clip (drum-machine style) | ● | ● | ● | ● | **Works** with MIDI Merge on; the passes appear at Stop |
 | Earlier passes heard while later ones are recorded | ● | ● | ● | ● | **Works**: at each wrap the finished passes go on the armed tracks as Stop will place them (merged, they add up; otherwise the last is on top), and the next pass plays them; no undo step until Stop (`c458cdf`) |
 | Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take (`c458cdf`); erasing held notes is missing |
-| Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Missing**: comping is for audio tracks only |
+| Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Works**: with Keep Takes as Lanes (or on a MIDI or instrument track whose lanes are open, in any mode but Merge) each take and each loop pass goes on a take lane, drawn under the track with its notes; a click on a lane picks the whole take, a drag swipes a range of it into the comp, Up/Down cycle a comp segment through the takes, as on audio tracks. MIDI joins get no crossfade: the outgoing piece's notes end at the join, a note the incoming take held over it sounds from there. Merge keeps passes in one clip as before |
 | Note repeat | ○ | ● | ● | ◐ | **Missing** |
 | Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Missing**: recording over a pattern clip erases it; the drum machine's pads are not recorded |
 
@@ -267,7 +267,7 @@ either wire the control or take it off the menu.
 |---|---:|---|
 | Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Done (`68d0dc0`): Replace, Merge, New Playlist; settles bug 3 |
 | Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Done: passes add up with MIDI Merge (`68d0dc0`); finished passes are on the tracks while the loop runs and Undo takes the last back (`midi_record::LoopPreview`, `c458cdf`) |
-| MIDI takes: lanes, pick a take, comp between takes | 12–18 | Not started (large: the audio comping model would have to take MIDI clips) |
+| MIDI takes: lanes, pick a take, comp between takes | 12–18 | Done: Keep Takes as Lanes on the audio comp model |
 | Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; with it stopped too, a listening clock of its own (`e5635d1`) |
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in kept as an option (`e5635d1`) |
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
@@ -325,7 +325,7 @@ take played on another computer can land on a track here.
 
 Written before code, as the work list asks for the large items; none of these is built yet.
 
-**MIDI take lanes and comping (tier 2).** The audio comp model (`engine/src/cmd/comp.rs`) is
+**MIDI take lanes and comping (tier 2).** *Built as designed, except that the comp plays the newest take (as audio comping does) rather than staying as it was.* The audio comp model (`engine/src/cmd/comp.rs`) is
 playlist based: each take layer is a playlist, the comp is the active one, a swipe copies a
 range of a layer into it (`edit::copy_range`, which already cuts MIDI clips) and remembers the
 layer (`Clip::from_layer`). MIDI takes already land on playlists (loop passes without MIDI Merge,
@@ -409,3 +409,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Identical devices, 63 input ports, aliases, per-device offsets, the driver's timestamps; bug 11 fixed, bug 10 partly |
 | 2026-11-16 | minor | Commits noted on the second round's rows; designs for MIDI take lanes, low-latency monitoring and MIDI effects |
 | 2026-11-16 | minor | Synth and sampler rows brought up to date (Bend Range, sustain, mod wheel; Mod Wheel Vibrato 0 by default) |
+| 2026-11-16 | minor | MIDI take lanes: Keep Takes as Lanes record mode, lanes with notes under MIDI and instrument tracks, pick, swipe and cycle between MIDI takes |

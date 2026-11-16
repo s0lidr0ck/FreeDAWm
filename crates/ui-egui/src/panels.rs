@@ -495,6 +495,7 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                                 (soundcraft_engine::midi_record::RecordMode::Replace, "Replace"),
                                 (soundcraft_engine::midi_record::RecordMode::Merge, "Merge"),
                                 (soundcraft_engine::midi_record::RecordMode::NewPlaylist, "New Playlist"),
+                                (soundcraft_engine::midi_record::RecordMode::TakeLanes, "Keep Takes as Lanes"),
                             ] {
                                 if ui.radio(mode == m, text).clicked() {
                                     let _ = app.run("options.midi_record_mode", json!({"mode": m.name()}));
