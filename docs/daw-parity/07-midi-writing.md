@@ -75,7 +75,7 @@ The gaps are of four kinds:
 | Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
-| Edit several clips or tracks at once | ● | ● | ● | ● | **Missing**: one clip at a time |
+| Edit several clips or tracks at once | ● | ● | ● | ● | **Partial**: with several MIDI clips selected, the editor edits one (the header says which, its Clip menu switches) and shows the others' notes over its time in their track's colour; a click on one makes its clip the edited one with that note selected, keeping the bars in view. One clip is edited at a time, and the roll spans only the edited clip's length |
 | Notes can run past the clip's edge and still play, or the clip grows | ● | ● | ● | ● | **Works**: an edit that puts notes past the end grows the clip to the next bar line, up to the next clip (bug 4, fixed); notes a trim left past the end stay hidden |
 | Every edit undoable, one step per drag | ● | ● | ● | ● | **Works**, the event list too (bug 21, fixed) |
 | Every edit scriptable | ○ | ◐ | ◐ | ◐ | **Works** |
@@ -381,3 +381,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Selection and note mute: select by clicking a key, Select by Rule… sets the editor selection, notes can be muted |
 | 2026-11-16 | minor | Quantize done more fully: window, random offset, note ends and lengths; built-in grooves and a groove from a clip; playback quantize per clip and per track with the notes left in place |
 | 2026-11-16 | minor | Controller lanes: Line and Curve tools, ramps between points, scale and thin, program change and poly pressure lanes, controllers that follow their notes |
+| 2026-11-16 | minor | Several selected MIDI clips in the editor: the others show in their colour, a click switches to one |

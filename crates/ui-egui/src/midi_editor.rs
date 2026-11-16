@@ -191,6 +191,9 @@ pub struct MidiEditorState {
     /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
     /// its own line, new points on the clip's main channel.
     pub ctrl_channel: Option<u8>,
+    /// Of several selected MIDI clips, the one being edited (the others' notes show in their
+    /// track's colour; a click on one makes its clip this one).
+    pub active: Option<ClipId>,
     /// What a drag on empty lane space does: select points, or draw a line or a curve.
     pub ctrl_tool: crate::midi_lanes::LaneTool,
     /// Scale Points' percent (the lanes' right-click menu).
@@ -243,6 +246,7 @@ impl Default for MidiEditorState {
             lanes: Vec::new(),
             ctrl_sel: None,
             ctrl_channel: None,
+            active: None,
             ctrl_tool: crate::midi_lanes::LaneTool::Select,
             ctrl_scale_pct: 100.0,
             ctrls_follow: false,
@@ -363,8 +367,33 @@ pub fn duplicate_offset(notes: &[soundcraft_midi::Note], grid: i64) -> i64 {
 
 /// The MIDI clip being edited: the first selected MIDI clip, else a MIDI clip under the insertion
 /// point on a selected track.
+/// The selected MIDI clips, in selection order: the ones the editor can switch between.
+pub fn selected_midi_clips(s: &soundcraft_model::Session) -> Vec<ClipId> {
+    s.edit.selected_clips.iter().copied().filter(|id| s.find_clip(*id).is_some_and(|(_, c)| matches!(c.content, ClipContent::Midi { .. }))).collect()
+}
+
+/// Makes `to` (one of the selected MIDI clips) the clip the editor edits: its view keeps the
+/// same bars in sight, and `select` becomes the note selection.
+pub fn activate_clip(app: &mut SoundApp, to: ClipId, select: Vec<usize>) {
+    let s = app.engine.session_arc();
+    let tick = |id: ClipId| s.find_clip(id).map(|(_, c)| s.tempo.samples_to_ticks(c.start, s.sample_rate));
+    if let (Some(from), Some(a), Some(b)) = (app.midi.clip, app.midi.clip.and_then(tick), tick(to))
+        && let Some(v) = app.midi.views.get(&from).copied()
+    {
+        app.midi.views.insert(to, MidiView { left: (v.left + (a - b) as f64).max(0.0), ..v });
+    }
+    app.midi.active = Some(to);
+    app.midi.clip = Some(to);
+    app.midi.selected = select;
+    app.midi.ctrl_sel = None;
+}
+
 pub fn target_clip(app: &SoundApp) -> Option<ClipId> {
     let s = app.engine.session();
+    // Of several selected MIDI clips, the one made active (a click on one of its notes).
+    if let Some(a) = app.midi.active.filter(|a| s.edit.selected_clips.contains(a) && s.find_clip(*a).is_some()) {
+        return Some(a);
+    }
     for id in &s.edit.selected_clips {
         if let Some((_, c)) = s.find_clip(*id)
             && matches!(c.content, ClipContent::Midi { .. })
@@ -437,7 +466,18 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         return;
     }
     let track_color = app.engine.session().track(track).map_or([120, 120, 200], |t| t.color);
-    let header_text = format!("{} · {} selected", clip.name, app.midi.selected.len());
+    let editable = selected_midi_clips(app.engine.session());
+    let header_text = if editable.len() > 1 {
+        format!(
+            "{} ({} of {} clips) · {} selected",
+            clip.name,
+            editable.iter().position(|c| *c == cid).map_or(1, |k| k + 1),
+            editable.len(),
+            app.midi.selected.len()
+        )
+    } else {
+        format!("{} · {} selected", clip.name, app.midi.selected.len())
+    };
     let edit_grid = app.engine.session().edit.grid;
     // Snapping (1 when the editor's grid is off) and the step nudges, Duplicate and Quantize use.
     let snap_ticks = app.midi.grid.ticks(edit_grid);
@@ -569,6 +609,23 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     if lt.small_button("Quantize").on_hover_text("Quantize the selected notes (every note when none is) to the grid").clicked() {
         op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
+    }
+    // Several selected clips: which one is edited.
+    if editable.len() > 1 {
+        let names: Vec<(ClipId, String)> = {
+            let s = app.engine.session();
+            editable.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| (*id, c.name.clone()))).collect()
+        };
+        lt.menu_button("Clip", |ui| {
+            for (id, name) in &names {
+                if ui.radio(*id == cid, name.as_str()).clicked() {
+                    activate_clip(app, *id, Vec::new());
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("The selected clips: the one edited (a click on another's note switches to it)");
     }
     let grid_text = format!("Grid: {}", app.midi.grid.label(edit_grid));
     lt.menu_button(grid_text, |ui| tools::grid_menu(app, ui)).response.on_hover_text("The MIDI Editor's own grid (hold Alt while dragging: no snap)");
@@ -742,6 +799,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let ghost_notes = midi_ghosts::shown(app, &s, cid);
     let ghost_rects = midi_ghosts::rects(&ghost_notes, &x_of, &y_of, row_h);
     midi_ghosts::draw(&notes_p, &ghost_notes, &ghost_rects);
+    let sibling_notes = midi_ghosts::siblings(&s, cid);
+    let sibling_rects = midi_ghosts::rects(&sibling_notes, &x_of, &y_of, row_h);
+    midi_ghosts::draw_siblings(&notes_p, &sibling_notes, &sibling_rects);
     let mut ghosts: Vec<Rect> = Vec::new();
     for (i, n) in sequence.notes.iter().enumerate() {
         let (mut st, mut ln, mut p) = (n.start, n.length, i32::from(n.pitch));
@@ -836,6 +896,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             tools::hover_box(ui, hp, &text, roll);
             app.midi.hover = Some(text);
         }
+    }
+    // A press on another selected clip's note makes that clip the edited one, the note selected.
+    if (resp.clicked() || resp.drag_started())
+        && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+        && hit(p).is_none()
+        && let Some(g) = midi_ghosts::hit(&sibling_rects, p).and_then(|g| sibling_notes.get(g))
+    {
+        activate_clip(app, g.clip, vec![g.index]);
+        return;
     }
     // A double-click on a ghost opens its clip.
     if resp.double_clicked()
