@@ -85,7 +85,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Scrub audio by dragging | ● | ◐ | ● | ● | **Partial**: the Scrubber plays the track it drags over (or the selected tracks), forwards and backwards at the drag's speed, with clip gain, fades and clip effects but not the track's inserts or fader; not while playing, not on the ruler |
 | Shuttle / jog at variable speed | ● | ○ | ● | ● | **Missing** |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
-| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Missing** in the interface; the player already accepts 0.1–4× |
+| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Partial**: Options › More › Varispeed… plays at 0.1–4× until set back to 1, the pitch moving with it (not during a take); no pitch-preserving option |
 | Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Missing** |
 
 Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
@@ -213,7 +213,8 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | Shrinks G-06 |
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
-(Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10; per-clip transpose and non-destructive
+(Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**varispeed done** 2026-11-16, tape style;
+no pitch-preserving option, no shuttle); per-clip transpose and non-destructive
 reverse, 8–12; clip effects that take any module, 8–12; automatic crossfades on overlap and layered
 editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (build strips off the audio
 thread) and worker thread priority, 8–14; automatic device recovery, 3–6.
@@ -236,6 +237,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 3: varispeed |
 | 2026-11-16 | minor | tier 2: scrub audio with the Scrubber |
 | 2026-11-16 | minor | tier 2: auditioning files in the Workspace and clips in the Clip List |
 | 2026-11-16 | minor | tier 2: Pause, typing a position into the counter, held rewind and fast forward |

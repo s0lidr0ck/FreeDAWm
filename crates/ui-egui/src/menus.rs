@@ -245,6 +245,7 @@ pub const AUDIOSUITE: &[(&str, &str)] = &[
 /// Commands that open a dialog when invoked from a menu (programmatic calls never do).
 const DIALOG_COMMANDS: &[&str] = &[
     "clip.clear",
+    "transport.varispeed",
     "lyrics.find",
     "track.new",
     "file.bounce_mix",

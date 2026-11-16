@@ -861,6 +861,10 @@ pub struct SoundApp {
     /// Paused: where to resume, with the end and loop of the play paused. Any other start or a
     /// locate forgets it.
     pub(crate) paused: Option<(Samples, Option<Samples>, Option<Range>)>,
+    /// Varispeed on: the speed every Play runs at (`transport.varispeed`).
+    pub varispeed: Option<f32>,
+    /// A Half-Speed Play is starting: it keeps its half speed whatever Varispeed says.
+    half_speed_play: bool,
     /// A file or clip auditioning (`audition`).
     pub audition: audition::Audition,
     /// Loop Playback and the loop range as they were when the loop playing was last decided (at
@@ -1087,6 +1091,8 @@ impl SoundApp {
             play_end: None,
             paused: None,
             audition: audition::Audition::default(),
+            varispeed: None,
+            half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1473,6 +1479,10 @@ impl SoundApp {
             p.set_band_library(self.engine.band_library());
             p.update_session(self.player_session());
             p.play_counted(from, end, looped, countoff);
+            // Varispeed applies to plays, never to a take (the player refuses to record off speed 1).
+            if let Some(v) = self.varispeed.filter(|_| !self.engine.transport.recording && !std::mem::take(&mut self.half_speed_play)) {
+                p.set_speed(v);
+            }
         } else {
             self.sim = Some((from, end, looped));
         }
@@ -2534,7 +2544,21 @@ impl SoundApp {
                     // The player keeps full speed while a take records (it would lose input).
                     self.ui.status = "Half speed is not available while recording".into();
                 }
+                TransportRequest::Varispeed(speed) => {
+                    self.varispeed = speed;
+                    if self.is_playing()
+                        && !self.engine.transport.recording
+                        && let Some(p) = &self.player
+                    {
+                        p.set_speed(speed.unwrap_or(1.0));
+                    }
+                    self.ui.status = match speed {
+                        Some(v) => format!("Varispeed {v:.2}×: plays run at this speed until it is turned off"),
+                        None => "Varispeed off".into(),
+                    };
+                }
                 TransportRequest::HalfSpeed => {
+                    self.half_speed_play = true;
                     if let Some(p) = &self.player {
                         p.set_speed(0.5);
                     }

@@ -153,3 +153,19 @@ fn held_fast_forward_winds_faster_and_a_click_jumps_a_second() {
     assert_eq!(h.state().position() - sr, wound, "letting go of a long hold does not jump again");
     assert!(wound > sr, "more than a click's second: {wound}");
 }
+
+#[test]
+fn varispeed_is_set_from_its_dialog_and_turned_off_at_one() {
+    let mut r = Rig::new();
+    soundcraft_ui_egui::menus::invoke_menu(&mut r.app, "transport.varispeed", "Options > More > Varispeed...");
+    assert!(matches!(r.app.dialogs.open, Some(soundcraft_ui_egui::dialogs::Dialog::Number { .. })), "the menu item opens its dialog");
+    r.app.dialogs.open = None;
+    r.app.run("transport.varispeed", json!({"speed": 0.8})).unwrap();
+    r.frame(vec![]);
+    assert_eq!(r.app.varispeed, Some(0.8));
+    assert!(r.app.run("transport.varispeed", json!({"speed": 9.0})).is_err());
+    assert!(r.app.run("transport.varispeed", json!({"speed": "fast"})).is_err());
+    r.app.run("transport.varispeed", json!({"speed": 1.0})).unwrap();
+    r.frame(vec![]);
+    assert_eq!(r.app.varispeed, None, "1× is off");
+}

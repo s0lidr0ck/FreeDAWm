@@ -443,6 +443,9 @@ impl Dialogs {
                 },
                 key: "path".into(),
             },
+            "transport.varispeed" => {
+                Dialog::Number { cmd: id.into(), title: "Varispeed (1 is off)".into(), key: "speed".into(), value: 1.0, suffix: "×".into() }
+            }
             "edit.repeat" => Dialog::Number { cmd: id.into(), title: "Repeat".into(), key: "count".into(), value: 2.0, suffix: "times".into() },
             "edit.shift" => {
                 Dialog::Number { cmd: id.into(), title: "Shift (seconds)".into(), key: "by_seconds".into(), value: 1.0, suffix: "s".into() }

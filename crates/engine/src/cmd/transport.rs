@@ -26,6 +26,15 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({}))
         }),
         cmd!(noundo "transport.pause", "Pause", [], None, "{}", always, |e, _| { e.transport_requests.push(TransportRequest::Pause); Ok(json!({})) }),
+        cmd!(noundo "transport.varispeed", "Varispeed...", [], None, "{speed?: 0.1..4 (1 or omitted: off)} — plays at this speed until turned off, the pitch moving with it", always, |e, p| {
+            let speed = match p.get("speed") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_f64().filter(|x| x.is_finite() && (0.1..=4.0).contains(x)).ok_or_else(|| bad("transport.varispeed", "speed must be a number from 0.1 to 4"))?),
+            };
+            let speed = speed.filter(|x| (x - 1.0).abs() > 1e-6).map(|x| x as f32);
+            e.transport_requests.push(TransportRequest::Varispeed(speed));
+            Ok(json!({"speed": speed.unwrap_or(1.0)}))
+        }),
         cmd!(noundo "transport.half_speed", "Half-Speed Playback", [], Some("Shift+Space"), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::HalfSpeed); Ok(json!({})) }),
         cmd!(noundo "transport.play_selection", "Play Edit", ["Edit", "Selection"], Some("Alt+["), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::PlaySelection); Ok(json!({})) }),
         cmd!(noundo "transport.rtz", "Return to Zero", [], Some("Home"), "{}", always, |e, _| locate(e, 0)),

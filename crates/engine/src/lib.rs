@@ -124,6 +124,9 @@ pub enum TransportRequest {
     PlaySelection,
     Pause,
     HalfSpeed,
+    /// Varispeed: every Play from now on runs at this speed (tape style, the pitch moves with
+    /// it), and a play under way changes now; `None` (or 1) turns it off.
+    Varispeed(Option<f32>),
     Scrub(Samples),
     AllNotesOff,
     /// `scout.capture` start: build a Scout rig for `strips` (off the audio thread) and arm it.
