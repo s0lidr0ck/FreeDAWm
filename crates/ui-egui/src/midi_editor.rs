@@ -426,6 +426,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             op = Some(("event.change_duration", json!({"legato": 0})));
             ui.close();
         }
+        if ui.button("Invert Selection").on_hover_text("Select the notes that are not selected, and not the others").clicked() {
+            app.midi.selected = tools::inverted_selection(sequence, &app.midi.selected);
+            ui.close();
+        }
+        if ui.button("Select Same Pitch").on_hover_text("Add every note of the selected notes' pitches").clicked() {
+            app.midi.selected = tools::same_pitch_selection(sequence, &app.midi.selected, None);
+            ui.close();
+        }
     })
     .response
     .on_hover_text("More: Audition, controller lanes, Legato");
@@ -575,13 +583,26 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let y_of = |pitch: i32| geo.y_of(pitch);
     let pitch_at = |y: f32| geo.pitch_at(y);
     let painter = ui.painter().with_clip_rect(roll.union(keys));
-    // Background rows and keys.
+    // Background rows and keys. With a key on the Key ruler, the rows out of the key at the clip's
+    // start are shaded darker, so the scale shows.
+    let scale = (!s.key_signatures.is_empty()).then(|| {
+        let (k, sc) = soundcraft_engine::vocal::key_pc_at(&s, clip.start);
+        soundcraft_engine::vocal::key_set(k, sc)
+    });
     let top = pitch_at(roll.min.y);
     for r in 0..=rows + 1 {
         let pitch = top - r;
         let y = y_of(pitch);
         let row = Rect::from_min_size(pos2(roll.min.x, y), vec2(roll.width(), row_h));
-        painter.rect_filled(row, 0.0, if is_black(pitch) { Color32::from_rgb(30, 30, 32) } else { Color32::from_rgb(40, 40, 42) });
+        let out_of_key = scale.is_some_and(|set| !set.contains(pitch.rem_euclid(12) as u8));
+        let fill = if out_of_key {
+            Color32::from_rgb(24, 24, 26)
+        } else if is_black(pitch) {
+            Color32::from_rgb(30, 30, 32)
+        } else {
+            Color32::from_rgb(40, 40, 42)
+        };
+        painter.rect_filled(row, 0.0, fill);
         let key = Rect::from_min_size(pos2(keys.min.x, y), vec2(KEY_W - 2.0, row_h - 1.0));
         painter.rect_filled(key, 1.0, if is_black(pitch) { Color32::from_rgb(20, 20, 20) } else { Color32::from_rgb(225, 225, 225) });
         if pitch.rem_euclid(12) == 0 && (0..=127).contains(&pitch) {
@@ -935,6 +956,21 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if (semi != 0 || ticks != 0)
             && !app.midi.selected.is_empty()
             && let Ok(r) = app.run("midi.notes_move", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi}))
+            && let Some(a) = r.get("indices").and_then(|v| v.as_array())
+        {
+            app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();
+        }
+        // Alt+Left / Alt+Right: the selected notes a grid step shorter or longer.
+        let (shorter, longer) = ui.input(|i| {
+            let alt = i.modifiers.alt && !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.shift;
+            (alt && i.key_pressed(egui::Key::ArrowLeft), alt && i.key_pressed(egui::Key::ArrowRight))
+        });
+        if (shorter || longer)
+            && !app.midi.selected.is_empty()
+            && let Ok(r) = app.run(
+                "midi.notes_resize",
+                json!({"clip": cid.0, "indices": app.midi.selected, "length": if longer { grid_ticks } else { -grid_ticks }}),
+            )
             && let Some(a) = r.get("indices").and_then(|v| v.as_array())
         {
             app.midi.selected = a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect();

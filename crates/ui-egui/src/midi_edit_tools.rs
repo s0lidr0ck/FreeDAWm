@@ -614,6 +614,20 @@ pub fn select_all(app: &mut SoundApp, cid: ClipId) {
     app.midi.selected = clip_notes(s, cid).iter().enumerate().filter(|(_, n)| n.start >= 0).map(|(i, _)| i).collect();
 }
 
+/// The notes in the clip's window that are not in `selected`.
+pub fn inverted_selection(seq: &soundcraft_midi::Sequence, selected: &[usize]) -> Vec<usize> {
+    seq.notes.iter().enumerate().filter(|(i, n)| n.start >= 0 && !selected.contains(i)).map(|(i, _)| i).collect()
+}
+
+/// `selected` and every other note in the clip's window of a pitch among them (or of `pitch`).
+pub fn same_pitch_selection(seq: &soundcraft_midi::Sequence, selected: &[usize], pitch: Option<u8>) -> Vec<usize> {
+    let pitches: Vec<u8> = match pitch {
+        Some(p) => vec![p],
+        None => selected.iter().filter_map(|i| seq.notes.get(*i)).map(|n| n.pitch).collect(),
+    };
+    seq.notes.iter().enumerate().filter(|(i, n)| selected.contains(i) || (n.start >= 0 && pitches.contains(&n.pitch))).map(|(i, _)| i).collect()
+}
+
 /// Split: the selected notes at `at` (ticks from the clip start), else at the playhead.
 pub fn split(app: &mut SoundApp, cid: ClipId, at: Option<i64>) -> Result<(), String> {
     if app.midi.selected.is_empty() {
