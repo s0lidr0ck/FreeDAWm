@@ -1,6 +1,6 @@
 # Four-DAW parity, section 7: writing MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and first tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 items over two rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Third-party instruments named below belong to their makers.
@@ -53,9 +53,11 @@ The gaps are of four kinds:
    tempo change leaves clips off their bars and can silence their last notes. Trimming a clip's
    start deletes the notes and controllers before it for good. Notes moved past a clip's end stay
    in the clip, unseen and unheard.
-3. **Much of what the four offer around notes is absent:** note mute, groove templates, playback
-   quantize, a drum-map view, chord and strum tools, scale highlight, editing several clips at
-   once, shared clip copies, stretching a clip, a full event list, note entry in the score.
+3. **Much of what the four offer around notes was absent.** The second round added note mute,
+   grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
+   in the editor, controller ramps and a full event list (the rows below say how far each
+   goes). Still absent: shared clip copies, stretching a clip, an index for dense clips, chord
+   pads, editable drum maps, per-note probability and note entry in the score.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
    filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
    automated, instrument latency is not compensated, and notes from clips reach the instrument
