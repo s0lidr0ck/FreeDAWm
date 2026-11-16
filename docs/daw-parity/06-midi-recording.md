@@ -154,9 +154,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Punch out and keep playing | ● | ● | ● | ● | **Works** (QuickPunch: Record while recording punches out, again punches in); a MIDI take is kept to each punch |
 | Pre-roll and post-roll | ● | ● | ● | ● | **Works** |
 | Count-in | ● | ● | ● | ● | **Works**: Setup › Click/Countoff… sets the bars and the click |
-| Notes played during the count-in are kept as a pickup | ● | ● | ● | ● | **Missing**: deliberately not taken |
+| Notes played during the count-in are kept as a pickup | ● | ● | ● | ● | **Works** as an option (Setup › Click/Countoff… › Keep MIDI played during the count-off): the take then begins at the bar the first of them was played in; off by default, as before. Not before the session's start |
 | Metronome, optionally only while recording | ● | ● | ● | ● | **Works** |
-| Capture what was just played without having pressed Record | ● | ● | ● | ● | **Works** while the transport plays: Event › More MIDI › Capture MIDI (desktop) makes a take of the playback under way or the last one, on the armed (or selected) tracks; not with the transport stopped |
+| Capture what was just played without having pressed Record | ● | ● | ● | ● | **Works** while the transport plays: Event › More MIDI › Capture MIDI (desktop) makes a take of the playback under way or the last one, on the armed (or selected) tracks; with the transport stopped, what was played since is captured at the session's tempo from the playhead's bar, its first note on the downbeat |
 | Recording starts at the first note played | ● | ○ | ○ | ○ | **Missing** |
 | The take is drawn as it is played | ● | ● | ● | ● | **Works** |
 | Footswitch punch; record from a controller's transport keys | ● | ● | ● | ● | **Missing** |
@@ -268,8 +268,8 @@ either wire the control or take it off the menu.
 | Record modes: merge, replace, new clip on top; MIDI Merge switch wired | 6–10 | Done (`68d0dc0`): Replace, Merge, New Playlist; settles bug 3 |
 | Loop recording that adds up, earlier passes heard, undo last pass | 8–14 | Done: passes add up with MIDI Merge (`68d0dc0`); finished passes are on the tracks while the loop runs and Undo takes the last back (`midi_record::LoopPreview`, `c458cdf`) |
 | MIDI takes: lanes, pick a take, comp between takes | 12–18 | Not started (large: the audio comping model would have to take MIDI clips) |
-| Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; not with it stopped |
-| Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in not done |
+| Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; with it stopped too (a listening clock of its own) |
+| Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in kept as an option |
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Not started |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
@@ -282,7 +282,7 @@ either wire the control or take it off the menu.
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
-| MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery |
+| MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery (`397e268`) |
 
 **Designs for what remains of K (not built).**
 
@@ -359,3 +359,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI learn, the MIDI Mappings window, MMC and learnt transport keys; mapped messages kept out of takes |
 | 2026-11-16 | minor | Loop recording: earlier passes are heard while later ones record, and Undo takes back the last pass while looping |
 | 2026-11-16 | minor | A MIDI take survives a crash: spilled to the autosave folder as it is played, placed by recovery |
+| 2026-11-16 | minor | Capture MIDI with the transport stopped; notes played in the count-off kept as a pickup when asked |

@@ -144,6 +144,7 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         return;
     }
+    let mut pickup = app.engine.session().edit.flag("midi.keep_pickup");
     let (mut db, mut accent, mut normal, mut countoff, mut bars, mut only_rec) = {
         let e = &app.engine.session().edit;
         (
@@ -183,6 +184,12 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
             }
         });
         ui.label(egui::RichText::new("The count-off plays before a take started with Record, not before Play.").small());
+        if crate::widgets::checkbox(ui, &mut pickup, "Keep MIDI played during the count-off")
+            .on_hover_text("Notes played in the count-off are a pickup: the MIDI take begins at the bar they were played in")
+            .changed()
+        {
+            p.insert("keep_pickup".into(), json!(pickup));
+        }
         if !p.is_empty()
             && let Err(e) = app.run("setup.click_countoff", Value::Object(p))
         {

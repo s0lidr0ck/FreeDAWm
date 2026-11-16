@@ -76,22 +76,40 @@ pub(crate) fn collect_capture(app: &mut SoundApp) {
     }
 }
 
-/// Event › More MIDI › Capture MIDI: what was played on the MIDI inputs during the playback under
-/// way (or the last one) without recording becomes a take on the record-armed MIDI and instrument
-/// tracks (or, with none armed, the selected ones), placed as a recorded take is (latency, input
-/// filter, record mode, input quantize): over the loop when it looped, else from the bar where it
-/// began to the end of the bar where it ended. One undo step.
+/// Event › More MIDI › Capture MIDI: what was played on the MIDI inputs without recording becomes
+/// a take on the record-armed MIDI and instrument tracks (or, with none armed, the selected ones),
+/// placed as a recorded take is (latency, input filter, record mode, input quantize). What was
+/// played last counts: during the playback under way (or the last one), over the loop when it
+/// looped, else from the bar where it began to the end of the bar where it ended; or, played with
+/// the transport stopped (after the last playback), at the session's tempo from the bar the
+/// playhead is in, its first note on that bar's downbeat. One undo step.
 pub(crate) fn capture(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    use soundcraft_playback::midi_in::LISTENING;
     collect_capture(app);
     let heard = std::mem::take(&mut app.midi_capture);
-    let events = recorded_events(app, &heard);
+    // What was played last: while playing, or with the transport stopped.
+    let listened = heard.last().is_some_and(|x| x.pass == LISTENING);
+    let older = heard.iter().rposition(|x| (x.pass == LISTENING) != listened).map_or(0, |i| i + 1);
+    let mut events = recorded_events(app, heard.get(older..).unwrap_or_default());
     if events.is_empty() {
-        return Err("Nothing was played to capture: play along while the transport runs, then Capture MIDI.".into());
+        return Err("Nothing was played to capture: play along (stopped, or while the transport runs), then Capture MIDI.".into());
     }
-    let latency = take_latency(app);
+    let latency = if listened { 0 } else { take_latency(app) };
     let s = app.engine.session();
     let (sr, tempo) = (s.sample_rate, &s.tempo);
-    let looped = app.play_loop.filter(|_| events.iter().any(|e| e.pass > 0));
+    if listened {
+        // On the session's timeline from the playhead's bar: the first note on its downbeat.
+        let is_on = |m: [u8; 3]| m[0] & 0xF0 == 0x90 && m[2] > 0;
+        let first = events.iter().filter(|e| is_on(e.msg)).map(|e| e.at).min().or_else(|| events.iter().map(|e| e.at).min()).unwrap_or(0);
+        let bar = tempo.bar_beat_at_tick(tempo.samples_to_ticks(app.position().max(0), sr)).bar;
+        let at = tempo.tick_to_samples(tempo.bar_start_tick(bar), sr);
+        // (A pedal pressed before the first note is down from the downbeat.)
+        for e in &mut events {
+            e.at = at.saturating_add(e.at.saturating_sub(first)).max(at);
+            e.pass = 0;
+        }
+    }
+    let looped = app.play_loop.filter(|_| !listened && events.iter().any(|e| e.pass > 0));
     let take = match looped {
         Some(l) => soundcraft_engine::midi_record::MidiTake { start: l.start, end: l.end, looped: Some(l), punch: None, latency },
         None => {
@@ -634,6 +652,33 @@ pub(crate) mod tests {
         assert_eq!((n.pitch, n.length), (60, 30_000 * 960 / 24_000));
         assert!(app.midi_capture.is_empty(), "captured once");
         assert_eq!(app.engine.undo_label(), Some("Record"));
+    }
+
+    #[test]
+    fn capture_midi_with_the_transport_stopped_starts_on_the_playheads_bar() {
+        use soundcraft_playback::midi_in::{LISTENING, RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        let note = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };
+        // Played along with the transport earlier, then noodled with it stopped: the noodle is
+        // what was played last. On the listening clock: a sustain pedal, then a note a quarter long.
+        app.midi_capture = vec![
+            note(500, [0x90, 40, 100], 0),
+            note(5_000_000, [0xB0, 64, 127], LISTENING),
+            note(5_010_000, [0x90, 60, 100], LISTENING),
+            note(5_034_000, [0x80, 60, 0], LISTENING),
+        ];
+        // The playhead in bar 3 (bars are 96,000 samples at 120 bpm).
+        app.engine.session_mut().edit.selection = soundcraft_time::Range::point(200_000);
+        let r = app.run("ui.capture_midi", json!({})).unwrap();
+        let id = soundcraft_model::ClipId(r["clips"][0].as_u64().unwrap());
+        let (_, c) = app.engine.session().find_clip(id).unwrap();
+        assert_eq!((c.start, c.length), (192_000, 96_000), "the playhead's bar");
+        let seq = c.midi_playing().unwrap();
+        assert_eq!(seq.notes.iter().map(|n| (n.pitch, n.start, n.length)).collect::<Vec<_>>(), vec![(60, 0, 960)], "on the downbeat");
+        assert_eq!(seq.ctrls[0].tick, 0, "the pedal pressed before it is down from the downbeat");
     }
 
     #[test]

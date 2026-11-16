@@ -144,6 +144,10 @@ pub fn block_offset(stamp: u64, now: u64, frames: usize, rate: f64) -> u32 {
     at.floor() as u32
 }
 
+/// The loop pass of what Capture MIDI heard with the transport stopped: its position is then the
+/// listening clock's (samples since the hub was made, at the session rate), not the timeline's.
+pub const LISTENING: u16 = u16::MAX;
+
 /// A recorded event: its timeline sample, port slot, message and loop pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedMidi {
@@ -428,6 +432,17 @@ impl MidiHub {
     /// UI falls behind, what does not fit is dropped. Never allocates.
     pub fn capture_block(&self, live: &LiveMidi, base: i64, now: u64, rate: f64, pass: u16) {
         heard_into(&self.capture, live, base, now, rate, pass, i64::MIN);
+    }
+
+    /// Audio thread, with the transport stopped: the block's events for Capture MIDI on the
+    /// listening clock (each at its stamp, in samples at `rate` since the hub was made), with the
+    /// pass [`LISTENING`]. Never allocates.
+    pub fn listen_block(&self, live: &LiveMidi, rate: f64) {
+        for e in live.events() {
+            let at = (e.stamp as f64 * rate / 1e6).round() as i64;
+            let packed = pack(e.msg) | (u64::from(e.port) << 24) | (u64::from(LISTENING) << 32);
+            self.capture.push(at as u64, packed);
+        }
     }
 
     /// UI thread: what was captured since the last call.
@@ -1054,6 +1069,18 @@ mod tests {
         hub.take_captured(&mut cap);
         assert!(rec.is_empty(), "not a take's");
         assert_eq!(cap, vec![RecordedMidi { at: 47_952, port: 1, msg: [0x90, 60, 90], pass: 2 }]);
+    }
+
+    #[test]
+    fn what_is_played_with_the_transport_stopped_is_heard_on_the_listening_clock() {
+        let hub = MidiHub::new();
+        let mut live = LiveMidi::new();
+        live.push(LiveEvent { offset: 0, port: 1, msg: [0x90, 60, 90], stamp: 1_000_000 });
+        live.push(LiveEvent { offset: 0, port: 1, msg: [0x80, 60, 0], stamp: 1_500_000 });
+        hub.listen_block(&live, 48_000.0);
+        let mut cap = Vec::new();
+        hub.take_captured(&mut cap);
+        assert_eq!(cap.iter().map(|x| (x.at, x.pass)).collect::<Vec<_>>(), vec![(48_000, LISTENING), (72_000, LISTENING)]);
     }
 
     #[test]

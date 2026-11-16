@@ -1244,6 +1244,14 @@ impl AudioState {
             } else if self.playing && !self.mix.live_midi.is_empty() {
                 // Not recording: kept for Capture MIDI (what was just played).
                 h.capture_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass);
+            } else if let Some(c) = self.countoff.filter(|_| self.recording && !self.mix.live_midi.is_empty()) {
+                // A count-off before a take: what is played is before the record point by what is
+                // left of it (a pickup, which the take keeps if asked: `midi_record`).
+                let left = c.len().saturating_sub(self.countoff_at);
+                h.record_block(&self.mix.live_midi, self.pos.saturating_sub(left).saturating_sub(self.midi_lead), self.midi_now, rate, 0, i64::MIN);
+            } else if !self.playing && !self.mix.live_midi.is_empty() {
+                // Stopped: Capture MIDI listens on a clock of its own.
+                h.listen_block(&self.mix.live_midi, rate);
             }
         }
         if self.playing {
@@ -4055,7 +4063,7 @@ mod tests {
     }
 
     #[test]
-    fn live_midi_is_heard_during_the_count_off_but_only_recorded_from_the_record_point() {
+    fn live_midi_is_heard_during_the_count_off_and_recorded_before_the_record_point() {
         // One bar of four 2400-frame beats: 9600 frames.
         let countoff = CountOff { bars: 1, beats_per_bar: 4, beat: 2400.0 };
         let start = |play: bool| {
@@ -4093,9 +4101,12 @@ mod tests {
         st.fill(&mut out, 2);
         let mut got = Vec::new();
         hub.take_recorded(&mut got);
-        assert_eq!(got.len(), 1, "only the note-off, played after the record point: {got:?}");
-        assert_eq!(got[0].msg, [0x80, 60, 0]);
-        assert!((48_000..48_000 + 4 * 256).contains(&got[0].at), "{}", got[0].at);
+        // The note played in the count-off is before the record point, where it was played (a
+        // pickup: the take leaves it out unless asked), the note-off after it.
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].msg, got[1].msg), ([0x90, 60, 110], [0x80, 60, 0]));
+        assert!((48_000 - 9_600..48_000).contains(&got[0].at), "{}", got[0].at);
+        assert!((48_000..48_000 + 4 * 256).contains(&got[1].at), "{}", got[1].at);
     }
 
     #[test]

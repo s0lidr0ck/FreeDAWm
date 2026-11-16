@@ -158,6 +158,8 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
     let quantize = s.edit.flag("midi.input_quantize");
     let opts = crate::cmd::event_more::quantize_opts(s);
     let passes = events.iter().map(|x| x.pass).max().unwrap_or(0).max(upto.unwrap_or(0));
+    let pickup = with_pickup(s, take, events);
+    let take = &pickup;
     let mut out = Vec::new();
     for tid in tracks {
         let Some(Route::Midi(input)) = s.track(tid).map(|t| t.mixer.input.clone()) else { continue };
@@ -450,6 +452,26 @@ fn merge_take(s: &mut Session, track: TrackId, range: Range, take: Sequence) -> 
     clip.midi_channels = true;
     crate::edit::place_clip(s, track, clip);
     id
+}
+
+/// Notes played during the count-off are kept as a pickup when Setup › Click/Countoff asks
+/// (`midi.keep_pickup`): the take then begins at the start of the bar the first of them was
+/// played in (not before the session's start), so they land where they were played. Without a
+/// punch range, and only notes: a controller alone moved in the count-off does not extend it.
+pub fn with_pickup(s: &Session, take: &MidiTake, events: &[RecordedEvent]) -> MidiTake {
+    if !s.edit.flag("midi.keep_pickup") || take.punch.is_some() {
+        return *take;
+    }
+    let first = events
+        .iter()
+        .filter(|x| x.pass == 0 && x.at < take.start && x.msg[0] & 0xF0 == 0x90 && x.msg[2] > 0)
+        .map(|x| x.at.saturating_sub(take.latency))
+        .min();
+    let Some(first) = first.filter(|f| *f < take.start) else { return *take };
+    let sr = s.sample_rate;
+    let bar = s.tempo.bar_beat_at_tick(s.tempo.samples_to_ticks(first.max(0), sr)).bar;
+    let start = s.tempo.tick_to_samples(s.tempo.bar_start_tick(bar), sr).clamp(0, take.start);
+    MidiTake { start, ..*take }
 }
 
 /// The range pass `pass` of `passes` covers (see the module docs), cut to the punch range;
@@ -1033,6 +1055,27 @@ mod tests {
         p.restore(e.session_mut());
         let tr = e.session().track(t).unwrap();
         assert_eq!((tr.playlists.len(), tr.clips().len()), (1, 0));
+    }
+
+    #[test]
+    fn notes_played_in_the_count_off_are_a_pickup_when_asked() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        // Recording from bar 3 (8 Q), a pickup played on the last beat of the count-off.
+        let take = MidiTake { start: 8 * Q, end: 12 * Q, looped: None, punch: None, latency: 480 };
+        let events = [ev(7 * Q + 480, "K", [0x90, 55, 90]), ev(8 * Q + 480, "K", [0x80, 55, 0]), ev(9 * Q + 480, "K", [0x90, 60, 100])];
+        let ids = record_live_midi(&mut e, &take, &events);
+        let c = clip(&e, ids[0]);
+        assert_eq!(c.start, 8 * Q, "left out unless asked");
+        assert_eq!(c.midi_playing().unwrap().notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("setup.click_countoff", &json!({"keep_pickup": true})).unwrap();
+        let ids = record_live_midi(&mut e, &take, &events);
+        let c = clip(&e, ids[0]);
+        assert_eq!((c.start, c.end()), (4 * Q, 12 * Q), "from the bar the pickup was played in");
+        let notes: Vec<(u8, i64)> = c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect();
+        assert_eq!(notes, vec![(55, 3 * TICKS_PER_QUARTER), (60, 5 * TICKS_PER_QUARTER)]);
+        let _ = t;
     }
 
     #[test]
