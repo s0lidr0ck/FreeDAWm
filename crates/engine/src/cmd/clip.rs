@@ -183,7 +183,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Warp clips. On Elastic tracks the material is rendered with a pitch-preserving time stretch
 /// (the original source is remembered in `edit.values` so Remove Warp restores it).
-fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let ratio = f64_or(p, "ratio", 1.0).clamp(0.05, 20.0);
     let s = e.session_mut();
@@ -299,22 +299,13 @@ fn flag(e: &mut Engine, p: &Value, get: fn(&soundcraft_model::Clip) -> bool, set
     Ok(json!({"value": v, "clips": ids.len()}))
 }
 
-fn layer(e: &mut Engine, p: &Value, front: bool) -> Result<Value> {
+/// Send to Back / Bring to Front. Overlapping clips (crossfades) are mixed together, and a
+/// playlist is kept in time order (code relies on it), so there is no front or back to keep:
+/// the commands change nothing and say so. They used to reorder the playlist out of time order
+/// until the next edit re-sorted it.
+fn layer(e: &mut Engine, p: &Value, _front: bool) -> Result<Value> {
     let ids = clip_ids_param(e, p);
-    let s = e.session_mut();
-    for t in &mut s.tracks {
-        if let Some(pl) = t.playlist_mut() {
-            let (mut sel, mut rest): (Vec<_>, Vec<_>) = pl.clips.drain(..).partition(|c| ids.contains(&c.id));
-            if front {
-                rest.append(&mut sel);
-                pl.clips = rest;
-            } else {
-                sel.append(&mut rest);
-                pl.clips = sel;
-            }
-        }
-    }
-    Ok(json!({}))
+    Ok(json!({"clips": ids.len(), "changed": false, "note": "overlapping clips are mixed together; there is no front or back order"}))
 }
 
 fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -440,6 +431,36 @@ mod tests {
         assert!((c.length as f64 - len0 as f64 * 0.5).abs() < 2.0);
         e.execute("clip.remove_warp", &json!({"clips": [cid]})).unwrap();
         assert_eq!(e.session().find_clip(ClipId(cid)).unwrap().1.length, len0);
+    }
+
+    /// Parity bug 14: Send to Back / Bring to Front leave the playlist in time order.
+    #[test]
+    fn layer_commands_keep_the_playlist_in_time_order() {
+        let mut e = crate::demo::demo_engine();
+        let t = e.session().tracks.iter().find(|t| t.clips().len() > 1).map(|t| t.id).unwrap();
+        let before = e.session().track(t).unwrap().clips().to_vec();
+        let last = before.last().unwrap().id.0;
+        e.execute("clip.send_to_back", &json!({"clips": [last]})).unwrap();
+        e.execute("clip.bring_to_front", &json!({"clips": [before[0].id.0]})).unwrap();
+        assert_eq!(e.session().track(t).unwrap().clips(), before.as_slice());
+    }
+
+    /// Parity bug 12: Conform to Tempo on an Elastic track keeps the pitch (a rendered,
+    /// pitch-preserving stretch), not a varispeed ratio.
+    #[test]
+    fn conform_on_an_elastic_track_keeps_the_pitch() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id.0).unwrap();
+        e.execute("track.elastic", &json!({"track": pad, "algorithm": "polyphonic"})).unwrap();
+        let cid = e.session().track(TrackId(pad)).unwrap().clips()[0].id.0;
+        let len0 = e.session().find_clip(ClipId(cid)).unwrap().1.length;
+        let src0 = e.session().find_clip(ClipId(cid)).unwrap().1.source();
+        let bpm = e.session().tempo.tempo_at_tick(0);
+        e.execute("clip.conform_to_tempo", &json!({"clip": cid, "source_bpm": bpm * 1.25})).unwrap();
+        let c = e.session().find_clip(ClipId(cid)).unwrap().1.clone();
+        assert_eq!(c.stretch, 1.0, "no varispeed");
+        assert_ne!(c.source(), src0, "rendered to a new file");
+        assert!((c.length as f64 - len0 as f64 * 1.25).abs() < 2.0, "{} vs {}", c.length, len0);
     }
 
     /// A clip on an Elastic track playing `clip_len` samples of a source that is silent before `tone_at`.

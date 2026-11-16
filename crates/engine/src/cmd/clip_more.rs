@@ -241,11 +241,15 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let s = e.session_mut();
     let mut out = Vec::new();
+    // Clips on an Elastic track (any algorithm but Varispeed) keep their pitch: they are
+    // rendered with the pitch-preserving stretch once the ratios are known.
+    let mut elastic = Vec::new();
     for cid in ids {
-        let Some((_, c)) = s.find_clip(cid).map(|(t, c)| (t, c.clone())) else { continue };
+        let Some((t, c)) = s.find_clip(cid).map(|(t, c)| (t, c.clone())) else { continue };
         if !c.is_audio() || c.edit_locked {
             continue;
         }
+        let keeps_pitch = s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
         let bpm_key = format!("clip.bpm.{}", cid.0);
         let len_key = format!("clip.len0.{}", cid.0);
         let stretch = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
@@ -256,13 +260,20 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         s.edit.values.insert(len_key, len0);
         let ratio = (src_bpm / now).clamp(0.05, 20.0);
         let new_len = ((len0 * ratio).round() as Samples).max(1);
+        out.push(json!({"clip": cid, "source_bpm": src_bpm, "bpm": now, "stretch": ratio}));
+        if keeps_pitch {
+            elastic.push((cid, ratio));
+            continue;
+        }
         if let Some(cl) = s.find_clip_mut(cid) {
             cl.stretch = ratio;
             cl.length = new_len;
             cl.fade_in.len = cl.fade_in.len.min(new_len);
             cl.fade_out.len = cl.fade_out.len.min(new_len);
         }
-        out.push(json!({"clip": cid, "source_bpm": src_bpm, "bpm": now, "stretch": ratio}));
+    }
+    for (cid, ratio) in elastic {
+        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio}))?;
     }
     Ok(json!({"clips": out}))
 }

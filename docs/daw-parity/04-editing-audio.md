@@ -124,7 +124,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
 | Trim clips to close gaps | ◐ | ● | ● | ● | **Missing** |
 | Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Partial**: always overwrite |
-| Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Flag only**, and it leaves the playlist out of time order (bug 14) |
+| Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Missing**: overlapping clips are mixed together; Send to Back and Bring to Front say so and change nothing (bug 14, fixed) |
 | Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**; whole files only, not a clip from the list |
 
 ## E. Clip properties
@@ -201,7 +201,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Extract a groove and apply it | ● | ● | ● | ● | **Missing** |
 | Detect tempo from audio and build a tempo map | ◐ | ● | ● | ● | **Works**: constant, follow and smooth modes |
 | Audio on a musical-time track follows tempo edits | ● | ● | ● | ● | **Flag only**: the track setting exists; nothing moves or stretches |
-| Conform a clip to the session tempo | ● | ● | ● | ● | **Partial**: changes pitch even on a pitch-preserving track (bug 12) |
+| Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving render on an Elastic one (bug 12, fixed) |
 | Re-stretch after trimming | ● | ● | ● | ● | **Partial**: a second stretch rebuilds from the first-stretch length and discards later trims |
 
 ## J. Pitch and spectral editing
@@ -276,9 +276,9 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 9 | **Fixed.** Deleting fades in a selection trimmed every crossfade on the track back to its midpoint, including those outside the selection. Only fades and crossfades that lie in the selection go now (with a point, those of the clip under it). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`delete_fades`) |
 | 10 | **Fixed.** Commit / Bounce copied volume, output and sends to the new track but not pan or automation, then hid the original. It now also carries the pan, trim, surround panner, automation mode and every automation lane but the inserts' own (which is in the render). Test: `io::strip_tests::commit_carries_pan_trim_and_automation` | `engine/src/io.rs` (`commit_track`) |
 | 11 | **Fixed.** Strip Silence treated muted clips as silence and deleted them. Muted clips are now set aside before stripping and put back whole. Test: `io::strip_tests::muted_clips_are_left_whole` | `engine/src/io.rs` (`strip_silence`) |
-| 12 | Conform to Tempo sets a varispeed ratio, so pitch changes even on a pitch-preserving (Elastic) track | `engine/src/cmd/clip_more.rs:255-260` |
+| 12 | **Fixed.** Conform to Tempo set a varispeed ratio, so pitch changed even on a pitch-preserving (Elastic) track. On an Elastic track (any algorithm but Varispeed) it now renders the clip with the pitch-preserving stretch from its original, as Elastic Properties does. Test: `cmd::clip::tests::conform_on_an_elastic_track_keeps_the_pitch` | `engine/src/cmd/clip_more.rs` (`conform`) |
 | 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
-| 14 | Send to Back / Bring to Front reorder the playlist without re-sorting; code that assumes time order can misbehave until the next edit | `engine/src/cmd/clip.rs:305-315` |
+| 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips are mixed together, so there is no order to keep: the commands now leave the playlist alone and say so. A real front/back order belongs with the overlap modes (tier 2). Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
 | 15 | Dragging a folder track moves the folder without its members | `ui-egui/src/edit_window.rs:1301` |
 | 16 | Nudge with a partial selection moves whole clips; clips nudged past zero are each clamped, closing the gaps between them | `engine/src/cmd/edit.rs:907-921`; `engine/src/edit.rs:481` |
 | 17 | Shuffle trim ripples clips from one point and automation from another | `engine/src/edit.rs:783-784` |
@@ -347,3 +347,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 9 fixed: deleting fades leaves crossfades outside the selection alone |
 | 2026-11-16 | minor | Bugs 7 and 8 fixed: Insert/Cut Time move every playlist, the tempo and meter map and keys; Identify Beat restores the tempo after the selection |
 | 2026-11-16 | minor | Bugs 10, 11 and 22 fixed: Commit keeps pan and automation, Strip Silence keeps muted clips, Export Clips writes each clip alone |
+| 2026-11-16 | minor | Bugs 12 and 14 fixed: Conform keeps the pitch on Elastic tracks; front/back no longer unsorts the playlist |
