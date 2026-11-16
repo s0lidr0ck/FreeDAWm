@@ -61,7 +61,9 @@ which profile, is in `ui.json`, not the session; the profiles are JSON files in 
 `Monitor Profiles` (`soundcraft_engine::monitor_profiles`). A simulated output is measured, not
 drawn: `freedawm-cli monitor-test-file` writes a test signal, and `freedawm-cli monitor-profile`
 reads a bounce of it through a device into a profile (`soundcraft_engine::monitor_capture`:
-frequency response and stereo width, nothing level-dependent).
+frequency response and stereo width, nothing level-dependent). A hearing profile comes from the Hearing Test
+(`soundcraft_dsp::hearing_test`): bands of noise centred between the ears and matched in loudness
+against the ISO 226 contour, played as previews, which bypass the stage.
 
 Device I/O today is the system's *default* output and *default* input device, opened as two
 separate cpal streams; the mix renders 512-sample blocks and resamples to the device rate when

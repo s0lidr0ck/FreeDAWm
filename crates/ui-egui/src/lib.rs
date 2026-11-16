@@ -27,6 +27,7 @@ pub mod extra_windows;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
+pub mod hearing_ui;
 pub mod hit_picker;
 pub mod icons;
 mod imprint_ui;
@@ -370,6 +371,9 @@ pub struct UiState {
     /// The Ear Profile window.
     #[serde(skip)]
     pub show_ear_profile: bool,
+    /// The Hearing Test window.
+    #[serde(skip)]
+    pub show_hearing_test: bool,
     /// The user's keyboard shortcuts: command id → shortcut ("Cmd+Shift+X"), `""` for none.
     /// Commands not in it keep the registry's (`shortcuts::effective_shortcut`).
     pub shortcuts: shortcuts::Overrides,
@@ -553,6 +557,7 @@ impl Default for UiState {
             monitor_sim: false,
             monitor_sim_profile: String::new(),
             show_ear_profile: false,
+            show_hearing_test: false,
             shortcuts: shortcuts::Overrides::new(),
             shortcut_editor: shortcut_editor::EditorState::default(),
             show_clip_effects: false,
@@ -909,6 +914,8 @@ pub struct SoundApp {
     last_rev: u64,
     /// The monitor stage's state on this side (`monitor_ui`).
     pub monitor: monitor_ui::MonitorUi,
+    /// The hearing test under way (`hearing_ui`).
+    pub hearing: Option<hearing_ui::HearingTest>,
     /// The band Library last handed to the player (its address; 0 = none yet).
     band_lib_key: usize,
     fonts_ready: bool,
@@ -1076,6 +1083,7 @@ impl SoundApp {
             last_rev: 0,
             band_lib_key: 0,
             monitor: monitor_ui::MonitorUi::default(),
+            hearing: None,
             fonts_ready: false,
             fonts_installed: false,
             theme_applied: None,

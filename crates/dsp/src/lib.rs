@@ -18,6 +18,7 @@ pub mod beat;
 pub mod biquad;
 pub mod derive;
 pub mod drum_import;
+pub mod hearing_test;
 pub mod link;
 pub mod meter;
 pub mod monitor;

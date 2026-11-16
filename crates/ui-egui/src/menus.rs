@@ -112,6 +112,11 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("monitor.profiles", "Monitor Profiles", "", None),
     ("monitor.ear_profile.save", "Save Ear Profile", "", None),
     ("window.ear_profile", "Ear Profile", "", None),
+    ("window.hearing_test", "Hearing Test", "", None),
+    ("hearing_test.state", "Hearing Test State", "", None),
+    ("hearing_test.set", "Set Hearing Test Answer", "", None),
+    ("hearing_test.next", "Next Hearing Test Step", "", None),
+    ("hearing_test.back", "Previous Hearing Test Step", "", None),
     ("view.mix_section", "Mix Window View", "", None),
     ("view.mix_slim", "Slim Strips", "View > Mix Window Views > Slim Strips", None),
     ("ui.new_tracks_dialog", "New Tracks…", "", None),
@@ -746,7 +751,7 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
         Some(i) if i.starts_with("ui.ml.") => !app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(),
         // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
         Some("ui.mix.slim_editors") => app.ui.wide_editors,
-        Some(i) if i.starts_with("monitor.") => true,
+        Some(i) if i.starts_with("monitor.") || i.starts_with("hearing_test.") => true,
         Some(i) if i.starts_with("ui.mix.width.") => crate::channel_width::enabled(app, i),
         // Rename… opens its dialog on the first selected track.
         Some("track.rename") => !app.engine.target_tracks().is_empty(),
@@ -867,6 +872,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.workspace") => app.ui.show_workspace,
         Some("window.preferences") => app.ui.show_preferences,
         Some("window.ear_profile") => app.ui.show_ear_profile,
+        Some("window.hearing_test") => app.ui.show_hearing_test,
         Some("monitor.ear") => app.ui.monitor_ear,
         Some("monitor.sim") => app.ui.monitor_sim,
         Some("window.configurations") => app.ui.show_configurations,
@@ -1164,6 +1170,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         return Some(r);
     }
     if let Some(r) = crate::monitor_ui::run(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::hearing_ui::run(app, id, p) {
         return Some(r);
     }
     if let Some(v) = crate::extra_windows::run(app, id, p) {

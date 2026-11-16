@@ -81,18 +81,95 @@ fn profiles_live_in_the_library_folder_and_are_listed_with_the_built_in_outputs(
 }
 
 #[test]
-fn ear_without_a_profile_opens_the_window_to_make_one() {
+fn ear_without_a_profile_opens_the_hearing_test_to_make_one() {
     let dir = scratch("none");
     let mut h = harness(app(&dir));
     assert!(h.state_mut().run("monitor.ear", json!({})).is_err());
     assert!(!h.state().ui.monitor_ear);
     h.run_steps(3);
-    h.get_by_label("Left ear");
-    h.get_by_label("Copy Left to Right");
-    h.state_mut().run("window.ear_profile", json!({"value": false})).unwrap();
+    h.get_by_label("Set your listening level");
+    h.get_by_label("Step 1 of 20");
+    h.state_mut().run("window.hearing_test", json!({"value": false})).unwrap();
     h.run_steps(2);
-    assert!(h.query_by_label("Left ear").is_none());
+    assert!(h.query_by_label("Set your listening level").is_none());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_hearing_test_steps_through_balance_then_loudness() {
+    use soundcraft_ui_egui::hearing_ui::{Kind, STEPS, kind};
+    assert_eq!(STEPS, 20);
+    assert_eq!(kind(0), Kind::Level);
+    assert_eq!((kind(1), kind(10)), (Kind::Balance(0), Kind::Balance(9)));
+    // Loudness skips the 1 kHz band, which is the reference.
+    let loud: Vec<Kind> = (11..20).map(kind).collect();
+    assert_eq!(loud, [0, 1, 2, 4, 5, 6, 7, 8, 9].map(Kind::Loudness));
+    assert_eq!(kind(99), Kind::Loudness(9));
+}
+
+#[test]
+fn the_hearing_test_ends_in_an_ear_profile_and_never_edits_the_session() {
+    let dir = scratch("test");
+    let mut app = app(&dir);
+    let rev = app.engine.revision;
+    assert!(app.run("hearing_test.next", json!({})).is_err());
+    let r = app.run("window.hearing_test", json!({"value": true, "name": "Me", "headphones": "HD 600"})).unwrap();
+    assert_eq!(r, json!({"open": true, "step": 1, "steps": 20, "kind": "level", "hz": 1000.0, "value": 0.0}));
+    assert!(app.run("hearing_test.set", json!({"value": 3.0})).is_err());
+    // Balance: the right ear needs 6 dB more at 4 kHz (step 8) and nothing elsewhere.
+    for step in 2..=11 {
+        let r = app.run("hearing_test.next", json!({})).unwrap();
+        assert_eq!((r["step"].as_u64(), r["kind"].as_str()), (Some(step), Some("balance")));
+        if r["hz"] == json!(4000.0) {
+            assert_eq!(app.run("hearing_test.set", json!({"value": 6.0})).unwrap()["value"], json!(6.0));
+        }
+    }
+    assert_eq!(app.run("hearing_test.back", json!({})).unwrap()["step"], json!(10));
+    app.run("hearing_test.next", json!({})).unwrap();
+    // Loudness: 8 kHz needs 10 dB more; an answer out of range is held at the range's end.
+    for _ in 12..=20 {
+        let r = app.run("hearing_test.next", json!({})).unwrap();
+        assert_eq!(r["kind"], json!("loudness"));
+        if r["hz"] == json!(8000.0) {
+            app.run("hearing_test.set", json!({"value": 10.0})).unwrap();
+        }
+        if r["hz"] == json!(125.0) {
+            assert_eq!(app.run("hearing_test.set", json!({"value": 900.0})).unwrap()["value"], json!(25.0));
+            app.run("hearing_test.set", json!({"value": 0.0})).unwrap();
+        }
+    }
+    assert_eq!(app.run("hearing_test.state", json!({})).unwrap()["step"], json!(20));
+    let r = app.run("hearing_test.next", json!({})).unwrap();
+    assert_eq!(r["finished"], json!(true));
+    assert!(!app.ui.show_hearing_test && app.ui.show_ear_profile);
+    let draft = app.monitor.draft.clone().unwrap();
+    assert_eq!((draft.name.as_str(), draft.headphones.as_str()), ("Me", "HD 600"));
+    // 4 kHz is band 6, 8 kHz band 8: the balance is split, the loudness shared.
+    assert_eq!((draft.left[6], draft.right[6]), (-3.0, 3.0));
+    assert_eq!((draft.left[8], draft.right[8]), (10.0, 10.0));
+    assert_eq!((draft.left[0], draft.right[3]), (0.0, 0.0));
+    assert_eq!(app.engine.revision, rev);
+    assert!(!app.engine.is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn no_step_of_the_hearing_test_can_play_a_clipped_or_loud_sound() {
+    use soundcraft_ui_egui::hearing_ui::{HearingTest, STEPS};
+    let mut test = HearingTest::default();
+    test.answers.balance = [20.0; 10];
+    test.answers.loudness = [25.0; 10];
+    for step in 0..STEPS {
+        test.step = step;
+        let [l, r] = test.clip();
+        assert_eq!(l.len(), r.len());
+        assert!(l.len() > 24_000 && l.len() < 96_000);
+        let peak = l.iter().chain(&r).fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak < 0.9, "step {step}: peak {peak}");
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        assert!(rms(&l).max(rms(&r)) < 0.26, "step {step}");
+        assert!(l.iter().chain(&r).all(|v| v.is_finite()));
+    }
 }
 
 #[test]

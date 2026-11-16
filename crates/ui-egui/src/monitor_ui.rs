@@ -17,8 +17,8 @@ use soundcraft_engine::monitor_profiles as lib;
 use soundcraft_model::monitor::HearingProfile;
 use std::path::PathBuf;
 
-/// The frequencies the Ear Profile window's sliders set, Hz.
-pub const EDIT_HZ: [f32; 10] = [125.0, 250.0, 500.0, 1000.0, 2000.0, 3000.0, 4000.0, 6000.0, 8000.0, 12_000.0];
+/// The frequencies the Ear Profile window's sliders set, Hz (the hearing test's).
+pub const EDIT_HZ: [f32; 10] = soundcraft_dsp::hearing_test::TEST_HZ;
 /// The sliders' range, dB.
 pub const EDIT_DB: std::ops::RangeInclusive<f32> = -20.0..=30.0;
 
@@ -172,9 +172,9 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, Stri
                 match all.first() {
                     Some(first) => app.ui.monitor_ear_profile = first.name.clone(),
                     None => {
-                        // Nothing to correct with yet: the window to make one opens instead.
-                        open_editor(app);
-                        app.ui.status = "No hearing profile yet: set one up in the Ear Profile window".into();
+                        // Nothing to correct with yet: the test that makes one opens instead.
+                        let _ = crate::hearing_ui::run(app, "window.hearing_test", &json!({"value": true}));
+                        app.ui.status = "No hearing profile yet: the Hearing Test makes one".into();
                         return Some(Err(app.ui.status.clone()));
                     }
                 }
@@ -248,6 +248,14 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, Stri
     })
 }
 
+/// Opens the Ear Profile window on `draft` (the hearing test's result), in place of whatever it
+/// was editing.
+pub(crate) fn load_draft(app: &mut SoundApp, draft: Draft) {
+    app.monitor.draft = Some(draft);
+    app.monitor.revision = app.monitor.revision.wrapping_add(1);
+    app.ui.show_ear_profile = true;
+}
+
 fn open_editor(app: &mut SoundApp) {
     if app.monitor.draft.is_none() {
         let current = dir(app).and_then(|d| lib::find_hearing(&d, &app.ui.monitor_ear_profile));
@@ -306,6 +314,10 @@ pub fn strip_keys(app: &mut SoundApp, ui: &mut Ui, size: Vec2) {
             }
         }
         ui.separator();
+        if ui.button("Hearing Test…").clicked() {
+            report(app, "window.hearing_test", json!({"value": true}));
+            ui.close();
+        }
         if ui.button("Ear Profile…").clicked() {
             report(app, "window.ear_profile", json!({"value": true}));
             ui.close();
@@ -349,7 +361,7 @@ pub fn window(app: &mut SoundApp, ctx: &egui::Context) {
     };
     let before = draft.clone();
     let mut open = true;
-    let mut save = false;
+    let (mut save, mut retest) = (false, false);
     let t = Tokens::current();
     egui::Window::new(egui::RichText::new("Ear Profile").font(bold(13.0)))
         .id(egui::Id::new("ear_profile_window"))
@@ -395,6 +407,9 @@ pub fn window(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Copy Left to Right").clicked() {
                     draft.right = draft.left;
                 }
+                if ui.button("Hearing Test…").on_hover_text("Measure the profile instead of setting it by hand").clicked() {
+                    retest = true;
+                }
                 if ui.button("Flat").clicked() {
                     draft.left = [0.0; 10];
                     draft.right = [0.0; 10];
@@ -417,6 +432,10 @@ pub fn window(app: &mut SoundApp, ctx: &egui::Context) {
             Ok(_) => app.ui.status = format!("Saved the hearing profile “{}”", p.name),
             Err(e) => app.ui.status = e,
         }
+    }
+    if retest {
+        let _ = app.run("window.hearing_test", json!({"value": true, "name": draft.name, "headphones": draft.headphones}));
+        open = false;
     }
     if !open {
         close_editor(app);
