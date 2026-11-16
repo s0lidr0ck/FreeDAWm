@@ -278,6 +278,10 @@ pub struct Keel {
     up_grind: [Stage; 2],
     down: [Stage; 2],
     tube: TriodeStage,
+    /// The tube stage settled with no input (see `settle_tube`); `reset` returns to it.
+    tube_idle: TriodeStage,
+    /// The plate voltage the settled stage gives with no input: what is taken off its output.
+    tube_idle_plate: f64,
     tube_gain: f64,
     dc: Biquad,
     // the tone stacks, one per voicing, all running
@@ -320,6 +324,8 @@ impl Keel {
             up_grind: [Stage::default(); 2],
             down: [Stage::default(); 2],
             tube: TriodeStage::default(),
+            tube_idle: TriodeStage::default(),
+            tube_idle_plate: 0.0,
             tube_gain: 60.0,
             dc: Biquad::default(),
             stacks: Default::default(),
@@ -350,11 +356,27 @@ impl Keel {
         }
     }
 
+    /// Runs the freshly prepared tube stage with no input until it settles, and keeps that state
+    /// and its plate voltage as the idle point. The stage's own DC solution (`dc_plate`) is exact,
+    /// but each sample is solved from its plate table with a Newton tolerance, so with a silent
+    /// grid it lands a few tens of millivolts away and drifts there through the cathode bypass:
+    /// taken off the output, that difference was a slow thump from silence (about -62 dBFS).
+    fn settle_tube(&mut self, rate: f64) {
+        // the cathode bypass (1.5 kΩ, 25 µF) has a 37 ms time constant: half a second is >13 of them
+        let n = (rate * 0.5) as usize;
+        let mut vp = self.tube.dc_plate();
+        for _ in 0..n {
+            vp = self.tube.process(0.0);
+        }
+        self.tube_idle_plate = if vp.is_finite() { vp } else { self.tube.dc_plate() };
+        self.tube_idle.clone_from(&self.tube);
+    }
+
     /// The tube stage's small-signal gain, measured: a quiet sine through it, at its rate.
     fn measure_tube(&mut self, rate: f64) -> f64 {
         let n = (rate * 0.03) as usize;
         let w = std::f64::consts::TAU * 1000.0 / rate;
-        let dc = self.tube.dc_plate();
+        let dc = self.tube_idle_plate;
         let mut peak = 0.0f64;
         for i in 0..n {
             let y = self.tube.process(0.01 * (w * i as f64).sin()) - dc;
@@ -362,7 +384,7 @@ impl Keel {
                 peak = peak.max(y.abs());
             }
         }
-        self.tube.reset();
+        self.tube.clone_from(&self.tube_idle);
         if peak.is_finite() && peak > 1e-6 { peak / 0.01 } else { 60.0 }
     }
 
@@ -422,7 +444,7 @@ impl Keel {
         let up = hb::up4(&mut self.up, pre);
         let up_g = hb::up4(&mut self.up_grind, pushed);
         let mut out4 = [0.0f64; 4];
-        let dc = self.tube.dc_plate();
+        let dc = self.tube_idle_plate;
         let tube_norm = 1.0 / (self.tube_gain * TUBE_VOLTS);
         for ((o, u), g) in out4.iter_mut().zip(up).zip(up_g) {
             let v = u * k;
@@ -482,6 +504,7 @@ impl Plugin for Keel {
         }
         self.latency = hb::round_trip_latency(&coefs, 2).min(DI_LEN - 1);
         self.tube.prepare(TUBE, rate * 4.0);
+        self.settle_tube(rate * 4.0);
         self.tube_gain = self.measure_tube(rate * 4.0);
         self.hp_in.set(FilterType::HighPass1, 25.0, 0.7, 0.0, sr);
         self.grind_push.set(FilterType::Peak, 800.0, 0.9, 6.0, sr);
@@ -508,7 +531,8 @@ impl Plugin for Keel {
 
     fn reset(&mut self) {
         self.up.iter_mut().chain(&mut self.up_grind).chain(&mut self.down).for_each(Stage::reset);
-        self.tube.reset();
+        // back to the settled idle point (a clone of the same shared plate table: no allocation)
+        self.tube.clone_from(&self.tube_idle);
         for b in [&mut self.hp_in, &mut self.grind_push, &mut self.dc, &mut self.bright] {
             b.reset();
         }

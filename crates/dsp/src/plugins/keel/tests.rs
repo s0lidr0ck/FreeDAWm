@@ -237,3 +237,27 @@ fn hostile_values_and_switching_stay_finite() {
     k.process(&mut wide, 512);
     assert!(wide.iter().all(|c| c == &wide[0]), "the mono result on every channel");
 }
+
+/// Silence in is silence out at every rate and with each voicing, after `prepare` and after a
+/// `reset` that follows loud playing: the tube stage starts from where it settles with no input,
+/// not from its exact DC solution, which its per-sample solve lands a little away from.
+#[test]
+fn silence_in_silence_out_after_prepare_and_reset() {
+    let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    for sr in [44_100.0, 48_000.0, 96_000.0] {
+        for (v, name) in VOICINGS.iter().enumerate() {
+            let mut k = keel(sr, &[("voicing", v as f32), ("drive", 10.0)]);
+            let p = peak(&run(&mut k, &vec![0.0; sr as usize]));
+            assert!(p < 1e-6, "{sr} Hz, {name}: {p} from silence");
+            let _ = run(&mut k, &sine(sr as usize / 4, 60.0, sr, 0.9));
+            k.reset();
+            let p = peak(&run(&mut k, &vec![0.0; sr as usize / 2]));
+            assert!(p < 1e-6, "{sr} Hz, {name}: {p} from silence after a reset");
+        }
+    }
+    // the old reference, the stage's exact DC point, is measurably away from where it rests
+    let k = keel(48_000.0, &[]);
+    // (24 mV at 48 kHz when this was written; about 8e-4 at the output)
+    let off = (k.tube.dc_plate() - k.tube_idle_plate).abs();
+    assert!(off > 1e-4, "{off}");
+}

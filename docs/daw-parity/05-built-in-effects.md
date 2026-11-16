@@ -132,7 +132,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator) |
 | Bass enhancer (harmonics so low notes are heard on small speakers) | ◐ | ○ | ◐ | ○ | **Works** (Heft): harmonics made only from the band below Frequency (40–250 Hz) and added only above it, Character from even to odd, Original Bass keeps, reduces or removes the lows; transparent at zero, no latency, no aliasing (cubic at most, from a band under 250 Hz); every channel. Tests: `heft/tests.rs` |
 | Guitar amps | ● | ● | ● | ● | **Works**: seven, solved tube by tube; mono out |
-| Bass amp | ● | ● | ● | ● | **Works** (Keel): Tube (the Amp engine's 12AX7 stage), Solid State and Grind preamps at 4x through half-bands, the Amp engine's tone stack with Keel's own parts per voicing, Bright, three cabinets or none blended with a latency-matched DI, Squeeze limiter; 5 samples latency at every rate. Tests: `keel/tests.rs` (latency measured, no allocation, 44.1/48/96 kHz, aliasing at full drive) |
+| Bass amp | ● | ● | ● | ● | **Works** (Keel): Tube (the Amp engine's 12AX7 stage), Solid State and Grind preamps at 4x through half-bands, the Amp engine's tone stack with Keel's own parts per voicing, Bright, three cabinets or none blended with a latency-matched DI, Squeeze limiter; 5 samples latency at every rate. Tests: `keel/tests.rs` (latency measured, no allocation, 44.1/48/96 kHz, aliasing at full drive, silence in gives silence out: the tube stage starts from where it settles with no input, which had made a -62 dBFS thump from silence) |
 | Cabinets from impulse responses | ● | ● | ● | ● | **Works** |
 | Pedalboard in one window | ◐ | ● | ● | ● | **Dropped by the owner**: pedals stay separate inserts |
 | Tuner | ● | ● | ● | ● | **Works** (Tuner) |
@@ -369,3 +369,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | The effects the owner dropped marked "dropped by the owner" (rotary speaker, auto-pan, ring modulator, frequency shifter, vocoder, beat repeat, volume shaper / gater, pedalboard, upward compression, linear-phase CleanQ, gated reverb, plain sub-bass generator, graphic EQ, real-time pitch correction) |
 | 2026-11-16 | minor | Comp's Link All Channels leaves the LFE out, told by the mixer from the track's channel format; the meters and Dither listed under Utilities in the insert menu |
 | 2026-11-16 | minor | Keel (bass amp) and Heft (bass enhancer) added; preset housekeeping and editor basics done |
+| 2026-11-16 | minor | Keel: silence in gives silence out (the tube stage's idle point is where it settles, not its exact DC solution) |
