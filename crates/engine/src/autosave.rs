@@ -307,7 +307,8 @@ impl Autosave {
     fn write(&mut self, session: &Session, origin: Option<&str>, recording: Option<&Recording>) -> Result<()> {
         let base = origin.and_then(|p| Path::new(p).parent()).and_then(|p| std::path::absolute(p).ok());
         let audio_dir = self.dir.join("Audio Files");
-        let mut s = session.clone();
+        // Stretches still heard live are rendered, so the copy holds their audio.
+        let mut s = crate::stretch_jobs::rendered(session).unwrap_or_else(|| session.clone());
         let mut copies = BTreeMap::new();
         for src in &mut s.sources {
             let file = if Path::new(&src.path).is_absolute() { Some(PathBuf::from(&src.path)) } else { base.as_ref().map(|b| b.join(&src.path)) };

@@ -46,6 +46,7 @@ pub mod scout_profiles;
 pub mod scout_prompt;
 pub mod spill;
 pub mod split_files;
+pub mod stretch_jobs;
 pub mod surface;
 pub mod tempo_detect;
 pub mod tick_clips;
@@ -276,6 +277,13 @@ pub struct Engine {
     pub take_hits: Option<crate::cmd::juke::TakeHits>,
     /// Numbers each analysis (`TakeHits::id`).
     pub take_hits_seq: u64,
+    /// Stretch renders are made by a worker while the clip is heard through the real-time
+    /// stretcher ([`stretch_jobs`]); off, commands render them in place (the CLI, scripts).
+    pub defer_stretch: bool,
+    /// Stretch renders made, by reserved source, with the live entry each was made for: kept so
+    /// an undo or redo that brings the entry back gets its render at once.
+    pub(crate) stretch_done:
+        std::collections::HashMap<soundcraft_model::SourceId, (soundcraft_model::LiveStretch, Arc<soundcraft_model::SourceAudio>)>,
     /// Take files recorded in this run that nothing may use one day (an undone take, a take of a
     /// track deleted while it recorded): deleted once neither the session, its history nor a
     /// session file names them ([`io::clean_unused_takes`]).
@@ -323,6 +331,8 @@ impl Engine {
             scout_capture: None,
             take_hits: None,
             take_hits_seq: 0,
+            defer_stretch: false,
+            stretch_done: std::collections::HashMap::new(),
             scout_pending: Vec::new(),
             scout_floor: 0,
             band_lib: None,
@@ -447,6 +457,7 @@ impl Engine {
         self.redo.clear();
         self.merge_redo = None;
         self.last_selection = None;
+        self.stretch_done.clear();
         // The host stops the transport (`ResetSession`), which ends any armed capture.
         self.scout_capture = None;
         // A capture of the old session never lands in the new one.
@@ -585,6 +596,7 @@ impl Engine {
         self.redo.push(HistoryEntry { label: h.label, doc: cur });
         self.revision = self.revision.wrapping_add(1);
         self.dirty = true;
+        self.restore_stretch_renders();
         true
     }
 
@@ -617,6 +629,7 @@ impl Engine {
         self.undo.push(HistoryEntry { label: h.label, doc: cur });
         self.revision = self.revision.wrapping_add(1);
         self.dirty = true;
+        self.restore_stretch_renders();
         true
     }
 
@@ -710,6 +723,13 @@ impl Engine {
     /// Run a command by id. Never panics: escaped panics become `EngineError::Internal` and the
     /// document is restored.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // Stretch renders inside this command (and the tempo follow after it) are deferred
+        // when the host renders them in the background.
+        let defer = self.defer_stretch;
+        stretch_jobs::with_defer(defer, || self.execute_inner(id, params))
+    }
+
+    fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
         let id = cmd::canonical_id(id);
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if self.blocked_while_recording(id) {

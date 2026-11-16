@@ -211,6 +211,27 @@ pub fn add_source_audio(s: &mut Session, name: &str, audio: Arc<SourceAudio>, fo
     insert_source(s, name, audio, None, format)
 }
 
+/// Reserve a source for audio still being made (a stretch render, see [`crate::stretch_jobs`]):
+/// listed with its name, length and channels, a new unsaved file as [`add_source`]'s, its audio
+/// not in the pool yet.
+pub(crate) fn reserve_source(s: &mut Session, name: &str, channels: usize, frames: Samples) -> SourceId {
+    let id = SourceId(s.alloc());
+    let stem = Path::new(name).file_stem().and_then(|x| x.to_str()).unwrap_or(name).to_string();
+    let path = unique_audio_rel(s, &stem);
+    s.sources.push(Source {
+        id,
+        name: stem,
+        path,
+        channels: u16::try_from(channels).unwrap_or(u16::MAX),
+        frames: u64::try_from(frames.max(0)).unwrap_or(0),
+        sample_rate: s.sample_rate.hz(),
+        format: FileFormat::Wav,
+        time_reference: 0,
+        unsaved: true,
+    });
+    id
+}
+
 fn insert_source(s: &mut Session, name: &str, audio: Arc<SourceAudio>, path: Option<&str>, format: FileFormat) -> SourceId {
     let sr = s.sample_rate.hz();
     let id = SourceId(s.alloc());
@@ -1698,6 +1719,9 @@ pub fn save_session_copy(e: &Engine, path: &str) -> Result<usize> {
 /// an existing file by its absolute path, with nothing unsaved, stays a reference.
 fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool) -> Result<(Session, usize, PathBuf)> {
     use std::collections::{HashMap, HashSet};
+    // Stretches still heard live are rendered first: what is saved is the render.
+    let rendered = crate::stretch_jobs::rendered(session);
+    let session = rendered.as_ref().unwrap_or(session);
     let p = session_file(path);
     // Before any audio is written: a session saved outside the write root changes nothing.
     crate::file_access::check_write(&p).map_err(EngineError::Io)?;
@@ -2366,6 +2390,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 /// `Audio Files/` (stored, not compressed: audio barely compresses). Returns the bytes and the
 /// session with its source paths pointing into the bundle.
 pub fn session_bundle(session: &Session) -> Result<(Vec<u8>, Session)> {
+    let rendered = crate::stretch_jobs::rendered(session);
+    let session = rendered.as_ref().unwrap_or(session);
     use std::io::Write as _;
     let zerr = |err: zip::result::ZipError| EngineError::Io(format!("bundle: {err}"));
     let ioerr = |err: std::io::Error| EngineError::Io(format!("bundle: {err}"));

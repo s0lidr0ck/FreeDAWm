@@ -408,6 +408,11 @@ pub struct Session {
     /// in the background; the engine carries it across undo and redo.
     #[serde(skip)]
     pub vocal: crate::VocalCache,
+    /// Stretch renders being made, by the source id each render will have: until a render's
+    /// audio is in the pool, the mixer reads its original through the real-time stretcher
+    /// ([`crate::LiveStretch`]). Never saved: a save renders what is still here first.
+    #[serde(skip)]
+    pub live_stretch: std::collections::BTreeMap<SourceId, crate::LiveStretch>,
 }
 
 impl Default for Session {
@@ -455,6 +460,7 @@ impl Session {
             assets: crate::AssetPool::default(),
             folder: None,
             vocal: crate::VocalCache::default(),
+            live_stretch: std::collections::BTreeMap::new(),
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);

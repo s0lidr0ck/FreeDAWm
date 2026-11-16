@@ -4270,7 +4270,10 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let ClipContent::Audio { source, offset } = clip.content else { return };
     let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
     let Some(isect) = clip.range().intersect(&block) else { return };
-    let Some(audio) = s.pool.get(source) else { return };
+    // A stretch whose render is still being made: the original, through the real-time
+    // stretcher ([`live_stretch_at`]).
+    let live = live_stretch(s, source);
+    let Some(audio) = s.pool.get(live.map_or(source, |l| l.source)) else { return };
     let nsrc = audio.num_channels();
     if nsrc == 0 {
         return;
@@ -4283,14 +4286,15 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     // Gain is evaluated every 32 samples and interpolated (fades and envelopes stay smooth).
     const STEP: usize = 32;
     // Clean Vocal's cleaned alternate, mixed in sample for sample before gain and fades.
-    let alt = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
+    let alt = clip.clean_alt().filter(|k| k.wet() > 0.0 && live.is_none()).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
     let edges = alt.map(|(_, origin, a)| CleanEdges::new(s, clip, origin, a.frames()));
     // Vocal tuning's render replaces the heard audio inside its spans (looked up once per block).
     // A plain clip reads its window in runs; a stretched, reversed, looped or transposed one
     // sample by sample through `Clip::material_at`.
-    let unstretched = (stretch - 1.0).abs() < 1e-9 && clip.plays_plain();
+    let unstretched = (stretch - 1.0).abs() < 1e-9 && clip.plays_plain() && live.is_none();
     let pitch = clip.pitch_ratio();
     let grain = (s.sample_rate.as_f64() * TRANSPOSE_GRAIN_SECS).max(64.0);
+    let live_grain = (s.sample_rate.as_f64() * soundcraft_dsp::live_stretch::GRAIN_SECS).max(64.0);
     let tuned = tuned_spans(s, clip);
     // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
     let (taps, tap) = clip.channel_taps(nsrc, buf.len());
@@ -4356,7 +4360,10 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                     // A varispeed clip reads its file at `1 / stretch` file samples a sample,
                     // band-limited (the sampler's reader): a sped-up clip no longer aliases.
                     let f = clip.material_at(rel);
-                    let v = shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0);
+                    let v = match live {
+                        Some(l) => live_stretch_at(&mut src, l, f, pitch, live_grain).unwrap_or(0.0),
+                        None => shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0),
+                    };
                     match cleaned.as_mut().and_then(|(w, origin, c)| shifted_at(c, f - *origin as f64, rel, stretch, pitch, grain).map(|cv| (*w, cv)))
                     {
                         Some((w, cv)) => blend(v, cv, edges.map_or(w, |e| e.weight(w, f))),
@@ -4409,6 +4416,24 @@ pub fn tuned_spans<'a>(s: &'a Session, clip: &Clip) -> Option<&'a soundcraft_mod
 /// [`Clip::source_channel`] gives that one channel.
 pub fn clip_heard_window(s: &Session, clip: &Clip, start: Samples, n: usize) -> Option<Vec<Vec<f32>>> {
     let ClipContent::Audio { source, .. } = clip.content else { return None };
+    if let Some(l) = live_stretch(s, source) {
+        // A stretch still being rendered: the render positions asked, through the stretcher.
+        let audio = s.pool.get(l.source)?;
+        let nsrc = audio.num_channels();
+        let grain = (s.sample_rate.as_f64() * soundcraft_dsp::live_stretch::GRAIN_SECS).max(64.0);
+        let chans = match clip.source_channel.map(usize::from).filter(|c| *c < nsrc) {
+            Some(c) => c..c + 1,
+            None => 0..nsrc,
+        };
+        return Some(
+            chans
+                .map(|ch| {
+                    let mut src = audio.cursor(ch, false);
+                    (0..n).map(|k| live_stretch_at(&mut src, l, start.saturating_add(k as i64) as f64, 1.0, grain).unwrap_or(0.0)).collect()
+                })
+                .collect(),
+        );
+    }
     let audio = s.pool.get(source)?;
     let alt = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
     let nalt = alt.map_or(0, |(_, _, a)| a.num_channels());
@@ -4481,6 +4506,23 @@ impl CleanEdges {
 /// `(1 − w) · dry + w · wet`, exactly `wet` at `w = 1`.
 fn blend(dry: f32, wet: f32, w: f32) -> f32 {
     if w >= 1.0 { wet } else { (1.0 - w) * dry + w * wet }
+}
+
+/// The live stretch standing in for `source` while its render is made: only while the pool has
+/// no audio for it. Reads only: safe on the audio thread.
+pub fn live_stretch(s: &Session, source: soundcraft_model::SourceId) -> Option<&soundcraft_model::LiveStretch> {
+    if s.live_stretch.is_empty() || s.pool.get(source).is_some() {
+        return None;
+    }
+    s.live_stretch.get(&source)
+}
+
+/// Render position `q` of a live stretch, read from its original through the real-time
+/// stretcher ([`soundcraft_dsp::live_stretch`]): two grains of `grain` samples read at the
+/// file's speed (times `pitch`, a clip transpose), placed by the stretch map. Never allocates.
+fn live_stretch_at(src: &mut soundcraft_model::SampleCursor<'_>, l: &soundcraft_model::LiveStretch, q: f64, pitch: f64, grain: f64) -> Option<f32> {
+    use soundcraft_dsp::live_stretch::{map_at, stretch_at};
+    stretch_at(|at, step| band_limited_at(src, at, step), |x| map_at(&l.map, x), q, grain, pitch)
 }
 
 /// `src` at the fractional position `f`, read `step` file samples a sample: a cubic at or below

@@ -193,10 +193,22 @@ fn apply(e: &mut Engine, track: soundcraft_model::TrackId, id: ClipId, st: &Warp
         Some(a) => Some(soundcraft_dsp::offline::StretchMode::from_id(a).unwrap_or_default()),
         None => Some(soundcraft_dsp::offline::StretchMode::Polyphonic),
     };
-    let um: Vec<(usize, usize)> = marks.iter().map(|m| (usize::try_from(m.0).unwrap_or(0), usize::try_from(m.1).unwrap_or(0))).collect();
-    let out = soundcraft_dsp::offline::warp_render(&ch, &um, s.sample_rate.as_f64() as f32, mode);
-    let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: out };
-    let src = crate::io::add_source(s, &format!("{}-Warp", clip.name), buf, None, soundcraft_audio_io::FileFormat::Wav);
+    let name = format!("{}-Warp", clip.name);
+    let src = match mode {
+        // Pitch-preserving: rendered now, or (deferred) heard through the real-time stretcher
+        // until a worker has rendered it.
+        Some(_) => {
+            let kind = soundcraft_model::StretchKind::Warp { marks: marks.clone(), mode: algo.clone() };
+            crate::stretch_jobs::stretch_source(s, &name, &base, st.offset.max(0), n, kind)
+                .ok_or_else(|| bad(C, "the clip's original audio is missing"))?
+        }
+        None => {
+            let um: Vec<(usize, usize)> = marks.iter().map(|m| (usize::try_from(m.0).unwrap_or(0), usize::try_from(m.1).unwrap_or(0))).collect();
+            let out = soundcraft_dsp::offline::warp_render(&ch, &um, s.sample_rate.as_f64() as f32, mode);
+            let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: out };
+            crate::io::add_source(s, &name, buf, None, soundcraft_audio_io::FileFormat::Wav)
+        }
+    };
     remember_original(s, id, &WarpState { roff: 0, ..st.clone() });
     s.edit.values.remove(&format!("elastic.{id}.ratio", id = id.0));
     let old_end = st.marks.last().map_or(0, |m| m.1);
