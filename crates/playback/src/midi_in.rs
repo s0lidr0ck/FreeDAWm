@@ -447,12 +447,14 @@ pub struct MidiInputs {
     ports: Vec<Port>,
     /// Enabled (true) or disabled by port name, as saved; a port not named is enabled.
     choices: BTreeMap<String, bool>,
+    /// Ports control surfaces use: closed here (a surface's messages are not notes).
+    reserved: Vec<String>,
     last_scan: Option<Instant>,
 }
 
 impl MidiInputs {
     pub fn new(backend: Box<dyn MidiBackend>, hub: Arc<MidiHub>, choices: BTreeMap<String, bool>) -> MidiInputs {
-        MidiInputs { backend, hub, ports: Vec::new(), choices, last_scan: None }
+        MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), last_scan: None }
     }
 
     /// The system's ports (`None` where there is no MIDI backend: the web build).
@@ -488,6 +490,20 @@ impl MidiInputs {
     pub fn set_enabled(&mut self, name: &str, on: bool) {
         self.choices.insert(name.to_string(), on);
         self.apply();
+    }
+
+    /// The ports control surfaces use: closed here, so what they send never reaches a track
+    /// (takes, Thru, All Inputs).
+    pub fn set_reserved(&mut self, names: Vec<String>) {
+        if names != self.reserved {
+            self.reserved = names;
+            self.apply();
+        }
+    }
+
+    /// Whether a control surface uses `name`.
+    pub fn reserved(&self, name: &str) -> bool {
+        self.reserved.iter().any(|r| r == name)
     }
 
     /// When the port named `name` last received a message, if it is open.
@@ -538,7 +554,7 @@ impl MidiInputs {
         for i in 0..self.ports.len() {
             let Some(p) = self.ports.get(i) else { continue };
             let enabled = self.enabled(&p.info.name);
-            let want = enabled && p.info.present;
+            let want = enabled && p.info.present && !self.reserved.contains(&p.info.name);
             let (name, slot, has) = (p.info.name.clone(), p.info.slot, p.conn.is_some());
             let mut result = None;
             if want && !has {
@@ -586,6 +602,28 @@ mod system {
         Ok(m)
     }
 
+    struct RawConn(#[allow(dead_code)] midir::MidiInputConnection<()>);
+
+    impl MidiConnection for RawConn {}
+
+    pub fn open_raw(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
+        let mut m = midir::MidiInput::new("FreeDAWm surface").map_err(|e| e.to_string())?;
+        // SysEx too (handshakes), but not the clock and active sensing.
+        m.ignore(midir::Ignore::TimeAndActiveSense);
+        let port = m.ports().into_iter().find(|p| m.port_name(p).ok().as_deref() == Some(name)).ok_or_else(|| "not found".to_string())?;
+        let conn = m
+            .connect(
+                &port,
+                "FreeDAWm surface input",
+                move |_stamp, bytes, _| {
+                    let _ = to.send(bytes.to_vec());
+                },
+                (),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(Box::new(RawConn(conn)))
+    }
+
     impl MidiBackend for Midir {
         fn ports(&mut self) -> Vec<String> {
             let Ok(m) = client() else { return Vec::new() };
@@ -601,6 +639,25 @@ mod system {
             Ok(Box::new(Conn(conn)))
         }
     }
+}
+
+/// Opens the system's input port `name` for a control surface: every message, SysEx included,
+/// goes to `to` as it comes (from the driver's thread). Dropping the connection closes the port.
+pub fn open_raw_input(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        system::open_raw(name, to)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = to;
+        Err(format!("{name}: no MIDI input here"))
+    }
+}
+
+/// The system's input port names (empty on the web).
+pub fn system_port_names() -> Vec<String> {
+    system_backend().map(|mut b| b.ports()).unwrap_or_default()
 }
 
 /// The system's MIDI backend (`None` on the web).
@@ -715,6 +772,18 @@ impl MidiBackend for FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_port_a_control_surface_uses_is_closed_to_notes() {
+        let fake = FakeBackend::with_ports(&["MCU", "Keys"]);
+        let mut m = MidiInputs::new(fake.boxed(), MidiHub::new(), BTreeMap::new());
+        m.rescan();
+        m.set_reserved(vec!["MCU".into()]);
+        assert!(!fake.is_open("MCU") && fake.is_open("Keys"));
+        assert!(m.reserved("MCU"));
+        m.set_reserved(Vec::new());
+        assert!(fake.is_open("MCU"));
+    }
 
     #[test]
     fn ring_keeps_order_and_counts_overflow() {

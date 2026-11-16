@@ -48,9 +48,9 @@ revision history:
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
    Offsets, count-off set-up and capture of what was just played now work. Still stored and
    unread: the input filter, MIDI Thru in the Options menu and the other settings bug 22 lists.
-3. **Nothing goes out, and nothing is mapped.** MIDI output to hardware ports works (External
-   MIDI). Still missing: clock or timecode out, no MIDI track playing an instrument on another track, no MIDI learn, no
-   control surface, no transport control from a controller.
+3. **Going out and mapping.** MIDI output to hardware ports works (External MIDI), and Mackie
+   Control and HUI surfaces drive the mixer and transport. Still missing: clock and timecode out,
+   a MIDI track playing an instrument on another track, and MIDI learn.
 
 The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
 synth). There is no piano, and only the synth answers the sustain pedal and pitch bend.
@@ -209,8 +209,8 @@ Compared in full in section 7; listed here for what matters while recording.
 | MIDI timecode and machine control | ● | ◐ | ● | ● | **Missing** |
 | MIDI learn: move a knob, it is mapped to a parameter | ◐ | ● | ● | ● | **Missing** |
 | Mapped controller moves kept out of the recording | ● | ● | ● | ● | **Missing** |
-| Control surfaces (Mackie Control, HUI and maker scripts) | ● | ● | ● | ● | **Missing** |
-| Transport from a controller | ● | ● | ● | ● | **Missing** |
+| Control surfaces (Mackie Control, HUI and maker scripts) | ● | ● | ● | ● | **Partial**: Setup › Control Surfaces adds Mackie Control (with extenders) and HUI on chosen input and output ports. Faders with touch (touch is the on-screen fader held, for Touch and Latch), V-Pots as pan, mute, solo, rec and select, transport, bank and channel shift, automation-mode keys, scribble strips, meters, motor faders and LEDs following the mix, the jog wheel, the MCU handshake and HUI's ping. Tested against simulated devices (documented bytes in, bytes out), not yet against hardware. No maker scripts, no plug-in or send pages on the V-Pots, no flip; Avid EUCON is not possible (proprietary, licensed SDK) |
+| Transport from a controller | ● | ● | ● | ● | **Partial**: from a Mackie Control or HUI surface's transport keys |
 
 ## L. Files
 
@@ -276,7 +276,7 @@ either wire the control or take it off the menu.
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Not started |
-| Mackie Control and HUI surfaces | 12–20 | Not started (left for last, as section 3's mixing work may take it) |
+| Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Not started (Musical Typing's step mode fixed: bug 18) |
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Not started; bug 12 open |
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
@@ -333,3 +333,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Status of the work list, commits on the fixed bugs, summary brought up to date |
 | 2026-11-16 | minor | Merge is the default MIDI record mode for new sessions; saved sessions keep theirs |
 | 2026-11-16 | minor | MIDI output to hardware ports (External MIDI), enabled in Setup › MIDI Input Devices |
+| 2026-11-16 | minor | Control surfaces: Mackie Control (with extenders) and HUI, Setup › Control Surfaces |

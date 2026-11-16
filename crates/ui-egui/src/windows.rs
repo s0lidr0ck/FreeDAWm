@@ -24,6 +24,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     playback_engine(app, ctx);
     io_setup(app, ctx);
     crate::midi_devices::show(app, ctx);
+    crate::surfaces::show(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     crate::net_ui::show(app, ctx);
     shortcuts_window(app, ctx);

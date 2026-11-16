@@ -94,6 +94,7 @@ pub mod slider_drag;
 pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
+pub mod surfaces;
 pub mod swale_ui;
 pub mod teleprompter;
 pub mod tempo_markers;
@@ -345,6 +346,12 @@ pub struct UiState {
     /// Setup › MIDI Input Devices… (`midi_devices`).
     #[serde(default)]
     pub show_midi_inputs: bool,
+    /// Setup › Control Surfaces… (`surfaces`).
+    #[serde(default)]
+    pub show_surfaces: bool,
+    /// The control surfaces (`surfaces`): per machine, as the hardware is.
+    #[serde(default)]
+    pub surfaces: Vec<surfaces::SurfaceConfig>,
     /// Setup › Network… (`net_ui`).
     #[serde(default)]
     pub show_network: bool,
@@ -555,6 +562,8 @@ impl Default for UiState {
             sync: window_sync::SyncOptions::default(),
             show_io_setup: false,
             show_midi_inputs: false,
+            show_surfaces: false,
+            surfaces: Vec::new(),
             show_network: false,
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
@@ -843,6 +852,8 @@ pub struct SoundApp {
     pub(crate) midi_sent: bool,
     /// The MIDI Input Devices window was open last frame (it rescans when it opens).
     pub(crate) midi_window_was_open: bool,
+    /// The running control surfaces (`surfaces`).
+    pub surfaces: surfaces::Surfaces,
     /// The live MIDI the audio thread heard since recording started (`midi_devices::collect`).
     pub(crate) midi_rec: Vec<soundcraft_playback::midi_in::RecordedMidi>,
     /// The hub's count of recorded events lost (the window did not collect them in time) when
@@ -1085,6 +1096,7 @@ impl SoundApp {
             use_system_midi: false,
             midi_sent: false,
             midi_window_was_open: false,
+            surfaces: surfaces::Surfaces::default(),
             midi_rec: Vec::new(),
             midi_rec_lost_at: 0,
             midi_capture: Vec::new(),
@@ -2723,6 +2735,7 @@ impl SoundApp {
         // Stop the old playback before sending a replacement session to the audio thread.
         self.handle_transport(dt);
         midi_devices::tick(self);
+        surfaces::tick(self);
         scout::poll(self, ctx);
         // The band's Library can change without an edit (a reload): it is checked too.
         let band_lib = self.engine.band_library();

@@ -42,6 +42,7 @@ pub mod scout_profiles;
 pub mod scout_prompt;
 pub mod spill;
 pub mod split_files;
+pub mod surface;
 pub mod tempo_detect;
 pub mod tick_clips;
 pub mod vocal;

@@ -145,7 +145,7 @@ K-system scales, and the master a loudness meter.
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
-| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Missing**: no controller mapping, no HUI or Mackie Control |
+| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Partial**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); no controller mapping (MIDI learn) yet |
 | Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
 
 ### Editing it
@@ -330,6 +330,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Control surfaces (Mackie Control, HUI) write automation from their faders and V-Pots |
 | 2026-11-16 | minor | tier 3: a control room design |
 | 2026-11-16 | minor | tier 3: mixer snapshots |
 | 2026-11-16 | minor | tier 2: group attributes in the dialog, nested VCAs |
