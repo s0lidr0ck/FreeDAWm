@@ -50,7 +50,9 @@ use soundcraft_band::runtime::{BandRuntime, Retired};
 use soundcraft_dsp::{Plugin, PluginEditor, PluginStateReader};
 pub use soundcraft_mix::CountOff;
 use soundcraft_mix::scout::ScoutRig;
-use soundcraft_mix::{BandSongCache, BandUpdate, LiveInstances, MAX_CHANNELS, MixEngine, PreparedInstance, StripMeter, main_channels};
+use soundcraft_mix::{
+    BandSongCache, BandUpdate, BuiltinPrep, LiveInstances, MAX_CHANNELS, MixEngine, Prepared, PreparedInstance, StripMeter, main_channels,
+};
 use soundcraft_model::{ModuleId, Session, TrackId};
 use soundcraft_time::{Range, Samples};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -103,8 +105,9 @@ pub struct PreviewAudio {
 // `Taps` is the largest: a fixed array, so the audio thread takes it without freeing anything.
 #[allow(clippy::large_enum_variant)]
 enum Cmd {
-    /// A new snapshot plus the third-party instances it needs (created on the UI thread).
-    Session(Arc<Session>, Vec<PreparedInstance>),
+    /// A new snapshot plus the plugin instances and Clip Effects modules it needs (created on
+    /// the UI thread: third-party ones and, through a [`BuiltinPrep`], built-in ones).
+    Session(Arc<Session>, Prepared),
     /// Where the callback sends the snapshots it replaces (freeing one takes thousands of frees).
     OldSessions(SyncSender<Arc<Session>>),
     /// Live input, and a planar buffer for it (channels × `max_block`) to replace the mix's input:
@@ -592,6 +595,8 @@ fn send_band_garbage(mix: &mut MixEngine, garbage: &Sender<Garbage>, runtime: Op
 fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
+    // Built-in modules and Clip Effects come made from the UI thread too (`Side::builtins`).
+    m.set_prepared_builtins(true);
     m.metronome = true;
     // The master's loudness meter (Window › Loudness Meter) reads the live mix.
     m.set_loudness_metering(true);
@@ -715,7 +720,7 @@ impl AudioState {
                         // with the new engine's garbage, after the next meter copy (see `send_garbage`).
                         self.mix.keep_retired_analysis(old.take_retired_analysis());
                     }
-                    self.mix.adopt(instances);
+                    self.mix.adopt_prepared(instances);
                     // The main format may have changed: buffers for the widest are already here.
                     self.main_width = main_channels(&s).min(self.main.len());
                     // Outputs may have moved: the device layout stays, the map follows.
@@ -1712,6 +1717,9 @@ struct Side {
     /// Instances made ahead, a step at a time, for a session about to be handed over
     /// ([`Player::preload_begin`]); the next `prepare` for that session takes them.
     preload: Option<Preload>,
+    /// The built-in instances and Clip Effects modules handed to the audio thread's engine (made
+    /// here, so its `sync` never creates one).
+    builtins: BuiltinPrep,
 }
 
 /// Third-party instances being made ahead of a session's hand-over (the progress window's
@@ -1839,6 +1847,7 @@ impl Side {
             band_installed: false,
             loan: None,
             preload: None,
+            builtins: BuiltinPrep::default(),
         }
     }
 
@@ -1901,7 +1910,8 @@ impl Side {
             l.pending = Some(s);
             return;
         }
-        let instances = self.prepare(&s);
+        let mut instances = self.builtins.prepare(&s, self.max_block);
+        instances.instances.extend(self.prepare(&s));
         let band = self.prepare_band(&s);
         // The disk thread keeps this session's audio played from disk ready around the playhead.
         soundcraft_model::disk::focus(Some(Arc::clone(&s)));
@@ -3974,7 +3984,7 @@ mod tests {
         // Disarmed with the key down: nothing hears live input now, so the mix stops rendering.
         let mut s = (*st.session).clone();
         s.tracks[0].mixer.record_arm = false;
-        tx.send(Cmd::Session(Arc::new(s.clone()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s.clone()), Prepared::default())).unwrap();
         // The instrument runs on while the note releases (heard, not frozen), then the mix stops.
         st.fill(&mut out, 2);
         let mut tail = peak(&out);
@@ -3989,7 +3999,7 @@ mod tests {
         // Armed again a while later (the key's note-off was never heard): the note must not
         // come back sounding.
         s.tracks[0].mixer.record_arm = true;
-        tx.send(Cmd::Session(Arc::new(s), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s), Prepared::default())).unwrap();
         for _ in 0..400 {
             st.fill(&mut out, 2);
         }
@@ -4285,7 +4295,7 @@ mod tests {
         // the UI thread sends one built for the new rate.
         let mut s44 = s.clone();
         s44.sample_rate = soundcraft_time::SampleRate::new(44_100).unwrap();
-        tx.send(Cmd::Session(Arc::new(s44), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s44), Prepared::default())).unwrap();
         st.drain();
         assert!(!st.mix.has_band());
         let g: Vec<Garbage> = grx.try_iter().collect();
@@ -4331,14 +4341,14 @@ mod tests {
         let plugin = soundcraft_dsp::create("gain").unwrap();
         tx.send(Cmd::Session(
             Arc::clone(&s),
-            vec![PreparedInstance { track: t, slot: SlotKey::Module(m), id: "clap:test.fake".into(), ch: 2, plugin }],
+            vec![PreparedInstance { track: t, slot: SlotKey::Module(m), id: "clap:test.fake".into(), ch: 2, plugin }].into(),
         ))
         .unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
         assert!(grx.try_recv().is_err(), "nothing retired yet");
         // A session without the insert retires the instance to the return channel.
-        tx.send(Cmd::Session(Arc::new(soundcraft_model::Session::default()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(soundcraft_model::Session::default()), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         assert_eq!(grx.try_recv().unwrap().plugins.len(), 1);
         // A sample-rate change rebuilds the engine without dropping plugins on this thread.
@@ -4350,13 +4360,14 @@ mod tests {
                 id: "clap:test.fake".into(),
                 ch: 2,
                 plugin: soundcraft_dsp::create("gain").unwrap(),
-            }],
+            }]
+            .into(),
         ))
         .unwrap();
         st.fill(&mut out, 2);
         let mut s44 = (*s).clone();
         s44.sample_rate = soundcraft_time::SampleRate::new(44_100).unwrap();
-        tx.send(Cmd::Session(Arc::new(s44), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s44), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         assert_eq!(grx.try_recv().unwrap().plugins.len(), 1);
     }
@@ -4547,7 +4558,7 @@ mod tests {
             let s = Arc::new(soundcraft_model::Session::default());
             watched.push(Arc::downgrade(&s));
             side.collect_garbage();
-            tx.send(Cmd::Session(s, Vec::new())).unwrap();
+            tx.send(Cmd::Session(s, Prepared::default())).unwrap();
             st.fill(&mut out, 2);
             let replaced = watched.len().checked_sub(2).and_then(|i| watched.get(i));
             assert!(replaced.is_none_or(|w| w.strong_count() == 1), "freed on the audio thread");
@@ -4708,7 +4719,7 @@ mod tests {
         let (tx, rx) = channel();
         let st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s.clone()), device_rate, max_block, channel().0);
         // Synced first, so the Play's reset seats the plugins as an offline render does.
-        tx.send(Cmd::Session(Arc::new(s.clone()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s.clone()), Prepared::default())).unwrap();
         tx.send(play).unwrap();
         (st, shared, tx)
     }
@@ -5440,7 +5451,7 @@ mod tests {
         assert_eq!(before.len(), 8);
         let mut moved = s.clone();
         moved.outputs[0].first_channel = 6;
-        tx.send(Cmd::Session(Arc::new(moved), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(moved), Prepared::default())).unwrap();
         st.fill(&mut out, 8);
         assert_eq!(ids(&st), before);
         assert!(out.chunks(8).all(|f| f[0] == 0.0 && f[1] == 0.0), "the main left 1-2");
@@ -5641,7 +5652,7 @@ mod tests {
         // A sample-rate change rebuilds the engine: the armed rig comes back first.
         let mut s2 = (*s).clone();
         s2.sample_rate = soundcraft_time::SampleRate::HZ_44100;
-        tx.send(Cmd::Session(Arc::new(s2), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s2), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         let back = side.take_scout().expect("the armed rig comes back with the old engine");
         assert!(back.finished() && back.frames() > 0);
@@ -5720,7 +5731,7 @@ mod tests {
         for format in [ChannelFormat::Surround51, ChannelFormat::Atmos712, ChannelFormat::Stereo] {
             let mut changed = s.clone();
             changed.outputs[0].format = format;
-            tx.send(Cmd::Session(Arc::new(changed), Vec::new())).unwrap();
+            tx.send(Cmd::Session(Arc::new(changed), Prepared::default())).unwrap();
             st.fill(&mut out, 2);
             assert_eq!(ids(&st), before, "{format:?}");
             assert!(out.iter().any(|x| x.abs() > 0.05), "{format:?}: the clip still plays");
@@ -5777,6 +5788,30 @@ mod tests {
         player.preview(Vec::new(), 48_000);
         st.fill(&mut out, 2);
         assert!(out.iter().all(|x| *x == 0.0));
+    }
+
+    /// Realtime safety: the player makes built-in inserts and Clip Effects modules on the UI
+    /// thread and hands them over with the session, so the audio thread's `sync` creates none,
+    /// also for an insert or a clip effect added while playing.
+    #[test]
+    fn the_audio_thread_creates_no_builtin_module() {
+        let mut s = clip_session(48_000, &["compressor"]);
+        let (player, mut st) = Player::offline(Arc::new(s.clone()), 48_000, 256, 2);
+        player.update_session(Arc::new(s.clone()));
+        player.play(0, None, None);
+        let mut out = vec![0.0f32; 2 * 256];
+        st.fill(&mut out, 2);
+        assert_eq!(st.mix.made_in_sync(), 0);
+        let t = s.tracks[0].id;
+        let cid = s.tracks[0].clips()[0].id;
+        s.track_mut(t).unwrap().mixer.add_module(soundcraft_model::Insert::new("eq_7band"), None).unwrap();
+        s.find_clip_mut(cid).unwrap().set_effect("comp.lookahead", 5.0);
+        player.update_session(Arc::new(s.clone()));
+        for _ in 0..4 {
+            st.fill(&mut out, 2);
+        }
+        assert_eq!(st.mix.made_in_sync(), 0, "nothing was made on the audio thread");
+        assert!(out.iter().any(|x| *x != 0.0), "it plays");
     }
 
     #[test]
@@ -6136,7 +6171,7 @@ mod tests {
         let dropped_on = Arc::new(Mutex::new(None));
         let spy = DropSpy { inner: soundcraft_dsp::create("gain").unwrap(), dropped_on: Arc::clone(&dropped_on) };
         let instance = PreparedInstance { track: TrackId(1), slot: SlotKey::Instrument, id: "vst3:fake".into(), ch: 2, plugin: Box::new(spy) };
-        player.tx.send(Cmd::Session(session, vec![instance])).unwrap();
+        player.tx.send(Cmd::Session(session, vec![instance].into())).unwrap();
         // The "audio thread": fills until the shutdown, then goes away with its state.
         let audio = std::thread::Builder::new()
             .name("fake-audio".into())
@@ -6167,7 +6202,7 @@ mod tests {
         let dropped_on = Arc::new(Mutex::new(None));
         let spy = DropSpy { inner: soundcraft_dsp::create("gain").unwrap(), dropped_on: Arc::clone(&dropped_on) };
         let instance = PreparedInstance { track: TrackId(1), slot: SlotKey::Instrument, id: "vst3:fake".into(), ch: 2, plugin: Box::new(spy) };
-        player.tx.send(Cmd::Session(Arc::clone(&session), vec![instance])).unwrap();
+        player.tx.send(Cmd::Session(Arc::clone(&session), vec![instance].into())).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
         // The "audio thread" keeps draining commands after the shutdown (the stream is not down
@@ -6312,7 +6347,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
@@ -6345,7 +6380,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let (etx, erx) = sync_channel(1);
         drop(erx);
         tx.send(Cmd::Lend(Box::new(new_engine(48_000.0, max_block_for(None))), etx)).unwrap();
@@ -6362,7 +6397,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let (etx, erx) = sync_channel(1);
         tx.send(Cmd::Lend(Box::new(new_engine(48_000.0, max_block_for(None))), etx)).unwrap();
         let mut out = vec![0.0f32; 256];
@@ -6393,7 +6428,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         tx.send(Cmd::Shutdown).unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
@@ -6477,7 +6512,7 @@ mod lend_tests {
         // not be lost with the receiver, and the audio thread must not stay lent for ever.
         let (s, instance) = hosted();
         let (p, mut st) = Player::offline(Arc::clone(&s), 48_000, 256, 2);
-        p.tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        p.tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let mut out = vec![0.0f32; 2 * 128];
         st.fill(&mut out, 2);
         assert_eq!(st.mix.hosted_instances(), 1);

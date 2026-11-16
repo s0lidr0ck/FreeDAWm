@@ -21,8 +21,10 @@
 //!   -3 dB, LFE dropped), or map speaker by speaker into other multichannel layouts.
 //!
 //! ## Plugin instances and threads
-//! [`MixEngine::sync`] brings plugin instances in line with the session. Built-in plugins are
-//! cheap (allocation only) and are always created there, on whichever thread renders. Hosted
+//! [`MixEngine::sync`] brings plugin instances in line with the session. Built-in plugins and
+//! Clip Effects modules are created there, on whichever thread renders, unless the host makes
+//! them on its control thread with a [`BuiltinPrep`] ([`MixEngine::set_prepared_builtins`], see
+//! `prepare`): realtime playback does, so `sync` on the audio thread only seats them. Hosted
 //! third-party plugins (`clap:` / `vst3:` ids, see [`is_third_party`]) are expensive and have
 //! main-thread rules, so a realtime host keeps them off the audio thread:
 //! - with [`MixEngine::set_external_instances`]`(true)` (realtime playback), `sync` never creates a
@@ -75,7 +77,9 @@ pub mod external_midi;
 use delay_line::DelayLine;
 mod link;
 pub mod live_midi;
+mod prepare;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
+pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx};
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
@@ -837,6 +841,13 @@ pub struct MixEngine {
     external: bool,
     /// Instances handed over by the host, waiting for `sync` to place them.
     adopt: HashMap<(TrackId, SlotKey), PreparedInstance>,
+    /// Built-in instances and Clip Effects modules come from the host too ([`MixEngine::set_prepared_builtins`]).
+    builtins: bool,
+    /// Clip Effects modules handed over by the host, waiting for `sync` (by track and clip).
+    adopt_clip: HashMap<(TrackId, u64), PreparedClipFx>,
+    /// Built-in instances and Clip Effects modules `sync` made itself although the host makes them
+    /// ([`MixEngine::made_in_sync`]).
+    made_in_sync: u64,
     /// Instances `sync` took out of service, for the host to drop (see [`MixEngine::take_retired`]).
     retired: Vec<Box<dyn Plugin>>,
     /// Lent to an offline render ([`LiveInstances`]): `sync` parks the third-party slots it would
@@ -886,6 +897,10 @@ struct SlotCtx<'a> {
     sr: f32,
     mb: usize,
     external: bool,
+    /// Built-in instances come from the host too.
+    builtins: bool,
+    /// Built-in instances made here although the host makes them.
+    made: &'a mut u64,
     /// Instances made here are for an offline render.
     offline: bool,
     adopt: &'a mut HashMap<(TrackId, SlotKey), PreparedInstance>,
@@ -928,7 +943,14 @@ impl SlotCtx<'_> {
     /// holds, even an instance of the same plugin: the host made it because it no longer tracks
     /// the old one (it was removed and re-added between two renders), and drives its editor.
     fn waiting(&self, t: TrackId, key: SlotKey) -> bool {
-        self.external && self.adopt.contains_key(&(t, key))
+        (self.external || self.builtins) && self.adopt.contains_key(&(t, key))
+    }
+
+    /// Creates and prepares an instance for `ins` here (allocates).
+    fn create(&self, ins: &soundcraft_model::Insert, ch: usize) -> Option<Box<dyn Plugin>> {
+        // External MIDI keeps its port in its state too.
+        let state = if is_third_party(&ins.plugin) || ins.plugin == external_midi::ID { ins.state_bytes() } else { None };
+        create_instance_for(&ins.plugin, state.as_deref(), self.sr, self.mb, ch, self.offline).map(|n| n.plugin)
     }
 
     /// A new instance for `ins` on track `t`, slot `key`, prepared for `ch` channels.
@@ -941,8 +963,9 @@ impl SlotCtx<'_> {
             slot.state_load = ins.state_load;
             return Some(slot);
         }
-        let plugin = if third && self.external {
-            match self.adopt.remove(&(t, key)) {
+        let hosted = if third { self.external } else { self.builtins };
+        let plugin = if hosted {
+            let given = match self.adopt.remove(&(t, key)) {
                 Some(p) if p.id == ins.plugin && p.ch == ch => Some(p.plugin),
                 Some(p) if self.lent => {
                     // Not for this session's channel count: it waits for the host's session.
@@ -954,11 +977,18 @@ impl SlotCtx<'_> {
                     None
                 }
                 None => None,
-            }
+            };
+            // A built-in the host did not make (it never fails to, but the sound must not depend
+            // on that) is made here after all, and counted.
+            given.or_else(|| {
+                let made = if third { None } else { self.create(ins, ch) };
+                if made.is_some() && !self.lent {
+                    *self.made = self.made.saturating_add(1);
+                }
+                made
+            })
         } else {
-            // External MIDI keeps its port in its state too.
-            let state = if third || ins.plugin == external_midi::ID { ins.state_bytes() } else { None };
-            create_instance_for(&ins.plugin, state.as_deref(), self.sr, self.mb, ch, self.offline).map(|n| n.plugin)
+            self.create(ins, ch)
         }?;
         *self.serial = self.serial.wrapping_add(1);
         let emits = plugin.info().midi_out;
@@ -1063,6 +1093,9 @@ impl MixEngine {
             countoff: None,
             external: false,
             adopt: HashMap::new(),
+            builtins: false,
+            adopt_clip: HashMap::new(),
+            made_in_sync: 0,
             retired: Vec::new(),
             lent: false,
             parked: HashMap::new(),
@@ -1207,6 +1240,34 @@ impl MixEngine {
         }
         // Force a re-sync so waiting slots pick their instance up.
         self.synced = (usize::MAX, usize::MAX, usize::MAX);
+    }
+
+    /// [`MixEngine::adopt`] for everything the host made for the session about to be rendered
+    /// (its third-party instances and a [`BuiltinPrep`]'s built-in ones and Clip Effects
+    /// modules). Does not allocate unless the adopt tables must grow.
+    pub fn adopt_prepared(&mut self, p: Prepared) {
+        let Prepared { instances, clip_fx } = p;
+        self.adopt(instances);
+        for c in clip_fx {
+            if let Some(old) = self.adopt_clip.insert((c.track, c.clip), c) {
+                self.retired.extend(old.eq.into_iter().chain(old.comp));
+            }
+        }
+    }
+
+    /// Realtime mode for built-in plugins and Clip Effects too: the host makes them with a
+    /// [`BuiltinPrep`] on its control thread and hands them over with
+    /// [`MixEngine::adopt_prepared`], so `sync` (which a realtime render runs on the audio thread)
+    /// only seats them. Off by default.
+    pub fn set_prepared_builtins(&mut self, on: bool) {
+        self.builtins = on;
+    }
+
+    /// How many built-in instances and Clip Effects modules `sync` has made itself while the host
+    /// was to make them ([`MixEngine::set_prepared_builtins`]); a realtime host keeps this at 0.
+    #[doc(hidden)]
+    pub fn made_in_sync(&self) -> u64 {
+        self.made_in_sync
     }
 
     /// Serial of the instance a chain module currently has (`None` without one). A module that
@@ -1420,6 +1481,7 @@ impl MixEngine {
             self.retired_analysis.extend(m.analysis.drain(..).map(|(_, a)| a));
         }
         out.extend(self.adopt.drain().map(|(_, p)| p.plugin));
+        out.extend(self.adopt_clip.drain().flat_map(|(_, p)| p.eq.into_iter().chain(p.comp)));
         out.extend(self.parked.drain().map(|(_, p)| p.plugin));
         self.retired_links.extend(self.links.drain(..).map(|g| g.slab));
         self.synced = (usize::MAX, usize::MAX, usize::MAX);
@@ -1561,6 +1623,8 @@ impl MixEngine {
             sr: self.sample_rate,
             mb,
             external: self.external,
+            builtins: self.builtins,
+            made: &mut self.made_in_sync,
             offline: self.offline,
             adopt: &mut self.adopt,
             retired: &mut self.retired,
@@ -1615,7 +1679,8 @@ impl MixEngine {
             if strip.pre.len() != ch || strip.pre.iter().any(|b| b.capacity() < mb) {
                 strip.pre = vec![Vec::with_capacity(mb); ch];
             }
-            sync_clip_fx(strip, t, cx.sr, mb, cx.retired);
+            let host = self.builtins.then_some(&mut self.adopt_clip);
+            sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
             // Module MIDI inputs: the accepted sources, and room for the list (`process_strip`
@@ -1751,6 +1816,11 @@ impl MixEngine {
         for k in leftovers {
             if let Some(p) = cx.adopt.remove(&k) {
                 cx.retired.push(p.plugin);
+            }
+        }
+        if !cx.lent {
+            for (_, p) in self.adopt_clip.drain() {
+                cx.retired.extend(p.eq.into_iter().chain(p.comp));
             }
         }
         if !self.external {
@@ -3417,6 +3487,8 @@ impl std::fmt::Write for Key {
 }
 
 impl ClipFx {
+    const EQ: &'static str = "eq_7band";
+    const COMP: &'static str = "compressor";
     fn new(sr: f32, ch: usize) -> ClipFx {
         ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch }
     }
@@ -3439,17 +3511,33 @@ impl ClipFx {
     /// Make or retire the modules `params` need or no longer need (each exists only when one of
     /// its parameters is set). Allocates: `MixEngine::sync` calls it when the session changes, never
     /// `render`; a retired module goes to `retired`, not dropped here.
-    fn prepare_modules<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone, retired: &mut Vec<Box<dyn Plugin>>) {
+    /// Returns how many modules it made.
+    fn prepare_modules<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone, retired: &mut Vec<Box<dyn Plugin>>) -> u64 {
         let (has_eq, has_comp) = Self::needs(params);
+        let mut made = 0;
         if has_eq && self.eq.is_none() {
-            self.eq = self.make("eq_7band");
+            self.eq = self.make(Self::EQ);
+            made += u64::from(self.eq.is_some());
         } else if !has_eq {
             retired.extend(self.eq.take());
         }
         if has_comp && self.comp.is_none() {
-            self.comp = self.make("compressor");
+            self.comp = self.make(Self::COMP);
+            made += u64::from(self.comp.is_some());
         } else if !has_comp {
             retired.extend(self.comp.take());
+        }
+        made
+    }
+    /// Seats modules made off the audio thread ([`PreparedClipFx`]) where this chain has none;
+    /// the rest are retired. Allocates nothing.
+    fn seat(&mut self, p: PreparedClipFx, retired: &mut Vec<Box<dyn Plugin>>) {
+        for (have, new) in [(&mut self.eq, p.eq), (&mut self.comp, p.comp)] {
+            match (have.is_none(), new) {
+                (true, new) => *have = new,
+                (false, Some(n)) => retired.push(n),
+                (false, None) => {}
+            }
         }
     }
     /// Whether the modules match what `params` need (`prepare_modules` has run since they changed).
@@ -3497,7 +3585,18 @@ impl ClipFx {
 /// clip plays: an effect chain for each clip with live effects and the modules its settings
 /// need, and a buffer to render clips into. Chains of clips that lost their effects, and modules
 /// no longer needed, go to `retired`.
-fn sync_clip_fx(strip: &mut Strip, t: &Track, sr: f32, mb: usize, retired: &mut Vec<Box<dyn Plugin>>) {
+///
+/// With `host` (a realtime engine, [`MixEngine::set_prepared_builtins`]) the modules come made
+/// from the control thread; one that did not is made here all the same and counted in `made`.
+fn sync_clip_fx(
+    strip: &mut Strip,
+    t: &Track,
+    sr: f32,
+    mb: usize,
+    retired: &mut Vec<Box<dyn Plugin>>,
+    mut host: Option<&mut HashMap<(TrackId, u64), PreparedClipFx>>,
+    made: &mut u64,
+) {
     let ch = strip.buf.len();
     let live = || t.clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p)));
     strip.clip_fx.retain(|id, fx| {
@@ -3510,7 +3609,18 @@ fn sync_clip_fx(strip: &mut Strip, t: &Track, sr: f32, mb: usize, retired: &mut 
     let mut any = false;
     for (id, params) in live() {
         any = true;
-        strip.clip_fx.entry(id).or_insert_with(|| ClipFx::new(sr, ch)).prepare_modules(params, retired);
+        let fx = strip.clip_fx.entry(id).or_insert_with(|| ClipFx::new(sr, ch));
+        if let Some(p) = host.as_deref_mut().and_then(|a| a.remove(&(t.id, id))) {
+            if p.ch == ch {
+                fx.seat(p, retired);
+            } else {
+                retired.extend(p.eq.into_iter().chain(p.comp));
+            }
+        }
+        let n = fx.prepare_modules(params, retired);
+        if host.is_some() {
+            *made = made.saturating_add(n);
+        }
     }
     if any && (strip.clipbuf.len() != ch || strip.clipbuf.iter().any(|c| c.len() < mb)) {
         strip.clipbuf = vec![vec![0.0; mb]; ch];
@@ -5443,7 +5553,7 @@ impl MixEngine {
             .values()
             .map(|st| st.plugins.iter().flatten().chain(st.instrument.iter()).filter(|p| is_third_party(&p.id)).count())
             .sum::<usize>();
-        seated + self.adopt.len() + self.parked.len()
+        seated + self.adopt.values().filter(|p| is_third_party(&p.id)).count() + self.parked.len()
     }
 }
 
@@ -8594,6 +8704,60 @@ mod tests {
         eng.ensure_synced(&s);
         assert!(seat(&eng).0.is_none());
         assert!(!eng.retired.is_empty(), "the EQ was retired for dropping off the audio thread");
+    }
+
+    /// The realtime path: built-in inserts, instruments and Clip Effects modules are made by a
+    /// `BuiltinPrep` on the control thread and only seated by `sync` on the render path, which
+    /// creates (allocates) none itself; the sound is identical to an engine that makes them in
+    /// `sync`.
+    #[test]
+    fn sync_on_the_render_path_makes_no_builtin_module() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.edit.click = false;
+        let cid = s.track(t).unwrap().clips()[0].id;
+        s.track_mut(t).unwrap().mixer.add_module(Insert::new("compressor"), None).unwrap();
+        let synth = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        s.track_mut(synth).unwrap().instrument = Some(Insert::new("subtractive_synth"));
+        let realtime = || {
+            let mut eng = MixEngine::new(48_000.0, 512);
+            eng.set_external_instances(true);
+            eng.set_prepared_builtins(true);
+            eng
+        };
+        let mut eng = realtime();
+        let mut prep = BuiltinPrep::default();
+        let mut reference = MixEngine::new(48_000.0, 512);
+        reference.set_external_instances(true);
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        let mut want = vec![vec![0.0f32; 512]; 2];
+        let mut block = 0i64;
+        let mut play = |s: &Session, eng: &mut MixEngine, prep: &mut BuiltinPrep, reference: &mut MixEngine| {
+            // The hand-over: made here (the control thread), seated by the render's sync.
+            eng.adopt_prepared(prep.prepare(s, 512));
+            for _ in 0..4 {
+                eng.render(s, block * 512, 512, &mut out);
+                reference.render(s, block * 512, 512, &mut want);
+                assert_eq!(out, want, "block {block}: as loud and as shaped as an engine making its own modules");
+                block += 1;
+            }
+            assert_eq!(eng.made_in_sync(), 0, "the render path created no module");
+        };
+        play(&s, &mut eng, &mut prep, &mut reference);
+        assert!(eng.strips[&t].plugins[0].is_some() && eng.strips[&synth].instrument.is_some());
+        // A new insert and new Clip Effects while playing: still nothing made on the render path.
+        s.track_mut(t).unwrap().mixer.add_module(Insert::new("eq_7band"), None).unwrap();
+        s.find_clip_mut(cid).unwrap().set_effect("eq.hpf_on", 1.0);
+        play(&s, &mut eng, &mut prep, &mut reference);
+        s.find_clip_mut(cid).unwrap().set_effect("comp.lookahead", 5.0);
+        play(&s, &mut eng, &mut prep, &mut reference);
+        let fx = &eng.strips[&t].clip_fx[&cid.0];
+        assert!(fx.eq.is_some() && fx.comp.is_some());
+        // A session already handed over makes nothing new.
+        assert!(prep.prepare(&s, 512).is_empty());
+        // The guard bites: an engine given nothing makes its modules in `sync` and says so.
+        let mut bare = realtime();
+        bare.render(&s, 0, 512, &mut out);
+        assert_eq!(bare.made_in_sync(), 5, "two inserts, an instrument and two Clip Effects modules");
     }
 
     fn impulse_at(ch: &[f32]) -> Vec<usize> {

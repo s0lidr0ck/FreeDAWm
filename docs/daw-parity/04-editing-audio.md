@@ -141,7 +141,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
 | Reverse a clip without a new file | ○ | ● | ● | ◐ | **Missing**: offline only |
-| Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made when the session changes, not when a clip first plays (bug 13, partly) |
+| Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made off the audio thread when the session changes, not when a clip first plays (bug 13, fixed) |
 | Sync point | ● | ● | ● | ● | **Works** |
 | Clip notes | ○ | ● | ● | ● | **Missing** |
 
@@ -277,7 +277,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 10 | **Fixed.** Commit / Bounce copied volume, output and sends to the new track but not pan or automation, then hid the original. It now also carries the pan, trim, surround panner, automation mode and every automation lane but the inserts' own (which is in the render). Test: `io::strip_tests::commit_carries_pan_trim_and_automation` | `engine/src/io.rs` (`commit_track`) |
 | 11 | **Fixed.** Strip Silence treated muted clips as silence and deleted them. Muted clips are now set aside before stripping and put back whole. Test: `io::strip_tests::muted_clips_are_left_whole` | `engine/src/io.rs` (`strip_silence`) |
 | 12 | **Fixed.** Conform to Tempo set a varispeed ratio, so pitch changed even on a pitch-preserving (Elastic) track. On an Elastic track (any algorithm but Varispeed) it now renders the clip with the pitch-preserving stretch from its original, as Elastic Properties does. Test: `cmd::clip::tests::conform_on_an_elastic_track_keeps_the_pitch` | `engine/src/cmd/clip_more.rs` (`conform`) |
-| 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
+| 13 | **Fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are made when the session changes (`sync_clip_fx`), and for playback on the UI thread: the player's `BuiltinPrep` makes the modules a session newly needs and sends them with it (`PreparedClipFx`), so `sync` on the audio thread only seats them; modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. The clip buffer of a track that gets its first clip effect is still sized in `sync`. Tests: `mix` `clip_effects_are_prepared_before_the_clip_plays`, `sync_on_the_render_path_makes_no_builtin_module` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
 | 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips are mixed together, so there is no order to keep: the commands now leave the playlist alone and say so. A real front/back order belongs with the overlap modes (tier 2). Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
 | 15 | **Fixed.** Dragging a folder track moved the folder without its members. `track.move` now moves a folder with the tracks inside it at any level unless a count is given (`edit::folder_block`), and the drag passes that count and refuses a drop inside the folder itself. Test: `engine/tests/editing_parity.rs` (the drag itself not checked in a GUI) | `engine/src/cmd/track.rs` (`move_track`); `ui-egui/src/edit_window.rs` |
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
@@ -333,7 +333,7 @@ clips and finds unused files; the Scrubber plays audio. Not done: warp markers d
 editable; clip transpose; real-time clip loop and reverse; overlap modes with a front/back order;
 edit groups (track groups) editing together; slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
-dragging; bug 18's timecode origin and bug 13's adopt path; every tier-3 item; ARA 2 hosting.
+dragging; bug 18's timecode origin; every tier-3 item; ARA 2 hosting.
 
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
@@ -378,3 +378,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Tier 2: snap to clip edges, markers and zero crossings; rubber-band clip selection; clip groups trim, fade and drag as one |
 | 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |
+| 2026-11-16 | minor | Bug 13 fixed: Clip Effects modules are made off the audio thread |
