@@ -1,6 +1,6 @@
 # Four-DAW parity, section 5: built-in effects
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Hardware named below (1176, LA-2A, Pultec and so on) belongs
@@ -53,7 +53,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Dynamics | Ten modelled compressor styles, multiband, true-peak limiter, transient shaper, two gates | Medium: **no compressor takes a key input**, so no ducking; no upward compression |
+| A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no upward compression, no look-ahead on Comp |
 | B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no linear-phase mode on the main EQ, no simple channel EQ in the menu |
 | C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp, no tuner, no pedalboard |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses**, nothing beyond stereo |
@@ -65,9 +65,10 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
 | K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no controller mapping, no racks or macros |
 
-Three things every one of the four does and FreeDAWm does not: **a compressor you can key from
-another track**; **effects that process every channel of a surround track**; and **meter
-plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
+Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
+you can key from another track (now Comp); effects that process every channel of a surround
+track (now done, bug 2); and **meter plug-ins** (spectrum, loudness, phase) you can put anywhere
+in a chain.
 
 ## A. Dynamics
 
@@ -75,7 +76,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 |---|:-:|:-:|:-:|:-:|---|
 | Compressor with knee, mix, sidechain filter, gain-reduction meter | ● | ● | ● | ● | **Works** (Comp) |
 | Modelled characters (FET, opto, VCA, vari-mu) | ● | ● | ● | ● | **Works**: ten styles, three variants each |
-| Key input from another track | ● | ● | ● | ● | **Missing** on Comp; only Lull, Rez and Shale take a key |
+| Key input from another track | ● | ● | ● | ● | **Works**: Comp, Lull, Rez and Shale take a key; Comp's Listen plays what its detector hears |
 | Look-ahead | ● | ● | ● | ● | **Missing** on Comp (the hidden stock compressor has it) |
 | Auto make-up gain | ◐ | ● | ● | ● | **Works** |
 | Mid/side and stereo link amount | ◐ | ● | ● | ● | **Works** |
@@ -87,7 +88,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | De-esser | ● | ● | ● | ● | **Works** (Sift: split or wide, plus plosives) |
 | Transient shaper | ◐ | ◐ | ● | ● | **Works** |
 | Dynamic resonance suppressor | ○ | ○ | ○ | ○ | **Works** (Rez), with a key input |
-| Ducker (music under voice) | ● | ● | ● | ● | **Missing**: needs the compressor key |
+| Ducker (music under voice) | ● | ● | ● | ● | **Works**: Comp keyed from the voice, factory preset "Duck Under Voice" |
 | Loudness leveller to a LUFS target | ○ | ○ | ◐ | ○ | **Works** (LevelUp) |
 
 ## B. EQ and filters
@@ -241,7 +242,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Tails included in bounce and freeze | ● | ● | ● | ● | **Works** (bug 6) |
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
 | Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Partial**: missing on eight engines; no mix on the insert slot |
-| Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; dynamics are not linked across them |
+| Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels) |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Missing** (section 3) |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
@@ -291,8 +292,8 @@ track. Then bug 4.
 
 | Work | Est. (h) | Notes |
 |---|---:|---|
-| Key input on Comp, with a ducking preset | 4–8 | The routing side is in section 3's list; this is the engine side |
-| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Partly done** with bug 2: per channel (front pair stereo); linked detection for dynamics remains |
+| Key input on Comp, with a ducking preset | 4–8 | **Done**: Comp takes the mixer's existing sidechain key (the same picker as Lull, Rez and Shale), with Listen and "Duck Under Voice" |
+| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Done**: per channel with bug 2; Comp's Link All Channels keys every channel from the loudest one (the LFE included; off by default). The other dynamics engines (Twine, Transient, Sift, LevelUp) still detect per channel |
 | Click-free bypass that keeps delay compensation steady | 4–6 | **Done** with bug 4 |
 | A simple channel EQ and compressor in the menu (unhide and tidy the stock ones, or presets of CleanQ and Comp) | 3–6 | Owner's call which |
 | Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | The measuring code exists |
@@ -348,3 +349,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 9 fixed: Reverb's output cuts are designed at the rate in use (the colour filters were never stale) |
 | 2026-11-16 | minor | Bugs 5, 8 and 9: the commits that fixed them noted in their rows |
 | 2026-11-16 | minor | Bug 6 fixed: Filter's tail follows its circuit, Reso and lowest corner |
+| 2026-11-16 | minor | Tier 2: Comp takes a key (Listen, "Duck Under Voice") and can link detection across a surround track |

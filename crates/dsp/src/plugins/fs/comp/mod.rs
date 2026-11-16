@@ -27,6 +27,18 @@
 //!   30 Hz meters as live values, [`LIVE_GR`] .. [`LIVE_LANE_GR`], and `(L+R)/2` of the input on
 //!   `pre`, as `copyScope` reads it). The preset dirty-tracking, state save and editor are
 //!   UI-only.
+//!
+//! FreeDAWm additions (not in the C++), after the C++ parameters so its order is kept:
+//! - **Key input.** The host may hand a key from another track
+//!   ([`Plugin::process_with_sidechain`]); every lane's detector then measures the key instead
+//!   of its own input (feed-forward, the feedback styles included), through the lane's SC HPF
+//!   and the style's detector filters, in the channel mode in force. That is ducking: the
+//!   factory preset "Duck Under Voice" sets it up. With no key chosen nothing changes.
+//! - **Listen** (`listen`): the output is what the detectors hear (the key, or the input, after
+//!   the SC HPF), to set the filter by ear. Kept out of presets.
+//! - **Link all channels** (`surLink`): on a track wider than stereo, every channel's detector
+//!   hears the loudest channel, so a surround mix is reduced as one (the per-channel host builds
+//!   that key; see `per_channel`). Off by default: each channel on its own, as before.
 
 pub mod comp_engine_dsp;
 mod presets;
@@ -87,7 +99,7 @@ fn xover_hi_text(v: f32) -> String {
 }
 
 /// Parameters in the C++ order (`Parameters.h`), ids, names and defaults verbatim.
-pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS] = [
+pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS + 2] = [
     fs_choice("style", "A Style", 0.0, "Lane A", STYLES),
     knob01("amount", "A Amount", 0.4, "Lane A", pct_text),
     knob01("ratio", "A Ratio", 0.4, "Lane A", pct_text),
@@ -141,7 +153,13 @@ pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS] = [
     fs_choice("split", "Split", 0.0, "Crossover", &["Parallel", "Multiband", "Serial"]),
     knob01("xoverLo", "Low / Mid", 0.467, "Crossover", xover_lo_text),
     knob01("xoverHi", "Mid / High", 0.42, "Crossover", xover_hi_text),
+    // FreeDAWm's own, after the C++ order (see the module notes)
+    fs_toggle("listen", "Listen", 0.0, "Global"),
+    fs_toggle("surLink", "Link All Channels", 0.0, "Global"),
 ];
+
+/// The index of [`COMP_PARAMS`]' Listen.
+const P_LISTEN: usize = NUM_PARAMS;
 
 pub static COMP_INFO: PluginInfo = PluginInfo {
     id: "fs_comp",
@@ -151,7 +169,7 @@ pub static COMP_INFO: PluginInfo = PluginInfo {
     params: &COMP_PARAMS,
     is_instrument: false,
     audiosuite: false,
-    sidechain: false,
+    sidechain: true,
     link: None,
     references: 0,
     midi_out: false,
@@ -223,6 +241,7 @@ impl Comp {
         for i in 0..NUM_PARAMS {
             self.dsp.set_parameter(i, self.p.v(i));
         }
+        self.dsp.set_listen(self.p.v(P_LISTEN) > 0.5);
     }
 }
 
@@ -234,7 +253,11 @@ impl Plugin for Comp {
     fn set_param(&mut self, id: &str, value: f32) -> bool {
         match self.p.set(id, value) {
             Some(idx) => {
-                self.dsp.set_parameter(idx, self.p.v(idx));
+                if idx < NUM_PARAMS {
+                    self.dsp.set_parameter(idx, self.p.v(idx));
+                } else if idx == P_LISTEN {
+                    self.dsp.set_listen(self.p.v(idx) > 0.5);
+                }
                 true
             }
             None => false,
@@ -266,6 +289,32 @@ impl Plugin for Comp {
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+        self.run(io, frames, None);
+    }
+
+    fn process_with_sidechain(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
+        self.run(io, frames, key);
+    }
+
+    fn analysis(&self) -> Option<Arc<Analysis>> {
+        Some(self.analysis.clone())
+    }
+
+    fn gain_reduction_db(&self) -> f32 {
+        self.lane_gr_db.iter().copied().fold(0.0, f32::max)
+    }
+
+    fn readouts(&self, out: &mut [f32; 8]) {
+        out[0] = self.in_peak_db;
+        out[1] = self.lane_gr_db[0];
+        out[2] = self.lane_gr_db[1];
+        out[3] = self.lane_gr_db[2];
+        out[4] = self.out_peak_db;
+    }
+}
+
+impl Comp {
+    fn run(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
         let nc = self.channels.min(io.len());
         let frames = io[..nc].iter().map(Vec::len).fold(frames, usize::min);
         // The input scope (`scope[...] = 0.5f * (x0 + x1)`, x1 = x0 on a mono bus), before the
@@ -287,7 +336,9 @@ impl Plugin for Comp {
                 start += len;
             }
         }
-        self.dsp.process(io, nc, frames);
+        // A key that does not cover the block is no key (the engine checks it too).
+        let key = key.filter(|k| !k.is_empty() && k.iter().take(2).all(|b| b.len() >= frames));
+        self.dsp.process_keyed(io, nc, frames, key);
         let m = self.dsp.take_block_meters();
         self.in_peak_db = gain_to_db(m.in_peak);
         self.out_peak_db = gain_to_db(m.out_peak);
@@ -297,24 +348,6 @@ impl Plugin for Comp {
         self.publish();
     }
 
-    fn analysis(&self) -> Option<Arc<Analysis>> {
-        Some(self.analysis.clone())
-    }
-
-    fn gain_reduction_db(&self) -> f32 {
-        self.lane_gr_db.iter().copied().fold(0.0, f32::max)
-    }
-
-    fn readouts(&self, out: &mut [f32; 8]) {
-        out[0] = self.in_peak_db;
-        out[1] = self.lane_gr_db[0];
-        out[2] = self.lane_gr_db[1];
-        out[3] = self.lane_gr_db[2];
-        out[4] = self.out_peak_db;
-    }
-}
-
-impl Comp {
     fn dsp_sample_rate(&self) -> f64 {
         f64::from(self.dsp.sample_rate())
     }
@@ -423,7 +456,9 @@ mod tests {
                 "dryOn",
                 "split",
                 "xoverLo",
-                "xoverHi"
+                "xoverHi",
+                "listen",
+                "surLink"
             ]
         );
         let defaults: Vec<f32> = COMP_PARAMS.iter().map(|p| p.default).collect();
@@ -432,7 +467,7 @@ mod tests {
         want.extend(lane);
         want.push(2.0);
         want.extend(lane);
-        want.extend([1.0, 1.0, 0.0, 0.467, 0.42]);
+        want.extend([1.0, 1.0, 0.0, 0.467, 0.42, 0.0, 0.0]);
         assert_eq!(defaults, want);
         for p in &COMP_PARAMS {
             let g = p.group;
@@ -487,7 +522,7 @@ mod tests {
     #[test]
     fn every_factory_preset_parses() {
         let presets = factory_presets("fs_comp");
-        assert_eq!(presets.len(), 86);
+        assert_eq!(presets.len(), 87);
         for (name, json) in presets {
             let p = FsPreset::parse(json, &COMP_INFO).unwrap();
             assert_eq!(&p.name, name);
@@ -709,5 +744,96 @@ mod tests {
         let mut b = src.clone();
         run(&mut s, &mut b, 512);
         assert_eq!(a, b, "a reset engine renders the same as a fresh one");
+    }
+
+    /// `io` through `s` in blocks of 512 with `key` (planar, as long as `io`) as the sidechain.
+    fn run_keyed(s: &mut Comp, io: &mut [Vec<f32>], key: Option<&[Vec<f32>]>) {
+        let len = io.iter().map(Vec::len).min().unwrap_or(0);
+        let mut pos = 0;
+        while pos < len {
+            let n = 512.min(len - pos);
+            let mut buf: Vec<Vec<f32>> = io.iter().map(|c| c[pos..pos + n].to_vec()).collect();
+            let kb: Option<Vec<Vec<f32>>> = key.map(|k| k.iter().map(|c| c[pos..pos + n].to_vec()).collect());
+            s.process_with_sidechain(&mut buf, n, kb.as_deref());
+            for (b, c) in buf.iter().zip(io.iter_mut()) {
+                c[pos..pos + n].copy_from_slice(b);
+            }
+            pos += n;
+        }
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    fn tone(hz: f32, amp: f32, len: usize) -> Vec<f32> {
+        (0..len).map(|i| amp * (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin()).collect()
+    }
+
+    fn duck_preset(s: &mut Comp) {
+        let (_, json) = factory_presets("fs_comp").iter().find(|(n, _)| *n == "Duck Under Voice").unwrap();
+        let p = FsPreset::parse(json, &COMP_INFO).unwrap();
+        for (id, v) in &p.values {
+            s.set_param(id, *v);
+        }
+    }
+
+    /// The parity list's key input: a quiet bed keyed from a loud voice steps back while the
+    /// voice speaks and comes back after; with no key chosen it is compressed by its own level
+    /// only, exactly as before.
+    #[test]
+    fn a_key_from_another_track_ducks_the_input() {
+        assert!(COMP_INFO.sidechain, "the host offers a key source");
+        let len = 168_000;
+        let bed = sine(len, 0.05);
+        // the voice talks for the middle second only
+        let voice: Vec<f32> = tone(700.0, 0.5, len).iter().enumerate().map(|(i, v)| if (24_000..72_000).contains(&i) { *v } else { 0.0 }).collect();
+        let mut s = prepared();
+        duck_preset(&mut s);
+        let mut io = vec![bed.clone(), bed.clone()];
+        run_keyed(&mut s, &mut io, Some(&[voice.clone(), voice.clone()]));
+        let db = |x: f32| 20.0 * x.log10();
+        let before = db(rms(&io[0][12_000..24_000]));
+        let during = db(rms(&io[0][48_000..72_000]));
+        let after = db(rms(&io[0][156_000..168_000]));
+        assert!(before - during > 10.0, "ducked {:.1} dB", before - during);
+        assert!((after - before).abs() < 1.5, "comes back: {after:.1} vs {before:.1} dB");
+        assert!((before - db(rms(&bed[12_000..24_000]))).abs() < 0.5, "a quiet bed alone is left alone");
+
+        // No key: the same as `process`.
+        let mut a = prepared();
+        duck_preset(&mut a);
+        let mut b = prepared();
+        duck_preset(&mut b);
+        let mut x = vec![bed.clone(), bed.clone()];
+        let mut y = x.clone();
+        run(&mut a, &mut x, 512);
+        run_keyed(&mut b, &mut y, None);
+        assert_eq!(x, y);
+    }
+
+    /// Listen plays what the detector hears: the key through the SC HPF, not the input.
+    #[test]
+    fn listen_plays_the_filtered_key() {
+        let len = 48_000;
+        let high = tone(2_000.0, 0.3, len);
+        let key: Vec<f32> = tone(30.0, 0.3, len).iter().zip(&high).map(|(a, b)| a + b).collect();
+        let input = sine(len, 0.5);
+        let corr = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() / (rms(a) * rms(b) * a.len() as f32);
+        let mut s = prepared();
+        s.set_param("scHpf", 0.7); // about 190 Hz
+        s.set_param("listen", 1.0);
+        let mut io = vec![input.clone(), input.clone()];
+        run_keyed(&mut s, &mut io, Some(&[key.clone(), key.clone()]));
+        let out = &io[0][24_000..];
+        // the 2 kHz part of the key comes through, the 30 Hz part and the input do not
+        assert!(corr(out, &high[24_000..]).abs() > 0.9, "{}", corr(out, &high[24_000..]));
+        assert!(rms(out) < 1.2 * rms(&high[24_000..]), "the low part is filtered out");
+        assert!(corr(out, &input[24_000..]).abs() < 0.1, "the input is not heard");
+        // off again: the input is back
+        s.set_param("listen", 0.0);
+        let mut io = vec![input.clone(), input.clone()];
+        run_keyed(&mut s, &mut io, Some(&[vec![0.0; len], vec![0.0; len]]));
+        assert!(corr(&io[0][24_000..], &input[24_000..]) > 0.9);
     }
 }

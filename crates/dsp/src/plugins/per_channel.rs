@@ -9,8 +9,11 @@
 //!
 //! The extra instances follow the first: the same parameters, transport, actions, assets and
 //! prepared state. Meters, readouts, analysis, links, editors and stored state are the first
-//! instance's. Detection is not linked across instances: a compressor on 5.1 reduces the front
-//! pair, the centre and each surround on its own.
+//! instance's. Detection is not linked across instances by default: a compressor on 5.1 reduces
+//! the front pair, the centre and each surround on its own. A plugin with a key input and a
+//! `surLink` parameter (Comp's Link All Channels) can link them: while it is on and no key is
+//! chosen, every instance is keyed from one signal, each sample the loudest channel's (the LFE
+//! included), so they all measure the same thing and reduce together.
 
 use crate::{LinkSlab, MidiOut, Plugin, PluginEditor, PluginInfo, PluginStateReader, SampleSource, Transport, analysis};
 use std::sync::Arc;
@@ -35,11 +38,17 @@ pub(crate) struct PerChannel {
     /// The state last given to `load_state`, for instances made after it.
     state: Option<Vec<u8>>,
     offline: bool,
+    /// The linking key (two copies of one signal), sized in `prepare` for wide tracks of
+    /// plugins that link (see the module docs); empty otherwise.
+    link_key: Vec<Vec<f32>>,
 }
+
+/// The parameter that links detection across every channel.
+const SUR_LINK: &str = "surLink";
 
 impl PerChannel {
     pub(crate) fn new(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
-        PerChannel { make, first, rest: Vec::new(), state: None, offline: false }
+        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new() }
     }
 
     fn all(&mut self) -> impl Iterator<Item = &mut Box<dyn Plugin>> {
@@ -75,6 +84,8 @@ impl Plugin for PerChannel {
         for p in &mut self.rest {
             p.prepare(sample_rate, max_block, 1);
         }
+        let links = info.sidechain && !self.rest.is_empty() && info.params.iter().any(|p| p.id == SUR_LINK);
+        self.link_key = if links { vec![vec![0.0; max_block]; 2] } else { Vec::new() };
     }
 
     fn reset(&mut self) {
@@ -98,6 +109,21 @@ impl Plugin for PerChannel {
     }
 
     fn process_with_sidechain(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
+        let linked = key.is_none()
+            && !self.link_key.is_empty()
+            && self.first.param(SUR_LINK).is_some_and(|v| v > 0.5)
+            && self.link_key.iter().all(|k| k.len() >= frames)
+            && io.iter().all(|c| c.len() >= frames);
+        if linked {
+            // each sample, the loudest channel's value (signed, so the key keeps its spectrum)
+            for i in 0..frames {
+                let v = io.iter().map(|c| c[i]).filter(|v| v.is_finite()).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+                for k in &mut self.link_key {
+                    k[i] = v;
+                }
+            }
+        }
+        let key = if linked { Some(self.link_key.as_slice()) } else { key };
         let n = io.len().min(2);
         let (head, tail) = io.split_at_mut(n);
         self.first.process_with_sidechain(head, frames, key);
@@ -274,6 +300,31 @@ mod tests {
             wide.process(&mut io, frames);
         }
         assert!(peak(&io[5]) < peak(&dry[5]));
+    }
+
+    /// The parity list's linked detection: with Link All Channels on, a loud surround channel
+    /// turns Comp down on every channel of a 5.1 track; off, the front pair is left alone.
+    #[test]
+    fn comp_links_detection_across_every_channel_when_asked() {
+        let frames = 512;
+        let front = |linked: bool| {
+            let mut p = instantiate("fs_comp").unwrap();
+            assert!(p.set_param("amount", 0.6)); // threshold -30 dB
+            assert!(p.set_param("ratio", 0.9));
+            assert!(p.set_param("surLink", if linked { 1.0 } else { 0.0 }));
+            p.prepare(48_000.0, frames, 6);
+            let mut io: Vec<Vec<f32>> = Vec::new();
+            for _ in 0..40 {
+                io = (0..6).map(|c| if c == 4 { sine(frames, 0.0) } else { sine(frames, 0.0).iter().map(|v| v * 0.02).collect() }).collect();
+                p.process(&mut io, frames);
+            }
+            (peak(&io[0]), peak(&io[3]))
+        };
+        let (alone, lfe_alone) = front(false);
+        let (linked, lfe_linked) = front(true);
+        assert!((alone - 0.01).abs() < 0.002, "a quiet front pair alone is left alone: {alone}");
+        assert!(linked < 0.5 * alone, "linked, the loud surround turns the front down: {linked} vs {alone}");
+        assert!(lfe_linked < 0.5 * lfe_alone);
     }
 
     #[test]
