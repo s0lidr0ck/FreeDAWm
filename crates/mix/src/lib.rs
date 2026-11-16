@@ -82,6 +82,7 @@ pub mod midi_fx;
 pub mod midi_sync;
 mod monitor;
 mod prepare;
+mod rpn;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
 pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx};
 pub mod scout;
@@ -4927,6 +4928,8 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
     const PRESSURE: usize = 129;
     const PROGRAM: usize = 130;
     let mut last = [(i64::MIN, 0i32); 131];
+    // RPN and NRPN: selected, then set (see `rpn`), read in the clips' order.
+    let mut params = rpn::ParamChase::default();
     let sr = s.sample_rate;
     for clip in t.clips() {
         let Some(sequence) = clip.midi_playing() else { continue };
@@ -4938,6 +4941,12 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
         // Events a start trim hid (before tick 0) count as set when the clip starts.
         for (i, c) in sequence.ctrls.iter().enumerate().filter(|(_, c)| ch.is_none_or(|ch| c.channel & 0x0F == ch)) {
             let slot = match c.kind {
+                CtrlKind::Cc(n) if rpn::is_param_cc(n & 0x7F) => {
+                    if s.tempo.tick_to_samples(base.saturating_add(c.tick), sr).max(clip.start) < until {
+                        params.cc(n & 0x7F, c.value.clamp(0, 127) as u8);
+                    }
+                    continue;
+                }
                 CtrlKind::Cc(n) => usize::from(n & 0x7F),
                 CtrlKind::PitchBend => BEND,
                 CtrlKind::ChannelPressure => PRESSURE,
@@ -4982,6 +4991,13 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
             }
         }
     }
+    params.send(|mut m| match ch {
+        None => inst.plugin.midi(0, m),
+        Some(ch) => {
+            m[0] |= ch;
+            inst.plugin.midi_raw(0, m);
+        }
+    });
 }
 
 /// Session audio shared with a sample-playing instrument.
@@ -7594,6 +7610,33 @@ mod tests {
         assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), vec![(0, [0xB0, 121, 0]), (0, [0xB0, 64, 127]), (0, [0xE0, 0, 0])]);
         render_block(&mut eng, &s, 36_512);
         assert!(heard.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rpn_values_are_chased_after_their_select() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.ears"));
+        let cc = |tick, n, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(n), value, shape: Default::default() };
+        // Pitch-bend range 12 (RPN 0, 0) set at the start, the bank and a program after it.
+        let ctrls = vec![cc(0, 101, 0), cc(1, 100, 0), cc(2, 6, 12), cc(3, 0, 1), cc(4, 32, 2)];
+        let seq = soundcraft_midi::Sequence { ctrls, ..Default::default() };
+        let cid = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 48_000 * 4, seq));
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ears = Ears { inner: soundcraft_dsp::create("gain").unwrap(), heard: Arc::clone(&heard) };
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_external_instances(true);
+        eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Instrument, id: "clap:test.ears".into(), ch: 2, plugin: Box::new(ears) }]);
+        render_block(&mut eng, &s, 0);
+        heard.lock().unwrap().clear();
+        render_block(&mut eng, &s, 36_000);
+        let got: Vec<[u8; 3]> = heard.lock().unwrap().iter().map(|x| x.1).collect();
+        assert_eq!(
+            got,
+            vec![[0xB0, 121, 0], [0xB0, 0, 1], [0xB0, 32, 2], [0xB0, 101, 0], [0xB0, 100, 0], [0xB0, 6, 12], [0xB0, 101, 0], [0xB0, 100, 0]],
+            "the range reaches RPN 0, the bank before anything else"
+        );
     }
 
     #[test]

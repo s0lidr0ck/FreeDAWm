@@ -110,7 +110,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Notes with velocity and channel | ● | ● | ● | ● | **Works** |
 | Release velocity | ● | ● | ● | ● | **Partial**: recorded; when played live it reaches CLAP and AU instruments, not VST3 or the built-in ones |
 | Sustain and other controllers, pitch bend, channel and poly aftertouch, program change | ● | ● | ● | ● | **Works**, stored in the clip unthinned |
-| Bank select, 14-bit controllers, RPN and NRPN understood as such | ● | ◐ | ● | ● | **Partial**: kept as separate plain controllers |
+| Bank select, 14-bit controllers, RPN and NRPN understood as such | ● | ◐ | ● | ● | **Partial**: kept as plain controllers and played in order; when playback starts mid-clip the chase follows RPN and NRPN (each parameter set before the play position is selected and set again, then the selection in effect restored) and sends the bank before the program (`mix::rpn`). Not shown or edited as one value in the editor; 14-bit pairs other than Data Entry are chased as two controllers |
 | SysEx | ● | ○ | ● | ● | **Missing** |
 | MPE (per-note bend, pressure, timbre) | ● | ● | ● | ● | **Partial**: the channels pass through and are kept; nothing sets up or understands a zone |
 | MIDI 2.0 resolution | ○ | ○ | ● | ◐ | **Missing** |
@@ -280,7 +280,7 @@ either wire the control or take it off the menu.
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Done: the Step Input window and the editor's Step button (`fa832ab`, `486cf93`; Musical Typing's step mode fixed: bug 18) |
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Partly: driver timestamps and per-device offsets done (`2a34aa9`); bug 12 and the low-latency path open |
-| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Not started |
+| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Partly: RPN and NRPN chased as parameters, bank before program (`mix::rpn`). SysEx and controllers as automation not started |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Done: bug 11 fixed, 63 ports, aliases; bug 10 fixed where the system gives a new identity (`2a34aa9`) |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
 | MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery (`397e268`) |
@@ -430,3 +430,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | MIDI effects before the instrument: Arpeggiator, Chord, Scale and Note Repeat (input menu › MIDI Effects); takes keep the keys as played |
 | 2026-11-16 | minor | MIDI to Track: changing one route lets go only of that track's notes on the target, not every routed note |
 | 2026-11-16 | minor | Juke's pads are recorded on an armed track that listens to Musical Typing |
+| 2026-11-16 | minor | Chase after a locate follows RPN and NRPN (select, then value) and sends the bank before the program |
