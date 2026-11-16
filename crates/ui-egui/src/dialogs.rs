@@ -722,6 +722,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                                     if ui.selectable_label(kind == k.id(), k.label()).clicked() {
                                         *kind = k.id().to_string();
                                         *name = k.default_name().to_string();
+                                        // Instruments are stereo (the built-in ones are): mono
+                                        // would fold them, as an Instrument track never wants.
+                                        let mono = soundcraft_model::ChannelFormat::Mono.label();
+                                        if k == soundcraft_model::TrackKind::Instrument && *format == mono {
+                                            *format = soundcraft_model::ChannelFormat::Stereo.label().to_string();
+                                        }
                                     }
                                 }
                             });

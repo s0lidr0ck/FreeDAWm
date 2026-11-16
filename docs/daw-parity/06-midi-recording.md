@@ -191,7 +191,7 @@ Compared in full in section 7; listed here for what matters while recording.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| New instrument track ready to play | ● | ● | ● | ● | **Works** (subtractive synth, input set to all). The New Tracks dialog makes it mono (bug 15) |
+| New instrument track ready to play | ● | ● | ● | ● | **Works** (subtractive synth, input set to all, stereo from the New Tracks dialog too) |
 | Drag an instrument from the browser to make a track | ● | ● | ● | ● | **Works** |
 | Third-party instruments | ● AAX | ● | ● AU | ● VST | **Works**: CLAP, VST3 and AU, with channels kept |
 | Piano and other sampled instruments in the box | ● | ● | ● | ● | **Missing**: a sampler with no library |
@@ -241,7 +241,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 12 | What you hear loses its timing when an audio buffer is rendered in several parts (large device buffers, a loop end inside the buffer, sample-rate conversion): all the notes land at the start of the first part | `playback/src/midi_in.rs:136-145`; `playback/src/lib.rs:1197-1203` |
 | 13 | Module MIDI input recorded in a loop keeps only the last partial pass, or an empty range after a punch partway through | `ui-egui/src/lib.rs:2162-2166` |
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it` | `engine/src/midi_record.rs` (`pass_range`) |
-| 15 | The New Tracks dialog keeps "Mono" when the kind is switched to Instrument, so the stereo synth is folded to mono | `ui-egui/src/dialogs.rs:348, 703-706` |
+| 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
 | 16 | Menu items that run their command with no values and so change nothing: Input Quantize, MIDI Track Offsets. Step Input always enters the same eighth note | `ui-egui/src/menus.rs:949-965, 1075-1076`; `ui-egui/src/menubar.txt:435-440` |
 | 17 | The live drawing of a take shows notes on channels the track will not record, at the time heard, not the time they will be placed | `ui-egui/src/live_midi.rs:58-71` |
 | 18 | Musical Typing's step mode ignores the velocity setting, does not lengthen the clip (later notes do not play), and a position before the clip collapses to its start | `ui-egui/src/musical_typing.rs:138-151` |
@@ -316,3 +316,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 7 corrected: the claim was wrong (midir calls back once per message on every backend FreeDAWm uses) |
 | 2026-11-16 | minor | Bug 8 fixed: a pedal down at the end of a take comes up, and one pressed before it is kept |
 | 2026-11-16 | minor | Bug 5 fixed: an early downbeat at a loop's end starts the next pass |
+| 2026-11-16 | minor | Bug 15 fixed: the New Tracks dialog makes instrument tracks stereo |
