@@ -60,11 +60,58 @@ fn table_matches_the_cpp_order_and_defaults() {
 }
 
 #[test]
-fn registered_and_reports_no_latency() {
+fn registered_and_reports_the_oversampling_latency() {
     let p = crate::create("fs_dist").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
-    assert_eq!(p.latency(), 0, "the C++ reports no latency");
+    assert_eq!(p.latency(), 5, "the half-band oversampler's delay (the C++ reports none)");
     assert!(crate::param_deriver("fs_dist").is_some(), "Link and the knob memory");
+    for sr in [44_100.0, 96_000.0] {
+        let mut p = Dist::new();
+        p.prepare(sr, 512, 2);
+        assert_eq!(p.latency(), 5, "{sr}");
+    }
+    let mut r = Dist::cpp_reference();
+    r.prepare(48_000.0, 512, 2);
+    assert_eq!(r.latency(), 0, "the C++'s oversampling, for the fidelity test");
+}
+
+/// Energy of the non-harmonic content below 0.42 fs relative to the fundamental, in dB, for a
+/// 7013 Hz tone through `p` (`circuit` at `drive`) at 48 kHz: what aliasing puts where no
+/// harmonic of the tone falls.
+fn alias_db(mut p: Dist, circuit: f32, drive: f32) -> f64 {
+    use rustfft::{FftPlanner, num_complex::Complex};
+    let sr = 48_000usize;
+    let f0 = 7013usize;
+    p.set_param("circuit", circuit);
+    p.set_param("drive", drive);
+    p.prepare(sr as f32, 512, 2);
+    let src: Vec<f32> = (0..sr + sr / 2).map(|i| 0.3 * (std::f32::consts::TAU * (f0 * i % sr) as f32 / sr as f32).sin()).collect();
+    let mut io = vec![src.clone(), src];
+    run(&mut p, &mut io, 512);
+    let mut buf: Vec<Complex<f64>> = io[0][sr / 2..].iter().map(|&v| Complex::new(f64::from(v), 0.0)).collect();
+    FftPlanner::new().plan_fft_forward(sr).process(&mut buf);
+    let e = |k: usize| buf[k].norm_sqr();
+    let near_harmonic = |k: usize| (1..4).any(|h| (k as i64 - (h * f0) as i64).abs() <= 2);
+    let fundamental: f64 = (f0 - 2..=f0 + 2).map(e).sum();
+    let alias: f64 = (20..sr * 42 / 100).filter(|&k| !near_harmonic(k)).map(e).sum();
+    10.0 * (alias / fundamental).log10()
+}
+
+#[test]
+fn circuits_alias_less_than_the_cpp() {
+    // Regression for the weak anti-alias filter, on a 7 kHz tone. What lands between the
+    // harmonics below 20 kHz is aliasing. Where the circuit's harmonics die out below the 4x
+    // Nyquist, what is left came through the C++'s Butterworth, and the half-bands remove it: the
+    // Blues Breaker at full drive and the Klon and Tube Screamer at low drive come out 8 to 30 dB
+    // cleaner. The hard clippers at full drive (the RAT here) are unchanged to 0.1 dB: their
+    // aliasing is made above the 4x Nyquist and folds inside the oversampled signal, which no
+    // filter after it can remove (that needs a higher factor), and it is never worse.
+    for (circuit, drive, gain) in [(6.0, 1.0, 20.0), (5.0, 0.3, 20.0), (0.0, 0.3, 6.0), (1.0, 1.0, -0.5)] {
+        let ours = alias_db(Dist::new(), circuit, drive);
+        let cpp = alias_db(Dist::cpp_reference(), circuit, drive);
+        println!("circuit {circuit}, drive {drive}: aliasing {ours:.1} dB here, {cpp:.1} dB in the C++'s");
+        assert!(ours < cpp - gain, "circuit {circuit}, drive {drive}: {ours:.1} vs {cpp:.1}");
+    }
 }
 
 #[test]

@@ -16,7 +16,9 @@
 //!   Circuit's setter re-derives the model and clears every solver state, so pushing it every
 //!   block would stop the filter ever running. Here `set_param` only stores the value; `process`
 //!   does the wrapper's push (all values after `prepare`/`reset`, else the changed ones).
-//! - Latency: none (IIR only). Tail: `getTailLengthSeconds` is 1 s (a self-oscillating filter
+//! - Latency: the C++ reports none. FreeDAWm's steeper anti-alias filters (see
+//!   `filter_engine_dsp`) delay the output 5 samples, which `latency()` reports;
+//!   [`Filter::cpp_reference`] is the C++'s oversampling, for the fidelity test. Tail: `getTailLengthSeconds` is 1 s (a self-oscillating filter
 //!   keeps ringing), so `tail_samples` is one second.
 //! - Bypass: the engine's own `bypass` parameter passes the input straight through (the
 //!   modulation keeps running), translated in the engine. It is kept in order but hidden
@@ -224,6 +226,15 @@ impl Filter {
         }
     }
 
+    /// The C++'s oversampling exactly (Butterworth anti-alias filters, no latency), for the
+    /// fidelity test. `restore_initial` keeps the choice.
+    pub fn cpp_reference() -> Self {
+        let mut p = Self::new();
+        p.dsp.set_cpp_oversampling(true);
+        p.dsp.prepare(48_000.0);
+        p
+    }
+
     /// `prepareToPlay` at `sr`, fresh before any audio, else on the live instance (see the
     /// module notes).
     fn prepare_at(&mut self, sr: f64) {
@@ -298,6 +309,11 @@ impl Plugin for Filter {
         let bpm = if transport.tempo.is_finite() { transport.tempo as f32 } else { 0.0 };
         let ppq = if transport.quarters.is_finite() { transport.quarters } else { -1.0 };
         self.dsp.set_host_transport(transport.playing, bpm, ppq);
+    }
+
+    fn latency(&self) -> usize {
+        // the half-band oversampler's delay (0 for the C++ reference and while engine-bypassed)
+        self.dsp.latency_samples()
     }
 
     fn tail_samples(&self) -> usize {

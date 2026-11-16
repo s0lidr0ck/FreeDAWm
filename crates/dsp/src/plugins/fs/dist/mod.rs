@@ -19,7 +19,10 @@
 //! - APVTS ranges: floats 0..1, choices whole indices, bools 0/1. `ParamInfo::clamp` does the
 //!   same (NaN becomes the default), so the engine never sees a non-finite value.
 //! - Unused output channels are cleared (the Rust host contract leaves extra channels alone; the
-//!   engine processes at most 2). No latency (`setLatencySamples` is never called), no tail.
+//!   engine processes at most 2). No tail. The C++ never calls `setLatencySamples`; FreeDAWm's
+//!   steeper anti-alias filters (see `dist_engine_dsp`) delay the output 5 samples, which
+//!   `latency()` reports. [`Dist::cpp_reference`] is the C++'s oversampling, for the fidelity
+//!   test.
 //! - `ScopedNoDenormals` (flush-to-zero): no safe Rust equivalent; it only changes values below
 //!   ~1e-38. `silence_tail_is_cheap` guards the CPU side.
 //! - Link (`applyLink`), the per-circuit knob memory (`applyPendingKnobSwap`) and a preset's
@@ -181,6 +184,8 @@ pub struct Dist {
     out_peak_db: f32,
     /// Audio has gone through since `new`: `prepare` / `reset` take the live path.
     processed: bool,
+    /// The C++'s oversampling filters (the fidelity test's build).
+    cpp_oversampling: bool,
 }
 
 impl Default for Dist {
@@ -202,7 +207,18 @@ impl Dist {
             in_peak_db: f32::NAN,
             out_peak_db: f32::NAN,
             processed: false,
+            cpp_oversampling: false,
         }
+    }
+
+    /// The C++'s oversampling exactly (Butterworth anti-alias filters, no latency), for the
+    /// fidelity test.
+    pub fn cpp_reference() -> Self {
+        let mut p = Self::new();
+        p.cpp_oversampling = true;
+        p.dsp.set_cpp_oversampling(true);
+        p.dsp.prepare(48_000.0);
+        p
     }
 
     /// `prepareToPlay` on the live instance at `sr`: the top of the next block (Link following
@@ -291,6 +307,7 @@ impl Plugin for Dist {
             return;
         }
         let mut dsp = Box::new(DistEngineDsp::new());
+        dsp.set_cpp_oversampling(self.cpp_oversampling);
         dsp.prepare(sr);
         self.dsp = dsp;
         self.force_push = true; // re-push everything into the fresh DSP state
@@ -306,6 +323,11 @@ impl Plugin for Dist {
         // parameter pushed again at the next block (`prepareToPlay` + `forcePush`), in place.
         self.dsp.reset();
         self.force_push = true;
+    }
+
+    fn latency(&self) -> usize {
+        // the half-band oversampler's delay (0 for the C++ reference and while engine-bypassed)
+        self.dsp.latency_samples()
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {

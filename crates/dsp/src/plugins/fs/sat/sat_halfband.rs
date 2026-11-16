@@ -225,6 +225,27 @@ pub fn round_trip_delay(coefs: &[Coefs], stages: usize) -> f64 {
         .sum()
 }
 
+/// Two stages as a 4x interpolator (stage 0, next to the base rate, first), as Dist and Filter
+/// run them: one base-rate sample in, four 4x samples out, in time order, passband gain 1.
+#[inline]
+pub fn up4(st: &mut [Stage; 2], x: f64) -> [f64; 4] {
+    let [st0, st1] = st;
+    let (a, b) = st0.up(x);
+    let (u0, u1) = st1.up(a);
+    let (u2, u3) = st1.up(b);
+    [u0, u1, u2, u3]
+}
+
+/// The matching 4x decimator: four 4x samples in (in time order), one base-rate sample out.
+/// [`up4`] then this delays by [`round_trip_delay`] of the two stages (5 samples, rounded).
+#[inline]
+pub fn down4(st: &mut [Stage; 2], d: [f64; 4]) -> f64 {
+    let [st0, st1] = st;
+    let e0 = st1.down(d[0], d[1]);
+    let e1 = st1.down(d[2], d[3]);
+    st0.down(e0, e1)
+}
+
 /// [`round_trip_delay`] to the nearest whole sample: the latency an engine built on these stages
 /// reports (Sat and Vint: 4, 5 and 6 samples at 2x, 4x and 8x, at every rate).
 pub fn round_trip_latency(coefs: &[Coefs], stages: usize) -> usize {

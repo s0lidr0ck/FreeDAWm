@@ -103,6 +103,9 @@ pub fn cpp_reference(plugin_id: &str) -> Option<Box<dyn Plugin>> {
     let mut p: Box<dyn Plugin> = match plugin_id {
         // the dry is delayed to sit with the voices, and reported as latency
         "fs_pitch" => Box::new(pitch::Pitch::cpp_reference()),
+        // half-band oversampling with a reported latency, not the C++'s Butterworth
+        "fs_dist" => Box::new(dist::Dist::cpp_reference()),
+        "fs_filter" => Box::new(filter::Filter::cpp_reference()),
         _ => return None,
     };
     p.prepare(48_000.0, 1024, 2);

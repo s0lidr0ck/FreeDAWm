@@ -159,7 +159,7 @@ fn engine_maps_match_the_header() {
 }
 
 #[test]
-fn registered_with_no_latency_and_a_one_second_tail() {
+fn registered_with_the_oversampling_latency_and_a_one_second_tail() {
     let mut p = crate::create("fs_filter").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
     for circuit in 0..9 {
@@ -167,11 +167,87 @@ fn registered_with_no_latency_and_a_one_second_tail() {
         p.prepare(48_000.0, 512, 2);
         let mut io = vec![sine(512, 0.5), sine(512, 0.5)];
         p.process(&mut io, 512);
-        assert_eq!(p.latency(), 0);
+        assert_eq!(p.latency(), 5, "the half-band oversampler's delay (the C++ reports none)");
         assert_eq!(p.tail_samples(), 48_000);
     }
     p.prepare(96_000.0, 512, 2);
     assert_eq!(p.tail_samples(), 96_000);
+    assert_eq!(p.latency(), 5);
+    let mut r = Filter::cpp_reference();
+    r.prepare(48_000.0, 512, 2);
+    assert_eq!(r.latency(), 0, "the C++'s oversampling, for the fidelity test");
+    r.reset();
+    assert_eq!(r.latency(), 0, "a reset keeps the build");
+}
+
+/// How late `p` delivers a quiet 1.5 kHz tone at `sr`, in samples (its phase delay).
+fn measured_delay(p: &mut Filter, sr: f32) -> f64 {
+    let n = sr as usize;
+    let w = std::f64::consts::TAU * 1500.0 / f64::from(sr);
+    let src: Vec<f32> = (0..n).map(|i| (0.05 * (w * i as f64).sin()) as f32).collect();
+    let mut io = vec![src.clone(), src];
+    run(p, &mut io, 512);
+    let (mut re, mut im) = (0.0f64, 0.0f64);
+    for (i, &y) in io[0].iter().enumerate().skip(n / 2) {
+        re += f64::from(y) * (w * i as f64).sin();
+        im += f64::from(y) * (w * i as f64).cos();
+    }
+    -im.atan2(re) / w
+}
+
+#[test]
+fn reported_latency_is_the_measured_delay() {
+    // Regression: the anti-alias filters were weak; the half-bands that replace them delay the
+    // output, and that delay is reported. With Mix at 0 the input runs through the oversampler
+    // alone (the circuit mixed out at 4x): it comes out late by what is reported, at every rate.
+    for sr in [44_100.0f32, 48_000.0, 96_000.0] {
+        let mut p = Filter::new();
+        p.set_param("mix", 0.0);
+        p.prepare(sr, 512, 2);
+        let d = measured_delay(&mut p, sr);
+        assert_eq!(p.latency(), 5);
+        assert!((d - 5.0).abs() < 0.6, "{sr}: measured {d:.2}");
+        let mut r = Filter::cpp_reference();
+        r.set_param("mix", 0.0);
+        r.prepare(sr, 512, 2);
+        println!("{sr}: half-bands {d:.2} samples (reported 5); the C++'s Butterworth {:.2} (reported 0)", measured_delay(&mut r, sr));
+    }
+}
+
+/// Energy of the non-harmonic content below 0.42 fs relative to the fundamental, in dB, for a
+/// 7013 Hz tone through `p` (the Moog at full drive) at 48 kHz: what aliasing puts where no
+/// harmonic of the tone falls.
+fn alias_db(mut p: Filter) -> f64 {
+    use rustfft::{FftPlanner, num_complex::Complex};
+    let sr = 48_000usize;
+    let f0 = 7013usize;
+    p.set_param("circuit", 4.0);
+    p.set_param("drive", 1.0);
+    p.set_param("cutoff", 1.0);
+    p.set_param("reso", 0.0);
+    p.set_param("modSrc", 0.0);
+    p.prepare(sr as f32, 512, 2);
+    let src: Vec<f32> = (0..sr + sr / 2).map(|i| 0.5 * (std::f32::consts::TAU * (f0 * i % sr) as f32 / sr as f32).sin()).collect();
+    let mut io = vec![src.clone(), src];
+    run(&mut p, &mut io, 512);
+    let mut buf: Vec<Complex<f64>> = io[0][sr / 2..].iter().map(|&v| Complex::new(f64::from(v), 0.0)).collect();
+    FftPlanner::new().plan_fft_forward(sr).process(&mut buf);
+    let e = |k: usize| buf[k].norm_sqr();
+    let near_harmonic = |k: usize| (1..4).any(|h| (k as i64 - (h * f0) as i64).abs() <= 2);
+    let fundamental: f64 = (f0 - 2..=f0 + 2).map(e).sum();
+    let alias: f64 = (20..sr * 42 / 100).filter(|&k| !near_harmonic(k)).map(e).sum();
+    10.0 * (alias / fundamental).log10()
+}
+
+#[test]
+fn a_driven_circuit_aliases_far_less_than_the_cpp() {
+    // Regression for the weak anti-alias filter: the Moog ladder at full drive, wide open, on a
+    // 7 kHz tone. What lands between the harmonics below 20 kHz is aliasing; the half-bands
+    // cut it well below the C++'s Butterworth.
+    let ours = alias_db(Filter::new());
+    let cpp = alias_db(Filter::cpp_reference());
+    println!("aliasing: {ours:.1} dB here, {cpp:.1} dB in the C++'s");
+    assert!(ours < cpp - 10.0, "{ours:.1} vs {cpp:.1}");
 }
 
 #[test]
