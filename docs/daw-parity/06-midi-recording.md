@@ -207,10 +207,10 @@ Compared in full in section 7; listed here for what matters while recording.
 | MIDI output to hardware | ● | ● | ● | ● | **Works**: an instrument or MIDI track's output menu › MIDI Output sends what it plays (clips, live input, chased controllers) to a hardware port, on its own channels or one; ports are enabled in Setup › MIDI Input Devices › Outputs; each message leaves when the audio beside it is heard (output latency and delay compensation included); a stop, a locate, All MIDI Notes Off and closing the port let go of every note left on. The audio thread only pushes into a lock-free ring; a sender thread per port talks to the driver |
 | MIDI clock out and in | ● | ● | ● | ● | **Flag only** (out), **Missing** (in) |
 | MIDI timecode and machine control | ● | ◐ | ● | ● | **Missing** |
-| MIDI learn: move a knob, it is mapped to a parameter | ◐ | ● | ● | ● | **Missing** |
-| Mapped controller moves kept out of the recording | ● | ● | ● | ● | **Missing** |
+| MIDI learn: move a knob, it is mapped to a parameter | ◐ | ● | ● | ● | **Works**: right-click a fader, pan knob, expanded send level or a plug-in's knob on the chain › Learn MIDI Controller, then move a CC or press a key; Setup › MIDI Mappings lists them (range, invert, delete). Parameter mappings are saved with the session (they name its tracks and plug-ins); transport keys with the app (the controller on this desk). A move is the control's own command: one undo step per gesture, written to automation as the on-screen control is |
+| Mapped controller moves kept out of the recording | ● | ● | ● | ● | **Works**: the MIDI hub claims mapped CCs and notes before they reach a port's ring, so they are never heard, recorded or played through; a surface's whole ports are kept out |
 | Control surfaces (Mackie Control, HUI and maker scripts) | ● | ● | ● | ● | **Partial**: Setup › Control Surfaces adds Mackie Control (with extenders) and HUI on chosen input and output ports. Faders with touch (touch is the on-screen fader held, for Touch and Latch), V-Pots as pan, mute, solo, rec and select, transport, bank and channel shift, automation-mode keys, scribble strips, meters, motor faders and LEDs following the mix, the jog wheel, the MCU handshake and HUI's ping. Tested against simulated devices (documented bytes in, bytes out), not yet against hardware. No maker scripts, no plug-in or send pages on the V-Pots, no flip; Avid EUCON is not possible (proprietary, licensed SDK) |
-| Transport from a controller | ● | ● | ● | ● | **Partial**: from a Mackie Control or HUI surface's transport keys |
+| Transport from a controller | ● | ● | ● | ● | **Works**: MMC from any input; learnt keys or footswitches (Play, Stop, Play/Stop, Record, Return to Zero, Loop, Punch: Record again, which punches with QuickPunch on); a surface's transport keys |
 
 ## L. Files
 
@@ -275,7 +275,7 @@ either wire the control or take it off the menu.
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
-| MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Not started |
+| MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Not started (Musical Typing's step mode fixed: bug 18) |
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Not started; bug 12 open |
@@ -283,6 +283,28 @@ either wire the control or take it off the menu.
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Not started; bugs 10 and 11 open |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
 | MIDI take survives a crash | 3–5 | Not started |
+
+**Designs for what remains of K (not built).**
+
+- *MIDI clock and timecode out.* A per-machine list of output ports that carry sync (Setup › MIDI
+  Input Devices › Outputs, a Sync column: off, clock, MTC). The audio thread knows the transport
+  and tempo map per block; at a block start it works out the clock ticks (24 per quarter, from the
+  tempo map at the block's position) and MTC quarter frames (four per frame at the session's frame
+  rate) that fall in the block, and pushes each into the port's External MIDI ring with the
+  heard-time stamp the instruments use (`OutHub::begin_block` plus the offset), so the sender
+  thread puts them on the wire on time. Play sends Song Position Pointer then Start (or Continue);
+  Stop sends Stop; a locate while stopped sends Song Position Pointer, and for MTC a full-frame
+  SysEx. Nothing new crosses to the audio thread but the port keys (atomics), so it stays
+  allocation-free. Tests: render blocks at a known tempo and count the 0xF8 stamps.
+- *A MIDI track playing an instrument on another track (multi-timbral).* A MIDI track's output
+  gets a route `Route::Instrument(TrackId)` (and a channel). The mix renders MIDI sources first:
+  such a track's notes (clips, live input, chase) are scheduled into a per-strip MIDI buffer
+  instead of an instrument, the same fixed-capacity block buffer modules' MIDI uses
+  (`Route::Modules`), and the target instrument track merges every buffer routed to it, each
+  keeping its channel, before it runs; a multi-timbral instrument answers each channel. Cycles
+  are refused as sends' are; a frozen or inactive target plays nothing. Recording stays on the
+  MIDI track, mute and solo of the MIDI track gate its notes, and its automation lanes are not
+  audio. Section 3's mixer owns the routing menus; this is about two days with tests.
 
 **3. What most have (≈ 40–65 h).** Not started yet. Auto-arm of the selected track, 2–3; note repeat, 4–6;
 recording into a step pattern and from the drum machine's pads, 8–12; MPE set-up and per-note
@@ -334,3 +356,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Merge is the default MIDI record mode for new sessions; saved sessions keep theirs |
 | 2026-11-16 | minor | MIDI output to hardware ports (External MIDI), enabled in Setup › MIDI Input Devices |
 | 2026-11-16 | minor | Control surfaces: Mackie Control (with extenders) and HUI, Setup › Control Surfaces |
+| 2026-11-16 | minor | MIDI learn, the MIDI Mappings window, MMC and learnt transport keys; mapped messages kept out of takes |

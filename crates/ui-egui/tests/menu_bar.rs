@@ -21,7 +21,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Process", 14),
     ("AI", 14),
     ("Options", 18),
-    ("Setup", 10),
+    ("Setup", 11),
     ("Window", 35),
 ];
 

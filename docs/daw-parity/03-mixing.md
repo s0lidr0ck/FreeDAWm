@@ -145,7 +145,7 @@ K-system scales, and the master a loudness meter.
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
-| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Partial**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); no controller mapping (MIDI learn) yet |
+| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Partial**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
 | Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
 
 ### Editing it
@@ -268,7 +268,7 @@ one a mix engineer would not forgive.
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), and a key taken from an aux by a non-aux track remain |
-| Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
+| Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done** (width and balance are not automatable yet) |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
@@ -330,6 +330,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | MIDI learn for faders, pan, send levels and plug-in knobs |
 | 2026-11-16 | minor | Control surfaces (Mackie Control, HUI) write automation from their faders and V-Pots |
 | 2026-11-16 | minor | tier 3: a control room design |
 | 2026-11-16 | minor | tier 3: mixer snapshots |

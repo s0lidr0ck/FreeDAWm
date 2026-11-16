@@ -382,6 +382,10 @@ pub struct Session {
     /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
     #[serde(default, skip_serializing_if = "crate::StudioTuning::is_default")]
     pub studio_tuning: crate::StudioTuning,
+    /// MIDI learn: controllers mapped to this session's mixer and plug-in parameters (omitted
+    /// from the file while empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_maps: Vec<crate::MidiMap>,
     /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mix_snapshots: Vec<crate::MixSnapshot>,
@@ -436,6 +440,7 @@ impl Session {
             notes: Vec::new(),
             lyric_sheet: crate::LyricSheet::default(),
             studio_tuning: crate::StudioTuning::default(),
+            midi_maps: Vec::new(),
             mix_snapshots: Vec::new(),
             pool: SourcePool::default(),
             assets: crate::AssetPool::default(),

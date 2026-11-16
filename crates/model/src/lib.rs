@@ -13,6 +13,7 @@ pub mod disk;
 mod ids;
 mod lyrics;
 mod markers;
+mod midi_map;
 pub mod migrate;
 mod mixer;
 mod notes;
@@ -34,6 +35,7 @@ pub use lyrics::{
     track_has_lyrics, track_lines,
 };
 pub use markers::{Group, MarkerKind, MemoryLocation};
+pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAction};
 pub use mixer::{
     Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx, KitLayout, KitPad,
     MAX_MODULES, MAX_TRACK_DELAY, MidiIn, Mixer, ModuleId, ModuleRef, OutputPath, PreparedState, REFERENCE_KEYS, Route, SEND_SLOTS, SPACE_IR_KEY,

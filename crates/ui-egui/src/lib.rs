@@ -55,6 +55,7 @@ pub mod midi_editor_link;
 pub mod midi_editor_window;
 pub mod midi_ghosts;
 pub mod midi_lanes;
+pub mod midi_learn;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;
@@ -347,6 +348,12 @@ pub struct UiState {
     /// Setup › MIDI Input Devices… (`midi_devices`).
     #[serde(default)]
     pub show_midi_inputs: bool,
+    /// Setup › MIDI Mappings… (`midi_learn`).
+    #[serde(default)]
+    pub show_midi_maps: bool,
+    /// MIDI learn's transport keys (`midi.transport_maps`): per machine, as the controller is.
+    #[serde(default, rename = "midi.transport_maps")]
+    pub midi_transport_maps: Vec<soundcraft_model::MidiMap>,
     /// Setup › Control Surfaces… (`surfaces`).
     #[serde(default)]
     pub show_surfaces: bool,
@@ -566,6 +573,8 @@ impl Default for UiState {
             show_io_setup: false,
             show_midi_inputs: false,
             show_surfaces: false,
+            show_midi_maps: false,
+            midi_transport_maps: Vec::new(),
             surfaces: Vec::new(),
             show_network: false,
             midi_inputs: std::collections::BTreeMap::new(),
@@ -858,6 +867,14 @@ pub struct SoundApp {
     pub(crate) midi_window_was_open: bool,
     /// The running control surfaces (`surfaces`).
     pub surfaces: surfaces::Surfaces,
+    /// MIDI learn (`midi_learn`): the control waiting for a controller to be moved.
+    pub learning: Option<soundcraft_model::MidiTarget>,
+    /// The claims last given to the MIDI hub.
+    pub(crate) learn_claims: Vec<(usize, u8, u8, u8)>,
+    /// The learn menu a right-click opened.
+    pub(crate) learn_menu: Option<midi_learn::LearnMenu>,
+    /// Transport keys down now (port, channel, number, CC), so one acts once as it goes down.
+    pub(crate) learn_switches: std::collections::HashMap<(String, u8, u8, bool), bool>,
     /// The live MIDI the audio thread heard since recording started (`midi_devices::collect`).
     pub(crate) midi_rec: Vec<soundcraft_playback::midi_in::RecordedMidi>,
     /// The hub's count of recorded events lost (the window did not collect them in time) when
@@ -1101,6 +1118,10 @@ impl SoundApp {
             midi_sent: false,
             midi_window_was_open: false,
             surfaces: surfaces::Surfaces::default(),
+            learning: None,
+            learn_claims: Vec::new(),
+            learn_menu: None,
+            learn_switches: std::collections::HashMap::new(),
             midi_rec: Vec::new(),
             midi_rec_lost_at: 0,
             midi_capture: Vec::new(),
@@ -2740,6 +2761,7 @@ impl SoundApp {
         self.handle_transport(dt);
         midi_devices::tick(self);
         surfaces::tick(self);
+        midi_learn::tick(self);
         scout::poll(self, ctx);
         // The band's Library can change without an edit (a reload): it is checked too.
         let band_lib = self.engine.band_library();

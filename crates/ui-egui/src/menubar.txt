@@ -567,6 +567,7 @@ Setup > ## Recording & MIDI
 Setup > Click/Countoff... = @window.click_countoff
 Setup > MIDI Input Devices... = @window.midi_inputs [desktop]
 Setup > Control Surfaces... = @window.control_surfaces [desktop]
+Setup > MIDI Mappings... = @window.midi_mappings [desktop]
 Setup > Network... = @window.network [desktop]
 Setup > ---
 Setup > ## Session & keys

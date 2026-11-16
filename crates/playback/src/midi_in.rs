@@ -172,6 +172,43 @@ pub struct MidiHub {
     /// Each slot's pedals down now: bit per channel, the sustain pedal (CC 64) in the low 16 bits,
     /// the sostenuto pedal (CC 66) in the high 16, so a take started with one down has it down.
     pedals: [AtomicU32; MAX_MIDI_PORTS],
+    /// MIDI learn: the messages mappings claim, bit per (slot, CC or note, channel, number)
+    /// ([`claim_bit`]). A claimed message goes to `control`, not to its port's ring: it is never
+    /// heard, recorded or played through.
+    claims: Box<[AtomicU64]>,
+    /// While a control is being learnt, every CC and note is also handed over (flagged).
+    learning: AtomicBool,
+    /// Claimed and learnt messages, and MIDI Machine Control, for the UI thread (several ports'
+    /// driver threads push: a multi-producer ring).
+    control: soundcraft_mix::external_midi::OutRing,
+}
+
+/// One message handed to the UI thread by [`MidiHub::take_control`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControlMsg {
+    pub slot: u8,
+    pub msg: [u8; 3],
+    /// Handed over because a control is being learnt.
+    pub learn: bool,
+    /// A MIDI Machine Control message (`F0 7F <device> 06 <command> F7`).
+    pub mmc: Option<[u8; 6]>,
+}
+
+/// Bits in the claim table per port slot: CC and note, 16 channels, 128 numbers.
+const CLAIM_BITS: usize = 2 * 16 * 128;
+
+/// The claim table's bit for a message (`kind` 0 CC, 1 note).
+fn claim_bit(slot: usize, kind: u8, channel: u8, number: u8) -> usize {
+    slot * CLAIM_BITS + usize::from(kind & 1) * 2048 + usize::from(channel & 0x0F) * 128 + usize::from(number & 0x7F)
+}
+
+/// The claim kind of a message: 0 a CC, 1 a note on or off, `None` anything else.
+fn claim_kind(msg: [u8; 3]) -> Option<u8> {
+    match msg[0] & 0xF0 {
+        0xB0 => Some(0),
+        0x80 | 0x90 => Some(1),
+        _ => None,
+    }
 }
 
 impl MidiHub {
@@ -186,7 +223,51 @@ impl MidiHub {
             capture: MidiRing::new(RECORD_RING),
             held: [AtomicU64::new(0), AtomicU64::new(0)],
             pedals: std::array::from_fn(|_| AtomicU32::new(0)),
+            claims: (0..MAX_MIDI_PORTS * CLAIM_BITS / 64).map(|_| AtomicU64::new(0)).collect(),
+            learning: AtomicBool::new(false),
+            control: soundcraft_mix::external_midi::OutRing::new(1024),
         })
+    }
+
+    /// MIDI learn: the messages the mappings claim now, as (slot, kind 0 CC / 1 note, channel,
+    /// number); everything else is unclaimed.
+    pub fn set_claims(&self, claims: &[(usize, u8, u8, u8)]) {
+        let mut words = vec![0u64; self.claims.len()];
+        for &(slot, kind, ch, num) in claims {
+            if slot < MAX_MIDI_PORTS {
+                let b = claim_bit(slot, kind, ch, num);
+                if let Some(w) = words.get_mut(b / 64) {
+                    *w |= 1 << (b % 64);
+                }
+            }
+        }
+        for (a, w) in self.claims.iter().zip(words) {
+            a.store(w, Ordering::Relaxed);
+        }
+    }
+
+    /// While on, every CC and note is handed over too (MIDI learn is waiting for one).
+    pub fn set_learning(&self, on: bool) {
+        self.learning.store(on, Ordering::Relaxed);
+    }
+
+    fn claimed(&self, slot: usize, msg: [u8; 3]) -> bool {
+        let Some(kind) = claim_kind(msg) else { return false };
+        let b = claim_bit(slot, kind, msg[0] & 0x0F, msg[1]);
+        self.claims.get(b / 64).is_some_and(|w| w.load(Ordering::Relaxed) & (1 << (b % 64)) != 0)
+    }
+
+    /// UI thread: what was claimed, learnt or sent as MMC since the last call.
+    pub fn take_control(&self, out: &mut Vec<ControlMsg>) {
+        while let Some((a, b)) = self.control.pop() {
+            let slot = (a & 0xFF) as u8;
+            if a & (1 << 9) != 0 {
+                let bytes = b.to_le_bytes();
+                out.push(ControlMsg { slot, msg: [0; 3], learn: false, mmc: Some([0xF0, 0x7F, bytes[0], 0x06, bytes[1], 0xF7]) });
+            } else {
+                out.push(ControlMsg { slot, msg: unpack(b), learn: a & (1 << 8) != 0, mmc: None });
+            }
+        }
     }
 
     /// Microseconds since the hub was made (never 0, which means "never").
@@ -397,7 +478,29 @@ impl PortSink {
 
     /// [`PortSink::send`] stamped `stamp` (µs since the hub was made).
     pub fn send_at(&self, stamp: u64, bytes: &[u8]) {
+        // MIDI Machine Control: the transport, for the UI thread.
+        if let [0xF0, 0x7F, device, 0x06, command, ..] = bytes {
+            let (a, b) = ((self.slot as u64 & 0xFF) | (1 << 9), u64::from_le_bytes([*device, *command, 0, 0, 0, 0, 0, 0]));
+            self.hub.control.push(a, b);
+            return;
+        }
         let Some(msg) = parse(bytes) else { return };
+        let learning = self.hub.learning.load(Ordering::Relaxed) && claim_kind(msg).is_some();
+        let note_off = msg[0] & 0xF0 == 0x80 || (msg[0] & 0xF0 == 0x90 && msg[2] == 0);
+        if learning && !note_off {
+            // (Not a note-off: the key let go after learning would be learnt again.)
+            self.hub.control.push((self.slot as u64 & 0xFF) | (1 << 8), pack(msg));
+        }
+        if self.hub.claimed(self.slot, msg) {
+            // A mapped control: it moves its parameter, it never plays or records.
+            if let Some(a) = self.hub.activity.get(self.slot) {
+                a.store(stamp.max(1), Ordering::Relaxed);
+            }
+            if !learning {
+                self.hub.control.push(self.slot as u64 & 0xFF, pack(msg));
+            }
+            return;
+        }
         if let Some(a) = self.hub.activity.get(self.slot) {
             a.store(stamp.max(1), Ordering::Relaxed);
         }
@@ -598,7 +701,8 @@ mod system {
 
     fn client() -> Result<midir::MidiInput, String> {
         let mut m = midir::MidiInput::new("FreeDAWm").map_err(|e| e.to_string())?;
-        m.ignore(midir::Ignore::All);
+        // SysEx comes through (MIDI Machine Control); the clock and active sensing do not.
+        m.ignore(midir::Ignore::TimeAndActiveSense);
         Ok(m)
     }
 
@@ -772,6 +876,33 @@ impl MidiBackend for FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_claimed_control_is_handed_over_instead_of_played_and_mmc_too() {
+        let hub = MidiHub::new();
+        let k = hub.sink(3);
+        hub.set_slot(3, Some("Knobs"));
+        hub.set_claims(&[(3, 0, 0, 7)]);
+        k.send(&[0xB0, 7, 99]);
+        k.send(&[0xB1, 7, 98]);
+        k.send(&[0xF0, 0x7F, 0x10, 0x06, 0x02, 0xF7]);
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert_eq!(live.events().iter().map(|e| e.msg).collect::<Vec<_>>(), vec![[0xB1, 7, 98]], "only the unclaimed channel plays");
+        let mut got = Vec::new();
+        hub.take_control(&mut got);
+        assert_eq!(got[0], ControlMsg { slot: 3, msg: [0xB0, 7, 99], learn: false, mmc: None });
+        assert_eq!(got[1].mmc, Some([0xF0, 0x7F, 0x10, 0x06, 0x02, 0xF7]));
+        // Learning: every CC and note-on is handed over, flagged, and still plays.
+        hub.set_learning(true);
+        k.send(&[0x90, 60, 100]);
+        k.send(&[0x80, 60, 0]);
+        got.clear();
+        hub.take_control(&mut got);
+        assert_eq!(got, vec![ControlMsg { slot: 3, msg: [0x90, 60, 100], learn: true, mmc: None }]);
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert_eq!(live.events().len(), 2);
+    }
 
     #[test]
     fn a_port_a_control_surface_uses_is_closed_to_notes() {

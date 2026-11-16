@@ -623,6 +623,13 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             if resp.dragged() {
                 app.hold_control(id, soundcraft_model::AutoParam::Pan(i as u8));
             }
+            resp.context_menu(|ui| {
+                crate::midi_learn::menu_items(
+                    app,
+                    ui,
+                    soundcraft_model::MidiTarget::Param { track: id, param: soundcraft_model::AutoParam::Pan(i as u8) },
+                );
+            });
             let _ = resp.on_hover_text("Alt-drag: all tracks · Alt+Shift-drag: selected tracks");
             let pr = Rect::from_center_size(pos2(cx, y + 42.0), vec2(ks + 8.0, 13.0));
             inset(ui.painter(), pr, t.counter_bg);
@@ -703,6 +710,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     } else {
         app.engine.automation_shown(id, &soundcraft_model::AutoParam::Volume).unwrap_or(track.mixer.volume_db)
     };
+    crate::midi_learn::context_at(app, ui, fr, crate::midi_learn::volume(id));
     if let Some(db) = fader(ui, fr, shown_db, ui.id().with(("fader", id.0))) {
         app.gesture = Some(crate::Gesture::Fader { track: id, start_db: shown_db });
         if trim_mode {
@@ -1643,6 +1651,13 @@ fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r:
     if fresp.drag_stopped() {
         app.engine.end_merge();
     }
+    fresp.context_menu(|ui| {
+        crate::midi_learn::menu_items(
+            app,
+            ui,
+            soundcraft_model::MidiTarget::Param { track: id, param: soundcraft_model::AutoParam::SendLevel(slot as u8) },
+        );
+    });
     if fresp.clicked() && ui.input(|i| i.modifiers.alt) {
         let _ = app.run("mix.send_level", json!({"track": id.0, "slot": slot, "db": 0.0}));
     } else if fresp.double_clicked() {
