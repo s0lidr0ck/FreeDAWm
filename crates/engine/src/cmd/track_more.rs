@@ -328,6 +328,9 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
             if tr.mixer.pan.len() != keep.4.len() {
                 tr.mixer.pan = keep.4;
             }
+            // The old modules' automation went with them: left, a lane would drive whichever new
+            // module took its id.
+            tr.automation.retain(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. }));
             if tr.kind == TrackKind::Instrument && instrument.is_some() {
                 tr.instrument = instrument.clone();
             }
@@ -672,6 +675,29 @@ mod tests {
         std::fs::write(&junk, "{\"format\": \"other\"}").unwrap();
         assert!(e.execute("track.load_preset", &json!({"path": junk.to_string_lossy(), "tracks": ["Hats"]})).is_err());
         assert_eq!(e.session().track_by_name("Hats").unwrap().mixer, before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Mix bug 13: loading a preset kept the old modules' automation, which could drive the new.
+    #[test]
+    fn loading_a_preset_drops_the_old_modules_automation() {
+        let dir = std::env::temp_dir().join(format!("sc-preset-lanes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bass.json").to_string_lossy().into_owned();
+        let mut e = crate::demo::demo_engine();
+        e.execute("track.save_preset", &json!({"path": path, "tracks": ["Bass"]})).unwrap();
+        let hats = e.session().track_by_name("Hats").unwrap().id;
+        let module = soundcraft_model::ModuleId(1);
+        let plugin = soundcraft_model::AutoParam::Plugin { module, param: "threshold".into() };
+        {
+            let tr = e.session_mut().track_mut(hats).unwrap();
+            tr.lane_mut(&plugin).set_point(0, 0.5);
+            tr.lane_mut(&soundcraft_model::AutoParam::Volume).set_point(0, -3.0);
+        }
+        e.execute("track.load_preset", &json!({"path": path, "tracks": ["Hats"]})).unwrap();
+        let tr = e.session().track(hats).unwrap();
+        assert!(tr.lane(&plugin).is_none_or(|l| l.points.is_empty()), "the module lane went");
+        assert!(tr.lane(&soundcraft_model::AutoParam::Volume).is_some_and(|l| !l.points.is_empty()), "the fader's stays");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
