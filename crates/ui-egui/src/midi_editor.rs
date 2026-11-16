@@ -737,6 +737,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if lt.small_button("Quantize").on_hover_text("Quantize the selected notes (every note when none is) to the grid").clicked() {
         op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
     }
+    if lt
+        .add(egui::Button::selectable(app.step.open, "Step"))
+        .on_hover_text("Step Input: enter notes from a MIDI keyboard into this clip with the transport stopped")
+        .clicked()
+    {
+        crate::step_input::toggle(app);
+    }
     // Several selected clips: which one is edited.
     if editable.len() > 1 {
         let names: Vec<(ClipId, String)> = {
