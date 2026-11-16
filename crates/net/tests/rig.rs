@@ -327,7 +327,9 @@ impl Rig {
     /// A booth with an armed vocal track and a track on the piano PC's port; a piano PC with
     /// nothing set up (it arms a Piano track itself) whose clock runs `ppm` fast.
     fn new(ppm: f64, outbox: Option<std::path::PathBuf>) -> Rig {
-        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), ..NetConfig::default() }, None);
+        // The rig's PCs follow over the plain link: the booth takes them there (Take PCs over
+        // the encrypted link only, on by default, turned off).
+        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), encrypted_only: false, ..NetConfig::default() }, None);
         let port = hub.listen(0).unwrap();
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let booth_clock = SimClock::new(1.0);

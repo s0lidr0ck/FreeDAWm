@@ -122,7 +122,8 @@ fn a_pc_dialling_another_key_reaches_nobody() {
 
 #[test]
 fn encrypted_only_keeps_pcs_off_the_plain_link_and_the_page_on_it() {
-    let b = booth(NetConfig { encrypted_only: true, ..NetConfig::default() });
+    // On by default: a booth as it comes.
+    let b = booth(NetConfig::default());
     let mut plain = Conn::open(&b.plain.to_string());
     let v = plain.call(json!({"id": 1, "method": "pair.request", "params": {"name": "Piano PC"}})).unwrap();
     assert_eq!(v["ok"], false);

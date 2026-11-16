@@ -1825,7 +1825,8 @@ mod tests {
     #[test]
     fn a_followers_take_shows_as_a_local_recording_and_then_as_sent() {
         use egui_kittest::kittest::Queryable;
-        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), ..NetConfig::default() }, None);
+        // The follower is on the plain link: the booth takes PCs there (on by default: off here).
+        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), encrypted_only: false, ..NetConfig::default() }, None);
         hub.update_config(|c| {
             c.paired = vec![PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: "piano".into(), follows: true, key: String::new() }];
         });

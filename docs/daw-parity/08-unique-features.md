@@ -275,13 +275,16 @@ same pass as the items above; these are the starting points.
   The booth binds the paired PC to its key (its token is refused on the plain link and from any
   other key); the remote PC keeps the booth's key and later dials only it. Setup › Network:
   Offer the encrypted local link (on by default), Take PCs over the encrypted link only (the
-  plain link then serves the phone's page alone), and which link each PC is on. *Not built:* the
+  plain link then serves the phone's page alone; on by default since the owner's decision of
+  2026-11-16, a value already saved is kept), and which link each PC is on. *Not built:* the
   password-authenticated exchange over the code (SPAKE2): no such crate is in the dependency
   tree and hand-written key-exchange code was not wanted. Without it, a machine that answers the
   very first contact with its own key (by forging the booth's mDNS record) could still sit in the
   middle of that one pairing, as it can on the plain link today; once paired the keys are pinned.
-  PCs paired over the plain link keep working there until paired again. The phone's page stays
-  on plain HTTP (a browser cannot speak this link).
+  PCs paired over the plain link keep working there only while Take PCs over the encrypted link
+  only is off (settings saved before the option existed now have it on: such a PC pairs again,
+  over the encrypted link). The phone's page stays on plain HTTP (a browser cannot speak this
+  link) and is served with the option on.
 - *Talkback (built, 4d3e275).* The control room's talkback (its input, level and talk key, F11 or
   the Network window's Talk to the performer, held) is mixed into the copy of the mix the stream
   sends, the music dimmed by the control room's dim (once: the monitor's own dim already counts
@@ -343,6 +346,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Take PCs over the encrypted link only is on by default (owner); a saved choice is kept |
 | 2026-11-16 | minor | Plug-ins in their own process: the design refined (not built) |
 | 2026-11-16 | minor | Browser build: the session kept between visits, with a notice, Export and Clear; a design for recording |
 | 2026-11-16 | minor | Remote recording: the encrypted local link and talkback |

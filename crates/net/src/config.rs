@@ -136,8 +136,8 @@ pub struct NetConfig {
     #[serde(default = "yes")]
     pub encrypted_link: bool,
     /// Take PCs over the encrypted local link only: the plain TCP link then serves the phone's
-    /// remote page and nothing else.
-    #[serde(default)]
+    /// remote page and nothing else. On by default; a value already saved is kept.
+    #[serde(default = "yes")]
     pub encrypted_only: bool,
 }
 
@@ -157,7 +157,7 @@ impl Default for NetConfig {
             internet_host: false,
             relay_url: String::new(),
             encrypted_link: true,
-            encrypted_only: false,
+            encrypted_only: true,
         }
     }
 }
@@ -221,5 +221,14 @@ mod tests {
         assert_eq!(c.device("abc").map(|d| d.name.as_str()), Some("Phone"));
         assert!(c.device("").is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pcs_take_the_encrypted_link_only_by_default_and_a_saved_choice_stays() {
+        assert!(NetConfig::default().encrypted_only);
+        let unset: NetConfig = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert!(unset.encrypted_only, "settings saved before the option existed take the default");
+        let saved: NetConfig = serde_json::from_str(r#"{"encrypted_only": false}"#).unwrap();
+        assert!(!saved.encrypted_only, "a choice already saved is kept");
     }
 }
