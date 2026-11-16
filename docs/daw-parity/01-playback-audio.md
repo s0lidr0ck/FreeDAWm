@@ -235,8 +235,9 @@ the file, centred on the nominal position, so nothing is reported to delay compe
 (3) *Clips with no stretch* take the run-based path they take now and are bit-identical.
 (4) *Quality.* Plain grains are phasier than WSOLA on sustained material; a later step can
 align each grain to the previous one by a short correlation search over the file (still
-stateless, as the search only reads the file). Left: building (1) and the worker that replaces
-it with the render.
+stateless, as the search only reads the file). Built so far: the stretcher itself
+(`dsp::live_stretch`, fourth round). Left: the clip read and the worker that replaces it with the
+render.
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
@@ -263,6 +264,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | the real-time stretcher (not wired to clips yet) |
 | 2026-11-16 | minor | layered overlapping clips and crossfade on overlap (section 4, D) |
 | 2026-11-16 | minor | warp markers you drag (section 4) |
 | 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |

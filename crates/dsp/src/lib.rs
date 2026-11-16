@@ -19,6 +19,7 @@ pub mod biquad;
 pub mod derive;
 pub mod drum_import;
 pub mod link;
+pub mod live_stretch;
 pub mod meter;
 pub mod offline;
 mod osc;
