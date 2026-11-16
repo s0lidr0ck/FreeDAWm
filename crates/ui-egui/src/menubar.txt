@@ -558,7 +558,7 @@ Setup > Playback Engine...
 Setup > I/O...
 Setup > ---
 Setup > ## Recording & MIDI
-Setup > Click/Countoff... = soon
+Setup > Click/Countoff... = @window.click_countoff
 Setup > MIDI Input Devices... = @window.midi_inputs [desktop]
 Setup > Network... = @window.network [desktop]
 Setup > ---

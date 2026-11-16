@@ -8,8 +8,8 @@ use soundcraft_ui_egui::{Services, SoundApp};
 use std::collections::HashMap;
 
 /// Top-level rows per menu, headings and separators not counted: the approved mockups' counts,
-/// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Click/Countoff…,
-/// Preferences…). The FreeDAWm menu (About, Session Info, Session Audio
+/// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Preferences…;
+/// Click/Countoff… has its window now). The FreeDAWm menu (About, Session Info, Session Audio
 /// Health, Quit) is drawn by hand ahead of these.
 const ROWS: [(&str, usize); 11] = [
     ("File", 14),
@@ -26,7 +26,7 @@ const ROWS: [(&str, usize); 11] = [
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
-const GREYED: [(&str, &str); 3] = [("Change Meter...", menus::SOON), ("Add Key Change...", menus::SOON), ("Click/Countoff...", menus::SOON)];
+const GREYED: [(&str, &str); 2] = [("Change Meter...", menus::SOON), ("Add Key Change...", menus::SOON)];
 
 fn rows(n: &MenuNode) -> usize {
     n.children.iter().filter(|c| !matches!(c.kind, MenuKind::Heading | MenuKind::Separator)).count()
@@ -436,7 +436,8 @@ fn live_midi_windows_are_desktop_only() {
 
 #[test]
 fn greyed_items_are_refused_by_path() {
-    assert_eq!(menus::soon_reason("Setup > Click/Countoff..."), Some(menus::SOON));
+    // Click/Countoff… has its window now.
+    assert_eq!(menus::soon_reason("Setup > Click/Countoff..."), None);
     // MIDI Input Devices… has its window now (hardware MIDI input).
     assert_eq!(menus::soon_reason("Setup > MIDI Input Devices..."), None);
     assert_eq!(menus::soon_reason("Setup > Preferences..."), None);

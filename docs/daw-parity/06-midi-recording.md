@@ -153,7 +153,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Punch in by pressing Record while playing | ● | ● | ● | ● | **Works** |
 | Punch out and keep playing | ● | ● | ● | ● | **Missing**: Record again stops the transport |
 | Pre-roll and post-roll | ● | ● | ● | ● | **Works** |
-| Count-in | ● | ● | ● | ● | **Partial**: works, but the bar count and click sound can only be set by a command; the setup window is greyed |
+| Count-in | ● | ● | ● | ● | **Works**: Setup › Click/Countoff… sets the bars and the click |
 | Notes played during the count-in are kept as a pickup | ● | ● | ● | ● | **Missing**: deliberately not taken |
 | Metronome, optionally only while recording | ● | ● | ● | ● | **Works** |
 | Capture what was just played without having pressed Record | ● | ● | ● | ● | **Flag only**: the command exists; no buffer listens |
@@ -165,7 +165,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Input quantize with strength and swing, the played timing kept | ● | ● | ● | ● | **Partial**: the engine does it and keeps the performance; no control turns it on. Notes only |
+| Input quantize with strength and swing, the played timing kept | ● | ● | ● | ● | **Works** (Event › More MIDI › Input Quantize). Notes only |
 | Input filter (leave out aftertouch, SysEx and so on) | ● | ◐ | ● | ● | **Flag only** |
 | Transpose, velocity scale or curve, fixed velocity, key range on input | ● | ● | ● | ● | **Missing**: Real-Time Properties change clip playback only |
 | Live MIDI effects before the instrument (arpeggiator, chord, scale) | ● | ● | ● | ● | **Missing** |
@@ -242,7 +242,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 13 | **Fixed.** Module MIDI recorded in a loop now prints over the loop (the print is the same each pass), from the punch point when Record was pressed inside it (`module_record::print_range`). Test: `engine/tests/midi_recording.rs` | `engine/src/module_record.rs`; `ui-egui/src/lib.rs` |
 | 14 | **Fixed** with bug 4: the first pass of a take punched in partway through a playing loop runs from the punch point to the loop's end, so what lies before it stays. Test: `midi_record::tests::a_punch_in_inside_a_playing_loop_leaves_what_came_before_it` | `engine/src/midi_record.rs` (`pass_range`) |
 | 15 | **Fixed.** Choosing Instrument in the New Tracks dialog turns Mono into Stereo (other formats are kept). Not covered by a test (dialog state inside an egui closure); checked by reading | `ui-egui/src/dialogs.rs` |
-| 16 | Menu items that run their command with no values and so change nothing: Input Quantize, MIDI Track Offsets. Step Input always enters the same eighth note | `ui-egui/src/menus.rs:949-965, 1075-1076`; `ui-egui/src/menubar.txt:435-440` |
+| 16 | **Partly fixed.** Event › More MIDI › Input Quantize opens a window (on/off, grid, strength, swing) and MIDI Track Offsets one (milliseconds per MIDI track); Setup › Click/Countoff… opens one too (level, sounds, only while recording, count-off bars) instead of being greyed out. Step Input still runs its command with defaults (step entry is its own tier-2 item) | `ui-egui/src/ops_windows.rs`; `ui-egui/src/menus.rs`; `ui-egui/src/menubar.txt` |
 | 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes` | `ui-egui/src/live_midi.rs` |
 | 18 | **Fixed.** Musical Typing's step mode enters through `event.step_input` on the selected clip's track: at the keys' velocity, the clip lengthened to hold the note, a new clip where there is none. Test: `musical_typing::tests::step_mode_uses_the_velocity_and_lengthens_the_clip` | `ui-egui/src/musical_typing.rs` |
 | 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
@@ -325,3 +325,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 19 fixed: MIDI Real-Time Properties shows the track's values, writes what moved and undoes |
 | 2026-11-16 | minor | Bug 21 fixed: MIDI export keeps clip trims and leaves muted clips out |
 | 2026-11-16 | minor | Bug 23 fixed: the web build's menus leave out the live MIDI windows |
+| 2026-11-16 | minor | Bug 16 partly fixed: Input Quantize, MIDI Track Offsets and Click/Countoff have windows |

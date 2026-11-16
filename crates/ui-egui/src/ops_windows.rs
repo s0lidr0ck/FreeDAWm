@@ -85,6 +85,153 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     time_ops(app, ctx);
     midi_ops(app, ctx);
     rtp(app, ctx);
+    input_quantize(app, ctx);
+    midi_offsets(app, ctx);
+    click_countoff(app, ctx);
+}
+
+/// Setup › Click/Countoff: the metronome's level and sounds, whether it clicks only while
+/// recording, and the count-off before a take. Shows the session's settings; each change runs
+/// `setup.click_countoff`.
+fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_click_countoff;
+    if !open {
+        return;
+    }
+    let (mut db, mut accent, mut normal, mut countoff, mut bars, mut only_rec) = {
+        let e = &app.engine.session().edit;
+        (
+            e.value("click.volume_db", -6.0),
+            e.value("click.accent_note", 84.0) as u8,
+            e.value("click.normal_note", 72.0) as u8,
+            e.countoff,
+            e.countoff_bars,
+            e.flag("click.only_during_record"),
+        )
+    };
+    egui::Window::new("Click/Countoff").open(&mut open).default_size(vec2(300.0, 180.0)).show(ctx, |ui| {
+        let mut p = serde_json::Map::new();
+        if ui.add(egui::Slider::new(&mut db, -60.0..=12.0).text("Level dB")).changed() {
+            p.insert("volume_db".into(), json!(db));
+        }
+        ui.horizontal(|ui| {
+            ui.label("Accent note");
+            if ui.add(egui::DragValue::new(&mut accent).range(0..=127)).changed() {
+                p.insert("accent_note".into(), json!(accent));
+            }
+            ui.label("Other beats");
+            if ui.add(egui::DragValue::new(&mut normal).range(0..=127)).changed() {
+                p.insert("normal_note".into(), json!(normal));
+            }
+        });
+        if crate::widgets::checkbox(ui, &mut only_rec, "Only while recording").changed() {
+            p.insert("only_during_record".into(), json!(only_rec));
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if crate::widgets::checkbox(ui, &mut countoff, "Count off").changed() {
+                p.insert("countoff".into(), json!(countoff));
+            }
+            if ui.add_enabled(countoff, egui::DragValue::new(&mut bars).range(1..=16).suffix(" bars")).changed() {
+                p.insert("countoff_bars".into(), json!(bars));
+            }
+        });
+        ui.label(egui::RichText::new("The count-off plays before a take started with Record, not before Play.").small());
+        if !p.is_empty()
+            && let Err(e) = app.run("setup.click_countoff", Value::Object(p))
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_click_countoff = open;
+}
+
+/// The input quantize grids offered, as `event.input_quantize` takes them, and their ticks.
+const INPUT_GRIDS: [(&str, i64); 6] = [("1/4", 960), ("1/8", 480), ("1/8t", 320), ("1/16", 240), ("1/16t", 160), ("1/32", 120)];
+
+/// Event › MIDI Operations › Input Quantize: whether MIDI takes are quantized as they are placed
+/// (the played performance is kept to restore), on which grid, how strongly and with what swing.
+/// Shows the session's settings; each change runs `event.input_quantize`.
+fn input_quantize(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_input_quantize;
+    if !open {
+        return;
+    }
+    let (mut on, grid, mut strength, mut swing) = {
+        let e = &app.engine.session().edit;
+        (
+            e.flag("midi.input_quantize"),
+            e.value("midi.input_quantize.grid_ticks", 240.0) as i64,
+            e.value("midi.input_quantize.strength", 100.0),
+            e.value("midi.input_quantize.swing", 0.0),
+        )
+    };
+    let mut pick = INPUT_GRIDS.iter().find(|g| g.1 == grid).map_or("1/16", |g| g.0);
+    egui::Window::new("Input Quantize").open(&mut open).default_size(vec2(300.0, 150.0)).show(ctx, |ui| {
+        let mut p = serde_json::Map::new();
+        if crate::widgets::checkbox(ui, &mut on, "Quantize MIDI takes as they are recorded").changed() {
+            p.insert("enabled".into(), json!(on));
+        }
+        ui.add_enabled_ui(on, |ui| {
+            egui::ComboBox::from_label("Grid").selected_text(pick).show_ui(ui, |ui| {
+                for (g, _) in INPUT_GRIDS {
+                    if ui.selectable_value(&mut pick, g, g).clicked() {
+                        p.insert("grid".into(), json!(g));
+                    }
+                }
+            });
+            if ui.add(egui::Slider::new(&mut strength, 0.0..=100.0).text("Strength %")).changed() {
+                p.insert("strength".into(), json!(strength));
+            }
+            if ui.add(egui::Slider::new(&mut swing, 0.0..=100.0).text("Swing %")).changed() {
+                p.insert("swing".into(), json!(swing));
+            }
+        });
+        ui.label(egui::RichText::new("Notes only; the played timing is kept (Restore Performance).").small());
+        if !p.is_empty()
+            && let Err(e) = app.run("event.input_quantize", Value::Object(p))
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_input_quantize = open;
+}
+
+/// Event › MIDI Track Offsets: each MIDI and instrument track's playback offset in milliseconds
+/// (its notes sound that much later, earlier if negative). Each change runs
+/// `event.midi_track_offsets`.
+fn midi_offsets(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_midi_offsets;
+    if !open {
+        return;
+    }
+    let rows: Vec<(u64, String, f64)> = {
+        let s = app.engine.session();
+        let ms = |samples: f64| samples * 1000.0 / s.sample_rate.as_f64();
+        s.tracks
+            .iter()
+            .filter(|t| t.kind.is_midi())
+            .map(|t| (t.id.0, t.name.clone(), ms(s.edit.value(&format!("midi.offset.{}", t.id.0), 0.0))))
+            .collect()
+    };
+    egui::Window::new("MIDI Track Offsets").open(&mut open).default_size(vec2(300.0, 200.0)).show(ctx, |ui| {
+        if rows.is_empty() {
+            ui.label("No MIDI or instrument tracks.");
+        }
+        egui::Grid::new("midi_offsets").num_columns(2).show(ui, |ui| {
+            for (id, name, ms) in rows {
+                let mut v = ms;
+                ui.label(name);
+                if ui.add(egui::DragValue::new(&mut v).range(-10_000.0..=10_000.0).speed(0.5).suffix(" ms")).changed()
+                    && let Err(e) = app.run("event.midi_track_offsets", json!({"track": id, "offset": {"seconds": v / 1000.0}}))
+                {
+                    app.ui.status = e;
+                }
+                ui.end_row();
+            }
+        });
+    });
+    app.ui.show_midi_offsets = open;
 }
 
 fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {

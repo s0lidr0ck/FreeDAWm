@@ -93,6 +93,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.time_ops", "Time Operations", "", None),
     ("window.midi_ops", "MIDI Operations", "", None),
     ("window.rtp", "MIDI Real-Time Properties", "", None),
+    ("window.input_quantize", "Input Quantize", "", None),
+    ("window.click_countoff", "Click/Countoff", "", None),
+    ("window.midi_offsets", "MIDI Track Offsets", "", None),
     ("window.playback_engine", "Playback Engine", "", None),
     ("ui.audio_device", "Audio Device", "", None),
     ("setup.record_offset", "Record Offset", "", None),
@@ -1010,6 +1013,8 @@ const MENU_WINDOWS: &[(&str, &str)] = &[
     ("Event > Time Operations > Time Operations Window", "window.time_ops"),
     ("Event > MIDI Operations > MIDI Operations Window", "window.midi_ops"),
     ("Event > MIDI Real-Time Properties", "window.rtp"),
+    ("Event > MIDI Operations > Input Quantize...", "window.input_quantize"),
+    ("Event > MIDI Track Offsets", "window.midi_offsets"),
 ];
 
 /// The shortcut a menu item shows for `id`: the user's, else the registry's (blank for none).
@@ -1321,6 +1326,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.time_ops" => toggle(&mut app.ui.show_time_ops),
         "window.midi_ops" => toggle(&mut app.ui.show_midi_ops),
         "window.rtp" => toggle(&mut app.ui.show_rtp),
+        "window.input_quantize" => toggle(&mut app.ui.show_input_quantize),
+        "window.click_countoff" => toggle(&mut app.ui.show_click_countoff),
+        "window.midi_offsets" => toggle(&mut app.ui.show_midi_offsets),
         "window.playback_engine" => toggle(&mut app.ui.show_playback_engine),
         "window.io_setup" => toggle(&mut app.ui.show_io_setup),
         "window.midi_inputs" => toggle(&mut app.ui.show_midi_inputs),

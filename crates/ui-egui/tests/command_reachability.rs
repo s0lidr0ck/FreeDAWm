@@ -52,7 +52,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("options.midi_live_mode", "stored flag nothing reads"),
     ("options.midi_thru", "stored flag nothing reads"),
     ("options.transport_online", "stored flag nothing reads"),
-    ("setup.click_countoff", "shown greyed out (coming soon): needs its own window"),
     ("setup.current_feet_frames", "needs a position and has no dialog"),
     ("setup.current_timecode", "needs a position and has no dialog"),
     ("setup.disk_allocation", "a stored setting with no window"),
