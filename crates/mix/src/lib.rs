@@ -2214,8 +2214,10 @@ impl MixEngine {
             if gain <= 0.0 {
                 continue;
             }
-            // Mono sends use the send's own pan; stereo sends go straight to L/R.
-            let stereo = if src.len() == 1 { [send_pan(t, i, snd.pan, pos), 0.0] } else { [-1.0, 1.0] };
+            // Mono sends use the send's own pan; a stereo send's pan balances it (see
+            // `stereo_send_pans`).
+            let p = send_pan(t, i, snd.pan, pos);
+            let stereo = if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) };
             let surround = snd.surround.as_ref().or(if snd.follow_main_pan { t.mixer.surround.as_ref() } else { None });
             let m = build_matrix(src_fmt, src.len(), dst.fmt, dst.buf.len(), &PanSpec { stereo, surround }, law);
             apply_matrix(src, frames, &mut dst.buf, &m, gain);
@@ -4397,6 +4399,14 @@ fn send_level(t: &Track, i: usize, base: f32, pos: Samples) -> f32 {
     base
 }
 
+/// The left and right pan positions of a stereo send whose pan knob is at `p` (−1..1): centred,
+/// the two sides go straight to left and right; turned left, the right side moves towards the
+/// left until both are hard left (and the other way round). Centred is what it always was.
+fn stereo_send_pans(p: f32) -> [f32; 2] {
+    let p = if p.is_finite() { p.clamp(-1.0, 1.0) } else { 0.0 };
+    if p < 0.0 { [-1.0, 1.0 + 2.0 * p] } else { [-1.0 + 2.0 * p, 1.0] }
+}
+
 /// A send's pan as its automation plays it (read like [`send_level`]).
 fn send_pan(t: &Track, i: usize, base: f32, pos: Samples) -> f32 {
     if t.mixer.automation_mode.reads()
@@ -6046,6 +6056,39 @@ mod tests {
         }
         let out = render_range(&s, Range::new(0, 4800), 512);
         assert!(out[0][1000] > 0.1, "aux should carry the send: {}", out[0][1000]);
+    }
+
+    /// Mix bug 2: on a stereo track the send pan did nothing, though its knob is shown.
+    #[test]
+    fn a_stereo_send_follows_its_pan() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4800], vec![0.25; 4800]] };
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "lr", SourceId(900), 0, 0, 4800));
+        let bus = s.add_bus("Verb", ChannelFormat::Stereo);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Verb"));
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        let set_pan = |s: &mut Session, pan: f32| {
+            let tr = s.track_mut(t).unwrap();
+            tr.mixer.output = Route::None;
+            let mut snd = soundcraft_model::SendSlot::new(Route::Bus(bus));
+            snd.level_db = 0.0;
+            snd.pan = pan;
+            tr.mixer.sends[0] = Some(snd);
+        };
+        set_pan(&mut s, 0.0);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][1000] - 0.5).abs() < 1e-3 && (out[1][1000] - 0.25).abs() < 1e-3, "centred: L to L, R to R");
+        set_pan(&mut s, -1.0);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!(out[1][1000].abs() < 1e-4, "hard left: nothing on the right: {}", out[1][1000]);
+        assert!((out[0][1000] - 0.75).abs() < 1e-3, "both sides on the left: {}", out[0][1000]);
+        set_pan(&mut s, 1.0);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!(out[0][1000].abs() < 1e-4 && (out[1][1000] - 0.75).abs() < 1e-3, "hard right: {:?}", (out[0][1000], out[1][1000]));
+        assert_eq!(stereo_send_pans(f32::NAN), [-1.0, 1.0]);
     }
 
     #[test]

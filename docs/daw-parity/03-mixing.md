@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 1 fixed: meters keep every peak between screen updates) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 2 fixed: a stereo send follows its pan) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -33,7 +33,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
 | B. Panning | One fixed pan law, dual pan for stereo | Medium: no law choice, no balance or width |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets | **Large**: no key input on the stock compressor or on any third-party plug-in |
-| D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only; a stereo send ignores its pan |
+| D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups | Medium: fixed group attributes, no listen bus |
 | F. Automation | All modes write; trim lane; wide editing set | **Large**: block-rate, not delay-compensated, faders do not follow, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed | **Large**: one scale; post-fader only |
@@ -93,7 +93,7 @@ scale** (meters no longer miss a peak).
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Eight or more sends, pre or post fader | ● | ● | ● | ● | **Works**: ten |
-| Send level, pan and mute, automatable | ● | ● | ● | ● | **Partial**: on a stereo track the send pan knob does nothing |
+| Send level, pan and mute, automatable | ● | ● | ● | ● | **Works**: a stereo send's pan balances it |
 | Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Partial**: busses only |
 | A new send comes with its return | ● | ● | ● | ● | **Missing**: a send to a new bus is silent until an aux is made for it |
 | Default send level setting | ● | ◐ | ● | ◐ | **Missing**: a new send starts at −∞ |
@@ -237,7 +237,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | # | Bug | Where |
 |---|---|---|
 | 1 | **Fixed:** meters and clip lights showed only the latest block. The engine and the player now keep the loudest block until the UI takes it (`StripMeter::merge_from`, `Player::copy_meters`), and a block the audio thread could not publish is folded into the next | `StripMeter::measure` in `crates/mix/src/lib.rs`; the meter copy in `crates/playback/src/lib.rs` |
-| 2 | On a stereo track the send pan does nothing, though the knob is shown | `route_strip` in `crates/mix/src/lib.rs` |
+| 2 | **Fixed:** on a stereo track the send pan did nothing; it now balances the send (turned left, the right side moves left until both are hard left) | `route_strip` in `crates/mix/src/lib.rs` |
 | 3 | Soloing a VCA mutes everything | `SoloScope::fill` in `crates/model/src/solo.rs`; the S key in `mix_window.rs` |
 | 4 | The trim automation lane plays with automation Off | fader stage of `process_strip` in `crates/mix/src/lib.rs` |
 | 5 | Mute automation switches with no ramp and can click | the same place |
@@ -296,5 +296,6 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 2 fixed: a stereo send follows its pan |
 | 2026-11-16 | minor | bug 1 fixed: meters keep every peak between screen updates |
 | 2026-11-16 | major | First version: mixing against Pro Tools, Studio Pro, Logic Pro and Cubase |
