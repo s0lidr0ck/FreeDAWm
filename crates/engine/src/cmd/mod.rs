@@ -125,7 +125,28 @@ pub struct CommandInfo {
     pub disabled_reason: Option<String>,
 }
 
+/// Commands that store a setting nothing in FreeDAWm reads yet. The menu bar leaves them out;
+/// agents and scripts still reach them, so their description says so ([`STORED_ONLY_NOTE`]).
+pub const STORED_ONLY: &[&str] = &[
+    "options.auto_spot_clips",
+    "options.calibration_mode",
+    "setup.peripherals",
+    "setup.transcription_settings",
+    "view.clip_ara_note_overlay",
+    "view.clip_scene_take",
+    "view.track_transcription_lane",
+    "view.transport_ableton_link",
+];
+
+/// Appended to the description of every [`STORED_ONLY`] command.
+pub const STORED_ONLY_NOTE: &str = " — stored only: nothing in FreeDAWm reads this setting yet";
+
 impl CommandSpec {
+    /// Whether this command only stores a setting nothing reads yet ([`STORED_ONLY`]).
+    pub fn stored_only(&self) -> bool {
+        STORED_ONLY.contains(&self.id)
+    }
+
     pub fn info(&self, e: &Engine) -> CommandInfo {
         let en = (self.enabled)(e);
         CommandInfo {
@@ -133,7 +154,7 @@ impl CommandSpec {
             label: self.label.into(),
             menu: self.menu.iter().map(|s| s.to_string()).collect(),
             shortcut: self.shortcut.map(str::to_string),
-            params: self.params.into(),
+            params: if self.stored_only() { format!("{}{STORED_ONLY_NOTE}", self.params) } else { self.params.into() },
             enabled: en.is_ok(),
             disabled_reason: en.err(),
         }
@@ -450,6 +471,17 @@ pub fn clip_ids_param(e: &Engine, p: &Value) -> Vec<ClipId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_only_commands_say_so_to_agents() {
+        let e = Engine::default();
+        for id in STORED_ONLY {
+            let c = command_specs().iter().find(|c| c.id == *id).unwrap_or_else(|| panic!("no command {id}"));
+            assert!(c.info(&e).params.ends_with(STORED_ONLY_NOTE), "{id}: {}", c.info(&e).params);
+        }
+        let other = command_specs().iter().find(|c| c.id == "transport.play").unwrap();
+        assert!(!other.info(&e).params.contains("stored only"));
+    }
 
     #[test]
     fn ids_are_unique_and_documented() {

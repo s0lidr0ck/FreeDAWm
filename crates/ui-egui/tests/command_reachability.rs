@@ -204,3 +204,14 @@ fn the_window_sync_options_are_check_items_in_window_sync() {
         assert!(commands.contains(id), "{id} is reachable from the menu bar");
     }
 }
+
+/// Commands that only store a setting nothing reads stay off the menu bar, and agents are told
+/// (their description ends with the engine's note).
+#[test]
+fn stored_only_commands_stay_off_the_menus() {
+    let shown = menu_commands();
+    for id in soundcraft_engine::cmd::STORED_ONLY {
+        assert!(OFF_THE_MENUS.iter().any(|(off, _)| off == id), "{id} is stored only but not listed as off the menus");
+        assert!(!shown.contains(*id), "{id} only stores a setting, yet the menu bar shows it");
+    }
+}
