@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (the loop changes while playing) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -99,7 +99,7 @@ Varispeed is the only whole-project speed control among the four.
 | ASIO on Windows | ● | ● | n/a | ● | **Partial**: only in a personal build (`cargo xtask build-asio`) |
 | Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected |
 | Recover when the device disappears | ● | ● | ● | ● | **Partial**: detected and reported; reconnect is a manual button |
-| Session rate differs from the device rate | n/a | ● | ● | n/a | **Partial**: plays, but through a two-point linear resampler with no filter |
+| Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
 | Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel; aux, folder and master strips are serial; worker threads have no realtime priority |
 | Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
 | Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer |
@@ -206,7 +206,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
 | Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | The player's speed path can carry it once it has a better resampler |
-| A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | The offline sinc exists; this needs a realtime form |
+| A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** for the device-rate and speed path (2026-11-16): `playback/src/resample.rs`, 16 frames of added delay off the direct path; stretched clips still read with linear interpolation in the mixer |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | Builds on `Player::preview` |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
 | Typing a position into the counter; pause | 2–4 | |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: a band-limited resampler for other device rates and speeds |
 | 2026-11-16 | minor | the loop changes while playing |
 | 2026-11-16 | minor | declick: transport ramps, loop-edge ramps and automatic edge fades |
 | 2026-11-16 | minor | bug 11 fixed: a missing chosen device is told to the user |

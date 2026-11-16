@@ -36,6 +36,7 @@ pub mod midi_in;
 mod outmap;
 pub mod pw;
 pub mod record;
+mod resample;
 pub mod stream;
 
 pub use devices::AudioConfig;
@@ -475,9 +476,11 @@ struct AudioState {
     max_block: usize,
     /// The last fill took the direct path (see [`AudioState::fill`]).
     direct: bool,
-    /// The last frame of the block before `pending`, per channel: the resampler interpolates
-    /// from it into the block (`read` in -1..0).
-    carry: [f32; MAX_DEVICE_CHANNELS],
+    /// The frames of the blocks before `pending`, per channel: the resampler's kernel reaches
+    /// back into them (`resample`).
+    hist: Box<resample::History>,
+    /// The resampler's kernel, tabulated for the step in use.
+    kernel: Box<resample::Kernel>,
     /// Live input, popped into `mix.input` once per mix block.
     feed: Option<Arc<feed::InputFeed>>,
     /// Input frames popped during the current callback.
@@ -623,7 +626,8 @@ impl AudioState {
             device_rate,
             max_block,
             direct: false,
-            carry: [0.0; MAX_DEVICE_CHANNELS],
+            hist: Box::default(),
+            kernel: Box::default(),
             feed: None,
             popped: 0,
             shut: false,
@@ -1577,18 +1581,15 @@ impl AudioState {
     /// `step` per device frame.
     fn fill_resampled(&mut self, out: &mut [f32], channels: usize, monitoring: bool, capturing: bool, step: f64, quantum: usize) {
         for frame in out.chunks_mut(channels) {
-            // The next block is needed as soon as the read falls between this block's last frame
-            // and the next block's first: that last frame is carried over to interpolate from.
+            // The next block is needed as soon as the read passes this block's last frame; the
+            // kernel reads `resample::HALF` frames behind, back into the history.
             while self.read > self.pending_len as f64 - 1.0 {
-                if let Some(last) = self.pending_len.checked_sub(1) {
-                    for (k, ch) in self.carry.iter_mut().zip(&self.pending) {
-                        *k = ch.get(last).copied().unwrap_or(0.0);
-                    }
-                }
+                self.hist.push(&self.pending, self.pending_len);
                 self.read -= self.pending_len as f64;
                 if !self.playing && !monitoring && !capturing {
                     // Nothing more to hear: start afresh next time.
                     (self.read, self.pending_len) = (0.0, 0);
+                    self.hist.clear();
                     break;
                 }
                 self.render_next(quantum);
@@ -1596,26 +1597,10 @@ impl AudioState {
                     break;
                 }
             }
-            // A read in -1..0 falls between the carried frame and the block's first.
-            let (i0, fr) = if self.read < 0.0 {
-                (None, (self.read + 1.0).clamp(0.0, 1.0) as f32)
-            } else {
-                let i = self.read.floor();
-                (Some(i as usize), (self.read - i) as f32)
-            };
             let sounding = self.playing || monitoring;
-            let (pending, carry, len) = (&self.pending, &self.carry, self.pending_len);
-            let sample = |c: usize| {
-                let ch = pending.get(c);
-                let (a, b) = match i0 {
-                    Some(i) => (ch.and_then(|v| v.get(i)).copied(), ch.and_then(|v| v.get(i + 1)).filter(|_| i + 1 < len).copied()),
-                    None => (carry.get(c).copied(), ch.and_then(|v| v.first()).copied()),
-                };
-                let a = a.unwrap_or(0.0);
-                let b = b.unwrap_or(a);
-                a + (b - a) * fr
-            };
-            write_frame(frame, sounding, sample);
+            let (first, w) = self.kernel.at(self.read, step);
+            let (pending, hist, len) = (&self.pending, &*self.hist, self.pending_len);
+            write_frame(frame, sounding, |c| resample::sample(pending, len, hist, c, first, &w));
             self.read += step;
         }
     }
@@ -4976,10 +4961,14 @@ mod tests {
         let got = callbacks(&mut st, &[50]);
         assert!(!shared.direct.load(Ordering::Relaxed));
         assert_eq!(shared.position.load(Ordering::Relaxed), 200);
-        let want = offline(&s, 0..200);
+        // Read at ×2 from frame 100 through the band-limited kernel (which lags `HALF` frames
+        // and reaches back into what the direct path played).
+        let want = offline(&s, 0..300);
         for c in 0..2 {
-            let every_other: Vec<f32> = (0..50).map(|i| want[c][100 + 2 * i]).collect();
-            assert_bits(&got[c], &every_other, "at ×2 from frame 100");
+            let every_other = resample::reference(&want[c], 100.0, 2.0, 50);
+            for (k, (g, w)) in got[c].iter().zip(&every_other).enumerate() {
+                assert!((g - w).abs() < 1e-5, "at ×2 from frame 100, sample {k}: {g} vs {w}");
+            }
         }
     }
 
@@ -5257,7 +5246,8 @@ mod tests {
     #[test]
     fn the_resampler_interpolates_into_the_next_block() {
         // At ×1.25 a 10-frame callback renders 13 frames and reads 0..11.25; the next starts at
-        // 12.5, between that block's last frame and the next block's first.
+        // 12.5, between that block's last frame and the next block's first. Block by block the
+        // band-limited kernel reads what it reads from the whole render at once.
         let s = clip_session(4800, &[]);
         let (st, shared, _tx) = playing(&s, 48_000.0, 256);
         let mut st = exact(st);
@@ -5265,13 +5255,9 @@ mod tests {
         let got = callbacks(&mut st, &[10; 40]);
         let want = offline(&s, 0..600);
         for c in 0..2 {
-            for (k, g) in got[c].iter().enumerate() {
-                let at = k as f64 * 1.25;
-                let i = at.floor() as usize;
-                let fr = (at - i as f64) as f32;
-                let (a, b) = (want[c][i], want[c][i + 1]);
-                let w = a + (b - a) * fr;
-                assert!((g - w).abs() < 1e-6, "channel {c}, frame {k} (read {at}): {g} vs {w}");
+            let w = resample::reference(&want[c], 0.0, 1.25, got[c].len());
+            for (k, (g, w)) in got[c].iter().zip(&w).enumerate() {
+                assert!((g - w).abs() < 1e-5, "channel {c}, frame {k}: {g} vs {w}");
             }
         }
     }
