@@ -131,6 +131,23 @@ pub fn transpose(notes: &mut [Note], semitones: i32) {
     }
 }
 
+/// The part of a `semitones` shift the notes can all take and stay in 0..=127: so a chord moved
+/// past the top or bottom keeps its shape rather than piling onto one pitch.
+pub fn fitting_shift(notes: &[Note], semitones: i64) -> i64 {
+    let (Some(lo), Some(hi)) = (notes.iter().map(|n| i64::from(n.pitch)).min(), notes.iter().map(|n| i64::from(n.pitch)).max()) else {
+        return 0;
+    };
+    semitones.clamp(-lo, 127 - hi)
+}
+
+/// [`transpose`] by as much of `semitones` as every note can take ([`fitting_shift`]): notes
+/// keep their intervals. Returns the shift made.
+pub fn transpose_within(notes: &mut [Note], semitones: i32) -> i32 {
+    let s = fitting_shift(notes, i64::from(semitones)) as i32;
+    transpose(notes, s);
+    s
+}
+
 /// Velocity change for [`change_velocity`]. Results are clamped to 1..=127.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VelocityOp {

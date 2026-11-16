@@ -106,6 +106,17 @@ fn transpose_clamps() {
     assert!(notes.iter().all(|n| n.pitch == 127));
 }
 
+/// Bug 6: a chord moved past the top keeps its intervals.
+#[test]
+fn transpose_within_keeps_the_shape() {
+    let mut notes = vec![n(100, 0, 1), n(104, 0, 1), n(120, 0, 1)];
+    assert_eq!(transpose_within(&mut notes, 24), 7);
+    assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![107, 111, 127]);
+    assert_eq!(transpose_within(&mut notes, i32::MIN), -107);
+    assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![0, 4, 20]);
+    assert_eq!(fitting_shift(&[], 5), 0);
+}
+
 #[test]
 fn velocity_ops() {
     let base = vec![n(60, 0, 1), n(60, 100, 1), n(60, 200, 1)];

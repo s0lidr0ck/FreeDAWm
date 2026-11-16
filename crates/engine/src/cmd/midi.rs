@@ -148,7 +148,9 @@ fn note_add(e: &mut Engine, p: &Value) -> Result<Value> {
     seq.notes.push(n);
     seq.sort();
     let index = seq.notes.iter().position(|x| *x == n).unwrap_or(0);
-    Ok(json!({"index": index, "notes": seq.notes.len()}))
+    let count = seq.notes.len();
+    grow_to_fit(e, id, &[index]);
+    Ok(json!({"index": index, "notes": count}))
 }
 
 fn note_edit(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -170,7 +172,11 @@ fn note_edit(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let edited = *n;
     seq.sort();
-    Ok(json!({"note": edited, "index": seq.notes.iter().position(|x| *x == edited)}))
+    let index = seq.notes.iter().position(|x| *x == edited);
+    if let Some(i) = index {
+        grow_to_fit(e, id, &[i]);
+    }
+    Ok(json!({"note": edited, "index": index}))
 }
 
 fn indices(p: &Value) -> Vec<usize> {
@@ -194,9 +200,8 @@ fn note_delete(e: &mut Engine, p: &Value) -> Result<Value> {
 fn notes_move(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = clip_id(p, "midi.notes_move")?;
     let idx = indices(p);
-    let dt = i64_or(p, "ticks", 0);
-    let ds = i64_or(p, "semitones", 0);
     let seq = seq_mut(e, id, "midi.notes_move")?;
+    let (dt, ds) = fitting_move(seq, &idx, i64_or(p, "ticks", 0), i64_or(p, "semitones", 0));
     for (i, n) in seq.notes.iter_mut().enumerate() {
         if idx.contains(&i) {
             n.start = n.start.saturating_add(dt).max(0);
@@ -204,7 +209,18 @@ fn notes_move(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     let kept = sort_tracked(seq, &idx);
+    grow_to_fit(e, id, &kept);
     Ok(json!({"moved": kept.len(), "indices": kept}))
+}
+
+/// How far the notes at `idx` can move and keep their shape: not left of the clip's start (the
+/// earliest stops there) nor past either end of the keyboard (the chord keeps its intervals),
+/// rather than piling onto the start or onto one pitch.
+fn fitting_move(seq: &Sequence, idx: &[usize], ticks: i64, semitones: i64) -> (i64, i64) {
+    let picked: Vec<Note> = idx.iter().filter_map(|i| seq.notes.get(*i).copied()).collect();
+    let first = picked.iter().map(|n| n.start).min().unwrap_or(0);
+    let dt = if first >= 0 { ticks.max(-first) } else { ticks };
+    (dt, soundcraft_midi::ops::fitting_shift(&picked, semitones))
 }
 
 /// Sorts `seq`'s notes; returns where the notes at `marked` (old indices) ended up.
@@ -214,6 +230,58 @@ fn sort_tracked(seq: &mut Sequence, marked: &[usize]) -> Vec<usize> {
     let kept = work.iter().enumerate().filter(|(_, (_, f))| *f).map(|(i, _)| i).collect();
     seq.notes = work.into_iter().map(|(n, _)| n).collect();
     kept
+}
+
+/// Notes an edit put past the clip's end would be kept unseen and unheard: the clip grows to the
+/// bar line after the last of the notes at `idx` (positions after the edit), but not over the next
+/// clip on its playlist nor while edit-locked. Returns whether it grew.
+pub(crate) fn grow_to_fit(e: &mut Engine, id: ClipId, idx: &[usize]) -> bool {
+    let s = e.session_mut();
+    let sr = s.sample_rate;
+    let Some(track) = s.find_clip(id).map(|(t, _)| t) else { return false };
+    let Some(tr) = s.track(track) else { return false };
+    let Some(clip) = tr.playlists.iter().flat_map(|p| p.clips.iter()).find(|c| c.id == id) else { return false };
+    let ClipContent::Midi { sequence } = &clip.content else { return false };
+    if clip.edit_locked {
+        return false;
+    }
+    let Some(last) = idx.iter().filter_map(|i| sequence.notes.get(*i)).map(Note::end).max().filter(|t| *t < i64::MAX / 4) else {
+        return false;
+    };
+    let base = s.tempo.samples_to_ticks(clip.start, sr);
+    let end_tick = base.saturating_add(last);
+    // Only notes that run past the end grow the clip: one ending inside a clip that stops short of
+    // a bar line leaves it as it is.
+    if s.tempo.tick_to_samples(end_tick, sr) <= clip.end() {
+        return false;
+    }
+    let bar = s.tempo.bar_beat_at_tick(end_tick.saturating_sub(1)).bar;
+    let to_tick = s.tempo.bar_start_tick(bar.saturating_add(1)).max(end_tick);
+    let mut to = s.tempo.tick_to_samples(to_tick, sr);
+    if to <= clip.end() {
+        return false;
+    }
+    // Not over the next clip of the playlist it is on.
+    let next = tr
+        .playlists
+        .iter()
+        .find(|p| p.clips.iter().any(|c| c.id == id))
+        .and_then(|p| p.clips.iter().filter(|c| c.id != id && c.start >= clip.end()).map(|c| c.start).min());
+    if let Some(n) = next {
+        to = to.min(n);
+    }
+    // Nor past a day long: a note sent absurdly far stays hidden rather than make a vast clip.
+    to = to.min(clip.start.saturating_add(i64::from(sr.hz()).saturating_mul(86_400)));
+    if to <= clip.end() {
+        return false;
+    }
+    match s.find_clip_mut(id) {
+        Some(c) => {
+            c.trim_end_to(to);
+            true
+        }
+        None => false,
+    }
 }
 
 /// `indices` (each once, in range), or every note when the parameter is missing.
@@ -255,6 +323,7 @@ fn notes_resize(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     let kept = sort_tracked(seq, &idx);
+    grow_to_fit(e, id, &kept);
     Ok(json!({"indices": kept}))
 }
 
@@ -287,16 +356,16 @@ fn notes_add(e: &mut Engine, p: &Value) -> Result<Value> {
     seq.notes.extend(add);
     let marked: Vec<usize> = (first..seq.notes.len()).collect();
     let kept = sort_tracked(seq, &marked);
+    grow_to_fit(e, id, &kept);
     Ok(json!({"indices": kept}))
 }
 
 fn notes_copy(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "midi.notes_copy";
     let id = clip_id(p, C)?;
-    let dt = i64_or(p, "ticks", 0);
-    let ds = i64_or(p, "semitones", 0);
     let seq = seq_mut(e, id, C)?;
     let idx = picked(p, seq.notes.len());
+    let (dt, ds) = fitting_move(seq, &idx, i64_or(p, "ticks", 0), i64_or(p, "semitones", 0));
     let copies: Vec<Note> = idx
         .iter()
         .filter_map(|i| seq.notes.get(*i))
@@ -306,6 +375,7 @@ fn notes_copy(e: &mut Engine, p: &Value) -> Result<Value> {
     seq.notes.extend(copies);
     let marked: Vec<usize> = (first..seq.notes.len()).collect();
     let kept = sort_tracked(seq, &marked);
+    grow_to_fit(e, id, &kept);
     Ok(json!({"indices": kept}))
 }
 
@@ -396,6 +466,7 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     let kept = sort_tracked(seq, &idx);
+    grow_to_fit(e, id, &kept);
     Ok(json!({"indices": kept}))
 }
 
@@ -565,6 +636,85 @@ mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, TrackKind};
 
+    fn starts_pitches(e: &mut Engine, clip: u64) -> Vec<(i64, u64)> {
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        n["notes"].as_array().unwrap().iter().map(|x| (x["start"].as_i64().unwrap(), x["pitch"].as_u64().unwrap())).collect()
+    }
+
+    /// Bug 5: trimming a clip's start hides the notes and controllers before it rather than
+    /// deleting them; dragging the start back returns them. 120 bpm at 48 kHz: a bar is 96 000
+    /// samples and 3 840 ticks.
+    #[test]
+    fn trimming_the_start_hides_notes_and_dragging_back_returns_them() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 0, "length_ticks": 7_000})).unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 62, "start_ticks": 3_840})).unwrap();
+        e.execute("midi.ctrl_add", &json!({"clip": clip, "lane": "cc64", "tick": 0, "value": 127})).unwrap();
+        e.execute("edit.trim_clip", &json!({"clip": clip, "start": 96_000})).unwrap();
+        assert_eq!(starts_pitches(&mut e, clip), vec![(-3_840, 60), (0, 62)]);
+        let ctrls = e.execute("midi.ctrls", &json!({"clip": clip, "lane": "cc64"})).unwrap();
+        assert_eq!(ctrls["events"][0]["tick"], -3_840, "{ctrls}");
+        e.execute("edit.trim_clip", &json!({"clip": clip, "start": 0})).unwrap();
+        assert_eq!(starts_pitches(&mut e, clip), vec![(0, 60), (3_840, 62)]);
+        let ctrls = e.execute("midi.ctrls", &json!({"clip": clip, "lane": "cc64"})).unwrap();
+        assert_eq!(ctrls["events"][0]["tick"], 0, "{ctrls}");
+    }
+
+    /// Bug 11: the right half of a split starts in the controller state from before the cut.
+    /// Bug 12: each half's Restore Performance puts the notes back where they belong.
+    #[test]
+    fn split_halves_keep_the_controller_state_and_their_original_performance() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 0})).unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 62, "start_ticks": 4_000})).unwrap();
+        e.execute("midi.ctrl_add", &json!({"clip": clip, "lane": "cc64", "tick": 100, "value": 127})).unwrap();
+        e.execute("midi.ctrl_add", &json!({"clip": clip, "lane": "cc64", "tick": 200, "value": 90})).unwrap();
+        e.execute("event.flatten_performance", &json!({"clips": [clip]})).unwrap();
+        e.execute("edit.separate", &json!({"tracks": [t.0], "at": 96_000})).unwrap();
+        let right = e.session().track(t).unwrap().clips()[1].id.0;
+        let ctrls = e.execute("midi.ctrls", &json!({"clip": right, "lane": "cc64"})).unwrap();
+        assert_eq!(ctrls["events"].as_array().unwrap().len(), 1, "{ctrls}");
+        assert_eq!(ctrls["events"][0]["tick"], 200 - 3_840);
+        assert_eq!(ctrls["events"][0]["value"], 90);
+        // Restore Performance on the right half: its note stays at 160 ticks in, not at 4 000.
+        e.execute("midi.notes_move", &json!({"clip": right, "indices": [0], "ticks": 500})).unwrap();
+        e.execute("event.restore_performance", &json!({"clips": [right]})).unwrap();
+        let visible: Vec<(i64, u64)> = starts_pitches(&mut e, right).into_iter().filter(|x| x.0 >= 0).collect();
+        assert_eq!(visible, vec![(160, 62)]);
+        // And after a start trim of the left half.
+        e.execute("edit.trim_clip", &json!({"clip": clip, "start": 2_500})).unwrap();
+        e.execute("event.restore_performance", &json!({"clips": [clip]})).unwrap();
+        assert_eq!(starts_pitches(&mut e, clip).first(), Some(&(-100, 60)));
+    }
+
+    /// Bug 4: notes moved, copied or added past the clip's end grow it to the next bar line, but
+    /// not over the next clip.
+    #[test]
+    fn notes_put_past_the_end_grow_the_clip_up_to_the_next_clip() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 0})).unwrap();
+        let len = |e: &Engine| e.session().find_clip(ClipId(clip)).unwrap().1.length;
+        assert_eq!(len(&e), 96_000);
+        e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "ticks": 4_800})).unwrap();
+        assert_eq!(len(&e), 192_000, "to the end of bar 2");
+        e.execute("midi.new_clip", &json!({"track": t.0, "start": 240_000, "end": 288_000})).unwrap();
+        e.execute("midi.notes_copy", &json!({"clip": clip, "indices": [0], "ticks": 7_680})).unwrap();
+        assert_eq!(len(&e), 240_000, "up to the next clip");
+        // A far move stays hidden rather than make a vast clip; nothing overflows.
+        e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "ticks": i64::MAX})).unwrap();
+        assert_eq!(len(&e), 240_000);
+        // A note ending inside a clip that stops short of a bar line leaves it as it is.
+        let short = e.execute("midi.new_clip", &json!({"track": t.0, "start": 288_000, "end": 336_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": short, "pitch": 60, "start_ticks": 1_800, "length_ticks": 120})).unwrap();
+        assert_eq!(e.session().find_clip(ClipId(short)).unwrap().1.length, 48_000);
+    }
+
     #[test]
     fn create_clip_add_edit_move_delete() {
         let mut e = Engine::default();
@@ -596,6 +746,27 @@ mod tests {
         e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "semitones": i64::MAX})).unwrap();
         let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
         assert_eq!(n["notes"][0]["pitch"], 127);
+    }
+
+    /// Bug 6: notes dragged left past the clip's start, or transposed past the keyboard's end,
+    /// stop as a group: they keep their spacing and their chord.
+    #[test]
+    fn moves_past_the_start_or_the_keyboard_keep_the_shape() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0})).unwrap()["clip"].as_u64().unwrap();
+        for (pitch, start) in [(120, 240), (124, 480), (127, 960)] {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": start})).unwrap();
+        }
+        e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0, 1, 2], "ticks": -1_000})).unwrap();
+        assert_eq!(psl(&mut e, clip).iter().map(|x| x.1).collect::<Vec<_>>(), vec![0, 240, 720]);
+        e.execute("midi.notes_copy", &json!({"clip": clip, "indices": [0, 1, 2], "semitones": -200, "ticks": 1_920})).unwrap();
+        let copies: Vec<u64> = psl(&mut e, clip).iter().filter(|x| x.1 >= 1_920).map(|x| x.0).collect();
+        assert_eq!(copies, vec![0, 4, 7]);
+        e.execute("event.transpose", &json!({"clips": [clip], "semitones": 12})).unwrap();
+        let mut pitches: Vec<u64> = psl(&mut e, clip).iter().map(|x| x.0).collect();
+        pitches.sort_unstable();
+        assert_eq!(pitches, vec![0, 4, 7, 120, 124, 127], "the top note is at 127 already: no room");
     }
 
     fn psl(e: &mut Engine, clip: u64) -> Vec<(u64, i64, i64)> {

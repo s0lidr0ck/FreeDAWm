@@ -654,7 +654,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 }
             }
         }
-        if let Some(end) = edits.and_then(|e| midi_cleanup_panel::edit_of(e, i)).and_then(|e| e.new_end).filter(|end| *end < st + ln) {
+        if let Some(end) = edits.and_then(|e| midi_cleanup_panel::edit_of(e, i)).and_then(|e| e.new_end).filter(|end| *end < st.saturating_add(ln)) {
             ln = (end - st).max(0);
         }
         let selected = app.midi.selected.contains(&i);
@@ -694,7 +694,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         sequence.notes.iter().enumerate().rev().find_map(|(i, n)| {
             let r = Rect::from_min_max(
                 pos2(x_of(n.start), y_of(i32::from(n.pitch))),
-                pos2(x_of(n.start + n.length).max(x_of(n.start) + 3.0), y_of(i32::from(n.pitch)) + row_h),
+                pos2(x_of(n.end()).max(x_of(n.start) + 3.0), y_of(i32::from(n.pitch)) + row_h),
             );
             r.contains(pos).then(|| (i, edge_at(pos.x - r.min.x, r.width())))
         })
@@ -776,10 +776,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 .iter()
                 .enumerate()
                 .filter(|(_, n)| {
-                    let r = Rect::from_min_max(
-                        pos2(x_of(n.start), y_of(i32::from(n.pitch))),
-                        pos2(x_of(n.start + n.length), y_of(i32::from(n.pitch)) + row_h),
-                    );
+                    let r = Rect::from_min_max(pos2(x_of(n.start), y_of(i32::from(n.pitch))), pos2(x_of(n.end()), y_of(i32::from(n.pitch)) + row_h));
                     r.intersects(band)
                 })
                 .map(|(i, _)| i)
@@ -920,7 +917,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             )
         });
         if all {
-            app.midi.selected = (0..sequence.notes.len()).collect();
+            app.midi.selected = sequence.notes.iter().enumerate().filter(|(_, n)| n.start >= 0).map(|(i, _)| i).collect();
         }
         let semi = if up {
             1

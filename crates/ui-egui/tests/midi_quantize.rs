@@ -36,3 +36,26 @@ fn quantize_follows_a_quarter_note_grid() {
 fn quantize_follows_a_sixteenth_note_grid() {
     assert_eq!(quantize_on("1/16"), 240);
 }
+
+/// Bug 31: a note moved to the largest start (a script can do it) draws in the editor and on the
+/// timeline without an overflow.
+#[test]
+fn a_note_at_the_largest_start_does_not_overflow_the_editor() {
+    let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
+    app.run("track.new", json!({"name": "Far", "kind": "midi"})).unwrap();
+    let clip = app.run("midi.new_clip", json!({"track": "Far", "start": 0, "end": 96_000})).unwrap()["clip"].clone();
+    app.run("midi.note_add", json!({"clip": clip, "pitch": 60, "start_ticks": 0, "length_ticks": 480})).unwrap();
+    app.run("midi.notes_move", json!({"clip": clip, "indices": [0], "ticks": i64::MAX})).unwrap();
+    app.run("edit.select", json!({"clips": [clip]})).unwrap();
+    app.ui.show_midi_editor = true;
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(5);
+    h.event(egui::Event::PointerMoved(egui::pos2(800.0, 700.0)));
+    h.run_steps(2);
+}

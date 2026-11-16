@@ -2306,9 +2306,9 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
             let span = f32::from(hi.saturating_sub(lo).max(1));
             let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
             let p = painter.with_clip_rect(vis);
-            for n in &sequence.notes {
-                let a = s.tempo.tick_to_samples(base + n.start, s.sample_rate);
-                let b = s.tempo.tick_to_samples(base + n.start + n.length, s.sample_rate).min(clip.end());
+            for n in sequence.notes.iter().filter(|n| n.start >= 0) {
+                let a = s.tempo.tick_to_samples(base.saturating_add(n.start), s.sample_rate);
+                let b = s.tempo.tick_to_samples(base.saturating_add(n.end()), s.sample_rate).min(clip.end());
                 let nx0 = x_of(s, tl, a);
                 let nx1 = x_of(s, tl, b).max(nx0 + 2.0);
                 if nx1 < vis.min.x || nx0 > vis.max.x {

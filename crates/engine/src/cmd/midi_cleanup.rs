@@ -237,6 +237,21 @@ mod tests {
         assert_eq!(notes(&e, id).len(), 4, "the take is untouched");
     }
 
+    /// Bug 13: Consolidate merges a clip on Cleaned as it sounds: its cleaned notes.
+    #[test]
+    fn consolidate_keeps_what_a_cleaned_clip_plays() {
+        let (mut e, id) = setup();
+        e.execute("midi.cleanup", &json!({"clip": id.0})).unwrap();
+        let heard = clip(&e, id).midi_playing().unwrap().notes.clone();
+        let t = e.session().find_clip(id).unwrap().0;
+        let end = clip(&e, id).end();
+        e.execute("edit.consolidate", &json!({"tracks": [t.0], "start": 0, "end": end})).unwrap();
+        let merged = e.session().track(t).unwrap().clips()[0].clone();
+        assert!(merged.midi_cleanup.is_none());
+        let ClipContent::Midi { sequence } = &merged.content else { panic!("a MIDI clip") };
+        assert_eq!(sequence.notes, heard);
+    }
+
     /// A clip in E major (no chords) with E4, C4, G#4, F4, B4 and D4: C, F and D are out of key.
     fn e_major_setup() -> (Engine, ClipId) {
         let mut e = Engine::default();

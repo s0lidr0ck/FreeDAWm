@@ -108,7 +108,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 guard += 1;
             }
             // Notes.
-            for n in &sequence.notes {
+            for n in sequence.notes.iter().filter(|n| n.start >= 0 && n.start < len_ticks) {
                 let x = left + n.start as f32 * px_per_tick;
                 let (step, sharp) = diatonic(n.pitch);
                 let y = y_of(step);

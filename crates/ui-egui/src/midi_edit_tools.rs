@@ -609,7 +609,9 @@ pub fn space(app: &mut SoundApp, cid: ClipId) {
 
 /// Select all: every note of the clip (ghosts never).
 pub fn select_all(app: &mut SoundApp, cid: ClipId) {
-    app.midi.selected = (0..clip_notes(app.engine.session(), cid).len()).collect();
+    let s = app.engine.session();
+    // The notes in the clip's window: not those a start trim hid before it.
+    app.midi.selected = clip_notes(s, cid).iter().enumerate().filter(|(_, n)| n.start >= 0).map(|(i, _)| i).collect();
 }
 
 /// Split: the selected notes at `at` (ticks from the clip start), else at the playhead.

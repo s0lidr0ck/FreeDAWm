@@ -49,32 +49,86 @@ pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> O
         ls.notes.retain(|n| n.start < boundary);
         ls.ctrls.retain(|c| c.tick < boundary);
         rs.notes.retain(|n| n.start >= boundary);
-        rs.ctrls.retain(|c| c.tick >= boundary);
-        for n in &mut rs.notes {
-            n.start -= boundary;
-        }
-        for c in &mut rs.ctrls {
-            c.tick -= boundary;
-        }
+        // The right part keeps the controller state from before the cut (the program, the pedal,
+        // the bend in force there): the last value of each, hidden before its start, which sets
+        // the state it starts in.
+        let before = last_values_before(&rs.ctrls, boundary);
+        rs.ctrls.retain(|c| c.tick >= boundary || before.contains(c));
+        shift_sequence(rs, boundary);
     }
     Some((left, right))
 }
 
-/// Trim a MIDI clip's start: drop notes before the new start and re-anchor the rest.
-fn rebase_midi_start(clip: &mut Clip, old_start: Samples, t: TimeCtx<'_>) {
+/// The last event of each controller (per channel and kind) before `tick`, in time order.
+fn last_values_before(ctrls: &[soundcraft_midi::CtrlEvent], tick: i64) -> Vec<soundcraft_midi::CtrlEvent> {
+    let mut out: Vec<soundcraft_midi::CtrlEvent> = Vec::new();
+    for c in ctrls.iter().rev().filter(|c| c.tick < tick) {
+        if !out.iter().any(|o| o.channel == c.channel && o.kind == c.kind) {
+            out.push(*c);
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// Every note and controller `delta` ticks earlier.
+fn shift_sequence(seq: &mut soundcraft_midi::Sequence, delta: i64) {
+    for n in &mut seq.notes {
+        n.start = n.start.saturating_sub(delta);
+    }
+    for c in &mut seq.ctrls {
+        c.tick = c.tick.saturating_sub(delta);
+    }
+}
+
+/// Trim a MIDI clip's start: re-anchor the notes and controllers to the new start. Nothing is
+/// dropped: what falls before it gets a negative tick, is hidden and does not play (the
+/// controllers there still set the state the clip starts in), and comes back when the start is
+/// dragged out again. Returns the shift in ticks (0 for other clips), which the clip's stored
+/// original performance takes too ([`shift_originals`]).
+fn rebase_midi_start(clip: &mut Clip, old_start: Samples, t: TimeCtx<'_>) -> i64 {
     let delta = t.ticks(clip.start) - t.ticks(old_start);
     if let ClipContent::Midi { sequence } = &mut clip.content {
-        if delta == 0 {
-            return;
+        if delta != 0 {
+            shift_sequence(sequence, delta);
         }
-        sequence.notes.retain(|n| n.start >= delta);
-        sequence.ctrls.retain(|c| c.tick >= delta);
-        for n in &mut sequence.notes {
-            n.start -= delta;
+        return delta;
+    }
+    0
+}
+
+/// Keeps Restore Performance in step with start trims: each clip's stored original (Flatten
+/// Performance, a recorded take) moves with its notes. `shifts` are (clip, ticks) as
+/// [`rebase_midi_start`] returned them.
+fn shift_originals(s: &mut Session, shifts: &[(ClipId, i64)]) {
+    for (id, delta) in shifts.iter().filter(|(_, d)| *d != 0) {
+        if let Some(orig) = s.midi_originals.get_mut(&id.0) {
+            shift_sequence(orig, *delta);
         }
-        for c in &mut sequence.ctrls {
-            c.tick -= delta;
+    }
+}
+
+/// A copied piece of a MIDI clip keeps only what can sound in it: the notes that reach into it
+/// and, from before its start, the last value of each controller (the state it starts in).
+fn crop_hidden_midi(clip: &mut Clip, t: TimeCtx<'_>) {
+    let len = t.ticks(clip.end()) - t.ticks(clip.start);
+    if let ClipContent::Midi { sequence } = &mut clip.content {
+        sequence.notes.retain(|n| n.end() > 0 && n.start < len);
+        let mut seen: Vec<(u8, soundcraft_midi::CtrlKind)> = Vec::new();
+        let mut keep: Vec<bool> = vec![true; sequence.ctrls.len()];
+        for (i, c) in sequence.ctrls.iter().enumerate().rev() {
+            let earlier = c.tick < 0 && seen.contains(&(c.channel, c.kind));
+            if c.tick < 0 && !earlier {
+                seen.push((c.channel, c.kind));
+            }
+            if (c.tick >= len || earlier)
+                && let Some(k) = keep.get_mut(i)
+            {
+                *k = false;
+            }
         }
+        let mut k = keep.into_iter();
+        sequence.ctrls.retain(|_| k.next().unwrap_or(true));
     }
 }
 
@@ -91,12 +145,16 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut out = Vec::with_capacity(pl.clips.len() + ids.len());
     let mut count = 0;
+    let mut halves = Vec::new();
     for c in pl.clips.drain(..) {
         if at > c.start
             && at < c.end()
             && let Some(id) = ids.pop()
             && let Some((l, r)) = split_clip(&c, at, id, t)
         {
+            if matches!(c.content, ClipContent::Midi { .. }) {
+                halves.push((c.id, r.id, t.ticks(at) - t.ticks(c.start)));
+            }
             out.push(l);
             out.push(r);
             count += 1;
@@ -106,6 +164,13 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     }
     pl.clips = out;
     pl.sort();
+    // Each half keeps the stored original performance, in its own time, for Restore Performance.
+    for (left, right, boundary) in halves {
+        if let Some(mut orig) = s.midi_originals.get(&left.0).cloned() {
+            shift_sequence(&mut orig, boundary);
+            s.midi_originals.insert(right.0, orig);
+        }
+    }
     count
 }
 
@@ -157,12 +222,22 @@ pub fn remove_clips(s: &mut Session, track: TrackId, ids: &[ClipId], shuffle: bo
 
 /// Copy the material inside `range` (clips trimmed to the range), relative to `range.start`.
 pub fn copy_range(s: &Session, track: TrackId, range: Range) -> Vec<Clip> {
+    copy_range_with(s, track, range, false)
+}
+
+/// [`copy_range`]; with `as_heard`, a MIDI clip on Cleaned gives the notes it plays (its MIDI
+/// Cleanup's), not its raw ones, and leaves its cleanup behind: what Consolidate merges.
+fn copy_range_with(s: &Session, track: TrackId, range: Range, as_heard: bool) -> Vec<Clip> {
     let t = TimeCtx::of(s);
     let Some(tr) = s.track(track) else { return Vec::new() };
     let mut out = Vec::new();
     for c in tr.clips() {
         let Some(isect) = c.range().intersect(&range) else { continue };
         let mut part = c.clone();
+        if as_heard && let Some(heard) = c.midi_playing() {
+            part.content = ClipContent::Midi { sequence: heard.clone() };
+            part.midi_cleanup = None;
+        }
         if isect.start > part.start {
             let old = part.start;
             part.trim_start_to(isect.start);
@@ -171,6 +246,7 @@ pub fn copy_range(s: &Session, track: TrackId, range: Range) -> Vec<Clip> {
         if isect.end < part.end() {
             part.trim_end_to(isect.end);
         }
+        crop_hidden_midi(&mut part, t);
         part.start -= range.start;
         out.push(part);
     }
@@ -187,7 +263,7 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
         let t = TimeCtx::of(s);
         let base = t.ticks(range.start);
         let parts: Vec<Clip> =
-            copy_range(s, track, range).into_iter().filter(|c| !c.muted && matches!(c.content, ClipContent::Midi { .. })).collect();
+            copy_range_with(s, track, range, true).into_iter().filter(|c| !c.muted && matches!(c.content, ClipContent::Midi { .. })).collect();
         // A printed band clip among the parts keeps its channels (and its controllers-first
         // order); the other parts play on channel 1, so they go there.
         channels = parts.iter().any(|c| c.midi_channels);
@@ -204,8 +280,9 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
                 n.start += at;
                 merged.notes.push(n);
             }
-            for mut c in sequence.ctrls.into_iter().filter(|c| (0..len).contains(&c.tick)) {
-                c.tick += at;
+            // A controller a start trim hid sets the state the part starts in.
+            for mut c in sequence.ctrls.into_iter().filter(|c| c.tick < len) {
+                c.tick = c.tick.max(0) + at;
                 merged.ctrls.push(c);
             }
         }
@@ -448,18 +525,20 @@ pub fn trim_to(s: &mut Session, track: TrackId, range: Range) -> usize {
     let tc = TimeCtx { tempo: &tempo, sr: s.sample_rate };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut n = 0;
+    let mut shifts = Vec::new();
     for c in &mut pl.clips {
         if let Some(i) = c.range().intersect(&range)
             && i != c.range()
         {
             let old = c.start;
             c.trim_start_to(i.start);
-            rebase_midi_start(c, old, tc);
+            shifts.push((c.id, rebase_midi_start(c, old, tc)));
             c.trim_end_to(i.end);
             n += 1;
         }
     }
     pl.sort();
+    shift_originals(s, &shifts);
     n
 }
 
@@ -469,14 +548,16 @@ pub fn trim_start_to(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let tc = TimeCtx { tempo: &tempo, sr: s.sample_rate };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut n = 0;
+    let mut shifts = Vec::new();
     for c in &mut pl.clips {
         if c.range().contains(at) && at > c.start {
             let old = c.start;
             c.trim_start_to(at);
-            rebase_midi_start(c, old, tc);
+            shifts.push((c.id, rebase_midi_start(c, old, tc)));
             n += 1;
         }
     }
+    shift_originals(s, &shifts);
     n
 }
 
@@ -880,9 +961,10 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
     };
     let t = TimeCtx::of(s);
     let mut c = old.clone();
+    let mut shift = 0;
     if let Some(at) = start {
         c.trim_start_to(at.max(file(&c).map_or(lo, |(f, _)| lo.max(f))));
-        rebase_midi_start(&mut c, old.start, t);
+        shift = rebase_midi_start(&mut c, old.start, t);
         if shuffle {
             c.start = old.start;
         }
@@ -893,6 +975,7 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
     let pl = s.track_mut(track).and_then(|t| t.playlist_mut())?;
     *pl.clip_mut(id)? = c.clone();
     pl.sort();
+    shift_originals(s, &[(id, shift)]);
     if shuffle {
         // The clips after this one move, a crossfade partner starting inside it included; the
         // automation moves from the same place (the partner's start, else this clip's end).

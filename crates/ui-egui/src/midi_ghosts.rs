@@ -36,7 +36,7 @@ pub fn ghost_notes(s: &Session, cid: ClipId, only: Option<&[TrackId]>) -> Vec<Gh
             let other = s.tempo.samples_to_ticks(c.start, sr);
             let shift = other.saturating_sub(base);
             let len = s.tempo.samples_to_ticks(c.end(), sr).saturating_sub(other);
-            for n in seq.notes.iter().filter(|n| n.start < len) {
+            for n in seq.notes.iter().filter(|n| n.start >= 0 && n.start < len) {
                 let start = n.start.saturating_add(shift);
                 let length = n.length.min(len.saturating_sub(n.start)).max(1);
                 if start < end && start.saturating_add(length) > 0 && out.len() < MAX_GHOSTS {

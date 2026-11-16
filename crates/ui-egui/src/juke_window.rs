@@ -1312,7 +1312,7 @@ fn lit_notes(app: &SoundApp, ctx: &egui::Context, tid: TrackId) -> [f32; 128] {
         for c in tr.clips().iter().filter(|c| c.range().contains(pos) && !c.muted) {
             if let soundcraft_model::ClipContent::Midi { sequence } = &c.content {
                 let rel = at - s.tempo.samples_to_ticks(c.start, sr);
-                for n in sequence.notes.iter().filter(|n| n.start <= rel && rel < n.start + n.length.max(1)) {
+                for n in sequence.notes.iter().filter(|n| n.start <= rel && rel < n.start.saturating_add(n.length.max(1))) {
                     if let Some(t) = last.get_mut(usize::from(n.pitch.min(127))) {
                         *t = now;
                     }
