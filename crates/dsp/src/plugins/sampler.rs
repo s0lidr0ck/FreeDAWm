@@ -242,6 +242,8 @@ const VOICES: usize = 32;
 const MAX_STEP: f64 = 256.0;
 /// Frames between updates of each voice's pitch and filter (the modulation's control rate).
 const CONTROL: usize = 16;
+/// Pitch bend range, semitones each way (the synth's).
+const BEND_RANGE: f32 = 2.0;
 /// Notes a mono sampler remembers being held, to return to when the newest is let go.
 const HELD_STACK: usize = 16;
 
@@ -351,9 +353,17 @@ struct Voice {
     target: f64,
     fenv: AdEnv,
     svf: [Svf; 2],
-    /// Filter coefficients for the current control period.
+    /// Filter coefficients for the current control period: `g` the target the control update
+    /// set, `g_now` the value in use, moving to it by `g_inc` a frame (no steps in the sweep).
     g: f32,
     k: f32,
+    g_now: f32,
+    g_inc: f32,
+    /// What the voice added to each of the first two channels on its last frame: a stolen
+    /// voice's sound fades out from there instead of stopping dead.
+    last: [f32; 2],
+    /// Its key was let go while the sustain pedal was down: it is released with the pedal.
+    pedal: bool,
 }
 
 impl Voice {
@@ -377,6 +387,10 @@ impl Voice {
             svf: [Svf { ic1: 0.0, ic2: 0.0 }; 2],
             g: 0.0,
             k: 2.0,
+            g_now: -1.0,
+            g_inc: 0.0,
+            last: [0.0; 2],
+            pedal: false,
         }
     }
 
@@ -488,6 +502,14 @@ pub struct Sampler {
     random: f32,
     /// Frames until the voices' pitch and filter are next updated.
     control: usize,
+    /// The sound of voices cut off to make room (a steal, mono mode's retrigger), fading to
+    /// nothing over a few milliseconds, per channel: a steal no longer clicks.
+    declick: [f32; 2],
+    declick_coef: f32,
+    /// The sustain pedal (CC 64) is down.
+    sustain: bool,
+    /// Pitch bend in semitones (± [`BEND_RANGE`]).
+    bend: f64,
     /// The pitch (semitones from the sample's) the last note started at, for glide.
     last_pitch: Option<f64>,
     /// Mono: the keys held, oldest first.
@@ -556,6 +578,10 @@ impl Sampler {
             rng: Rng::new(0x5A3C_91E7),
             random: 0.0,
             control: 0,
+            declick: [0.0; 2],
+            declick_coef: 0.0,
+            sustain: false,
+            bend: 0.0,
             last_pitch: None,
             held: [0; HELD_STACK],
             held_len: 0,
@@ -701,8 +727,11 @@ impl Sampler {
                 self.last_pitch = Some(pitch);
                 return;
             }
-            for v in self.voices.iter_mut().skip(1) {
-                v.stop();
+            for i in 1..self.voices.len() {
+                self.retire(i);
+                if let Some(v) = self.voices.get_mut(i) {
+                    v.stop();
+                }
             }
             self.begin(0, note, gain, pitch, step);
             return;
@@ -751,6 +780,15 @@ impl Sampler {
         self.control = 0;
     }
 
+    /// Voice `idx`'s sound carries on in the de-click fade before the voice is reused or stopped.
+    fn retire(&mut self, idx: usize) {
+        if let Some(v) = self.voices.get(idx).filter(|v| v.active()) {
+            for (d, l) in self.declick.iter_mut().zip(v.last) {
+                *d += l;
+            }
+        }
+    }
+
     /// The voice to steal: a released one before a held one, the quietest first.
     fn quietest(&self) -> Option<usize> {
         self.voices
@@ -768,6 +806,7 @@ impl Sampler {
         let end = self.end_frame();
         let from = if d.glide > 0.0 { self.last_pitch.unwrap_or(pitch) } else { pitch };
         let step = if from == pitch { step } else { self.step_for(from) };
+        self.retire(idx);
         if let Some(v) = self.voices.get_mut(idx) {
             // A one-shot plays through and ignores its note-off, unless it loops: a loop has no end
             // to play to, so the note-off releases it (it used to ring until all notes off).
@@ -846,7 +885,22 @@ impl Sampler {
             }
             return;
         }
+        let sustain = self.sustain;
         for v in self.voices.iter_mut().filter(|v| v.held && v.note == note) {
+            if sustain {
+                v.pedal = true;
+            } else {
+                v.held = false;
+                v.env.gate_off();
+            }
+        }
+    }
+
+    /// The pedal goes up (or the controllers reset): every voice it held is released.
+    fn pedal_up(&mut self) {
+        self.sustain = false;
+        for v in self.voices.iter_mut().filter(|v| v.pedal) {
+            v.pedal = false;
             v.held = false;
             v.env.gate_off();
         }
@@ -863,7 +917,16 @@ impl Sampler {
                     v.env.gate_off();
                 }
             }
-            EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
+            EventKind::Sustain(true) => self.sustain = true,
+            EventKind::Sustain(false) => self.pedal_up(),
+            EventKind::Bend(ratio) => {
+                let st = 12.0 * f64::from(ratio).log2();
+                self.bend = if st.is_finite() { st.clamp(-48.0, 48.0) } else { 0.0 };
+            }
+            EventKind::ResetControllers => {
+                self.pedal_up();
+                self.bend = 0.0;
+            }
         }
     }
 
@@ -908,7 +971,7 @@ impl Sampler {
             if (v.pitch - v.target).abs() < 1e-4 {
                 v.pitch = v.target;
             }
-            let semis = v.pitch + d.lfo_pitch * f64::from(lfo);
+            let semis = v.pitch + d.lfo_pitch * f64::from(lfo) + self.bend;
             let step = base * 2f64.powf(semis / 12.0);
             let step = if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 };
             if d.warp {
@@ -925,6 +988,11 @@ impl Sampler {
                 let g = (PI * hz / self.sr).tan();
                 v.g = if g.is_finite() { g } else { 0.0 };
                 v.k = d.k;
+                // a new voice starts on its value; after that it glides there over the period
+                if v.g_now < 0.0 {
+                    v.g_now = v.g;
+                }
+                v.g_inc = (v.g - v.g_now) / CONTROL as f32;
             }
         }
     }
@@ -972,15 +1040,22 @@ impl Sampler {
                     if d.filter != FilterKind::Off
                         && let Some(f) = v.svf.get_mut(c.min(1))
                     {
-                        y = f.run(y, v.g, v.k, d.filter);
+                        y = f.run(y, v.g_now.max(0.0), v.k, d.filter);
                     }
                     let side = match c {
                         0 if ch >= 2 => pan.0,
                         1 => pan.1,
                         _ => 1.0,
                     };
-                    *x += y * a * side;
+                    let out = y * a * side;
+                    if let Some(l) = v.last.get_mut(c) {
+                        *l = if out.is_finite() { out } else { 0.0 };
+                    }
+                    *x += out;
                 }
+            }
+            if d.filter != FilterKind::Off {
+                v.g_now += v.g_inc;
             }
             if d.warp {
                 advance_grains(v, grain_inc, sample.channel(0).unwrap_or_default(), search);
@@ -1115,6 +1190,9 @@ impl Plugin for Sampler {
     fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
+        // a cut-off voice fades with a 1.5 ms time constant (under -80 dB in 15 ms)
+        self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
+        self.declick = [0.0; 2];
         self.level.set_time(20.0, self.sr);
         self.pan.set_time(20.0, self.sr);
         self.update();
@@ -1132,6 +1210,9 @@ impl Plugin for Sampler {
         self.control = 0;
         self.last_pitch = None;
         self.held_len = 0;
+        self.declick = [0.0; 2];
+        self.sustain = false;
+        self.bend = 0.0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -1170,6 +1251,17 @@ impl Plugin for Sampler {
             let p = self.pan.next();
             let pan = ((1.0 - p).min(1.0), (1.0 + p).min(1.0));
             self.render_frame(io, ch, n, level, pan);
+            if self.declick != [0.0; 2] {
+                for (b, d) in io.iter_mut().zip(self.declick.iter_mut()) {
+                    if let Some(x) = b.get_mut(n) {
+                        *x += *d;
+                    }
+                    *d *= self.declick_coef;
+                    if d.abs() < 1e-7 {
+                        *d = 0.0;
+                    }
+                }
+            }
         }
         // Events for an empty block take effect immediately.
         for e in evs.iter().take(count).skip(next) {
@@ -1206,6 +1298,23 @@ impl Plugin for Sampler {
 
     fn note_off(&mut self, offset: usize, note: u8) {
         self.events.push(offset, EventKind::Off(note));
+    }
+
+    /// The sustain pedal (CC 64), pitch bend (± 2 semitones, as the synth) and the reset of
+    /// controllers (CC 121); all notes off (CC 120, 123).
+    fn midi(&mut self, offset: usize, msg: [u8; 3]) {
+        let [status, d1, d2] = msg;
+        let kind = match (status & 0xF0, d1) {
+            (0xB0, 64) => EventKind::Sustain(d2 >= 64),
+            (0xB0, 120 | 123) => EventKind::AllOff,
+            (0xB0, 121) => EventKind::ResetControllers,
+            (0xE0, _) => {
+                let v = (i32::from(d2 & 0x7F) << 7 | i32::from(d1 & 0x7F)) - 8192;
+                EventKind::Bend(2f32.powf(v as f32 / 8192.0 * BEND_RANGE / 12.0))
+            }
+            _ => return,
+        };
+        self.events.push(offset, kind);
     }
 
     fn all_notes_off(&mut self) {
@@ -1588,6 +1697,67 @@ mod tests {
         let out = run(&mut s, 512);
         assert!(out[0][..300].iter().all(|&v| v == 0.0));
         assert!(out[0][301..].iter().any(|&v| v != 0.0));
+    }
+
+    /// Bug 26 of the MIDI writing parity list: a stolen voice was cut dead, a click as loud as
+    /// the voice. Its sound now fades out over a few milliseconds while the new note starts.
+    #[test]
+    fn a_stolen_voice_fades_instead_of_clicking() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("velocity", 0.0);
+        s.set_param("attack", 5.0);
+        for n in 0..VOICES as u8 {
+            s.note_on(0, 40 + n, 127);
+        }
+        let _ = run(&mut s, 4800);
+        // every voice is busy: the next note takes one of them
+        s.note_on(100, 90, 127);
+        let out = run(&mut s, 512);
+        let jump = out[0].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 0.02, "the largest step is {jump}");
+        assert!(s.voices.iter().filter(|v| v.active()).count() <= VOICES);
+    }
+
+    /// Bug 28: the filter's cutoff moved in steps every 16 frames; it now glides between them.
+    #[test]
+    fn the_cutoff_glides_between_control_updates() {
+        let mut s = sampler(mono(SR, sine(220.0, SR, 48_000)));
+        s.set_param("filter_type", 1.0);
+        s.set_param("cutoff", 200.0);
+        s.note_on(0, 60, 127);
+        let _ = run(&mut s, 512);
+        let g_low = s.voices.iter().find(|v| v.active()).map(|v| v.g_now).unwrap();
+        s.set_param("cutoff", 8000.0);
+        // a control update, then half a period
+        let _ = run(&mut s, CONTROL + CONTROL / 2);
+        let v = s.voices.iter().find(|v| v.active()).unwrap();
+        assert!(v.g_now > g_low && v.g_now < v.g, "{g_low} < {} < {}", v.g_now, v.g);
+        let _ = run(&mut s, 4 * CONTROL);
+        let v = s.voices.iter().find(|v| v.active()).unwrap();
+        assert!((v.g_now - v.g).abs() <= 1e-4 * v.g, "settles on the value");
+    }
+
+    /// The sampler answers the sustain pedal and pitch bend (the MIDI writing parity list).
+    #[test]
+    fn the_pedal_holds_released_notes_and_the_bend_moves_the_pitch() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("release", 10.0);
+        s.midi(0, [0xB0, 64, 127]);
+        s.note_on(0, 60, 127);
+        s.note_off(100, 60);
+        let _ = run(&mut s, 4800);
+        assert!(s.voices.iter().any(|v| v.active()), "held by the pedal");
+        s.midi(0, [0xB0, 64, 0]);
+        let _ = run(&mut s, 4800);
+        assert!(!s.voices.iter().any(|v| v.active()), "released with it");
+
+        s.note_on(0, 60, 127);
+        let _ = run(&mut s, 512);
+        let plain = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        s.midi(0, [0xE0, 0x7F, 0x7F]);
+        let _ = run(&mut s, 512);
+        let bent = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        assert!((bent / plain - 2f64.powf(2.0 / 12.0)).abs() < 1e-3, "a whole tone up: {}", bent / plain);
     }
 
     #[test]

@@ -283,6 +283,9 @@ const METAL: [f32; 6] = [263.0, 400.0, 421.0, 474.0, 587.0, 845.0];
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
+    /// What the voice added to the six outputs (left, right, send A and B, each side) on its last
+    /// frame: a stolen voice fades from there instead of stopping dead.
+    last: [f32; 6],
     pad: usize,
     age: u64,
     t: u32,
@@ -339,6 +342,7 @@ impl Voice {
     fn new(seed: u32) -> Voice {
         Voice {
             active: false,
+            last: [0.0; 6],
             pad: 0,
             age: 0,
             t: 0,
@@ -395,6 +399,9 @@ pub struct Juke {
     sr: f32,
     ch: usize,
     voices: [Voice; VOICES],
+    /// Stolen voices' sound fading out (see `Voice::last`), and the fade's per-frame factor.
+    declick: [f32; 6],
+    declick_coef: f32,
     events: EventQueue,
     /// Stacked hits waiting their delay: (samples left, pad, velocity).
     /// Hits to come: (frames left, pad, velocity, with its stacks).
@@ -488,6 +495,8 @@ impl Juke {
             events: EventQueue::new(),
             pending: [(0, 0, 0, false, u8::MAX); MAX_PENDING],
             pending_len: 0,
+            declick: [0.0; 6],
+            declick_coef: 0.0,
             counter: 0,
             robin: [0; PADS * LAYERS],
             samples: vec![None; PADS * LAYERS * ROBINS],
@@ -713,6 +722,11 @@ impl Juke {
             .or_else(|| self.voices.iter().enumerate().min_by_key(|(_, v)| v.age).map(|(i, _)| i))
             .unwrap_or(0);
         let Some(v) = self.voices.get_mut(idx) else { return };
+        if v.active {
+            for (d, l) in self.declick.iter_mut().zip(v.last) {
+                *d += l;
+            }
+        }
         let seed = v.rng.next_u32();
         *v = Voice::new(seed);
         v.active = true;
@@ -834,6 +848,7 @@ impl Juke {
                 continue;
             }
             let (ol, or) = (out * v.pan_l, out * v.pan_r);
+            v.last = [ol, or, ol * v.send_a, or * v.send_a, ol * v.send_b, or * v.send_b];
             if let Some(pk) = self.pad_peak.get_mut(v.pad) {
                 *pk = pk.max(ol.abs()).max(or.abs());
             }
@@ -844,7 +859,13 @@ impl Juke {
             bl += ol * v.send_b;
             br += or * v.send_b;
         }
-        (l, r, al, ar, bl, br)
+        let d = self.declick;
+        if d != [0.0; 6] {
+            for x in &mut self.declick {
+                *x = if x.abs() < 1e-7 { 0.0 } else { *x * self.declick_coef };
+            }
+        }
+        (l + d[0], r + d[1], al + d[2], ar + d[3], bl + d[4], br + d[5])
     }
 
     fn tick_pending(&mut self) {
@@ -1032,6 +1053,8 @@ impl Plugin for Juke {
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
+        self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
+        self.declick = [0.0; 6];
         let block = max_block.clamp(1, 1 << 16);
         for w in &mut self.work {
             for c in w.iter_mut() {
@@ -1316,6 +1339,20 @@ mod tests {
             assert!(peak(&mix[48_000 * 7..]) < 1e-5, "pad {} rings on", pad + 1);
             assert!(mix.iter().all(|v| v.is_finite() && v.abs() < 4.0));
         }
+    }
+
+    /// Bug 26 of the MIDI writing parity list: a stolen voice stopped dead (a click); it now
+    /// fades out over a few milliseconds.
+    #[test]
+    fn a_stolen_voice_fades_instead_of_clicking() {
+        let mut j = juke();
+        let mut hits: Vec<(usize, u8, u8)> = (0..VOICES).map(|i| (i * 7, 36, 127)).collect();
+        // every voice busy with a kick when a quiet hat takes the oldest one
+        hits.push((2400, 42, 1));
+        let (l, _) = run(&mut j, 2600, &hits);
+        let slope = l[2300..2399].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let jump = l[2399..2410].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 2.0 * slope + 1e-3, "a step of {jump} against the kicks' own {slope}");
     }
 
     #[test]
