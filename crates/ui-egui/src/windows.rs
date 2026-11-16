@@ -260,8 +260,14 @@ fn event_list(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(n.start.to_string()).font(mono(11.0)));
                     ui.label(soundcraft_midi::note_name(n.pitch));
                     let mut v = i64::from(n.velocity);
-                    if ui.add(egui::DragValue::new(&mut v).range(1..=127)).changed() {
-                        let _ = app.engine.execute("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}));
+                    let r = ui.add(egui::DragValue::new(&mut v).range(1..=127));
+                    if r.changed() {
+                        // One undo step per drag (each frame of it joins the first), not per frame.
+                        let key = format!("evl.velocity.{}.{i}", cid.0);
+                        let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &key);
+                    }
+                    if r.drag_stopped() || r.lost_focus() {
+                        app.engine.end_merge();
                     }
                     ui.label(n.length.to_string());
                     if ui.small_button("✕").clicked() {
