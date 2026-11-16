@@ -13,7 +13,8 @@
 //!   (playback − callback) and the mix's own delay (delay compensation). The audio
 //!   record offset's manual and measured parts are for the input path and don't apply. Loop
 //!   recording: an event that moves before the loop's start was played at the end of the pass
-//!   before.
+//!   before. One heard from the take's start on that moves before it begins the take (notes
+//!   played between the Record press and the transport rolling are heard on its first frame).
 //! - **Range**: a clip covers the record range (from where recording started to where it
 //!   stopped), cut to the punch range; loop recording makes a clip over the loop per pass with
 //!   anything in it, the first on the track's playlist and each later one on a new playlist (the
@@ -74,10 +75,15 @@ pub fn record_live_midi(e: &mut Engine, take: &MidiTake, events: &[RecordedEvent
 
 /// Where an event heard at `at` in loop pass `pass` was played: `take.latency` earlier, and one
 /// heard in the first `latency` samples after a loop wrap belongs to the end of the pass before.
+/// One heard from the take's start on that would move before it begins the take: a note played
+/// between the Record press and the transport rolling (the player hears those on the take's first
+/// frame), or a first downbeat played a little early.
 pub fn played_at(take: &MidiTake, at: Samples, pass: u16) -> (Samples, u16) {
+    let heard = at;
     let at = at.saturating_sub(take.latency);
     match take.looped {
         Some(l) if at < l.start && pass > 0 => (at.saturating_add(l.len()), pass - 1),
+        _ if pass == 0 && heard >= take.start && at < take.start => (take.start, 0),
         _ => (at, pass),
     }
 }
@@ -314,6 +320,27 @@ mod tests {
         notes.sort();
         let at = e.session().tempo.samples_to_ticks(4 * Q - 300, e.session().sample_rate);
         assert_eq!(notes, vec![(60, TICKS_PER_QUARTER), (64, at)]);
+    }
+
+    #[test]
+    fn notes_played_before_the_transport_rolled_begin_the_take_despite_latency() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        // The player hears a note played between the Record press and the roll on the take's
+        // first frame; the output latency would move it before the take.
+        let take = MidiTake { start: 4 * Q, end: 8 * Q, looped: None, punch: None, latency: 512 };
+        let events = [ev(4 * Q, "K", [0x90, 60, 100]), ev(4 * Q + 300, "K", [0x90, 64, 100]), ev(5 * Q + 512, "K", [0x80, 60, 0])];
+        let ids = record_live_midi(&mut e, &take, &events);
+        assert_eq!(ids.len(), 1);
+        let c = clip(&e, ids[0]);
+        assert_eq!(c.start, 4 * Q);
+        let notes: Vec<(u8, i64)> = c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect();
+        assert_eq!(notes, vec![(60, 0), (64, 0)], "the downbeat and an early note are kept, on the start");
+        assert_eq!(c.midi_playing().unwrap().notes[0].length, TICKS_PER_QUARTER);
+        // Heard before the take began (an earlier block's): still left out.
+        let take2 = MidiTake { start: 12 * Q, end: 14 * Q, looped: None, punch: None, latency: 512 };
+        assert!(record_live_midi(&mut e, &take2, &[ev(12 * Q - 1, "K", [0x90, 60, 100])]).is_empty());
+        let _ = t;
     }
 
     #[test]

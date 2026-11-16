@@ -1,6 +1,6 @@
 # Four-DAW parity, section 6: recording MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** major (first version) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (fixes and features, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). FreeDAWm is not affiliated with or endorsed by any of them.
@@ -227,7 +227,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 
 | # | Bug | Where |
 |---|---|---|
-| 1 | Notes played between pressing Record and the transport rolling are meant to become the take's first notes. They are moved to the take's start, then moved earlier by the output latency, which puts them before the start, and are dropped. On real hardware the first downbeat is at risk every time | `playback/src/midi_in.rs:293-303`; `engine/src/midi_record.rs:77-83, 138` |
+| 1 | **Fixed.** Notes played between pressing Record and the transport rolling, or a first downbeat played a little early, moved before the take's start by the output latency and were dropped. An event heard from the take's start on that the latency would move before it now begins the take (`midi_record::played_at`). Test: `midi_record::tests::notes_played_before_the_transport_rolled_begin_the_take_despite_latency` (512 samples of latency) | `engine/src/midi_record.rs` (`played_at`) |
 | 2 | Loop record: the second and later passes each go on a new, empty playlist that becomes the active one. Everything else on the track vanishes from playback until the playlist is switched back. Audio copies the playlist first | `engine/src/midi_record.rs:153-156` |
 | 3 | A take erases everything under its whole range, even if one note was played, although the old part was audible during the take | `engine/src/edit.rs:254-255` |
 | 4 | Record pressed while a loop plays and the playhead is before the loop: after the first wrap every note is silently discarded | `engine/src/io.rs:2368`; `engine/src/midi_record.rs:131-136` |
@@ -309,3 +309,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | major | First version: recording MIDI against Pro Tools, Studio Pro, Logic Pro and Cubase |
+| 2026-11-16 | minor | Bug 1 fixed: notes played before the transport rolls begin the take instead of being dropped |
