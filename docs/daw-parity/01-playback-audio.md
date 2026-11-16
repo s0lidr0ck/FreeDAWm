@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 9 fixed: Reconnect closes the old device first) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 11 fixed: a missing chosen device is told to the user) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -190,7 +190,7 @@ All in features the docs count as done. Each needs a regression test with its fi
 | 8 | **Fixed:** Clip Gain › Bypass erased the gain and its envelope; it is now a bypass toggle (checked in the menu) that keeps them | `cmd/clip.rs:83` |
 | 9 | **Fixed:** Reconnect opened the new device before closing the old one (ASIO allows one); it now closes first, as applying new settings already did (untested on hardware) | `crates/ui-egui/src/lib.rs:2080` |
 | 10 | Solo modes AFL, PFL, Latch and Momentary do nothing; only SIP and X-OR work | `cmd/options.rs:258`, `menus.rs:953` |
-| 11 | A missing configured device falls back to the system default with only a log line | `crates/playback/src/devices.rs:355` |
+| 11 | **Fixed:** a missing configured device fell back to the system default with only a log line; the status line now says so once, and the Playback Engine window while it holds | `crates/playback/src/devices.rs:355` |
 | 12 | Clip effects allocate on the audio thread the first time a clip plays | `crates/mix/src/lib.rs:2560` |
 
 ## Suggested order of work
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 11 fixed: a missing chosen device is told to the user |
 | 2026-11-16 | minor | bug 9 fixed: Reconnect closes the old device first |
 | 2026-11-16 | minor | bug 8 fixed: Clip Gain Bypass is a real bypass |
 | 2026-11-16 | minor | bug 7 fixed: varispeed Elastic Properties changes the clip length |

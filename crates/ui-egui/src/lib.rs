@@ -812,6 +812,9 @@ pub struct SoundApp {
     /// Punch range to trim the take to (pre/post-roll recordings).
     punch: Option<Range>,
     recorder_failed: bool,
+    /// A player was (re)opened and whether it opened the chosen device is still to be told
+    /// (checked once in `logic`, with the audio settings loaded by then).
+    device_notice_pending: bool,
     /// Input this take lost to a slow disk, as last reported (ms).
     lost_shown: u64,
     /// Where the takes being recorded go, autosaved with the session so a crash can't lose them.
@@ -1008,6 +1011,7 @@ impl SoundApp {
             record_start: 0,
             punch: None,
             recorder_failed: false,
+            device_notice_pending: true,
             lost_shown: 0,
             take_plan: None,
             ui: UiState::default(),
@@ -1967,6 +1971,7 @@ impl SoundApp {
         // and then destroy it under the audio thread.
         let (session, audio) = (self.engine.session_arc(), &self.ui.audio);
         reopen(&mut self.player, || soundcraft_playback::Player::with_config(session, audio));
+        self.device_notice_pending = true;
         if let Some(p) = &self.player {
             p.locate(at);
         }
@@ -1977,6 +1982,18 @@ impl SoundApp {
         scout::lost(self);
         self.forget_measure();
         Ok(())
+    }
+
+    /// Once per opened player: a chosen audio system or device that is missing (so the default
+    /// plays), or no device at all, is said on the status line, not only in the log.
+    fn tell_device_fallback(&mut self) {
+        if !std::mem::take(&mut self.device_notice_pending) {
+            return;
+        }
+        if let Some(n) = self.player.as_ref().and_then(|p| p.fallback_notice(&self.ui.audio)) {
+            log::warn!("{n}");
+            self.ui.status = n;
+        }
     }
 
     /// Open the input device once (for recording and input monitoring) and feed the player.
@@ -2081,6 +2098,7 @@ impl SoundApp {
         // The old player goes first (see `apply_audio_config`): ASIO allows one driver at a time.
         let (session, audio) = (self.engine.session_arc(), &self.ui.audio);
         reopen(&mut self.player, || Player::with_config(session, audio));
+        self.device_notice_pending = true;
         // The new player gets the band on the next frame.
         self.band_lib_key = 0;
         self.midi_sent = false;
@@ -2324,6 +2342,7 @@ impl SoundApp {
         if ctx.current_pass_index() > 0 {
             return;
         }
+        self.tell_device_fallback();
         // A ruler pick lasts only while it is still what Delete would mean.
         ruler_items::prune(self);
         // Fonts set now take effect next frame, so draw only from the frame after.

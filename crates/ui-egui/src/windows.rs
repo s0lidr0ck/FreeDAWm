@@ -673,6 +673,10 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
             ui.label(format!("{sr} Hz{note}"));
             ui.end_row();
         });
+        // The chosen device missing, so the default plays: said here as long as it holds.
+        if let Some(n) = app.player.as_ref().and_then(|p| p.fallback_notice(&app.ui.audio)) {
+            ui.colored_label(egui::Color32::from_rgb(220, 140, 40), n);
+        }
         ui.separator();
         engine_status(app, ui);
         ui.separator();

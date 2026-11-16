@@ -1945,6 +1945,12 @@ impl Player {
         }
     }
 
+    /// What to tell the user when this player did not open what `cfg` chose (see
+    /// [`devices::fallback_notice`]).
+    pub fn fallback_notice(&self, cfg: &AudioConfig) -> Option<String> {
+        devices::fallback_notice(cfg, &self.system, &self.device_name, self.silent)
+    }
+
     /// Open the default output device. Never fails: without a device it runs a silent clock.
     pub fn new(session: Arc<Session>) -> Player {
         Player::with_config(session, &AudioConfig::default())
