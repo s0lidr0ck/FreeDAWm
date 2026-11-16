@@ -17,8 +17,10 @@
 //!   played between the Record press and the transport rolling are heard on its first frame).
 //! - **Range**: a clip covers the record range (from where recording started to where it
 //!   stopped), cut to the punch range; loop recording makes a clip over the loop per pass with
-//!   anything in it, the first on the track's playlist and each later one on a new playlist (the
-//!   comp layers are for audio takes).
+//!   anything in it, the first on the track's playlist and each later one on a new playlist that
+//!   starts as a copy of the track's (the comp layers are for audio takes). The first pass runs
+//!   from where recording started to the loop's end: Record pressed partway through a playing
+//!   loop, or before it with the transport heading into it, records the rest of that pass.
 //! - Each track takes the events its input lets through (its port, or all; Omni or one channel),
 //!   channels kept; notes still held at the range's end end there; notes begun before it are
 //!   left out. Controllers (sustain, mod wheel, pitch bend, aftertouch, program) are kept.
@@ -138,6 +140,11 @@ pub fn record_midi_on(e: &mut Engine, tracks: &[TrackId], take: &MidiTake, event
         let mut placed_first = false;
         for pass in 0..=passes {
             let range = match take.looped {
+                // The first pass runs from where recording started to the loop's end: the rest of
+                // the loop when punched in partway through it, or up to it from before it.
+                // (Stopped before ever reaching that loop: where it stopped.)
+                Some(l) if pass == 0 && take.start < l.start && passes == 0 => Some(Range::new(take.start, take.end.clamp(take.start, l.end))),
+                Some(l) if pass == 0 && take.start < l.end => Some(Range::new(take.start, l.end)),
                 Some(l) => Some(l),
                 None if pass == 0 => Some(Range::new(take.start, take.end.max(take.start))),
                 None => None,
@@ -361,6 +368,52 @@ mod tests {
         let take2 = MidiTake { start: 12 * Q, end: 14 * Q, looped: None, punch: None, latency: 512 };
         assert!(record_live_midi(&mut e, &take2, &[ev(12 * Q - 1, "K", [0x90, 60, 100])]).is_empty());
         let _ = t;
+    }
+
+    #[test]
+    fn record_pressed_before_a_playing_loop_keeps_every_pass() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        // Rolling from 2 Q into a loop over 4..8 Q: the first pass is 2..8 Q, then the loop.
+        let lp = Range::new(4 * Q, 8 * Q);
+        let take = MidiTake { start: 2 * Q, end: 6 * Q, looped: Some(lp), punch: None, latency: 480 };
+        let events = vec![
+            ev(3 * Q + 480, "K", [0x90, 50, 100]),
+            ev(5 * Q + 480, "K", [0x80, 50, 0]),
+            RecordedEvent { pass: 1, ..ev(5 * Q + 480, "K", [0x90, 60, 100]) },
+            RecordedEvent { pass: 2, ..ev(4 * Q + 480, "K", [0x90, 64, 100]) },
+        ];
+        let ids = record_live_midi(&mut e, &take, &events);
+        assert_eq!(ids.len(), 3, "no pass after the first wrap is lost");
+        let tr = e.session().track(t).unwrap();
+        let first = &tr.playlists[0].clips[0];
+        assert_eq!((first.start, first.length), (2 * Q, 6 * Q));
+        let n = first.midi_playing().unwrap().notes[0];
+        assert_eq!((n.pitch, n.start, n.length), (50, TICKS_PER_QUARTER, 2 * TICKS_PER_QUARTER));
+        let later: Vec<(Samples, Samples, u8, i64)> = tr.playlists[1..]
+            .iter()
+            .flat_map(|p| {
+                p.clips.iter().map(|c| (c.start, c.length, c.midi_playing().unwrap().notes[0].pitch, c.midi_playing().unwrap().notes[0].start))
+            })
+            .collect();
+        let q = TICKS_PER_QUARTER;
+        assert_eq!(later, vec![(4 * Q, 4 * Q, 60, q), (4 * Q, 4 * Q, 64, 0)]);
+    }
+
+    #[test]
+    fn a_punch_in_inside_a_playing_loop_leaves_what_came_before_it() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let mut old = Sequence::default();
+        old.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 10 });
+        let id = e.session_mut().new_clip_id();
+        crate::edit::place_clip(e.session_mut(), t, Clip::midi(id, "Old", 0, Q, old));
+        // Record pressed at 2 Q while the loop 0..4 Q plays.
+        let take = MidiTake { start: 2 * Q, end: 3 * Q, looped: Some(Range::new(0, 4 * Q)), punch: None, latency: 0 };
+        let ids = record_live_midi(&mut e, &take, &[ev(2 * Q + 100, "K", [0x90, 60, 100])]);
+        let c = clip(&e, ids[0]);
+        assert_eq!((c.start, c.length), (2 * Q, 2 * Q));
+        assert!(e.session().find_clip(id).is_some(), "the clip before the punch point stays");
     }
 
     #[test]

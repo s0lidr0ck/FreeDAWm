@@ -88,10 +88,15 @@ pub(crate) fn finish_take(
     let take = soundcraft_engine::midi_record::MidiTake {
         start: plan.start,
         end,
-        looped: plan.pass.map(|p| {
-            let from = plan.loop_from.unwrap_or(plan.start);
-            soundcraft_time::Range::new(from, from.saturating_add(p))
-        }),
+        // Record pressed before a playing loop: the transport wraps there, and each pass after
+        // the first is the loop (the player counts them).
+        looped: plan
+            .pass
+            .map(|p| {
+                let from = plan.loop_from.unwrap_or(plan.start);
+                soundcraft_time::Range::new(from, from.saturating_add(p))
+            })
+            .or_else(|| app.play_loop.filter(|l| plan.start < l.start)),
         punch: plan.punch,
         latency: take_latency(app),
     };
