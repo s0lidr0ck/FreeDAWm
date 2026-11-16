@@ -257,6 +257,10 @@ pub struct Engine {
     pub take_hits: Option<crate::cmd::juke::TakeHits>,
     /// Numbers each analysis (`TakeHits::id`).
     pub take_hits_seq: u64,
+    /// Take files recorded in this run that nothing may use one day (an undone take, a take of a
+    /// track deleted while it recorded): deleted once neither the session, its history nor a
+    /// session file names them ([`io::clean_unused_takes`]).
+    pub(crate) recorded_takes: Vec<std::path::PathBuf>,
 }
 
 impl Default for Engine {
@@ -310,6 +314,7 @@ impl Engine {
             auto_write: cmd::auto_write::AutoWriter::new(),
             copy_imported_audio: true,
             unsaved_audio_root: None,
+            recorded_takes: Vec::new(),
         }
     }
 
@@ -433,6 +438,8 @@ impl Engine {
         for n in thawed {
             self.message(n);
         }
+        // The old session's history is gone: its takes nothing names any more go too.
+        crate::io::clean_unused_takes(self, true);
     }
 
     /// Reports the silent sidechains of the session now in place as just loaded (messages, and

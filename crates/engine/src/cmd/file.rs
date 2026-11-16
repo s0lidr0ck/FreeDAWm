@@ -200,7 +200,11 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"clips": placed.iter().map(|c| c.0).collect::<Vec<_>>()}))
         }),
         cmd!(query "file.get_info", "Get Info...", ["File"], None, "{}", always, |e, _| Ok(crate::inspect::session(e, false))),
-        cmd!(noundo "app.quit", "Quit", [], Some("Cmd+Q"), "{}", always, |_, _| Ok(json!({"quit": true}))),
+        cmd!(noundo "app.quit", "Quit", [], Some("Cmd+Q"), "{}", always, |e, _| {
+            // Undo ends here: takes nothing names any more go.
+            crate::io::clean_unused_takes(e, true);
+            Ok(json!({"quit": true}))
+        }),
     ]
 }
 

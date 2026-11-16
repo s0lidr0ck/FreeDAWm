@@ -1258,7 +1258,55 @@ pub fn save_session(e: &mut Engine, path: &str) -> Result<usize> {
             log::info!("{}: removed {gone} generated audio files nothing uses", dir.display());
         }
     }
+    clean_unused_takes(e, false);
     Ok(written)
+}
+
+/// Deletes the take files recorded in this run ([`Engine::recorded_takes`]) that nothing names:
+/// not a source of the session or (unless `history_ends`: the session is being closed or
+/// replaced, so undo can no longer bring them back) of an undo or redo step, not any session file
+/// or backup in the take's project folder, not any autosave. When one of those can't be read,
+/// the take is kept (when unsure, keep). Returns how many were deleted.
+pub fn clean_unused_takes(e: &mut Engine, history_ends: bool) -> usize {
+    if e.recorded_takes.is_empty() {
+        return 0;
+    }
+    let base = e.path.as_deref().and_then(|p| Path::new(p).parent()).map(Path::to_path_buf);
+    let sessions: Vec<&Session> = if history_ends { vec![e.session()] } else { e.history_sessions() };
+    let named: std::collections::HashSet<PathBuf> = sessions
+        .iter()
+        .flat_map(|s| s.sources.iter())
+        .flat_map(|src| {
+            // A relative path is the session folder's; an absolute one is itself.
+            let rel = base.as_deref().map(|b| crate::spill::resolve(&src.path, b));
+            [Some(PathBuf::from(&src.path)), rel].into_iter().flatten()
+        })
+        .map(|p| file_key(&p))
+        .collect();
+    let mut gone = 0;
+    let mut kept = Vec::new();
+    for take in std::mem::take(&mut e.recorded_takes) {
+        if !file_found(&take) {
+            continue;
+        }
+        let key = file_key(&take);
+        let project = take.parent().and_then(Path::parent).map(Path::to_path_buf);
+        let on_disk = project.as_deref().and_then(|p| crate::spill::named_on_disk(p, e.unsaved_audio_root.as_deref()));
+        let used = named.contains(&key) || on_disk.is_none_or(|d| d.iter().any(|p| file_key(p) == key));
+        if used || remove_path(&take).is_err() {
+            kept.push(take);
+            continue;
+        }
+        gone += 1;
+        if let Some(cache) = project.as_deref().and_then(|p| crate::peak_cache::path_for(p, &take)) {
+            let _ = remove_path(cache);
+        }
+    }
+    e.recorded_takes = kept;
+    if gone > 0 {
+        log::info!("removed {gone} take files nothing uses");
+    }
+    gone
 }
 
 /// Every saved source still decoded in memory (imported or made before the first save) is
@@ -2288,6 +2336,11 @@ fn add_recording_in(
     let before = e.session_arc();
     let mut out = Vec::new();
     for (tid, path) in takes {
+        // A take in a project's (or autosave's) `Audio Files`: deleted when nothing names it any
+        // more (undone, or its track deleted while it recorded).
+        if path.parent().and_then(Path::file_name).is_some_and(|n| n == "Audio Files") && !e.recorded_takes.contains(&path) {
+            e.recorded_takes.push(path.clone());
+        }
         if e.session().track(tid).is_none_or(|t| t.frozen_audio().is_some()) {
             continue;
         }
@@ -2505,6 +2558,50 @@ mod record_tests {
         ids.sort_by_key(|c| c.0);
         ids.dedup();
         assert_eq!(ids.len(), n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undone_takes_are_deleted_once_undo_cannot_bring_them_back() {
+        // Bug: undoing a take, or deleting its track while it recorded, left its file behind.
+        let dir = test_dir("undone-takes");
+        let session = dir.join("Song.fdawm").to_string_lossy().into_owned();
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        e.execute("session.save_as", &json!({"path": session})).unwrap();
+        let (kept, undone, orphan, saved) = (
+            dir.join("Audio Files/Vox_01.wav"),
+            dir.join("Audio Files/Vox_02.wav"),
+            dir.join("Audio Files/Gone_01.wav"),
+            dir.join("Audio Files/Vox_03.wav"),
+        );
+        for p in [&kept, &undone, &orphan, &saved] {
+            write_take(p, 100);
+        }
+        // A take a session file in the project names (a saved copy), then undone.
+        add_recording(&mut e, 0, vec![(vox, saved.clone())], None);
+        save_session_copy(&e, &dir.join("Song v1.fdawm").to_string_lossy()).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        add_recording(&mut e, 0, vec![(vox, kept.clone())], None);
+        add_recording(&mut e, 200, vec![(vox, undone.clone())], None);
+        e.execute("edit.undo", &json!({})).unwrap();
+        // The track it recorded for was deleted meanwhile: placed nowhere.
+        add_recording(&mut e, 0, vec![(TrackId(9_999), orphan.clone())], None);
+        // Saving keeps what undo or redo may bring back; the orphan goes.
+        save_session(&mut e, &session).unwrap();
+        assert!(kept.exists() && undone.exists() && saved.exists());
+        assert!(!orphan.exists(), "a take nothing can ever use");
+        // Redo still has it.
+        e.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(e.session().track(vox).unwrap().clips().len(), 2);
+        e.execute("edit.undo", &json!({})).unwrap();
+        // Closing ends undo: the undone take goes; the take in the session and the one a session
+        // file names stay.
+        save_session(&mut e, &session).unwrap();
+        e.replace_session(Session::default());
+        assert!(!undone.exists(), "an undone take nothing names");
+        assert!(kept.exists(), "a take in the saved session");
+        assert!(saved.exists(), "a take a session file in the project names");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

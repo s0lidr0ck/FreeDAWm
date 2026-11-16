@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 4 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 6 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -30,7 +30,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Arming and inputs | Arming works; inputs are mono or stereo hardware only | Medium: no internal (bus) recording, wrong channels in two cases |
-| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly | Small: no discard-take, undo leaves files |
+| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly | Small: no discard-take |
 | C. Punching | Automatic punch with handles works | Medium: no punch out on the fly, no punch crossfades, four modes are labels |
 | D. Loop recording and takes | Takes to layers, swipe comping | Small to medium: plain tracks lose the rest of the song; no record modes |
 | E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
@@ -70,7 +70,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Pre-roll | ● | ● | ● | ● | **Works**: heard, not recorded, with or without a selection |
 | Start recording while playing | ● | ● | ● | ● | **Works**, gapless; inside a playing loop the take splits into its passes |
 | Discard the take in progress | ● | ◐ | ● | ● | **Missing** |
-| Undo a take | ● | ● | ● | ● | **Partial**: the clips go, the file stays in Audio Files |
+| Undo a take | ● | ● | ● | ● | **Works**: the file goes when no undo step, session file or autosave names it any more (on save or close) |
 | Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Missing** |
 | Recording at another speed | ● | ○ | ● | ○ | **Missing**: refused (half-speed record is a Pro Tools and Logic feature) |
 
@@ -175,7 +175,7 @@ Lines move while section 1's work is in progress, so functions are named.
 | 3 | **Fixed:** Record pressed while a loop is playing placed the take as one straight clip running past the loop end; it now splits into that loop's passes (`record_start` in `crates/engine/src/io.rs`) | `start_recording` in `crates/ui-egui/src/lib.rs` (the plan has no pass) |
 | 4 | **Fixed:** loop record on a plain track left playlists that held only the loop, so the track was silent elsewhere; each pass's playlist now copies the track's playlist from before the take | `place_take` in `crates/engine/src/io.rs` |
 | 5 | **Fixed:** pre-roll with no selection recorded and placed the pre-roll, overwriting what was there; the take is now kept from the insertion point on | `start_recording`, `place_take` |
-| 6 | Undoing a take, or deleting an armed track during one, leaves the file in Audio Files | `add_recording_in` in `crates/engine/src/io.rs` |
+| 6 | **Fixed:** undoing a take, or deleting an armed track during one, left the file in Audio Files; such files are deleted on save (when no undo step can bring them back) or when the session closes, never while the session, its history, a session file in the project or an autosave names them (`clean_unused_takes`) | `add_recording_in` in `crates/engine/src/io.rs` |
 | 7 | With monitoring Off, an armed track plays its old clips under the take being recorded | clip branch of the strip render in `crates/mix/src/lib.rs` |
 | 8 | Take numbers start at the session's source count plus one | `plan_takes` |
 | 9 | Clear Clip Indicators reports success from the engine and does nothing | `track.clear_clip_indicators` in `crates/engine/src/cmd/track.rs` |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
