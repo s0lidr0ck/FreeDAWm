@@ -1148,10 +1148,12 @@ pub(crate) enum Pick {
 /// The picker's groups of built-in plugins (effects, or `instruments`), in order: the FireStation
 /// engines and the stock plugins listed with them ([`soundcraft_dsp::PluginInfo::with_engines`])
 /// first (by name, under [`BUILT_IN_GROUP`]), then the rest by category in the registry's order ("Utilities" for
-/// the effects, "Built-in" for the instruments). Only the listed plugins
+/// the effects, Dither and the meters among them; "Built-in" for the instruments). Only the listed plugins
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
     use soundcraft_dsp::Category;
+    // Dither is a utility here, not a group of its own (the owner's call).
+    let group_of = |p: &soundcraft_dsp::PluginInfo| if p.category == Category::Dither { Category::Other } else { p.category };
     let listed = || soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument == instruments);
     let mut out = Vec::new();
     let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
@@ -1161,8 +1163,8 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
     }
     let mut cats: Vec<Category> = Vec::new();
     for p in listed().filter(|p| !p.with_engines()) {
-        if !cats.contains(&p.category) {
-            cats.push(p.category);
+        if !cats.contains(&group_of(p)) {
+            cats.push(group_of(p));
         }
     }
     for c in cats {
@@ -1171,7 +1173,7 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
             Category::Instrument => "Built-in".to_string(),
             c => format!("{c:?}"),
         };
-        out.push((name, listed().filter(|p| !p.with_engines() && p.category == c).collect()));
+        out.push((name, listed().filter(|p| !p.with_engines() && group_of(p) == c).collect()));
     }
     out
 }
@@ -2260,10 +2262,15 @@ mod tests {
         assert!(fs.contains(&"Manners") && fs.contains(&"Rez") && fs.contains(&"Sprawl"), "Rez and Sprawl are offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
-        assert_eq!(names, ["Built-In", "Utilities", "Dither"]);
+        assert_eq!(names, ["Built-In", "Utilities"], "Dither has no group of its own");
         let ids: Vec<&str> = groups[1].1.iter().map(|p| p.id).collect();
-        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
+        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "channel_tool"] {
             assert!(ids.contains(&id), "{id}");
+        }
+        // The meters and Dither are utilities (the owner's call), not in the first group.
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither"] {
+            assert!(ids.contains(&id), "{id} under Utilities");
+            assert!(groups[0].1.iter().all(|p| p.id != id), "{id} not with the engines");
         }
         for (_, l) in &groups {
             assert!(l.iter().all(|p| p.listed() && !p.is_instrument));
@@ -2271,7 +2278,7 @@ mod tests {
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
-        assert!(groups[1].1.iter().all(|p| p.category == Category::Other));
+        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither));
         // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);

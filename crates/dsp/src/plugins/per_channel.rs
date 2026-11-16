@@ -12,8 +12,10 @@
 //! instance's. Detection is not linked across instances by default: a compressor on 5.1 reduces
 //! the front pair, the centre and each surround on its own. A plugin with a key input and a
 //! `surLink` parameter (Comp's Link All Channels) can link them: while it is on and no key is
-//! chosen, every instance is keyed from one signal, each sample the loudest channel's (the LFE
-//! included), so they all measure the same thing and reduce together.
+//! chosen, every instance is keyed from one signal, each sample the loudest channel's, so they all
+//! measure the same thing and reduce together. The LFE, as the host names it from the track's
+//! channel format ([`Plugin::set_lfe_channels`]), is left out: it neither feeds the key nor is
+//! turned down by it (its instance detects on its own signal).
 
 use crate::{LinkSlab, MidiOut, Plugin, PluginEditor, PluginInfo, PluginStateReader, SampleSource, Transport, analysis};
 use std::sync::Arc;
@@ -41,6 +43,8 @@ pub(crate) struct PerChannel {
     /// The linking key (two copies of one signal), sized in `prepare` for wide tracks of
     /// plugins that link (see the module docs); empty otherwise.
     link_key: Vec<Vec<f32>>,
+    /// The LFE channels ([`Plugin::set_lfe_channels`]): kept out of the link.
+    lfe: u64,
 }
 
 /// The parameter that links detection across every channel.
@@ -48,7 +52,7 @@ const SUR_LINK: &str = "surLink";
 
 impl PerChannel {
     pub(crate) fn new(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
-        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new() }
+        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0 }
     }
 
     fn all(&mut self) -> impl Iterator<Item = &mut Box<dyn Plugin>> {
@@ -114,10 +118,19 @@ impl Plugin for PerChannel {
             && self.first.param(SUR_LINK).is_some_and(|v| v > 0.5)
             && self.link_key.iter().all(|k| k.len() >= frames)
             && io.iter().all(|c| c.len() >= frames);
+        let lfe = self.lfe;
+        let is_lfe = move |c: usize| c < 64 && lfe & (1u64 << c) != 0;
         if linked {
-            // each sample, the loudest channel's value (signed, so the key keeps its spectrum)
+            // each sample, the loudest channel's value (signed, so the key keeps its spectrum),
+            // the LFE left out
             for i in 0..frames {
-                let v = io.iter().map(|c| c[i]).filter(|v| v.is_finite()).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+                let v = io
+                    .iter()
+                    .enumerate()
+                    .filter(|(c, _)| !is_lfe(*c))
+                    .map(|(_, c)| c[i])
+                    .filter(|v| v.is_finite())
+                    .fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
                 for k in &mut self.link_key {
                     k[i] = v;
                 }
@@ -127,8 +140,10 @@ impl Plugin for PerChannel {
         let n = io.len().min(2);
         let (head, tail) = io.split_at_mut(n);
         self.first.process_with_sidechain(head, frames, key);
-        for (p, c) in self.rest.iter_mut().zip(tail.iter_mut()) {
-            p.process_with_sidechain(std::slice::from_mut(c), frames, key);
+        for (i, (p, c)) in self.rest.iter_mut().zip(tail.iter_mut()).enumerate() {
+            // the LFE is not turned down by the others' link: it keys from itself
+            let k = if linked && is_lfe(i + 2) { None } else { key };
+            p.process_with_sidechain(std::slice::from_mut(c), frames, k);
         }
     }
 
@@ -159,6 +174,11 @@ impl Plugin for PerChannel {
     fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
         self.all().for_each(|p| p.set_offline(offline));
+    }
+
+    fn set_lfe_channels(&mut self, mask: u64) {
+        self.lfe = mask;
+        self.first.set_lfe_channels(mask & 0b11);
     }
 
     fn set_param_automated(&mut self, id: &str, automated: bool) {
@@ -324,7 +344,41 @@ mod tests {
         let (linked, lfe_linked) = front(true);
         assert!((alone - 0.01).abs() < 0.002, "a quiet front pair alone is left alone: {alone}");
         assert!(linked < 0.5 * alone, "linked, the loud surround turns the front down: {linked} vs {alone}");
-        assert!(lfe_linked < 0.5 * lfe_alone);
+        assert!(lfe_linked < 0.5 * lfe_alone, "no layout given: every channel is linked");
+    }
+
+    /// The owner's rule: told the track is 5.1 (L R C LFE Ls Rs), Link All Channels leaves the LFE
+    /// out. A loud LFE does not turn the others down, and a loud surround does not turn the LFE
+    /// down; the other channels still link.
+    #[test]
+    fn comp_link_leaves_the_lfe_of_a_5_1_track_out() {
+        let frames = 512;
+        // (peak of L, of LFE, of Rs) after 40 blocks; `loud` is the channel at full level
+        let run = |loud: usize, lfe_mask: u64| {
+            let mut p = instantiate("fs_comp").unwrap();
+            assert!(p.set_param("amount", 0.6));
+            assert!(p.set_param("ratio", 0.9));
+            assert!(p.set_param("surLink", 1.0));
+            p.set_lfe_channels(lfe_mask);
+            p.prepare(48_000.0, frames, 6);
+            let mut io: Vec<Vec<f32>> = Vec::new();
+            for _ in 0..40 {
+                io = (0..6).map(|c| if c == loud { sine(frames, 0.0) } else { sine(frames, 0.0).iter().map(|v| v * 0.02).collect() }).collect();
+                p.process(&mut io, frames);
+            }
+            (peak(&io[0]), peak(&io[3]), peak(&io[5]))
+        };
+        const LFE_5_1: u64 = 1 << 3;
+        // A loud LFE: the front and surrounds are left alone.
+        let (l, _, rs) = run(3, LFE_5_1);
+        assert!((l - 0.01).abs() < 0.002 && (rs - 0.01).abs() < 0.002, "a loud LFE turns nothing else down: {l} {rs}");
+        // Without the layout it did (the old behaviour, still what an unknown layout gets).
+        let (l_old, _, _) = run(3, 0);
+        assert!(l_old < 0.5 * l, "{l_old} vs {l}");
+        // A loud surround: the front still follows it, the quiet LFE does not.
+        let (l, lfe, _) = run(4, LFE_5_1);
+        assert!(l < 0.005, "the others still link: {l}");
+        assert!((lfe - 0.01).abs() < 0.002, "the LFE is not turned down by the others: {lfe}");
     }
 
     #[test]

@@ -1737,8 +1737,10 @@ impl MixEngine {
                 cx.retire(t.id, key, p);
             }
             let rate = s.sample_rate.hz();
+            let lfe = lfe_mask(strip_format(t, ch));
             for (slot, ins) in chain.iter_mut().zip(&t.mixer.inserts) {
                 if let Some(slot) = slot.as_mut() {
+                    slot.plugin.set_lfe_channels(lfe);
                     sync_assets(slot, ins, s, rate, cx.retired_assets);
                     sync_link(slot, t.id, ins, &self.links, cx.retired_links);
                 }
@@ -3777,6 +3779,11 @@ fn read_bus(src: &BusBuf, t: &Track, dst: &mut [Vec<f32>], frames: usize, law: P
         build_matrix(src.fmt, ns, dst_fmt, nd, &PanSpec { stereo, surround: None }, law)
     };
     apply_matrix(&src.buf, frames, dst, &m, 1.0);
+}
+
+/// The LFE channels of `fmt` as [`Plugin::set_lfe_channels`] takes them (bit `n`: channel `n`).
+fn lfe_mask(fmt: ChannelFormat) -> u64 {
+    fmt.speakers().iter().take(64).enumerate().filter(|(_, sp)| sp.is_lfe()).fold(0, |m, (i, _)| m | (1u64 << i))
 }
 
 fn strip_format(t: &Track, n: usize) -> ChannelFormat {
@@ -7191,6 +7198,56 @@ mod tests {
         assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), vec![(0, [0xB0, 121, 0]), (0, [0xB0, 64, 127]), (0, [0xE0, 0, 0])]);
         render_block(&mut eng, &s, 36_512);
         assert!(heard.lock().unwrap().is_empty());
+    }
+
+    /// Records the LFE layout the mixer hands it.
+    struct Layout {
+        inner: Box<dyn Plugin>,
+        lfe: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl Plugin for Layout {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            self.inner.info()
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.inner.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {}
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.inner.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.inner.param(id)
+        }
+        fn process(&mut self, _io: &mut [Vec<f32>], _frames: usize) {}
+        fn set_lfe_channels(&mut self, mask: u64) {
+            self.lfe.store(mask, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The owner's rule for Comp's Link All Channels needs the plug-in to know which channel is the
+    /// LFE: the mixer tells every insert from the track's channel format (5.1: channel 3; 7.1.4:
+    /// channel 3; stereo and a 6-channel layout without one: none).
+    #[test]
+    fn inserts_are_told_which_channel_is_the_lfe() {
+        for (fmt, want) in
+            [(ChannelFormat::Surround51, 1u64 << 3), (ChannelFormat::Atmos714, 1 << 3), (ChannelFormat::Surround60, 0), (ChannelFormat::Stereo, 0)]
+        {
+            let mut s = Session::default();
+            let t = s.add_track(TrackKind::Audio, fmt, None);
+            let ins = Insert::new("clap:test.layout");
+            let m = ins.id;
+            s.track_mut(t).unwrap().mixer.inserts.push(ins);
+            let lfe = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+            let plugin = Layout { inner: soundcraft_dsp::create("gain").unwrap(), lfe: Arc::clone(&lfe) };
+            let mut eng = MixEngine::new(48_000.0, 512);
+            eng.set_external_instances(true);
+            let ch = fmt.channels();
+            eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Module(m), id: "clap:test.layout".into(), ch, plugin: Box::new(plugin) }]);
+            render_block(&mut eng, &s, 0);
+            assert_eq!(lfe.load(std::sync::atomic::Ordering::Relaxed), want, "{fmt:?}");
+        }
     }
 
     struct Keys {

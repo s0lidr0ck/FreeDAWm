@@ -46,6 +46,10 @@ effects:
 - **4 meters:** Spectrum, Loudness Meter (with true peak, range and a ten-minute history), Phase
   Meter (correlation and goniometer), Tuner.
 
+The insert menu offers the engines and the FreeDAWm designs first (by name), then one Utilities
+group: the utilities, Dither and the four meters (the owner's call; Dither has no group of its
+own).
+
 **17 older stock effects are hidden from the menu on purpose**, because an engine covers each
 one: EQ 1-Band, EQ 7-Band, Compressor/Limiter, Expander/Gate, De-Esser, Maximizer, Channel Strip,
 Room and Plate Reverb, Mod Delay, Chorus, Flanger, Phaser, Saturator, Lo-Fi, Rectifier, Pitch
@@ -56,13 +60,13 @@ from the menu, and say so where a hidden effect would have filled a gap.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no upward compression, no look-ahead on Comp |
-| B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no linear-phase mode on the main EQ, no simple channel EQ in the menu |
-| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp, no pedalboard |
+| A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no look-ahead on Comp (upward compression dropped by the owner) |
+| B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no simple channel EQ in the menu (linear-phase CleanQ and a graphic EQ dropped by the owner) |
+| C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets | Small to medium: no bass amp yet (pedalboard dropped by the owner) |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses**, nothing beyond stereo |
-| E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small to medium: no rotary speaker, auto-pan, ring modulator or frequency shifter |
-| F. Pitch and voice | Octaver, doubler, whammy; machine-learning de-noise and de-reverb on an insert | Medium: no real-time pitch correction, no vocoder |
-| G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | **Large**: no beat repeat, gater, glitch or multi-effect; no mastering assistant |
+| E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small: rotary speaker, auto-pan, ring modulator and frequency shifter dropped by the owner |
+| F. Pitch and voice | Octaver, doubler, whammy; machine-learning de-noise and de-reverb on an insert | Small: real-time pitch correction and a vocoder dropped by the owner |
+| G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | Medium: no glitch or multi-effect; no mastering assistant (beat repeat and a gater dropped by the owner) |
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 936 factory presets, a searchable browser, chain and track presets | Small: two save paths that disagree, no rename, no default preset |
 | J. Editors | Custom editors for 24 effects, live graphs on mixer tiles | Small: fixed size, no value type-in on knobs |
@@ -84,7 +88,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Auto make-up gain | ◐ | ● | ● | ● | **Works** |
 | Mid/side and stereo link amount | ◐ | ● | ● | ● | **Works** |
 | Multiband compressor | ● | ● | ● | ● | **Works**: three bands inside Comp; crossovers are not linear-phase |
-| Upward compression or expansion | ◐ | ◐ | ◐ | ● | **Missing** |
+| Upward compression or expansion | ◐ | ◐ | ◐ | ● | **Dropped by the owner** |
 | Brickwall limiter aware of inter-sample peaks | ● | ● | ● | ● | **Works** (Twine: 8× true-peak detection) |
 | Clipper | ◐ | ◐ | ◐ | ● | **Works** (Twine: hard, soft, tape) |
 | Gate and expander with hysteresis, hold, look-ahead, key | ● | ● | ● | ● | **Works** (Lull; Shale for drums with bleed removal) |
@@ -103,12 +107,12 @@ Loudness Meter and Phase Meter). All three are in place.
 | Dynamic bands | ◐ | ● | ○ | ● | **Works** |
 | Mid/side or left/right per band | ◐ | ● | ◐ | ● | **Works** |
 | Spectrum behind the curve | ● | ● | ● | ● | **Works** |
-| Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only |
+| Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only; a linear-phase CleanQ was dropped by the owner |
 | Correct bell shapes near the top of the range at 44.1/48 kHz | ● | ● | ● | ● | **Works**: matched to the analog shape (within about 2 dB) |
 | Tilt band | ○ | ○ | ◐ | ◐ | **Missing** |
 | Match EQ | ○ | ○ | ● | ◐ | **Works** (CopyQ: up to four weighted profiles) |
 | Modelled vintage EQs | ● | ● | ● | ◐ | **Works** (Vint: two Pultecs, 1073, 550A, SSL E) |
-| Graphic EQ | ◐ | ○ | ● | ● | **Missing** |
+| Graphic EQ | ◐ | ○ | ● | ● | **Dropped by the owner** |
 | Automatic balance EQ | ○ | ○ | ○ | ○ | **Works** (Manners) |
 | Resonant filter with envelope, LFO and step modulation | ● | ● | ● | ● | **Works** (Filter: nine circuits, 16 steps) |
 | Wah | ● | ● | ● | ● | **Works** |
@@ -124,11 +128,11 @@ Loudness Meter and Phase Meter). All three are in place.
 | Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp; Dist and Filter use a weak filter (bug 8) |
 | Bit and sample-rate reduction | ● | ● | ● | ● | **Partial**: inside Vint's Sampler circuit; the Lo-Fi effect is hidden |
 | Exciter / enhancer | ◐ | ◐ | ● | ◐ | **Works** (Vint Enhancer) |
-| Sub-bass generator | ● | ○ | ● | ◐ | **Missing** |
+| Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator); a bass enhancer that adds harmonics above a chosen frequency is on the owner's build list instead |
 | Guitar amps | ● | ● | ● | ● | **Works**: seven, solved tube by tube; mono out |
 | Bass amp | ● | ● | ● | ● | **Missing** |
 | Cabinets from impulse responses | ● | ● | ● | ● | **Works** |
-| Pedalboard in one window | ◐ | ● | ● | ● | **Missing**: pedals are separate inserts |
+| Pedalboard in one window | ◐ | ● | ● | ● | **Dropped by the owner**: pedals stay separate inserts |
 | Tuner | ● | ● | ● | ● | **Works** (Tuner) |
 
 ## D. Reverb
@@ -138,7 +142,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Room, hall, plate | ● | ● | ● | ● | **Works** (Reverb) |
 | Chamber, spring | ◐ | ◐ | ● | ◐ | **Works**; ChamberMade builds the room from its shape, materials and microphones |
 | Shimmer | ○ | ○ | ◐ | ● | **Works** |
-| Gated / non-linear | ● | ◐ | ● | ◐ | **Missing** |
+| Gated / non-linear | ● | ◐ | ● | ◐ | **Dropped by the owner** |
 | Convolution with your own impulse responses | ● | ● | ● | ● | **Works** (Vault): zero latency, true stereo, up to 10 s |
 | Bundled impulse-response library | ● | ● | ● | ● | **Missing**: one generated hall |
 | Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only |
@@ -159,9 +163,9 @@ Loudness Meter and Phase Meter). All three are in place.
 | Long synced delays at high sample rates | ● | ● | ● | ● | **Works** up to 10.9 s at every rate |
 | Chorus, ensemble, flanger, phaser | ● | ● | ● | ● | **Works** (Mod: fourteen modelled circuits) |
 | Tremolo, vibrato | ● | ● | ● | ● | **Works** |
-| Auto-pan | ◐ | ● | ● | ● | **Missing** |
-| Rotary speaker | ◐ | ● | ● | ● | **Missing** |
-| Ring modulator, frequency shifter | ● | ○ | ● | ● | **Missing** |
+| Auto-pan | ◐ | ● | ● | ● | **Dropped by the owner** |
+| Rotary speaker | ◐ | ● | ● | ● | **Dropped by the owner** |
+| Ring modulator, frequency shifter | ● | ○ | ● | ● | **Dropped by the owner** |
 | Modulation locked to the bar | ● | ● | ● | ● | **Works** in Filter, Swale and Mod |
 
 ## F. Pitch and voice
@@ -171,8 +175,8 @@ Loudness Meter and Phase Meter). All three are in place.
 | Real-time pitch shifter | ● | ◐ | ● | ● | **Works** (Pitch); no formant preservation, and its delay is not compensated (bug 5) |
 | Octaver, doubler, harmony at fixed intervals | ● | ◐ | ● | ● | **Works** |
 | Harmony that follows a key | ○ | ○ | ◐ | ◐ | **Missing** |
-| Real-time automatic pitch correction | ○ | ○ | ● | ● | **Missing**; the vocal editor is offline (section 4) |
-| Vocoder | ◐ | ● | ● | ● | **Missing** |
+| Real-time automatic pitch correction | ○ | ○ | ● | ● | **Dropped by the owner**; the vocal editor is offline (section 4) |
+| Vocoder | ◐ | ● | ● | ● | **Dropped by the owner** |
 | De-noise on an insert | ○ | ○ | ○ | ◐ | **Works** (Mend Live): about 50 ms delay, 44.1 and 48 kHz only |
 | De-reverb on an insert | ○ | ○ | ○ | ○ | **Works** (Mend Studio): about 2.9 s delay, so for mixing, not tracking |
 | De-click, de-hum | ○ | ○ | ○ | ○ | **Missing** |
@@ -182,8 +186,8 @@ Loudness Meter and Phase Meter). All three are in place.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Beat repeat / stutter | ◐ | ◐ | ● | ● | **Missing** |
-| Gater or drawn volume shaper | ◐ | ● | ● | ● | **Partial**: Swale repeats one attack-hold-release shape per beat |
+| Beat repeat / stutter | ◐ | ◐ | ● | ● | **Dropped by the owner** |
+| Gater or drawn volume shaper | ◐ | ● | ● | ● | **Partial**: Swale repeats one attack-hold-release shape per beat; a gater or drawn shaper was dropped by the owner |
 | Step-sequenced multi-effect | ○ | ◐ | ● | ● | **Partial**: the Filter's 16-step cutoff only |
 | Glitch, granular or spectral effects | ◐ | ○ | ● | ◐ | **Missing** |
 | Lo-fi and vinyl | ● | ◐ | ● | ● | **Partial**: cassette and 12-bit sampler models; no vinyl |
@@ -245,7 +249,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Tails included in bounce and freeze | ● | ● | ● | ● | **Works** (bug 6) |
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
 | Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Partial**: missing on eight engines; no mix on the insert slot |
-| Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels) |
+| Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels), leaving the LFE out |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Missing** (section 3) |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
@@ -296,16 +300,16 @@ track. Then bug 4.
 | Work | Est. (h) | Notes |
 |---|---:|---|
 | Key input on Comp, with a ducking preset | 4–8 | **Done**: Comp takes the mixer's existing sidechain key (the same picker as Lull, Rez and Shale), with Listen and "Duck Under Voice" (commits 8d6303b, 773ac66) |
-| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Done**: per channel with bug 2; Comp's Link All Channels keys every channel from the loudest one (the LFE included; off by default). The other dynamics engines (Twine, Transient, Sift, LevelUp) still detect per channel (commit 8d6303b) |
+| Effects on surround tracks: run stereo engines per channel pair or per channel, with linked detection for dynamics | 10–16 | **Done**: per channel with bug 2; Comp's Link All Channels keys every channel from the loudest one (off by default). The LFE, as the track's channel format names it (the mixer tells each insert, `Plugin::set_lfe_channels`), neither feeds the link nor is turned down by it (the owner's decision; test `comp_link_leaves_the_lfe_of_a_5_1_track_out`). The other dynamics engines (Twine, Transient, Sift, LevelUp) still detect per channel (commits 8d6303b, LFE: see the revision history) |
 | Click-free bypass that keeps delay compensation steady | 4–6 | **Done** with bug 4 |
 | A simple channel EQ and compressor in the menu (unhide and tidy the stock ones, or presets of CleanQ and Comp) | 3–6 | Owner's call which |
 | Meter plug-ins: spectrum, loudness with true peak, correlation | 8–12 | **Done**: Spectrum, Loudness Meter, Phase Meter (commit 5f123a2) |
 | Tuner; channel utility (swap, mono, mid/side, per-channel polarity); dither in the menu | 6–10 | **Done** (commit 5f123a2) |
 | Bundled impulse responses for Vault, and impulse-response editing | 6–10 | Imprint can capture; licensing for any third-party set must be checked |
-| Rotary speaker, auto-pan, ring modulator and frequency shifter | 10–16 | |
-| Vocoder | 8–12 | Needs a key input |
-| Bass amp; a pedalboard that holds Dist, Mod and Filter in one window | 10–16 | |
-| Beat repeat and a drawn volume shaper / gater | 8–12 | |
+| Rotary speaker, auto-pan, ring modulator and frequency shifter | 10–16 | Dropped by the owner |
+| Vocoder | 8–12 | Dropped by the owner |
+| Bass amp; a pedalboard that holds Dist, Mod and Filter in one window | 10–16 | Bass amp on the owner's build list; the pedalboard dropped by the owner |
+| Beat repeat and a drawn volume shaper / gater | 8–12 | Dropped by the owner |
 | Preset housekeeping: one save path, rename, default preset, A/B everywhere, favourites in the insert menu, hide effects | 8–12 | Fixes bugs 1, 3 and 10 properly |
 | Editor basics: scalable windows, type-in on every control, pin on top | 6–10 | |
 
@@ -314,6 +318,11 @@ mode and uncramped bells in CleanQ, 8–12; upward compression, 4–6; gated rev
 reverb, 10–16; a rack with parallel and band splits and macro knobs (Studio Pro, partly Cubase),
 14–22; modulators for any parameter (Cubase, partly Studio Pro), 10–16; a sub-bass generator and
 a graphic EQ, 4–7. A mastering assistant is Logic's alone and belongs in the last section.
+**Dropped by the owner:** real-time pitch correction, a linear-phase CleanQ, upward compression,
+gated reverb, a plain sub-bass generator and a graphic EQ (with, from tier 2, the rotary speaker,
+auto-pan, ring modulator, frequency shifter, vocoder, beat repeat, volume shaper / gater and the
+pedalboard). Of the new effects only a bass amp and a bass enhancer (harmonics above a chosen
+frequency, so low notes are heard on small speakers) are to be built.
 
 **Where FreeDAWm is already level or ahead:** ten compressor models with a multiband mode in one
 plug-in, a 24-band dynamic EQ with mid/side per band, circuit-level models of vintage EQs, pedals
@@ -355,3 +364,5 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Tier 2: Comp takes a key (Listen, "Duck Under Voice") and can link detection across a surround track |
 | 2026-11-16 | minor | Tier 2: Spectrum, Loudness Meter, Phase Meter, Tuner and Channel Tool added; Dither back in the menu |
 | 2026-11-16 | minor | Bug 6 and the tier-2 rows above: the commits that did them noted |
+| 2026-11-16 | minor | The effects the owner dropped marked "dropped by the owner" (rotary speaker, auto-pan, ring modulator, frequency shifter, vocoder, beat repeat, volume shaper / gater, pedalboard, upward compression, linear-phase CleanQ, gated reverb, plain sub-bass generator, graphic EQ, real-time pitch correction) |
+| 2026-11-16 | minor | Comp's Link All Channels leaves the LFE out, told by the mixer from the track's channel format; the meters and Dither listed under Utilities in the insert menu |
