@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
-use soundcraft_model::{Clip, ClipId, Source, SourceId, TrackId};
+use soundcraft_model::{Clip, ClipId, Fade, FadeShape, Source, SourceId, TrackId};
 
 fn source(id: u64, frames: u64) -> Source {
     Source {
@@ -92,4 +92,54 @@ fn a_range_passed_or_chosen_still_clears_the_range() {
     run(&mut e, "edit.select", json!({"clips": [c[0].0, c[2].0]}));
     run(&mut e, "edit.clear", json!({"start": 500, "end": 2500}));
     assert_eq!(clips(&e, t), vec![(0, 500, 0), (2500, 500, 2500)]);
+}
+
+// ---- bug 2: placing a crossfaded pair cut the first clip off -------------------------------
+
+fn ids(v: &[ClipId]) -> Vec<u64> {
+    v.iter().map(|c| c.0).collect()
+}
+
+/// Two clips crossfaded over 1000..1200, and a long clip on a second track.
+fn crossfaded(mode: &str) -> (Engine, TrackId, Vec<ClipId>) {
+    let mut e = engine(mode);
+    let (t, c) = track(&mut e, &[(0, 1200, 0), (1000, 1000, 5000)]);
+    let s = e.session_mut();
+    s.find_clip_mut(c[0]).unwrap().fade_out = Fade { len: 200, shape: FadeShape::EqualPower, curvature: 0.0 };
+    s.find_clip_mut(c[1]).unwrap().fade_in = Fade { len: 200, shape: FadeShape::EqualPower, curvature: 0.0 };
+    (e, t, c)
+}
+
+fn pair_at(e: &Engine, t: TrackId, at: i64) -> bool {
+    let c = clips(e, t);
+    c.contains(&(at, 1200, 0)) && c.contains(&(at + 1000, 1000, 5000))
+}
+
+#[test]
+fn paste_duplicate_and_repeat_keep_a_crossfaded_pair_whole() {
+    let (mut e, t, _) = crossfaded("slip");
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    run(&mut e, "edit.copy", json!({}));
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 10_000}));
+    run(&mut e, "edit.paste", json!({}));
+    assert!(pair_at(&e, t, 10_000), "paste: {:?}", clips(&e, t));
+
+    let (mut e, t, _) = crossfaded("slip");
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    run(&mut e, "edit.duplicate", json!({}));
+    assert!(pair_at(&e, t, 2000), "duplicate: {:?}", clips(&e, t));
+
+    let (mut e, t, _) = crossfaded("slip");
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 2000}));
+    run(&mut e, "edit.repeat", json!({"count": 2}));
+    assert!(pair_at(&e, t, 2000) && pair_at(&e, t, 4000), "repeat: {:?}", clips(&e, t));
+}
+
+#[test]
+fn copying_a_crossfaded_pair_to_another_track_keeps_it_whole() {
+    let (mut e, t, c) = crossfaded("slip");
+    let u = new_track(&mut e);
+    run(&mut e, "clip.copy_to", json!({"clips": ids(&c), "track": u.0}));
+    assert!(pair_at(&e, u, 0), "copy_to: {:?}", clips(&e, u));
+    assert!(pair_at(&e, t, 0));
 }

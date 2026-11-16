@@ -315,11 +315,14 @@ fn copy_to(e: &mut Engine, p: &Value) -> Result<Value> {
         .collect();
     let s = e.session_mut();
     let mut new_ids = Vec::new();
+    let mut placed = Vec::with_capacity(copies.len());
     for (t, mut c) in copies {
         c.id = s.new_clip_id();
         new_ids.push(c.id);
-        crate::edit::place_clip(s, t, c);
+        placed.push((t, c));
     }
+    // Together, so copies of a crossfaded pair keep their crossfade.
+    crate::edit::put_clips(s, placed);
     s.edit.selected_clips = new_ids.clone();
     s.edit.selected_tracks = vec![to];
     Ok(json!({"clips": new_ids.iter().map(|c| c.0).collect::<Vec<_>>(), "track": to.0}))

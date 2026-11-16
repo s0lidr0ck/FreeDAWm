@@ -336,13 +336,12 @@ fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
         let mut copies = Vec::new();
         for k in 1..=reps {
             let mut nc = c.clone();
-            nc.start = 0;
-            copies.push((c.start + c.length * k, nc));
+            nc.id = s.new_clip_id();
+            nc.start = c.start.saturating_add(c.length.saturating_mul(k));
+            copies.push((tid, nc));
         }
-        for (at, nc) in copies {
-            let _ = crate::edit::paste(s, tid, at, &[nc], c.length, false);
-            made += 1;
-        }
+        made += copies.len();
+        crate::edit::put_clips(s, copies);
     }
     Ok(json!({"loops": made}))
 }

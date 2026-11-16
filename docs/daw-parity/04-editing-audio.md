@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
-| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: **pasting or duplicating a crossfaded pair destroys the crossfade**; overwrite is the only overlap mode |
+| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups and edit lock are mostly not honoured; no clip transpose; clip effects are lost on a split |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
@@ -116,7 +116,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, except that a crossfaded pair loses its crossfade (bug 2); Repeat leaves automation behind, Duplicate takes it |
+| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it |
 | Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; ignores Shuffle |
 | Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Partial**: the tempo and meter map, key signatures, take layers and other playlists do not move (bug 7) |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
@@ -266,7 +266,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | # | Bug | Where |
 |---|---|---|
 | 1 | **Fixed.** Selecting clips A and C and pressing Delete also removed clip B between them, on every track involved. Delete, Cut and Copy now act on the selected clips alone while the selection is still the span they set (`object_clips`, `edit::remove_clips`); a range passed or chosen still clears the range. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`object_clips`, `cut_copy_objects`, `clear`) |
-| 2 | Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy place clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cuts the first off | `engine/src/edit.rs:216-239` |
+| 2 | **Fixed.** Paste, Duplicate, Repeat, clip loop and Ctrl-drag copy placed clips one by one, each clearing what is under it, so the second clip of a crossfaded pair cut the first off. They now place their clips together (`edit::put_clips`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`paste`, `put_clips`); `engine/src/cmd/clip.rs` (`loop_clips`); `engine/src/cmd/clip_more.rs` (`copy_to`) |
 | 3 | Trimming or splitting a stretched clip advances the file position by timeline samples, not source samples, so the remaining piece plays from the wrong place | `model/src/clip.rs:447-453`; `mix/src/lib.rs:3398` |
 | 4 | An edit-locked clip can still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped | `engine/src/edit.rs:82-455, 800-882` |
 | 5 | Per-clip effects are stored under the clip's id, so a split's right half and every copy play without them | `engine/src/cmd/clip_more.rs:194`; `mix/src/lib.rs:2882` |
@@ -339,3 +339,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 |---|---|---|
 | 2026-11-16 | major | First version: editing audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
 | 2026-11-16 | minor | Bug 1 fixed: Delete, Cut and Copy of selected clips leave the clips between them alone |
+| 2026-11-16 | minor | Bug 2 fixed: pasted, duplicated, repeated, looped and copied crossfaded pairs keep their crossfade |

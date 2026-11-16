@@ -237,13 +237,16 @@ pub fn paste(s: &mut Session, track: TrackId, at: Samples, clips: &[Clip], lengt
         make_room(s, track, at, length)?;
     }
     let mut ids = Vec::new();
+    let mut placed = Vec::with_capacity(clips.len());
     for c in clips {
         let mut nc = c.clone();
         nc.id = s.new_clip_id();
         nc.start += at;
         ids.push(nc.id);
-        place_clip(s, track, nc);
+        placed.push((track, nc));
     }
+    // All at once: a crossfaded pair overwrites what is under it, never its own partner.
+    put_clips(s, placed);
     Ok(ids)
 }
 
@@ -516,9 +519,9 @@ pub fn move_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(Trac
     n
 }
 
-/// Place moved clips, overwriting what they cover but not each other, so a crossfaded pair
-/// moved together stays a crossfade.
-fn put_clips(s: &mut Session, placed: Vec<(TrackId, Clip)>) {
+/// Place clips together (moved, pasted or copied), overwriting what they cover but not each
+/// other, so a crossfaded pair placed together stays a crossfade.
+pub fn put_clips(s: &mut Session, placed: Vec<(TrackId, Clip)>) {
     for (t, c) in &placed {
         clear_range(s, *t, c.range(), false);
     }
