@@ -608,8 +608,8 @@ impl Engine {
 
     /// Undo and Redo never change the Edit mode or its settings (Shuffle Lock above all).
     fn keep_edit_mode(&mut self, from: &Session) {
-        use edit::{RELATIVE_GRID, SHUFFLE_LOCK, SNAP_TO_GRID};
-        let flags = [SNAP_TO_GRID, SHUFFLE_LOCK, RELATIVE_GRID];
+        use edit::{RELATIVE_GRID, SHUFFLE_LOCK, SNAP_TO_CLIPS, SNAP_TO_GRID, SNAP_TO_MARKERS, SNAP_TO_ZERO};
+        let flags = [SNAP_TO_GRID, SHUFFLE_LOCK, RELATIVE_GRID, SNAP_TO_CLIPS, SNAP_TO_MARKERS, SNAP_TO_ZERO];
         let ed = &self.doc.edit;
         // The view (zoom, scroll, waveform height) and the current tool stay too: undo takes back
         // the edit, not where the person was looking or what they were holding.

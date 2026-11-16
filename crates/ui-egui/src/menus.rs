@@ -761,6 +761,9 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
 
 /// View and option toggles that keep their state as a session flag: command id → flag.
 const FLAG_TOGGLES: &[(&str, &str)] = &[
+    ("edit.snap_to_clips", soundcraft_engine::edit::SNAP_TO_CLIPS),
+    ("edit.snap_to_markers", soundcraft_engine::edit::SNAP_TO_MARKERS),
+    ("edit.snap_to_zero_crossings", soundcraft_engine::edit::SNAP_TO_ZERO),
     ("track.suspend_groups", "groups.suspended"),
     ("options.low_latency_monitoring", "options.low_latency_monitoring"),
     ("options.keyboard_lock", "options.edit_tool_mode_keyboard_lock"),

@@ -1008,6 +1008,12 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
         let band = Rect::from_two_pos(*origin, *to).intersect(lane);
         painter.rect(band, 0.0, t_accent_fill(), Stroke::new(1.0, Tokens::current().accent), StrokeKind::Inside);
     }
+    if let Some(Gesture::ClipBand { origin, to, .. }) = &app.gesture {
+        let band = Rect::from_two_pos(*origin, *to).intersect(lane);
+        if band.height() > 0.0 && band.width() > 0.0 {
+            painter.rect(band, 0.0, t_accent_fill(), Stroke::new(1.0, Tokens::current().accent), StrokeKind::Inside);
+        }
+    }
     crate::lyrics_lane::draw(&painter, &s, track, tl, lane);
     if track.kind == TrackKind::Master || track.kind == TrackKind::Aux || track.kind == TrackKind::Vca {
         let p = auto_view.clone().unwrap_or(AutoParam::Volume);
@@ -2701,7 +2707,43 @@ fn plugin_range(track: &Track, p: &AutoParam) -> (f32, f32) {
 /// `at` on the grid when the edit mode or Snap to Grid asks for it.
 pub fn snap(s: &Session, at: Samples) -> Samples {
     let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
-    if on { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at }
+    let gridded = if on { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    ops::snap_point(s, at, gridded, magnet_reach(s), None, &[])
+}
+
+/// [`snap`] for an edit point on `track`: also to the zero crossing of its audio when asked.
+pub fn snap_on(s: &Session, at: Samples, track: TrackId) -> Samples {
+    let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
+    let gridded = if on { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    ops::snap_point(s, at, gridded, magnet_reach(s), Some(track), &[])
+}
+
+/// How near (8 pixels at the current zoom) a clip edge or marker pulls an edit point.
+fn magnet_reach(s: &Session) -> Samples {
+    let spp = s.edit.zoom.samples_per_px;
+    if spp.is_finite() { (spp.max(0.0) * 8.0).min(1e12) as Samples } else { 0 }
+}
+
+/// The clips a box drawn over the timeline touches: on each visible row it crosses, those whose
+/// span on screen overlaps it.
+fn clips_in_band(s: &Session, tl: Rect, rows: &[(u64, [f32; 4])], band: Rect) -> Vec<ClipId> {
+    let mut out = Vec::new();
+    for (id, row) in rows {
+        let Some(t) = s.track(TrackId(*id)) else { continue };
+        let lane = lane_rect(t, rect(*row), tl);
+        if band.max.y < lane.min.y || band.min.y > lane.max.y {
+            continue;
+        }
+        for c in t.clips() {
+            let (x0, x1) = (x_of(s, tl, c.start), x_of(s, tl, c.end()));
+            if x1 >= band.min.x && x0 <= band.max.x {
+                out.push(c.id);
+            }
+        }
+    }
+    out
+}
+
 }
 
 fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
@@ -3143,19 +3185,32 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         ui.ctx().request_repaint();
     } else if resp.drag_started() {
         app.gesture = match eff {
-            Tool::Selector | Tool::Smart => Some(Gesture::Select { track: track.id, anchor: snap(&s, at_origin), tracks: vec![track.id] }),
-            Tool::Grabber => hit.as_ref().map(|c| {
-                let clips = if s.edit.selected_clips.contains(&c.id) { s.edit.selected_clips.clone() } else { vec![c.id] };
-                Gesture::MoveClips {
-                    clips,
-                    grab_at: at_origin,
-                    delta: 0,
-                    from_track: track.id,
-                    to_track: track.id,
-                    copy: mods.ctrl,
-                    keep_time: mods.alt,
-                }
-            }),
+            Tool::Selector | Tool::Smart => {
+                Some(Gesture::Select { track: track.id, anchor: snap_on(&s, at_origin, track.id), tracks: vec![track.id] })
+            }
+            Tool::Grabber => hit
+                .as_ref()
+                .map(|c| {
+                    // An unselected clip comes with the rest of its clip group.
+                    let clips = if s.edit.selected_clips.contains(&c.id) { s.edit.selected_clips.clone() } else { ops::group_members(&s, c.id) };
+                    Gesture::MoveClips {
+                        clips,
+                        grab_at: at_origin,
+                        delta: 0,
+                        from_track: track.id,
+                        to_track: track.id,
+                        copy: mods.ctrl,
+                        keep_time: mods.alt,
+                    }
+                })
+                .or_else(|| {
+                    // From empty space (not an automation lane): a box that picks clips.
+                    auto_view.is_none().then(|| Gesture::ClipBand {
+                        origin,
+                        to: origin,
+                        keep: if mods.shift { s.edit.selected_clips.clone() } else { Vec::new() },
+                    })
+                }),
             Tool::Trim => hit.as_ref().map(|c| match near_edge(c) {
                 Some(false) => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end() },
                 _ if at_origin - c.start < c.end() - at_origin => Gesture::TrimStart { clip: c.id, track: track.id, to: c.start },
@@ -3332,7 +3387,7 @@ fn point_context_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, param: &A
 }
 
 fn place_insertion(app: &mut SoundApp, ui: &Ui, s: &Session, track: TrackId, at: Samples, extend: bool) {
-    let at = snap(s, at);
+    let at = snap_on(s, at, track);
     let sel = s.edit.selection;
     let params = if extend && s.edit.selected_tracks.contains(&track) {
         let r = if at < sel.start { Range::new(at, sel.end) } else { Range::new(sel.start, at) };
@@ -3503,6 +3558,23 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         }
+        Some(Gesture::ClipBand { origin, to, keep }) => {
+            *to = p;
+            let band = Rect::from_two_pos(*origin, p);
+            let mut ids: Vec<u64> = keep.iter().map(|c| c.0).collect();
+            ids.extend(clips_in_band(&s, tl, rows, band).into_iter().map(|c| c.0));
+            ids.sort_unstable();
+            ids.dedup();
+            let mut now: Vec<u64> = s.edit.selected_clips.iter().map(|c| c.0).collect();
+            now.sort_unstable();
+            if ids != now {
+                if ids.is_empty() {
+                    let _ = app.engine.execute("edit.select_none", &json!({}));
+                } else {
+                    let _ = app.engine.execute("edit.select", &json!({"clips": ids}));
+                }
+            }
+        }
         Some(Gesture::RubberBand { track, param, origin, to }) => {
             *to = p;
             if let Some(t) = s.track(*track)
@@ -3553,7 +3625,7 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     }
     if let Some(Gesture::Select { track, anchor, tracks }) = &app.gesture {
         let (track, anchor, tracks) = (*track, *anchor, tracks.clone());
-        let r = Range::new(anchor, snap(&s, at));
+        let r = Range::new(anchor, snap_on(&s, at, track));
         if tracks != s.edit.selected_tracks || r != s.edit.selection {
             let ids: Vec<u64> = tracks.iter().map(|x| x.0).collect();
             let _ = app.run("edit.select", json!({"tracks": ids, "start": r.start, "end": r.end}));
@@ -3645,7 +3717,9 @@ fn automation_id(p: &AutoParam) -> String {
 
 /// Grid snapping while dragging; holding Cmd/Ctrl swaps Grid and Slip.
 fn drag_snap(s: &Session, at: Samples, flip: bool) -> Samples {
-    if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at }
+    let gridded = if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate) } else { at };
+    // The suspend modifier lets go of clip edges and markers too.
+    if flip { gridded } else { ops::snap_point(s, at, gridded, magnet_reach(s), None, &[]) }
 }
 
 /// What a clip drag works out once per target track rather than every frame: where the tracks go
@@ -4128,6 +4202,40 @@ mod tests {
         h.input_mut().max_texture_side = Some(8192);
         h.run_steps(4);
         h
+    }
+
+    /// A Grabber drag from empty space boxes clips across tracks; Shift adds to what was selected.
+    #[test]
+    fn a_grabber_box_from_empty_space_selects_the_clips_it_touches() {
+        let mut engine = soundcraft_engine::Engine::default();
+        engine.execute("track.new", &json!({"count": 3})).unwrap();
+        engine.execute("edit.tool", &json!({"tool": "grabber"})).unwrap();
+        let s = engine.session_mut();
+        let ids: Vec<TrackId> = s.tracks.iter().map(|t| t.id).collect();
+        let mut made = Vec::new();
+        for (i, t) in ids.iter().enumerate() {
+            let id = s.new_clip_id();
+            let start = 48_000 * (1 + i as i64);
+            s.track_mut(*t).and_then(|t| t.playlist_mut()).unwrap().clips =
+                vec![Clip::audio(id, "c", soundcraft_model::SourceId(1), 0, start, 24_000)];
+            made.push((id, start));
+        }
+        let mut h = harness_with(engine);
+        let s = h.state().engine.session().clone();
+        let tl = timeline(&h);
+        // From before the first clip on track 1, down to track 2, ending inside track 2's clip.
+        let from = pos2(x_of(&s, tl, made[0].1) - 30.0, row(&h, 0).center().y);
+        let to = pos2(x_of(&s, tl, made[1].1) + 5.0, row(&h, 1).center().y);
+        drag(&mut h, from, to);
+        let mut sel = h.state().engine.session().edit.selected_clips.clone();
+        sel.sort();
+        assert_eq!(sel, vec![made[0].0, made[1].0]);
+        // Shift: the third track's clip is added.
+        let from = pos2(x_of(&s, tl, made[2].1) - 30.0, row(&h, 2).center().y);
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        drag(&mut h, from, from + vec2(60.0, 0.0));
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        assert_eq!(h.state().engine.session().edit.selected_clips.len(), 3);
     }
 
     #[test]

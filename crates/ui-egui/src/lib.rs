@@ -724,6 +724,14 @@ pub enum Gesture {
         track: TrackId,
         start_db: f32,
     },
+    /// A Grabber drag from an empty part of the timeline: the clips the box touches, on every
+    /// track it crosses, are selected (with Shift held at the press, added to the selection).
+    ClipBand {
+        origin: egui::Pos2,
+        to: egui::Pos2,
+        /// The clips selected before (Shift), kept under the band's.
+        keep: Vec<soundcraft_model::ClipId>,
+    },
     ClipGain {
         clip: soundcraft_model::ClipId,
         track: TrackId,

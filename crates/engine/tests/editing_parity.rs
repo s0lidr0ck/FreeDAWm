@@ -572,3 +572,68 @@ fn a_clip_group_selects_moves_and_deletes_as_one() {
     run(&mut e, "edit.select", json!({"clips": [b[0].0], "exact": true}));
     assert_eq!(e.session().edit.selected_clips, vec![b[0]]);
 }
+
+#[test]
+fn a_clip_groups_trims_and_fades_act_on_every_member() {
+    let mut e = engine("slip");
+    let (t, a) = track(&mut e, &[(1000, 1000, 1000)]);
+    let (u, b) = track(&mut e, &[(1200, 1000, 5000)]);
+    let (_, lone) = track(&mut e, &[(1000, 1000, 9000)]);
+    run(&mut e, "clip.group", json!({"clips": [a[0].0, b[0].0]}));
+    run(&mut e, "edit.trim_clip", json!({"clip": a[0].0, "start": 1100}));
+    assert_eq!(clips(&e, t), vec![(1100, 900, 1100)]);
+    assert_eq!(clips(&e, u), vec![(1300, 900, 5100)], "the other member's start moves as far");
+    run(&mut e, "edit.trim_clip", json!({"clip": b[0].0, "end": 2100}));
+    assert_eq!(clips(&e, u), vec![(1300, 800, 5100)]);
+    assert_eq!(clips(&e, t), vec![(1100, 800, 1100)]);
+    run(&mut e, "edit.trim_clip", json!({"clip": b[0].0, "end": 2200, "alone": true}));
+    assert_eq!(clips(&e, t), vec![(1100, 800, 1100)], "alone: the group stays");
+    let r = run(&mut e, "edit.fades_create", json!({"clip": a[0].0, "side": "in", "length": 200}));
+    assert_eq!(r["fades"], 2);
+    let s = e.session();
+    assert_eq!(s.find_clip(b[0]).unwrap().1.fade_in.len, 200);
+    assert_eq!(s.find_clip(lone[0]).unwrap().1.fade_in.len, 0, "a clip outside the group is left alone");
+    assert_eq!(soundcraft_engine::edit::group_members(s, lone[0]), vec![lone[0]]);
+}
+
+// ---- tier 2: snapping to clip edges, markers and zero crossings ------------------------------
+
+#[test]
+fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
+    use soundcraft_engine::edit::{magnet_target, snap_point, zero_crossing_near};
+    let mut e = engine("slip");
+    let (t, _) = track(&mut e, &[(10_000, 5_000, 0), (20_000, 1_000, 0)]);
+    run(&mut e, "markers.add", json!({"at": 30_000}));
+    // Nothing pulls until asked.
+    assert_eq!(magnet_target(e.session(), 10_050, 100, &[]), None);
+    run(&mut e, "edit.snap_to_clips", json!({}));
+    let s = e.session();
+    assert_eq!(magnet_target(s, 10_050, 100, &[]), Some(10_000));
+    assert_eq!(magnet_target(s, 14_960, 100, &[]), Some(15_000), "a clip's end");
+    assert_eq!(magnet_target(s, 10_500, 100, &[]), None, "out of reach");
+    assert_eq!(magnet_target(s, 30_010, 100, &[]), None, "markers are off");
+    let first = s.track(t).unwrap().clips()[0].id;
+    assert_eq!(magnet_target(s, 10_050, 100, &[first]), None, "a dragged clip does not pull itself");
+    // A grid line nearer than the edge wins; an edge nearer than the grid line wins.
+    assert_eq!(snap_point(s, 10_050, 10_040, 100, None, &[]), 10_040);
+    assert_eq!(snap_point(s, 10_020, 10_100, 100, None, &[]), 10_000);
+    run(&mut e, "edit.snap_to_markers", json!({}));
+    assert_eq!(magnet_target(e.session(), 29_950, 100, &[]), Some(30_000));
+
+    // Zero crossings: a sine of period 100 in the clip's file, crossing every 50 samples.
+    let wave: Vec<f32> = (0..100_000).map(|i| ((i as f64 + 0.5) * std::f64::consts::TAU / 100.0).sin() as f32).collect();
+    let audio = soundcraft_model::SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![wave] });
+    e.session_mut().pool.insert(SourceId(8), std::sync::Arc::new(audio));
+    let z = zero_crossing_near(e.session(), t, 10_120, 240).unwrap();
+    assert!((10_099..=10_100).contains(&z), "the nearest crossing to file sample 120 is at 100: {z}");
+    assert_eq!(zero_crossing_near(e.session(), t, 17_000, 240), None, "no audio there");
+    // Off, an insertion stays put; on, it moves to the crossing.
+    assert_eq!(snap_point(e.session(), 10_120, 10_120, 0, Some(t), &[]), 10_120);
+    run(&mut e, "edit.snap_to_zero_crossings", json!({}));
+    assert_eq!(snap_point(e.session(), 10_120, 10_120, 0, Some(t), &[]), z);
+    // Undo keeps the snap settings, like the Edit mode.
+    run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 0, "end": 100}));
+    run(&mut e, "edit.clear", json!({}));
+    run(&mut e, "edit.undo", json!({}));
+    assert!(e.session().edit.flag(soundcraft_engine::edit::SNAP_TO_ZERO));
+}

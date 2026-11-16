@@ -153,6 +153,33 @@ pub fn specs() -> Vec<CommandSpec> {
             snap_to_grid
         ),
         cmd!(
+            noundo "edit.snap_to_clips",
+            "Snap to Clip Edges",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to clip edges within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_CLIPS)
+        ),
+        cmd!(
+            noundo "edit.snap_to_markers",
+            "Snap to Markers",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to markers within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_MARKERS)
+        ),
+        cmd!(
+            noundo "edit.snap_to_zero_crossings",
+            "Snap to Zero Crossings",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — selection edges and the insertion snap to the nearest zero crossing of the audio under them (within 5 ms)",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_ZERO)
+        ),
+        cmd!(
             noundo "edit.shuffle_lock",
             "Shuffle Lock",
             [],
@@ -180,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Trim Clip",
             [],
             None,
-            "{clip: id, start?: position, end?: position} — moves the clip's edges like the Trim tool, in the current Edit mode",
+            "{clip: id, start?: position, end?: position, alone?: bool} — moves the clip's edges like the Trim tool, in the current Edit mode; the rest of its clip group moves the same edge as far unless `alone`",
             always,
             trim_clip
         ),
@@ -954,14 +981,25 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         if p.get("shape").is_some_and(|v| !v.is_string()) {
             return Err(bad("edit.fades_create", "shape must be a fade shape name"));
         }
-        let fade = Fade { len: length.min(available), shape, curvature };
-        let clip = e.session_mut().find_clip_mut(id).ok_or_else(|| bad("edit.fades_create", "clip not found"))?;
-        if fade_in {
-            clip.fade_in = fade;
-        } else {
-            clip.fade_out = fade;
+        // A grouped clip's fade goes on every member of its group (each within its own length),
+        // unless `alone`.
+        let ids = if bool_or(p, "alone", false) { vec![id] } else { ops::group_members(e.session(), id) };
+        let mut n = 0;
+        for id in ids {
+            let Some(clip) = e.session_mut().find_clip_mut(id) else { continue };
+            let available = clip.length.min(clip.end().saturating_sub(clip.start));
+            if available <= 0 {
+                continue;
+            }
+            let fade = Fade { len: length.min(available), shape, curvature };
+            if fade_in {
+                clip.fade_in = fade;
+            } else {
+                clip.fade_out = fade;
+            }
+            n += 1;
         }
-        return Ok(json!({"fades": 1}));
+        return Ok(json!({"fades": n}));
     }
     if p.get("curvature").is_some() {
         return Err(bad("edit.fades_create", "curvature requires a clip and side"));
@@ -1078,7 +1116,20 @@ fn trim_clip(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("edit.trim_clip", "pass `start` and/or `end`"));
     }
     let sh = shuffle(e.session());
+    let before = e.session().find_clip(id).map(|(_, c)| (c.start, c.end())).ok_or_else(|| bad("edit.trim_clip", "no such clip"))?;
     let c = ops::trim_clip(e.session_mut(), id, start, end, sh).ok_or_else(|| bad("edit.trim_clip", "no such clip, or it is edit-locked"))?;
+    // The rest of a clip group moves the same edge by as much, unless `alone`.
+    let (ds, de) = (c.start - before.0, c.end() - before.1);
+    if !bool_or(p, "alone", false) && (ds != 0 || de != 0) {
+        for other in ops::group_members(e.session(), id).into_iter().filter(|o| *o != id) {
+            let Some((os, oe)) = e.session().find_clip(other).map(|(_, x)| (x.start, x.end())) else { continue };
+            let start = (start.is_some() && ds != 0).then(|| os.saturating_add(ds));
+            let end = (end.is_some() && de != 0).then(|| oe.saturating_add(de));
+            if start.is_some() || end.is_some() {
+                let _ = ops::trim_clip(e.session_mut(), other, start, end, sh);
+            }
+        }
+    }
     Ok(json!({"start": c.start, "end": c.end()}))
 }
 

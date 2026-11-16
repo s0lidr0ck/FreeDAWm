@@ -84,8 +84,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; "1/4 dotted" typed as a command fails to parse |
 | Grid in time, frames and samples | ● | ● | ● | ● | **Partial**: lines no longer drift (bug 18, partly fixed); time and frame lines still count from zero, not the timecode start |
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
-| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Missing**: only the grid is ever snapped to |
-| Snap to zero crossings | ○ | ◐ | ● | ● | **Missing** |
+| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
+| Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
 | Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
 | Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Missing** |
@@ -97,7 +97,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Range across several tracks | ● | ● | ● | ● | **Works** |
 | Select several clips as objects and act on only those | ● | ● | ● | ● | **Works**: Delete, Cut and Copy act on the selected clips only (bug 1, fixed) |
-| Rubber-band selection of clips | ◐ | ● | ● | ● | **Missing**: the rubber band picks automation points only |
+| Rubber-band selection of clips | ◐ | ● | ● | ● | **Works**: a Grabber drag from empty space selects the clips the box touches across tracks (Shift adds) |
 | Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Missing** except Select All |
 | Extend selection to session start or end | ● | ● | ● | ● | **Missing** |
 | Type the selection's start, end and length | ● | ● | ● | ● | **Missing**: the numbers are display only |
@@ -136,7 +136,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip mute | ● | ● | ● | ● | **Works** |
 | Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
-| Clip groups that select and move as one | ● | ● | ● | ● | **Partial**: selecting a grouped clip selects its group, so moves, cuts, copies and deletes take the whole group; a drag that starts on an unselected member, trims and fades still act on one clip |
+| Clip groups that select and move as one | ● | ● | ● | ● | **Works**: selecting a grouped clip selects its group; a drag from an unselected member takes the group; a trim moves the same edge of every member as far, and a fade drawn on one goes on all (`alone` for one) |
 | Loop a clip without making copies | ● | ◐ | ● | ◐ | **Partial**: makes real copies, N times or to a length |
 | Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
@@ -358,5 +358,6 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: snap to clip edges, markers and zero crossings; rubber-band clip selection; clip groups trim, fade and drag as one |
 | 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |

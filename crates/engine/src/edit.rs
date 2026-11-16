@@ -1100,6 +1100,105 @@ pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
     n
 }
 
+/// `id` and the other clips of its clip group on every track's active playlist (`id` alone when
+/// it is not grouped), `id` first.
+pub fn group_members(s: &Session, id: ClipId) -> Vec<ClipId> {
+    let group = s.find_clip(id).and_then(|(_, c)| c.group);
+    let mut out = vec![id];
+    if let Some(g) = group {
+        out.extend(s.tracks.iter().flat_map(|t| t.clips()).filter(|c| c.group == Some(g) && c.id != id).map(|c| c.id));
+    }
+    out
+}
+
+/// Edit-state flag: edit points snap to clip edges near them (Options › Snap to Clip Edges).
+pub const SNAP_TO_CLIPS: &str = "edit.snap_to_clips";
+/// Edit-state flag: edit points snap to markers near them (Options › Snap to Markers).
+pub const SNAP_TO_MARKERS: &str = "edit.snap_to_markers";
+/// Edit-state flag: a selection's edges and the insertion snap to the nearest zero crossing of
+/// the audio under them (Options › Snap to Zero Crossings).
+pub const SNAP_TO_ZERO: &str = "edit.snap_to_zero_crossings";
+
+/// The clip edge or marker nearest `at` within `reach`, as [`SNAP_TO_CLIPS`] and
+/// [`SNAP_TO_MARKERS`] ask. Clip edges count on every visible track's active playlist, clips in
+/// `skip` (the ones being dragged) left out; a marker counts by its start, a range by its end too.
+pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) -> Option<Samples> {
+    let reach = reach.max(0);
+    let mut best: Option<Samples> = None;
+    let mut take = |p: Samples| {
+        let d = p.saturating_sub(at).saturating_abs();
+        if d <= reach && best.is_none_or(|b| d < b.saturating_sub(at).saturating_abs()) {
+            best = Some(p);
+        }
+    };
+    if s.edit.flag(SNAP_TO_CLIPS) {
+        for t in s.tracks.iter().filter(|t| !t.hidden) {
+            for c in t.clips().iter().filter(|c| !skip.contains(&c.id)) {
+                take(c.start);
+                take(c.end());
+            }
+        }
+    }
+    if s.edit.flag(SNAP_TO_MARKERS) {
+        for m in &s.markers {
+            take(m.start);
+            if m.end > m.start {
+                take(m.end);
+            }
+        }
+    }
+    best
+}
+
+/// The zero crossing nearest `at` within `reach` in the audio clip under `at` on `track` (its
+/// first channel, or the channel it plays): where the waveform changes sign or touches zero.
+pub fn zero_crossing_near(s: &Session, track: TrackId, at: Samples, reach: Samples) -> Option<Samples> {
+    let t = s.track(track)?;
+    let c = t.clips().iter().rev().find(|c| c.range().contains(at) && !c.muted)?;
+    let ClipContent::Audio { source, offset } = &c.content else { return None };
+    let audio = s.pool.get(*source)?;
+    let reach = reach.clamp(1, 1 << 16);
+    let file_at = offset.saturating_add(c.source_span(at.saturating_sub(c.start)));
+    let from = file_at.saturating_sub(c.source_span(reach)).max(*offset).max(0);
+    let to = file_at.saturating_add(c.source_span(reach)).min(offset.saturating_add(c.source_span(c.length)));
+    let n = usize::try_from(to.saturating_sub(from)).ok()?.saturating_add(1);
+    if n < 2 {
+        return None;
+    }
+    let mut buf = vec![0.0f32; n];
+    let got = audio.read(c.source_channel.map_or(0, usize::from), usize::try_from(from).ok()?, &mut buf);
+    let buf = buf.get(..got)?;
+    let best = buf
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[1] == 0.0 || (w[0] < 0.0) != (w[1] < 0.0))
+        // The sample nearer zero of the two is the crossing.
+        .map(|(i, w)| if w[0].abs() < w[1].abs() { i } else { i + 1 })
+        .map(|i| from.saturating_add(i as Samples))
+        .min_by_key(|f| f.saturating_sub(file_at).saturating_abs())?;
+    let timeline = c.start.saturating_add(c.timeline_span(best.saturating_sub(*offset)));
+    Some(timeline.clamp(c.start, c.end()))
+}
+
+/// An edit point at `raw` after snapping: `gridded` (the grid's answer, or `raw` when the grid is
+/// off), unless a clip edge or marker within `reach` of `raw` is nearer; then, on `track` with
+/// [`SNAP_TO_ZERO`] on, the nearest zero crossing within 5 ms.
+pub fn snap_point(s: &Session, raw: Samples, gridded: Samples, reach: Samples, track: Option<TrackId>, skip: &[ClipId]) -> Samples {
+    let mut at = gridded;
+    if let Some(m) = magnet_target(s, raw, reach, skip)
+        && (gridded == raw || m.saturating_sub(raw).saturating_abs() <= gridded.saturating_sub(raw).saturating_abs())
+    {
+        at = m;
+    }
+    if s.edit.flag(SNAP_TO_ZERO)
+        && let Some(t) = track
+        && let Some(z) = zero_crossing_near(s, t, at, s.sample_rate.samples(0.005))
+    {
+        at = z;
+    }
+    at
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
