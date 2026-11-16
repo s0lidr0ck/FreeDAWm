@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Object / Bed",
             [],
             None,
-            "{tracks?, object?: bool} — routes the tracks as immersive objects (true) or to the bed; toggles when `object` is omitted",
+            "{tracks?, object?: bool} — marks the tracks as immersive objects (true) or bed (false); toggles when `object` is omitted. A mark only: objects are not rendered yet, every track plays through its panner into the bed",
             has_selection,
             |e, p| {
                 let tracks = tracks_required(e, "track.object", p)?;

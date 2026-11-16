@@ -83,6 +83,10 @@ fn auto_update(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
+/// What the Renderer window is, and what it is not yet.
+pub(crate) const RENDERER_NOTE: &str = "Shows the main output's speakers with live levels, and where tracks marked as objects are panned. \
+It renders nothing: objects are not rendered yet and play through their panners into the bed.";
+
 fn renderer(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.extra.show_renderer;
     if !open {
@@ -106,6 +110,7 @@ fn renderer(app: &mut SoundApp, ctx: &egui::Context) {
         ctx,
         |ui| {
             ui.label(egui::RichText::new(format!("Main output: {}", fmt.label())).font(regular(11.0)).color(t.text));
+            ui.label(egui::RichText::new(RENDERER_NOTE).small().color(t.text_dim));
             let side = ui.available_width().min(360.0);
             let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
             let p = ui.painter_at(r);
@@ -133,9 +138,7 @@ fn renderer(app: &mut SoundApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             if objects.is_empty() {
                 ui.label(
-                    egui::RichText::new("No object tracks. Use the Object view in the Mix window to route tracks as objects.")
-                        .small()
-                        .color(t.text_dim),
+                    egui::RichText::new("No tracks marked as objects (the Object view in the Mix window marks them).").small().color(t.text_dim),
                 );
             } else {
                 ui.label(egui::RichText::new(format!("{} object track(s)", objects.len())).small().color(t.text_dim));

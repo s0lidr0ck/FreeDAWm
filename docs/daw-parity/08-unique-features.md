@@ -1,6 +1,6 @@
 # Four-DAW parity, section 8: what only one of them has
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (clip launcher deferred by the owner) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (controls made honest) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Other product names below (Dolby Atmos, Melodyne, Splice,
@@ -64,7 +64,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Clip effects: EQ and dynamics per clip, live | **Works** | Per-clip EQ, compressor and gain, with copy, paste and render |
 | Beat Detective across many tracks, phase kept | **Partial** | Finds hits across selected tracks and cuts all at the same points; conforming is done by Detect Tempo › Straighten; no trigger editing or edit smoothing |
 | Sketch: a clip-launcher window, also on a tablet | **Missing** | DAWproject import drops launcher clips and says so |
-| Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is **Flag only**; no renderer, no ADM |
+| Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is a mark that says it is one; no renderer, no ADM |
 | Speech-to-text on dialogue with text search | **Partial** | Lyric transcription with word times; no search of the words on the timeline |
 | Video: several tracks, editing, satellite link, pull up and down | **Partial** | One video track with H.264, ProRes and Motion JPEG playback, timecode and feet+frames; no editing, no export |
 | Destructive record, QuickPunch, TrackPunch | **Flag only** | Ordinary range punch works; the three modes are stored and unread |
@@ -181,15 +181,15 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 
 ## Things that promise more than they do
 
-| # | What | Where |
-|---|---|---|
-| 1 | Object/Bed switch on the mixer strip and the Renderer window: the switch is stored and drawn; no audio path reads it, and the Renderer only draws speakers and dots | `engine/src/cmd/track_more.rs:21-40`; `ui-egui/src/mix_window.rs:408-414`; `ui-egui/src/extra_windows.rs:86-145` |
-| 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` |
-| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` |
-| 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` |
-| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` |
-| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` |
-| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` |
+| # | What | Where | Status |
+|---|---|---|---|
+| 1 | Object/Bed switch on the mixer strip and the Renderer window: the switch is stored and drawn; no audio path reads it, and the Renderer only draws speakers and dots | `engine/src/cmd/track_more.rs:21-40`; `ui-egui/src/mix_window.rs:408-414`; `ui-egui/src/extra_windows.rs:86-145` | **Labelled** (COMMIT_row1): the switch's hover, its command's description and the Renderer window say that objects are not rendered yet and play through their panners into the bed. Rendering objects is the mixing section's work ([section 3](03-mixing.md)) |
+| 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` |  |
+| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` |  |
+| 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` |  |
+| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` |  |
+| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` |  |
+| 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` |  |
 
 ## Suggested order of work
 
@@ -247,5 +247,5 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | Clip launcher deferred by the owner |
+| 2026-11-16 | minor | Clip launcher deferred by the owner; the Object/Bed switch and the Renderer say what they do not do |
 | 2026-11-16 | major | First version: signature features of Pro Tools, Studio Pro, Logic Pro and Cubase, and what only FreeDAWm has |

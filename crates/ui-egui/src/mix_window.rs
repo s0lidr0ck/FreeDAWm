@@ -11,6 +11,9 @@ use serde_json::json;
 use soundcraft_model::{ChannelFormat, ModuleId, Route, StripSize, SurroundPan, Track, TrackId, TrackKind};
 use soundcraft_playback::MeterSnapshot;
 
+/// The Object/Bed switch is a mark for now: say so where it is clicked.
+pub(crate) const OBJECT_HOVER: &str = "Marks the track as an immersive object or as bed. A mark only: objects are not rendered yet, so the track plays through its panner into the bed either way.";
+
 /// A strip's width: Wide 150, Slim 80; `Auto` follows the Mix window's global toggle
 /// (`global_wide`, wide unless View › Narrow Mix / Slim Strips is on).
 pub fn strip_width(size: StripSize, global_wide: bool) -> f32 {
@@ -415,7 +418,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             let on = app.engine.session().edit.flag(&format!("object.{}", id.0));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(sec));
             let label = egui::RichText::new(if on { "OBJECT" } else { "BED" }).font(bold(9.0));
-            if c.add_sized(sec.size(), egui::Button::new(label).selected(on)).on_hover_text("Route as an immersive object or to the bed").clicked() {
+            if c.add_sized(sec.size(), egui::Button::new(label).selected(on)).on_hover_text(OBJECT_HOVER).clicked() {
                 let _ = app.run("track.object", json!({"tracks": [id.0], "object": !on}));
             }
         }
