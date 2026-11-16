@@ -95,6 +95,20 @@ pub fn engine(plugin_id: &str) -> Option<&'static EngineReg> {
     ENGINES.iter().copied().find(|e| e.info.id == plugin_id)
 }
 
+/// The C++-faithful build of an engine whose FreeDAWm default departs from the C++ on purpose
+/// (a fix the owner chose over the original), prepared at 48 kHz as [`crate::create`] makes a
+/// plugin: what the fidelity test renders, so the rest of the port is still held to the C++.
+/// `None` for every other engine, whose default build is already the C++'s.
+pub fn cpp_reference(plugin_id: &str) -> Option<Box<dyn Plugin>> {
+    let mut p: Box<dyn Plugin> = match plugin_id {
+        // the dry is delayed to sit with the voices, and reported as latency
+        "fs_pitch" => Box::new(pitch::Pitch::cpp_reference()),
+        _ => return None,
+    };
+    p.prepare(48_000.0, 1024, 2);
+    Some(p)
+}
+
 /// The id of every engine's own bypass parameter (kept in the parameter order, hidden in the UI).
 const ENGINE_BYPASS: &str = "bypass";
 

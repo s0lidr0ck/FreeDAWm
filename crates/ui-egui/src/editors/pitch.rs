@@ -178,8 +178,8 @@ fn foot_text(ins: &Insert, style: i32, lamp: f32) -> String {
         format!("{}   \u{00B7}   map an expression pedal to Pedal", cfg::whammy_readout(pv(ins, d::P_INTERVAL).round() as i32, pv(ins, d::P_PEDAL)))
     } else {
         format!(
-            "Voices are about {:.1} ms behind the dry, which is half the window   \u{00B7}   Grain sets the window: smaller is tighter, and warbles more",
-            d::latency_ms(style, pv(ins, d::P_GRAIN))
+            "The dry waits {:.1} ms so the voices sweep around it; the mix makes up the delay   \u{00B7}   Grain sets the window: smaller is tighter, and warbles more",
+            d::dry_delay_samples(style, pv(ins, d::P_GRAIN), 48_000.0) as f32 / 48.0
         )
     }
 }

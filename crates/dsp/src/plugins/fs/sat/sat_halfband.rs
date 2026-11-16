@@ -7,7 +7,8 @@
 //!     H(z) = 0.5 * [ A0(z^2) + z^-1 A1(z^2) ]
 //! ```
 //!
-//! No latency to report. The coefficients have a closed form and depend only on the transition
+//! The C++ reports no latency for them; FreeDAWm does ([`round_trip_latency`]: a few samples, the
+//! same at every rate). The coefficients have a closed form and depend only on the transition
 //! width, never on the sample rate. Measured in the C++: stage 1 (next to the base rate) has 10
 //! coefficients, stages 2 and 3 have 5.
 //!
@@ -203,9 +204,82 @@ pub fn coefs_for_stage(s: usize) -> Coefs {
     }
 }
 
+/// How late `stages` stages (stage 0 first), up and back down again, deliver a low-frequency
+/// signal, in base-rate samples: the group delay at DC. (The half-bands hold it to a small
+/// fraction of a sample through the low and middle of the band.)
+///
+/// Each stage's interpolator and decimator is `0.5 * [A0(z^2) + z^-1 A1(z^2)]` at its high rate,
+/// both branches unit gain and in phase at DC, so each delays DC by half of (its allpasses'
+/// delays plus the one sample between the branches). A first-order allpass
+/// `(a + z^-1) / (1 + a z^-1)` run in `z^2` delays DC by `2 (1 - a) / (1 + a)` high-rate samples;
+/// stage `s` runs at `2^(s + 1)` times the base rate.
+pub fn round_trip_delay(coefs: &[Coefs], stages: usize) -> f64 {
+    coefs
+        .iter()
+        .take(stages)
+        .enumerate()
+        .map(|(s, c)| {
+            let allpasses: f64 = c.as_slice().iter().map(|a| 2.0 * (1.0 - a) / (1.0 + a)).sum();
+            (allpasses + 1.0) / 2.0f64.powi(s as i32 + 1)
+        })
+        .sum()
+}
+
+/// [`round_trip_delay`] to the nearest whole sample: the latency an engine built on these stages
+/// reports (Sat and Vint: 4, 5 and 6 samples at 2x, 4x and 8x, at every rate).
+pub fn round_trip_latency(coefs: &[Coefs], stages: usize) -> usize {
+    let d = round_trip_delay(coefs, stages).round();
+    if d.is_finite() && d > 0.0 { d as usize } else { 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_trip_latency_is_the_measured_low_frequency_delay() {
+        // Up through `stages` stages and back down: a 500 Hz tone (at 48 kHz) comes out late by
+        // the computed delay (its phase delay, to a twentieth of a sample), and the rounded
+        // latency is that to the nearest sample.
+        let coefs = [coefs_for_stage(0), coefs_for_stage(1), coefs_for_stage(2)];
+        for (stages, want) in [(1, 4), (2, 5), (3, 6)] {
+            let mut st = [Stage::default(); 3];
+            for (s, c) in st.iter_mut().zip(&coefs) {
+                s.set(c);
+            }
+            let w = std::f64::consts::TAU * 500.0 / 48_000.0;
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for n in 0..48_000usize {
+                let mut buf = [0.0f64; 8];
+                let mut tmp = [0.0f64; 8];
+                buf[0] = (w * n as f64).sin();
+                let mut count = 1;
+                for s in st.iter_mut().take(stages) {
+                    for i in 0..count {
+                        (tmp[2 * i], tmp[2 * i + 1]) = s.up(buf[i]);
+                    }
+                    count *= 2;
+                    buf[..count].copy_from_slice(&tmp[..count]);
+                }
+                for s in st.iter_mut().take(stages).rev() {
+                    count /= 2;
+                    for i in 0..count {
+                        buf[i] = s.down(buf[2 * i], buf[2 * i + 1]);
+                    }
+                }
+                if n >= 24_000 {
+                    // correlate with the input's sine and cosine: the output's phase
+                    re += buf[0] * (w * n as f64).sin();
+                    im += buf[0] * (w * n as f64).cos();
+                }
+            }
+            let measured = -im.atan2(re) / w;
+            let computed = round_trip_delay(&coefs, stages);
+            assert!((measured - computed).abs() < 0.05, "{stages} stages: measured {measured:.3}, computed {computed:.3}");
+            assert_eq!(round_trip_latency(&coefs, stages), want, "{stages} stages ({computed:.3})");
+        }
+        assert_eq!(round_trip_latency(&coefs, 0), 0);
+    }
 
     #[test]
     fn coefficient_counts_match_the_cpp_measurements() {

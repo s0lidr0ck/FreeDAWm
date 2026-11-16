@@ -1276,8 +1276,9 @@ fn draw_pitch(p: &egui::Painter, rect: Rect, ins: &Insert, live: Option<&LiveVal
             let interval = param(ins, "interval").round() as i32;
             p.text(at, Align2::LEFT_TOP, pc::whammy_readout(interval, param(ins, "pedal")), bold(8.0), t.text);
         } else {
-            let ms = pd::latency_ms(style, param(ins, "grain"));
-            p.text(at, Align2::LEFT_TOP, format!("VOICES +{ms:.0} ms"), bold(8.0), t.text_dim);
+            // the dry delay the voices sweep around, which the host compensates
+            let ms = pd::dry_delay_samples(style, param(ins, "grain"), 48_000.0) as f32 / 48.0;
+            p.text(at, Align2::LEFT_TOP, format!("LATENCY {ms:.0} ms"), bold(8.0), t.text_dim);
         }
     }
 }

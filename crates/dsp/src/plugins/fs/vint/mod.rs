@@ -37,8 +37,11 @@
 //!   Extra channels are left untouched (the Rust host contract).
 //! - `ScopedNoDenormals` (flush-to-zero): no safe Rust equivalent. It only changes values below
 //!   ~1e-38, far under the fidelity bar; `silence_tail_is_cheap` guards the CPU side.
-//! - No `setLatencySamples` (the README: "No latency"; the half-band IIRs report none):
-//!   `latency()` is 0. No tail (`getTailLengthSeconds` is 0).
+//! - No `setLatencySamples` (the README: "No latency"), though the half-band IIR oversamplers
+//!   delay dry and wet alike by a few samples. FreeDAWm reports that delay as `latency()`
+//!   (`VintEngineDsp::latency_samples`: 4, 5 or 6 samples at Eco, Normal or Insane), so delay
+//!   compensation lines Vint up with the rest of the mix; the audio is unchanged. No tail
+//!   (`getTailLengthSeconds` is 0).
 //! - The engine's own bypass is a 15 ms glide into the dry input (kept, hidden in the UI).
 //! - The block-RMS VU feed (`takeOutputLevel`), the scope, the preset dirty-tracking, the state
 //!   save and the editor are UI-only.
@@ -372,6 +375,11 @@ impl Plugin for Vint {
             self.push_all();
             self.dsp.prepare(sr);
         }
+    }
+
+    fn latency(&self) -> usize {
+        // the oversampling's own delay; it follows Quality
+        self.dsp.latency_samples()
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {

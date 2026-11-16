@@ -252,8 +252,9 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 ## Bugs found on the way
 
 Found while reading; none was reproduced by running the program. Paths are under `crates/`.
-Three rows are marked *by design*: the port matches the C++ original on purpose, so changing
-them is the owner's decision, not a repair.
+Three rows were marked *by design* (5, 8 and 9): the port matched the C++ original on purpose.
+The owner has decided they should be fixed; where a fix makes an engine differ from the C++, the
+fidelity test renders that engine's C++-faithful build (`plugins::fs::cpp_reference`).
 
 | # | Bug | Where |
 |---|---|---|
@@ -261,7 +262,7 @@ them is the owner's decision, not a repair.
 | 2 | **Fixed.** On a track wider than stereo, 24 effects (every engine, Mend, Vault) processed left and right only; centre, LFE and surrounds passed unprocessed. They now run one instance on the first two channels and a mono instance on each other channel (`dsp/src/plugins/per_channel.rs`), with the same parameters, transport, assets and state. Detection is not linked across them. Test: `per_channel.rs` (a 5.1 surround channel sounds as on a mono track) | `dsp/src/plugins/fs/*/mod.rs` (`channels.min(2)`) |
 | 3 | **Fixed.** Saving from the narrow drawer wrote no name or tags, every stored parameter, no CleanQ guides, and let a user preset take a factory preset's name (after which the factory one won). It now writes the wide editor's file (`user_preset_body`: name, tags, the same parameters, CleanQ's guides) and refuses a factory name; its loads skip what the editors keep out of presets (`editors::not_in_presets`). **Claim corrected:** the Dist knob bank and the Amp and Vault loaded files are not in the wide editor's presets either, so the two paths did not differ there. Test: `editor_kit/presets.rs` | `ui-egui/src/panels.rs:971-1029` |
 | 4 | **Fixed.** Bypass was an instant switch with no reset, and the track's delay compensation changed in the same block. A bypass now crossfades (the mixer's 10 ms), a bypassed insert keeps its latency (its input goes past it through a delay of that length, so no track moves), and a plugin switched back on is reset and heard once its latency has passed (`insert_step` in `mix/src/lib.rs`). Test: `mix/tests/insert_bypass.rs` | `mix/src/lib.rs:1939, 2721, 2770` |
-| 5 | *By design.* Pitch reports no latency though its shifted voices run 6–20 ms late; Sat and Vint also report none | `dsp/src/plugins/fs/pitch/mod.rs:14-16`; `fs/sat/mod.rs:16`; `fs/vint/mod.rs:40` |
+| 5 | **Fixed.** Pitch reported no latency though its shifted voices ran 6–20 ms late; Sat and Vint also reported none though their oversamplers delay everything. Pitch now delays its dry to the middle of the voices' sweep and reports that (17.5 ms for POG at the default Grain, following Style, Grain and the rate; OC-2 0); Sat and Vint report their half-bands' 4, 5 or 6 samples (Eco, Normal, Insane). Tests measure the delay at 44.1, 48 and 96 kHz | `dsp/src/plugins/fs/pitch/pitch_engine_dsp.rs` (`dry_delay_samples`); `fs/sat/sat_halfband.rs` (`round_trip_latency`); `fs/sat/mod.rs`, `fs/vint/mod.rs` (`latency`) |
 | 6 | **Partly fixed.** Delay reported an 8 s tail whatever the feedback or freeze, Mod 0.25 s, ChamberMade four tape repeats, so a bounce or freeze could cut the tail. Delay now reports at least 8 s and as long as its echoes take to fall 80 dB (60 s for Freeze or a runaway loop); Mod adds its flangers' Regen ring; ChamberMade counts tape repeats to -80 dB. Filter still reports 1 s: left for now (its file is being changed for bug 8); a resonant setting low down can ring longer. Tests: delay, mod and chamber `tests.rs` | `dsp/src/plugins/fs/delay/mod.rs:251-254`; `fs/mod_engine/mod.rs:398-401`; `fs/filter/mod.rs:303`; `fs/chamber/mod.rs:409-414` |
 | 7 | **Fixed.** The Delay buffer was a fixed number of samples (10.9 s at 48 kHz, 2.7 s at 192 kHz), so long synced times were shortened and lost sync at high rates. A line now holds the same 10.9 s at every rate (`line_len`; unchanged at 44.1 and 48 kHz). Test: delay `tests.rs` (a 4 s whole note at 60 BPM keeps its time at 192 kHz) | `dsp/src/plugins/fs/delay/delay_engine_dsp.rs:59-60, 966` |
 | 8 | *By design.* Dist and Filter oversample four times behind a filter that rejects only about 16 dB at the original Nyquist, so high-gain settings alias | `dsp/src/plugins/fs/dist/dist_engine_dsp.rs:1191-1200`; `fs/filter/filter_engine_dsp.rs:920-929` |
@@ -281,8 +282,8 @@ them is the owner's decision, not a repair.
 Estimates are agent-hours for one implementer with tests, as in the earlier sections. No estimate
 includes listening tests, which this section needs more than any other.
 
-**1. Fix what is wrong (≈ 14–22 h).** Bugs 1–4, 6, 7 and 10–18. Bugs 5, 8 and 9 wait for the
-owner's decision, because fixing them makes the port differ from the original. Bug 2 first, in its
+**1. Fix what is wrong (≈ 14–22 h).** Bugs 1–4, 6, 7 and 10–18. Bugs 5, 8 and 9, once by design,
+are being fixed at the owner's decision. Bug 2 first, in its
 cheapest form: until effects handle every channel, refuse or warn when one is put on a surround
 track. Then bug 4.
 
@@ -342,3 +343,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 10 fixed: a partial Comp preset sounds the same wherever it is loaded |
 | 2026-11-16 | minor | Bug 1 fixed: a user preset saved from a wide editor leaves out what the editor keeps out of presets |
 | 2026-11-16 | minor | Bug 3 fixed: the narrow drawer saves the wide editor's preset file and refuses factory names; the claim about the Dist bank and loaded files corrected |
+| 2026-11-16 | minor | Bug 5 fixed: Pitch delays its dry and reports it as latency; Sat and Vint report their oversampling delay |

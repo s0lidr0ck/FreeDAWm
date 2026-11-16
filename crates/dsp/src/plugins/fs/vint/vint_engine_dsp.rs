@@ -973,6 +973,13 @@ impl VintEngineDsp {
     pub fn get_oversampling(&self) -> usize {
         self.os_factor
     }
+    /// Rust addition: how late the output is, in samples. Every path goes up and back down
+    /// through the same half-band stages (the Passive's and the Console's early decimation runs
+    /// the dry through matching ones), so the whole output is late by their low-frequency group
+    /// delay: 4, 5 or 6 samples at 2x, 4x or 8x, at any rate. The C++ reports none.
+    pub fn latency_samples(&self) -> usize {
+        vinthb::round_trip_latency(&self.hb_coefs, self.num_stages.min(3))
+    }
     pub fn take_input_peak(&mut self) -> f32 {
         std::mem::take(&mut self.in_peak)
     }

@@ -101,20 +101,126 @@ fn table_matches_the_cpp_order_and_defaults() {
 }
 
 #[test]
-fn registered_with_no_latency() {
+fn registered_with_the_dry_delay_as_latency() {
     let mut p = crate::create("fs_pitch").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
-    // The dry path is untouched; the C++ reports no latency (the voice lag is a readout).
+    // The voice lag the C++ shows (readout [3]) stays; the latency is the dry delay, which puts
+    // the dry in the middle of a downward voice's sweep. OC-2 does not shift: none.
     for style in 0..5 {
         p.set_param("style", style as f32);
         p.prepare(48_000.0, 512, 2);
+        let want = d::dry_delay_samples(style, 0.5, 48_000.0) as usize;
+        assert_eq!(p.latency(), want, "style {style} before the first block");
         let mut io = vec![sine(512, 0.5), sine(512, 0.5)];
         p.process(&mut io, 512);
-        assert_eq!(p.latency(), 0);
+        assert_eq!(p.latency(), want, "style {style}");
+        assert_eq!(want == 0, style == d::STYLE_OC2, "style {style}");
         let mut r = [f32::NAN; 8];
         p.readouts(&mut r);
         assert_eq!(r[3], d::latency_ms(style, 0.5));
     }
+    // POG at 48 kHz, Grain in the middle: the sweep runs 5 ms .. 30 ms, so 17.5 ms.
+    assert_eq!(d::dry_delay_samples(d::STYLE_POG, 0.5, 48_000.0), 840);
+    // The C++ reference: dry untouched, nothing reported.
+    let mut r = Pitch::cpp_reference();
+    r.prepare(48_000.0, 512, 2);
+    assert_eq!(r.latency(), 0);
+}
+
+/// A fresh Pitch at `sr`, set up by `setup`, run over `input` on both channels: the left output
+/// and the latency it reported.
+fn render_at(sr: f32, setup: &dyn Fn(&mut Pitch), input: &[f32]) -> (Vec<f32>, usize) {
+    let mut p = Pitch::new();
+    setup(&mut p);
+    p.prepare(sr, 512, 2);
+    let lat = p.latency();
+    let mut io = vec![input.to_vec(), input.to_vec()];
+    run(&mut p, &mut io, 512);
+    assert_eq!(p.latency(), lat, "the latency holds while the knobs do");
+    (io.swap_remove(0), lat)
+}
+
+#[test]
+fn reported_latency_is_the_dry_delay_and_the_middle_of_the_voices() {
+    // Regression: the C++ reports no latency, so after delay compensation the shifted voices ran
+    // late against the rest of the mix. The dry is now delayed by exactly the reported latency,
+    // and the voices' measured delay averages out near it.
+    for sr in [44_100.0f32, 48_000.0, 96_000.0] {
+        for style in [d::STYLE_POG, d::STYLE_MICRO_POG, d::STYLE_H910, d::STYLE_WHAMMY, d::STYLE_OC2] {
+            // Dry only: an impulse comes out exactly `latency` samples late, at unity.
+            let dry_only = |p: &mut Pitch| {
+                p.set_param("style", style as f32);
+                for id in ["sub", "octDown", "octUp", "oct2Up", "fifth", "voice"] {
+                    p.set_param(id, 0.0);
+                }
+            };
+            let mut imp = vec![0.0f32; (0.2 * sr) as usize];
+            imp[100] = 0.5;
+            let (out, lat) = render_at(sr, &dry_only, &imp);
+            let peak = out.iter().enumerate().fold((0, 0.0f32), |m, (i, &v)| if v.abs() > m.1 { (i, v.abs()) } else { m });
+            assert_eq!(peak.0 - 100, lat, "sr {sr}, style {style}: the dry's impulse");
+            assert!((peak.1 - 0.5).abs() < 1e-4, "sr {sr}, style {style}: {}", peak.1);
+            assert_eq!(lat, d::dry_delay_samples(style, 0.5, sr) as usize);
+        }
+        // Wet only, one voice (POG): sparse impulses at a spacing that walks through every point
+        // of the sweep; each comes out where the head read it. Their mean delay is the latency.
+        let lat = d::dry_delay_samples(d::STYLE_POG, 0.5, sr) as f64;
+        for (voice, tol) in [("octDown", 0.12), ("octUp", 0.25)] {
+            let wet = |p: &mut Pitch| {
+                p.set_param("style", d::STYLE_POG as f32);
+                p.set_param("dry", 0.0);
+                for id in ["sub", "octDown", "octUp", "oct2Up", "fifth"] {
+                    p.set_param(id, if id == voice { 0.8 } else { 0.0 });
+                }
+            };
+            let gap = (0.1 * sr) as usize + 37;
+            let n = 120;
+            let mut x = vec![0.0f32; gap * (n + 1)];
+            for k in 0..n {
+                x[gap * k + 1000] = 0.5;
+            }
+            let (out, _) = render_at(sr, &wet, &x);
+            let mut sum = 0.0f64;
+            let mut count = 0usize;
+            for k in 0..n {
+                let t0 = gap * k + 1000;
+                let w = &out[t0..t0 + gap - 1];
+                let e: f64 = w.iter().map(|&v| f64::from(v * v)).sum();
+                if e > 1e-6 {
+                    sum += w.iter().enumerate().map(|(i, &v)| i as f64 * f64::from(v * v)).sum::<f64>() / e;
+                    count += 1;
+                }
+            }
+            let mean = sum / count.max(1) as f64;
+            println!(
+                "sr {sr} {voice}: {count} impulses, mean delay {mean:.0} vs reported {lat:.0} ({:+.1} ms)",
+                (mean - lat) * 1000.0 / f64::from(sr)
+            );
+            assert!(count > n / 3, "sr {sr} {voice}: {count}");
+            assert!((mean - lat).abs() < tol * lat, "sr {sr} {voice}: mean delay {mean:.0}, reported {lat:.0}");
+        }
+    }
+}
+
+#[test]
+fn a_grain_change_fades_the_dry_to_its_new_tap() {
+    // Moving Grain moves the dry delay (and the latency) through a 5 ms crossfade, not a jump.
+    let mut p = prepared();
+    for id in ["sub", "octDown", "octUp", "oct2Up", "fifth"] {
+        p.set_param(id, 0.0);
+    }
+    let src = sine(48_000, 0.5);
+    let mut io = vec![src.clone(), src.clone()];
+    run(&mut p, &mut io, 512);
+    let before = p.latency();
+    p.set_param("grain", 1.0);
+    let mut io = vec![src.clone(), src.clone()];
+    run(&mut p, &mut io, 512);
+    assert_eq!(p.latency(), d::dry_delay_samples(d::STYLE_POG, 1.0, 48_000.0) as usize);
+    assert!(p.latency() > before);
+    // A 220 Hz sine at 0.5 moves at most 0.0145 a sample; the fade adds a little, a jump far more.
+    let worst = io[0].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.03, "{worst}");
 }
 
 #[test]
@@ -416,8 +522,10 @@ fn bypass_lands_exactly_on_the_input() {
         // The 0.002-per-sample glide, then the input. In `f32` the glide stalls a few hundred
         // ulps short of 1 (each step rounds to nothing), as the C++'s does: what is left of the
         // wet path is under -50 dB.
+        // The input as the dry line delays it for the latency, so the timing holds through it.
+        let lat = s.latency();
         for i in 24_000..48_000 {
-            assert!((io[0][i] - src[i]).abs() < 2e-3, "style {style}, sample {i}: {} vs {}", io[0][i], src[i]);
+            assert!((io[0][i] - src[i - lat]).abs() < 2e-3, "style {style}, sample {i}: {} vs {}", io[0][i], src[i - lat]);
         }
     }
 }
@@ -505,12 +613,15 @@ fn a_reset_does_not_glide() {
     let mut warm = vec![sine(4_800, 0.5), sine(4_800, 0.5)];
     run(&mut s, &mut warm, 512);
     s.reset();
-    let src = sine(256, 0.5);
+    let src = sine(2048, 0.5);
     let mut io = vec![src.clone(), src.clone()];
     run(&mut s, &mut io, 256);
     let g = d::knob_to_gain(0.3);
-    for i in 0..256 {
-        assert!((io[0][i] - src[i] * g).abs() < 1e-6, "sample {i}: {} vs {}", io[0][i], src[i] * g);
+    // the dry line starts empty after a reset: silence for the latency, then the input
+    let lat = s.latency();
+    for i in 0..2048 {
+        let want = if i >= lat { src[i - lat] * g } else { 0.0 };
+        assert!((io[0][i] - want).abs() < 1e-6, "sample {i}: {} vs {want}", io[0][i]);
     }
 
     // With a voice up, its smoothed gain sits at its target right after the reset.
@@ -559,7 +670,8 @@ fn dry_and_unity_level_pass_the_input_when_no_voice_is_up() {
     let mut io = vec![src.clone(), src.clone()];
     run(&mut s, &mut io, 512);
     let g = d::knob_to_gain(0.7071);
+    let lat = s.latency();
     for i in 4800..9600 {
-        assert!((io[0][i] - src[i] * g).abs() < 1e-5, "sample {i}");
+        assert!((io[0][i] - src[i - lat] * g).abs() < 1e-5, "sample {i}");
     }
 }

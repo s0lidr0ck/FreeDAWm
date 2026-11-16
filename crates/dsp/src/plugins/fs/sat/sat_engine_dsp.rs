@@ -516,6 +516,13 @@ impl SatEngineDsp {
         self.os_factor
     }
 
+    /// Rust addition: how late the output is, in samples. Dry and wet both go up and back down
+    /// through the half-bands, so the whole output is late by their low-frequency group delay
+    /// (4, 5 or 6 samples at 2x, 4x or 8x, at any rate). The C++ reports none.
+    pub fn latency_samples(&self) -> usize {
+        sathb::round_trip_latency(&self.stage_coefs, self.num_stages.clamp(0, 3) as usize)
+    }
+
     /// Peak levels for the meters, since the last call.
     pub fn take_input_peak(&mut self) -> f32 {
         std::mem::take(&mut self.in_peak)

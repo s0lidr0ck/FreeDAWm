@@ -7,14 +7,20 @@
 //! other starts at a WAVEFORM-MATCHED point (normalised cross-correlation over the recent
 //! history) and the two crossfade. Voices: sub (-2 oct), -1 oct, 5th (3 modes), +1 oct, +2 oct,
 //! two detuned doubles, one glide. Wet path: voices -> width pan -> swell (Attack) -> LP filter
-//! with Q -> Level. Dry is untouched.
+//! with Q -> Level. Dry is delayed to sit with the voices (below).
 //!
 //! Styles: POG (all five interval voices, 30 ms window), Micro POG (sub + octave up, 12 ms),
 //! OC-2 (analog flip-flop divider, monophonic), H910 (doubler, two detuned voices, 40 ms),
 //! Whammy (one voice glides from unison to a stepped interval under the Pedal knob).
 //!
-//! Latency: the dry path is untouched (zero). Shifted voices are inherently late by roughly half
-//! the window; the C++ does not report it to the host (see `latency_ms`).
+//! Latency (FreeDAWm's, not the C++'s): the shifted voices are inherently late, each read head
+//! sweeping between `min_d` and its window. The C++ leaves the dry path untouched and reports
+//! nothing, so after the host's delay compensation the voices lag the rest of the mix by the
+//! window. Here the dry (and the engine's own bypass) runs through a delay line set to the middle
+//! of a downward voice's sweep ([`PitchEngineDsp::latency_samples`]), and the plugin reports that
+//! as its latency: dry and voices land on the grid together. OC-2 does not shift and stays at 0.
+//! When Style or Grain moves the delay, the dry crossfades to its new tap over 5 ms. With
+//! [`PitchEngineDsp::set_align_dry`] off the engine is the C++ again (the fidelity test).
 //!
 //! Translation notes (C++ behaviour reproduced deliberately):
 //! - `float` and `double` exactly where the C++ has them: the signal path, smoothers and knob
@@ -169,6 +175,31 @@ pub fn latency_ms(style: i32, grain_knob: f32) -> f32 {
     0.5 * style_window_ms(style) * knob_to_grain(grain_knob)
 }
 
+/// The dry delay, in samples, that puts the dry in the middle of a downward voice's sweep
+/// (`min_d` .. its window, as `applyStyle` derives them for `style` and Grain at `fs`): the
+/// latency FreeDAWm reports (see the module notes). 0 for OC-2, which does not shift. The same
+/// `f32` arithmetic as `apply_style`, so the engine and this agree to the sample.
+pub fn dry_delay_samples(style: i32, grain_knob: f32, fs: f32) -> i32 {
+    if style == STYLE_OC2 {
+        return 0;
+    }
+    let (win_ms, min_ms, seg_step) = if style == STYLE_MICRO_POG {
+        (12.0f32, 2.0f32, 2)
+    } else if style == STYLE_H910 {
+        (40.0, 8.0, 4)
+    } else if style == STYLE_WHAMMY {
+        (24.0, 4.0, 4)
+    } else {
+        (30.0, 5.0, 4)
+    };
+    let g = knob_to_grain(grain_knob);
+    let base_win = win_ms * 0.001 * fs * g;
+    let min_d = cmax(min_ms * 0.001 * fs, 8.0);
+    let span = (MATCH * seg_step) as f32;
+    let win = cmin(cmax(base_win, min_d + span + 8.0 + 0.4 * base_win), (BUF - 64) as f32);
+    clamp_t((0.5 * (min_d + win)).round() as i32, 0, BUF - 1)
+}
+
 pub fn semi_ratio(semis: f32) -> f32 {
     2.0f32.powf(semis / 12.0)
 }
@@ -218,6 +249,8 @@ impl Default for Head {
 
 struct Channel {
     buf: Vec<f32>,
+    /// The dry delay line (FreeDAWm's latency alignment; `BUF` long, made in `new`).
+    dry: Vec<f32>,
     pos: i32,
     h: [Head; NV],
     /// Wet filter.
@@ -247,6 +280,7 @@ impl Channel {
     fn new() -> Self {
         Channel {
             buf: vec![0.0; BUF as usize],
+            dry: vec![0.0; BUF as usize],
             pos: 0,
             h: [Head::default(); NV],
             lp: Biquad::default(),
@@ -271,6 +305,7 @@ impl Channel {
     /// field back to its default.
     fn clear(&mut self) {
         self.buf.fill(0.0);
+        self.dry.fill(0.0);
         self.pos = 0;
         self.h = [Head::default(); NV];
         self.lp = Biquad::default();
@@ -449,6 +484,16 @@ struct State {
     glide_coef: f32,
     atk_inc: f32,
     onset_hold_len: f32,
+
+    // ---------------------------------------------------------------- dry alignment (Rust)
+    /// The dry delay in samples: the tap being faded to, and the reported latency.
+    dry_d: i32,
+    /// The tap being faded from, while `dry_xf < 1`.
+    dry_d_old: i32,
+    /// 0..1 crossfade from `dry_d_old` to `dry_d`.
+    dry_xf: f32,
+    /// Write position in the dry lines.
+    dry_pos: i32,
 }
 
 impl Default for State {
@@ -508,6 +553,10 @@ impl Default for State {
             glide_coef: 0.0,
             atk_inc: 0.0,
             onset_hold_len: 2400.0,
+            dry_d: 0,
+            dry_d_old: 0,
+            dry_xf: 1.0,
+            dry_pos: 0,
         }
     }
 }
@@ -763,6 +812,8 @@ pub struct PitchEngineDsp {
     ch: [Channel; 2],
     /// `trackLamp`: 1 while the OC-2 divider is locked on a note.
     track_lamp: f32,
+    /// Delay the dry to sit with the voices (FreeDAWm). Off: the C++'s untouched dry.
+    align_dry: bool,
 }
 
 impl Default for PitchEngineDsp {
@@ -774,7 +825,7 @@ impl Default for PitchEngineDsp {
 impl PitchEngineDsp {
     /// `PitchEngineDSP() { prepare (48000.0); }`. Allocates the two channel buffers.
     pub fn new() -> Self {
-        let mut e = PitchEngineDsp { s: State::default(), ch: [Channel::new(), Channel::new()], track_lamp: 0.0 };
+        let mut e = PitchEngineDsp { s: State::default(), ch: [Channel::new(), Channel::new()], track_lamp: 0.0, align_dry: true };
         e.prepare(48000.0);
         e
     }
@@ -815,6 +866,30 @@ impl PitchEngineDsp {
     /// The Whammy voice's current (slewed) interval in semitones, `whamSemi`.
     pub fn whammy_semis(&self) -> f32 {
         self.s.wham_semi
+    }
+
+    /// How late the output is, in samples: the dry delay (0 for OC-2, or with the alignment off).
+    /// The voices' read heads sweep around it; see the module notes.
+    pub fn latency_samples(&self) -> usize {
+        usize::try_from(self.s.dry_d).unwrap_or(0)
+    }
+
+    /// Whether the dry is delayed to sit with the voices (the default). Off, the engine is the
+    /// C++'s: dry untouched, no latency. The fidelity test turns it off; call `prepare` after.
+    pub fn set_align_dry(&mut self, on: bool) {
+        self.align_dry = on;
+    }
+
+    /// Ends any dry-delay crossfade: the dry plays from its current tap at once. For the first
+    /// block after a prepare, so the dry starts where the pushed values put it.
+    pub fn seat_dry(&mut self) {
+        self.s.dry_d_old = self.s.dry_d;
+        self.s.dry_xf = 1.0;
+    }
+
+    /// Whether the dry is delayed to sit with the voices ([`PitchEngineDsp::set_align_dry`]).
+    pub fn aligns_dry(&self) -> bool {
+        self.align_dry
     }
 
     /// The sample rate `prepare` settled on.
@@ -902,6 +977,12 @@ impl PitchEngineDsp {
 
         self.apply_style();
         self.update_control();
+
+        // the dry delay starts at its tap, with nothing to fade from
+        let s = &mut self.s;
+        s.dry_d_old = s.dry_d;
+        s.dry_xf = 1.0;
+        s.dry_pos = 0;
     }
 
     // -------------------------------------------------------------- main
@@ -928,6 +1009,7 @@ impl PitchEngineDsp {
                 Some(r) => r[i],
                 None => x0,
             };
+            let (xd0, xd1) = self.dry_delayed(x0, x1);
 
             let s = &mut self.s;
             let k = 0.005f32;
@@ -986,13 +1068,56 @@ impl PitchEngineDsp {
             wet_l *= inv;
             wet_r *= inv;
 
-            let y0 = x0 * s.dry_sm + wet_l;
-            let y1 = x1 * s.dry_sm + wet_r;
+            let y0 = xd0 * s.dry_sm + wet_l;
+            let y1 = xd1 * s.dry_sm + wet_r;
 
-            left[i] = x0 * s.byp_sm + y0 * (1.0 - s.byp_sm);
+            left[i] = xd0 * s.byp_sm + y0 * (1.0 - s.byp_sm);
             if let Some(r) = right.as_deref_mut() {
-                r[i] = x1 * s.byp_sm + y1 * (1.0 - s.byp_sm);
+                r[i] = xd1 * s.byp_sm + y1 * (1.0 - s.byp_sm);
             }
+        }
+    }
+
+    /// One sample of each channel into the dry lines and the delayed pair out (Rust: the latency
+    /// alignment). With no delay this is the input itself.
+    fn dry_delayed(&mut self, x0: f32, x1: f32) -> (f32, f32) {
+        let s = &mut self.s;
+        if s.dry_d == 0 && s.dry_xf >= 1.0 {
+            return (x0, x1);
+        }
+        let pos = s.dry_pos;
+        let tap = |line: &[f32], d: i32| -> f32 {
+            let mut i = pos - d;
+            if i < 0 {
+                i += BUF;
+            }
+            line.get(i as usize).copied().unwrap_or(0.0)
+        };
+        let mut out = [0.0f32; 2];
+        for (c, (x, o)) in self.ch.iter_mut().zip([x0, x1].into_iter().zip(out.iter_mut())) {
+            if let Some(slot) = c.dry.get_mut(pos as usize) {
+                *slot = x;
+            }
+            let now = tap(&c.dry, s.dry_d);
+            *o = if s.dry_xf >= 1.0 { now } else { now * s.dry_xf + tap(&c.dry, s.dry_d_old) * (1.0 - s.dry_xf) };
+        }
+        if s.dry_xf < 1.0 {
+            s.dry_xf = (s.dry_xf + 1.0 / cmax(0.005 * s.fs, 1.0)).min(1.0);
+        }
+        s.dry_pos = if pos + 1 >= BUF { 0 } else { pos + 1 };
+        (out[0], out[1])
+    }
+
+    /// Where the dry delay should sit for the style and window just derived: the middle of a
+    /// downward voice's sweep (`min_d` .. its window), 0 when nothing shifts or the alignment is
+    /// off. A change fades the dry over to the new tap.
+    fn retarget_dry(&mut self) {
+        let s = &mut self.s;
+        let target = if self.align_dry { dry_delay_samples(s.style_idx, s.grain_knob, s.fs) } else { 0 };
+        if target != s.dry_d {
+            s.dry_d_old = s.dry_d;
+            s.dry_d = target;
+            s.dry_xf = 0.0;
         }
     }
 
@@ -1050,6 +1175,7 @@ impl PitchEngineDsp {
                 s.reset_head(&mut c.h[v], v);
             }
         }
+        self.retarget_dry();
     }
 
     // -------------------------------------------------------------- control rate
@@ -1161,11 +1287,12 @@ impl PitchEngineDsp {
         self.s.v_gain
     }
 
-    /// Addresses and lengths of every heap block the engine owns (the two channel buffers): a
+    /// Addresses and lengths of every heap block the engine owns (the channel and dry buffers): a
     /// test sees that nothing on the audio path re-allocates them.
     #[cfg(test)]
-    pub(crate) fn heap_blocks(&self) -> [(usize, usize); 2] {
-        [(self.ch[0].buf.as_ptr() as usize, self.ch[0].buf.capacity()), (self.ch[1].buf.as_ptr() as usize, self.ch[1].buf.capacity())]
+    pub(crate) fn heap_blocks(&self) -> [(usize, usize); 4] {
+        let b = |v: &Vec<f32>| (v.as_ptr() as usize, v.capacity());
+        [b(&self.ch[0].buf), b(&self.ch[1].buf), b(&self.ch[0].dry), b(&self.ch[1].dry)]
     }
 }
 
