@@ -38,6 +38,20 @@ const STEP_SECONDS: f64 = 0.02;
 /// The merge key of a pass (see [`Engine::hold_merge`]).
 const PASS: &str = "automation_pass";
 
+/// The `s.edit` flag that keeps every point a pass wrote (Options › More › Thin Automation After
+/// Pass off). Unset, the lanes a pass wrote are thinned when it ends, as Pro Tools does.
+pub const KEEP_PASS_POINTS: &str = "automation.keep_pass_points";
+
+/// How far thinning after a pass may move a lane: a twentieth of a dB, a thousandth of the pan.
+fn pass_tolerance(p: &AutoParam) -> f32 {
+    match p {
+        AutoParam::Volume | AutoParam::Trim | AutoParam::SendLevel(_) => 0.05,
+        AutoParam::Pan(_) | AutoParam::SendPan(_) => 0.001,
+        // A plug-in's range is its own: only points exactly on the line go.
+        _ => 0.0,
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         crate::cmd!(noundo
@@ -57,6 +71,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "{tracks?, db: -144..24, touch?: bool} — the trim the fader sets in Trim mode, written to the trim lane while playing; touch false lets the fader go",
             has_selection,
             trim
+        ),
+        crate::cmd!(
+            "automation.thin_after_pass",
+            "Thin Automation After Pass",
+            ["Options", "More"],
+            None,
+            "{value?: bool} — thin the lanes a writing pass wrote when it ends (on unless turned off); toggles when omitted",
+            always,
+            |e, p| {
+                let keep = !p.get("value").and_then(Value::as_bool).unwrap_or_else(|| e.session().edit.flag(KEEP_PASS_POINTS));
+                e.session_mut().edit.set_flag(KEEP_PASS_POINTS, keep);
+                Ok(json!({"value": !keep}))
+            }
         ),
         crate::cmd!(query "automation.touched", "Touched Automation Controls", [], None, "{} → [{track, param}]", always, |e, _| {
             let pos = e.transport.position;
@@ -300,6 +327,14 @@ impl Engine {
         }
         // Forget pulses that ran out, so the list stays short.
         self.auto_write.pulses.retain(|x| pos >= x.2 && pos.saturating_sub(x.2) <= hold);
+        if stopped && !self.session().edit.flag(KEEP_PASS_POINTS) {
+            // A pass leaves a point every step: what lies on a line goes (one undo step with it).
+            let written = self.auto_write.written.clone();
+            for (t, param) in written {
+                let p = json!({"tracks": [t.0], "param": param.id(), "tolerance": pass_tolerance(&param)});
+                let _ = self.execute_merged("automation.thin", &p, PASS);
+            }
+        }
         if stopped {
             self.auto_write.written.clear();
             self.auto_write.pulses.clear();
@@ -395,9 +430,11 @@ mod tests {
     use soundcraft_model::{AutoParam, ModuleId, TrackId};
     use soundcraft_time::Samples;
 
-    /// The demo session with Kick in `mode`, a CleanQ on Kick and a send A, playing from 0.
+    /// The demo session with Kick in `mode`, a CleanQ on Kick and a send A, playing from 0. Every
+    /// written point is kept (no thinning after a pass), so the tests can count them.
     fn kick(mode: &str) -> (Engine, TrackId, ModuleId, Samples) {
         let mut e = crate::demo::demo_engine();
+        e.execute("automation.thin_after_pass", &json!({"value": false})).unwrap();
         e.execute("mix.module_add", &json!({"track": "Kick", "plugin": "fs_cleanq"})).unwrap();
         e.execute("mix.send", &json!({"track": "Kick", "slot": 0, "bus": "Verb", "level_db": -10.0})).unwrap();
         e.execute("mix.automation_mode", &json!({"tracks": ["Kick"], "mode": mode})).unwrap();
@@ -496,6 +533,39 @@ mod tests {
         assert_eq!(play(&mut e, 30 * q), 1);
         e.automation_ui_held(Vec::new());
         assert_eq!(play(&mut e, 31 * q), 0);
+    }
+
+    /// Tier 2: a pass's lanes are thinned when it ends (one undo step with the pass), unless
+    /// Thin Automation After Pass is off.
+    #[test]
+    fn a_pass_is_thinned_when_it_ends() {
+        let mut e = crate::demo::demo_engine();
+        let t = e.session().track_by_name("Kick").unwrap().id;
+        e.execute("mix.automation_mode", &json!({"tracks": [t.0], "mode": "touch"})).unwrap();
+        let q = i64::from(e.session().sample_rate.hz()) / 10;
+        play(&mut e, 0);
+        e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+        e.execute("mix.volume", &json!({"tracks": [t.0], "db": -6.0})).unwrap();
+        for i in 1..=20 {
+            play(&mut e, i * q);
+        }
+        e.automation_ui_held(Vec::new());
+        stop(&mut e, 21 * q);
+        let pts = points(&e, t, &AutoParam::Volume);
+        assert!(pts.len() <= 3, "a held still fader leaves its ends: {pts:?}");
+        assert!(pts.iter().all(|p| p.1 == -6.0));
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(points(&e, t, &AutoParam::Volume).is_empty(), "the pass and its thinning are one step");
+        // Off: every point stays.
+        e.execute("automation.thin_after_pass", &json!({"value": false})).unwrap();
+        play(&mut e, 0);
+        e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+        for i in 1..=20 {
+            play(&mut e, i * q);
+        }
+        e.automation_ui_held(Vec::new());
+        stop(&mut e, 21 * q);
+        assert!(points(&e, t, &AutoParam::Volume).len() >= 20);
     }
 
     /// Mix bug 6: the members of a group stopped writing half a second after the dragged fader

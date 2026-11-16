@@ -542,6 +542,7 @@ Options > More > Pre-Fader Metering = Options > Pre-Fader Metering
 Options > More > Suspend All Groups = @track.suspend_groups
 Options > More > Default Send Level > Silent = @mix.default_send_level
 Options > More > Default Send Level > 0 dB = @mix.default_send_level
+Options > More > Thin Automation After Pass
 Options > More > Pan Law > 0 dB = @mix.pan_law
 Options > More > Pan Law > -3 dB = @mix.pan_law
 Options > More > Pan Law > -4.5 dB = @mix.pan_law
