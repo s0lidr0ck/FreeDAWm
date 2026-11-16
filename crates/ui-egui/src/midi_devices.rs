@@ -40,7 +40,14 @@ pub(crate) fn start_take(app: &mut SoundApp) {
     if let Some(h) = &app.midi_hub {
         let mut stale = Vec::new();
         h.take_recorded(&mut stale);
+        app.midi_rec_lost_at = h.record_dropped();
     }
+}
+
+/// Recorded MIDI events the take lost because the window did not collect them in time (it
+/// stopped drawing, and the record ring filled).
+pub(crate) fn lost_in_take(app: &SoundApp) -> u64 {
+    app.midi_hub.as_ref().map_or(0, |h| h.record_dropped().saturating_sub(app.midi_rec_lost_at))
 }
 
 /// While recording (each frame): the live MIDI heard since the last frame.

@@ -789,6 +789,9 @@ pub struct SoundApp {
     pub(crate) midi_window_was_open: bool,
     /// The live MIDI the audio thread heard since recording started (`midi_devices::collect`).
     pub(crate) midi_rec: Vec<soundcraft_playback::midi_in::RecordedMidi>,
+    /// The hub's count of recorded events lost (the window did not collect them in time) when
+    /// the take started: what it counts beyond is this take's loss, reported at Stop.
+    pub(crate) midi_rec_lost_at: u64,
     /// The last local MIDI take as recorded (events as heard, and where they go), for a remote
     /// recorder to send to the booth (`net_ui`).
     pub(crate) last_midi_take: Option<(soundcraft_engine::midi_record::MidiTake, Vec<soundcraft_engine::midi_record::RecordedEvent>)>,
@@ -1004,6 +1007,7 @@ impl SoundApp {
             midi_sent: false,
             midi_window_was_open: false,
             midi_rec: Vec::new(),
+            midi_rec_lost_at: 0,
             last_midi_take: None,
             last_audio_take: None,
             play_from: 0,
@@ -2245,6 +2249,12 @@ impl SoundApp {
         if let Some(p) = problem {
             log::warn!("recording: {p}");
             self.ui.status = format!("{} ({p})", self.ui.status);
+        }
+        let lost = midi_devices::lost_in_take(self);
+        if lost > 0 {
+            log::warn!("recording: {lost} MIDI events lost");
+            self.ui.status =
+                format!("{} ({lost} MIDI events were lost: the window was not drawing; a note may run on to the end of its clip)", self.ui.status);
         }
     }
 
