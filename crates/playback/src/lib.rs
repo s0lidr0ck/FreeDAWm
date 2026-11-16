@@ -379,6 +379,20 @@ fn guarded_block(fault: &Fault, shared: &Shared, out: &mut [f32], fill: impl FnO
     }
 }
 
+/// Shortest loop the transport repeats, in samples. A shorter one would render the mix once per
+/// lap (hundreds of times a callback); it plays once, to its end, instead.
+const MIN_LOOP: i64 = 64;
+
+/// The loop and end a Play keeps: a loop shorter than [`MIN_LOOP`] (an accidental sliver of a
+/// selection) plays once and stops at its end, never on through the rest of the session.
+fn loop_or_end(looped: Option<Range>, end: Option<Samples>) -> (Option<Range>, Option<Samples>) {
+    match looped {
+        Some(l) if l.len() > MIN_LOOP => (Some(l), end),
+        Some(l) => (None, Some(end.map_or(l.end, |e| e.min(l.end)))),
+        None => (None, end),
+    }
+}
+
 /// State owned by the audio callback.
 struct AudioState {
     /// The preview playing ([`Cmd::Preview`]) and its read position, in its own frames.
@@ -643,8 +657,7 @@ impl AudioState {
                     self.midi_pass = 0;
                     self.pos = from;
                     self.shared.position.store(from, Ordering::Relaxed);
-                    self.end = end;
-                    self.looped = looped.filter(|r| r.len() > 64);
+                    (self.looped, self.end) = loop_or_end(looped, end);
                     // With a count-off the transport rolls once it is over (`render_next`).
                     self.countoff = countoff.filter(|c| !c.is_empty());
                     self.countoff_at = 0;
@@ -712,8 +725,7 @@ impl AudioState {
                         Some(refused) => self.send_scout(refused),
                         None => {
                             self.pos = range.start;
-                            self.end = None;
-                            self.looped = Some(range).filter(|r| r.len() > 64);
+                            (self.looped, self.end) = loop_or_end(Some(range), None);
                             self.playing = true;
                             self.pending_len = 0;
                             self.read = 0.0;
@@ -4556,6 +4568,24 @@ mod tests {
             let every_other: Vec<f32> = (0..50).map(|i| want[c][100 + 2 * i]).collect();
             assert_bits(&got[c], &every_other, "at ×2 from frame 100");
         }
+    }
+
+    #[test]
+    fn a_loop_too_short_to_repeat_plays_once_and_stops() {
+        // Bug: a selection of 64 samples or less with Loop Playback on played to the session end.
+        let s = clip_session(4800, &[]);
+        let tiny = Cmd::Play { from: 1000, end: None, looped: Some(Range::new(1000, 1040)), countoff: None };
+        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, tiny);
+        let got = callbacks(&mut st, &[441, 441]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 1040);
+        assert!(!shared.playing.load(Ordering::Relaxed), "stopped at the sliver's end");
+        let want = offline(&s, 1000..1040);
+        for c in 0..2 {
+            assert_bits(&got[c][..40], &want[c], "the sliver, once");
+            assert!(got[c][40..].iter().all(|x| x.to_bits() == 0), "silent after it");
+        }
+        assert_eq!(loop_or_end(Some(Range::new(0, 65)), None), (Some(Range::new(0, 65)), None));
+        assert_eq!(loop_or_end(Some(Range::new(0, 64)), Some(30)), (None, Some(30)));
     }
 
     #[test]
