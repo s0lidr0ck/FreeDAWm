@@ -2915,8 +2915,10 @@ fn process_strip(
     let last = pos.saturating_add(frames.saturating_sub(1) as i64);
     let mut v0 = volume_db_at(t, pos);
     let mut v1 = volume_db_at(t, last);
-    // Trim automation (an offset on top of the volume curve).
-    if let Some(l) = t.automation.iter().find(|l| l.param == AutoParam::Trim).filter(|l| !l.points.is_empty()) {
+    // Trim automation (an offset on top of the volume curve), read like every other lane.
+    if t.mixer.automation_mode.reads()
+        && let Some(l) = t.automation.iter().find(|l| l.param == AutoParam::Trim).filter(|l| !l.points.is_empty())
+    {
         v0 += l.value_at(pos, 0.0);
         v1 += l.value_at(last, 0.0);
     }
@@ -7422,6 +7424,16 @@ mod tests {
         s.track_mut(t).unwrap().lane_mut(&AutoParam::Trim).set_point(0, -12.0);
         let out = render_range(&s, Range::new(0, 4800), 512);
         assert!(out[0][2000] < 0.2, "{}", out[0][2000]);
+    }
+
+    /// Mix bug 4: the trim lane played with the track's automation Off.
+    #[test]
+    fn the_trim_lane_is_silent_with_automation_off() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.track_mut(t).unwrap().lane_mut(&AutoParam::Trim).set_point(0, -12.0);
+        s.track_mut(t).unwrap().mixer.automation_mode = soundcraft_model::AutomationMode::Off;
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][2000] - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3, "{}", out[0][2000]);
     }
 
     #[test]
