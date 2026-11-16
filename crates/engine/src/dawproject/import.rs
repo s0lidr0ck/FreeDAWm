@@ -1344,6 +1344,7 @@ impl<'p, R: Read + Seek> Importer<'p, '_, R> {
                     seq.notes.push(soundcraft_midi::Note {
                         pitch: key.clamp(0, 127) as u8,
                         velocity: vel,
+                        muted: false,
                         release_velocity: rel,
                         channel: n.int("channel").unwrap_or(0).clamp(0, 15) as u8,
                         start,

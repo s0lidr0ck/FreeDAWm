@@ -265,7 +265,15 @@ mod tests {
         let mut s = Session::new("t", SampleRate::HZ_48000);
         let keys = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
         let mut seq = Sequence::default();
-        seq.notes.push(Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 4 * TICKS_PER_QUARTER, length: TICKS_PER_QUARTER });
+        seq.notes.push(Note {
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 4 * TICKS_PER_QUARTER,
+            length: TICKS_PER_QUARTER,
+        });
         let id = s.new_clip_id();
         crate::edit::place_clip(&mut s, keys, Clip::midi(id, "Keys", 0, at(4.0), seq));
         let a = audio_track(&mut s, "A", &[(0.0, 4.0)], hits(&[1.0, 3.0], 4.0));

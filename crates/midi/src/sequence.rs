@@ -15,6 +15,14 @@ pub struct Note {
     pub start: i64,
     /// Length in ticks; always > 0.
     pub length: i64,
+    /// A muted note stays in the clip and the editor (drawn faint) but does not play and is
+    /// left out of MIDI export. Absent in sessions saved before notes could be muted.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Note {

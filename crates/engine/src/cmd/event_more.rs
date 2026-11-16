@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select/Split Notes...",
             ["Event", "MIDI Operations"],
             None,
-            "{clips?, pitch_from?: 0, pitch_to?: 127, action?: select|split} — split moves the matching notes to a new MIDI track",
+            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
             has_selection,
             select_split
         ),
@@ -311,8 +311,7 @@ fn midi_clip_ids(e: &Engine, p: &Value) -> Vec<(TrackId, ClipId)> {
 
 fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.select_split_notes";
-    let from = i64_or(p, "pitch_from", 0).clamp(0, 127) as u8;
-    let to = i64_or(p, "pitch_to", 127).clamp(0, 127) as u8;
+    let rule = note_rule(p);
     let split = match str_param(p, "action") {
         None | Some("select") => false,
         Some("split") => true,
@@ -324,12 +323,25 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let s = e.session_mut();
     let mut matched = 0;
+    let mut found = Vec::new();
     let mut new_tracks: std::collections::BTreeMap<u64, TrackId> = Default::default();
     for (t, cid) in clips {
         let Some(c) = s.find_clip(cid).map(|(_, c)| c.clone()) else { continue };
         let ClipContent::Midi { sequence } = &c.content else { continue };
-        let (hit, rest) = soundcraft_midi::ops::split_notes(&sequence.notes, from, to);
+        // Bars as the clip sits on the timeline; notes hidden before its start never match.
+        let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+        let tempo = &s.tempo;
+        let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
+        let picked: Vec<usize> = soundcraft_midi::ops::select_matching(&sequence.notes, &rule, bar_start)
+            .into_iter()
+            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0))
+            .collect();
+        let (mut hit, mut rest) = (Vec::new(), Vec::new());
+        for (i, n) in sequence.notes.iter().enumerate() {
+            if picked.contains(&i) { hit.push(*n) } else { rest.push(*n) }
+        }
         matched += hit.len();
+        found.push(json!({"clip": cid.0, "indices": picked}));
         if !split || hit.is_empty() {
             continue;
         }
@@ -352,7 +364,31 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new() } };
         crate::edit::place_clip(s, nt, nc);
     }
-    Ok(json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()}))
+    let mut out = json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()});
+    if !split {
+        if let [one] = found.as_slice() {
+            out["indices"] = one["indices"].clone();
+        }
+        out["clips"] = Value::Array(found);
+    }
+    Ok(out)
+}
+
+/// The rule `event.select_split_notes` picks notes by (see its parameters).
+fn note_rule(p: &Value) -> soundcraft_midi::ops::NoteRule {
+    let d = soundcraft_midi::ops::NoteRule::default();
+    let pair = |a: &str, b: &str, lo: i64, hi: i64, dflt: (i64, i64)| match (p.get(a).and_then(Value::as_i64), p.get(b).and_then(Value::as_i64)) {
+        (None, None) => None,
+        (x, y) => Some((x.unwrap_or(dflt.0).clamp(lo, hi), y.unwrap_or(dflt.1).clamp(lo, hi))),
+    };
+    let byte = |x: (i64, i64)| (x.0 as u8, x.1 as u8);
+    soundcraft_midi::ops::NoteRule {
+        pitch: pair("pitch_from", "pitch_to", 0, 127, (0, 127)).map_or(d.pitch, byte),
+        velocity: pair("velocity_from", "velocity_to", 1, 127, (1, 127)).map_or(d.velocity, byte),
+        length: pair("length_from", "length_to", 1, i64::MAX, d.length).unwrap_or(d.length),
+        start: pair("start_from", "start_to", 0, i64::MAX, d.start).unwrap_or(d.start),
+        in_bar: pair("in_bar_from", "in_bar_to", 0, i64::MAX, (0, i64::MAX)),
+    }
 }
 
 fn input_quantize_state(s: &Session) -> Value {
@@ -443,7 +479,15 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
         if let ClipContent::Midi { sequence } = &mut c.content {
             if !rest {
                 for pitch in &pitches {
-                    sequence.notes.push(Note { pitch: *pitch, velocity: vel, release_velocity: 64, channel: 0, start: tick - base, length: dur });
+                    sequence.notes.push(Note {
+                        pitch: *pitch,
+                        velocity: vel,
+                        muted: false,
+                        release_velocity: 64,
+                        channel: 0,
+                        start: tick - base,
+                        length: dur,
+                    });
                     added += 1;
                 }
             }
@@ -764,6 +808,7 @@ fn retro_record(e: &mut Engine, p: &Value) -> Result<Value> {
         let note = Note {
             pitch: i64_or(v, "pitch", 60).clamp(0, 127) as u8,
             velocity: i64_or(v, "velocity", 100).clamp(1, 127) as u8,
+            muted: false,
             release_velocity: 64,
             channel: i64_or(v, "channel", 0).clamp(0, 15) as u8,
             start: 0,
@@ -949,6 +994,43 @@ mod tests {
             ClipContent::Midi { sequence } => assert_eq!(sequence.notes[0].pitch, 72),
             _ => panic!(),
         }
+    }
+
+    /// Parity section 7: notes picked by rule (pitch, velocity, length, start, place in the bar),
+    /// returned per clip for the MIDI Editor to select; and a muted note stays but can be found.
+    #[test]
+    fn notes_are_selected_by_rule() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "velocity": 120},
+            {"pitch": 60, "start_ticks": 960, "velocity": 40, "length_ticks": 240},
+            {"pitch": 62, "start_ticks": 3840 + 960, "velocity": 100},
+            {"pitch": 64, "start_ticks": 3840 + 1000, "velocity": 100, "length_ticks": 960}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let pick = |e: &mut Engine, rule: Value| {
+            let mut p = rule;
+            p["clips"] = json!([cid]);
+            let r = e.execute("event.select_split_notes", &p).unwrap();
+            r["indices"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect::<Vec<_>>()
+        };
+        assert_eq!(pick(&mut e, json!({"pitch_from": 60, "pitch_to": 63})), vec![1, 2]);
+        assert_eq!(pick(&mut e, json!({"velocity_from": 100})), vec![0, 2, 3]);
+        assert_eq!(pick(&mut e, json!({"length_from": 480})), vec![3]);
+        assert_eq!(pick(&mut e, json!({"in_bar_from": 960, "in_bar_to": 1919})), vec![1, 2, 3]);
+        assert_eq!(pick(&mut e, json!({"start_from": 1000})), vec![2, 3]);
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid]})).unwrap();
+        assert_eq!(r["clips"][0]["clip"], cid);
+        // Mute two notes: they stay in the clip, and Set Notes can unmute them.
+        e.execute("midi.notes_set", &json!({"clip": cid, "indices": [1, 2], "muted": true})).unwrap();
+        let muted = |e: &Engine| match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.notes.iter().map(|n| n.muted).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        assert_eq!(muted(&e), vec![false, true, true, false]);
+        assert_eq!(e.undo_label(), Some("Set Notes"));
+        e.execute("midi.notes_set", &json!({"clip": cid, "indices": [2], "muted": false})).unwrap();
+        assert_eq!(muted(&e), vec![false, true, false, false]);
     }
 
     #[test]

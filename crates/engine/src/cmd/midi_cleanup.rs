@@ -187,7 +187,7 @@ mod tests {
     use std::sync::Arc;
 
     fn note(pitch: u8, velocity: u8, start: i64, length: i64) -> Note {
-        Note { pitch, velocity, release_velocity: 64, channel: 0, start, length }
+        Note { pitch, velocity, muted: false, release_velocity: 64, channel: 0, start, length }
     }
 
     /// An instrument track with one MIDI clip at 0 (a C triad and a short quiet C#), a C chord

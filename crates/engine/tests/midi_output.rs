@@ -17,7 +17,7 @@ fn an_external_midi_track_plays_its_clip_out_of_its_port() {
     e.execute("mix.midi_output", &json!({"track": t.0, "port": "Render Test Synth", "channel": 2})).unwrap();
     // A quarter note at 120 bpm is 24,000 samples; the note starts on beat 2.
     let mut seq = Sequence::default();
-    seq.notes.push(Note { pitch: 48, velocity: 100, release_velocity: 64, channel: 0, start: 960, length: 960 });
+    seq.notes.push(Note { pitch: 48, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 960, length: 960 });
     let id = e.session_mut().new_clip_id();
     soundcraft_engine::edit::place_clip(e.session_mut(), t, Clip::midi(id, "Bass", 0, 96_000, seq));
     let h = hub();

@@ -69,9 +69,9 @@ The gaps are of four kinds:
 | Notes edited directly on the track | ● | ◐ | ○ | ● | **Flag only**: the view exists in the menu; nothing handles it |
 | Draw, move, resize, copy by dragging, delete | ● | ● | ● | ● | **Works**; drawing needs the main window's Pencil tool |
 | Marquee, shift-click, select all | ● | ● | ● | ● | **Works** |
-| Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Partial**: Invert Selection and Select Same Pitch in the editor's More menu; by rule, the command only counts |
+| Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Works**: a click on a piano key selects that pitch's notes (Shift adds, a drag along the keys adds each key's); Invert Selection, Select Same Pitch and Select by Rule… (pitch, velocity, length and beat-of-the-bar ranges, in the MIDI Operations window) in the editor's More menu |
 | Split a note, join notes | ● | ● | ● | ● | **Works** |
-| Mute notes | ● | ● | ● | ● | **Missing** |
+| Mute notes | ● | ● | ● | ● | **Works**: Mute Notes / Unmute Notes in the editor's More menu (`midi.notes_set` with `muted`); a muted note is drawn faint, does not play and is left out of MIDI export; sessions saved before load unmuted, and unmuted notes save as before |
 | Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
@@ -378,3 +378,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Tier 2 begun: selection tools and length keys, scale shading, humanise, strum, reverse, half and double time, fix overlaps; a dropped `.mid` imports at the insertion point (the drag-in row said Missing: corrected) |
 | 2026-11-16 | minor | Bugs 26 and 28 fixed, 27 partly (triangle and cymbal oscillators): stolen voices fade, the sampler's cutoff glides; the sampler answers the sustain pedal and pitch bend |
 | 2026-11-16 | minor | Bugs 20, 15 (Repeat) and 24 fixed: controller lanes per channel, Repeat in bars on tick tracks, CLAP note-only plug-ins hear bend, pressure and the expression controllers, note-offs carry release velocity |
+| 2026-11-16 | minor | Selection and note mute: select by clicking a key, Select by Rule… sets the editor selection, notes can be muted |

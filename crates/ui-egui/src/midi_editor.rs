@@ -438,6 +438,25 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.selected = tools::same_pitch_selection(sequence, &app.midi.selected, None);
             ui.close();
         }
+        if ui.button("Select by Rule…").on_hover_text("Select the notes in pitch, velocity, length and beat ranges").clicked() {
+            app.ops.midi_op = "select notes".into();
+            app.ops.rule_split = false;
+            app.ui.show_midi_ops = true;
+            ui.close();
+        }
+        // Mute the selected notes, or unmute them when every one is muted.
+        let picked: Vec<&soundcraft_midi::Note> = app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).collect();
+        let all_muted = !picked.is_empty() && picked.iter().all(|n| n.muted);
+        let mute_text = if all_muted { "Unmute Notes" } else { "Mute Notes" };
+        if ui
+            .add_enabled(!picked.is_empty(), egui::Button::new(mute_text))
+            .on_hover_text("A muted note stays in the clip but does not play")
+            .clicked()
+        {
+            let sel = app.midi.selected.clone();
+            let _ = app.run("midi.notes_set", json!({"clip": cid.0, "indices": sel, "muted": !all_muted}));
+            ui.close();
+        }
     })
     .response
     .on_hover_text("More: Audition, controller lanes, Legato");
@@ -683,8 +702,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         }
         let selected = app.midi.selected.contains(&i);
         let fill = if selected { Color32::WHITE } else { shade(n.velocity) };
+        // A muted note is drawn faint, with its outline.
+        let (fill, edge) = if n.muted { (fill.gamma_multiply(0.25), Color32::from_gray(150)) } else { (fill, Color32::BLACK) };
         let r = note_rect(st, ln, p);
-        notes_p.rect(r, 2.0, fill, Stroke::new(1.0, Color32::BLACK), StrokeKind::Inside);
+        notes_p.rect(r, 2.0, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
         // The note's name, when it fits.
         if r.width() >= 24.0 && r.height() >= 8.0 && r.intersects(roll) {
             let name = soundcraft_midi::note_name(p.clamp(0, 127) as u8);
@@ -820,8 +841,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         );
         if resp.drag_stopped() {
             let length = drawn_len(start, p.x);
-            let note =
-                soundcraft_midi::Note { pitch: pitch as u8, velocity: app.midi.last_velocity, release_velocity: 64, channel: 0, start, length };
+            let note = soundcraft_midi::Note {
+                pitch: pitch as u8,
+                velocity: app.midi.last_velocity,
+                muted: false,
+                release_velocity: 64,
+                channel: 0,
+                start,
+                length,
+            };
             if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&[note], start)})).is_ok() {
                 app.midi.last_length = Some(length);
                 audition(app, cid, &[note]);
@@ -912,8 +940,15 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 let pitch = pitch_at(p.y).clamp(0, 127);
                 let start = floor_grid(geo.tick_at(p.x));
                 let length = app.midi.last_length.unwrap_or(grid_ticks).max(1);
-                let note =
-                    soundcraft_midi::Note { pitch: pitch as u8, velocity: app.midi.last_velocity, release_velocity: 64, channel: 0, start, length };
+                let note = soundcraft_midi::Note {
+                    pitch: pitch as u8,
+                    velocity: app.midi.last_velocity,
+                    muted: false,
+                    release_velocity: 64,
+                    channel: 0,
+                    start,
+                    length,
+                };
                 if app.run("midi.notes_add", json!({"clip": cid.0, "notes": placed(&[note], start)})).is_ok() {
                     audition(app, cid, &[note]);
                 }

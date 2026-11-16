@@ -582,7 +582,7 @@ pub fn export_midi(e: &Engine, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
                 // a note is cut at the end, and controllers hidden before the start set the state
                 // at it.
                 let len = s.tempo.samples_to_ticks(c.end(), sr).saturating_sub(base);
-                for n in sequence.notes.iter().filter(|n| n.start >= 0) {
+                for n in sequence.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
                     let mut n = *n;
                     n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
                     n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
@@ -4071,7 +4071,7 @@ mod name_tests {
 
     #[test]
     fn a_midi_track_name_is_cut_to_a_length_that_can_be_drawn() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: "n".repeat(1_000_000), sequence }], ..Default::default() };
         let mut e = Engine::default();
@@ -4105,7 +4105,7 @@ mod name_tests {
     /// Bug 17: a MIDI file imported at bar 3 brings its tempo there, not to the song's start.
     #[test]
     fn a_midi_file_imported_later_brings_its_tempo_with_its_notes() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let smf = soundcraft_midi::Smf {
             tracks: vec![soundcraft_midi::SmfTrack { name: "Lead".into(), sequence }],
@@ -4123,7 +4123,8 @@ mod name_tests {
 
     #[test]
     fn midi_longer_than_a_day_is_refused() {
-        let held = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: (1 << 28) - 1 };
+        let held =
+            soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: (1 << 28) - 1 };
         let sequence = soundcraft_midi::Sequence { notes: vec![held], ..Default::default() };
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: String::new(), sequence }], ..Default::default() };
         let err = import_midi_bytes(&mut Engine::default(), &soundcraft_midi::write_smf(&smf).unwrap(), 0, false).unwrap_err();
@@ -4132,7 +4133,7 @@ mod name_tests {
 
     #[test]
     fn midi_with_more_meter_changes_than_scores_have_is_refused() {
-        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 960 };
+        let note = soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 };
         let sequence = soundcraft_midi::Sequence { notes: vec![note], ..Default::default() };
         let meters = (0..=MAX_MIDI_METERS as i64).map(|bar| (bar * 3840, 4, 4)).collect();
         let smf = soundcraft_midi::Smf { tracks: vec![soundcraft_midi::SmfTrack { name: String::new(), sequence }], meters, ..Default::default() };
@@ -4442,8 +4443,9 @@ mod smf_tempo_tests {
     fn smf_export_writes_what_plays() {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
-        let note = |pitch, start| Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 240 };
-        let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000)], ctrls: Vec::new() };
+        let note = |pitch, start| Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 };
+        // A muted note (pitch 64) is left out too.
+        let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }], ctrls: Vec::new() };
         let a = s.new_clip_id();
         crate::edit::place_clip(&mut s, t, Clip::midi(a, "a", 0, 96_000, seq));
         let b = s.new_clip_id();
@@ -4474,7 +4476,7 @@ mod smf_tempo_tests {
             .iter()
             .map(|at| {
                 let start = s.tempo.samples_to_ticks(*at, sr) - s.tempo.samples_to_ticks(0, sr);
-                Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start, length: 240 }
+                Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 }
             })
             .collect();
         let cid = s.new_clip_id();

@@ -346,3 +346,40 @@ pub fn split_notes(notes: &[Note], pitch_from: u8, pitch_to: u8) -> (Vec<Note>, 
     let (lo, hi) = if pitch_from <= pitch_to { (pitch_from, pitch_to) } else { (pitch_to, pitch_from) };
     notes.iter().partition(|n| (lo..=hi).contains(&n.pitch))
 }
+
+/// A rule picking notes by ranges (each inclusive, either order): pitch, velocity, length and
+/// start in ticks, and optionally the start's position inside its bar (ticks from the bar line).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoteRule {
+    pub pitch: (u8, u8),
+    pub velocity: (u8, u8),
+    pub length: (i64, i64),
+    pub start: (i64, i64),
+    pub in_bar: Option<(i64, i64)>,
+}
+
+impl Default for NoteRule {
+    fn default() -> Self {
+        NoteRule { pitch: (0, 127), velocity: (1, 127), length: (1, i64::MAX), start: (0, i64::MAX), in_bar: None }
+    }
+}
+
+fn within<T: Ord + Copy>(x: T, (a, b): (T, T)) -> bool {
+    if a <= b { a <= x && x <= b } else { b <= x && x <= a }
+}
+
+impl NoteRule {
+    /// Whether `n` matches; `bar_start(t)` is the start of the bar holding tick `t`.
+    pub fn matches(&self, n: &Note, bar_start: impl Fn(i64) -> i64) -> bool {
+        within(n.pitch, self.pitch)
+            && within(n.velocity, self.velocity)
+            && within(n.length, self.length)
+            && within(n.start, self.start)
+            && self.in_bar.is_none_or(|r| within(n.start.saturating_sub(bar_start(n.start)), r))
+    }
+}
+
+/// The indices of the notes matching `rule` (see [`NoteRule::matches`]).
+pub fn select_matching(notes: &[Note], rule: &NoteRule, bar_start: impl Fn(i64) -> i64) -> Vec<usize> {
+    notes.iter().enumerate().filter(|(_, n)| rule.matches(n, &bar_start)).map(|(i, _)| i).collect()
+}

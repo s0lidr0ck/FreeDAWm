@@ -666,7 +666,7 @@ mod tests {
 
     fn cleanup_clip() -> Clip {
         let mut seq = Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 100 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 100 });
         Clip::midi(ClipId(1), "m", 0, 1000, seq)
     }
 
@@ -688,7 +688,7 @@ mod tests {
     fn midi_playing_follows_switch() {
         let mut c = cleanup_clip();
         let mut cleaned = Sequence::default();
-        cleaned.notes.push(soundcraft_midi::Note { pitch: 72, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 50 });
+        cleaned.notes.push(soundcraft_midi::Note { pitch: 72, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 50 });
         let preview = std::sync::Arc::new(CleanupPreview {
             inputs: 7,
             out: CleanupOutput { sequence: cleaned.clone(), edits: Vec::new(), report: Default::default() },

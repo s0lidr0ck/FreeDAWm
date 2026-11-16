@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Notes",
             [],
             None,
-            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, channel?: 0..15} — the same value on every picked note -> {indices}",
+            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, channel?: 0..15, muted?: bool} — the same value on every picked note (a muted note does not play) -> {indices}",
             always,
             notes_set
         ),
@@ -139,6 +139,7 @@ fn note_add(e: &mut Engine, p: &Value) -> Result<Value> {
     let n = Note {
         pitch: i64_or(p, "pitch", 60).clamp(0, 127) as u8,
         velocity: i64_or(p, "velocity", 100).clamp(1, 127) as u8,
+        muted: false,
         release_velocity: 64,
         channel: i64_or(p, "channel", 0).clamp(0, 15) as u8,
         start: i64_or(p, "start_ticks", 0).max(0),
@@ -333,6 +334,7 @@ fn note_of(v: &Value) -> Option<Note> {
     Some(Note {
         pitch: int("pitch")?.clamp(0, 127) as u8,
         velocity: int("velocity").unwrap_or(100).clamp(1, 127) as u8,
+        muted: false,
         release_velocity: 64,
         channel: int("channel").unwrap_or(0).clamp(0, 15) as u8,
         start: int("start").or_else(|| int("start_ticks"))?.max(0),
@@ -441,8 +443,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let int = |k: &str| p.get(k).and_then(Value::as_i64);
     let (pitch, start, length, velocity, channel) = (int("pitch"), int("start"), int("length"), int("velocity"), int("channel"));
-    if [pitch, start, length, velocity, channel].iter().all(Option::is_none) {
-        return Err(bad(C, "give pitch, start, length, velocity or channel"));
+    let muted = p.get("muted").and_then(Value::as_bool);
+    if [pitch, start, length, velocity, channel].iter().all(Option::is_none) && muted.is_none() {
+        return Err(bad(C, "give pitch, start, length, velocity, channel or muted"));
     }
     let seq = seq_mut(e, id, C)?;
     let idx = picked(p, seq.notes.len());
@@ -462,6 +465,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             if let Some(v) = channel {
                 n.channel = v.clamp(0, 15) as u8;
+            }
+            if let Some(m) = muted {
+                n.muted = m;
             }
         }
     }

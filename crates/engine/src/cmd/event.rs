@@ -576,6 +576,7 @@ fn add_note(e: &mut Engine, p: &Value) -> Result<Value> {
     let note = soundcraft_midi::Note {
         pitch: i64_or(p, "pitch", 60).clamp(0, 127) as u8,
         velocity: i64_or(p, "velocity", 100).clamp(1, 127) as u8,
+        muted: false,
         release_velocity: 64,
         channel: i64_or(p, "channel", 0).clamp(0, 15) as u8,
         start: i64_or(p, "start_ticks", 0).max(0),

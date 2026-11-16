@@ -36,6 +36,13 @@ pub struct OpsState {
     pub human_timing: i64,
     pub human_velocity: i64,
     pub half_time: bool,
+    /// Select Notes: pitch, velocity and length (ticks) ranges, the beats of the bar a note
+    /// starts in (1-based, fractional), and whether matching notes move to a new track instead.
+    pub rule_pitch: (i64, i64),
+    pub rule_velocity: (i64, i64),
+    pub rule_length: (i64, i64),
+    pub rule_beats: Option<(f64, f64)>,
+    pub rule_split: bool,
     pub rtp_velocity: i64,
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
@@ -74,6 +81,11 @@ impl Default for OpsState {
             human_timing: 10,
             human_velocity: 8,
             half_time: true,
+            rule_pitch: (0, 127),
+            rule_velocity: (1, 127),
+            rule_length: (1, 15_360),
+            rule_beats: None,
+            rule_split: false,
             rtp_velocity: 0,
             rtp_transpose: 0,
             rtp_duration: 100.0,
@@ -380,7 +392,8 @@ fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// The MIDI Operations window's operations.
-pub const MIDI_OPS: [&str; 11] = [
+pub const MIDI_OPS: [&str; 12] = [
+    "select notes",
     "quantize",
     "transpose",
     "change velocity",
@@ -426,6 +439,21 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
         "strum" => ("event.strum", json!({"ticks": o.strum_ticks, "direction": if o.strum_up { "up" } else { "down" }})),
         "reverse" => ("event.reverse_notes", json!({})),
         "half or double time" => ("event.time_scale", json!({"factor": if o.half_time { 2.0 } else { 0.5 }})),
+        "select notes" => {
+            let mut p = json!({
+                "pitch_from": o.rule_pitch.0, "pitch_to": o.rule_pitch.1,
+                "velocity_from": o.rule_velocity.0, "velocity_to": o.rule_velocity.1,
+                "length_from": o.rule_length.0, "length_to": o.rule_length.1,
+                "action": if o.rule_split { "split" } else { "select" },
+            });
+            // Beats of the bar (1-based) as ticks from the bar line; the end beat's whole length.
+            if let Some((a, b)) = o.rule_beats {
+                let q = soundcraft_midi::PPQ as f64;
+                p["in_bar_from"] = json!((((a.min(b) - 1.0) * q).round() as i64).max(0));
+                p["in_bar_to"] = json!((((a.max(b)) * q).round() as i64 - 1).max(0));
+            }
+            ("event.select_split_notes", p)
+        }
         _ => return None,
     })
 }
@@ -436,6 +464,7 @@ pub fn open_midi_op(app: &mut SoundApp, id: &str) -> bool {
     let op = match id {
         "event.quantize" => "quantize",
         "event.change_duration" => "change duration",
+        "event.select_split_notes" => "select notes",
         _ => return false,
     };
     app.ops.midi_op = op.into();
@@ -455,6 +484,7 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             }
         });
         match app.ops.midi_op.as_str() {
+            "select notes" => rule_form(ui, &mut app.ops),
             "quantize" => {
                 egui::ComboBox::from_label("Grid").selected_text(app.ops.quant_grid.clone()).show_ui(ui, |ui| {
                     for g in QUANTIZE_GRIDS {
@@ -503,8 +533,14 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             }
             _ => {}
         }
-        let picked = editor_selection(app);
-        let whom = if picked.is_some() {
+        // Select Notes picks from every note of the clip open in the MIDI Editor.
+        let rule_clip = (app.ops.midi_op == "select notes" && !app.ops.rule_split && app.ui.show_midi_editor)
+            .then(|| crate::midi_editor::target_clip(app))
+            .flatten();
+        let picked = if app.ops.midi_op == "select notes" { None } else { editor_selection(app) };
+        let whom = if rule_clip.is_some() {
+            "Selects the matching notes in the MIDI Editor."
+        } else if picked.is_some() {
             "Applies to the notes selected in the MIDI Editor."
         } else {
             "Applies to the selected MIDI clips (or those under the selection)."
@@ -512,6 +548,17 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
         ui.label(egui::RichText::new(whom).small());
         if ui.button(egui::RichText::new("Apply").strong()).clicked() {
             let r = match midi_op_params(&app.ops) {
+                Some((id, mut p)) if rule_clip.is_some() => {
+                    p["clips"] = json!([rule_clip.map(|c| c.0)]);
+                    let r = app.run(id, p);
+                    if let Ok(v) = &r
+                        && let Some(a) = v.get("indices").and_then(|x| x.as_array())
+                    {
+                        app.midi.selected = a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
+                        app.midi.clip = rule_clip;
+                    }
+                    r
+                }
                 Some((id, mut p)) => {
                     if let Some((clip, sel)) = &picked {
                         p["clips"] = json!([clip.0]);
@@ -534,6 +581,41 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
         }
     });
     app.ui.show_midi_ops = open;
+}
+
+/// Select Notes' form: the ranges a note must fall in, and select or split.
+fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
+    let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(egui::DragValue::new(&mut v.0).range(lo..=hi));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut v.1).range(lo..=hi));
+        });
+    };
+    ui.horizontal(|ui| {
+        ui.label("Pitch");
+        ui.add(egui::DragValue::new(&mut o.rule_pitch.0).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)));
+        ui.label("to");
+        ui.add(egui::DragValue::new(&mut o.rule_pitch.1).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)));
+    });
+    range(ui, "Velocity", &mut o.rule_velocity, 1, 127);
+    range(ui, "Length (ticks)", &mut o.rule_length, 1, 1_000_000);
+    let mut beats = o.rule_beats.is_some();
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut beats, "On beats").on_hover_text("Only notes starting in these beats of their bar (1 is the downbeat)").changed() {
+            o.rule_beats = beats.then_some((1.0, 1.0));
+        }
+        if let Some((a, b)) = &mut o.rule_beats {
+            ui.add(egui::DragValue::new(a).range(1.0..=64.0).speed(0.25));
+            ui.label("to");
+            ui.add(egui::DragValue::new(b).range(1.0..=64.0).speed(0.25));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut o.rule_split, false, "Select them");
+        ui.radio_value(&mut o.rule_split, true, "Move them to a new track");
+    });
 }
 
 fn rtp(app: &mut SoundApp, ctx: &egui::Context) {

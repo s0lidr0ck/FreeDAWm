@@ -246,7 +246,7 @@ fn close_note(open: &mut OpenNotes, notes: &mut Vec<Note>, channel: u8, pitch: u
     }
     let Some((start, velocity)) = stack.pop_front() else { return };
     let length = tick.saturating_sub(start).max(1);
-    notes.push(Note { pitch, velocity, release_velocity: release, channel, start, length });
+    notes.push(Note { pitch, velocity, muted: false, release_velocity: release, channel, start, length });
 }
 
 /// Meta-event text: UTF-8 when it is valid UTF-8, else Windows-1252 (a superset of Latin-1 for
@@ -382,7 +382,7 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
         let pitch = u8::try_from(key % 128).unwrap_or(0);
         for (start, velocity) in stack.drain(..) {
             let length = tick.saturating_sub(start).max(1);
-            seq.notes.push(Note { pitch, velocity, release_velocity: DEFAULT_RELEASE, channel, start, length });
+            seq.notes.push(Note { pitch, velocity, muted: false, release_velocity: DEFAULT_RELEASE, channel, start, length });
         }
     }
     seq.sort();

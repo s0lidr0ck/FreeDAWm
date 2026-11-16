@@ -1140,7 +1140,15 @@ mod tests {
     fn merging_midi_keeps_a_printed_clips_channels() {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
-        let n = |pitch: u8, channel: u8| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel, start: 0, length: 240 };
+        let n = |pitch: u8, channel: u8| soundcraft_midi::Note {
+            pitch,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel,
+            start: 0,
+            length: 240,
+        };
         let id = s.new_clip_id();
         ops::place_clip(&mut s, t, Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![] }));
         let mut e = Engine::new(s);

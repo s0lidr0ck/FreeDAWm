@@ -677,7 +677,8 @@ pub fn press_key(app: &mut SoundApp, cid: ClipId, pitch: u8) {
     let Some((_, clip)) = s.find_clip(cid) else { return };
     let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
     let len = s.tempo.samples_to_ticks(clip.end(), s.sample_rate).saturating_sub(base).max(1);
-    let note = Note { pitch: pitch.min(127), velocity: app.midi.last_velocity, release_velocity: 64, channel: 0, start: 0, length: len };
+    let note =
+        Note { pitch: pitch.min(127), velocity: app.midi.last_velocity, muted: false, release_velocity: 64, channel: 0, start: 0, length: len };
     let Some((copy, from, _)) = crate::midi_editor::audition_session(&s, cid, &[note]) else { return };
     let to = from.saturating_add((KEY_HOLD_S * s.sample_rate.as_f64()) as i64).min(clip.end());
     crate::midi_editor::start_audition(app, copy, from, to);
@@ -690,8 +691,15 @@ pub fn release_key(app: &mut SoundApp) {
     }
 }
 
-/// The piano keys left of the roll: a press plays the key's note until the button goes up;
-/// dragging along the keys glides from note to note.
+/// The selection after a press on the piano key `pitch`: the notes of that pitch (in the clip's
+/// window); added to `selected` with Shift held, or while a press glides on from key to key.
+pub fn key_selection(seq: &soundcraft_midi::Sequence, selected: &[usize], pitch: u8, add: bool) -> Vec<usize> {
+    same_pitch_selection(seq, if add { selected } else { &[] }, Some(pitch))
+}
+
+/// The piano keys left of the roll: a press plays the key's note until the button goes up and
+/// selects the notes of that pitch (Shift: adds them); dragging along the keys glides from note
+/// to note, adding each key's notes.
 pub fn piano_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, keys: Rect, pitch_at: &dyn Fn(f32) -> i32) {
     let resp = ui.interact(keys, ui.id().with(("midi_keys", cid.0)), Sense::click_and_drag());
     let down = resp.is_pointer_button_down_on() || resp.dragged();
@@ -699,6 +707,9 @@ pub fn piano_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, keys: Rect, pitch_at
         (true, Some(p)) => {
             let pitch = pitch_at(p.y).clamp(0, 127) as u8;
             if app.midi.piano_key != Some(pitch) {
+                let add = app.midi.piano_key.is_some() || ui.input(|i| i.modifiers.shift);
+                let seq = soundcraft_midi::Sequence { notes: clip_notes(app.engine.session(), cid), ctrls: Vec::new() };
+                app.midi.selected = key_selection(&seq, &app.midi.selected, pitch, add);
                 press_key(app, cid, pitch);
             }
         }

@@ -134,7 +134,15 @@ fn with_riff(program: Option<i32>, channel: u8) -> (Engine, u64) {
     let t = s.add_track(TrackKind::Instrument, soundcraft_model::ChannelFormat::Stereo, Some("Keys"));
     let mut seq = soundcraft_midi::Sequence::default();
     for (i, pitch) in [60u8, 64, 67].into_iter().enumerate() {
-        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 90, release_velocity: 64, channel, start: i as i64 * 960, length: 960 });
+        seq.notes.push(soundcraft_midi::Note {
+            pitch,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel,
+            start: i as i64 * 960,
+            length: 960,
+        });
     }
     if let Some(p) = program {
         seq.ctrls.push(soundcraft_midi::CtrlEvent { tick: 0, channel, kind: CtrlKind::Program, value: p });

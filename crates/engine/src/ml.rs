@@ -1145,7 +1145,15 @@ pub fn midi_sequence(s: &soundcraft_model::Session, start: Samples, len: Samples
             continue;
         }
         let b = tick(n.end).clamp(a + 1, last);
-        seq.notes.push(Note { pitch: n.pitch.min(127), velocity: n.velocity.clamp(1, 127), release_velocity: 64, channel, start: a, length: b - a });
+        seq.notes.push(Note {
+            pitch: n.pitch.min(127),
+            velocity: n.velocity.clamp(1, 127),
+            muted: false,
+            release_velocity: 64,
+            channel,
+            start: a,
+            length: b - a,
+        });
     }
     trim_same_pitch_overlaps(&mut seq.notes);
     for (a, b) in &t.pedals {

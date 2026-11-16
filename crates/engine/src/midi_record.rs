@@ -751,7 +751,7 @@ mod tests {
         let mut e = Engine::default();
         let t = armed(&mut e, "midi:all", 0);
         let mut old = Sequence::default();
-        old.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 10 });
+        old.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 10 });
         let id = e.session_mut().new_clip_id();
         crate::edit::place_clip(e.session_mut(), t, Clip::midi(id, "Old", 0, Q, old));
         // Record pressed at 2 Q while the loop 0..4 Q plays.
@@ -853,7 +853,7 @@ mod tests {
     /// A clip with one note of `pitch` at tick `at` on `t`, from `start` for `len`.
     fn old_clip(e: &mut Engine, t: TrackId, start: Samples, len: Samples, pitch: u8, at: i64) -> ClipId {
         let mut seq = Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 90, release_velocity: 64, channel: 0, start: at, length: 100 });
+        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: at, length: 100 });
         let id = e.session_mut().new_clip_id();
         crate::edit::place_clip(e.session_mut(), t, Clip::midi(id, "Old", start, len, seq));
         id

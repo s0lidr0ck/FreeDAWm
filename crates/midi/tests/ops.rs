@@ -2,7 +2,7 @@ use soundcraft_midi::ops::*;
 use soundcraft_midi::*;
 
 fn n(pitch: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length }
+    Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 fn starts(notes: &[Note]) -> Vec<i64> {
@@ -269,4 +269,33 @@ fn sequence_serde_round_trip() {
     let seq = Sequence { notes: vec![n(60, 0, 1)], ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9 }] };
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(serde_json::from_str::<Sequence>(&json).unwrap(), seq);
+}
+
+#[test]
+fn notes_are_picked_by_rule() {
+    let mut v = vec![n(60, 0, 240), n(62, 960, 480), n(64, 3840 + 960, 240), n(72, 4000, 960)];
+    v[1].velocity = 40;
+    let bar = |t: i64| t.div_euclid(3840) * 3840;
+    assert_eq!(select_matching(&v, &NoteRule::default(), bar), vec![0, 1, 2, 3]);
+    let r = NoteRule { pitch: (65, 60), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![0, 1, 2]);
+    let r = NoteRule { velocity: (80, 127), length: (1, 480), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![0, 2]);
+    // Beat 2 of any bar.
+    let r = NoteRule { in_bar: Some((960, 1919)), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![1, 2]);
+    let r = NoteRule { start: (900, 4000), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![1, 3]);
+}
+
+#[test]
+fn a_muted_note_round_trips_and_old_notes_load_unmuted() {
+    let mut a = n(60, 0, 10);
+    let json = serde_json::to_string(&a).unwrap();
+    assert!(!json.contains("muted"), "an unmuted note saves as before: {json}");
+    a.muted = true;
+    let back: Note = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+    assert!(back.muted);
+    let old: Note = serde_json::from_str(r#"{"pitch":60,"velocity":100,"release_velocity":64,"channel":0,"start":0,"length":10}"#).unwrap();
+    assert!(!old.muted);
 }

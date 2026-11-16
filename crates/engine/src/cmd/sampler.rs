@@ -503,7 +503,15 @@ fn slice_midi(e: &mut Engine, p: &Value) -> Result<Value> {
             break;
         }
         let (ta, tb) = (tick(a), tick(b));
-        seq.notes.push(soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start: ta, length: (tb - ta).max(1) });
+        seq.notes.push(soundcraft_midi::Note {
+            pitch,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: ta,
+            length: (tb - ta).max(1),
+        });
     }
     let notes = seq.notes.len();
     let s = e.session_mut();
@@ -559,7 +567,7 @@ mod tests {
         let q = TICKS_PER_QUARTER;
         let mut seq = Sequence::default();
         for &(pitch, start, len) in notes {
-            seq.notes.push(Note { pitch, velocity: 127, release_velocity: 64, channel: 0, start: start * q, length: len * q });
+            seq.notes.push(Note { pitch, velocity: 127, muted: false, release_velocity: 64, channel: 0, start: start * q, length: len * q });
         }
         let s = e.session_mut();
         let cid = s.new_clip_id();

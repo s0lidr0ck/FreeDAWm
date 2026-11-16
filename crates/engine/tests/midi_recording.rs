@@ -11,7 +11,7 @@ fn new_track(e: &mut Engine, kind: &str) -> TrackId {
 }
 
 fn note(pitch: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length }
+    Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 /// Bug 20: a new MIDI track, and the tracks a MIDI file import makes, listen to every MIDI input,

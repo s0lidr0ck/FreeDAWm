@@ -4226,13 +4226,13 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         // voice: a note starting over it retriggers it (its note-off first, so every note-on has
         // its own note-off), and only the last to end closes it.
         let sounding_across = |me: &soundcraft_midi::Note, pitch: u8, ch: u8, at: Samples| {
-            sequence.notes.iter().filter(|m| m.start >= 0 && !std::ptr::eq(*m, me)).any(|m| {
+            sequence.notes.iter().filter(|m| m.start >= 0 && !m.muted && !std::ptr::eq(*m, me)).any(|m| {
                 let (x, on, off) = shaped(m);
                 x.pitch == pitch && (!chans || x.channel & 0x0F == ch) && on < at && off > at && on < clip.end()
             })
         };
-        // Notes before tick 0 are what a start trim hid: they don't play.
-        for n0 in sequence.notes.iter().filter(|n| n.start >= 0) {
+        // Notes before tick 0 are what a start trim hid: they don't play; nor do muted notes.
+        for n0 in sequence.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
             let (n, on, off) = shaped(n0);
             if on >= clip.end() {
                 continue;
@@ -5923,7 +5923,7 @@ mod tests {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
         let mut seq = Sequence::default();
-        seq.notes.push(Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 960 });
+        seq.notes.push(Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 960 });
         let cid = s.new_clip_id();
         let tr = s.track_mut(t).unwrap();
         tr.playlist_mut().unwrap().clips.push(Clip::midi(cid, "n", 0, 24_000, seq));
@@ -7106,7 +7106,7 @@ mod tests {
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
         s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.tape"));
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 4, length: 16 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 4, length: 16 });
         let cc = |tick, kind, value| soundcraft_midi::CtrlEvent { tick, channel: 0, kind, value };
         seq.ctrls = vec![cc(2, CtrlKind::Program, 7), cc(8, CtrlKind::Cc(1), 50), cc(12, CtrlKind::PitchBend, 0)];
         let cid = s.new_clip_id();
@@ -7193,7 +7193,7 @@ mod tests {
     #[test]
     fn overlapping_notes_of_one_pitch_each_get_their_own_end() {
         let mut seq = soundcraft_midi::Sequence::default();
-        let note = |start, length| soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start, length };
+        let note = |start, length| soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
         seq.notes = vec![note(0, 16), note(8, 4)];
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         render_block(&mut eng, &s, 0);
@@ -7210,8 +7210,8 @@ mod tests {
     fn a_note_set_off_channel_1_plays_on_its_channel() {
         let seq = soundcraft_midi::Sequence {
             notes: vec![
-                soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 2, start: 0, length: 8 },
-                soundcraft_midi::Note { pitch: 64, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 8 },
+                soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 2, start: 0, length: 8 },
+                soundcraft_midi::Note { pitch: 64, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 0, length: 8 },
             ],
             ctrls: vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 2, kind: CtrlKind::Cc(1), value: 50 }],
         };
@@ -7224,12 +7224,24 @@ mod tests {
         assert!(got.contains(&(true, 200, [0x82, 60, 64])), "{got:?}");
     }
 
+    /// A muted note does not play; the notes around it do.
+    #[test]
+    fn a_muted_note_is_silent() {
+        let note = |pitch, muted| soundcraft_midi::Note { pitch, velocity: 100, muted, release_velocity: 64, channel: 0, start: 0, length: 8 };
+        let seq = soundcraft_midi::Sequence { notes: vec![note(60, true), note(64, false)], ..Default::default() };
+        let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
+        render_block(&mut eng, &s, 0);
+        let got = std::mem::take(&mut *heard.lock().unwrap());
+        assert!(got.contains(&(false, 0, [0x90, 64, 100])), "{got:?}");
+        assert!(!got.iter().any(|e| e.2[1] == 60), "{got:?}");
+    }
+
     /// Bug 8: a clip that starts between two ticks (25 samples a tick: 260 is tick 10.4) plays
     /// its first note at its start, so playback started there hears it.
     #[test]
     fn a_note_at_the_start_of_a_clip_off_the_tick_grid_plays_from_the_start() {
         let seq = soundcraft_midi::Sequence {
-            notes: vec![soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 8 }],
+            notes: vec![soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 8 }],
             ..Default::default()
         };
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 260, 48_000, seq));
@@ -7243,7 +7255,7 @@ mod tests {
     #[test]
     fn a_negative_delay_moves_early_notes_before_the_clip_rather_than_piling_them() {
         let mut seq = soundcraft_midi::Sequence::default();
-        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 4 };
+        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 4 };
         seq.notes = vec![note(60, 0), note(62, 40)];
         // The clip starts on tick 100 (2 500 samples); 40 ticks early is 1 000 samples.
         let (mut s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 2_500, 48_000, seq));
@@ -7262,7 +7274,7 @@ mod tests {
     #[test]
     fn notes_hidden_by_a_start_trim_are_silent_and_their_controllers_set_the_start_state() {
         let mut seq = soundcraft_midi::Sequence::default();
-        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length: 8 };
+        let note = |pitch, start| soundcraft_midi::Note { pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 8 };
         seq.notes = vec![note(50, -100), note(60, 0)];
         seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: -50, channel: 0, kind: CtrlKind::Program, value: 9 }];
         // 25 samples a tick: the clip starts on tick 10.
@@ -7344,7 +7356,7 @@ mod tests {
     #[test]
     fn live_midi_plays_while_stopped_and_lets_go_when_disarmed() {
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 400 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 400 });
         let (mut s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         let t = s.tracks[0].id;
         {
@@ -7658,7 +7670,7 @@ mod tests {
     /// samples per tick), hearing every live input.
     fn armed_with_clip_note() -> (Session, MixEngine, Arc<std::sync::Mutex<Vec<(bool, usize, [u8; 3])>>>) {
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 1900 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 40, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 1900 });
         let (mut s, eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         let m = &mut s.tracks[0].mixer;
         (m.input, m.record_arm) = (Route::Midi(soundcraft_model::MidiIn::all()), true);
@@ -7837,7 +7849,7 @@ mod tests {
     fn a_note_off_on_the_clip_end_plays_on_a_block_boundary() {
         // 25 samples per tick: the note runs past the clip, whose end (1024) is a block boundary.
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 4, length: 400 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 4, length: 400 });
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 1024, seq));
         for b in 0..4 {
             render_block(&mut eng, &s, b * 512);
@@ -7855,7 +7867,7 @@ mod tests {
     fn a_sounding_note_that_leaves_the_playing_sequence_gets_its_note_off() {
         // 25 samples per tick: the note sounds from 100 to 10100. After the first block the playing
         // sequence changes so that the note no longer spans the playhead (512).
-        let note = |length| soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 4, length };
+        let note = |length| soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 4, length };
         let take = |len| {
             let mut seq = soundcraft_midi::Sequence::default();
             seq.notes.push(note(len));
@@ -7900,8 +7912,8 @@ mod tests {
     fn printed_clips_play_their_channels_controllers_first() {
         let mut seq = soundcraft_midi::Sequence::default();
         // A keyswitch and a note with the controller that sets them up, all on tick 4.
-        seq.notes.push(soundcraft_midi::Note { pitch: 24, velocity: 1, release_velocity: 0, channel: 0, start: 4, length: 2 });
-        seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, release_velocity: 64, channel: 2, start: 4, length: 16 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 24, velocity: 1, muted: false, release_velocity: 0, channel: 0, start: 4, length: 2 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, muted: false, release_velocity: 64, channel: 2, start: 4, length: 16 });
         seq.ctrls = vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70 }];
         let mut clip = Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq.clone());
         clip.midi_channels = true;
@@ -7957,7 +7969,7 @@ mod tests {
         // A printed clip: CC11 on channel 1 (twice: the later value wins), CC1 on channel 3, a lower-manual note on
         // channel 9 (no controllers), all before the seek; an unflagged clip's CC7 still goes to channel 1 as before.
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, release_velocity: 64, channel: 8, start: 2, length: 2 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 48, velocity: 90, muted: false, release_velocity: 64, channel: 8, start: 2, length: 2 });
         seq.ctrls = vec![
             soundcraft_midi::CtrlEvent { tick: 2, channel: 0, kind: CtrlKind::Cc(11), value: 40 },
             soundcraft_midi::CtrlEvent { tick: 4, channel: 0, kind: CtrlKind::Cc(11), value: 70 },
@@ -7998,7 +8010,7 @@ mod tests {
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
         s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.keys"));
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 480 });
+        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel: 0, start: 0, length: 480 });
         let cid = s.new_clip_id();
         s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(cid, "m", 0, 48_000, seq));
         s.edit.values.insert(format!("rtp.{}.transpose", t.0), 12.0);
