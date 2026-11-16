@@ -153,7 +153,7 @@ Varispeed is the only whole-project speed control among the four.
 |---|:-:|:-:|:-:|:-:|---|
 | Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed with linear interpolation |
 | Audio follows tempo changes | ● | ● | ● | ● | **Partial**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, renders them to the new length (offline, not in real time) |
-| Choice of stretch algorithm | ● | ● | ● | ● | **Flag only**: polyphonic, rhythmic, monophonic and X-Form all run the same render |
+| Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
 | Warp markers you can drag | ● | ● | ● | ● | **Missing**: markers are written by Straighten and never edited or read |
 | Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
 | Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |

@@ -351,10 +351,52 @@ pub fn resample_table(ch: &[Vec<f32>], from: u32, to: u32) -> Vec<Vec<f32>> {
 // ---------------------------------------------------------------------------------------------
 // Time stretch (WSOLA) and pitch shift
 
+/// The Elastic algorithms: WSOLA tuned for each kind of material by its splice length and how
+/// far it searches for the best splice. Rhythmic splices short (a hit stays one hit, not
+/// smeared or doubled), Monophonic searches a wide window around a medium splice (it locks on
+/// a voice's pitch period), Polyphonic is the general setting, X-Form splices long and searches
+/// wide (smooth for pads and full mixes, soft on transients).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StretchMode {
+    #[default]
+    Polyphonic,
+    Rhythmic,
+    Monophonic,
+    XForm,
+}
+
+impl StretchMode {
+    /// The mode an Elastic algorithm id names (`x-form`, `rhythmic`, …); `None` for varispeed.
+    pub fn from_id(id: &str) -> Option<StretchMode> {
+        match id.to_ascii_lowercase().replace(['-', '_', ' '], "").as_str() {
+            "polyphonic" => Some(StretchMode::Polyphonic),
+            "rhythmic" => Some(StretchMode::Rhythmic),
+            "monophonic" => Some(StretchMode::Monophonic),
+            "xform" => Some(StretchMode::XForm),
+            _ => None,
+        }
+    }
+
+    /// Splice length and search reach, in seconds.
+    fn frame_and_reach(self) -> (f64, f64) {
+        match self {
+            StretchMode::Polyphonic => (0.040, 0.010),
+            StretchMode::Rhythmic => (0.012, 0.003),
+            StretchMode::Monophonic => (0.030, 0.015),
+            StretchMode::XForm => (0.090, 0.020),
+        }
+    }
+}
+
 /// Pitch-preserving time stretch by WSOLA (waveform-similarity overlap-add).
 /// `ratio` = output length / input length, clamped to 0.1 ..= 10. All channels share the same
 /// segment choices so the stereo image stays coherent.
 pub fn time_stretch(ch: &[Vec<f32>], ratio: f64, sample_rate: f32) -> Vec<Vec<f32>> {
+    time_stretch_mode(ch, ratio, sample_rate, StretchMode::Polyphonic)
+}
+
+/// [`time_stretch`] with the splicing of `mode`.
+pub fn time_stretch_mode(ch: &[Vec<f32>], ratio: f64, sample_rate: f32, mode: StretchMode) -> Vec<Vec<f32>> {
     let len = max_len(ch);
     let ratio = if ratio.is_finite() { ratio.clamp(0.1, 10.0) } else { 1.0 };
     let out_len = ((len as f64 * ratio).round() as usize).min(MAX_OFFLINE_SAMPLES);
@@ -363,7 +405,7 @@ pub fn time_stretch(ch: &[Vec<f32>], ratio: f64, sample_rate: f32) -> Vec<Vec<f3
     }
     let nch = ch.len() as f32;
     let guide: Vec<f32> = (0..len).map(|i| ch.iter().map(|c| c.get(i).copied().unwrap_or(0.0)).sum::<f32>() / nch).collect();
-    let plan = wsola_plan(&guide, ratio, sample_rate);
+    let plan = wsola_plan_mode(&guide, ratio, sample_rate, mode);
     wsola_apply(ch, &plan)
 }
 
@@ -383,16 +425,22 @@ pub struct WsolaPlan {
 
 /// Plan a stretch of `guide` by `ratio` (output / input length, clamped to 0.1 ..= 10).
 pub fn wsola_plan(guide: &[f32], ratio: f64, sample_rate: f32) -> WsolaPlan {
+    wsola_plan_mode(guide, ratio, sample_rate, StretchMode::Polyphonic)
+}
+
+/// [`wsola_plan`] with the splice length and search reach of `mode`.
+pub fn wsola_plan_mode(guide: &[f32], ratio: f64, sample_rate: f32, mode: StretchMode) -> WsolaPlan {
     let len = guide.len();
     let ratio = if ratio.is_finite() { ratio.clamp(0.1, 10.0) } else { 1.0 };
     let out_len = ((len as f64 * ratio).round() as usize).min(MAX_OFFLINE_SAMPLES);
     let sr = f64::from(sane_sr(sample_rate));
-    let frame = (((sr * 0.04) as usize) & !1).clamp(64, 8192);
+    let (frame_s, reach_s) = mode.frame_and_reach();
+    let frame = (((sr * frame_s) as usize) & !1).clamp(64, 8192);
     let hop = frame / 2;
     if len == 0 || (ratio - 1.0).abs() < 1e-9 {
         return WsolaPlan { reads: Vec::new(), frame, hop, out_len, identity: true };
     }
-    let tol = ((sr * 0.010) as usize).clamp(8, 2048) as i64;
+    let tol = ((sr * reach_s) as usize).clamp(8, 2048) as i64;
     let g = |i: i64| -> f32 { if i < 0 { 0.0 } else { guide.get(i as usize).copied().filter(|v| v.is_finite()).unwrap_or(0.0) } };
     let mut reads = Vec::with_capacity(out_len / hop.max(1) + 1);
     let mut prev_in: i64 = 0;
@@ -826,6 +874,37 @@ mod tests {
         assert_eq!(ch[0][99], 0.0);
         assert_eq!(ch[0][50], 1.0);
         fade(&mut ch, 1000, 1000, FadeShape::SCurve);
+    }
+
+    /// The Elastic algorithms really differ: Rhythmic keeps a hit tight where X-Form smears it, and
+    /// every mode keeps the length and a tone's level.
+    #[test]
+    fn stretch_modes_splice_differently_and_rhythmic_keeps_hits_tight() {
+        let sr = 48_000.0;
+        // A click every 0.25 s.
+        let mut clicks = vec![0.0f32; 48_000];
+        for k in 0..4 {
+            for i in 0..48 {
+                clicks[k * 12_000 + 1000 + i] = 0.9 * (1.0 - i as f32 / 48.0);
+            }
+        }
+        let spread = |mode: StretchMode| {
+            let out = time_stretch_mode(std::slice::from_ref(&clicks), 1.5, sr, mode);
+            assert_eq!(out[0].len(), 72_000, "{mode:?}");
+            // Samples carrying a click (above 5 % of full scale): a smeared or doubled hit has more.
+            out[0].iter().filter(|x| x.abs() > 0.045).count()
+        };
+        let (rhythmic, xform) = (spread(StretchMode::Rhythmic), spread(StretchMode::XForm));
+        assert!(rhythmic < xform, "rhythmic {rhythmic} samples of click, x-form {xform}");
+        assert_ne!(spread(StretchMode::Monophonic), spread(StretchMode::Polyphonic));
+        let tone: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.03).sin() * 0.5).collect();
+        for mode in [StretchMode::Polyphonic, StretchMode::Rhythmic, StretchMode::Monophonic, StretchMode::XForm] {
+            let out = time_stretch_mode(std::slice::from_ref(&tone), 0.8, sr, mode);
+            let rms = (out[0][2000..36_000].iter().map(|x| x * x).sum::<f32>() / 34_000.0).sqrt();
+            assert!((rms - 0.3535).abs() < 0.05, "{mode:?}: {rms}");
+        }
+        assert_eq!(StretchMode::from_id("X-Form"), Some(StretchMode::XForm));
+        assert_eq!(StretchMode::from_id("varispeed"), None);
     }
 }
 

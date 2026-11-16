@@ -160,7 +160,14 @@ pub fn render_stretched(s: &mut Session, cmd: &str, c: &Clip, out_len: Samples) 
     // The clip's material as it plays (Clean Vocal's cleaned alternate mixed in).
     let Some(ch) = soundcraft_mix::clip_source_window(s, c, offset.max(0), n) else { return Ok(None) };
     let sr = s.sample_rate;
-    let mut out = soundcraft_dsp::offline::time_stretch(&ch, ratio, sr.as_f64() as f32);
+    // The clip's track's Elastic algorithm chooses how the stretch splices.
+    let mode = s
+        .find_clip(c.id)
+        .and_then(|(t, _)| s.track(t))
+        .and_then(|t| t.elastic.as_deref())
+        .and_then(soundcraft_dsp::offline::StretchMode::from_id)
+        .unwrap_or_default();
+    let mut out = soundcraft_dsp::offline::time_stretch_mode(&ch, ratio, sr.as_f64() as f32, mode);
     let want = usize::try_from(out_len).unwrap_or(0);
     for o in &mut out {
         o.resize(want, 0.0);

@@ -193,7 +193,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Warp markers you drag to move a hit | ● | ● | ● | ● | **Flag only**: markers are stored by Straighten, never drawn or editable |
-| Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Partial**: every choice but varispeed runs the same offline stretch; varispeed plays with a simple resampler that aliases |
+| Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Works** offline: the track's algorithm sets how the stretch splices (Rhythmic short and tight, Monophonic searching wide, Polyphonic general, X-Form long and smooth); varispeed plays in real time through the band-limited resampler (section 1). Not real-time |
 | Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
 | Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
 | Quantize multitrack drums keeping phase | ● | ● | ● | ● | **Works** as Straighten, to a steady tempo only |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: the Elastic algorithm menu chooses a different stretch |
 | 2026-11-16 | minor | Tier 2: audio on tick tracks follows tempo-map edits |
 | 2026-11-16 | minor | Tier 2: processing keeps handles |
 | 2026-11-16 | minor | Tier 2: Commit Selection (bounce a range in place with effects) |
