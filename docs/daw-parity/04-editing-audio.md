@@ -118,7 +118,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it |
 | Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; ignores Shuffle |
-| Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Partial**: the tempo and meter map, key signatures, take layers and other playlists do not move (bug 7) |
+| Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Works**: every playlist and take layer, automation, markers, key changes and the tempo and meter map move (bug 7, fixed); refused inside a tempo ramp |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
 | Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
@@ -233,7 +233,7 @@ why they score ◐ for "built-in".
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
 | Tempo changes, ramps and curves; meter changes | ● | ● | ● | ● | **Works** |
 | Tap tempo | ● | ● | ● | ● | **Missing** |
-| Identify a beat to set the tempo from a selection | ● | ◐ | ● | ● | **Partial**: everything after the selection shifts (bug 8) |
+| Identify a beat to set the tempo from a selection | ● | ◐ | ● | ● | **Works**: the tempo after the selection resumes where it ends (bug 8, fixed) |
 | Video stays in sync through edits; snap to frames | ● | ● | ● | ● | **Works** |
 
 ## L. Clip list and sample-level editing
@@ -271,8 +271,8 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 4 | **Fixed.** An edit-locked clip could still be cut, cleared, separated, trimmed by menu, faded, healed, gain-changed, processed and stripped. One check after every command (`edit::locked_edit_refused`, next to the frozen-track check in `Engine::execute`) refuses and undoes any command that changed or removed a clip it left edit-locked; renaming, colouring, unlocking, deleting the track or playlist, and Insert/Cut Time moving it are allowed. Recording does not run through commands and still overwrites. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`locked_edit_refused`); `engine/src/lib.rs` (`execute`) |
 | 5 | **Fixed.** Per-clip effects were stored under the clip's id (`clip_fx.<clip>.*` edit values), so a split's right half and every copy played without them. They are now carried on the clip (`Clip::effects`, `Clip::effects_bypass`), which the mixer reads; older sessions are moved over on load (`Session::sanitize`). Edit Lock protects them too. Test: `engine/tests/editing_parity.rs` | `model/src/clip.rs`; `model/src/session.rs` (`migrate_clip_effects`); `mix/src/lib.rs` (`clip_fx_params`) |
 | 6 | **Fixed.** Heal joined two pieces when only their clip gain matched, dropping the second piece's gain line, mute, stretch and channel. It now joins only pieces of the same file continuing at the same stretch whose gain, bypass, mute, channel, clip effects, Clean Vocal and tuning match and with no fade at the join, and joins their clip-gain lines (`Clip::joined_env`). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`heal`, `heals`); `model/src/clip.rs` (`joined_env`) |
-| 7 | Insert Time and Cut Time move the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures | `engine/src/cmd/event.rs:244-293` |
-| 8 | Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end | `engine/src/cmd/event_more.rs:702, 723` |
+| 7 | **Fixed.** Insert Time and Cut Time moved the active playlist, automation and markers but not take layers, other playlists, the tempo and meter map or key signatures. They now work on every playlist, move key changes, and insert or remove ticks in the tempo and meter map (`TempoMap::insert_ticks`, `remove_ticks`; inserted time plays at the tempo where it goes in, a moved meter change goes to the next bar line). A point inside a tempo ramp is refused. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/event.rs` (`insert_time`, `cut_time`); `time/src/tempo.rs` |
+| 8 | **Fixed.** Identify Beat and Beat Detective's tempo option set a tempo at the selection start without restoring the old one at its end. Both now make the selection that many beats at the new tempo and resume the tempo in effect at its end there, moving later changes with it (`TempoMap::set_span`), so what follows stays where it was in time. Ends inside a ramp are refused. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/event_more.rs`; `time/src/tempo.rs` (`set_span`) |
 | 9 | **Fixed.** Deleting fades in a selection trimmed every crossfade on the track back to its midpoint, including those outside the selection. Only fades and crossfades that lie in the selection go now (with a point, those of the clip under it). Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`delete_fades`) |
 | 10 | Commit / Bounce copies volume, output and sends to the new track but not pan or automation, then hides the original | `engine/src/io.rs:1191-1202` |
 | 11 | Strip Silence treats muted clips as silence and deletes them | `engine/src/io.rs:979-992` |
@@ -345,3 +345,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 5 fixed: clip effects live on the clip, so splits and copies keep them. Bug 13 partly: clip effects are made at sync, not in render |
 | 2026-11-16 | minor | Bug 6 fixed: Heal joins only pieces that sound alike and keeps both clip-gain lines |
 | 2026-11-16 | minor | Bug 9 fixed: deleting fades leaves crossfades outside the selection alone |
+| 2026-11-16 | minor | Bugs 7 and 8 fixed: Insert/Cut Time move every playlist, the tempo and meter map and keys; Identify Beat restores the tempo after the selection |

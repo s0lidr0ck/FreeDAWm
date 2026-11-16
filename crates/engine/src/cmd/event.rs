@@ -247,9 +247,18 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("event.insert_time", "give `start` and `length` or `end`"));
     }
     let s = e.session_mut();
+    let sr = s.sample_rate;
+    let at = s.tempo.samples_to_ticks(r.start, sr);
+    if s.tempo.in_ramp(at) {
+        return Err(bad("event.insert_time", "the start is inside a tempo ramp; insert time before or after it"));
+    }
+    // The inserted time plays at the tempo in effect where it goes in.
+    let ticks =
+        soundcraft_time::to_samples(r.len() as f64 * s.tempo.tempo_at_tick(at) * soundcraft_time::TICKS_PER_QUARTER as f64 / (sr.as_f64() * 60.0));
     let ids: Vec<_> = s.tracks.iter().map(|t| t.id).collect();
     for t in ids {
-        crate::edit::insert_silence(s, t, r);
+        // Every playlist and take layer, not only the one shown.
+        on_every_playlist(s, t, |s| crate::edit::insert_silence(s, t, r));
         if let Some(tr) = s.track_mut(t) {
             for l in &mut tr.automation {
                 l.shift_from(r.start, r.len());
@@ -262,7 +271,28 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
             m.end += r.len();
         }
     }
+    for (k, _) in &mut s.key_signatures {
+        if *k >= r.start && *k > 0 {
+            *k = k.saturating_add(r.len());
+        }
+    }
+    s.tempo.insert_ticks(at, ticks);
     Ok(json!({"inserted": r.len()}))
+}
+
+/// Run `f` on each of a track's playlists in turn (the edit primitives work on the active one),
+/// then show the one that was shown.
+fn on_every_playlist(s: &mut soundcraft_model::Session, t: soundcraft_model::TrackId, mut f: impl FnMut(&mut soundcraft_model::Session)) {
+    let Some((n, shown)) = s.track(t).map(|tr| (tr.playlists.len(), tr.active_playlist)) else { return };
+    for i in 0..n {
+        if let Some(tr) = s.track_mut(t) {
+            tr.active_playlist = i;
+        }
+        f(s);
+    }
+    if let Some(tr) = s.track_mut(t) {
+        tr.active_playlist = shown;
+    }
 }
 
 fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -271,10 +301,17 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("event.cut_time", "selection is empty"));
     }
     let s = e.session_mut();
+    let sr = s.sample_rate;
+    let (from, to) = (s.tempo.samples_to_ticks(r.start, sr), s.tempo.samples_to_ticks(r.end, sr));
+    if s.tempo.in_ramp(from) || s.tempo.in_ramp(to) {
+        return Err(bad("event.cut_time", "an end of the range is inside a tempo ramp; cut time outside it"));
+    }
     let ids: Vec<_> = s.tracks.iter().map(|t| t.id).collect();
     for t in ids {
-        crate::edit::clear_range(s, t, r, false);
-        crate::edit::shift_from(s, t, r.end, -r.len());
+        on_every_playlist(s, t, |s| {
+            crate::edit::clear_range(s, t, r, false);
+            crate::edit::shift_from(s, t, r.end, -r.len());
+        });
         if let Some(tr) = s.track_mut(t) {
             for l in &mut tr.automation {
                 l.clear_range(r.start, r.end);
@@ -289,6 +326,21 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
             m.end -= r.len();
         }
     }
+    // Key changes inside the range go; the key in effect at its end carries on from its start.
+    let carried = s.key_signatures.iter().filter(|(k, _)| r.contains(*k)).max_by_key(|(k, _)| *k).map(|(_, key)| key.clone());
+    s.key_signatures.retain(|(k, _)| !r.contains(*k));
+    for (k, _) in &mut s.key_signatures {
+        if *k >= r.end {
+            *k = k.saturating_sub(r.len());
+        }
+    }
+    if let Some(key) = carried
+        && !s.key_signatures.iter().any(|(k, _)| *k == r.start)
+    {
+        s.key_signatures.push((r.start, key));
+        s.key_signatures.sort_by_key(|(k, _)| *k);
+    }
+    s.tempo.remove_ticks(from, to);
     Ok(json!({"removed": r.len()}))
 }
 

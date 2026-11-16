@@ -332,3 +332,62 @@ fn deleting_fades_leaves_crossfades_outside_the_selection() {
     let got: Vec<_> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end(), c.fade_in.len, c.fade_out.len)).collect();
     assert_eq!(got, vec![(0, 1050, 0, 0), (1050, 2100, 0, 100), (2000, 3000, 100, 0)], "the second crossfade stays");
 }
+
+// ---- bug 7: Insert and Cut Time left other playlists, tempo, meter and keys behind ----------
+
+fn all_playlists(e: &Engine, t: TrackId) -> Vec<Vec<(i64, i64)>> {
+    e.session().track(t).unwrap().playlists.iter().map(|p| p.clips.iter().map(|c| (c.start, c.length)).collect()).collect()
+}
+
+/// A track with a clip at one second on two playlists, a tempo change and a key change at two
+/// seconds (120 bpm: a bar is two seconds at 48 kHz).
+fn timeline() -> (Engine, TrackId) {
+    let mut e = engine("slip");
+    let (t, _) = track(&mut e, &[(48_000, 48_000, 0)]);
+    run(&mut e, "track.playlist_duplicate", json!({"track": t.0}));
+    let s = e.session_mut();
+    s.tempo.set_tempo(4 * soundcraft_time::TICKS_PER_QUARTER, 90.0).unwrap();
+    s.key_signatures.push((96_000, "D".into()));
+    (e, t)
+}
+
+#[test]
+fn insert_time_moves_every_playlist_the_tempo_map_and_the_keys() {
+    let (mut e, t) = timeline();
+    // One bar (two seconds at 120 bpm) at the start.
+    run(&mut e, "event.insert_time", json!({"start": 0, "length": 96_000}));
+    assert_eq!(all_playlists(&e, t), vec![vec![(144_000, 48_000)]; 2]);
+    let s = e.session();
+    let bar = 4 * soundcraft_time::TICKS_PER_QUARTER;
+    assert_eq!(s.tempo.tempos().iter().map(|x| (x.tick, x.bpm)).collect::<Vec<_>>(), vec![(0, 120.0), (2 * bar, 90.0)]);
+    assert_eq!(s.tempo.tick_to_samples(2 * bar, s.sample_rate), 192_000, "the tempo change stays with the music after it");
+    assert_eq!(s.key_signatures, vec![(192_000, "D".to_string())]);
+    run(&mut e, "event.cut_time", json!({"start": 0, "end": 96_000}));
+    assert_eq!(all_playlists(&e, t), vec![vec![(48_000, 48_000)]; 2]);
+    let s = e.session();
+    assert_eq!(s.tempo.tempos().iter().map(|x| (x.tick, x.bpm)).collect::<Vec<_>>(), vec![(0, 120.0), (bar, 90.0)]);
+    assert_eq!(s.key_signatures, vec![(96_000, "D".to_string())]);
+}
+
+#[test]
+fn time_is_not_inserted_inside_a_tempo_ramp() {
+    let (mut e, _) = timeline();
+    assert!(e.session_mut().tempo.set_ramp(0, true));
+    assert!(e.execute("event.insert_time", &json!({"start": 48_000, "length": 1000})).is_err());
+    assert!(e.execute("event.insert_time", &json!({"start": 200_000, "length": 1000})).is_ok());
+}
+
+// ---- bug 8: Identify Beat left the new tempo running past the selection --------------------
+
+#[test]
+fn identify_beat_restores_the_tempo_after_the_selection() {
+    let mut e = engine("slip");
+    let q = soundcraft_time::TICKS_PER_QUARTER;
+    // 1.5 seconds called one bar of 4/4: 160 bpm.
+    let r = run(&mut e, "event.identify_beat", json!({"start": 0, "end": 72_000, "bars": 1}));
+    assert!((r["bpm"].as_f64().unwrap() - 160.0).abs() < 1e-6);
+    let s = e.session();
+    assert_eq!(s.tempo.samples_to_ticks(72_000, s.sample_rate), 4 * q, "the selection is the bar");
+    assert_eq!(s.tempo.tempo_at_tick(4 * q), 120.0, "after it, the old tempo again");
+    assert_eq!(s.tempo.samples_to_ticks(72_000 + 96_000, s.sample_rate), 8 * q, "two seconds later is one bar later, as before");
+}

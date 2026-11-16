@@ -698,8 +698,13 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     if set_tempo && let Some(b) = bpm {
-        let tick = s.tempo.samples_to_ticks(r.start, sr);
-        s.tempo.set_tempo(tick, b).map_err(|err| bad(id, err.to_string()))?;
+        // The selection plays at the detected tempo; what follows keeps its tempo and its place.
+        let (t0, t1) = (s.tempo.samples_to_ticks(r.start, sr), s.tempo.samples_to_ticks(r.end, sr));
+        if s.tempo.in_ramp(t0) || s.tempo.in_ramp(t1) {
+            return Err(bad(id, "the selection starts or ends inside a tempo ramp"));
+        }
+        let len = soundcraft_time::to_samples(r.len() as f64 * b * TICKS_PER_QUARTER as f64 / (sr.as_f64() * 60.0));
+        s.tempo.set_span(t0, t1, len, b).map_err(|err| bad(id, err.to_string()))?;
     }
     let shown: Vec<Samples> = beats.iter().take(2000).copied().collect();
     Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated}))
@@ -707,7 +712,7 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.identify_beat";
-    let (r, t0, _) = selection_ticks(e, p, id)?;
+    let (r, t0, t1) = selection_ticks(e, p, id)?;
     let s = e.session();
     let m = s.tempo.meter_at_tick(t0);
     let bars = f64_or(p, "bars", 1.0).max(0.0);
@@ -719,8 +724,14 @@ fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
     let quarters = total_beats * 4.0 / f64::from(m.denominator.max(1));
     let secs = s.sample_rate.seconds(r.len());
     let bpm = quarters * 60.0 / secs;
+    if s.tempo.in_ramp(t0) || s.tempo.in_ramp(t1) {
+        return Err(bad(id, "the selection starts or ends inside a tempo ramp"));
+    }
+    // The selection becomes that many beats at the new tempo; the tempo in effect at its end
+    // resumes there, so what follows stays where it is.
+    let len = soundcraft_time::to_samples(quarters * TICKS_PER_QUARTER as f64);
     let s = e.session_mut();
-    s.tempo.set_tempo(t0, bpm).map_err(|err| bad(id, err.to_string()))?;
+    s.tempo.set_span(t0, t1, len, bpm).map_err(|err| bad(id, err.to_string()))?;
     Ok(json!({"bpm": bpm, "tick": t0}))
 }
 
