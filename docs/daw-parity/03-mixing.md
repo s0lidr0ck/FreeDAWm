@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: group attributes in the dialog, nested VCAs) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 3: mixer snapshots) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -39,7 +39,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
-| J. Mixer state and window | Undo for every move, track and chain presets, per-track delay | Small to medium: no snapshots |
+| J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots | Small: no mixer search or spill |
 
 Two things every one of the four does and FreeDAWm does not yet: **plug-in automation that is
 sample-accurate and delay-compensated** (the fader section's now is, and the faders follow it); and **a key input on the stock
@@ -221,7 +221,7 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 |---|:-:|:-:|:-:|:-:|---|
 | Undo for mixer moves | ◐ | ● | ● | ● | **Works**: every move, one step per gesture |
 | Track presets | ● | ● | ● | ● | **Works** |
-| Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Missing** |
+| Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Works**: Window › Mix Snapshots stores every strip under a name and recalls it whole or by section (faders, pan, mutes, sends, inserts, routing, delay), on every track or the selected ones (`mix.snapshot_store`, `mix.snapshot_recall`), one undo step each; saved with the session |
 | Copy one channel's settings onto others | ● | ● | ● | ● | **Partial**: duplicate a track or apply a preset |
 | Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped |
 | Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
@@ -277,7 +277,7 @@ one a mix engineer would not forgive.
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Done** |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
-**3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12; a listen bus for
+**3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12 (**done**); a listen bus for
 AFL and PFL (all but Logic), 6–10; post-fader inserts and plug-in deactivation (**deactivation done**), 5–8; hardware
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 3: mixer snapshots |
 | 2026-11-16 | minor | tier 2: group attributes in the dialog, nested VCAs |
 | 2026-11-16 | minor | tier 2: sends to outputs and tracks |
 | 2026-11-16 | minor | tier 2: width, balance and track delay |

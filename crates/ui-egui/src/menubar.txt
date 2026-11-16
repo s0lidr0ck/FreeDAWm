@@ -599,6 +599,7 @@ Window > ## Transport & session
 Window > Transport
 Window > Big Counter
 Window > Loudness Meter = @window.loudness
+Window > Mix Snapshots = @window.mix_snapshots
 Window > Memory Locations
 Window > Notes = @window.notes
 Window > Lyrics = @window.lyrics

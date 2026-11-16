@@ -27,6 +27,7 @@ mod event;
 pub(crate) mod event_more;
 mod file;
 pub(crate) mod freeze;
+pub mod mix_snapshot;
 mod module_record;
 pub mod pan_law;
 mod record_format;
@@ -205,6 +206,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(options::specs());
         v.extend(pan_law::specs());
         v.extend(strip_shape::specs());
+        v.extend(mix_snapshot::specs());
         v.extend(transport::specs());
         v.extend(tab::specs());
         v.extend(query::specs());

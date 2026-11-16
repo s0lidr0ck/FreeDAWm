@@ -22,7 +22,7 @@ const ROWS: [(&str, usize); 11] = [
     ("AI", 14),
     ("Options", 18),
     ("Setup", 9),
-    ("Window", 34),
+    ("Window", 35),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).

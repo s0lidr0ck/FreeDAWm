@@ -29,6 +29,65 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     shortcuts_window(app, ctx);
     clip_effects(app, ctx);
     loudness(app, ctx);
+    mix_snapshots(app, ctx);
+}
+
+/// Window › Mix Snapshots: store the mix under a name, recall it whole or by section, on every
+/// track or the selected ones (`mix.snapshot_*`, one undo step each).
+fn mix_snapshots(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_mix_snapshots;
+    if !open {
+        return;
+    }
+    let snaps: Vec<String> = app.engine.session().mix_snapshots.iter().map(|s| s.name.clone()).collect();
+    let id = egui::Id::new("mix_snapshot_sections");
+    let mut sections: Vec<bool> = ctx.data(|d| d.get_temp::<Vec<bool>>(id)).unwrap_or_else(|| vec![true; soundcraft_model::SNAPSHOT_SECTIONS.len()]);
+    let only_id = egui::Id::new("mix_snapshot_selected_only");
+    let mut only_selected = ctx.data(|d| d.get_temp::<bool>(only_id)).unwrap_or(false);
+    let mut run: Option<(&'static str, serde_json::Value)> = None;
+    win(ctx, &mut open, "Mix Snapshots", vec2(300.0, 320.0), |ui| {
+        if ui.button("Store New Snapshot").on_hover_text("Every strip's settings as they are now").clicked() {
+            run = Some(("mix.snapshot_store", json!({})));
+        }
+        ui.separator();
+        if snaps.is_empty() {
+            ui.label(egui::RichText::new("No snapshots yet.").weak());
+        }
+        for (i, name) in snaps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.small_button("Recall").clicked() {
+                    let picked: Vec<&str> =
+                        soundcraft_model::SNAPSHOT_SECTIONS.iter().zip(&sections).filter(|(_, on)| **on).map(|((s, _), _)| *s).collect();
+                    let mut p = json!({"snapshot": i, "sections": picked});
+                    if only_selected {
+                        p["tracks"] = json!(app.engine.session().edit.selected_tracks.iter().map(|t| t.0).collect::<Vec<_>>());
+                    }
+                    run = Some(("mix.snapshot_recall", p));
+                }
+                if ui.small_button("Update").on_hover_text("Store the mix now in this snapshot").clicked() {
+                    run = Some(("mix.snapshot_store", json!({"replace": i})));
+                }
+                if ui.small_button("Delete").clicked() {
+                    run = Some(("mix.snapshot_delete", json!({"snapshot": i})));
+                }
+            });
+        }
+        ui.separator();
+        ui.label("Recall");
+        for ((_, label), on) in soundcraft_model::SNAPSHOT_SECTIONS.iter().zip(sections.iter_mut()) {
+            ui.checkbox(on, *label);
+        }
+        ui.checkbox(&mut only_selected, "Selected tracks only");
+    });
+    ctx.data_mut(|d| {
+        d.insert_temp(id, sections);
+        d.insert_temp(only_id, only_selected);
+    });
+    app.ui.show_mix_snapshots = open;
+    if let Some((cmd, p)) = run {
+        let _ = app.run(cmd, p);
+    }
 }
 
 /// Window › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport

@@ -382,6 +382,9 @@ pub struct Session {
     /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
     #[serde(default, skip_serializing_if = "crate::StudioTuning::is_default")]
     pub studio_tuning: crate::StudioTuning,
+    /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mix_snapshots: Vec<crate::MixSnapshot>,
     #[serde(skip)]
     pub pool: SourcePool,
     /// Module assets made ready for their plugins (`Insert::assets`), by reference and rate.
@@ -433,6 +436,7 @@ impl Session {
             notes: Vec::new(),
             lyric_sheet: crate::LyricSheet::default(),
             studio_tuning: crate::StudioTuning::default(),
+            mix_snapshots: Vec::new(),
             pool: SourcePool::default(),
             assets: crate::AssetPool::default(),
             folder: None,

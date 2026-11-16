@@ -19,6 +19,7 @@ mod notes;
 mod scout;
 mod session;
 mod sheet;
+mod snapshot;
 mod solo;
 mod source;
 mod track;
@@ -53,6 +54,7 @@ pub use sheet::{
     Draft, LineKind, LyricPlace, LyricSheet, MAX_ALTERNATES, MAX_DRAFTS, MAX_SHEET_LINE_CHARS, MAX_SHEET_LINES, SheetLine, carry_ids, heading_name,
     line_kinds, sheet_texts,
 };
+pub use snapshot::{MAX_SNAPSHOTS, MixSnapshot, SNAPSHOT_SECTIONS, SnapshotStrip};
 pub use solo::SoloScope;
 pub use source::{AssetData, AssetPool, SampleCursor, Source, SourceAudio, SourcePool, VideoSource};
 pub use track::{FrozenAudio, Playlist, TRACK_COLORS, Track, TrackHeight, TrackKind};

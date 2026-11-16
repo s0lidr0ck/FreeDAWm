@@ -172,6 +172,9 @@ pub struct UiState {
     /// Window › Loudness Meter: the master's loudness and true peak.
     #[serde(default)]
     pub show_loudness: bool,
+    /// Window › Mix Snapshots.
+    #[serde(default)]
+    pub show_mix_snapshots: bool,
     pub show_undo_history: bool,
     /// The Notes tab (Window › Notes).
     pub show_notes: bool,
@@ -478,6 +481,7 @@ impl Default for UiState {
             show_memory_locations: false,
             show_big_counter: false,
             show_loudness: false,
+            show_mix_snapshots: false,
             show_undo_history: false,
             show_notes: false,
             notes_show: "open".into(),

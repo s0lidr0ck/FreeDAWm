@@ -28,6 +28,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.undo_history", "Undo History", "Window > Undo History", None),
     ("window.notes", "Notes", "", None),
     ("window.loudness", "Loudness Meter", "", None),
+    ("window.mix_snapshots", "Mix Snapshots", "", None),
     ("ui.loudness_reset", "Reset Loudness Meter", "", None),
     ("window.lyrics", "Lyrics", "", None),
     ("window.teleprompter", "Teleprompter", "", None),
@@ -870,6 +871,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.undo_history") => app.ui.show_undo_history,
         Some("window.notes") => app.ui.show_notes,
         Some("window.loudness") => app.ui.show_loudness,
+        Some("window.mix_snapshots") => app.ui.show_mix_snapshots,
         Some("window.lyrics") => app.ui.show_lyrics,
         Some("window.teleprompter") => app.ui.show_teleprompter,
         Some("window.teleprompter_separate") => app.ui.teleprompter_separate,
@@ -1310,6 +1312,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.undo_history" => toggle(&mut app.ui.show_undo_history),
         "window.notes" => toggle(&mut app.ui.show_notes),
         "window.loudness" => toggle(&mut app.ui.show_loudness),
+        "window.mix_snapshots" => toggle(&mut app.ui.show_mix_snapshots),
         "ui.loudness_reset" => {
             if let Some(p) = &app.player {
                 p.reset_loudness();
