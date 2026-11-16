@@ -152,7 +152,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Multi-tap and rhythm patterns | ● | ● | ● | ● | **Works** |
 | Reverse, freeze, pitch in the loop, ducking | ◐ | ◐ | ● | ● | **Works** |
 | Granular delay | ○ | ○ | ◐ | ◐ | **Missing** |
-| Long synced delays at high sample rates | ● | ● | ● | ● | **Partial**: the buffer is a fixed size, so at 192 kHz anything past 2.7 s is cut short |
+| Long synced delays at high sample rates | ● | ● | ● | ● | **Works** up to 10.9 s at every rate |
 | Chorus, ensemble, flanger, phaser | ● | ● | ● | ● | **Works** (Mod: fourteen modelled circuits) |
 | Tremolo, vibrato | ● | ● | ● | ● | **Works** |
 | Auto-pan | ◐ | ● | ● | ● | **Missing** |
@@ -263,7 +263,7 @@ them is the owner's decision, not a repair.
 | 4 | **Fixed.** Bypass was an instant switch with no reset, and the track's delay compensation changed in the same block. A bypass now crossfades (the mixer's 10 ms), a bypassed insert keeps its latency (its input goes past it through a delay of that length, so no track moves), and a plugin switched back on is reset and heard once its latency has passed (`insert_step` in `mix/src/lib.rs`). Test: `mix/tests/insert_bypass.rs` | `mix/src/lib.rs:1939, 2721, 2770` |
 | 5 | *By design.* Pitch reports no latency though its shifted voices run 6–20 ms late; Sat and Vint also report none | `dsp/src/plugins/fs/pitch/mod.rs:14-16`; `fs/sat/mod.rs:16`; `fs/vint/mod.rs:40` |
 | 6 | **Partly fixed.** Delay reported an 8 s tail whatever the feedback or freeze, Mod 0.25 s, ChamberMade four tape repeats, so a bounce or freeze could cut the tail. Delay now reports at least 8 s and as long as its echoes take to fall 80 dB (60 s for Freeze or a runaway loop); Mod adds its flangers' Regen ring; ChamberMade counts tape repeats to -80 dB. Filter still reports 1 s: left for now (its file is being changed for bug 8); a resonant setting low down can ring longer. Tests: delay, mod and chamber `tests.rs` | `dsp/src/plugins/fs/delay/mod.rs:251-254`; `fs/mod_engine/mod.rs:398-401`; `fs/filter/mod.rs:303`; `fs/chamber/mod.rs:409-414` |
-| 7 | The Delay buffer is a fixed number of samples: 10.9 s at 48 kHz, 2.7 s at 192 kHz. Longer synced times are silently shortened and lose sync | `dsp/src/plugins/fs/delay/delay_engine_dsp.rs:59-60, 966` |
+| 7 | **Fixed.** The Delay buffer was a fixed number of samples (10.9 s at 48 kHz, 2.7 s at 192 kHz), so long synced times were shortened and lost sync at high rates. A line now holds the same 10.9 s at every rate (`line_len`; unchanged at 44.1 and 48 kHz). Test: delay `tests.rs` (a 4 s whole note at 60 BPM keeps its time at 192 kHz) | `dsp/src/plugins/fs/delay/delay_engine_dsp.rs:59-60, 966` |
 | 8 | *By design.* Dist and Filter oversample four times behind a filter that rejects only about 16 dB at the original Nyquist, so high-gain settings alias | `dsp/src/plugins/fs/dist/dist_engine_dsp.rs:1191-1200`; `fs/filter/filter_engine_dsp.rs:920-929` |
 | 9 | *By design.* Reverb's output cuts and colour filters keep coefficients computed for 48 kHz; at 96 kHz they sit at about twice the labelled frequency | `dsp/src/plugins/fs/reverb/reverb_engine_dsp.rs:838-845, 2139-2146` |
 | 10 | A factory preset that lists only some parameters sounds different depending on where it is loaded: the Comp wide editor fills in the split mode and crossovers; the drawer menu and the browser do not | `ui-egui/src/fs_presets.rs:20-23, 77`; `ui-egui/src/browser/presets.rs:260, 277` |
@@ -330,3 +330,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 2 fixed: stereo-only effects process every channel of a surround track |
 | 2026-11-16 | minor | Bug 4 fixed: bypass crossfades, keeps the insert's latency and resets the plugin when it comes back |
 | 2026-11-16 | minor | Bug 6 mostly fixed: Delay, Mod and ChamberMade report tails that follow their feedback (Filter still to do) |
+| 2026-11-16 | minor | Bug 7 fixed: the Delay holds 10.9 s at every sample rate |

@@ -192,6 +192,27 @@ fn readouts_report_the_echo_time() {
     assert!((l - 350.0).abs() < 0.05 && (rr - 350.0).abs() < 0.05);
 }
 
+/// Bug 7 of the built-in effects parity list: the lines held 524288 samples at every rate, so at
+/// 192 kHz a synced whole note at 60 BPM (4 s) was cut to 2.7 s and lost the tempo.
+#[test]
+fn a_long_synced_delay_keeps_its_time_at_high_rates() {
+    for sr in [44_100.0f32, 48_000.0, 96_000.0, 192_000.0] {
+        let mut s = Delay::new();
+        s.set_param("sync", 1.0);
+        s.set_param("division", 13.0);
+        s.set_param("tempoSrc", 1.0);
+        s.set_param("tempo", 0.1);
+        s.prepare(sr, 512, 2);
+        let mut io = vec![sine(512, 0.3), sine(512, 0.3)];
+        s.process(&mut io, 512);
+        let r = readouts(&s);
+        assert!((r[0] - 4000.0).abs() < 1.0, "{sr}: {}", r[0]);
+    }
+    assert_eq!(d::line_len(48_000.0), d::BUF as usize);
+    assert_eq!(d::line_len(44_100.0), d::BUF as usize, "as the C++ at the common rates");
+    assert_eq!(d::line_len(192_000.0), 4 * d::BUF as usize);
+}
+
 #[test]
 fn tempo_sync_follows_transport() {
     // Stopped, playing, looping back, seeking and a tempo change between blocks: synced note values
@@ -594,8 +615,14 @@ fn reset_does_not_allocate() {
         assert_eq!(ptrs, s.engine().buffer_ptrs());
         s.process(&mut io, 512);
     }
+    // A higher rate than ever before grows the lines (`prepare`, off the audio thread); a reset
+    // there allocates nothing, and nor does going back down and up again.
     s.prepare(96_000.0, 1024, 2);
     assert_eq!(engine_ptr, s.engine() as *const DelayEngineDsp);
+    let ptrs = s.engine().buffer_ptrs();
+    s.reset();
+    s.prepare(48_000.0, 1024, 2);
+    s.prepare(96_000.0, 1024, 2);
     assert_eq!(ptrs, s.engine().buffer_ptrs());
     assert!(all_finite(&io));
 }
