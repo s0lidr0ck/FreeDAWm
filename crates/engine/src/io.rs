@@ -1394,6 +1394,8 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
             ntr.mixer.pan = mixer.pan.clone();
         }
         ntr.mixer.surround = mixer.surround;
+        ntr.mixer.width = mixer.width;
+        ntr.mixer.balance = mixer.balance;
         ntr.mixer.mute = mixer.mute;
         ntr.mixer.automation_mode = mixer.automation_mode;
         ntr.mixer.vca = mixer.vca;
@@ -4233,6 +4235,8 @@ mod strip_tests {
         let tr = s.track_mut(t).unwrap();
         tr.mixer.pan = vec![-0.5, 0.25];
         tr.mixer.trim_db = -3.0;
+        tr.mixer.width = 0.5;
+        tr.mixer.balance = -0.25;
         tr.lane_mut(&AutoParam::Volume).set_point(0, -6.0);
         tr.lane_mut(&AutoParam::Pan(0)).set_point(1000, 0.5);
         let module = tr.mixer.inserts.first().map(|i| i.id);
@@ -4242,6 +4246,7 @@ mod strip_tests {
         let nt = commit_track(&mut e, t).unwrap().unwrap();
         let n = e.session().track(nt).unwrap();
         assert_eq!(n.mixer.pan, vec![-0.5, 0.25]);
+        assert_eq!((n.mixer.width, n.mixer.balance), (0.5, -0.25), "width and balance stay on the strip, not in the render");
         assert_eq!(n.mixer.trim_db, 0.0, "the trim is in the render");
         let mut lanes: Vec<String> = n.automation.iter().filter(|l| !l.points.is_empty()).map(|l| l.param.label()).collect();
         lanes.sort();

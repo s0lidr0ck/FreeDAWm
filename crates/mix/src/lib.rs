@@ -5827,6 +5827,10 @@ fn pre_fader_session(s: &Session, track: TrackId, trim_automation: bool) -> Sess
             t.mixer.sends.iter_mut().for_each(|x| *x = None);
             t.mixer.surround = None;
             t.mixer.vca = None;
+            // Width and balance belong to the main panner, after the render (the track delay is
+            // before the inserts, so it is in it).
+            t.mixer.width = 1.0;
+            t.mixer.balance = 0.0;
             // The render is what the frozen track would play live.
             t.frozen = false;
             t.freeze = None;
