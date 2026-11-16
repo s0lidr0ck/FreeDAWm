@@ -1,11 +1,35 @@
-//! Scrub audio: dragging the Scrubber over a track plays the audio the pointer passes over,
-//! forwards or backwards, at the speed of the drag. Each frame the stretch swept since the last
-//! one is rendered from the scrubbed tracks' clips (gain, fades and clip effects; not the
-//! track's inserts), reversed when the drag goes back, and sent to the player's preview voice
-//! at a rate that makes it last about a frame, so its pitch follows the drag speed as tape does.
+//! Scrub audio: dragging the Scrubber over a track (or along a timebase ruler, for every audible
+//! track) plays the audio the pointer passes over, forwards or backwards, at the speed of the
+//! drag. Each frame the stretch swept since the last one is rendered through each scrubbed
+//! track's strip as far as it can be away from the audio thread (clips, then the inserts when
+//! they are all built in, then the fader; a muted track is silent), reversed when the drag goes
+//! back, and sent to the player's preview voice at a rate that makes it last about a frame, so
+//! its pitch follows the drag speed as tape does. The inserts start afresh each frame, so a
+//! reverb's tail does not carry from one frame to the next.
 
 use soundcraft_model::{Session, TrackId};
 use soundcraft_time::{Range, Samples};
+
+/// Track `t`'s audio over `range` as its strip makes it, as far as the UI thread can: its clips
+/// through its inserts (pre-fader, [`soundcraft_mix::render_track_pre_fader`]) when every insert
+/// is built in, else its clips alone, then its fader level. Nothing when it is muted.
+pub fn strip_audio(s: &Session, t: TrackId, range: Range) -> Vec<Vec<f32>> {
+    let Some(tr) = s.track(t) else { return Vec::new() };
+    if tr.mixer.mute {
+        return Vec::new();
+    }
+    let built_in = !tr.mixer.inserts.iter().any(|i| soundcraft_mix::is_third_party(&i.plugin));
+    let mut audio = if built_in { soundcraft_mix::render_track_pre_fader(s, t, range) } else { soundcraft_mix::render_clips(s, t, range) };
+    let db = if tr.mixer.volume_db.is_finite() { tr.mixer.volume_db.clamp(-144.0, 24.0) } else { 0.0 };
+    let g = 10f32.powf(db / 20.0);
+    audio.iter_mut().flatten().for_each(|v| *v *= g);
+    audio
+}
+
+/// Every track a ruler scrub plays: those with clips that are not muted.
+pub fn audible_tracks(s: &Session) -> Vec<TrackId> {
+    s.tracks.iter().filter(|t| t.kind.has_playlist() && !t.kind.is_midi() && !t.mixer.mute).map(|t| t.id).collect()
+}
 
 /// The most audio one frame of a fast drag plays, in seconds of the session (a faster drag skips).
 pub const MAX_SWEEP_SECONDS: f64 = 0.5;
@@ -23,7 +47,7 @@ pub fn chunk(s: &Session, tracks: &[TrackId], from: Samples, to: Samples, second
     let mut out = vec![vec![0.0f32; len]; 2];
     let mut any = false;
     for t in tracks {
-        let audio = soundcraft_mix::render_clips(s, *t, range);
+        let audio = strip_audio(s, *t, range);
         let n = audio.len();
         for (c, ch) in audio.iter().enumerate() {
             // Mono to both sides; stereo left and right; more channels fold in turn.
@@ -98,5 +122,17 @@ mod tests {
         // Nothing moved, or nothing there: nothing plays.
         assert!(chunk(&s, &[t], 500, 500, 0.1).is_none());
         assert!(chunk(&s, &[t], 60_000, 61_000, 0.1).is_none());
+    }
+
+    #[test]
+    fn a_scrub_is_heard_through_the_fader_and_mute() {
+        let (mut s, t) = session();
+        let (full, _) = chunk(&s, &[t], 10_000, 10_800, 1.0 / 60.0).unwrap();
+        s.track_mut(t).unwrap().mixer.volume_db = -20.0;
+        let (low, _) = chunk(&s, &[t], 10_000, 10_800, 1.0 / 60.0).unwrap();
+        assert!((low[0][400] - full[0][400] * 0.1).abs() < 1e-3, "{} vs {}", low[0][400], full[0][400]);
+        s.track_mut(t).unwrap().mixer.mute = true;
+        assert!(chunk(&s, &[t], 10_000, 10_800, 1.0 / 60.0).is_none(), "a muted track is silent");
+        assert!(audible_tracks(&s).is_empty());
     }
 }

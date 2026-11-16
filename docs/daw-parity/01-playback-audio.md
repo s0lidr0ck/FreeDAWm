@@ -82,7 +82,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Scrub audio by dragging | ● | ◐ | ● | ● | **Partial**: the Scrubber plays the track it drags over (or the selected tracks), forwards and backwards at the drag's speed, with clip gain, fades and clip effects but not the track's inserts or fader; not while playing, not on the ruler |
+| Scrub audio by dragging | ● | ◐ | ● | ● | **Works**: the Scrubber plays the track it drags over (or the selected tracks), and a Scrubber drag along a timebase ruler every audible track, forwards and backwards at the drag's speed, through the track's strip: clips, the inserts when all are built in (started afresh each frame, so no tails carry), the fader and mute. Not while playing; a strip with a third-party insert scrubs its clips and fader only |
 | Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Options › More › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
 | Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Options › More › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
@@ -205,7 +205,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 |---|---:|---|
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
-| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | **Mostly done** (2026-11-16): held rewind / fast forward; the Scrubber plays the clips it passes (`ui-egui/src/scrub.rs`). Left: through the mixer (inserts, fader), on the ruler, while playing |
+| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | **Done** (2026-11-16): held rewind / fast forward; the Scrubber and a Scrubber drag on the ruler play what they pass through the track's built-in inserts and fader (`ui-egui/src/scrub.rs`). Left: scrubbing while playing, and third-party inserts (they would need the audio thread's instances) |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** (2026-11-16): `playback/src/resample.rs` for the device-rate and speed path (16 frames of added delay off the direct path); varispeed clips in the mixer read through the sampler's reader (`dsp::read_band_limited`: a cubic at or below the file's speed, a Kaiser-windowed sinc above it), no longer linear |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | **Partly done** (2026-11-16): Workspace files and Clip List clips at a preview level (`ui-egui/src/audition.rs`); left: the import dialog, session tempo, in sync with playback |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | **Partly done**: tick timebase, four algorithms (offline), draggable warp markers (offline render on release). Real-time stretch: designed (below), not built |
@@ -267,6 +267,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 | 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |
 | 2026-11-16 | minor | tier 3: varispeed that keeps the pitch; shuttle forwards and backwards |
 | 2026-11-16 | minor | tier 3: per-clip transpose and reverse, real-time clip loop |
+| 2026-11-16 | minor | tier 2: scrub through the track's strip, and on the ruler |
 | 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |

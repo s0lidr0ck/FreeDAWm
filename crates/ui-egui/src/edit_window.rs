@@ -728,8 +728,20 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         // selection that contains `at`, and a stopped playhead is that selection's
                         // start, so a click inside one would not move it (as the Vocal Editor's ruler).
                         let at = sample_at(&s, tl, p.x).max(0);
+                        let from = app.engine.transport.position;
                         let _ = app.run("edit.select", json!({"start": at}));
                         let _ = app.run("transport.locate", json!({"at": at}));
+                        // With the Scrubber, a drag along the ruler scrubs every audible track.
+                        if resp.dragged()
+                            && s.edit.tool == Tool::Scrubber
+                            && !app.engine.transport.playing
+                            && let Some(player) = &app.player
+                        {
+                            let seconds = f64::from(ui.input(|i| i.stable_dt)).clamp(1.0 / 120.0, 0.1) * 1.25;
+                            if let Some((audio, rate)) = crate::scrub::chunk(&s, &crate::scrub::audible_tracks(&s), from, at, seconds) {
+                                player.preview(audio, rate);
+                            }
+                        }
                     }
                 }
             }

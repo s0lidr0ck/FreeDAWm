@@ -69,7 +69,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Mute tool | ◐ | ● | ● | ● | **Missing** as a tool; Mute Clips is a key |
 | Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
-| Scrub tool with audio | ● | ◐ | ● | ● | **Works** on clips: plays what it passes, both ways, at the drag's speed (not the track's inserts; section 1) |
+| Scrub tool with audio | ● | ◐ | ● | ● | **Works**: plays what it passes, both ways, at the drag's speed, through the track's built-in inserts and fader; on a ruler it scrubs every audible track (section 1) |
 | Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Missing**: the tooltip promises it |
 
 ## B. Edit modes, grid and nudge
@@ -382,3 +382,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Tier 2: warp markers drawn on the clip, added, dragged and deleted |
 | 2026-11-16 | minor | Tier 2: clip transpose, reverse and loop in place, in real time; the loop trim |
 | 2026-11-16 | minor | Bug 18 fixed: grid lines count from the timecode start |
+| 2026-11-16 | minor | The Scrubber is heard through the strip, and scrubs on the ruler |
