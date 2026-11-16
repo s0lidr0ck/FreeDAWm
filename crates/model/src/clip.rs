@@ -278,6 +278,9 @@ pub struct Clip {
     /// not have plays as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_channel: Option<u16>,
+    /// Clip Gain › Bypass: the gain and its envelope are kept but not heard (fades still are).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gain_bypass: bool,
 }
 
 fn one() -> f64 {
@@ -314,6 +317,7 @@ impl Clip {
             from_layer: None,
             warp: Vec::new(),
             source_channel: None,
+            gain_bypass: false,
         }
     }
 
@@ -419,14 +423,17 @@ impl Clip {
         self.gain_at_with_fades(rel, self.fade_in, self.fade_out)
     }
 
-    /// Evaluate temporary fades while retaining clip gain and its envelope.
+    /// Evaluate temporary fades while retaining clip gain and its envelope (unless bypassed).
     /// UI previews can use this without modifying the clip or rebuilding media.
     pub fn gain_at_with_fades(&self, rel: Samples, fade_in: Fade, fade_out: Fade) -> f32 {
-        let mut db = self.gain_db;
-        if !self.gain_env.is_empty() {
-            db += env_value(&self.gain_env, rel);
+        let mut g = 1.0;
+        if !self.gain_bypass {
+            let mut db = self.gain_db;
+            if !self.gain_env.is_empty() {
+                db += env_value(&self.gain_env, rel);
+            }
+            g = db_to_gain(db);
         }
-        let mut g = db_to_gain(db);
         if fade_in.len > 0 && rel < fade_in.len {
             g *= fade_in.gain(rel as f32 / fade_in.len as f32);
         }

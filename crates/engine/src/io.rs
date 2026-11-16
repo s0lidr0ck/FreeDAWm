@@ -1084,8 +1084,11 @@ pub fn render_clip_gain(e: &mut Engine, cmd: &str, id: soundcraft_model::ClipId)
     if let Some(cl) = s.find_clip_mut(id) {
         cl.content = ClipContent::Audio { source: src, offset: 0 };
         soundcraft_model::rebase_lyrics(cl, c.source_offset());
-        cl.gain_db = 0.0;
-        cl.gain_env.clear();
+        // A bypassed gain was not rendered: it stays on the clip, still bypassed.
+        if !cl.gain_bypass {
+            cl.gain_db = 0.0;
+            cl.gain_env.clear();
+        }
         // The new source is the clip as it already sounds, stretch included.
         // Keeping the old ratio would play that audio through the stretch again.
         cl.stretch = 1.0;

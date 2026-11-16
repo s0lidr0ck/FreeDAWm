@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 7 fixed: varispeed Elastic Properties changes the clip length) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 8 fixed: Clip Gain Bypass is a real bypass) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -187,7 +187,7 @@ All in features the docs count as done. Each needs a regression test with its fi
 | 5 | **Fixed:** Split into Mono made two tracks that both played the left channel; each clip now carries the source channel it plays | `crates/engine/src/cmd/track.rs:463` |
 | 6 | **Fixed:** after Process, the clip's effects were baked in and still active, so heard twice; Process now takes off the effects it rendered (bypassed ones, not rendered, stay) | `cmd/audiosuite.rs:118` |
 | 7 | **Fixed:** Elastic Properties on a non-elastic track changed speed but not length, so the tail was cut or ran into silence; the length now follows (Remove Warp restores it) | `cmd/clip.rs:202` |
-| 8 | Clip Gain › Bypass erases the gain and its envelope | `cmd/clip.rs:83` |
+| 8 | **Fixed:** Clip Gain › Bypass erased the gain and its envelope; it is now a bypass toggle (checked in the menu) that keeps them | `cmd/clip.rs:83` |
 | 9 | Reconnect opens the new device before closing the old one (ASIO allows one) | `crates/ui-egui/src/lib.rs:2080` |
 | 10 | Solo modes AFL, PFL, Latch and Momentary do nothing; only SIP and X-OR work | `cmd/options.rs:258`, `menus.rs:953` |
 | 11 | A missing configured device falls back to the system default with only a log line | `crates/playback/src/devices.rs:355` |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 8 fixed: Clip Gain Bypass is a real bypass |
 | 2026-11-16 | minor | bug 7 fixed: varispeed Elastic Properties changes the clip length |
 | 2026-11-16 | minor | bug 6 fixed: Process takes off the clip effects it baked |
 | 2026-11-16 | minor | bugs 4 and 5 fixed: stereo clips on mono tracks, Split into Mono |

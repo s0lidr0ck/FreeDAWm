@@ -80,16 +80,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"rendered": n}))
         }),
-        cmd!("clip.gain_bypass", "Bypass", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
+        // A toggle: the gain and its envelope stay on the clip, unheard (it used to erase them).
+        cmd!("clip.gain_bypass", "Bypass", ["Clip", "Clip Gain"], None, "{clips?, value?: bool}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let s = e.session_mut();
+            let on =
+                p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|id| s.find_clip(*id).is_some_and(|(_, c)| c.gain_bypass)));
             for id in &ids {
                 if let Some(c) = s.find_clip_mut(*id) {
-                    c.gain_db = 0.0;
-                    c.gain_env.clear()
+                    c.gain_bypass = on;
                 }
             }
-            Ok(json!({}))
+            Ok(json!({"bypass": on, "clips": ids.len()}))
         }),
         cmd!("clip.identify_sync_point", "Identify Sync Point", ["Clip"], Some("Cmd+,"), "{clip?, at?}", has_selection, |e, p| {
             let at = position_param(e, "clip.identify_sync_point", p, "at")?.unwrap_or(e.session().edit.selection.start);
@@ -516,6 +518,26 @@ mod tests {
         assert_eq!(r["restored"], 0);
         let src = e.session().find_clip(clip.id).and_then(|(_, c)| c.source()).unwrap();
         assert!(e.session().source(src).is_some());
+    }
+
+    #[test]
+    fn clip_gain_bypass_keeps_the_gain_and_toggles() {
+        // Bug: Bypass erased the gain and its envelope.
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        e.execute("clip.gain", &json!({"clips": [kick.0], "db": -9.0})).unwrap();
+        e.session_mut().find_clip_mut(kick).unwrap().gain_env = vec![(0, 0.0), (100, -3.0)];
+        let r = e.execute("clip.gain_bypass", &json!({"clips": [kick.0]})).unwrap();
+        assert_eq!(r["bypass"], true);
+        let c = e.session().find_clip(kick).unwrap().1.clone();
+        assert_eq!((c.gain_db, c.gain_env.len(), c.gain_bypass), (-9.0, 2, true));
+        assert_eq!(c.gain_at(c.length / 2), 1.0, "unheard while bypassed");
+        e.execute("clip.gain_bypass", &json!({"clips": [kick.0]})).unwrap();
+        let c = e.session().find_clip(kick).unwrap().1.clone();
+        assert!(!c.gain_bypass);
+        assert!(c.gain_at(c.length / 2) < 0.4, "heard again");
+        assert!(e.undo());
+        assert!(e.session().find_clip(kick).unwrap().1.gain_bypass);
     }
 
     #[test]

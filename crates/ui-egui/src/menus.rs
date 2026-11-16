@@ -828,6 +828,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("view.main_counter") => e.main_counter.id() == ruler_id(leaf),
         Some("clip.edit_lock") => selected_clips_all(app, |c| c.edit_locked),
         Some("clip.time_lock") => selected_clips_all(app, |c| c.time_locked),
+        Some("clip.gain_bypass") => selected_clips_all(app, |c| c.gain_bypass),
         Some("window.mix") => app.ui.window == MainWindow::Mix,
         Some("window.edit") => app.ui.window == MainWindow::Edit,
         Some("window.mix_separate") => app.ui.mix_separate,
