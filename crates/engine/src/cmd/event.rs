@@ -287,6 +287,22 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     s.tempo.insert_ticks(at, ticks);
+    // The Band's chord and section lanes (in ticks) move with the music after the point; a chord
+    // or section running across it grows by the inserted time.
+    for c in &mut s.band.chords {
+        if c.tick >= at {
+            c.tick = c.tick.saturating_add(ticks);
+        } else if c.tick.saturating_add(c.length_ticks) > at {
+            c.length_ticks = c.length_ticks.saturating_add(ticks);
+        }
+    }
+    for b in &mut s.band.sections {
+        if b.start_tick >= at {
+            b.start_tick = b.start_tick.saturating_add(ticks);
+        } else if b.start_tick.saturating_add(b.length_ticks) > at {
+            b.length_ticks = b.length_ticks.saturating_add(ticks);
+        }
+    }
     Ok(json!({"inserted": r.len()}))
 }
 
@@ -351,6 +367,38 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
         s.key_signatures.sort_by_key(|(k, _)| *k);
     }
     s.tempo.remove_ticks(from, to);
+    // The Band's chords and sections lose what was inside the cut and close up after it.
+    let cut = to.saturating_sub(from);
+    let squeeze = |start: i64, len: i64| -> Option<(i64, i64)> {
+        let end = start.saturating_add(len);
+        let map = |t: i64| {
+            if t <= from {
+                t
+            } else if t >= to {
+                t.saturating_sub(cut)
+            } else {
+                from
+            }
+        };
+        let (a, b) = (map(start), map(end));
+        (b > a).then_some((a, b - a))
+    };
+    s.band.chords.retain_mut(|c| match squeeze(c.tick, c.length_ticks) {
+        Some((a, l)) => {
+            c.tick = a;
+            c.length_ticks = l;
+            true
+        }
+        None => false,
+    });
+    s.band.sections.retain_mut(|b| match squeeze(b.start_tick, b.length_ticks) {
+        Some((a, l)) => {
+            b.start_tick = a;
+            b.length_ticks = l;
+            true
+        }
+        None => false,
+    });
     Ok(json!({"removed": r.len()}))
 }
 
@@ -741,6 +789,32 @@ mod tests {
     fn starts_lengths(e: &mut crate::Engine, clip: u64) -> Vec<(i64, i64)> {
         let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
         n["notes"].as_array().unwrap().iter().map(|x| (x["start"].as_i64().unwrap(), x["length"].as_i64().unwrap())).collect()
+    }
+
+    /// Bug 14: Insert Time and Cut Time move the Band's chord and section lanes with the music.
+    #[test]
+    fn insert_and_cut_time_move_the_band_lanes() {
+        use soundcraft_model::{ChannelFormat, ChordEvent, SectionBlock, TrackKind};
+        let mut e = crate::Engine::default();
+        e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let s = e.session_mut();
+        for (id, tick) in [(1, 0), (2, 3_840), (3, 7_680)] {
+            s.band.chords.push(ChordEvent { id, tick, length_ticks: 3_840, slot: 0, bass: -1 });
+        }
+        s.band.sections.push(SectionBlock { start_tick: 3_840, length_ticks: 7_680, ..Default::default() });
+        // One bar (96 000 samples at 120 bpm) in at bar 2.
+        e.execute("event.insert_time", &json!({"start": 96_000, "length": 96_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 7_680, 11_520]);
+        assert_eq!(e.session().band.sections[0].start_tick, 7_680);
+        e.execute("event.cut_time", &json!({"start": 96_000, "end": 192_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 3_840, 7_680]);
+        // Cutting bar 2 takes its chord away.
+        e.execute("event.cut_time", &json!({"start": 96_000, "end": 192_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 3_840]);
+        assert_eq!((e.session().band.sections[0].start_tick, e.session().band.sections[0].length_ticks), (3_840, 3_840));
     }
 
     /// Bug 1: Quantize and Legato with `indices` (the MIDI Editor's selection) change only those
