@@ -385,9 +385,7 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                 {
                     egui::Tooltip::for_widget(&resp).show(|ui| ui.label(why));
                 }
-                if resp.clicked() {
-                    let _ = app.run(cmd, json!({}));
-                }
+                crate::toolbar::transport_key(app, ui, &resp, cmd);
             }
             if flags.contains("view.transport.output_meters") {
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 26.0), Sense::hover());

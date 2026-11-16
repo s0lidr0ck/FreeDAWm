@@ -97,6 +97,7 @@ Edit > Selection > Change Timeline to Match Edit
 Edit > Selection > Change Edit to Match Timeline
 Edit > Selection > Play Edit
 Edit > Selection > Play Timeline
+Edit > Selection > Pause or Resume = @transport.pause
 Edit > Selection > ---
 Edit > Selection > Move Edit Left
 Edit > Selection > Move Edit Right

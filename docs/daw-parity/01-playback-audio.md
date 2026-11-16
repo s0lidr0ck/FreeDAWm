@@ -50,11 +50,11 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 |---|:-:|:-:|:-:|:-:|---|
 | Play, stop, toggle on Space | ● | ● | ● | ● | **Works** |
 | Play the selection once | ● | ● | ● | ● | **Works**; with only an insertion point it plays on from there |
-| Pause (resume from where it stopped) | ◐ | ● | ● | ● | **Missing**: Pause is Stop |
+| Pause (resume from where it stopped) | ◐ | ● | ● | ● | **Works**: Edit › Selection › Pause or Resume holds the playhead and the selection, and plays on from there with the same end and loop; while recording it is Stop |
 | Return to zero, go to end | ● | ● | ● | ● | **Works**, seamless while playing |
-| Rewind / fast forward while held | ● | ● | ● | ● | **Partial**: one jump of 1 s per press, no hold, no acceleration |
+| Rewind / fast forward while held | ● | ● | ● | ● | **Works**: a click jumps 1 s; held, the keys wind from 2× doubling each second up to 32× (no audio while winding) |
 | Locate by clicking the ruler | ● | ● | ● | ● | **Works** |
-| Locate by typing in the counter | ● | ● | ● | ● | **Missing**: the counter is read-only |
+| Locate by typing in the counter | ● | ● | ● | ● | **Works**: click the main counter's number, type a position in its format, Enter (the triangle beside it picks the format) |
 | Counter formats (bars, time, timecode, samples) | ● | ● | ● | ● | **Works**: five formats, main and sub counter |
 | Markers, recall while playing | ● | ● | ● | ● | **Works**, five marker rulers |
 | Pre-roll and post-roll on playback | ● | ● | ◐ | ● | **Works** (not when looping) |
@@ -205,11 +205,11 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 |---|---:|---|
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
-| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | The player's speed path can carry it once it has a better resampler |
+| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | Held rewind / fast forward **done** (2026-11-16); scrub audio not started (the resampler it needed is in) |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** for the device-rate and speed path (2026-11-16): `playback/src/resample.rs`, 16 frames of added delay off the direct path; stretched clips still read with linear interpolation in the mixer |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | Builds on `Player::preview` |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
-| Typing a position into the counter; pause | 2–4 | |
+| Typing a position into the counter; pause | 2–4 | **Done** (2026-11-16) |
 | Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | Shrinks G-06 |
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: Pause, typing a position into the counter, held rewind and fast forward |
 | 2026-11-16 | minor | tier 2: a band-limited resampler for other device rates and speeds |
 | 2026-11-16 | minor | the loop changes while playing |
 | 2026-11-16 | minor | declick: transport ramps, loop-edge ramps and automatic edge fades |

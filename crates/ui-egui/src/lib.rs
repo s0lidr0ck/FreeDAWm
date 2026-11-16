@@ -828,6 +828,11 @@ pub struct SoundApp {
     /// Where the transport last started, and the loop it plays (the take clock's zero).
     pub(crate) play_from: Samples,
     pub(crate) play_loop: Option<Range>,
+    /// Where the play under way ends (`None`: plays on), for a Pause to resume it.
+    play_end: Option<Samples>,
+    /// Paused: where to resume, with the end and loop of the play paused. Any other start or a
+    /// locate forgets it.
+    pub(crate) paused: Option<(Samples, Option<Samples>, Option<Range>)>,
     /// Loop Playback and the loop range as they were when the loop playing was last decided (at
     /// Play, or the last change while playing): a change while playing moves the loop.
     loop_basis: (bool, Option<Range>),
@@ -1048,6 +1053,8 @@ impl SoundApp {
             last_audio_take: None,
             play_from: 0,
             play_loop: None,
+            play_end: None,
+            paused: None,
             loop_basis: (false, None),
             countoff: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1390,7 +1397,11 @@ impl SoundApp {
 
     /// Current transport position (playhead while playing, else the edit insertion).
     pub fn position(&self) -> Samples {
-        if self.engine.transport.playing { self.engine.transport.position } else { self.engine.session().edit.selection.start }
+        match self.paused {
+            _ if self.engine.transport.playing => self.engine.transport.position,
+            Some((at, ..)) => at,
+            None => self.engine.session().edit.selection.start,
+        }
     }
 
     /// The session the player is handed: the document, or, while a Vocal Editor preview plays,
@@ -1421,6 +1432,8 @@ impl SoundApp {
         }
         self.play_from = from;
         self.play_loop = looped;
+        self.play_end = end;
+        self.paused = None;
         // A new playback: what Capture MIDI keeps starts again.
         self.midi_capture.clear();
         self.countoff = countoff.filter(|_| self.player.is_some());
@@ -2366,6 +2379,27 @@ impl SoundApp {
         }
     }
 
+    /// Pause: playing, the transport stops where it is and the selection stays as it was (the
+    /// insertion does not follow); paused, it plays on from there with the same end and loop.
+    /// Recording, or with nothing paused, it is Stop or Play.
+    fn pause(&mut self) {
+        if self.is_playing() && !self.engine.transport.recording && self.countoff.is_none() {
+            let at = self.engine.transport.position;
+            let resume = (at, self.play_end, self.play_loop);
+            let selection = self.engine.session().edit.selection;
+            self.stop_play();
+            self.engine.session_mut().edit.selection = selection;
+            self.engine.transport.position = at;
+            self.paused = Some(resume);
+        } else if self.is_playing() {
+            self.stop_play();
+        } else if let Some((at, end, looped)) = self.paused.take() {
+            self.start_play(at, end.filter(|e| *e > at), looped);
+        } else {
+            self.play_from_selection();
+        }
+    }
+
     /// Play from the selection, honouring loop playback and selection end.
     pub fn play_from_selection(&mut self) {
         let s = self.engine.session();
@@ -2422,7 +2456,11 @@ impl SoundApp {
                         self.play_from_selection();
                     }
                 }
-                TransportRequest::Stop | TransportRequest::Pause => self.stop_play(),
+                TransportRequest::Stop => {
+                    self.paused = None;
+                    self.stop_play();
+                }
+                TransportRequest::Pause => self.pause(),
                 TransportRequest::TogglePlay => {
                     if self.is_playing() {
                         self.stop_play();
@@ -2440,6 +2478,7 @@ impl SoundApp {
                     }
                 }
                 TransportRequest::Locate(at) => {
+                    self.paused = None;
                     if self.is_playing() {
                         if let Some(p) = &self.player {
                             p.locate(at);
