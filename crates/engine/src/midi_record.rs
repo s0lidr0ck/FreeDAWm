@@ -172,15 +172,18 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
         // so the take plays back where it was played.
         let offset = s.edit.value(&format!("midi.offset.{}", tid.0), 0.0);
         let offset = if offset.is_finite() { offset as Samples } else { 0 };
+        // The track's input transform, as its instrument heard it.
+        let transform = input.transform;
         let mine: Vec<(Samples, [u8; 3], u16)> = events
             .iter()
             .filter(filter)
-            .map(|x| {
+            .filter_map(|x| {
+                let msg = transform.apply(x.msg)?;
                 let (at, pass) = played_at(take, x.at, x.pass);
                 // (Still not before the take's start, as `played_at` keeps it.)
                 let placed = at.saturating_sub(offset);
                 let placed = if pass == 0 && x.at >= take.start { placed.max(take.start) } else { placed };
-                (placed, x.msg, pass)
+                Some((placed, msg, pass))
             })
             .collect();
         // The playlist as it was before this take: each loop pass after the first goes on a copy
@@ -1076,6 +1079,35 @@ mod tests {
         let notes: Vec<(u8, i64)> = c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect();
         assert_eq!(notes, vec![(55, 3 * TICKS_PER_QUARTER), (60, 5 * TICKS_PER_QUARTER)]);
         let _ = t;
+    }
+
+    #[test]
+    fn the_input_transform_shapes_the_take_and_survives_a_change_of_port() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        let r = e
+            .execute("track.midi_input_transform", &json!({"tracks": [t.0], "transpose": 12, "fixed_velocity": 90, "key_high": 72, "channel": 3}))
+            .unwrap();
+        assert_eq!(r["transform"]["transpose"], 12);
+        assert_eq!(e.undo_label(), Some("MIDI Input Transform"));
+        // Another port: the transform stays.
+        e.execute("track.input", &json!({"tracks": [t.0], "input": "midi:Keys"})).unwrap();
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        let events = [
+            ev(0, "Keys", [0x90, 60, 30]),
+            ev(Q, "Keys", [0x80, 60, 0]),
+            // Above the key range: left out, its note-off too.
+            ev(Q, "Keys", [0x90, 80, 100]),
+            ev(2 * Q, "Keys", [0x80, 80, 0]),
+        ];
+        let ids = record_live_midi(&mut e, &take, &events);
+        let notes: Vec<(u8, u8, u8, i64)> =
+            clip(&e, ids[0]).midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.velocity, n.channel, n.length)).collect();
+        assert_eq!(notes, vec![(72, 90, 2, TICKS_PER_QUARTER)]);
+        e.execute("track.midi_input_transform", &json!({"tracks": [t.0], "reset": true})).unwrap();
+        let Route::Midi(m) = &e.session().track(t).unwrap().mixer.input else { panic!() };
+        assert!(m.transform.is_identity());
+        assert_eq!(m.device.as_deref(), Some("Keys"));
     }
 
     #[test]

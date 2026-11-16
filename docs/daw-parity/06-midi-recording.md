@@ -46,8 +46,8 @@ revision history:
    one clip; the default for new sessions), Replace and New Playlist. Loop passes after the first keep the rest of the
    song. Loop passes are heard while the loop runs, and the last can be undone while it does. Still missing: MIDI takes to comp.
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
-   Offsets, count-off set-up and capture of what was just played now work. Still stored and
-   unread: the input filter, MIDI Thru in the Options menu and the other settings bug 22 lists.
+   Offsets, count-off set-up, capture of what was just played and the input filter now work. Still stored and
+   unread: MIDI Thru in the Options menu and the other settings bug 22 lists.
 3. **Going out and mapping.** MIDI output to hardware ports works (External MIDI), and Mackie
    Control and HUI surfaces drive the mixer and transport. Still missing: clock and timecode out,
    a MIDI track playing an instrument on another track, and MIDI learn.
@@ -78,7 +78,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Input: one port or all, one channel or all | ● | ● | ● | ● | **Works** |
 | Several tracks record different ports or channels in one pass | ● | ● | ● | ● | **Works** |
 | Layer several instruments from one keyboard | ● | ● | ● | ● | **Works** (arm them all) |
-| Channel changed on the way in | ● | ● | ● | ● | **Missing**; the played channel is kept in the clip |
+| Channel changed on the way in | ● | ● | ● | ● | **Works**: the track input menu › Input Transform › Channel (otherwise the played channel is kept in the clip) |
 | Record arm and input monitor (auto, on, off) on the track | ● | ● | ● | ● | **Works** |
 | The selected track is armed and heard automatically | ○ | ● | ● | ● | **Missing** |
 | Global MIDI thru switch | ● | ● | ● | ● | **Works** in the devices window; the Options menu item is **Flag only** |
@@ -166,8 +166,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Input quantize with strength and swing, the played timing kept | ● | ● | ● | ● | **Works** (Event › More MIDI › Input Quantize). Notes only |
-| Input filter (leave out aftertouch, SysEx and so on) | ● | ◐ | ● | ● | **Flag only** |
-| Transpose, velocity scale or curve, fixed velocity, key range on input | ● | ● | ● | ● | **Missing**: Real-Time Properties change clip playback only |
+| Input filter (leave out aftertouch, SysEx and so on) | ● | ◐ | ● | ● | **Works**: Setup › MIDI Input Devices › Leave out (notes, pitch bend, aftertouch, poly aftertouch, program, controllers; `setup.midi_input_filter`, the session's), for every port, from what is heard, recorded and captured; SysEx and real-time bytes are never taken |
+| Transpose, velocity scale or curve, fixed velocity, key range on input | ● | ● | ● | ● | **Works**: per track, the input menu › Input Transform (`track.midi_input_transform`), applied to what the instrument hears and to the take, kept when the port or channel changes; Real-Time Properties still change clip playback only |
 | Live MIDI effects before the instrument (arpeggiator, chord, scale) | ● | ● | ● | ● | **Missing** |
 | Record the effect's output, not the raw keys | ● | ● | ● | ● | **Missing** |
 | Scale or key lock on what you play | ○ | ◐ | ◐ | ● | **Missing** |
@@ -248,7 +248,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 19 | **Fixed.** The MIDI Real-Time Properties window reads the first selected MIDI track's values when the selection changes, writes only the property moved, and its changes can be undone (`event.midi_rtp` is an undo step; a drag is one). Test: `engine/tests/midi_recording.rs` (undo); the window by reading. Commits `149f728`, `f2ecfd9`. | `ui-egui/src/ops_windows.rs`; `engine/src/cmd/event_more.rs` |
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs`. Commit `91059d3`. | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs`. Commit `b34b914`. | `engine/src/io.rs` (`export_midi`) |
-| 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, the second set of device flags. Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
+| 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. The input filter is read now (Setup › MIDI Input Devices). Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, beat clock, MIDI studio, the second set of device flags. Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
 | 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`). Commit `352090a`. | `ui-egui/src/menubar.txt` |
 
 ## Suggested order of work
@@ -271,7 +271,7 @@ either wire the control or take it off the menu.
 | Capture what was just played (a listening buffer behind the existing command) | 5–8 | Done (`3675b3d`) while the transport plays; with it stopped too (a listening clock of its own) |
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in kept as an option |
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
-| Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Not started |
+| Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take |
 | MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Not started (large; needs a design: a MIDI stage ahead of the instrument on the audio thread, its output recordable) |
 | MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Not started (large; touches the mixer, section 3) |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI). The external instrument's latency, clock and timecode out remain |
@@ -361,3 +361,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | A MIDI take survives a crash: spilled to the autosave folder as it is played, placed by recovery |
 | 2026-11-16 | minor | Capture MIDI with the transport stopped; notes played in the count-off kept as a pickup when asked |
 | 2026-11-16 | minor | MIDI output ports start disabled; a port a track sends to still opens |
+| 2026-11-16 | minor | MIDI input filter wired; per-track input transforms (transpose, velocity, curve, fixed velocity, key range, channel) for thru and take |

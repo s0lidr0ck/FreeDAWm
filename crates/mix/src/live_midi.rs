@@ -171,12 +171,23 @@ pub fn port_id(name: &str) -> u64 {
 pub struct MidiFilter {
     pub port: Option<u64>,
     pub channel: u8,
+    /// The track's input transform (applied to what passes).
+    pub transform: soundcraft_model::MidiTransform,
 }
 
 impl MidiFilter {
     /// The filter for a track input on `device` (`None`: all inputs) and `channel`.
     pub fn new(device: Option<&str>, channel: u8) -> MidiFilter {
-        MidiFilter { port: device.map(port_id), channel: if channel > 16 { 0 } else { channel } }
+        MidiFilter {
+            port: device.map(port_id),
+            channel: if channel > 16 { 0 } else { channel },
+            transform: soundcraft_model::MidiTransform::default(),
+        }
+    }
+
+    /// The filter for a track's MIDI input, its transform included.
+    pub fn for_input(m: &soundcraft_model::MidiIn) -> MidiFilter {
+        MidiFilter { transform: m.transform, ..MidiFilter::new(m.device.as_deref(), m.channel) }
     }
 
     /// Whether `e` passes: its port's identity matches (any port for all inputs) and, for a

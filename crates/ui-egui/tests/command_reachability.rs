@@ -58,7 +58,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("setup.external_timecode_offset", "a stored setting with no window; nothing reads it"),
     ("setup.midi_beat_clock", "a stored setting with no window; no clock output reads it"),
     ("setup.midi_input_devices", "shown greyed out (coming soon): needs its own window"),
-    ("setup.midi_input_filter", "a stored setting with no window"),
     ("setup.midi_studio", "a stored setting with no window"),
     ("setup.peripherals", "a stored setting with no window"),
     ("setup.preferences", "Setup › Preferences… opens the Preferences window instead; this reads the session's settings for agents"),

@@ -2888,7 +2888,7 @@ fn process_strip(
     // Live MIDI input: an armed track (with MIDI Thru) or an input-monitored one plays it through
     // its instrument, stopped too. Notes it held are let go when it stops hearing it.
     let live_filter = match &t.mixer.input {
-        Route::Midi(m) if hears_live_midi(t, live.midi.thru) => Some(MidiFilter::new(m.device.as_deref(), m.channel)),
+        Route::Midi(m) if hears_live_midi(t, live.midi.thru) => Some(MidiFilter::for_input(m)),
         _ => None,
     };
     // Notes (and pedals) the input held are let go when the track stops hearing it or hears
@@ -4489,9 +4489,11 @@ fn release_clip_notes(s: &Session, id: TrackId, st: &mut Strip) {
 /// noting what it holds.
 fn deliver_live_midi(midi: &LiveMidi, f: MidiFilter, inst: &mut PluginSlot, held: &mut HeldNotes) {
     for e in midi.events() {
-        if f.matches(midi, e) {
-            held.track(e.port, e.msg);
-            inst.plugin.midi_raw(e.offset as usize, e.msg);
+        if f.matches(midi, e)
+            && let Some(msg) = f.transform.apply(e.msg)
+        {
+            held.track(e.port, msg);
+            inst.plugin.midi_raw(e.offset as usize, msg);
         }
     }
 }
@@ -7481,12 +7483,12 @@ mod tests {
         assert_eq!(take(&heard), keys.iter().map(|&(o, _, m)| (true, o as usize, m)).collect::<Vec<_>>());
 
         // One port; one channel.
-        set(&mut s, soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0 }, true, auto);
+        set(&mut s, soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0, ..Default::default() }, true, auto);
         play_live(&mut eng, true, &keys);
         render_block(&mut eng, &s, 1024);
         let h = take(&heard);
         assert!(h.contains(&(true, 20, [0x91, 62, 90])) && !h.iter().any(|x| x.2 == [0x90, 60, 100]), "{h:?}");
-        set(&mut s, soundcraft_model::MidiIn { device: None, channel: 1 }, true, auto);
+        set(&mut s, soundcraft_model::MidiIn { device: None, channel: 1, ..Default::default() }, true, auto);
         play_live(&mut eng, true, &keys);
         render_block(&mut eng, &s, 1536);
         let h = take(&heard);
@@ -7893,19 +7895,19 @@ mod tests {
     fn changing_the_input_lets_go_of_the_notes_the_old_one_held() {
         let (mut s, mut eng, heard) = armed_with_clip_note();
         eng.monitor_only = true;
-        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 0 });
+        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 0, ..Default::default() });
         play_live(&mut eng, true, &[(5, 0, [0x90, 60, 100])]);
         render_block(&mut eng, &s, 0);
         take_heard(&heard);
         // Another port: the key held on Keys would never get its note-off through the new input.
-        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0 });
+        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0, ..Default::default() });
         render_block(&mut eng, &s, 0);
         assert_eq!(take_heard(&heard), vec![(true, 0, [0x80, 60, 0])]);
         // Another channel, likewise.
         play_live(&mut eng, true, &[(5, 1, [0x90, 62, 100])]);
         render_block(&mut eng, &s, 0);
         take_heard(&heard);
-        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 2 });
+        s.tracks[0].mixer.input = Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 2, ..Default::default() });
         render_block(&mut eng, &s, 0);
         render_block(&mut eng, &s, 0);
         assert_eq!(take_heard(&heard), vec![(true, 0, [0x80, 62, 0])]);
@@ -7967,7 +7969,8 @@ mod tests {
         {
             let tr = s.track_mut(t2).unwrap();
             tr.instrument = Some(Insert::new("clap:test.tape2"));
-            (tr.mixer.input, tr.mixer.record_arm) = (Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0 }), true);
+            (tr.mixer.input, tr.mixer.record_arm) =
+                (Route::Midi(soundcraft_model::MidiIn { device: Some("DIN".into()), channel: 0, ..Default::default() }), true);
         }
         let heard2 = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tape = Tape { inner: soundcraft_dsp::create("gain").unwrap(), heard: Arc::clone(&heard2) };

@@ -549,6 +549,76 @@ pub struct MidiIn {
     /// 0: Omni (every channel), else 1-16.
     #[serde(default)]
     pub channel: u8,
+    /// What the track does to its input on the way in, before its instrument hears it and
+    /// before a take keeps it.
+    #[serde(default, skip_serializing_if = "MidiTransform::is_identity")]
+    pub transform: MidiTransform,
+}
+
+/// A track's MIDI input transform (Real-Time Properties for the input): applied to what the
+/// instrument hears live (thru) and to what a take records, never to the clips. Note-ons and
+/// note-offs go through the same mapping, so a note always ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MidiTransform {
+    /// Semitones added to every note (and poly pressure key); a note moved past 0..127 is left out.
+    pub transpose: i8,
+    /// Velocity scale in percent (100: as played).
+    pub velocity: u8,
+    /// Velocity curve, -100..100: 0 straight, above 0 harder (soft playing comes out softer),
+    /// below 0 softer (soft playing comes out louder).
+    pub curve: i8,
+    /// Every note-on at this velocity (0: off). Comes after scale and curve.
+    pub fixed_velocity: u8,
+    /// Only the keys from `key_low` to `key_high` (as played, before transposing) pass.
+    pub key_low: u8,
+    pub key_high: u8,
+    /// Every channel message onto this channel, 1-16 (0: as played).
+    pub channel: u8,
+}
+
+impl Default for MidiTransform {
+    fn default() -> Self {
+        MidiTransform { transpose: 0, velocity: 100, curve: 0, fixed_velocity: 0, key_low: 0, key_high: 127, channel: 0 }
+    }
+}
+
+impl MidiTransform {
+    /// Nothing changes.
+    pub fn is_identity(&self) -> bool {
+        *self == MidiTransform::default()
+    }
+
+    /// `msg` as the transform makes it; `None` when it is left out (a key outside the range, or
+    /// moved past 0..127). No allocation.
+    pub fn apply(&self, msg: [u8; 3]) -> Option<[u8; 3]> {
+        if self.is_identity() {
+            return Some(msg);
+        }
+        let [mut status, mut d1, mut d2] = msg;
+        let kind = status & 0xF0;
+        if matches!(kind, 0x80 | 0x90 | 0xA0) {
+            if d1 < self.key_low || d1 > self.key_high {
+                return None;
+            }
+            d1 = u8::try_from(i16::from(d1) + i16::from(self.transpose)).ok().filter(|p| *p <= 127)?;
+        }
+        if kind == 0x90 && d2 > 0 {
+            let mut v = f32::from(d2) / 127.0;
+            if self.curve != 0 {
+                v = v.powf(2f32.powf(f32::from(self.curve.clamp(-100, 100)) / 50.0));
+            }
+            v *= f32::from(self.velocity) / 100.0;
+            d2 = (v * 127.0).round().clamp(1.0, 127.0) as u8;
+            if self.fixed_velocity > 0 {
+                d2 = self.fixed_velocity.min(127);
+            }
+        }
+        if (0x80..0xF0).contains(&status) && (1..=16).contains(&self.channel) {
+            status = kind | (self.channel - 1);
+        }
+        Some([status, d1, d2])
+    }
 }
 
 impl MidiIn {

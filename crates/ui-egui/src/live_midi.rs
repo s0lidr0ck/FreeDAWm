@@ -64,7 +64,16 @@ pub fn live_take(app: &SoundApp, track: &Track) -> Option<LiveTake> {
     let latency = crate::midi_devices::take_latency(app);
     let placed = |at: Samples| if at >= start { at.saturating_sub(latency).max(start) } else { at.saturating_sub(latency) };
     let mut notes: Vec<LiveNote> = Vec::new();
-    for e in events.iter().filter(mine).map(|e| soundcraft_engine::midi_record::RecordedEvent { at: placed(e.at), ..e.clone() }) {
+    // As the track's input transform makes it.
+    let transform = match &track.mixer.input {
+        Route::Midi(m) => m.transform,
+        _ => soundcraft_model::MidiTransform::default(),
+    };
+    let shown = events
+        .iter()
+        .filter(mine)
+        .filter_map(|e| Some(soundcraft_engine::midi_record::RecordedEvent { at: placed(e.at), msg: transform.apply(e.msg)?, ..e.clone() }));
+    for e in shown {
         let kind = e.msg[0] & 0xF0;
         let pitch = e.msg[1];
         if kind == 0x90 && e.msg[2] > 0 {

@@ -1216,7 +1216,7 @@ pub(crate) fn midi_route(v: &str) -> Option<soundcraft_model::MidiIn> {
     let t = v.trim();
     let rest = t.get(..5).filter(|h| h.eq_ignore_ascii_case("midi:")).and_then(|_| t.get(5..))?.trim();
     let all = rest.is_empty() || rest.eq_ignore_ascii_case("all") || rest.eq_ignore_ascii_case("all inputs");
-    Some(soundcraft_model::MidiIn { device: (!all).then(|| rest.to_string()), channel: 0 })
+    Some(soundcraft_model::MidiIn { device: (!all).then(|| rest.to_string()), channel: 0, ..Default::default() })
 }
 
 /// A Band musician named as a route: `musician:N` or `Musician N` (case-insensitive), N 1..=6.
@@ -1356,11 +1356,16 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
                 _ => return Err(bad(cmd, "`channel` is 0 (Omni) or 1-16")),
             };
         }
-        let r = Route::Midi(m);
+        let r = Route::Midi(m.clone());
         let s = e.session_mut();
         for t in &tracks {
             if let Some(tr) = s.track_mut(*t) {
-                tr.mixer.input = r.clone();
+                // Another port or channel: the track's input transform stays.
+                let transform = match &tr.mixer.input {
+                    Route::Midi(old) => old.transform,
+                    _ => soundcraft_model::MidiTransform::default(),
+                };
+                tr.mixer.input = Route::Midi(soundcraft_model::MidiIn { transform, ..m.clone() });
             }
         }
         return Ok(json!({key: r}));
@@ -1476,7 +1481,9 @@ mod tests {
         let keys = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
         let tid = soundcraft_model::TrackId(keys);
         let input = |e: &Engine| e.session().track(tid).unwrap().mixer.input.clone();
-        let midi = |device: Option<&str>, channel| Route::Midi(soundcraft_model::MidiIn { device: device.map(str::to_string), channel });
+        let midi = |device: Option<&str>, channel| {
+            Route::Midi(soundcraft_model::MidiIn { device: device.map(str::to_string), channel, ..Default::default() })
+        };
         assert_eq!(input(&e), midi(None, 0), "a new instrument track takes MIDI: All Inputs");
         e.execute("track.input", &json!({"tracks": [keys], "input": "MIDI: Focusrite USB MIDI", "channel": 3})).unwrap();
         assert_eq!(input(&e), midi(Some("Focusrite USB MIDI"), 3));
@@ -1490,7 +1497,7 @@ mod tests {
         let text = serde_json::to_string(e.session()).unwrap();
         let back: soundcraft_model::Session = serde_json::from_str(&text).unwrap();
         assert_eq!(back.track(tid).unwrap().mixer.input, midi(None, 0));
-        assert_eq!(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 2 }.label(), "MIDI: Keys (ch 2)");
+        assert_eq!(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 2, ..Default::default() }.label(), "MIDI: Keys (ch 2)");
     }
 
     #[test]

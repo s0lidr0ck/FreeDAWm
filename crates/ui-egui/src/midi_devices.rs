@@ -20,6 +20,7 @@ const LIGHT: Duration = Duration::from_millis(150);
 pub fn tick(app: &mut SoundApp) {
     let Some(hub) = app.midi_hub.clone() else { return };
     hub.set_thru(app.ui.midi_thru);
+    hub.set_filter(filter_bits(app.engine.session()));
     if app.midi_inputs.is_none() && app.use_system_midi {
         app.midi_inputs = soundcraft_playback::midi_in::MidiInputs::system(std::sync::Arc::clone(&hub), app.ui.midi_inputs.clone());
     }
@@ -42,6 +43,11 @@ pub fn tick(app: &mut SoundApp) {
         m.set_wanted(wanted_outputs(app.engine.session()));
         m.tick(std::time::Instant::now());
     }
+}
+
+/// The session's MIDI input filter (`setup.midi_input_filter`) as the hub's bits.
+pub fn filter_bits(s: &soundcraft_model::Session) -> u32 {
+    soundcraft_playback::midi_in::FILTER_KINDS.iter().filter(|(k, _)| s.edit.flag(&format!("midi.filter.{k}"))).map(|(_, b)| b).sum()
 }
 
 /// The output ports the session's External MIDI instruments send to.
@@ -444,6 +450,7 @@ pub(crate) fn input_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
     }
     let Some(m) = current else { return };
+    transform_menu(app, ui, id, &m.transform);
     ui.menu_button(if m.channel == 0 { "Channel: Omni".to_string() } else { format!("Channel: {}", m.channel) }, |ui| {
         for ch in 0..=16u8 {
             let label = if ch == 0 { "Omni".to_string() } else { ch.to_string() };
@@ -455,6 +462,76 @@ pub(crate) fn input_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
                 ui.close();
             }
         }
+    });
+}
+
+/// The input menu's Input Transform submenu: what the track does to its MIDI input before its
+/// instrument hears it and a take keeps it (`track.midi_input_transform`; a drag is one undo
+/// step).
+fn transform_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId, t: &soundcraft_model::MidiTransform) {
+    let title = if t.is_identity() { "Input Transform".to_string() } else { "Input Transform (on)".to_string() };
+    ui.menu_button(title, |ui| {
+        let mut p = serde_json::Map::new();
+        let (mut transpose, mut velocity, mut curve, mut fixed, mut low, mut high, mut channel) =
+            (t.transpose, t.velocity, t.curve, t.fixed_velocity, t.key_low, t.key_high, t.channel);
+        egui::Grid::new(("midi-transform", id.0)).num_columns(2).show(ui, |ui| {
+            let mut row = |ui: &mut egui::Ui, label: &str, w: egui::DragValue, key: &str, v: serde_json::Value| {
+                ui.label(label);
+                if ui.add(w).changed() {
+                    p.insert(key.into(), v);
+                }
+                ui.end_row();
+            };
+            row(ui, "Transpose", egui::DragValue::new(&mut transpose).range(-48..=48).suffix(" st"), "transpose", json!(0));
+            row(ui, "Velocity", egui::DragValue::new(&mut velocity).range(1..=200).suffix(" %"), "velocity", json!(0));
+            row(ui, "Curve", egui::DragValue::new(&mut curve).range(-100..=100), "curve", json!(0));
+            row(
+                ui,
+                "Fixed velocity",
+                egui::DragValue::new(&mut fixed).range(0..=127).custom_formatter(|v, _| if v < 1.0 { "Off".into() } else { format!("{v:.0}") }),
+                "fixed_velocity",
+                json!(0),
+            );
+            row(ui, "Lowest key", egui::DragValue::new(&mut low).range(0..=127), "key_low", json!(0));
+            row(ui, "Highest key", egui::DragValue::new(&mut high).range(0..=127), "key_high", json!(0));
+            row(
+                ui,
+                "Channel",
+                egui::DragValue::new(&mut channel)
+                    .range(0..=16)
+                    .custom_formatter(|v, _| if v < 1.0 { "As played".into() } else { format!("{v:.0}") }),
+                "channel",
+                json!(0),
+            );
+        });
+        // The values the drags left (the closure above only marked which moved).
+        let now = [
+            ("transpose", json!(transpose)),
+            ("velocity", json!(velocity)),
+            ("curve", json!(curve)),
+            ("fixed_velocity", json!(fixed)),
+            ("key_low", json!(low)),
+            ("key_high", json!(high)),
+            ("channel", json!(channel)),
+        ];
+        for (k, v) in now {
+            if let Some(x) = p.get_mut(k) {
+                *x = v;
+            }
+        }
+        let reset = ui.add_enabled(!t.is_identity(), egui::Button::new("Reset")).clicked();
+        if reset {
+            p.clear();
+            p.insert("reset".into(), json!(true));
+        }
+        if !p.is_empty() {
+            p.insert("tracks".into(), json!([id.0]));
+            let key = format!("midi-transform.{}", id.0);
+            if let Err(e) = app.engine.execute_merged("track.midi_input_transform", &serde_json::Value::Object(p), &key) {
+                app.ui.status = e.to_string();
+            }
+        }
+        ui.label(egui::RichText::new("Applied to what the instrument hears and what a take records").small().color(Tokens::current().text_dim));
     });
 }
 
@@ -545,6 +622,28 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             set_output_enabled(app, &name, on);
         }
         ui.separator();
+        // Setup › MIDI Input Filter: the session's, for every port.
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Leave out:")
+                .on_hover_text("Messages of these kinds from every input are not heard, recorded or captured (this session's setting)");
+            let bits = filter_bits(app.engine.session());
+            for (kind, bit, label) in [
+                ("notes", 1, "Notes"),
+                ("pitch_bend", 2, "Pitch bend"),
+                ("mono_aftertouch", 4, "Aftertouch"),
+                ("poly_aftertouch", 8, "Poly aftertouch"),
+                ("program", 16, "Program"),
+                ("cc", 32, "Controllers"),
+            ] {
+                let mut on = bits & bit != 0;
+                if ui.checkbox(&mut on, label).changed() {
+                    let key = if on { "filter" } else { "allow" };
+                    if let Err(e) = app.run("setup.midi_input_filter", json!({key: [kind]})) {
+                        app.ui.status = e;
+                    }
+                }
+            }
+        });
         ui.checkbox(&mut app.ui.midi_thru, "MIDI Thru")
             .on_hover_text("Record-enabled instrument and MIDI tracks play what comes in (input-monitored tracks always do)");
         ui.horizontal(|ui| {
@@ -609,7 +708,7 @@ pub(crate) mod tests {
             vec![("MIDI: All Inputs".to_string(), true), ("MIDI: USB Keys".to_string(), true), ("MIDI: Musical Typing".to_string(), true)]
         );
         // A track on a port that is gone still shows it, marked.
-        let gone = MidiIn { device: Some("Old Keys".into()), channel: 0 };
+        let gone = MidiIn { device: Some("Old Keys".into()), channel: 0, ..Default::default() };
         assert_eq!(labels(&app, Some(&gone)).last().cloned(), Some(("MIDI: Old Keys (not connected)".to_string(), false)));
     }
 

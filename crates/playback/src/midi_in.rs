@@ -148,6 +148,25 @@ pub fn block_offset(stamp: u64, now: u64, frames: usize, rate: f64) -> u32 {
 /// listening clock's (samples since the hub was made, at the session rate), not the timeline's.
 pub const LISTENING: u16 = u16::MAX;
 
+/// Setup › MIDI Input Filter's kinds as the hub's filter bits ([`MidiHub::set_filter`]), in the
+/// order `setup.midi_input_filter` names them (SysEx and the real-time bytes are never played or
+/// recorded, so they have no bit).
+pub const FILTER_KINDS: [(&str, u32); 6] =
+    [("notes", 1), ("pitch_bend", 2), ("mono_aftertouch", 4), ("poly_aftertouch", 8), ("program", 16), ("cc", 32)];
+
+/// The filter bit of `msg`'s kind (0: none).
+fn filter_bit(msg: [u8; 3]) -> u32 {
+    match msg[0] & 0xF0 {
+        0x80 | 0x90 => 1,
+        0xE0 => 2,
+        0xD0 => 4,
+        0xA0 => 8,
+        0xC0 => 16,
+        0xB0 => 32,
+        _ => 0,
+    }
+}
+
 /// A recorded event: its timeline sample, port slot, message and loop pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedMidi {
@@ -167,6 +186,8 @@ pub struct MidiHub {
     /// When each slot last received a message (µs since `epoch`, 0: never).
     activity: [AtomicU64; MAX_MIDI_PORTS],
     thru: AtomicBool,
+    /// Setup › MIDI Input Filter ([`FILTER_KINDS`] bits).
+    filter: AtomicU32,
     record: MidiRing,
     /// What the mix heard while playing and not recording, for Capture MIDI (`capture_block`).
     capture: MidiRing,
@@ -223,6 +244,7 @@ impl MidiHub {
             ids: std::array::from_fn(|_| AtomicU64::new(0)),
             activity: std::array::from_fn(|_| AtomicU64::new(0)),
             thru: AtomicBool::new(true),
+            filter: AtomicU32::new(0),
             record: MidiRing::new(RECORD_RING),
             capture: MidiRing::new(RECORD_RING),
             held: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -282,6 +304,13 @@ impl MidiHub {
     /// MIDI Thru: record-armed instrument and MIDI tracks play their live input.
     pub fn set_thru(&self, on: bool) {
         self.thru.store(on, Ordering::Relaxed);
+    }
+
+    /// The input filter ([`FILTER_KINDS`] bits): messages of those kinds from every port are
+    /// left out of what the tracks hear, record and capture (a mapped control still moves its
+    /// parameter).
+    pub fn set_filter(&self, bits: u32) {
+        self.filter.store(bits, Ordering::Relaxed);
     }
 
     pub fn thru(&self) -> bool {
@@ -500,6 +529,7 @@ impl PortSink {
             return;
         }
         let Some(msg) = parse(bytes) else { return };
+        let filtered = self.hub.filter.load(Ordering::Relaxed) & filter_bit(msg) != 0;
         let learning = self.hub.learning.load(Ordering::Relaxed) && claim_kind(msg).is_some();
         let note_off = msg[0] & 0xF0 == 0x80 || (msg[0] & 0xF0 == 0x90 && msg[2] == 0);
         if learning && !note_off {
@@ -518,6 +548,10 @@ impl PortSink {
         }
         if let Some(a) = self.hub.activity.get(self.slot) {
             a.store(stamp.max(1), Ordering::Relaxed);
+        }
+        if filtered {
+            // Setup › MIDI Input Filter leaves it out.
+            return;
         }
         self.hub.note_held(msg);
         self.hub.pedal(self.slot, msg);
@@ -1081,6 +1115,21 @@ mod tests {
         let mut cap = Vec::new();
         hub.take_captured(&mut cap);
         assert_eq!(cap.iter().map(|x| (x.at, x.pass)).collect::<Vec<_>>(), vec![(48_000, LISTENING), (72_000, LISTENING)]);
+    }
+
+    #[test]
+    fn the_input_filter_leaves_out_the_kinds_chosen() {
+        let hub = MidiHub::new();
+        let keys = hub.typing();
+        hub.set_filter(FILTER_KINDS.iter().filter(|(k, _)| matches!(*k, "poly_aftertouch" | "cc")).map(|(_, b)| b).sum());
+        keys.send_at(5, &[0x90, 60, 100]);
+        keys.send_at(6, &[0xA0, 60, 40]);
+        keys.send_at(7, &[0xB0, 1, 64]);
+        keys.send_at(8, &[0xE0, 0, 70]);
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, 10, 64, 48_000.0);
+        assert_eq!(live.events().iter().map(|e| e.msg[0]).collect::<Vec<_>>(), vec![0x90, 0xE0]);
+        assert!(hub.last_activity(TYPING_SLOT) >= 7, "the light still shows it came");
     }
 
     #[test]
