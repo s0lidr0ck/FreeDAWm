@@ -3,8 +3,10 @@
 //!
 //! - [`MidiOutputs`]: the UI thread's list of output ports, through a [`MidiOutBackend`] (the
 //!   system's, `midir`, native only; or a fake for tests). Rescanned when asked and every 2 s;
-//!   enabled ports are kept by name in the app settings (a port never chosen is enabled), and an
-//!   enabled port that is present is open.
+//!   enabled ports are kept by name in the app settings. A port never chosen is disabled (on
+//!   Windows a port can be open in one program at a time: FreeDAWm takes none it was not asked
+//!   for) unless the session's External MIDI instruments name it ([`MidiOutputs::set_wanted`]);
+//!   an enabled port that is present is open.
 //! - Each open port has a sender thread: it takes the port's slot in the process's
 //!   [`soundcraft_mix::external_midi::OutHub`], empties the slot's ring about every half
 //!   millisecond and sends each message when its time comes (the audio thread only pushes into
@@ -50,6 +52,8 @@ pub struct OutPortInfo {
     pub error: Option<String>,
     /// Used by a control surface (opened by it, not here).
     pub reserved: bool,
+    /// A track of the session sends to it (an External MIDI instrument names it).
+    pub wanted: bool,
 }
 
 struct Sender {
@@ -78,12 +82,14 @@ pub struct MidiOutputs {
     ports: Vec<Port>,
     choices: BTreeMap<String, bool>,
     reserved: Vec<String>,
+    /// The ports the session's tracks send to.
+    wanted: Vec<String>,
     last_scan: Option<Instant>,
 }
 
 impl MidiOutputs {
     pub fn new(backend: Box<dyn MidiOutBackend>, choices: BTreeMap<String, bool>) -> MidiOutputs {
-        MidiOutputs { backend, hub: external_midi::hub(), ports: Vec::new(), choices, reserved: Vec::new(), last_scan: None }
+        MidiOutputs { backend, hub: external_midi::hub(), ports: Vec::new(), choices, reserved: Vec::new(), wanted: Vec::new(), last_scan: None }
     }
 
     /// The system's ports (`None` where there is no MIDI backend: the web build).
@@ -106,9 +112,18 @@ impl MidiOutputs {
         &self.choices
     }
 
-    /// Whether `name` is enabled (a port never chosen is).
+    /// Whether `name` is enabled: chosen so, or never chosen and a track sends to it.
     pub fn enabled(&self, name: &str) -> bool {
-        self.choices.get(name).copied().unwrap_or(true)
+        self.choices.get(name).copied().unwrap_or_else(|| self.wanted.iter().any(|w| w == name))
+    }
+
+    /// The ports the session's tracks send to (External MIDI instruments): one never chosen in
+    /// the window opens for them; one disabled there stays closed (the window says a track wants it).
+    pub fn set_wanted(&mut self, names: Vec<String>) {
+        if names != self.wanted {
+            self.wanted = names;
+            self.apply();
+        }
     }
 
     /// Enables or disables the port named `name`, opening or closing it now.
@@ -147,7 +162,7 @@ impl MidiOutputs {
         for n in names {
             if !self.ports.iter().any(|p| p.info.name == n) {
                 self.ports.push(Port {
-                    info: OutPortInfo { name: n, enabled: true, present: true, open: false, error: None, reserved: false },
+                    info: OutPortInfo { name: n, enabled: false, present: true, open: false, error: None, reserved: false, wanted: false },
                     sender: None,
                 });
             }
@@ -167,6 +182,7 @@ impl MidiOutputs {
             let Some(p) = self.ports.get_mut(i) else { continue };
             p.info.enabled = enabled;
             p.info.reserved = reserved;
+            p.info.wanted = self.wanted.contains(&name);
             match opened {
                 Some(Ok(s)) => {
                     p.sender = Some(s);
@@ -439,7 +455,9 @@ mod tests {
         let fake = FakeOutBackend::with_ports(&["Out Test Synth"]);
         let mut outs = MidiOutputs::new(fake.boxed(), BTreeMap::new());
         outs.rescan();
-        assert!(fake.is_open("Out Test Synth"), "a port never chosen is enabled");
+        assert!(!fake.is_open("Out Test Synth"), "a port never chosen is disabled");
+        outs.set_enabled("Out Test Synth", true);
+        assert!(fake.is_open("Out Test Synth"));
         let hub = external_midi::hub();
         let key = external_midi::port_key("Out Test Synth");
         let now = hub.now_us();
@@ -462,6 +480,27 @@ mod tests {
         assert_eq!(sent.len(), 5 + 32);
         assert!(!hub.send(key, 0, [0x90, 1, 1]), "the slot is free again");
         assert_eq!(outs.choices().get("Out Test Synth"), Some(&false));
+    }
+
+    #[test]
+    fn a_port_never_chosen_opens_only_for_a_track_that_sends_to_it() {
+        let fake = FakeOutBackend::with_ports(&["Out Test Juno", "Out Test Moog", "Out Test Off"]);
+        let mut choices = BTreeMap::new();
+        choices.insert("Out Test Moog".to_string(), true);
+        choices.insert("Out Test Off".to_string(), false);
+        let mut outs = MidiOutputs::new(fake.boxed(), choices);
+        outs.rescan();
+        assert!(!fake.is_open("Out Test Juno") && fake.is_open("Out Test Moog"), "enabled before: still open");
+        // A session whose tracks play the Juno and the port disabled in the window.
+        outs.set_wanted(vec!["Out Test Juno".into(), "Out Test Off".into()]);
+        assert!(fake.is_open("Out Test Juno"));
+        assert!(!fake.is_open("Out Test Off"), "a port disabled by choice stays closed");
+        let off = outs.ports().into_iter().find(|p| p.name == "Out Test Off").unwrap();
+        assert!(off.wanted && !off.enabled && !off.open, "the window can say a track wants it");
+        // That session closed: the Juno closes again; nothing was saved for it.
+        outs.set_wanted(Vec::new());
+        assert!(!fake.is_open("Out Test Juno"));
+        assert!(!outs.choices().contains_key("Out Test Juno"));
     }
 
     #[test]

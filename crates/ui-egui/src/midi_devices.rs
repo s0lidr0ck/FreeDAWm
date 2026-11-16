@@ -38,8 +38,18 @@ pub fn tick(app: &mut SoundApp) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_outputs {
+        // The ports the session's tracks send to open even if never enabled in the window.
+        m.set_wanted(wanted_outputs(app.engine.session()));
         m.tick(std::time::Instant::now());
     }
+}
+
+/// The output ports the session's External MIDI instruments send to.
+pub fn wanted_outputs(s: &soundcraft_model::Session) -> Vec<String> {
+    let mut v: Vec<String> = s.tracks.iter().filter_map(|t| t.instrument.as_ref().and_then(soundcraft_engine::cmd::midi_out::output_port)).collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// Recording starts: what the audio thread heard before is not part of the take.
@@ -308,12 +318,14 @@ pub fn set_output_enabled(app: &mut SoundApp, name: &str, on: bool) {
     }
 }
 
-/// The output ports a track can send to: the open ones, and the track's own when it is not
-/// (marked so), as `(name, available)`.
+/// The output ports a track can send to: those present and not a control surface's (one never
+/// enabled opens when a track sends to it), and the track's own when it is not (marked so), as
+/// `(name, available)`.
 pub fn output_choices(app: &SoundApp, current: Option<&str>) -> Vec<(String, bool)> {
-    let open: Vec<String> = app.midi_outputs.as_ref().map(|m| m.ports().into_iter().filter(|p| p.open).map(|p| p.name).collect()).unwrap_or_default();
-    let mut out: Vec<(String, bool)> = open.iter().map(|p| (p.clone(), true)).collect();
-    if let Some(c) = current.filter(|c| !c.is_empty() && !open.iter().any(|p| p == c)) {
+    let usable: Vec<String> =
+        app.midi_outputs.as_ref().map(|m| m.ports().into_iter().filter(|p| p.present && !p.reserved).map(|p| p.name).collect()).unwrap_or_default();
+    let mut out: Vec<(String, bool)> = usable.iter().map(|p| (p.clone(), true)).collect();
+    if let Some(c) = current.filter(|c| !c.is_empty() && !usable.iter().any(|p| p == c)) {
         out.push((c.to_string(), false));
     }
     out
@@ -342,6 +354,11 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
             egui::RichText::new(format!("MIDI: {name} (not connected)")).color(dim)
         };
         if ui.add(egui::Button::selectable(current.as_deref() == Some(name.as_str()), label)).clicked() {
+            // Chosen for a track: a port disabled in the window is enabled (the choice is
+            // explicit); one never chosen opens because the track sends to it.
+            if available && app.ui.midi_outputs.get(&name) == Some(&false) {
+                set_output_enabled(app, &name, true);
+            }
             if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": name})) {
                 app.ui.status = e;
             }
@@ -515,7 +532,9 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     (Some(err), _, _, _) => format!("Could not open: {err}"),
                     (None, false, _, _) => "Not connected".into(),
                     (None, true, true, _) => "Used by a control surface".into(),
+                    (None, true, false, true) if p.wanted && !app.ui.midi_outputs.contains_key(&p.name) => "Open (a track sends to it)".into(),
                     (None, true, false, true) => "Open".into(),
+                    (None, true, false, false) if p.wanted => "Disabled, but a track sends to it: enable it to play".into(),
                     (None, true, false, false) => "Disabled".into(),
                 };
                 ui.label(egui::RichText::new(state).small().color(t.text_dim));
@@ -769,15 +788,30 @@ pub(crate) mod tests {
         let mut m = MidiOutputs::new(fake.boxed(), app.ui.midi_outputs.clone());
         m.rescan();
         app.midi_outputs = Some(m);
+        // Outputs start disabled: on Windows a port is open in one program at a time.
+        assert!(!fake.is_open("UI Test Juno") && !fake.is_open("UI Test Moog"));
+        set_output_enabled(&mut app, "UI Test Moog", true);
+        assert!(fake.is_open("UI Test Moog"));
+        assert_eq!(serde_json::to_value(&app.ui).unwrap()["midi.outputs"]["UI Test Moog"], true);
         set_output_enabled(&mut app, "UI Test Moog", false);
-        assert!(fake.is_open("UI Test Juno") && !fake.is_open("UI Test Moog"));
         assert_eq!(serde_json::to_value(&app.ui).unwrap()["midi.outputs"]["UI Test Moog"], false);
-        assert_eq!(output_choices(&app, None), vec![("UI Test Juno".to_string(), true)]);
+        // A track can still pick any port there is.
+        assert_eq!(output_choices(&app, None), vec![("UI Test Juno".to_string(), true), ("UI Test Moog".to_string(), true)]);
         assert_eq!(output_choices(&app, Some("Gone")).last(), Some(&("Gone".to_string(), false)));
+        // A track that sends to a port never chosen opens it (the session wants it).
         let t = app.engine.execute("track.new", &json!({"kind": "midi"})).unwrap()["tracks"][0].as_u64().unwrap();
         app.run("mix.midi_output", json!({"track": t, "port": "UI Test Juno"})).unwrap();
         let ins = app.engine.session().track(TrackId(t)).unwrap().instrument.clone().unwrap();
         assert_eq!(soundcraft_engine::cmd::midi_out::output_port(&ins).as_deref(), Some("UI Test Juno"));
+        tick(&mut app);
+        assert!(fake.is_open("UI Test Juno"));
+        assert!(!app.ui.midi_outputs.contains_key("UI Test Juno"), "nothing saved for it");
+        // One disabled in the window stays closed; the window says a track wants it.
+        app.run("mix.midi_output", json!({"track": t, "port": "UI Test Moog"})).unwrap();
+        tick(&mut app);
+        assert!(!fake.is_open("UI Test Moog") && !fake.is_open("UI Test Juno"));
+        let moog = app.midi_outputs.as_ref().unwrap().ports().into_iter().find(|p| p.name == "UI Test Moog").unwrap();
+        assert!(moog.wanted && !moog.open);
     }
 
     #[test]
