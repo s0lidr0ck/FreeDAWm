@@ -2547,6 +2547,9 @@ fn process_strip(
             }
         }
         TrackKind::Audio if live.monitor_only => {}
+        // Recording over them (input monitoring Off, or no input to hear): the clips under the
+        // take are not heard, as the take will replace them.
+        TrackKind::Audio if t.mixer.record_arm && live.auto_input => {}
         TrackKind::Instrument | TrackKind::Midi
             if live.monitor_only && musician.is_none() && !module_in && live_filter.is_none() && strip.live_tail == 0 => {}
         TrackKind::Audio => {
@@ -7253,6 +7256,36 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    #[test]
+    fn an_armed_track_with_monitoring_off_does_not_play_its_clips_under_the_take() {
+        // Bug: with monitoring Off, the old clips played under the take being recorded.
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.track_mut(t).unwrap().mixer.record_arm = true;
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Off;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.input = vec![vec![0.25; 512]];
+        let mut out = vec![vec![0.0; 512]; 2];
+        let pan = std::f32::consts::FRAC_1_SQRT_2;
+        // Playing, not recording: the clips.
+        eng.render(&s, 0, 512, &mut out);
+        assert!((out[0][100] - 0.5 * pan).abs() < 1e-3, "{}", out[0][100]);
+        // Recording: neither the input (monitoring is off) nor the clips.
+        eng.recording = true;
+        eng.render(&s, 512, 512, &mut out);
+        assert!(out[0][100].abs() < 1e-6, "{}", out[0][100]);
+        // A punch: the clips in the pre- and post-roll, silence inside.
+        eng.punch = Some(Range::new(2048, 3072));
+        for (pos, want) in [(1024, 0.5 * pan), (2048, 0.0), (3072, 0.5 * pan)] {
+            eng.render(&s, pos, 512, &mut out);
+            assert!((out[0][100] - want).abs() < 1e-3, "{pos}: {}", out[0][100]);
+        }
+        // A track that is not armed plays on.
+        eng.punch = None;
+        s.track_mut(t).unwrap().mixer.record_arm = false;
+        eng.render(&s, 0, 512, &mut out);
+        assert!((out[0][100] - 0.5 * pan).abs() < 1e-3, "{}", out[0][100]);
     }
 
     #[test]

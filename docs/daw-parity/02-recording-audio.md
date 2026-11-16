@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 6 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 7 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -113,7 +113,7 @@ what a user can do, apart from punch out on the fly.
 | Low-latency mode that bypasses slow plug-ins | ● | ● | ● | ● | **Works**: only inserts with latency, only on live paths, crossfaded |
 | Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything |
 | Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Missing** |
-| Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Missing**: with monitoring Off the old clips play under the new take |
+| Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Works**: silent within the take, heard in the pre- and post-roll |
 | Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Partial**: sends reach busses only; a cue mix needs a send, a bus, an aux and an output |
 | Click on its own output | ● | ● | ● | ● | **Missing**: the click is summed into the main mix |
 | Talkback | ◐ | ◐ | ○ | ● | **Missing** |
@@ -176,7 +176,7 @@ Lines move while section 1's work is in progress, so functions are named.
 | 4 | **Fixed:** loop record on a plain track left playlists that held only the loop, so the track was silent elsewhere; each pass's playlist now copies the track's playlist from before the take | `place_take` in `crates/engine/src/io.rs` |
 | 5 | **Fixed:** pre-roll with no selection recorded and placed the pre-roll, overwriting what was there; the take is now kept from the insertion point on | `start_recording`, `place_take` |
 | 6 | **Fixed:** undoing a take, or deleting an armed track during one, left the file in Audio Files; such files are deleted on save (when no undo step can bring them back) or when the session closes, never while the session, its history, a session file in the project or an autosave names them (`clean_unused_takes`) | `add_recording_in` in `crates/engine/src/io.rs` |
-| 7 | With monitoring Off, an armed track plays its old clips under the take being recorded | clip branch of the strip render in `crates/mix/src/lib.rs` |
+| 7 | **Fixed:** with monitoring Off, an armed track played its old clips under the take being recorded; inside the take (the punch range) they are silent now | clip branch of the strip render in `crates/mix/src/lib.rs` |
 | 8 | Take numbers start at the session's source count plus one | `plan_takes` |
 | 9 | Clear Clip Indicators reports success from the engine and does nothing | `track.clear_clip_indicators` in `crates/engine/src/cmd/track.rs` |
 | 10 | A track with more than two channels repeats the last input channel | `track_input_channel` in `crates/model/src/mixer.rs` |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
