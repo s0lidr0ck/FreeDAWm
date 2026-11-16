@@ -2098,8 +2098,9 @@ impl MixEngine {
             }
         }
         self.regrow |= !fits;
-        // Before the clicks: they are not the mix's tail.
+        // Before the clicks: they are not the mix's tail, nor what the output meter shows.
         self.track_tail(s, frames);
+        self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
         // Metronome: summed after the master fader, so it reaches the speakers without passing
         // through any track, send or insert. Only the playback engine sets `metronome`.
         // Not while monitoring only (transport stopped): the position does not advance there, so the
@@ -2124,7 +2125,6 @@ impl MixEngine {
                 }
             }
         }
-        self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
         if let Some(r) = &mut self.scout {
             r.advance(pos, frames, scout_win, !self.monitor_only);
         }
@@ -7983,6 +7983,19 @@ mod tests {
         // Blocks that start mid-beat render the same clicks as a single pass.
         let split = render_playback(&s, len, 97, false);
         assert_eq!(out, split);
+    }
+
+    /// Mix bug 12: the output meter measured the click with the mix.
+    #[test]
+    fn the_output_meter_leaves_the_click_out() {
+        let mut s = Session::default();
+        s.edit.click = true;
+        let mut eng = MixEngine::new(s.sample_rate.as_f64() as f32, 512);
+        eng.metronome = true;
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        eng.render(&s, 0, 512, &mut out);
+        assert!(out[0].iter().any(|x| x.abs() > 0.1), "the click plays");
+        assert_eq!(eng.main_meter.peak, [0.0; 2], "but is not metered");
     }
 
     #[test]
