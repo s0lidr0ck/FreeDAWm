@@ -100,7 +100,7 @@ plug-ins** (spectrum, loudness, phase) you can put anywhere in a chain.
 | Mid/side or left/right per band | ◐ | ● | ◐ | ● | **Works** |
 | Spectrum behind the curve | ● | ● | ● | ● | **Works** |
 | Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only |
-| Correct bell shapes near the top of the range at 44.1/48 kHz | ● | ● | ● | ● | **Missing**: bells and shelves narrow near 20 kHz |
+| Correct bell shapes near the top of the range at 44.1/48 kHz | ● | ● | ● | ● | **Works**: matched to the analog shape (within about 2 dB) |
 | Tilt band | ○ | ○ | ◐ | ◐ | **Missing** |
 | Match EQ | ○ | ○ | ● | ◐ | **Works** (CopyQ: up to four weighted profiles) |
 | Modelled vintage EQs | ● | ● | ● | ◐ | **Works** (Vint: two Pultecs, 1073, 550A, SSL E) |
@@ -272,7 +272,7 @@ them is the owner's decision, not a repair.
 | 13 | **Fixed.** Vault trimmed the silence before the first reflection of a loaded impulse response; it now keeps the start and trims only the quiet end. Test: `vault.rs`, `vault/ir.rs` | `dsp/src/plugins/vault/ir.rs:143-145` |
 | 14 | Loading a chain preset clears the inserts directly and leaves the old modules' automation lanes behind | `engine/src/cmd/chain.rs:228-229` |
 | 15 | **Fixed.** Mod's tempo-synced LFO took its rate from the tempo but not its phase; while the host plays with Sync on, its phase now comes from the song position (a cycle starts on every multiple of the Division). Test: mod `tests.rs` | `dsp/src/plugins/fs/mod_engine/mod.rs:45` |
-| 16 | IIR EQs (CleanQ and the hidden EQs) narrow and lose gain near the top of the range at 44.1 and 48 kHz | `dsp/src/biquad.rs:47-99`; `dsp/src/plugins/fs/cleanq/clean_q_dsp.rs:422-433` |
+| 16 | **Fixed.** IIR bells and shelves (CleanQ and the hidden EQs) narrowed and lost gain near the top of the range at 44.1 and 48 kHz. They are now matched to their analog shape up to Nyquist (`biquad::matched`, after Vicanek): at most half the bilinear design's error and under 2 dB in the tested cases; low down they equal the old design, and a shelf whose poles would pass Nyquist keeps it. CleanQ's Ceiling fit keeps the C++ maths. Tests: `biquad.rs`, `clean_q_dsp.rs` | `dsp/src/biquad.rs:47-99`; `dsp/src/plugins/fs/cleanq/clean_q_dsp.rs:422-433` |
 | 17 | Hidden effects that old sessions still load: the stock "Limit" switch is not a brickwall; changing the compressor's look-ahead clicks; the Maximizer hard-clips and ignores inter-sample peaks; the stock gate and compressor link every channel, so a loud LFE ducks the rest; Lo-Fi's rate stops at 48 kHz; Channel Strip resumes stale gain reduction | `dsp/src/plugins/dynamics.rs:120-195, 648`; `harmonic.rs:132`; `strip.rs:177-182` |
 | 18 | Time Shift clicks if its delay changes again during a crossfade | `dsp/src/plugins/utility.rs:86-94` |
 
@@ -335,3 +335,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Bug 12 fixed: Vault's pre-delay crossfades |
 | 2026-11-16 | minor | Bug 13 fixed: Vault keeps the gap before an impulse response's first reflection |
 | 2026-11-16 | minor | Bug 15 fixed: Mod's synced LFO locks to the song position |
+| 2026-11-16 | minor | Bug 16 fixed: bells and shelves keep their shape near 20 kHz |

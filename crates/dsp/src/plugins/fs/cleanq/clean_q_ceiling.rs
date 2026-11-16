@@ -488,10 +488,12 @@ impl ConformResult {
     }
 }
 
-/// |H| in dB of one generated band at every grid point. Same design call the audio uses.
+/// |H| in dB of one generated band at every grid point: the C++'s design (the audio's bells and
+/// shelves follow their analog shape near the top instead, see `design_filter`; the fit keeps the
+/// C++'s maths so it learns what the C++ learns).
 pub fn band_response(b: &GenBand, sr: f64, out: &mut Vec<f64>) {
     out.resize(GRID_N, 0.0);
-    let d = dsp::design_filter(b.type_, 2, b.hz, b.db, b.q, sr);
+    let d = dsp::design_filter_cpp(b.type_, 2, b.hz, b.db, b.q, sr);
     for (i, o) in out.iter_mut().enumerate() {
         let w = 2.0 * PI * grid_hz(i).min(sr * 0.499) / sr;
         *o = dsp::magnitude_db(&d, w);
