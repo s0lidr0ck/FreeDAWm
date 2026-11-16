@@ -816,8 +816,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                                 });
                             }
                             None => {
+                                let depths = bounce_bit_depths(format);
+                                if !depths.contains(&bit_depth.as_str()) {
+                                    *bit_depth = "24".into();
+                                }
                                 egui::ComboBox::from_label("Bit Depth").selected_text(format!("{bit_depth}-bit")).show_ui(ui, |ui| {
-                                    for b in ["16", "24", "32f"] {
+                                    for &b in depths {
                                         ui.selectable_value(bit_depth, b.to_string(), format!("{b}-bit"));
                                     }
                                 });
@@ -827,10 +831,14 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
                         ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
                     }
+                    let refused = bounce_refusal(format, app.engine.session().main_format().channels());
+                    if let Some(why) = refused {
+                        ui.label(egui::RichText::new(why).color(Tokens::current().text_dim));
+                    }
                     bounce_range_choice(app, ui, range);
                     crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
                     let chosen = range.range(app.engine.session());
-                    if buttons_enabled(ui, "Bounce", enter, chosen.is_some())
+                    if buttons_enabled(ui, "Bounce", enter, chosen.is_some() && refused.is_none())
                         && let Some(r) = chosen
                     {
                         let p = std::path::Path::new(path.as_str()).with_extension(if format == "aiff" { "aif" } else { format.as_str() });
@@ -1666,5 +1674,47 @@ pub fn velocity_action(app: &SoundApp, d: &VelocityDialog) -> (String, Value) {
             ("midi.notes_velocity".into(), p)
         }
         _ => ("event.change_velocity".into(), p),
+    }
+}
+
+/// The bit depths the Bounce dialog offers for `format` (a lossless one): FLAC stores no 32-bit
+/// float, so it is not offered there (the writer would refuse it after the render).
+pub(crate) fn bounce_bit_depths(format: &str) -> &'static [&'static str] {
+    if format.eq_ignore_ascii_case("flac") { &["16", "24"] } else { &["16", "24", "32f"] }
+}
+
+/// Why `format` cannot hold a bounce of the main mix's `channels`, when it cannot (the dialog
+/// says so and does not start it). MP3 and Opus fold down instead.
+pub(crate) fn bounce_refusal(format: &str, channels: usize) -> Option<&'static str> {
+    (format.eq_ignore_ascii_case("flac") && channels > 8).then_some("FLAC holds at most 8 channels: choose WAV or AIFF for this mix")
+}
+
+#[cfg(test)]
+mod bounce_options_tests {
+    use super::*;
+
+    /// Mix bug 11: the dialog offered FLAC at 32-bit float and beyond 8 channels, which the
+    /// writer refuses once the render is done.
+    #[test]
+    fn the_bounce_dialog_offers_only_what_the_format_can_write() {
+        assert!(!bounce_bit_depths("flac").contains(&"32f"));
+        assert!(bounce_bit_depths("wav").contains(&"32f"));
+        assert!(bounce_refusal("flac", 12).is_some());
+        assert!(bounce_refusal("flac", 8).is_none());
+        assert!(bounce_refusal("wav", 16).is_none());
+        // Each depth offered is one the writer takes.
+        for f in ["wav", "aiff", "flac"] {
+            for d in bounce_bit_depths(f) {
+                let depth = match *d {
+                    "16" => soundcraft_audio_io::BitDepth::Int16,
+                    "24" => soundcraft_audio_io::BitDepth::Int24,
+                    _ => soundcraft_audio_io::BitDepth::Float32,
+                };
+                let fmt = soundcraft_audio_io::encode_format_for(f).unwrap();
+                let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 16]; 2] };
+                let opts = soundcraft_audio_io::EncodeOptions { format: fmt, bit_depth: depth, ..soundcraft_audio_io::EncodeOptions::default() };
+                assert!(soundcraft_audio_io::encode(&buf, &opts).is_ok(), "{f} {d}");
+            }
+        }
     }
 }

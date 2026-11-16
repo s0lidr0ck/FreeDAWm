@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 10 fixed: stems export behind a progress window with Cancel) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 11 fixed: the bounce dialog offers only what FLAC can write) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -186,7 +186,7 @@ scale** (meters no longer miss a peak).
 | Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: by command; the dialog always bounces the main mix |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**, except the selection |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Missing**: a whole-session bounce ends at the last clip |
-| WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus; the dialog offers FLAC settings that then fail |
+| WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
 | Convert sample rate on export | ● | ● | ● | ● | **Missing** for WAV, AIFF and FLAC |
 | Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Partial**: TPDF, always on, no control in the dialog |
 | Mono, and one file per channel | ● | ● | ● | ● | **Missing** |
@@ -246,7 +246,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 8 | **Fixed:** Commit put a surround track on a stereo track and dropped pan and automation; the committed track now has the source's format, pan, surround panner, mute, VCA and fader, pan, mute and send automation (the trim and the modules' lanes are in the audio) | `commit_track` in `crates/engine/src/io.rs` |
 | 9 | **Fixed:** loudness weighted any 6-channel bounce as 5.1 and every wider one flat; each channel is now weighted by its speaker as BS.1770-4 says (`ChannelFormat::loudness_weights`: 0 for the LFE, 1.41 for speakers between 60° and 120°) | `LoudnessMeter::new` in `crates/dsp/src/meter.rs` |
 | 10 | **Fixed:** Export › Stems ran in the window's thread with no progress or cancel; from the menu it now stops the transport and renders behind a progress window a slice per frame, with Cancel (`StemsJob`, `bounce::start_stems`); agents and the CLI still run it to the end | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
-| 11 | The bounce dialog offers FLAC at 32-bit float and beyond 8 channels, which the writer refuses | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
+| 11 | **Fixed:** the bounce dialog offered FLAC at 32-bit float and beyond 8 channels; it now offers 16 and 24 bit for FLAC and refuses a FLAC bounce of a mix wider than 8 channels before rendering | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
 | 12 | The output meter includes the click | master stage of `MixEngine::render` |
 | 13 | Loading a track preset keeps the old plug-in automation, which can drive the new modules | `track.load_preset` in `crates/engine/src/cmd/track_more.rs` |
 | 14 | A mono bus into a stereo aux is 3 dB louder than a centred mono track | bus read in `process_strip` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 11 fixed: the bounce dialog offers only what FLAC can write |
 | 2026-11-16 | minor | bug 10 fixed: stems export behind a progress window with Cancel |
 | 2026-11-16 | minor | bug 9 fixed: loudness is weighted by speaker for every layout |
 | 2026-11-16 | minor | bug 8 fixed: commit keeps the format, pan and automation |
