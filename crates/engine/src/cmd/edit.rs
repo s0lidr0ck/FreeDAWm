@@ -736,12 +736,53 @@ fn repeat(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session_mut();
     for t in &tracks {
         let clips = ops::copy_range(s, *t, range);
+        let musical = s.track(*t).is_some_and(|tr| tr.ticks_timebase);
         for k in 1..=count {
-            let at = range.start.saturating_add(range.len().saturating_mul(k));
-            ops::paste(s, *t, at, &clips, range.len(), sh).map_err(|why| bad("edit.repeat", why))?;
+            let (at, len, copy) = if musical {
+                repeat_in_ticks(s, range, &clips, k)
+            } else {
+                (range.start.saturating_add(range.len().saturating_mul(k)), range.len(), clips.clone())
+            };
+            ops::paste(s, *t, at, &copy, len, sh).map_err(|why| bad("edit.repeat", why))?;
         }
     }
     Ok(json!({"repeats": count}))
+}
+
+/// Copy `k` of a Repeat on a tick-timebase track: it starts `k` selection lengths in ticks after
+/// the selection, and each MIDI clip in it is placed and sized by its ticks there, so the copies
+/// stay on the bars under a changing tempo (audio clips keep their offset in samples). Returns
+/// where the copy starts, its length and its clips.
+fn repeat_in_ticks(
+    s: &soundcraft_model::Session,
+    range: soundcraft_time::Range,
+    clips: &[soundcraft_model::Clip],
+    k: i64,
+) -> (i64, i64, Vec<soundcraft_model::Clip>) {
+    let (map, sr) = (&s.tempo, s.sample_rate);
+    let ticks = |x: i64| map.samples_to_ticks_f(x, sr);
+    let at_tick = |t: f64| {
+        let x = map.ticks_f_to_samples_f(t, sr).round();
+        if x.is_finite() { x.clamp(0.0, i64::MAX as f64 / 2.0) as i64 } else { 0 }
+    };
+    let (t0, t1) = (ticks(range.start), ticks(range.end));
+    let span = (t1 - t0) * k as f64;
+    let at = at_tick(t0 + span);
+    let len = at_tick(t1 + span).saturating_sub(at).max(1);
+    let copy = clips
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) {
+                let a = range.start.saturating_add(c.start);
+                let (a, b) = (at_tick(ticks(a) + span), at_tick(ticks(a.saturating_add(c.length)) + span));
+                c.start = a.saturating_sub(at);
+                c.length = b.saturating_sub(a).max(1);
+            }
+            c
+        })
+        .collect();
+    (at, len, copy)
 }
 
 fn shift(e: &mut Engine, p: &Value) -> Result<Value> {

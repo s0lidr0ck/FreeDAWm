@@ -1,6 +1,10 @@
 //! `ClapPlugin`: a loaded CLAP instance behind the safe `soundcraft_dsp::Plugin` trait.
 
 use crate::ffi::{EVENT_CAP, Event, GuiLink, Instance, NotePort, PortBuffers};
+use clap_sys::events::{
+    CLAP_NOTE_EXPRESSION_BRIGHTNESS, CLAP_NOTE_EXPRESSION_EXPRESSION, CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_PRESSURE,
+    CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VIBRATO, CLAP_NOTE_EXPRESSION_VOLUME,
+};
 use clap_sys::ext::note_ports::{CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI};
 use soundcraft_dsp::{Plugin, PluginEditor, PluginInfo, Transport};
 use std::sync::Arc;
@@ -40,6 +44,9 @@ pub struct ClapPlugin {
     midi_in: bool,
     /// Held notes: a bitmask of MIDI channels per key.
     held: [u16; 128],
+    /// For a plug-in that takes only CLAP notes: each channel's last value of each note
+    /// expression its controllers set (NaN: none yet), sent again with every new note.
+    expr: [[f64; EXPRESSIONS]; 16],
     channels: usize,
     max_block: usize,
     latency: usize,
@@ -74,6 +81,7 @@ impl ClapPlugin {
             notes: NoteMode::None,
             midi_in: false,
             held: [0; 128],
+            expr: [[f64::NAN; EXPRESSIONS]; 16],
             channels: 2,
             max_block: 0,
             latency: 0,
@@ -114,7 +122,16 @@ impl ClapPlugin {
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
         let vel = velocity.min(127);
         match self.notes {
-            NoteMode::Clap => self.push(Event::NoteOn { time, channel: ch, key: note, velocity: f64::from(vel) / 127.0 }),
+            NoteMode::Clap => {
+                self.push(Event::NoteOn { time, channel: ch, key: note, velocity: f64::from(vel) / 127.0 });
+                // The channel's bend, pressure and controllers so far apply to the new note too.
+                let state = self.expr.get(usize::from(ch)).copied().unwrap_or([f64::NAN; EXPRESSIONS]);
+                for (expression, value) in (0i32..).zip(state) {
+                    if value.is_finite() {
+                        self.push(Event::Expression { time, expression, channel: ch, key: i16::from(note), value });
+                    }
+                }
+            }
             NoteMode::Midi => self.push(Event::Midi { time, data: [0x90 | ch, note, vel] }),
             NoteMode::None => return,
         }
@@ -131,7 +148,7 @@ impl ClapPlugin {
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
         match self.notes {
-            NoteMode::Clap => self.push(Event::NoteOff { time, channel: ch, key: note }),
+            NoteMode::Clap => self.push(Event::NoteOff { time, channel: ch, key: note, velocity: f64::from(release.min(127)) / 127.0 }),
             NoteMode::Midi => self.push(Event::Midi { time, data: [0x80 | ch, note, release & 0x7F] }),
             NoteMode::None => return,
         }
@@ -211,6 +228,35 @@ impl ClapPlugin {
     }
 }
 
+/// How many CLAP note expressions there are (`CLAP_NOTE_EXPRESSION_VOLUME` … `PRESSURE`).
+const EXPRESSIONS: usize = 7;
+
+/// The CLAP note expression a MIDI channel message stands for, for a plug-in that takes only
+/// CLAP notes: (expression, key: -1 for every key on the channel, value). Pitch bend is tuning
+/// (± 2 semitones), channel and poly pressure are pressure, CC1 vibrato, CC7 volume (amplitude,
+/// the General MIDI curve), CC10 pan, CC11 expression, CC74 brightness. Anything else has none.
+pub(crate) fn expression_of(msg: [u8; 3]) -> Option<(i32, i16, f64)> {
+    let [status, d1, d2] = msg;
+    let unit = |v: u8| f64::from(v.min(127)) / 127.0;
+    match status & 0xF0 {
+        0xE0 => {
+            let bend = (i32::from(d1 & 0x7F) | (i32::from(d2 & 0x7F) << 7)) - 8192;
+            Some((CLAP_NOTE_EXPRESSION_TUNING, -1, f64::from(bend) / 8192.0 * 2.0))
+        }
+        0xD0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, -1, unit(d1))),
+        0xA0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, i16::from(d1 & 0x7F), unit(d2))),
+        0xB0 => match d1 {
+            1 => Some((CLAP_NOTE_EXPRESSION_VIBRATO, -1, unit(d2))),
+            7 => Some((CLAP_NOTE_EXPRESSION_VOLUME, -1, unit(d2) * unit(d2))),
+            10 => Some((CLAP_NOTE_EXPRESSION_PAN, -1, unit(d2))),
+            11 => Some((CLAP_NOTE_EXPRESSION_EXPRESSION, -1, unit(d2))),
+            74 => Some((CLAP_NOTE_EXPRESSION_BRIGHTNESS, -1, unit(d2))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn pick_main(ports: &[crate::ffi::PortInfo]) -> Option<usize> {
     ports.iter().position(|p| p.main && p.channels > 0).or_else(|| ports.iter().position(|p| p.channels > 0))
 }
@@ -284,6 +330,7 @@ impl Plugin for ClapPlugin {
         self.inst.reset();
         self.queue.retain(|e| matches!(e, Event::Param { .. }));
         self.held = [0; 128];
+        self.expr = [[f64::NAN; EXPRESSIONS]; 16];
     }
 
     fn set_offline(&mut self, offline: bool) {
@@ -336,8 +383,21 @@ impl Plugin for ClapPlugin {
     }
 
     fn midi(&mut self, offset: usize, msg: [u8; 3]) {
+        let time = u32::try_from(offset).unwrap_or(u32::MAX);
         if self.midi_in {
-            self.push(Event::Midi { time: u32::try_from(offset).unwrap_or(u32::MAX), data: msg });
+            self.push(Event::Midi { time, data: msg });
+        } else if self.notes == NoteMode::Clap
+            && let Some((expression, key, value)) = expression_of(msg)
+        {
+            // A plug-in without MIDI input hears controllers, bend and pressure as note
+            // expressions on the sounding notes (and on the notes that follow).
+            let channel = msg[0] & 0x0F;
+            if key < 0
+                && let Some(slot) = self.expr.get_mut(usize::from(channel)).and_then(|c| c.get_mut(usize::try_from(expression).unwrap_or(usize::MAX)))
+            {
+                *slot = value;
+            }
+            self.push(Event::Expression { time, expression, channel, key, value });
         }
     }
 
@@ -451,5 +511,28 @@ impl PluginEditor for ClapEditor {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parity section 7, bug 24: controllers, bend and pressure become CLAP note expressions for
+    /// a plug-in that takes only CLAP notes.
+    #[test]
+    fn channel_messages_become_note_expressions() {
+        assert_eq!(expression_of([0xE3, 0, 0x40]), Some((CLAP_NOTE_EXPRESSION_TUNING, -1, 0.0)));
+        assert_eq!(expression_of([0xE0, 0, 0]), Some((CLAP_NOTE_EXPRESSION_TUNING, -1, -2.0)));
+        assert_eq!(expression_of([0xD1, 127, 0]), Some((CLAP_NOTE_EXPRESSION_PRESSURE, -1, 1.0)));
+        assert_eq!(expression_of([0xA0, 60, 127]), Some((CLAP_NOTE_EXPRESSION_PRESSURE, 60, 1.0)));
+        assert_eq!(expression_of([0xB0, 1, 127]), Some((CLAP_NOTE_EXPRESSION_VIBRATO, -1, 1.0)));
+        assert_eq!(expression_of([0xB0, 7, 127]), Some((CLAP_NOTE_EXPRESSION_VOLUME, -1, 1.0)));
+        assert_eq!(expression_of([0xB0, 11, 0]), Some((CLAP_NOTE_EXPRESSION_EXPRESSION, -1, 0.0)));
+        assert_eq!(expression_of([0xB0, 74, 127]), Some((CLAP_NOTE_EXPRESSION_BRIGHTNESS, -1, 1.0)));
+        assert_eq!(expression_of([0xB0, 10, 127]), Some((CLAP_NOTE_EXPRESSION_PAN, -1, 1.0)));
+        assert_eq!(expression_of([0xB0, 64, 127]), None);
+        assert_eq!(expression_of([0xC0, 3, 0]), None);
+        assert!(EXPRESSIONS as i32 > CLAP_NOTE_EXPRESSION_PRESSURE);
     }
 }

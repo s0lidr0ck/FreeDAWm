@@ -498,6 +498,29 @@ mod tests {
         assert_eq!(spans, vec![(0, 96_000), (96_000, 192_000), (288_000, 192_000)]);
     }
 
+    /// Parity section 7, bug 15: Edit › Repeat on a tick track spaces its copies in bars, as
+    /// Loop does; a sample-timebase track keeps spacing them in samples.
+    #[test]
+    fn midi_repeats_on_a_tick_track_stay_on_the_bars() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        e.execute("edit.repeat", &json!({"count": 2})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 192_000), (288_000, 192_000)]);
+        // The same on a sample-timebase track: copies a selection length in samples apart.
+        assert!(e.undo());
+        if let Some(tr) = e.session_mut().track_mut(t) {
+            tr.ticks_timebase = false;
+        }
+        e.execute("edit.repeat", &json!({"count": 2})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 96_000), (192_000, 96_000)]);
+    }
+
     #[test]
     fn elastic_warp_renders_and_remove_warp_restores() {
         let mut e = crate::demo::demo_engine();

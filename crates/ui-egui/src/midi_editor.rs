@@ -188,6 +188,9 @@ pub struct MidiEditorState {
     pub lanes: Vec<soundcraft_midi::CtrlKind>,
     /// The selected controller points: their lane and indices in the clip's controller list.
     pub ctrl_sel: Option<(soundcraft_midi::CtrlKind, Vec<usize>)>,
+    /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
+    /// its own line, new points on the clip's main channel.
+    pub ctrl_channel: Option<u8>,
     /// A drag in a controller lane.
     pub ctrl_drag: Option<crate::midi_lanes::CtrlDrag>,
     /// The controller lanes as last drawn.
@@ -233,6 +236,7 @@ impl Default for MidiEditorState {
             draw: None,
             lanes: Vec::new(),
             ctrl_sel: None,
+            ctrl_channel: None,
             ctrl_drag: None,
             drawn_lanes: Vec::new(),
             ctrl_menu: None,

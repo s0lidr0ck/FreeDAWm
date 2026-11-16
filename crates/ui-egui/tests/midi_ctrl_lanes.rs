@@ -195,3 +195,52 @@ fn lane_helpers() {
     assert_eq!(lg.value_at(lg.y_of(0)), 0);
     assert_eq!(lg.value_at(-100.0), 8191);
 }
+
+/// The clip's controller events of `lane`: (tick, channel).
+fn with_channels(h: &mut Harness<'_, SoundApp>, clip: u64) -> Vec<(i64, i64)> {
+    let r = h.state_mut().run("midi.ctrls", json!({"clip": clip, "lane": "cc1"})).unwrap();
+    r["events"].as_array().unwrap().iter().map(|x| (x["tick"].as_i64().unwrap(), x["channel"].as_i64().unwrap())).collect()
+}
+
+/// Bug 20: lanes keep channels apart. With every channel shown, a click adds its point on the
+/// clip's main channel (the one most of its notes use); with one channel picked, the lane shows
+/// and writes that channel only, and a Pencil pass leaves the other channels alone.
+#[test]
+fn lanes_show_and_write_one_channel() {
+    use soundcraft_midi::{Note, Sequence};
+    let n = |channel| Note { pitch: 60, velocity: 100, release_velocity: 64, channel, start: 0, length: 10 };
+    let seq = Sequence { notes: vec![n(2), n(2), n(0)], ctrls: Vec::new() };
+    assert_eq!(midi_lanes::main_channel(&seq), 2);
+    assert_eq!(midi_lanes::main_channel(&Sequence::default()), 0);
+    assert_eq!(midi_lanes::write_channel(Some(5), &seq), 5);
+
+    let (mut h, clip) = harness();
+    // Three notes on channel 3 (index 2) outnumber the two on channel 1.
+    for pitch in [67, 69, 71] {
+        h.state_mut().run("midi.note_add", json!({"clip": clip, "pitch": pitch, "start_ticks": 1920, "channel": 2})).unwrap();
+    }
+    // Channel 3's own mod wheel at beat 2.
+    h.state_mut().run("midi.ctrl_add", json!({"clip": clip, "lane": "cc1", "tick": 480, "value": 120, "channel": 2})).unwrap();
+    h.step();
+    let p = at(&h, CtrlKind::Cc(1), 2880, 100);
+    click_with(&mut h, p, Modifiers::NONE);
+    assert!(with_channels(&mut h, clip).contains(&(2880, 2)), "the new point is on the main channel");
+
+    // Channel 1 only: channel 3's points are not shown.
+    h.state_mut().midi.ctrl_channel = Some(0);
+    h.step();
+    let seq = match &h.state().engine.session().find_clip(soundcraft_model::ClipId(clip)).unwrap().1.content {
+        soundcraft_model::ClipContent::Midi { sequence } => sequence.clone(),
+        _ => panic!("a MIDI clip"),
+    };
+    let ticks: Vec<i64> = midi_lanes::events_of(&seq, CtrlKind::Cc(1), Some(0)).iter().map(|(_, c)| c.tick).collect();
+    assert_eq!(ticks, vec![0, 1920]);
+    // A Pencil pass across the bar writes channel 1 and keeps channel 3's points.
+    h.state_mut().engine.session_mut().edit.tool = soundcraft_model::Tool::Pencil;
+    let (a, b) = (at(&h, CtrlKind::Cc(1), 10, 30), at(&h, CtrlKind::Cc(1), 3000, 90));
+    drag(&mut h, a, b);
+    let ev = with_channels(&mut h, clip);
+    let ch3: Vec<i64> = ev.iter().filter(|x| x.1 == 2).map(|x| x.0).collect();
+    assert_eq!(ch3, vec![480, 2880], "{ev:?}");
+    assert!(ev.iter().filter(|x| x.1 == 0).count() > 2, "{ev:?}");
+}

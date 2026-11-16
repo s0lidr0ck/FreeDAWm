@@ -14,10 +14,10 @@ use crate::{ClapError, scan};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
-    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE,
-    CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value,
-    clap_event_transport, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+    CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_note,
+    clap_event_note_expression, clap_event_param_value, clap_event_transport, clap_input_events, clap_output_events,
 };
 use clap_sys::ext::audio_ports::{CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::gui::{CLAP_EXT_GUI, clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle};
@@ -887,10 +887,21 @@ pub(crate) enum Event {
         key: u8,
         velocity: f64,
     },
+    /// `velocity` is the release velocity, 0–1.
     NoteOff {
         time: u32,
         channel: u8,
         key: u8,
+        velocity: f64,
+    },
+    /// A CLAP note expression (`CLAP_NOTE_EXPRESSION_*`) on MIDI channel `channel`, for one key or,
+    /// with `key` -1, every key sounding on it.
+    Expression {
+        time: u32,
+        expression: i32,
+        channel: u8,
+        key: i16,
+        value: f64,
     },
     /// A raw MIDI 1.0 message (for plugins whose note port speaks only MIDI).
     Midi {
@@ -902,12 +913,20 @@ pub(crate) enum Event {
 impl Event {
     pub fn time(&self) -> u32 {
         match *self {
-            Event::Param { time, .. } | Event::NoteOn { time, .. } | Event::NoteOff { time, .. } | Event::Midi { time, .. } => time,
+            Event::Param { time, .. }
+            | Event::NoteOn { time, .. }
+            | Event::NoteOff { time, .. }
+            | Event::Expression { time, .. }
+            | Event::Midi { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
         match self {
-            Event::Param { time, .. } | Event::NoteOn { time, .. } | Event::NoteOff { time, .. } | Event::Midi { time, .. } => *time = t,
+            Event::Param { time, .. }
+            | Event::NoteOn { time, .. }
+            | Event::NoteOff { time, .. }
+            | Event::Expression { time, .. }
+            | Event::Midi { time, .. } => *time = t,
         }
     }
 }
@@ -917,6 +936,7 @@ enum RawEvent {
     Note(clap_event_note),
     Param(clap_event_param_value),
     Midi(clap_event_midi),
+    Expression(clap_event_note_expression),
 }
 
 impl RawEvent {
@@ -927,6 +947,7 @@ impl RawEvent {
             RawEvent::Note(e) => &e.header,
             RawEvent::Param(e) => &e.header,
             RawEvent::Midi(e) => &e.header,
+            RawEvent::Expression(e) => &e.header,
         }
     }
 
@@ -957,13 +978,22 @@ impl RawEvent {
                 key: i16::from(key),
                 velocity,
             }),
-            Event::NoteOff { time, channel, key } => RawEvent::Note(clap_event_note {
+            Event::NoteOff { time, channel, key, velocity } => RawEvent::Note(clap_event_note {
                 header: header(size_of::<clap_event_note>(), CLAP_EVENT_NOTE_OFF, time),
                 note_id: -1,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key: i16::from(key),
-                velocity: 0.0,
+                velocity,
+            }),
+            Event::Expression { time, expression, channel, key, value } => RawEvent::Expression(clap_event_note_expression {
+                header: header(size_of::<clap_event_note_expression>(), CLAP_EVENT_NOTE_EXPRESSION, time),
+                expression_id: expression,
+                note_id: -1,
+                port_index: 0,
+                channel: i16::from(channel & 0x0F),
+                key,
+                value,
             }),
             Event::Midi { time, data } => {
                 RawEvent::Midi(clap_event_midi { header: header(size_of::<clap_event_midi>(), CLAP_EVENT_MIDI, time), port_index: 0, data })
@@ -2545,5 +2575,18 @@ mod tests {
         assert_eq!((e.tempo, e.bar_number, e.tsig_num, e.tsig_denom), (90.0, 1, 3, 4));
         let nan = transport_event(&Transport { quarters: f64::NAN, ..t });
         assert_eq!(nan.song_pos_beats, 0);
+    }
+
+    /// Parity section 7, bug 24: a note-off carries its release velocity, and a note expression
+    /// reaches CLAP with its id, channel, key (-1: every key) and value.
+    #[test]
+    fn note_offs_and_expressions_reach_clap_whole() {
+        let off = RawEvent::from_event(&Event::NoteOff { time: 9, channel: 3, key: 60, velocity: 0.5 }, 4);
+        let RawEvent::Note(n) = off else { panic!("a note event") };
+        assert_eq!((n.header.type_, n.header.time, n.channel, n.key, n.velocity), (CLAP_EVENT_NOTE_OFF, 5, 3, 60, 0.5));
+        let ex = RawEvent::from_event(&Event::Expression { time: 2, expression: 2, channel: 1, key: -1, value: -1.5 }, 0);
+        let RawEvent::Expression(x) = ex else { panic!("an expression") };
+        assert_eq!((x.header.type_, x.header.size as usize), (CLAP_EVENT_NOTE_EXPRESSION, size_of::<clap_event_note_expression>()));
+        assert_eq!((x.expression_id, x.channel, x.key, x.note_id, x.value), (2, 1, -1, -1, -1.5));
     }
 }

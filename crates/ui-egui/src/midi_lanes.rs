@@ -5,6 +5,10 @@
 //! the selected points, Alt-click deletes one, Shift-click adds to the selection, a drag on empty
 //! space selects the points inside, the Pencil drags a freehand line that replaces what it crosses,
 //! Delete removes the selected points. The sustain lane is on/off.
+//!
+//! The lanes show one MIDI channel (picked under **Lanes › Channel**) or every channel, each
+//! channel its own line; new points go on the picked channel, or with every channel shown on the
+//! clip's main channel (the one most of its notes use).
 
 use crate::SoundApp;
 use crate::midi_editor::RollGeometry;
@@ -135,15 +139,43 @@ impl LaneGeometry {
     }
 }
 
-/// The lane's events (index in the clip's controller list, event).
-fn events_of(seq: &Sequence, kind: CtrlKind) -> Vec<(usize, CtrlEvent)> {
-    seq.ctrls.iter().copied().enumerate().filter(|(_, c)| c.kind == kind).collect()
+/// The lane's events on `channel` (every channel when `None`): index in the clip's controller
+/// list, event.
+pub fn events_of(seq: &Sequence, kind: CtrlKind, channel: Option<u8>) -> Vec<(usize, CtrlEvent)> {
+    seq.ctrls.iter().copied().enumerate().filter(|(_, c)| c.kind == kind && channel.is_none_or(|ch| c.channel == ch)).collect()
 }
 
-/// The selected points of `kind` (stale ones dropped).
+/// The clip's main channel: the one most of its notes use (its controllers when it has no
+/// notes; the lowest on a tie; channel 1, `0`, when it is empty).
+pub fn main_channel(seq: &Sequence) -> u8 {
+    let mut count = [0usize; 16];
+    let notes = !seq.notes.is_empty();
+    for ch in seq.notes.iter().map(|n| n.channel).chain(seq.ctrls.iter().filter(|_| !notes).map(|c| c.channel)) {
+        if let Some(c) = count.get_mut(usize::from(ch)) {
+            *c += 1;
+        }
+    }
+    let mut best = 0u8;
+    for (ch, n) in (0u8..).zip(count) {
+        if n > count.get(usize::from(best)).copied().unwrap_or(0) {
+            best = ch;
+        }
+    }
+    best
+}
+
+/// The channel new controller points go on: the one the lanes show, else the clip's main one.
+pub fn write_channel(shown: Option<u8>, seq: &Sequence) -> u8 {
+    shown.unwrap_or_else(|| main_channel(seq))
+}
+
+/// The selected points of `kind` on the shown channel (stale ones dropped).
 fn selected(app: &SoundApp, seq: &Sequence, kind: CtrlKind) -> Vec<usize> {
+    let ch = app.midi.ctrl_channel;
     match &app.midi.ctrl_sel {
-        Some((k, v)) if *k == kind => v.iter().copied().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind)).collect(),
+        Some((k, v)) if *k == kind => {
+            v.iter().copied().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind && ch.is_none_or(|ch| c.channel == ch))).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -182,6 +214,24 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
             }
         });
     });
+    ui.menu_button(channel_menu_label(app.midi.ctrl_channel), |ui| {
+        let used: Vec<u8> = (0u8..16).filter(|ch| seq.ctrls.iter().any(|c| c.channel == *ch)).collect();
+        if ui.radio(app.midi.ctrl_channel.is_none(), "All Channels").clicked() {
+            app.midi.ctrl_channel = None;
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        for ch in 0u8..16 {
+            let text = if used.contains(&ch) { format!("Channel {} \u{2022}", ch + 1) } else { format!("Channel {}", ch + 1) };
+            if ui.radio(app.midi.ctrl_channel == Some(ch), text).clicked() {
+                app.midi.ctrl_channel = Some(ch);
+                app.midi.ctrl_sel = None;
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("The channel the lanes show and new points go on");
     ui.separator();
     if ui.button("Show Lanes with Data").clicked() {
         for k in lanes_with_data(seq) {
@@ -192,6 +242,14 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     if ui.add_enabled(!app.midi.lanes.is_empty(), egui::Button::new("Hide All Lanes")).clicked() {
         app.midi.lanes.clear();
         ui.close();
+    }
+}
+
+/// The Lanes menu's channel item.
+pub fn channel_menu_label(ch: Option<u8>) -> String {
+    match ch {
+        Some(c) => format!("Channel: {}", u16::from(c) + 1),
+        None => "Channel: All".into(),
     }
 }
 
@@ -247,7 +305,9 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         let y = lg.y_of(0);
         p.line_segment([pos2(r.min.x, y), pos2(r.max.x, y)], Stroke::new(1.0, Color32::from_rgb(60, 60, 64)));
     }
-    let events = events_of(seq, kind);
+    let shown_ch = app.midi.ctrl_channel;
+    let events = events_of(seq, kind, shown_ch);
+    let channel = write_channel(shown_ch, seq);
     let sel = selected(app, seq, kind);
     let resp = ui.interact(r, ui.id().with(("ctrl_lane", cid.0, lane_id(kind))), Sense::click_and_drag());
     let pencil = app.engine.session().edit.tool == Tool::Pencil;
@@ -288,18 +348,24 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
     };
     // The line: stepped, each value held to the next event.
     let (lo, hi) = lane_range(kind);
-    let shown: Vec<(usize, i64, i32)> = events
+    let shown: Vec<(usize, i64, i32, u8)> = events
         .iter()
         .map(|(i, c)| match offset.filter(|_| sel.contains(i)) {
-            Some((dt, dv)) => (*i, c.tick.saturating_add(dt).max(0), (i64::from(c.value) + dv).clamp(i64::from(lo), i64::from(hi)) as i32),
-            None => (*i, c.tick, c.value),
+            Some((dt, dv)) => (*i, c.tick.saturating_add(dt).max(0), (i64::from(c.value) + dv).clamp(i64::from(lo), i64::from(hi)) as i32, c.channel),
+            None => (*i, c.tick, c.value, c.channel),
         })
         .collect();
-    let mut order = shown.clone();
-    order.sort_by_key(|x| x.1);
-    if !order.is_empty() {
+    // One stepped line per channel: a channel's value holds until its own next event. Channels
+    // other than the one new points go on are drawn fainter.
+    let line_colour = |ch: u8| if ch == channel { t.automation_line } else { t.automation_line.gamma_multiply(0.45) };
+    for ch in 0u8..16 {
+        let mut order: Vec<&(usize, i64, i32, u8)> = shown.iter().filter(|x| x.3 == ch).collect();
+        if order.is_empty() {
+            continue;
+        }
+        order.sort_by_key(|x| x.1);
         let mut line: Vec<Pos2> = Vec::with_capacity(order.len() * 2 + 1);
-        for (k, (_, tick, v)) in order.iter().enumerate() {
+        for (k, (_, tick, v, _)) in order.iter().enumerate() {
             let (x, y) = (geo.x_of(*tick), lg.y_of(*v));
             if k > 0
                 && let Some(prev) = line.last().copied()
@@ -311,14 +377,14 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         if let Some(last) = line.last().copied() {
             line.push(pos2(r.max.x, last.y));
         }
-        p.add(Shape::line(line, Stroke::new(1.5, t.automation_line)));
+        p.add(Shape::line(line, Stroke::new(1.5, line_colour(ch))));
     }
-    for (i, tick, v) in &shown {
+    for (i, tick, v, ch) in &shown {
         let c = pos2(geo.x_of(*tick), lg.y_of(*v));
         if sel.contains(i) {
             p.circle(c, 3.5, t.accent, Stroke::new(1.5, Color32::WHITE));
         } else {
-            p.circle(c, 2.5, Color32::from_rgb(40, 40, 40), Stroke::new(1.5, t.automation_line));
+            p.circle(c, 2.5, Color32::from_rgb(40, 40, 40), Stroke::new(1.5, line_colour(*ch)));
         }
     }
     // Readout while dragging a point.
@@ -346,7 +412,7 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         match app.midi.ctrl_drag.take() {
             Some(CtrlDrag::Pencil { points, .. }) => {
                 let pts: Vec<[i64; 2]> = points.iter().map(|(tk, v)| [*tk, i64::from(*v)]).collect();
-                let _ = app.run("midi.ctrl_draw", json!({"clip": cid.0, "lane": lane_id(kind), "points": pts}));
+                let _ = app.run("midi.ctrl_draw", json!({"clip": cid.0, "lane": lane_id(kind), "points": pts, "channel": channel}));
                 app.midi.ctrl_sel = None;
             }
             Some(CtrlDrag::Points { .. }) => {
@@ -390,7 +456,8 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
             // A single click on empty space adds a point (on the grid), as Studio One's arrow does.
             None => {
                 let tick = snap(geo.tick_at(at.x));
-                if let Ok(v) = app.run("midi.ctrl_add", json!({"clip": cid.0, "lane": lane_id(kind), "tick": tick, "value": lg.value_at(at.y)}))
+                if let Ok(v) = app
+                    .run("midi.ctrl_add", json!({"clip": cid.0, "lane": lane_id(kind), "tick": tick, "value": lg.value_at(at.y), "channel": channel}))
                     && let Some(i) = v["index"].as_u64()
                 {
                     app.midi.ctrl_sel = Some((kind, vec![i as usize]));
