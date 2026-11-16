@@ -6104,6 +6104,21 @@ mod tests {
         assert!(out[0][1000] > 0.1, "aux should carry the send: {}", out[0][1000]);
     }
 
+    /// Mix bug 14 (the audit's claim was wrong): a mono track into a mono bus already takes its
+    /// pan law there, so a stereo aux spreading that bus at unity plays it as loud as the track
+    /// centred straight to the main mix. Pinned here.
+    #[test]
+    fn a_mono_bus_into_a_stereo_aux_is_as_loud_as_a_centred_mono_track() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        let direct = render_range(&s, Range::new(0, 4800), 512)[0][1000];
+        let bus = s.add_bus("Mono", ChannelFormat::Mono);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Mono"));
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        s.track_mut(t).unwrap().mixer.output = Route::Bus(bus);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][1000] - direct).abs() < 1e-4 && (out[1][1000] - direct).abs() < 1e-4, "{} and {} vs {direct}", out[0][1000], out[1][1000]);
+    }
+
     /// Mix bug 2: on a stereo track the send pan did nothing, though its knob is shown.
     #[test]
     fn a_stereo_send_follows_its_pan() {

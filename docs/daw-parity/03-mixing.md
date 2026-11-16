@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 13 fixed: a track preset drops the old modules' automation) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 14 was not one: a mono bus into a stereo aux is as loud as a centred mono track) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -249,7 +249,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 11 | **Fixed:** the bounce dialog offered FLAC at 32-bit float and beyond 8 channels; it now offers 16 and 24 bit for FLAC and refuses a FLAC bounce of a mix wider than 8 channels before rendering | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
 | 12 | **Fixed:** the output meter measured the click with the mix; it now measures the mix before the click and the count-off are added | master stage of `MixEngine::render` |
 | 13 | **Fixed:** loading a track preset kept the old modules' automation, which could drive the new; their lanes now go with them (the fader's, pan's and sends' stay) | `track.load_preset` in `crates/engine/src/cmd/track_more.rs` |
-| 14 | A mono bus into a stereo aux is 3 dB louder than a centred mono track | bus read in `process_strip` |
+| 14 | **Not a bug (the claim was wrong):** a mono track feeding a mono bus already takes its pan law there (−3 dB), so the stereo aux spreading that bus at unity plays it exactly as loud as the track centred to the main mix; a test now pins it | bus read in `process_strip` |
 | 15 | An output or send loop is accepted and goes silent | `track.output`, `mix.send` |
 | 16 | Audio Units are not told a render is offline | `crates/au-host` |
 
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 14 was not one: a mono bus into a stereo aux is as loud as a centred mono track |
 | 2026-11-16 | minor | bug 13 fixed: a track preset drops the old modules' automation |
 | 2026-11-16 | minor | bug 12 fixed: the output meter leaves the click out |
 | 2026-11-16 | minor | bug 11 fixed: the bounce dialog offers only what FLAC can write |
