@@ -1188,8 +1188,17 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
         None => soundcraft_mix::render_track_pre_fader(&s, t, range),
     };
     let name = format!("{}.cm", tr.name);
-    let fmt = ChannelFormat::for_channels(audio.len().clamp(1, 2));
+    // The render has the track's channels: a surround track commits to a surround track.
+    let fmt = if audio.len() == tr.format.channels() { tr.format } else { ChannelFormat::for_channels(audio.len().max(1)) };
     let mixer = tr.mixer.clone();
+    // What the render leaves to the fader section goes on with the new track: its pan, mute and
+    // their automation, and the sends'. The trim and the modules' lanes are in the audio.
+    let lanes: Vec<_> = tr
+        .automation
+        .iter()
+        .filter(|l| !matches!(l.param, soundcraft_model::AutoParam::Trim | soundcraft_model::AutoParam::Plugin { .. }))
+        .cloned()
+        .collect();
     let buf = AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
     let s = e.session_mut();
     let src = add_source(s, &name, buf, None, FileFormat::Wav);
@@ -1199,22 +1208,18 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
         s.tracks.insert((idx + 1).min(s.tracks.len()), tr);
     }
     let cid = s.new_clip_id();
-    // What comes after the inserts carries over: fader, pan, trim, output, sends and their
-    // automation (the inserts' own automation is in the render).
-    let automation: Vec<soundcraft_model::AutomationLane> =
-        tr.automation.iter().filter(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. })).cloned().collect();
-    let automation_mode = mixer.automation_mode;
     if let Some(ntr) = s.track_mut(nt) {
         ntr.mixer.volume_db = mixer.volume_db;
-        ntr.mixer.trim_db = mixer.trim_db;
-        if ntr.mixer.pan.len() == mixer.pan.len() {
-            ntr.mixer.pan.clone_from(&mixer.pan);
-        }
-        ntr.mixer.surround.clone_from(&mixer.surround);
-        ntr.mixer.automation_mode = automation_mode;
-        ntr.automation = automation;
         ntr.mixer.output = mixer.output.clone();
         ntr.mixer.sends = mixer.sends.clone();
+        if ntr.mixer.pan.len() == mixer.pan.len() {
+            ntr.mixer.pan = mixer.pan.clone();
+        }
+        ntr.mixer.surround = mixer.surround;
+        ntr.mixer.mute = mixer.mute;
+        ntr.mixer.automation_mode = mixer.automation_mode;
+        ntr.mixer.vca = mixer.vca;
+        ntr.automation = lanes;
         if let Some(pl) = ntr.playlist_mut() {
             pl.clips.push(Clip::audio(cid, name, src, 0, 0, range.len()));
         }
@@ -3843,8 +3848,9 @@ mod strip_tests {
         assert!((ch[4_000] - 0.5).abs() < 0.02 && (ch[edge] - ch[4_000]).abs() < 0.02, "{} {}", ch[4_000], ch[edge]);
     }
 
-    /// Parity bug 10: Commit carries the pan, trim and fader/pan/send automation to the new
-    /// track; the inserts' automation is in the render and stays behind.
+    /// Parity bug 10: Commit carries the pan and fader/pan/send automation to the new track; the
+    /// inserts' automation is in the render and stays behind, and so is the trim (the render is
+    /// taken after it: carried over too, it would be applied twice).
     #[test]
     fn commit_carries_pan_trim_and_automation() {
         use soundcraft_model::AutoParam;
@@ -3863,7 +3869,7 @@ mod strip_tests {
         let nt = commit_track(&mut e, t).unwrap().unwrap();
         let n = e.session().track(nt).unwrap();
         assert_eq!(n.mixer.pan, vec![-0.5, 0.25]);
-        assert_eq!(n.mixer.trim_db, -3.0);
+        assert_eq!(n.mixer.trim_db, 0.0, "the trim is in the render");
         let mut lanes: Vec<String> = n.automation.iter().filter(|l| !l.points.is_empty()).map(|l| l.param.label()).collect();
         lanes.sort();
         assert_eq!(lanes, vec!["pan".to_string(), "volume".to_string()]);

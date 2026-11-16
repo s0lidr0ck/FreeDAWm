@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 7 fixed: paste and duplicate keep curves and replace the old points) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug 8 fixed: commit keeps the format, pan and automation) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -195,7 +195,7 @@ scale** (meters no longer miss a peak).
 | Add the bounce back to the session | ● | ● | ● | ● | **Missing** |
 | Several formats in one pass | ● | ◐ | ● | ● | **Missing** |
 | Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Partial**: every unmuted track, always through the master; it runs in the window's own thread with no progress or cancel |
-| Commit, freeze, bounce in place | ● | ● | ● | ● | **Partial**: commit drops pan and automation and reduces surround to stereo |
+| Commit, freeze, bounce in place | ● | ● | ● | ● | **Works**: commit keeps the format, the pan and the fader automation |
 | AAF or OMF | ● | ● | ● | ● | **Missing** |
 | DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
 
@@ -243,7 +243,7 @@ Lines move while the earlier sections' work is in progress, so functions are nam
 | 5 | **Fixed:** a mute switched in one sample and could click; it now ramps over 5 ms (240 samples), from where the last block left it | the same place |
 | 6 | **Fixed:** group members stopped writing half a second after the dragged fader stood still; holding a grouped fader or mute now holds the group's (`with_group` in `auto_write.rs`) | `mix.volume` grouping in `crates/engine/src/cmd/mix.rs`; `auto_write.rs` |
 | 7 | **Fixed:** paste and duplicate dropped curves and left the old points under the new; a copy now carries its curves and its edges (`AutomationLane::slice`), and a paste replaces what was under it with anchors either side (`paste_slice`); Paste Automation Points replaces the points between the first and the last. A copy that starts or ends inside a bent segment keeps that segment's bend, which only approximates its cut-off part | `edit.paste`, `edit.duplicate`, `automation.paste` |
-| 8 | Commit puts a surround track on a stereo track and drops pan and all automation | `commit_track` in `crates/engine/src/io.rs` |
+| 8 | **Fixed:** Commit put a surround track on a stereo track and dropped pan and automation; the committed track now has the source's format, pan, surround panner, mute, VCA and fader, pan, mute and send automation (the trim and the modules' lanes are in the audio) | `commit_track` in `crates/engine/src/io.rs` |
 | 9 | Loudness is wrong for 7.1 and wider bounces | `LoudnessMeter::new` in `crates/dsp/src/meter.rs` |
 | 10 | Export › Stems runs in the window's thread without stopping playback, with no progress or cancel | the stems prompt in `crates/ui-egui/src/dialogs.rs` |
 | 11 | The bounce dialog offers FLAC at 32-bit float and beyond 8 channels, which the writer refuses | `dialogs.rs`; `crates/audio-io/src/flac.rs` |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | bug 8 fixed: commit keeps the format, pan and automation |
 | 2026-11-16 | minor | bug 7 fixed: paste and duplicate keep curves and replace the old points |
 | 2026-11-16 | minor | bug 6 fixed: a held grouped fader holds its group |
 | 2026-11-16 | minor | bug 5 fixed: mutes ramp instead of clicking |
