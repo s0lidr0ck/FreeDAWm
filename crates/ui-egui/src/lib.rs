@@ -2240,8 +2240,11 @@ impl SoundApp {
                 }
                 TransportRequest::PlayRange { from, end, looped } => self.start_play(from, end, looped),
                 TransportRequest::PlaySelection => {
+                    // A range plays once; an insertion point plays on from there (it used to
+                    // play one sample and stop).
                     let sel = self.engine.session().edit.selection;
-                    self.start_play(sel.start, Some(sel.end.max(sel.start + 1)), None);
+                    let end = (!sel.is_empty()).then_some(sel.end);
+                    self.start_play(sel.start, end, None);
                 }
                 TransportRequest::HalfSpeed if self.engine.transport.recording => {
                     // The player keeps full speed while a take records (it would lose input).
@@ -2695,6 +2698,21 @@ mod tests {
         app.handle_transport(0.0);
         let r = soundcraft_time::Range::new(120_000, 132_000);
         assert_eq!(app.sim, Some((120_000, None, Some(r))), "looped with Loop Playback");
+    }
+
+    #[test]
+    fn play_selection_with_an_insertion_point_plays_on() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("edit.select", json!({"start": 48_000, "end": 48_000})).unwrap();
+        app.run("transport.play_selection", json!({})).unwrap();
+        app.handle_transport(0.25);
+        assert!(app.is_playing(), "not one sample and stop");
+        assert_eq!(app.position(), 48_000 + i64::from(app.engine.session().sample_rate.hz()) / 4);
+        app.stop_play();
+        app.run("edit.select", json!({"start": 48_000, "end": 60_000})).unwrap();
+        app.run("transport.play_selection", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((48_000, Some(60_000), None)));
     }
 
     #[test]
