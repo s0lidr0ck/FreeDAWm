@@ -18,8 +18,9 @@ use std::fmt::Write as _;
 /// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift,
 /// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350),
 /// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ, and from
-/// 50 500 for Mend (350).
-pub const MAX_CHARS: usize = 50_850;
+/// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
+/// sixteen parameters and their lines).
+pub const MAX_CHARS: usize = 51_500;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -106,6 +107,12 @@ pub fn purpose(id: &str) -> &'static str {
         "invert" => "Utility: polarity (phase) inversion per channel.",
         "dc_offset_removal" => "Utility: removes DC offset (a very low high-pass).",
         "signal_generator" => "Utility: test tones and noise (replaces the input).",
+        "dither" => "Utility: TPDF dither to 16, 20 or 24 bits, optional noise shaping; last on a master.",
+        "channel_tool" => "Utility: swap, mono, one side, M/S encode/decode, per-channel polarity, gain, DC filter.",
+        "spectrum" => "Meter: FFT spectrum (sum, L, R, mid, side) with slope and peak hold; sound untouched.",
+        "loudness" => "Meter: BS.1770 loudness (momentary, short-term, integrated, range, true peak) against a target.",
+        "phase_meter" => "Meter: stereo correlation (lowest held), balance and goniometer; sound untouched.",
+        "tuner" => "Meter: tuner (nearest note, cents off, A4 415-466 Hz); Mute silences while tuning.",
         _ => "",
     }
 }
@@ -367,6 +374,14 @@ mod tests {
             }
         }
         assert!(text.contains("scout-guides"));
+        // The meters, Channel Tool and Dither (listed since 5f123a2) are among them, with the
+        // utilities.
+        let utilities = text.find("## Utilities").unwrap_or(usize::MAX);
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "channel_tool", "dither"] {
+            let at = text.find(&format!("(`{id}`")).unwrap_or(0);
+            assert!(at > utilities, "{id} listed with the utilities");
+            assert!(!purpose(id).is_empty(), "{id}");
+        }
     }
 
     #[test]
