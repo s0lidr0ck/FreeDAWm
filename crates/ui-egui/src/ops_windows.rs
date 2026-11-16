@@ -30,6 +30,10 @@ pub struct OpsState {
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
     pub rtp_delay: i64,
+    /// The tracks the MIDI Real-Time Properties window's values were read from: read again when
+    /// the selection changes.
+    #[serde(skip)]
+    pub rtp_tracks: Vec<u64>,
     pub identify_bars: u32,
 }
 
@@ -57,6 +61,7 @@ impl Default for OpsState {
             rtp_transpose: 0,
             rtp_duration: 100.0,
             rtp_delay: 0,
+            rtp_tracks: Vec::new(),
             identify_bars: 1,
         }
     }
@@ -261,6 +266,20 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         return;
     }
+    // The selected MIDI tracks' values (the first one's), read when the selection changes.
+    let (sel, first) = {
+        let s = app.engine.session();
+        let sel: Vec<u64> = s.tracks.iter().filter(|t| s.edit.selected_tracks.contains(&t.id) && t.kind.is_midi()).map(|t| t.id.0).collect();
+        let first = sel.first().map(|id| {
+            let v = |name: &str, d: f64| s.edit.value(&format!("rtp.{id}.{name}"), d);
+            (v("velocity", 0.0) as i64, v("transpose", 0.0) as i64, v("duration", 100.0), v("delay", 0.0) as i64)
+        });
+        (sel, first)
+    };
+    if sel != app.ops.rtp_tracks {
+        (app.ops.rtp_velocity, app.ops.rtp_transpose, app.ops.rtp_duration, app.ops.rtp_delay) = first.unwrap_or((0, 0, 100.0, 0));
+        app.ops.rtp_tracks = sel;
+    }
     egui::Window::new("MIDI Real-Time Properties").open(&mut open).default_size(vec2(340.0, 200.0)).show(ctx, |ui| {
         ui.label("Non-destructive, applied at playback to the selected MIDI tracks.");
         // A frozen track's render played its notes with the properties of the time: greyed, saying so.
@@ -269,19 +288,30 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
             s.tracks.iter().find(|t| s.edit.selected_tracks.contains(&t.id) && t.kind.is_midi() && t.frozen_audio().is_some()).map(|t| t.name.clone())
         };
         let why = frozen.map(|n| format!("`{n}` is frozen, and its MIDI Real-Time Properties shape its notes. Unfreeze it to change them"));
-        let mut changed = false;
+        // Only the property moved is written (the others may differ between the selected tracks);
+        // a drag is one undo step.
+        let mut changed: Option<(&str, Value)> = None;
         let sliders = ui.add_enabled_ui(why.is_none(), |ui| {
-            changed |= ui.add(egui::Slider::new(&mut app.ops.rtp_velocity, -127..=127).text("Velocity +")).changed();
-            changed |= ui.add(egui::Slider::new(&mut app.ops.rtp_transpose, -48..=48).text("Transpose")).changed();
-            changed |= ui.add(egui::Slider::new(&mut app.ops.rtp_duration, 1.0..=400.0).text("Duration %")).changed();
-            changed |= ui.add(egui::Slider::new(&mut app.ops.rtp_delay, -960..=960).text("Delay (ticks)")).changed();
+            if ui.add(egui::Slider::new(&mut app.ops.rtp_velocity, -127..=127).text("Velocity +")).changed() {
+                changed = Some(("velocity", json!(app.ops.rtp_velocity)));
+            }
+            if ui.add(egui::Slider::new(&mut app.ops.rtp_transpose, -48..=48).text("Transpose")).changed() {
+                changed = Some(("transpose", json!(app.ops.rtp_transpose)));
+            }
+            if ui.add(egui::Slider::new(&mut app.ops.rtp_duration, 1.0..=400.0).text("Duration %")).changed() {
+                changed = Some(("duration", json!(app.ops.rtp_duration)));
+            }
+            if ui.add(egui::Slider::new(&mut app.ops.rtp_delay, -960..=960).text("Delay (ticks)")).changed() {
+                changed = Some(("delay", json!(app.ops.rtp_delay)));
+            }
         });
         if let Some(why) = &why {
             sliders.response.on_disabled_hover_text(why.as_str());
         }
-        if changed {
-            let p = json!({"velocity": app.ops.rtp_velocity, "transpose": app.ops.rtp_transpose, "duration": app.ops.rtp_duration, "delay": app.ops.rtp_delay});
-            if let Err(e) = app.engine.execute_merged("event.midi_rtp", &p, "rtp") {
+        if let Some((name, v)) = changed {
+            let mut p = serde_json::Map::new();
+            p.insert(name.into(), v);
+            if let Err(e) = app.engine.execute_merged("event.midi_rtp", &Value::Object(p), &format!("rtp.{name}")) {
                 app.ui.status = e.to_string();
             }
         }

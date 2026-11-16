@@ -37,6 +37,17 @@ fn new_and_imported_midi_tracks_listen_to_every_input() {
     }
 }
 
+/// Bug 19: MIDI Real-Time Properties changes are an undo step.
+#[test]
+fn midi_real_time_properties_can_be_undone() {
+    let mut e = Engine::default();
+    let t = new_track(&mut e, "instrument");
+    e.execute("event.midi_rtp", &json!({"tracks": [t.0], "transpose": 5})).unwrap();
+    assert_eq!(e.session().edit.value(&format!("rtp.{}.transpose", t.0), 0.0), 5.0);
+    e.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(e.session().edit.value(&format!("rtp.{}.transpose", t.0), 0.0), 0.0);
+}
+
 /// Bug 13: module MIDI recorded in a loop prints over the loop, from the punch point when Record
 /// was pressed inside it, not up to wherever the playhead was at Stop.
 #[test]
