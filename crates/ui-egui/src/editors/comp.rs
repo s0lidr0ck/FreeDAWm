@@ -469,13 +469,18 @@ fn auto_gain_ui(st: &Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, r: Re
 }
 
 /// After a recall (`loadPreset`): presets from before Multiband do not mention it; they load in
-/// Parallel at the default crossovers, joining the recall's undo step.
+/// Parallel at the default crossovers (`fs_presets::fill_missing`, which every other recall path
+/// applies too), joining the recall's undo step.
 fn after_recall(app: &mut SoundApp, host: &Host, params: Option<&serde_json::Map<String, serde_json::Value>>, recalled: bool) {
     if let Some(m) = params {
-        let missing: Vec<(&str, f32)> = ["split", "xoverLo", "xoverHi"]
-            .into_iter()
-            .filter(|k| !m.contains_key(*k))
-            .filter_map(|k| host.info.params.iter().find(|p| p.id == k).map(|p| (p.id, p.default)))
+        let mut filled = m.clone();
+        crate::fs_presets::fill_missing(host.info, &mut filled);
+        let missing: Vec<(&str, f32)> = host
+            .info
+            .params
+            .iter()
+            .filter(|p| !m.contains_key(p.id))
+            .filter_map(|p| filled.get(p.id).and_then(serde_json::Value::as_f64).map(|v| (p.id, v as f32)))
             .collect();
         if !missing.is_empty() {
             set_params_merged(app, host, &missing, RECALL_GESTURE);
