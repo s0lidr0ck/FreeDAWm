@@ -218,7 +218,7 @@ Compared in full in section 7; listed here for what matters while recording.
 |---|:-:|:-:|:-:|:-:|---|
 | Import a standard MIDI file with its tempo map | ● | ● | ● | ● | **Works** (formats 0, 1 and 2; tempo optional) |
 | Format 0 split by channel; markers imported | ● | ● | ● | ● | **Missing** (markers are read, not placed) |
-| Imported tracks ready to record on | ● | ● | ● | ● | **Partial**: they arrive with no MIDI input set |
+| Imported tracks ready to record on | ● | ● | ● | ● | **Works**: they listen to every MIDI input |
 | Export a MIDI file | ● | ● | ● | ● | **Works**; ignores clip trims and exports muted clips (bug 21) |
 
 ## Bugs found on the way
@@ -246,7 +246,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 17 | **Fixed.** The live drawing keeps only the track's channel and draws each event where it will be placed (the take's latency earlier). Test: `live_midi::tests::a_track_on_one_channel_shows_only_that_channels_notes` | `ui-egui/src/live_midi.rs` |
 | 18 | Musical Typing's step mode ignores the velocity setting, does not lengthen the clip (later notes do not play), and a position before the clip collapses to its start | `ui-egui/src/musical_typing.rs:138-151` |
 | 19 | The MIDI Real-Time Properties window never loads the selected track's values, writes all four on any change, and its changes cannot be undone | `ui-egui/src/ops_windows.rs:29-57, 283`; `engine/src/cmd/event_more.rs:116` |
-| 20 | A MIDI track's mixer strip always reads "MIDI in: all" though its input defaults to none; tracks made by MIDI import also have none and record nothing | `ui-egui/src/mix_window.rs:401-402`; `model/src/mixer.rs:1029`; `engine/src/io.rs:429` |
+| 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs` | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | MIDI export writes notes outside a clip's trimmed window and includes muted clips | `engine/src/io.rs:492-585` |
 | 22 | Settings stored that nothing reads: MIDI Merge, QuickPunch, TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, input filter, beat clock, MIDI studio, and a second set of device flags | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
 | 23 | The web build shows Musical Typing and MIDI Input Devices though it has no MIDI | `ui-egui/src/lib.rs:996-999` |
@@ -318,3 +318,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 5 fixed: an early downbeat at a loop's end starts the next pass |
 | 2026-11-16 | minor | Bug 15 fixed: the New Tracks dialog makes instrument tracks stereo |
 | 2026-11-16 | minor | Bug 17 fixed: the live take shows only its channel, where its notes will be placed |
+| 2026-11-16 | minor | Bug 20 fixed: new MIDI tracks and imported tracks listen to every MIDI input |

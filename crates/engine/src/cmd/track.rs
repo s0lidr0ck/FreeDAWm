@@ -329,7 +329,9 @@ fn new_track(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             if kind == TrackKind::Instrument {
                 t.instrument = Some(soundcraft_model::Insert::new(instrument.clone().unwrap_or_else(|| "subtractive_synth".into())));
-                // Plays whatever MIDI keyboard is plugged in once armed.
+            }
+            if kind.is_midi() {
+                // Plays (an instrument) and records whatever MIDI keyboard is plugged in once armed.
                 t.mixer.input = Route::Midi(soundcraft_model::MidiIn::all());
             }
         }

@@ -432,6 +432,8 @@ pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: b
         let drums = !tr.sequence.notes.is_empty() && tr.sequence.notes.iter().all(|n| n.channel == 9);
         if let Some(t) = s.track_mut(id) {
             t.instrument = Some(soundcraft_model::Insert::new(if drums { "drum_synth" } else { "subtractive_synth" }));
+            // Ready to record on, as a new instrument track is.
+            t.mixer.input = soundcraft_model::Route::Midi(soundcraft_model::MidiIn::all());
         }
         // A controller on the clip's last tick would not play, so the clip runs one tick past the last one.
         let past_ctrls =

@@ -399,7 +399,11 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             _ if track.kind == TrackKind::Instrument => instrument_slot(app, ui, track, sr),
             Some(k) => insert_slot(app, ui, track, k, sr, false),
             None if track.kind == TrackKind::Midi => {
-                ui.painter().text(sr.center(), Align2::CENTER_CENTER, "MIDI in: all", regular(9.0), t.text_dim);
+                let input = match &track.mixer.input {
+                    soundcraft_model::Route::Midi(m) => m.label(),
+                    _ => "MIDI: none".to_string(),
+                };
+                ui.painter().text(sr.center(), Align2::CENTER_CENTER, input, regular(9.0), t.text_dim);
             }
             None => {}
         }
