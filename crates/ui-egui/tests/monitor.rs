@@ -110,11 +110,11 @@ fn the_first_master_strip_has_the_keys_and_the_menu_runs_the_same_commands() {
     assert!(h.state().ui.monitor_sim);
     assert_eq!(h.state().ui.monitor_sim_profile, "Mono");
     let extra = menus::ui_aliases();
-    assert_eq!(menus::command_for_path("Options > Ear Correction", &extra).as_deref(), Some("monitor.ear"));
+    assert_eq!(menus::command_for_path("Options > Monitoring > Ear Correction", &extra).as_deref(), Some("monitor.ear"));
     let app = h.state_mut();
-    menus::invoke_menu(app, "monitor.ear", "Options > Ear Correction");
+    menus::invoke_menu(app, "monitor.ear", "Options > Monitoring > Ear Correction");
     assert!(!app.ui.monitor_ear);
-    assert_eq!(menus::item_state(app, "Options > Simulated Output", Some("monitor.sim")), (true, true));
+    assert_eq!(menus::item_state(app, "Options > Monitoring > Simulated Output", Some("monitor.sim")), (true, true));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
