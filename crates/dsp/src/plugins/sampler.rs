@@ -229,7 +229,7 @@ static SAMPLER_PARAMS: [ParamInfo; 106] = [
     // The pitch bend's throw each way, and the vibrato (cents each way, at the LFO's shape and
     // rate) the mod wheel brings in.
     lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
-    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 50.0, Unit::Cents),
+    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
@@ -559,7 +559,7 @@ impl Sampler {
                 lfo_sync: false,
                 lfo_quarters: 1.0,
                 bend_range: 2.0,
-                wheel_depth: 0.5,
+                wheel_depth: 0.0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -1790,7 +1790,7 @@ mod tests {
         let bent = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
         assert!((bent / plain - 2.0).abs() < 2e-3, "an octave up: {}", bent / plain);
         s.midi(0, [0xE0, 0x00, 0x40]);
-        // the wheel: the step swings by up to the vibrato's depth (50 cents by default)
+        // the wheel: the step swings by up to the vibrato's depth
         let swing = |s: &mut Sampler| {
             let (mut lo, mut hi) = (f64::MAX, 0.0f64);
             for _ in 0..200 {
@@ -1802,7 +1802,11 @@ mod tests {
             12.0 * (hi / lo).log2() * 100.0
         };
         assert!(swing(&mut s) < 0.5, "no wheel, no vibrato");
+        // Mod Wheel Vibrato starts at 0 (owner's decision), so a session made before it plays
+        // its mod-wheel data as it always did: no vibrato until the user turns it up.
         s.midi(0, [0xB0, 1, 127]);
+        assert!(swing(&mut s) < 0.5, "Mod Wheel Vibrato at 0 by default");
+        s.set_param("mod_wheel", 50.0);
         let cents = swing(&mut s);
         assert!(cents > 80.0 && cents < 101.0, "{cents} cents peak to peak");
         s.midi(0, [0xB0, 121, 0]);

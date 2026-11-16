@@ -108,7 +108,7 @@ static SYNTH_PARAMS: [ParamInfo; 21] = [
     lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
     // The pitch bend's throw each way, and the vibrato (cents each way) the mod wheel brings in.
     lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
-    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 50.0, Unit::Cents),
+    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
 ];
 const BEND_RANGE: usize = 19;
 const MOD_WHEEL: usize = 20;
@@ -655,6 +655,10 @@ mod tests {
         s.midi(0, [0xE0, 0x00, 0x40]);
         assert_eq!(swing(&mut s, &mut io), (0.0, 0.0), "no wheel, no vibrato");
         s.midi(0, [0xB0, 1, 127]);
+        // Mod Wheel Vibrato starts at 0 (owner's decision): mod-wheel data in a session made
+        // before it brings in no vibrato until the user turns it up.
+        assert_eq!(swing(&mut s, &mut io), (0.0, 0.0), "Mod Wheel Vibrato at 0 by default");
+        assert!(s.set_param("mod_wheel", 50.0));
         let (lo, hi) = swing(&mut s, &mut io);
         assert!(lo < -45.0 && hi > 45.0 && lo >= -50.01 && hi <= 50.01, "{lo} {hi}");
         s.midi(0, [0xB0, 121, 0]);

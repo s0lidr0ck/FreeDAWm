@@ -195,8 +195,8 @@ Compared in full in section 7; listed here for what matters while recording.
 | Drag an instrument from the browser to make a track | ● | ● | ● | ● | **Works** |
 | Third-party instruments | ● AAX | ● | ● AU | ● VST | **Works**: CLAP, VST3 and AU, with channels kept |
 | Piano and other sampled instruments in the box | ● | ● | ● | ● | **Missing**: a sampler with no library |
-| Synth | ● | ● | ● | ● | **Works**: 16 voices; velocity, sustain, pitch bend fixed at ±2 semitones; no mod wheel or aftertouch |
-| Sampler | ● | ● | ● | ● | **Partial**: velocity only; no sustain pedal, bend or mod wheel |
+| Synth | ● | ● | ● | ● | **Works**: 16 voices; velocity, sustain, pitch bend over Bend Range (0–24 semitones, 2 by default), the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default: turn it up); no aftertouch |
+| Sampler | ● | ● | ● | ● | **Partial**: velocity, sustain pedal, pitch bend over Bend Range, the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default); one sample, no zones |
 | Drum machine and drum synth | ● | ● | ● | ● | **Works**: velocity layers; notes only |
 | Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Partial**: External MIDI plays it (MIDI output); its audio comes back on an ordinary audio track, and its own latency is not measured or compensated |
 
@@ -408,3 +408,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Step input from a MIDI keyboard with lengths, rests, ties and chords; the MIDI editor's Step button |
 | 2026-11-16 | minor | Identical devices, 63 input ports, aliases, per-device offsets, the driver's timestamps; bug 11 fixed, bug 10 partly |
 | 2026-11-16 | minor | Commits noted on the second round's rows; designs for MIDI take lanes, low-latency monitoring and MIDI effects |
+| 2026-11-16 | minor | Synth and sampler rows brought up to date (Bend Range, sustain, mod wheel; Mod Wheel Vibrato 0 by default) |
