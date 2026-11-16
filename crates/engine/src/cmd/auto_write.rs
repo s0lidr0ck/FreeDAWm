@@ -127,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         crate::cmd!(query "automation.touched", "Touched Automation Controls", [], None, "{} → [{track, param}]", always, |e, _| {
-            let pos = e.transport.position;
+            let pos = e.heard_position();
             let rate = e.session().sample_rate;
             let w = &e.auto_write;
             let mut v: Vec<(TrackId, AutoParam)> = Vec::new();
@@ -158,6 +158,9 @@ pub struct AutoWriter {
     last_at: Samples,
     /// Whether the last pass ran with the transport playing.
     playing: bool,
+    /// How far behind the transport the sound is heard (the mix's delay compensation and the
+    /// output's latency), in samples: moves are written where they were heard.
+    heard_delay: Samples,
 }
 
 impl AutoWriter {
@@ -241,7 +244,7 @@ impl Engine {
     /// An automatable control of `track` changed: it counts as touched for
     /// [`TOUCH_HOLD_SECONDS`]. Every command that sets such a value calls this.
     pub fn automation_changed(&mut self, track: TrackId, param: AutoParam) {
-        let pos = self.transport.position;
+        let pos = self.heard_position();
         let w = &mut self.auto_write;
         match w.pulses.iter_mut().find(|x| x.0 == track && x.1 == param) {
             Some(x) => x.2 = pos,
@@ -303,6 +306,18 @@ impl Engine {
             .map_or(0.0, |l| l.value_at(self.transport.position, 0.0))
     }
 
+    /// How far behind the transport the sound is heard now, in samples (the host's mix delay
+    /// plus output latency): a pass writes a move where it was heard, not where the transport
+    /// had rendered to, and a control shows the automation being heard.
+    pub fn automation_heard_delay(&mut self, samples: Samples) {
+        self.auto_write.heard_delay = samples.clamp(0, i64::from(u32::MAX));
+    }
+
+    /// The timeline position being heard now (see [`Engine::automation_heard_delay`]).
+    pub fn heard_position(&self) -> Samples {
+        self.transport.position.saturating_sub(self.auto_write.heard_delay).max(0)
+    }
+
     /// The transport jumped (a locate while playing, a new start): the next points do not replace
     /// the automation between the old position and the new one.
     pub fn automation_jump(&mut self) {
@@ -330,13 +345,13 @@ impl Engine {
             return None;
         }
         let lane = tr.lane(param).filter(|l| !l.points.is_empty())?;
-        Some(lane.value_at(self.transport.position, current_value(tr, param)))
+        Some(lane.value_at(self.heard_position(), current_value(tr, param)))
     }
 
     /// Whether a control of the track is touched now (for a host that lights it).
     pub fn automation_touched(&self, track: TrackId, param: &AutoParam) -> bool {
         let hold = self.session().sample_rate.samples(TOUCH_HOLD_SECONDS);
-        self.auto_write.touched(track, param, self.transport.position, hold)
+        self.auto_write.touched(track, param, self.heard_position(), hold)
     }
 
     /// One writing pass at the transport's position: call it every frame. Writes nothing unless
@@ -346,7 +361,7 @@ impl Engine {
         let writes_any = |m: M| matches!(m, M::Write | M::Touch | M::Latch | M::TouchLatch | M::Trim);
         let may_write = playing && self.session().tracks.iter().any(|t| writes_any(t.mixer.automation_mode));
         self.hold_merge(may_write.then_some(PASS));
-        let pos = self.transport.position;
+        let pos = self.heard_position();
         let rate = self.session().sample_rate;
         let hold = rate.samples(TOUCH_HOLD_SECONDS);
         let started = playing && !self.auto_write.playing;
@@ -638,6 +653,20 @@ mod tests {
         assert_eq!(points(&e, t, &AutoParam::Pan(0)), pan_before, "pan is not");
         assert!(e.execute("automation.enable", &json!({"type": "colour"})).is_err());
         assert_eq!(e.execute("automation.enable", &json!({"type": "pan"})).unwrap()["value"], true, "toggles back on");
+    }
+
+    /// Tier 2: a move is written where it was heard, the host's mix and output delay behind the
+    /// transport.
+    #[test]
+    fn moves_are_written_where_they_were_heard() {
+        let (mut e, t, _, q) = kick("touch");
+        e.automation_heard_delay(1000);
+        e.execute("mix.volume", &json!({"track": t.0, "db": -6.0})).unwrap();
+        play(&mut e, 2 * q);
+        stop(&mut e, 3 * q);
+        let pts = points(&e, t, &AutoParam::Volume);
+        assert!(pts.contains(&(2 * q - 1000, -6.0)) && !pts.iter().any(|p| p.0 == 2 * q), "{pts:?}");
+        assert!(pts.iter().any(|p| p.0 == 3 * q - 1000), "{pts:?}");
     }
 
     /// Tier 2: a control shows what its automation plays, except while it is touched or written.

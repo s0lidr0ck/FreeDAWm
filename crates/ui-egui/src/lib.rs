@@ -2365,6 +2365,10 @@ impl SoundApp {
             }
             if self.engine.transport.playing {
                 self.engine.transport.position = p.position();
+                // Automation is written and shown where it is heard: the mix's delay and the
+                // output's latency behind the rendered position.
+                let lat = p.reported_latency();
+                self.engine.automation_heard_delay(i64::from(lat.mix) + i64::from(lat.output));
             }
             let now = self.last_frame.unwrap_or_default();
             let meter_interval = if self.ui.window == MainWindow::Mix { 1.0 / 60.0 } else { 1.0 / 20.0 };

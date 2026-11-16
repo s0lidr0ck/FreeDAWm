@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: VCA assignment from the track menu) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: moves are written where they were heard) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -138,9 +138,9 @@ miss a peak, and can read pre-fader).
 | Read, Touch, Latch, Write | ● | ● | ● | ● | **Works**, one undo step per pass |
 | Trim automation | ● | ○ | ● | ● | **Works** for volume |
 | Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Partial**: the Mix window's faders and pan knobs follow their lanes; plug-in controls and send knobs do not |
-| You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written 20 ms earlier |
+| You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
-| Automation delay-compensated | ● | ● | ● | ● | **Partial**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay); moves are still written early by the output latency |
+| Automation delay-compensated | ● | ● | ● | ● | **Partial**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay) and moves are written where they were heard (the mix delay and output latency behind the transport); plug-in parameters are not compensated |
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Missing** |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: moves are written where they were heard |
 | 2026-11-16 | minor | tier 2: VCA assignment from the track menu |
 | 2026-11-16 | minor | tier 2: the Automation window's write enables work |
 | 2026-11-16 | minor | tier 2: bounce a bus, with a tail |
