@@ -31,6 +31,7 @@
 pub mod devices;
 pub mod feed;
 pub mod jack;
+mod keep_pitch;
 pub mod measure;
 pub mod midi_in;
 pub mod midi_out;
@@ -205,6 +206,8 @@ struct Shared {
     countoff_at: AtomicI64,
     /// Speed × 1000.
     speed: AtomicU32,
+    /// Varispeed keeps the pitch ([`Player::set_keep_pitch`]).
+    keep_pitch: AtomicBool,
     meters: Mutex<MeterSnapshot>,
     /// `meters` holds peaks [`Player::copy_meters`] has not taken yet: the callback folds each
     /// block's peaks into them (the maximum) instead of replacing them, so a peak or clip between
@@ -253,6 +256,7 @@ impl Shared {
             counting: AtomicBool::new(false),
             countoff_at: AtomicI64::new(0),
             speed: AtomicU32::new(1000),
+            keep_pitch: AtomicBool::new(false),
             meters: Mutex::new(MeterSnapshot::default()),
             meters_unread: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
@@ -488,6 +492,9 @@ struct AudioState {
     hist: Box<resample::History>,
     /// The resampler's kernel, tabulated for the step in use.
     kernel: Box<resample::Kernel>,
+    /// Varispeed's pitch keeper ([`keep_pitch`]), and whether the last fill ran it.
+    keep_pitch: Box<keep_pitch::KeepPitch>,
+    keeping_pitch: bool,
     /// Live input, popped into `mix.input` once per mix block.
     feed: Option<Arc<feed::InputFeed>>,
     /// Input frames popped during the current callback.
@@ -639,6 +646,8 @@ impl AudioState {
             direct: false,
             hist: Box::default(),
             kernel: Box::default(),
+            keep_pitch: Box::default(),
+            keeping_pitch: false,
             feed: None,
             popped: 0,
             shut: false,
@@ -1474,6 +1483,7 @@ impl AudioState {
         self.direct = direct;
         self.shared.direct.store(direct, Ordering::Relaxed);
         if direct {
+            self.keeping_pitch = false;
             self.fill_direct(out, channels, monitoring, capturing);
             // Frames nothing rendered (play ended, nothing monitored): their input leaves too.
             self.discard_input(frames.saturating_sub(self.popped));
@@ -1487,6 +1497,15 @@ impl AudioState {
                 feed.begin_elastic(resampled_pops(self.read, self.pending_len, frames, step, quantum), arrive);
             }
             self.fill_resampled(out, channels, monitoring, capturing, step, quantum);
+            // Varispeed that keeps the pitch: the resampled play shifted back by 1 / speed.
+            let keep = speed_milli != 1000 && self.shared.keep_pitch.load(Ordering::Relaxed);
+            if keep {
+                if !self.keeping_pitch {
+                    self.keep_pitch.clear();
+                }
+                self.keep_pitch.process(out, channels, 1000.0 / f64::from(speed_milli.max(1)));
+            }
+            self.keeping_pitch = keep;
         }
         self.return_scout();
     }
@@ -3025,6 +3044,11 @@ impl Player {
             return;
         }
         self.shared.speed.store(v, Ordering::Relaxed);
+    }
+
+    /// Varispeed keeps the pitch (on) or moves it with the speed as tape does (off, the default).
+    pub fn set_keep_pitch(&self, keep: bool) {
+        self.shared.keep_pitch.store(keep, Ordering::Relaxed);
     }
 
     /// Playback rate last requested, 1.0 at full speed.

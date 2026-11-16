@@ -562,6 +562,10 @@ Options > More > Pan Law > -4.5 dB = @mix.pan_law
 Options > More > Pan Law > -6 dB = @mix.pan_law
 Options > More > Automatic Edge Fades = Options > Automatic Edge Fades
 Options > More > Varispeed... = @transport.varispeed
+Options > More > Varispeed Keeps Pitch = @transport.varispeed_keep_pitch
+Options > More > Shuttle > Back = @transport.shuttle_back
+Options > More > Shuttle > Stop = @transport.shuttle_stop
+Options > More > Shuttle > Forward = @transport.shuttle_forward
 
 Setup > ## Audio
 Setup > Playback Engine...

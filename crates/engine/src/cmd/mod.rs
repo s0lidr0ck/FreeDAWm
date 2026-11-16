@@ -85,14 +85,14 @@ mod tab;
 pub mod tempo;
 mod track;
 mod track_more;
-mod transport;
+pub mod transport;
 mod video;
 mod view;
 mod view_more;
-pub mod warp;
 mod vocal;
 mod vocal_studio;
 mod vst3;
+pub mod warp;
 mod zoom_toggle;
 
 pub use clap::plugin_info;

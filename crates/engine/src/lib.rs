@@ -130,6 +130,12 @@ pub enum TransportRequest {
     /// Varispeed: every Play from now on runs at this speed (tape style, the pitch moves with
     /// it), and a play under way changes now; `None` (or 1) turns it off.
     Varispeed(Option<f32>),
+    /// Shuttle: `speed` plays at that speed (negative: backwards, heard), 0 stops; without one,
+    /// `step` 1 goes forward (each again doubles the speed, to 4×), −1 back (to −8×), 0 stops.
+    Shuttle {
+        step: i8,
+        speed: Option<f32>,
+    },
     Scrub(Samples),
     AllNotesOff,
     /// `scout.capture` start: build a Scout rig for `strips` (off the audio thread) and arm it.

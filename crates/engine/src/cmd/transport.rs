@@ -5,6 +5,17 @@ use super::*;
 use crate::{TransportRequest, cmd};
 use serde_json::json;
 
+fn shuttle(e: &mut Engine, step: i8, speed: Option<f32>) -> Result<Value> {
+    if e.transport.recording {
+        return Err(bad("transport.shuttle", "not while recording"));
+    }
+    e.transport_requests.push(TransportRequest::Shuttle { step, speed });
+    Ok(json!({}))
+}
+
+/// The edit flag that makes Varispeed keep the pitch.
+pub const KEEP_PITCH: &str = "transport.varispeed_keep_pitch";
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "transport.play", "Play", [], Some("Space"), "{from?: position}", always, |e, p| {
@@ -34,6 +45,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let speed = speed.filter(|x| (x - 1.0).abs() > 1e-6).map(|x| x as f32);
             e.transport_requests.push(TransportRequest::Varispeed(speed));
             Ok(json!({"speed": speed.unwrap_or(1.0)}))
+        }),
+        cmd!(noundo "transport.varispeed_keep_pitch", "Varispeed Keeps Pitch", [], None, "{value?: bool} (toggles when omitted) — Varispeed and Shuttle play at their speed with the pitch kept, rather than moving with it as tape does", always, |e, p| super::more_util::toggle_flag(e, p, KEEP_PITCH)),
+        cmd!(noundo "transport.shuttle_forward", "Shuttle Forward", [], None, "{} — plays forwards at 1×; again doubles the speed (to 4×). Bind it to L for J/K/L shuttle", always, |e, _| shuttle(e, 1, None)),
+        cmd!(noundo "transport.shuttle_back", "Shuttle Back", [], None, "{} — plays backwards at 1× (heard); again doubles the speed (to 8×). Bind it to J for J/K/L shuttle", always, |e, _| shuttle(e, -1, None)),
+        cmd!(noundo "transport.shuttle_stop", "Shuttle Stop", [], None, "{} — stops a shuttle. Bind it to K for J/K/L shuttle", always, |e, _| shuttle(e, 0, None)),
+        cmd!(noundo "transport.shuttle", "Shuttle", [], None, "{speed: -8..4} — plays at this speed from the playhead, backwards when negative (heard); 0 stops", always, |e, p| {
+            let v = p.get("speed").and_then(Value::as_f64).filter(|x| x.is_finite() && (-8.0..=4.0).contains(x)).ok_or_else(|| bad("transport.shuttle", "speed must be a number from -8 to 4"))?;
+            shuttle(e, 0, Some(v as f32))
         }),
         cmd!(noundo "transport.half_speed", "Half-Speed Playback", [], Some("Shift+Space"), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::HalfSpeed); Ok(json!({})) }),
         cmd!(noundo "transport.play_selection", "Play Edit", ["Edit", "Selection"], Some("Alt+["), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::PlaySelection); Ok(json!({})) }),

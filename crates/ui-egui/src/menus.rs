@@ -789,6 +789,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("view.clip_overlap_shadows", "view.clip.overlap_shadows"),
     ("view.clip_transparency", "view.clip.transparency"),
     ("view.clip_gain_line", "view.clip.gain_line"),
+    ("transport.varispeed_keep_pitch", "transport.varispeed_keep_pitch"),
     ("view.clip_gain_info", "view.clip.gain_info"),
     ("view.clip_effects_status", "view.clip.effects_status"),
     ("view.clip_time_current", "view.clip.time.current"),

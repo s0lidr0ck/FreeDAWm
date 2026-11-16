@@ -948,6 +948,10 @@ pub struct SoundApp {
     pub(crate) paused: Option<(Samples, Option<Samples>, Option<Range>)>,
     /// Varispeed on: the speed every Play runs at (`transport.varispeed`).
     pub varispeed: Option<f32>,
+    /// Shuttle under way: its speed (negative: backwards, played as the frames pass through the
+    /// preview voice) and, going backwards, when the last frame's audio was sent.
+    pub shuttle: f32,
+    shuttle_at: Option<std::time::Instant>,
     /// A Half-Speed Play is starting: it keeps its half speed whatever Varispeed says.
     half_speed_play: bool,
     /// A file or clip auditioning (`audition`).
@@ -1185,6 +1189,8 @@ impl SoundApp {
             paused: None,
             audition: audition::Audition::default(),
             varispeed: None,
+            shuttle: 0.0,
+            shuttle_at: None,
             half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
@@ -1579,12 +1585,82 @@ impl SoundApp {
             p.play_counted(from, end, looped, countoff);
             // Varispeed applies to plays, never to a take (the player refuses to record off speed 1).
             if let Some(v) = self.varispeed.filter(|_| !self.engine.transport.recording && !std::mem::take(&mut self.half_speed_play)) {
+                p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
                 p.set_speed(v);
             }
         } else {
             self.sim = Some((from, end, looped));
         }
         self.note_play_started(from);
+    }
+
+    /// A shuttle step or speed (`transport.shuttle*`): forwards it is a play at that speed (the
+    /// pitch kept when Varispeed Keeps Pitch is on); backwards the transport is stopped and each
+    /// frame plays the stretch it went back over ([`SoundApp::shuttle_back_frame`]).
+    fn shuttle(&mut self, step: i8, speed: Option<f32>) {
+        let was = self.shuttle;
+        let next = match (speed, step) {
+            (Some(v), _) => v,
+            (None, 1) if was > 0.0 => (was * 2.0).min(4.0),
+            (None, 1) => 1.0,
+            (None, -1) if was < 0.0 => (was * 2.0).max(-8.0),
+            (None, -1) => -1.0,
+            _ => 0.0,
+        };
+        let next = if next.is_finite() { next.clamp(-8.0, 4.0) } else { 0.0 };
+        self.shuttle = next;
+        self.shuttle_at = None;
+        if next > 0.0 {
+            if !self.is_playing() {
+                let at = self.engine.transport.position;
+                self.start_play(at, None, None);
+            }
+            if let Some(p) = &self.player {
+                p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
+                p.set_speed(next.max(0.1));
+            }
+            self.ui.status = format!("Shuttle {next}×");
+        } else {
+            if self.is_playing() && was > 0.0 || next < 0.0 && self.is_playing() {
+                self.stop_play();
+            }
+            if let Some(p) = &self.player {
+                p.set_speed(self.varispeed.unwrap_or(1.0));
+            }
+            self.shuttle_at = (next < 0.0).then(std::time::Instant::now);
+            self.ui.status = if next < 0.0 { format!("Shuttle {next}×") } else { "Shuttle stopped".into() };
+        }
+    }
+
+    /// A backwards shuttle's frame: the playhead goes back by the time since the last frame at
+    /// the shuttle's speed, and the audio passed over plays backwards (every audible track's
+    /// clips, through the preview voice, as the Scrubber's does). Stops at the session start.
+    fn shuttle_back_frame(&mut self) {
+        let Some(last) = self.shuttle_at.filter(|_| self.shuttle < 0.0) else { return };
+        if self.is_playing() || self.engine.transport.recording {
+            (self.shuttle, self.shuttle_at) = (0.0, None);
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(last).as_secs_f64().min(0.25);
+        let s = self.engine.session_arc();
+        let from = self.engine.transport.position;
+        let to = (from - s.sample_rate.samples(dt * f64::from(-self.shuttle))).max(0);
+        if to == from {
+            if from == 0 {
+                (self.shuttle, self.shuttle_at) = (0.0, None);
+            }
+            return;
+        }
+        self.shuttle_at = Some(now);
+        let tracks: Vec<soundcraft_model::TrackId> =
+            s.tracks.iter().filter(|t| t.kind.has_playlist() && !t.kind.is_midi() && !t.mixer.mute).map(|t| t.id).collect();
+        if let Some(p) = &self.player
+            && let Some((audio, rate)) = crate::scrub::chunk(&s, &tracks, from, to, dt.max(1.0 / 120.0) * 1.25)
+        {
+            p.preview(audio, rate);
+        }
+        let _ = self.engine.execute("transport.locate", &json!({"at": to}));
     }
 
     /// The UI side of playback starting at `from` (the player already told).
@@ -2670,6 +2746,7 @@ impl SoundApp {
                     }
                     self.play_from_selection();
                 }
+                TransportRequest::Shuttle { step, speed } => self.shuttle(step, speed),
                 TransportRequest::Scrub(at) => self.engine.transport.position = at,
                 TransportRequest::AllNotesOff => {
                     if let Some(p) = &self.player {
@@ -2682,6 +2759,7 @@ impl SoundApp {
                 TransportRequest::DiscardTake => self.discard_recording(),
             }
         }
+        self.shuttle_back_frame();
         self.follow_loop_changes();
         // Read back the position.
         if let Some(p) = &self.player {
@@ -3147,6 +3225,32 @@ mod tests {
             assert!(app.is_playing());
             assert_eq!(app.position(), insertion + i64::from(app.engine.session().sample_rate.hz()) / 4);
         }
+    }
+
+    #[test]
+    fn shuttle_steps_double_and_backwards_moves_the_playhead_back() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("transport.locate", json!({"at": 96_000})).unwrap();
+        app.handle_transport(0.0);
+        for want in [1.0, 2.0, 4.0, 4.0] {
+            app.run("transport.shuttle_forward", json!({})).unwrap();
+            app.handle_transport(0.0);
+            assert_eq!(app.shuttle, want);
+        }
+        assert!(app.is_playing(), "forwards is a play");
+        app.run("transport.shuttle_back", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.shuttle, -1.0);
+        assert!(!app.is_playing(), "backwards stops the play and goes frame by frame");
+        let at = app.position();
+        app.shuttle_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(100));
+        app.handle_transport(0.0);
+        let back = at - app.position();
+        assert!((3_000..=12_000).contains(&back), "about 0.1 s back: {back}");
+        app.run("transport.shuttle_stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.shuttle, 0.0);
+        assert!(app.run("transport.shuttle", json!({"speed": 9})).is_err());
     }
 
     #[test]

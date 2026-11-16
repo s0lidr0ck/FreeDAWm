@@ -31,7 +31,11 @@ fn a_sped_up_clip_does_not_alias() {
     let (s, t) = session(tone, 0.5);
     let out = soundcraft_mix::render_clips(&s, t, Range { start: 1000, end: 40_000 });
     let level = rms(&out[0]);
-    assert!(level < 0.5 * std::f32::consts::FRAC_1_SQRT_2 * 0.03, "aliasing left at {level} (−30 dB would be {})", 0.5 * std::f32::consts::FRAC_1_SQRT_2 * 0.03);
+    assert!(
+        level < 0.5 * std::f32::consts::FRAC_1_SQRT_2 * 0.03,
+        "aliasing left at {level} (−30 dB would be {})",
+        0.5 * std::f32::consts::FRAC_1_SQRT_2 * 0.03
+    );
 }
 
 /// A tone well inside the band plays through a stretched read at its level.

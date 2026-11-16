@@ -83,10 +83,10 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Scrub audio by dragging | ● | ◐ | ● | ● | **Partial**: the Scrubber plays the track it drags over (or the selected tracks), forwards and backwards at the drag's speed, with clip gain, fades and clip effects but not the track's inserts or fader; not while playing, not on the ruler |
-| Shuttle / jog at variable speed | ● | ○ | ● | ● | **Missing** |
+| Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Options › More › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
-| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Partial**: Options › More › Varispeed… plays at 0.1–4× until set back to 1, the pitch moving with it (not during a take); no pitch-preserving option |
-| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Missing** |
+| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Options › More › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
+| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Partial**: Shuttle Back plays the clips backwards (not through the mixer) |
 
 Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
 Varispeed is the only whole-project speed control among the four.
@@ -239,8 +239,8 @@ stateless, as the search only reads the file). Left: building (1) and the worker
 it with the render.
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
-(Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**varispeed done** 2026-11-16, tape style;
-no pitch-preserving option, no shuttle); per-clip transpose and non-destructive
+(Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
+keeping the pitch; shuttle forwards through the mixer and backwards through the preview voice); per-clip transpose and non-destructive
 reverse, 8–12; clip effects that take any module, 8–12; automatic crossfades on overlap and layered
 editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plug-ins and Clip Effects are made off the audio thread now; build strips off the audio
 thread) and worker thread priority, 8–14; automatic device recovery, 3–6.
@@ -265,6 +265,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 |---|---|---|
 | 2026-11-16 | minor | warp markers you drag (section 4) |
 | 2026-11-16 | minor | varispeed clips read through the band-limited reader; the real-time stretch design |
+| 2026-11-16 | minor | tier 3: varispeed that keeps the pitch; shuttle forwards and backwards |
 | 2026-11-16 | minor | Bug 10 partly fixed: AFL and PFL solo listen; a monitor section |
 | 2026-11-16 | minor | Bug 12 fixed: plug-ins and Clip Effects are made off the audio thread |
 | 2026-11-16 | minor | status of tier 2 |
