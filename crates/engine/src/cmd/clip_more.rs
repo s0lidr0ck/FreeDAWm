@@ -521,7 +521,8 @@ mod tests {
             }
         }
 
-        // Varispeed on a non-elastic track does not change the clip length. Render still matches it.
+        // Varispeed on a non-elastic track plays the whole material at the new speed (half the
+        // length at ratio 0.5). Render still matches it.
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
         let tone: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.05).sin() * 0.4).collect();
@@ -537,7 +538,7 @@ mod tests {
         let before = soundcraft_mix::render_clips(e.session(), t, range);
         e.execute("clip.gain_render", &json!({"clip": id.0})).unwrap();
         let c = e.session().find_clip(id).unwrap().1.clone();
-        assert_eq!(c.length, 9_600);
+        assert_eq!(c.length, 4_800);
         assert!((c.stretch - 1.0).abs() < 1e-9);
         let after = soundcraft_mix::render_clips(e.session(), t, range);
         assert!(max_abs_diff(&before, &after) < 1e-5);

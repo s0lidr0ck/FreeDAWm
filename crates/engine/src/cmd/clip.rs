@@ -200,9 +200,25 @@ fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
             base.stretch = 1.0;
         }
         if elastic.is_none() || !base.is_audio() {
-            if let Some(cm) = s.find_clip_mut(*id) {
-                cm.stretch = ratio;
+            // Varispeed: the clip plays `ratio` times as long, so its length follows (it used
+            // to keep its length: the tail was cut off, or ran on into silence).
+            let material = base.length as f64 / if base.stretch.is_finite() && base.stretch > 0.0 { base.stretch } else { 1.0 };
+            if !base.is_audio() {
+                if let Some(cm) = s.find_clip_mut(*id) {
+                    cm.stretch = ratio;
+                }
+                continue;
             }
+            let mut nc = base;
+            nc.stretch = ratio;
+            nc.length = soundcraft_time::to_samples(material * ratio).max(1);
+            nc.fade_in.len = nc.fade_in.len.min(nc.length);
+            nc.fade_out.len = nc.fade_out.len.min(nc.length);
+            // Back on the original file (a render from an Elastic track before): its notes go.
+            for k in ["src", "off", "len", "ratio", "start"] {
+                s.edit.values.remove(&key(k));
+            }
+            super::more_util::replace_clip(s, t, *id, nc);
             continue;
         }
         let out_len = soundcraft_time::to_samples(base.length as f64 * ratio).max(1);
@@ -234,6 +250,13 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
         let orig = warp_original(s, *id);
         let start = s.edit.values.get(&key("start")).map(|v| *v as Samples);
         if let Some(c) = s.find_clip_mut(*id) {
+            // A varispeed clip (no render) goes back to its material's own length.
+            if orig.is_none() && c.is_audio() && c.stretch.is_finite() && c.stretch > 0.0 && (c.stretch - 1.0).abs() > 1e-9 {
+                c.length = soundcraft_time::to_samples(c.length as f64 / c.stretch).max(1);
+                c.fade_in.len = c.fade_in.len.min(c.length);
+                c.fade_out.len = c.fade_out.len.min(c.length);
+                n += 1;
+            }
             c.stretch = 1.0;
             c.warp.clear();
             if let Some((src, off, len)) = orig {
@@ -455,6 +478,30 @@ mod tests {
             e.execute("clip.elastic_properties", &json!({"clips": [cid.0], "ratio": ratio})).unwrap();
             assert_eq!(e.session().find_clip(cid).unwrap().1.length, len, "ratio {ratio}");
         }
+    }
+
+    #[test]
+    fn elastic_properties_off_an_elastic_track_changes_length_with_speed() {
+        // Bug: only the speed changed, so the tail was cut (slower) or ran into silence (faster).
+        use soundcraft_model::{ChannelFormat, Clip, Session, TrackKind};
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Plain"));
+        let samples = (0..20_000).map(|i| if i >= 19_000 { 0.5 } else { 0.0 }).collect();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![samples] };
+        let src = crate::io::add_source(&mut s, "Tail", buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let cid = s.new_clip_id();
+        crate::edit::place_clip(&mut s, t, Clip::audio(cid, "Clip", src, 0, 0, 20_000));
+        let mut e = crate::Engine::new(s);
+        e.execute("clip.elastic_properties", &json!({"clips": [cid.0], "ratio": 2.0})).unwrap();
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        assert_eq!((c.stretch, c.length), (2.0, 40_000));
+        assert!(rendered_peak(&e, t, cid) > 0.4, "the tail still plays");
+        // From the material's length, not the stretched one.
+        e.execute("clip.elastic_properties", &json!({"clips": [cid.0], "ratio": 0.5})).unwrap();
+        assert_eq!(e.session().find_clip(cid).unwrap().1.length, 10_000);
+        e.execute("clip.remove_warp", &json!({"clips": [cid.0]})).unwrap();
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        assert_eq!((c.stretch, c.length), (1.0, 20_000));
     }
 
     #[test]
