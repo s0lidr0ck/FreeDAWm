@@ -588,7 +588,17 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
         (Some(a), None) => ed.selection = soundcraft_time::Range::point(a.max(0)),
         _ => {}
     }
-    if let Some(c) = clips {
+    if let Some(mut c) = clips {
+        // A clip in a clip group brings the whole group (unless `exact`), so it selects, moves,
+        // copies and deletes as one.
+        if !exact {
+            let groups: Vec<u64> = c.iter().filter_map(|id| s.find_clip(*id)).filter_map(|(_, x)| x.group).collect();
+            for x in s.tracks.iter().flat_map(|t| t.clips()).filter(|x| x.group.is_some_and(|g| groups.contains(&g))) {
+                if !c.contains(&x.id) {
+                    c.push(x.id);
+                }
+            }
+        }
         // Selecting clips also selects their range and tracks (Grabber click).
         let mut range: Option<soundcraft_time::Range> = None;
         let mut trs = Vec::new();

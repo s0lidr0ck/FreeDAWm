@@ -547,3 +547,28 @@ fn undo_keeps_the_zoom_scroll_and_tool() {
     assert_eq!((ed.zoom.samples_per_px, ed.zoom.scroll, ed.tool), (7.0, 123, soundcraft_model::Tool::from_id("trim").unwrap()));
     assert_eq!(clips(&e, t).len(), 1, "the edit itself is undone");
 }
+
+// ---- tier 2 (first slice): clip groups select, move and delete as one ----------------------
+
+#[test]
+fn a_clip_group_selects_moves_and_deletes_as_one() {
+    let mut e = engine("slip");
+    let (t, a) = track(&mut e, &[(0, 1000, 0), (3000, 500, 0)]);
+    let (u, b) = track(&mut e, &[(500, 1000, 5000)]);
+    run(&mut e, "clip.group", json!({"clips": [a[0].0, b[0].0]}));
+    run(&mut e, "edit.select", json!({"clips": [a[0].0]}));
+    let mut sel: Vec<u64> = e.session().edit.selected_clips.iter().map(|c| c.0).collect();
+    sel.sort_unstable();
+    assert_eq!(sel, vec![a[0].0, b[0].0], "the group comes along");
+    run(&mut e, "edit.move_clips", json!({"by": 100}));
+    assert_eq!(clips(&e, t), vec![(100, 1000, 0), (3000, 500, 0)]);
+    assert_eq!(clips(&e, u), vec![(600, 1000, 5000)]);
+    run(&mut e, "edit.select", json!({"clips": [b[0].0]}));
+    run(&mut e, "edit.clear", json!({}));
+    assert_eq!(clips(&e, t), vec![(3000, 500, 0)], "the ungrouped clip stays");
+    assert!(clips(&e, u).is_empty());
+    // `exact` picks one member alone.
+    run(&mut e, "edit.undo", json!({}));
+    run(&mut e, "edit.select", json!({"clips": [b[0].0], "exact": true}));
+    assert_eq!(e.session().edit.selected_clips, vec![b[0]]);
+}

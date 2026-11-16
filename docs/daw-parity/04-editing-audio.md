@@ -38,7 +38,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers | Medium: edit groups do not edit together; no rubber-band clip selection |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients | Medium: overwrite is the only overlap mode |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups are not honoured; no clip transpose |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor | **Large**: clip groups only select together; no clip transpose |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
@@ -136,7 +136,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip mute | ● | ● | ● | ● | **Works** |
 | Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
-| Clip groups that select and move as one | ● | ● | ● | ● | **Flag only**: the group is stored and exported, never used in editing |
+| Clip groups that select and move as one | ● | ● | ● | ● | **Partial**: selecting a grouped clip selects its group, so moves, cuts, copies and deletes take the whole group; a drag that starts on an unselected member, trims and fades still act on one clip |
 | Loop a clip without making copies | ● | ◐ | ● | ◐ | **Partial**: makes real copies, N times or to a length |
 | Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Missing**: offline pitch shift only |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
@@ -322,6 +322,11 @@ organise, with folder editing, 8–12; a sample editor with a waveform pencil, 8
 zoom and track layout, and track markers (Pro Tools), 3–5; snap to zero crossings and real-time
 pitch correction, 4–8.
 
+**Status of tiers 2 and 3 (2026-11-16).** Done: undo and redo leave the zoom, scroll and tool
+alone. First slice: clip groups select as one (see E). Not started: every other tier-2 and tier-3
+item, ARA 2 hosting included. Real stretch algorithms were not started either, so as not to
+duplicate section 1's live time-stretch work.
+
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
 phase-coherent multitrack straightening in one command, a built-in vocal editor with formant
@@ -352,3 +357,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 18 partly fixed: time and frame grid lines no longer drift |
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
+| 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
