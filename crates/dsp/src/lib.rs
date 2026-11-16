@@ -211,8 +211,9 @@ pub const HIDDEN_STOCK: &[Category] =
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
-/// drawer with its response picker, for now, and Mend's the drawer with its model's status.)
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend"];
+/// drawer with its response picker, for now, and Mend's the drawer with its model's status.) Keel,
+/// the bass amp, is offered beside Amp, and Heft, the bass enhancer.
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft"];
 
 /// The meter plug-ins (Spectrum, Loudness Meter, Phase Meter, Tuner): utilities with an editor of
 /// their own, listed under Utilities (the owner's call), not with the engines.

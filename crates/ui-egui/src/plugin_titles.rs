@@ -31,6 +31,8 @@ pub fn subtitle(id: &str) -> &'static str {
         "rez" => "Resonance Suppressor",
         "lull" => "Gate & Expander",
         "sprawl" => "Stereo Imager",
+        "keel" => "Bass Amp",
+        "heft" => "Bass Enhancer",
         "vault" => "Convolution Reverb",
         "mend" => "Vocal Cleaner",
         "imprint" => "Impulse Response Capture",

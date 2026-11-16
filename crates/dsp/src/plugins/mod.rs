@@ -5,8 +5,10 @@ pub mod dynamics;
 pub mod eq;
 pub mod fs;
 pub mod harmonic;
+pub mod heft;
 pub mod imprint;
 pub mod juke;
+pub mod keel;
 pub mod lull;
 pub mod mend;
 pub mod meters;
@@ -27,7 +29,7 @@ pub mod vault;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 39] = [
+const BUILTINS: [&PluginInfo; 41] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -50,6 +52,8 @@ const BUILTINS: [&PluginInfo; 39] = [
     &harmonic::RECT_INFO,
     &pitch::PITCH_INFO,
     &sprawl::SPRAWL_INFO,
+    &keel::KEEL_INFO,
+    &heft::HEFT_INFO,
     &utility::SHIFT_INFO,
     &imprint::IMPRINT_INFO,
     &utility::GAIN_INFO,
@@ -128,6 +132,8 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "rectifier" => Box::new(harmonic::Rectifier::new()),
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
         "sprawl" => Box::new(sprawl::Sprawl::new()),
+        "keel" => Box::new(keel::Keel::new()),
+        "heft" => Box::new(heft::Heft::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "imprint" => Box::new(imprint::Imprint::new()),
         "gain" => Box::new(utility::Gain::new()),
@@ -180,6 +186,8 @@ mod tests {
         "rectifier",
         "pitch_shifter",
         "sprawl",
+        "keel",
+        "heft",
         "time_shift",
         "imprint",
         "gain",

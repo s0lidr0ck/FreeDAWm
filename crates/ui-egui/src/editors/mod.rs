@@ -12,6 +12,8 @@ pub mod copyq;
 pub mod delay;
 pub mod dist;
 pub mod filter;
+pub mod heft;
+pub mod keel;
 pub mod levelup;
 pub mod lull;
 pub mod manners;
@@ -69,6 +71,8 @@ pub(crate) fn not_in_presets(plugin: &str) -> &'static [&'static str] {
         "fs_dist" => dist::FAMILY.not_in_presets,
         "fs_filter" => filter::FAMILY.not_in_presets,
         "fs_levelup" => &levelup::NOT_IN_PRESETS,
+        "heft" => heft::FAMILY.not_in_presets,
+        "keel" => keel::FAMILY.not_in_presets,
         "lull" => lull::FAMILY.not_in_presets,
         "fs_manners" => manners::FAMILY.not_in_presets,
         "fs_mod" => mod_engine::FAMILY.not_in_presets,

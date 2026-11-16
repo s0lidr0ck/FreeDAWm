@@ -19,8 +19,9 @@ use std::fmt::Write as _;
 /// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350),
 /// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ, and from
 /// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
-/// sixteen parameters and their lines).
-pub const MAX_CHARS: usize = 51_500;
+/// sixteen parameters and their lines), and from 51 500 for Keel and Heft (1 100: their sixteen
+/// parameters and their lines).
+pub const MAX_CHARS: usize = 52_600;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -49,6 +50,12 @@ pub fn guides_format() -> Value {
 pub fn purpose(id: &str) -> &'static str {
     match id {
         "fs_amp" => "Guitar/bass amp: seven tube amps solved from their schematics, built-in or impulse-response cabinet, Auto Level, output trim.",
+        "heft" => {
+            "Bass enhancer: harmonics of the band below Frequency added above it (Character even/odd), Original Bass keeps or removes the lows."
+        }
+        "keel" => {
+            "Bass amp: Tube, Solid State or Grind preamp (4x oversampled), bass-mid-treble stack, Bright, 4x10/1x15/8x10 cabinet blended with the DI, Squeeze limiter."
+        }
         "fs_chamber" => "Reverb chamber you build yourself: room geometry, materials, speaker and mic placement.",
         "fs_cleanq" => {
             "24-band dynamic EQ (bells, shelves, cuts; any band can be dynamic) with a dynamic ceiling; Scout's EQ guides are drawn on it."
