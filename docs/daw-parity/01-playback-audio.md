@@ -165,11 +165,11 @@ Varispeed is the only whole-project speed control among the four.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Preview a file before importing | ● | ● | ● | ● | **Missing** |
+| Preview a file before importing | ● | ● | ● | ● | **Works** in the Workspace window: a click plays the file (read on a worker thread), again stops it; not in the import dialog |
 | Preview in time with the session tempo | ● | ● | ● | ● | **Missing** |
 | Preview while the session plays, in sync | ● | ● | ● | ● | **Missing** |
-| Audition a clip from the clip list or pool | ● | ● | ● | ● | **Missing** |
-| Preview volume and output | ● | ● | ● | ● | **Missing** |
+| Audition a clip from the clip list or pool | ● | ● | ● | ● | **Works**: Alt-click or Audition in the Clip List, with its clip gain |
+| Preview volume and output | ● | ● | ● | ● | **Partial**: a preview level (Workspace window); always the first two outputs |
 
 The player already has a raw preview voice (`Player::preview`, used only by Juke's hit picker), so
 the engine side of H is partly there.
@@ -207,7 +207,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
 | Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | Held rewind / fast forward **done** (2026-11-16); scrub audio not started (the resampler it needed is in) |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** for the device-rate and speed path (2026-11-16): `playback/src/resample.rs`, 16 frames of added delay off the direct path; stretched clips still read with linear interpolation in the mixer |
-| Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | Builds on `Player::preview` |
+| Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | **Partly done** (2026-11-16): Workspace files and Clip List clips at a preview level (`ui-egui/src/audition.rs`); left: the import dialog, session tempo, in sync with playback |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
 | Typing a position into the counter; pause | 2–4 | **Done** (2026-11-16) |
 | Streaming for AIFF and for converted or compressed files (decode once to a cache file) | 6–10 | Shrinks G-06 |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: auditioning files in the Workspace and clips in the Clip List |
 | 2026-11-16 | minor | tier 2: Pause, typing a position into the counter, held rewind and fast forward |
 | 2026-11-16 | minor | tier 2: a band-limited resampler for other device rates and speeds |
 | 2026-11-16 | minor | the loop changes while playing |

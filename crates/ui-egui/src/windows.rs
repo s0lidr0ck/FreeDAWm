@@ -506,6 +506,13 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             }
             ui.label(egui::RichText::new(&dir).small());
         });
+        ui.horizontal(|ui| {
+            ui.label("Preview level");
+            ui.add(egui::Slider::new(&mut app.ui.preview_db, -40.0..=6.0).suffix(" dB"));
+            if (app.audition.playing.is_some() || crate::audition::loading(app)) && ui.button("■ Stop").clicked() {
+                crate::audition::stop(app);
+            }
+        });
         ui.separator();
         let mut entries: Vec<(String, bool)> = std::fs::read_dir(&dir)
             .map(|rd| {
@@ -530,7 +537,13 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             for (name, is_dir) in entries.into_iter().take(2000) {
                 let path = std::path::Path::new(&dir).join(&name).to_string_lossy().into_owned();
                 let label = if is_dir { format!("📁 {name}") } else { format!("🔊 {name}") };
-                let r = ui.selectable_label(false, label);
+                let audio = !is_dir && !soundcraft_model::is_session_path(&name) && !is_midi_file(&name);
+                let on = audio && app.audition.playing.as_deref() == Some(path.as_str());
+                let r = ui.selectable_label(on, label);
+                if audio && r.clicked() && !r.double_clicked() {
+                    // A click auditions the file (again: stops it); a double-click imports it.
+                    crate::audition::file(app, &path);
+                }
                 if r.double_clicked() {
                     if is_dir {
                         app.ui.workspace_dir = path;
@@ -547,7 +560,10 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
-        ui.label(egui::RichText::new("Double-click to import audio/MIDI at the insertion point or open a session.").small());
+        ui.label(
+            egui::RichText::new("Click an audio file to hear it; double-click to import audio/MIDI at the insertion point or open a session.")
+                .small(),
+        );
     });
     app.ui.show_workspace = open;
 }

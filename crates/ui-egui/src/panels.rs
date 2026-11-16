@@ -288,6 +288,15 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let mut filter: String = ui.ctx().memory(|m| m.data.get_temp(fkey)).unwrap_or_default();
     ui.add(egui::TextEdit::singleline(&mut filter).hint_text("🔍 Find clips").desired_width(f32::INFINITY));
     ui.ctx().memory_mut(|m| m.data.insert_temp(fkey, filter.clone()));
+    if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
+        let unused = unused_sources(app.engine.session());
+        if unused.is_empty() {
+            app.ui.status = "Every file is used".into();
+        } else {
+            let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
+            let _ = app.run("edit.select", json!({"sources": ids}));
+        }
+    }
     let needle = filter.to_lowercase();
     let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -307,6 +316,17 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                         ui.close();
                     }
                     ui.separator();
+                }
+                if !whole {
+                    if ui.button("Audition").clicked() {
+                        crate::audition::clip(app, ClipId(id));
+                        ui.close();
+                    }
+                    if ui.button("Rename…").clicked() {
+                        let _ = app.run("edit.select", json!({"clips": [id], "exact": true}));
+                        app.dialogs.open_for_command(&app.engine, "clip.rename");
+                        ui.close();
+                    }
                 }
                 if ui.button("Clear…").clicked() {
                     let (clips, sources) = if whole { (vec![], vec![SourceId(id)]) } else { (vec![ClipId(id)], vec![]) };
@@ -332,11 +352,47 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 if whole { bold(11.0) } else { regular(11.0) },
                 t.text,
             );
-            if resp.clicked() {
+            if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
+                // Alt-click auditions a clip, as in Pro Tools.
+                crate::audition::clip(app, ClipId(id));
+            } else if resp.clicked() {
                 let _ = app.run("edit.select", if whole { json!({"sources": [id]}) } else { json!({"clips": [id]}) });
+                if !whole {
+                    reveal_clip(app, ClipId(id));
+                }
             }
         }
     });
+}
+
+/// The files no clip plays on any track's playlists (a drum kit's pad samples, which its
+/// instrument plays, count as used).
+pub fn unused_sources(s: &soundcraft_model::Session) -> Vec<SourceId> {
+    let mut used: std::collections::HashSet<SourceId> =
+        s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
+    for c in s.all_clips() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content {
+            used.insert(*source);
+        }
+        if let Some(k) = c.clean_alt() {
+            used.insert(k.source);
+        }
+    }
+    s.sources.iter().map(|src| src.id).filter(|id| !used.contains(id)).collect()
+}
+
+/// Scrolls the Edit window to `clip` when it is off screen.
+fn reveal_clip(app: &mut SoundApp, id: ClipId) {
+    let s = app.engine.session();
+    let Some((_, c)) = s.find_clip(id) else { return };
+    let (start, end) = (c.start, c.end());
+    let z = &s.edit.zoom;
+    let width = f64::from(app.edit_layout.timeline[2] - app.edit_layout.timeline[0]).max(1.0);
+    let shown = (z.scroll, z.scroll.saturating_add((width * z.samples_per_px.max(0.01)) as i64));
+    if end <= shown.0 || start >= shown.1 {
+        let margin = ((shown.1 - shown.0) / 10).max(0);
+        let _ = app.run("view.scroll", json!({"to": start.saturating_sub(margin).max(0)}));
+    }
 }
 
 /// Floating windows.

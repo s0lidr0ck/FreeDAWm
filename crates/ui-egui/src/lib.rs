@@ -4,6 +4,7 @@
 //! executing commands. It can be replaced without touching anything below it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod audition;
 pub mod auto_lanes;
 pub mod band;
 pub mod bounce;
@@ -391,6 +392,8 @@ pub struct UiState {
     pub show_video_universe: bool,
     pub video_burn_in: bool,
     pub workspace_dir: String,
+    /// The level files and clips are auditioned at (Workspace, Clip List), in dB.
+    pub preview_db: f32,
     pub configurations: Vec<(String, Value)>,
     /// Appearance (`ui.theme`): dark by default, light or follow the system on request.
     pub theme: theme::ThemeMode,
@@ -570,6 +573,7 @@ impl Default for UiState {
             show_video_universe: false,
             video_burn_in: false,
             workspace_dir: String::new(),
+            preview_db: 0.0,
             configurations: Vec::new(),
             theme: theme::ThemeMode::Dark,
             window_size: [1600.0, 1000.0],
@@ -833,6 +837,8 @@ pub struct SoundApp {
     /// Paused: where to resume, with the end and loop of the play paused. Any other start or a
     /// locate forgets it.
     pub(crate) paused: Option<(Samples, Option<Samples>, Option<Range>)>,
+    /// A file or clip auditioning (`audition`).
+    pub audition: audition::Audition,
     /// Loop Playback and the loop range as they were when the loop playing was last decided (at
     /// Play, or the last change while playing): a change while playing moves the loop.
     loop_basis: (bool, Option<Range>),
@@ -1055,6 +1061,7 @@ impl SoundApp {
             play_loop: None,
             play_end: None,
             paused: None,
+            audition: audition::Audition::default(),
             loop_basis: (false, None),
             countoff: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -2585,6 +2592,7 @@ impl SoundApp {
             return;
         }
         self.tell_device_fallback();
+        audition::poll(self);
         // A ruler pick lasts only while it is still what Delete would mean.
         ruler_items::prune(self);
         // Fonts set now take effect next frame, so draw only from the frame after.

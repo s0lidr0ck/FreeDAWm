@@ -241,8 +241,8 @@ why they score ◐ for "built-in".
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | List of clips and files with a search | ● | ● | ● | ● | **Works**; shows the active playlists only |
-| Audition, rename and locate from the list | ● | ● | ● | ● | **Partial**: selects the clip but does not scroll to it; no audition or rename |
-| Select and remove unused clips | ● | ● | ● | ● | **Partial**: remove works, nothing finds the unused ones |
+| Audition, rename and locate from the list | ● | ● | ● | ● | **Works**: a click selects the clip and scrolls to it when off screen; Alt-click or Audition plays it; Rename… from its menu |
+| Select and remove unused clips | ● | ● | ● | ● | **Works**: Select Unused Files picks the files no clip plays; Clear removes them |
 | Relink missing audio files | ● | ● | ● | ● | **Missing** (video can be relinked) |
 | Compact files to what is used | ● | ● | ● | ● | **Missing** |
 | "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Missing**: the command only renames the clip "Captured" |
@@ -358,4 +358,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: the Clip List auditions, renames, scrolls to clips and finds unused files |
 | 2026-11-16 | minor | Bug 24 fixed: "=" nudges later beside "−"; dragged fades default to equal power |
