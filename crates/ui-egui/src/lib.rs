@@ -1965,10 +1965,11 @@ impl SoundApp {
         // The old player goes first: with ASIO, the SDK holds one driver per process, and opening
         // the new device while the old streams would initialise (or replace) the running driver
         // and then destroy it under the audio thread.
-        self.player = None;
-        let player = soundcraft_playback::Player::with_config(self.engine.session_arc(), &self.ui.audio);
-        player.locate(at);
-        self.player = Some(player);
+        let (session, audio) = (self.engine.session_arc(), &self.ui.audio);
+        reopen(&mut self.player, || soundcraft_playback::Player::with_config(session, audio));
+        if let Some(p) = &self.player {
+            p.locate(at);
+        }
         // The new player gets the band on the next frame.
         self.band_lib_key = 0;
         self.midi_sent = false;
@@ -2077,7 +2078,9 @@ impl SoundApp {
         self.recorder_failed = false;
         // Rigs already back on the old player are stored before it goes.
         scout::drain(self);
-        self.player = Some(Player::with_config(self.engine.session_arc(), &self.ui.audio));
+        // The old player goes first (see `apply_audio_config`): ASIO allows one driver at a time.
+        let (session, audio) = (self.engine.session_arc(), &self.ui.audio);
+        reopen(&mut self.player, || Player::with_config(session, audio));
         // The new player gets the band on the next frame.
         self.band_lib_key = 0;
         self.midi_sent = false;
@@ -2580,6 +2583,13 @@ fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32, b: prefere
     d.gr = if gr > d.gr { gr } else { d.gr * fall };
 }
 
+/// Replaces what `slot` holds with `make()`, dropping the old one first: an audio device is
+/// closed before the next is opened (ASIO allows one driver per process).
+fn reopen<T>(slot: &mut Option<T>, make: impl FnOnce() -> T) {
+    *slot = None;
+    *slot = Some(make());
+}
+
 /// The status line naming the plugin `slot` (a module or the instrument) of a track, which the
 /// engine took out of the signal path.
 fn failed_plugin_status(s: &soundcraft_model::Session, track: TrackId, slot: Option<SlotKey>) -> Option<String> {
@@ -2698,6 +2708,27 @@ mod tests {
         app.handle_transport(0.0);
         let r = soundcraft_time::Range::new(120_000, 132_000);
         assert_eq!(app.sim, Some((120_000, None, Some(r))), "looped with Loop Playback");
+    }
+
+    #[test]
+    fn reopening_closes_the_old_device_before_opening_the_new() {
+        // Bug: Reconnect opened the new device while the old one still streamed.
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Dev(Rc<RefCell<Vec<&'static str>>>, &'static str);
+        impl Drop for Dev {
+            fn drop(&mut self) {
+                self.0.borrow_mut().push(if self.1 == "old" { "close old" } else { "close new" });
+            }
+        }
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut slot = Some(Dev(log.clone(), "old"));
+        let l = log.clone();
+        super::reopen(&mut slot, move || {
+            l.borrow_mut().push("open new");
+            Dev(l.clone(), "new")
+        });
+        assert_eq!(*log.borrow(), ["close old", "open new"]);
     }
 
     #[test]
