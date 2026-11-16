@@ -612,6 +612,24 @@ pub fn shown(s: &Session, t: &Track) -> bool {
     !t.hidden && !folder_collapsed(s, t)
 }
 
+/// How many tracks move with track `t` as one block: 1, or for a folder, it and the tracks right
+/// after it that sit inside it at any level.
+pub fn folder_block(s: &Session, t: TrackId) -> usize {
+    let Some(i) = s.track_index(t) else { return 1 };
+    let inside = |tr: &Track| {
+        let mut f = tr.folder;
+        for _ in 0..64 {
+            match f {
+                Some(id) if id == t => return true,
+                Some(id) => f = s.track(id).and_then(|x| x.folder),
+                None => return false,
+            }
+        }
+        false
+    };
+    1 + s.tracks.iter().skip(i + 1).take_while(|tr| inside(tr)).count()
+}
+
 /// Hidden because a folder at any level above this track is closed.
 pub fn folder_collapsed(s: &Session, track: &Track) -> bool {
     let mut current = track.folder;

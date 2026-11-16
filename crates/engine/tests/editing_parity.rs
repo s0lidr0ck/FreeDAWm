@@ -487,3 +487,63 @@ fn coalescing_volume_to_clip_gain_covers_every_playlist() {
         assert!(pl.clips.iter().all(|c| (db(c) + 6.0).abs() < 1e-2), "{}: {:?}", pl.name, pl.clips.iter().map(db).collect::<Vec<_>>());
     }
 }
+
+// ---- bug 15: moving a folder track left its members behind ---------------------------------
+
+#[test]
+fn a_moved_folder_takes_its_members() {
+    let mut e = engine("slip");
+    let ids: Vec<TrackId> = (0..4).map(|_| new_track(&mut e)).collect();
+    // Track 1 is a folder holding tracks 2 and 3; track 0 is above it.
+    for m in &ids[2..] {
+        e.session_mut().track_mut(*m).unwrap().folder = Some(ids[1]);
+    }
+    assert_eq!(soundcraft_engine::edit::folder_block(e.session(), ids[1]), 3);
+    run(&mut e, "track.move", json!({"track": ids[1].0, "to": 0}));
+    let order: Vec<TrackId> = e.session().tracks.iter().map(|t| t.id).filter(|t| ids.contains(t)).collect();
+    assert_eq!(order, vec![ids[1], ids[2], ids[3], ids[0]]);
+}
+
+// ---- bug 24 (part): marker names, stray marker lengths, view-only locations ----------------
+
+#[test]
+fn new_markers_get_unused_names_and_no_stray_length() {
+    let mut e = engine("slip");
+    run(&mut e, "edit.select", json!({"start": 1000}));
+    for at in [100, 200] {
+        run(&mut e, "markers.add", json!({"at": at}));
+    }
+    run(&mut e, "markers.delete", json!({"number": 1}));
+    // The selection starts after where a playing transport would add it: still a point.
+    run(&mut e, "markers.add", json!({}));
+    let s = e.session();
+    let names: Vec<&str> = s.markers.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names.iter().filter(|n| **n == "Marker 2").count(), 1, "{names:?}");
+    assert!(s.markers.iter().all(|m| m.end == m.start), "point markers have no length");
+}
+
+#[test]
+fn a_view_only_location_leaves_the_playhead() {
+    let mut e = engine("slip");
+    let n = run(&mut e, "markers.add", json!({"at": 5000, "kind": "none"}))["number"].as_u64().unwrap();
+    e.session_mut().edit.playhead = 100;
+    run(&mut e, "markers.recall", json!({"number": n}));
+    assert_eq!(e.session().edit.playhead, 100);
+}
+
+// ---- tier 2: undo leaves the view and the tool alone ----------------------------------------
+
+#[test]
+fn undo_keeps_the_zoom_scroll_and_tool() {
+    let mut e = engine("slip");
+    let (t, _) = track(&mut e, &[(0, 1000, 0)]);
+    run(&mut e, "edit.separate", json!({"tracks": [t.0], "at": 500}));
+    let z = &mut e.session_mut().edit;
+    z.zoom.samples_per_px = 7.0;
+    z.zoom.scroll = 123;
+    z.tool = soundcraft_model::Tool::from_id("trim").unwrap();
+    run(&mut e, "edit.undo", json!({}));
+    let ed = &e.session().edit;
+    assert_eq!((ed.zoom.samples_per_px, ed.zoom.scroll, ed.tool), (7.0, 123, soundcraft_model::Tool::from_id("trim").unwrap()));
+    assert_eq!(clips(&e, t).len(), 1, "the edit itself is undone");
+}

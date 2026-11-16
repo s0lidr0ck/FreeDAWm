@@ -606,12 +606,20 @@ impl Engine {
         use edit::{RELATIVE_GRID, SHUFFLE_LOCK, SNAP_TO_GRID};
         let flags = [SNAP_TO_GRID, SHUFFLE_LOCK, RELATIVE_GRID];
         let ed = &self.doc.edit;
-        if ed.edit_mode != from.edit.edit_mode || flags.iter().any(|f| ed.flag(f) != from.edit.flag(f)) {
+        // The view (zoom, scroll, waveform height) and the current tool stay too: undo takes back
+        // the edit, not where the person was looking or what they were holding.
+        if ed.edit_mode != from.edit.edit_mode
+            || flags.iter().any(|f| ed.flag(f) != from.edit.flag(f))
+            || ed.zoom != from.edit.zoom
+            || ed.tool != from.edit.tool
+        {
             let ed = &mut Arc::make_mut(&mut self.doc).edit;
             ed.edit_mode = from.edit.edit_mode;
             for f in flags {
                 ed.set_flag(f, from.edit.flag(f));
             }
+            ed.zoom = from.edit.zoom;
+            ed.tool = from.edit.tool;
         }
     }
 

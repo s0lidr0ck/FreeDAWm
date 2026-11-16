@@ -116,7 +116,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Track",
             [],
             None,
-            "{track, to: index, count?: n (the track and the n-1 after it move as one block, e.g. a folder with its members; `to` counts without the block)}",
+            "{track, to: index, count?: n (the track and the n-1 after it move as one block; default: a folder with its members, else 1; `to` counts without the block)}",
             has_tracks,
             move_track
         ),
@@ -960,7 +960,11 @@ fn auto_lanes(e: &mut Engine, p: &Value) -> Result<Value> {
 fn move_track(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = track_param(e, "track.move", p, "track")?.ok_or_else(|| bad("track.move", "`track` required"))?;
     let to = i64_or(p, "to", 0).max(0) as usize;
-    let count = i64_or(p, "count", 1).max(1) as usize;
+    // A folder moves with its members unless a count says otherwise.
+    let count = match p.get("count") {
+        Some(_) => i64_or(p, "count", 1).max(1) as usize,
+        None => crate::edit::folder_block(e.session(), t),
+    };
     let s = e.session_mut();
     if let Some(i) = s.track_index(t) {
         let end = i.saturating_add(count).min(s.tracks.len());

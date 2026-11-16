@@ -46,7 +46,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
 | L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
-| M. Undo and keys | 200 levels, history window, single-key editing, a key editor | Small: undo also rewinds zoom, scroll and tool |
+| M. Undo and keys | 200 levels, history window, single-key editing, a key editor | Small: redo by clicking in the history |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
 (a clip edge or a warp marker), with a real choice of algorithm; **edits that respect groups and
@@ -105,7 +105,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Link timeline and edit selection | ● | — | — | — | **Works** |
 | Link track and edit selection | ● | ◐ | ● | ● | **Flag only** |
 | Edit groups: an edit on one grouped track applies to all | ● | ● | ● | ● | **Partial**: selecting a track selects its group; clip grabs, moves and trims do not follow |
-| Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; the keys for zoom-to-selection and fit assume a 1200-pixel window |
+| Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; zoom-to-selection and fit size to the timeline on screen (bug 23, fixed) |
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
 | Markers on several rulers, a marker list | ● | ● | ● | ● | **Works** |
 | A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Missing** |
@@ -226,7 +226,7 @@ why they score ◐ for "built-in".
 |---|:-:|:-:|:-:|:-:|---|
 | Duplicate a track with a choice of what comes along | ● | ● | ● | ● | **Works**; the copy's clips keep the original's group and loop ids |
 | Freeze, commit | ● | ● | ● | ● | **Works** (see G for the commit bug) |
-| Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; dragging a folder leaves its members behind (bug 15) |
+| Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
 | Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing |
 | Lock a whole track | ◐ | ● | ● | ● | **Missing** |
 | Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
@@ -254,7 +254,7 @@ why they score ◐ for "built-in".
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Multi-level undo and redo, every edit covered | ● | ● | ● | ● | **Works** (200 levels) |
-| Undo leaves zoom, scroll and the current tool alone | ● | ● | ● | ● | **Missing**: they jump back with the edit |
+| Undo leaves zoom, scroll and the current tool alone | ● | ● | ● | ● | **Works**: undo and redo keep the zoom, scroll, waveform height and tool, as they keep the Edit mode |
 | Undo history list | ● | ● | ● | ● | **Works**; redo by clicking is not offered |
 | Single-key editing commands | ● | ● | ● | ● | **Works** |
 | Editable key bindings | ● | ● | ● | ● | **Works**; a few fixed keys cannot be changed |
@@ -279,7 +279,7 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 12 | **Fixed.** Conform to Tempo set a varispeed ratio, so pitch changed even on a pitch-preserving (Elastic) track. On an Elastic track (any algorithm but Varispeed) it now renders the clip with the pitch-preserving stretch from its original, as Elastic Properties does. Test: `cmd::clip::tests::conform_on_an_elastic_track_keeps_the_pitch` | `engine/src/cmd/clip_more.rs` (`conform`) |
 | 13 | **Partly fixed.** The first time a clip with effects played, its buffer and processors were created inside `render`. They are now made by `MixEngine::sync` when the session changes (`sync_clip_fx`; the structure fingerprint includes which clips have effects and which modules they need), modules no longer needed are retired rather than dropped, and `render` only looks them up and sets parameters. Left: `sync` itself runs on the audio thread when the player receives a new session, as it does for built-in insert modules; making them on the control thread needs the third-party adopt path (`SlotKey`) extended to clip effects. Test: `mix` `clip_effects_are_prepared_before_the_clip_plays` | `mix/src/lib.rs` (`sync_clip_fx`, `ClipFx::prepare_modules`, `process_strip`) |
 | 14 | **Fixed.** Send to Back / Bring to Front reordered the playlist without re-sorting, and the next edit's sort undid the order anyway. Overlapping clips are mixed together, so there is no order to keep: the commands now leave the playlist alone and say so. A real front/back order belongs with the overlap modes (tier 2). Test: `cmd::clip::tests::layer_commands_keep_the_playlist_in_time_order` | `engine/src/cmd/clip.rs` (`layer`) |
-| 15 | Dragging a folder track moves the folder without its members | `ui-egui/src/edit_window.rs:1301` |
+| 15 | **Fixed.** Dragging a folder track moved the folder without its members. `track.move` now moves a folder with the tracks inside it at any level unless a count is given (`edit::folder_block`), and the drag passes that count and refuses a drop inside the folder itself. Test: `engine/tests/editing_parity.rs` (the drag itself not checked in a GUI) | `engine/src/cmd/track.rs` (`move_track`); `ui-egui/src/edit_window.rs` |
 | 16 | **Fixed.** Nudge with a partial selection moved whole clips; clips nudged past zero were each clamped, closing the gaps between them. A range selection now nudges only the clips wholly inside it, and a move left stops at the session start for all moving clips together. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit.rs` (`nudge_clips`); `engine/src/edit.rs` (`move_clips`) |
 | 17 | **Fixed.** A Shuffle trim rippled clips from just after the clip's start (its crossfade partner included) but automation from its end, so points under the crossfade were deleted. Automation now moves from the same place as the clips. Test: `engine/tests/editing_parity.rs` | `engine/src/edit.rs` (`trim_clip`) |
 | 18 | **Partly fixed.** Time and frame grids rounded the step to whole samples, so 29.97 fps at 48 kHz drifted about 0.9 s an hour. Line *k* is now at *k* × the exact step, rounded (`GridValue::exact_step`). Left: the lines still count from sample 0, not the timecode start; that needs the start passed to every grid call. Test: `time` `frame_lines_do_not_drift_over_an_hour` | `time/src/grid.rs` (`line_at_or_before`, `next_line`) |
@@ -287,8 +287,8 @@ Found while reading; none was reproduced by running the program. Paths are under
 | 20 | **Partly fixed.** Processing a clip did not shorten fades to the new length, clear warp markers or swap the fades on Reverse, and rendered a muted clip to silence. Fades are now kept inside the new length, warp markers cleared, Reverse swaps the fades and mirrors the sync point, and a muted clip is processed as it sounds unmuted. Left: the handles are still dropped (tier 2, "processing that keeps handles"). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/audiosuite.rs` |
 | 21 | **Fixed.** Coalescing volume automation to clip gain changed only the active playlist, then zeroed the fader, so other playlists changed level. Every playlist and take layer's clips now take the level. Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/edit_more.rs` (`coalesce_volume_to_clip_gain`) |
 | 22 | **Fixed.** Export Clips rendered the clip's time range, not the clip, so overlapping neighbours were in the file (and a muted clip was silence). Each clip now renders alone and unmuted. Test: `io::strip_tests::exported_clips_hold_only_their_own_audio` | `engine/src/io.rs` (`export_clips`) |
-| 23 | Zoom to Selection and Fit by key assume a 1200-pixel timeline | `engine/src/cmd/view.rs:32, 42` |
-| 24 | Smaller: "+" on a US keyboard changes the grid, not nudge; default marker names repeat after a delete; Enter while playing can make a marker with a stray length; a view-only location still moves the playhead; a dragged fade defaults to S-curve and a commanded one to equal power | `ui-egui/src/shortcuts.rs:478, 517`; `engine/src/cmd/event.rs:404-424, 518-521`; `ui-egui/src/edit_window.rs:3301` |
+| 23 | **Fixed.** Zoom to Selection and Fit by key or menu assumed a 1200-pixel timeline. The app now passes the timeline's width on screen when the call names none (`SoundApp::run_with`); headless callers still default to 1200. Not checked in a running GUI | `ui-egui/src/lib.rs` |
+| 24 | **Partly fixed.** Default marker names no longer repeat after a delete; a marker added while playing is a point (no stray length to the selection start); a view-only location no longer moves the playhead. Left: "+" on a US keyboard is Shift+=, which the grid-step key also uses (a key-map decision that needs a keyboard to check), and a dragged fade still defaults to S-curve while a commanded one is equal power (many UI tests pin the S-curve; a product decision). Test: `engine/tests/editing_parity.rs` | `engine/src/cmd/event.rs` (`add_marker`, `recall_marker`); `ui-egui/src/shortcuts.rs`; `ui-egui/src/edit_window.rs` |
 
 ## Suggested order of work
 
@@ -351,3 +351,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 16 and 17 fixed: partial-selection nudge, spacing at the session start, Shuffle trim automation |
 | 2026-11-16 | minor | Bug 18 partly fixed: time and frame grid lines no longer drift |
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
+| 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |

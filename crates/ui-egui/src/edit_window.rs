@@ -1296,9 +1296,12 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         let s = app.engine.session();
         let to = rows.get(target_row).and_then(|(tid, _)| s.track_index(TrackId(*tid))).unwrap_or(s.tracks.len());
         let from = s.track_index(id).unwrap_or(0);
-        let to = if to > from { to - 1 } else { to };
-        if to != from {
-            let _ = app.run("track.move", json!({"track": id.0, "to": to}));
+        // A folder moves with its members (parity bug 15); dropped inside itself, nothing moves.
+        let count = soundcraft_engine::edit::folder_block(s, id);
+        let inside = to > from && to < from + count;
+        let to = if to > from { to.saturating_sub(count) } else { to };
+        if to != from && !inside {
+            let _ = app.run("track.move", json!({"track": id.0, "to": to, "count": count}));
         }
     }
     let pl_r = at(114.0, 1.0, 11.0, 14.5);

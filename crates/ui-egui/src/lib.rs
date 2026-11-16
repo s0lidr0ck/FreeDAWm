@@ -1128,7 +1128,18 @@ impl SoundApp {
         self.run_with(id, params, false)
     }
 
-    fn run_with(&mut self, id: &str, params: Value, open_behind_window: bool) -> Result<Value, String> {
+    fn run_with(&mut self, id: &str, mut params: Value, open_behind_window: bool) -> Result<Value, String> {
+        // Zoom to Selection and Fill Window by key or menu: sized to the timeline on screen, not
+        // to the commands' 1200-pixel default (parity bug 23).
+        if matches!(id, "view.zoom_to_selection" | "view.zoom_fit")
+            && let Some(o) = params.as_object_mut()
+            && !o.contains_key("width_px")
+        {
+            let [x0, _, x1, _] = self.edit_layout.timeline;
+            if x1 - x0 >= 100.0 {
+                o.insert("width_px".into(), serde_json::json!(x1 - x0));
+            }
+        }
         let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject");
         // (a running render refuses the session commands below, through `render::blocked`)
         #[cfg(not(target_arch = "wasm32"))]

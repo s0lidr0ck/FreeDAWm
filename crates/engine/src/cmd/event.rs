@@ -453,10 +453,20 @@ fn add_marker(e: &mut Engine, p: &Value) -> Result<Value> {
         (None, Some(a), Some(b)) => (a, b),
         (None, Some(p), None) | (None, None, Some(p)) => (p, p),
         _ if kind == MarkerKind::Selection => (sel.start, sel.end),
-        _ => (if e.transport.playing { e.transport.position } else { sel.start }, sel.start),
+        // A point marker: at the playhead while playing, else at the selection start (never a
+        // length running from one to the other).
+        _ => {
+            let at = if e.transport.playing { e.transport.position } else { sel.start };
+            (at, at)
+        }
     };
     let s = e.session_mut();
-    let n = s.markers.len() + 1;
+    // The first "Marker N" from the count up that no marker is called (after a delete the count
+    // alone repeats a name).
+    let mut n = s.markers.len() + 1;
+    while s.markers.iter().any(|m| m.name == format!("Marker {n}")) && n < s.markers.len().saturating_mul(2).saturating_add(2) {
+        n += 1;
+    }
     let name = str_param(p, "name").map_or_else(|| format!("Marker {n}"), str::to_string);
     let id = s.add_marker(&name, kind, a.max(0), b.max(a).max(0));
     if let Some(m) = s.markers.iter_mut().find(|m| m.id == id) {
@@ -567,7 +577,8 @@ fn recall_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     match m.kind {
         MarkerKind::Marker => s.edit.selection = soundcraft_time::Range::point(m.start),
         MarkerKind::Selection => s.edit.selection = soundcraft_time::Range::new(m.start, m.end),
-        MarkerKind::None => {}
+        // A location that only recalls view settings leaves the playhead where it is.
+        MarkerKind::None => return Ok(json!({"at": null})),
     }
     s.edit.playhead = m.start;
     e.transport_requests.push(crate::TransportRequest::Locate(m.start));
