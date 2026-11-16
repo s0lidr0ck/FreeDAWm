@@ -88,7 +88,10 @@ pub(crate) fn finish_take(
     let take = soundcraft_engine::midi_record::MidiTake {
         start: plan.start,
         end,
-        looped: plan.pass.map(|p| soundcraft_time::Range::new(plan.start, plan.start.saturating_add(p))),
+        looped: plan.pass.map(|p| {
+            let from = plan.loop_from.unwrap_or(plan.start);
+            soundcraft_time::Range::new(from, from.saturating_add(p))
+        }),
         punch: plan.punch,
         latency: take_latency(app),
     };
@@ -324,7 +327,7 @@ mod tests {
             RecordedMidi { at: 9_000, port: 0, msg: [0x80, 60, 0], pass: 0 },
             RecordedMidi { at: 2_000, port: TYPING_SLOT as u8, msg: [0x90, 72, 100], pass: 0 },
         ];
-        let plan = soundcraft_engine::io::Recording { start: 0, pass: None, punch: None, rate: 0, takes: Vec::new(), latency: 0 };
+        let plan = soundcraft_engine::io::Recording { start: 0, pass: None, punch: None, rate: 0, takes: Vec::new(), latency: 0, loop_from: None };
         let ids = finish_take(&mut app, &plan, 48_000);
         assert_eq!(ids.len(), 2);
         let pitch = |t: u64| {

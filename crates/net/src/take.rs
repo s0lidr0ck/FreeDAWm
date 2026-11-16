@@ -266,6 +266,7 @@ pub fn land_audio(e: &mut Engine, env: &TakeEnvelope, wav: &std::path::Path, fir
         rate: e.session().sample_rate.hz(),
         takes: Vec::new(),
         latency: first.saturating_neg(),
+        loop_from: None,
     };
     let takes: Vec<(TrackId, std::path::PathBuf)> = tracks.iter().map(|t| (*t, wav.to_path_buf())).collect();
     out.clips = soundcraft_engine::io::place_recording(e, &plan, takes);

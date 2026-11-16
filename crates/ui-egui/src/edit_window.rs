@@ -2179,7 +2179,10 @@ fn draw_live_take(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &
     let sel = s.edit.selection;
     // As the take will be placed: from its plan (its exact start and record offset), once made.
     let (start, pass, latency) = match &app.take_plan {
-        Some(p) => (p.start, p.pass, p.latency),
+        Some(p) => {
+            let (start, latency) = p.placement();
+            (start, p.pass, latency)
+        }
         None if s.edit.loop_record && !sel.is_empty() => (sel.start, Some(sel.len()), 0),
         None => (app.record_start, None, 0),
     };

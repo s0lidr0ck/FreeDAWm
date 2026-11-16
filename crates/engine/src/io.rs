@@ -2175,6 +2175,79 @@ pub struct Recording {
     /// Plans saved before it existed load as 0.
     #[serde(default)]
     pub latency: Samples,
+    /// Loop recording: where each pass starts on the timeline (the loop's start). A take punched
+    /// in partway through a playing loop starts later than this: its first pass is the rest of
+    /// that loop. `None` (and plans saved before it existed): `start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_from: Option<Samples>,
+}
+
+impl Recording {
+    /// Where the takes are placed from and the frames skipped at their head, as
+    /// [`add_recording`] takes them: a take started `lead` samples into its loop is placed as if
+    /// it had started at the loop's start, its first `lead` frames missing.
+    pub fn placement(&self) -> (Samples, Samples) {
+        match (self.pass, self.loop_from) {
+            (Some(p), Some(from)) if from <= self.start && self.start.saturating_sub(from) < p => {
+                (from, self.latency.saturating_sub(self.start.saturating_sub(from)))
+            }
+            _ => (self.start, self.latency),
+        }
+    }
+}
+
+/// How a Record press runs: where the take starts, the range it is kept to, the loop passes it
+/// splits into, and the transport to start.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordStart {
+    /// Where the take starts (until its first frame says exactly).
+    pub start: Samples,
+    /// The range the take is kept to (the pre- and post-roll play the clips).
+    pub punch: Option<Range>,
+    /// Loop recording: the pass length.
+    pub pass: Option<Samples>,
+    /// Loop recording: where each pass starts ([`Recording::loop_from`]).
+    pub loop_from: Option<Samples>,
+    /// The transport to start (from, end, loop); `None` when it is already rolling (punch in on
+    /// the fly).
+    pub play: Option<(Samples, Option<Samples>, Option<Range>)>,
+}
+
+/// What a Record press does with `edit`'s selection and options, the transport stopped
+/// (`rolling` `None`) or playing at a position, in a loop or not.
+///
+/// - Rolling: punch in on the fly at the position. Inside a playing loop the take splits into
+///   that loop's passes (the first is the rest of the loop it started in).
+/// - Loop Record with a selection: the selection loops, a pass each time round.
+/// - A selection: recorded there (punch), with the pre- and post-roll around it if they are on.
+/// - No selection: from the insertion point on; a pre-roll before it plays and is not recorded.
+pub fn record_start(edit: &soundcraft_model::EditState, rolling: Option<(Samples, Option<Range>)>) -> RecordStart {
+    if let Some((at, looped)) = rolling {
+        let lp = looped.filter(|l| !l.is_empty() && l.contains(at));
+        return RecordStart { start: at, punch: None, pass: lp.map(|l| l.len()), loop_from: lp.map(|l| l.start), play: None };
+    }
+    let sel = edit.selection;
+    if edit.loop_record && !sel.is_empty() {
+        return RecordStart {
+            start: sel.start,
+            punch: None,
+            pass: Some(sel.len()),
+            loop_from: Some(sel.start),
+            play: Some((sel.start, None, Some(sel))),
+        };
+    }
+    let (pre, post) = if edit.pre_post_roll { (edit.pre_roll.max(0), edit.post_roll.max(0)) } else { (0, 0) };
+    let from = sel.start.saturating_sub(pre).max(0);
+    let punch = if !sel.is_empty() {
+        Some(sel)
+    } else if from < sel.start {
+        // The pre-roll is heard, not recorded: the take is kept from the insertion point on.
+        Some(Range::new(sel.start, Samples::MAX))
+    } else {
+        None
+    };
+    let end = (!sel.is_empty()).then_some(sel.end.saturating_add(post));
+    RecordStart { start: from, punch, pass: None, loop_from: None, play: Some((from, end, None)) }
 }
 
 /// One track's take file.
@@ -2187,7 +2260,8 @@ pub struct Take {
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
 pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, PathBuf)>) -> Vec<soundcraft_model::ClipId> {
-    add_recording_in(e, plan.start, takes, plan.pass, plan.punch, plan.latency)
+    let (start, latency) = plan.placement();
+    add_recording_in(e, start, takes, plan.pass, plan.punch, latency)
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -2449,10 +2523,78 @@ mod record_tests {
             rate: 48_000,
             takes: vec![Take { track: vox, path: take.clone(), channels: 1 }],
             latency: 0,
+            loop_from: None,
         };
         place_recording(&mut e, &plan, vec![(vox, take)]);
         let clips: Vec<_> = e.session().track(vox).unwrap().clips().iter().map(|c| (c.start, c.length, c.source_offset())).collect();
         assert_eq!(clips, vec![(0, 1_400, 0), (1_400, 200, 400), (1_600, 1_400, 1_600)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn plan_of(start: Samples, rs: &RecordStart, take: &Path, vox: TrackId) -> Recording {
+        Recording {
+            start,
+            pass: rs.pass,
+            punch: rs.punch,
+            rate: 48_000,
+            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1 }],
+            latency: 0,
+            loop_from: rs.loop_from,
+        }
+    }
+
+    #[test]
+    fn record_pressed_in_a_playing_loop_splits_the_take_into_its_passes() {
+        // Bug: the take was placed as one straight clip running past the loop's end.
+        let dir = test_dir("loop-on-the-fly");
+        let take = dir.join("Audio Files/Vox_01.wav");
+        write_take(&take, 1_050);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let lp = Range::new(1_000, 1_400);
+        let rs = record_start(&e.session().edit, Some((1_300, Some(lp))));
+        assert_eq!(rs, RecordStart { start: 1_300, punch: None, pass: Some(400), loop_from: Some(1_000), play: None });
+        place_recording(&mut e, &plan_of(1_300, &rs, &take, vox), vec![(vox, take.clone())]);
+        // The rest of the loop it started in, then a pass each time round, all within the loop.
+        let rows: Vec<_> = clip_rows(&e, vox).into_iter().map(|(start, len, off)| (off, start, len)).collect();
+        assert_eq!(rows, vec![(0, 1_300, 100), (100, 1_000, 400), (500, 1_000, 400), (900, 1_000, 150)]);
+        // Outside the loop (or no loop), a straight take as before.
+        let rs = record_start(&e.session().edit, Some((2_000, Some(lp))));
+        assert_eq!((rs.pass, rs.loop_from), (None, None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pre_roll_with_no_selection_is_heard_not_recorded() {
+        // Bug: the pre-roll was recorded and placed over what was there.
+        let dir = test_dir("pre-roll-point");
+        let (base, take) = (dir.join("Audio Files/Base.wav"), dir.join("Audio Files/Vox_01.wav"));
+        write_take(&base, 3_000);
+        write_take(&take, 2_000);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        add_recording(&mut e, 0, vec![(vox, base)], None);
+        let ed = &mut e.session_mut().edit;
+        (ed.selection, ed.pre_post_roll, ed.pre_roll) = (Range::point(1_500), true, 1_000);
+        let rs = record_start(&e.session().edit, None);
+        assert_eq!((rs.start, rs.play), (500, Some((500, None, None))));
+        assert_eq!(rs.punch, Some(Range::new(1_500, Samples::MAX)));
+        place_recording(&mut e, &plan_of(rs.start, &rs, &take, vox), vec![(vox, take.clone())]);
+        // The old clip is kept up to the insertion point; the take from there, its pre-roll trimmed.
+        assert_eq!(clip_rows(&e, vox), vec![(0, 1_500, 0), (1_500, 1_000, 1_000), (2_500, 500, 2_500)]);
+        // Pre-roll off: no punch, as before.
+        e.session_mut().edit.pre_post_roll = false;
+        assert_eq!(record_start(&e.session().edit, None).punch, None);
+        // A selection is punched with its pre- and post-roll.
+        let ed = &mut e.session_mut().edit;
+        (ed.selection, ed.pre_post_roll, ed.post_roll) = (Range::new(1_500, 1_800), true, 200);
+        let rs = record_start(&e.session().edit, None);
+        assert_eq!((rs.start, rs.punch, rs.play), (500, Some(Range::new(1_500, 1_800)), Some((500, Some(2_000), None))));
+        // Loop Record with a selection loops it.
+        e.session_mut().edit.loop_record = true;
+        let rs = record_start(&e.session().edit, None);
+        let sel = Range::new(1_500, 1_800);
+        assert_eq!(rs, RecordStart { start: 1_500, punch: None, pass: Some(300), loop_from: Some(1_500), play: Some((1_500, None, Some(sel))) });
         let _ = std::fs::remove_dir_all(&dir);
     }
 

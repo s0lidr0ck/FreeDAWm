@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bug 1 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (bugs 3 and 5 fixed) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -67,8 +67,8 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 |---|:-:|:-:|:-:|:-:|---|
 | Record from the transport or one key | ● | ● | ● | ● | **Works** |
 | Count-off in bars | ● | ● | ● | ● | **Works**: 1–16 bars at the tempo and meter of the start point |
-| Pre-roll | ● | ● | ● | ● | **Partial**: without a selection the pre-roll is recorded and placed over what was there |
-| Start recording while playing | ● | ● | ● | ● | **Works**, gapless; wrong while a loop is playing (bug 3) |
+| Pre-roll | ● | ● | ● | ● | **Works**: heard, not recorded, with or without a selection |
+| Start recording while playing | ● | ● | ● | ● | **Works**, gapless; inside a playing loop the take splits into its passes |
 | Discard the take in progress | ● | ◐ | ● | ● | **Missing** |
 | Undo a take | ● | ● | ● | ● | **Partial**: the clips go, the file stays in Audio Files |
 | Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Missing** |
@@ -172,9 +172,9 @@ Lines move while section 1's work is in progress, so functions are named.
 |---|---|---|
 | 1 | **Fixed:** a stereo track with no input chosen monitored input 1 on both sides but recorded inputs 1 and 2; both now use the device's first channels (In 1-2; In 1 twice on a mono device) | `crates/mix/src/lib.rs` (input span for no input) against `plan_takes` in `crates/engine/src/io.rs` |
 | 2 | An audio track whose input is a bus hears and records hardware inputs instead; the menu offers busses to every track | the same two places; `crates/ui-egui/src/mix_window.rs` input menu |
-| 3 | Record pressed while a loop is playing: the take is placed as one straight clip running past the loop end | `start_recording` in `crates/ui-egui/src/lib.rs` (the plan has no pass) |
+| 3 | **Fixed:** Record pressed while a loop is playing placed the take as one straight clip running past the loop end; it now splits into that loop's passes (`record_start` in `crates/engine/src/io.rs`) | `start_recording` in `crates/ui-egui/src/lib.rs` (the plan has no pass) |
 | 4 | Loop record on a plain track leaves playlists that hold only the loop, so the track is silent elsewhere | `place_take` in `crates/engine/src/io.rs` |
-| 5 | Pre-roll with no selection records and places the pre-roll, overwriting what was there | `start_recording`, `place_take` |
+| 5 | **Fixed:** pre-roll with no selection recorded and placed the pre-roll, overwriting what was there; the take is now kept from the insertion point on | `start_recording`, `place_take` |
 | 6 | Undoing a take, or deleting an armed track during one, leaves the file in Audio Files | `add_recording_in` in `crates/engine/src/io.rs` |
 | 7 | With monitoring Off, an armed track plays its old clips under the take being recorded | clip branch of the strip render in `crates/mix/src/lib.rs` |
 | 8 | Take numbers start at the session's source count plus one | `plan_takes` |
@@ -220,5 +220,5 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-16 | minor | bug 1 fixed |
+| 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |

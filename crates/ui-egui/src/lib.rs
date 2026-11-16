@@ -1482,31 +1482,12 @@ impl SoundApp {
         if let Some(w) = self.rate_warning() {
             self.ui.status = w;
         }
-        let already_playing = self.is_playing();
+        let rolling = self.is_playing().then(|| (self.position(), self.play_loop));
         self.engine.transport.recording = true;
-        if already_playing {
-            // Punch in on the fly at the current playhead.
-            self.record_start = self.position();
-            self.punch = None;
-            self.plan_recording(takes, None);
-            return;
-        }
-        let e = self.engine.session().edit.clone();
-        let sel = e.selection;
-        if e.loop_record && !sel.is_empty() {
-            self.record_start = sel.start;
-            self.punch = None;
-            let c = self.record_countoff(sel.start, countoff);
-            self.start_play_counted(sel.start, None, Some(sel), c);
-            self.plan_recording(takes, Some(sel.len()));
-        } else {
-            // Record into the selection when there is one (punch), with pre/post-roll if enabled;
-            // the take is trimmed back to the punch range afterwards.
-            let (pre, post) = if e.pre_post_roll { (e.pre_roll, e.post_roll) } else { (0, 0) };
-            let from = (sel.start - pre).max(0);
-            self.record_start = from;
-            self.punch = (!sel.is_empty()).then_some(sel);
-            let end = (!sel.is_empty()).then_some(sel.end + post);
+        let plan = soundcraft_engine::io::record_start(&self.engine.session().edit, rolling);
+        self.record_start = plan.start;
+        self.punch = plan.punch;
+        if let Some((from, end, looped)) = plan.play {
             // The count-off comes before `from` (after it, the pre-roll plays as usual), at the
             // tempo and meter there; the take starts at `from` once it is over.
             let c = self.record_countoff(from, countoff);
@@ -1514,18 +1495,19 @@ impl SoundApp {
             if let Some(p) = &self.player {
                 p.set_punch(self.punch);
             }
-            self.start_play_counted(from, end, None, c);
-            self.plan_recording(takes, None);
+            self.start_play_counted(from, end, looped, c);
         }
+        self.plan_recording(takes, plan.pass, plan.loop_from);
     }
 
     /// Remember where the armed `takes` go (split into passes of `pass` when loop recording),
     /// placed earlier by the record offset, and autosave that plan with the session.
-    fn plan_recording(&mut self, takes: Vec<soundcraft_engine::io::Take>, pass: Option<Samples>) {
+    fn plan_recording(&mut self, takes: Vec<soundcraft_engine::io::Take>, pass: Option<Samples>, loop_from: Option<Samples>) {
         let rate = self.recorder.as_ref().map_or(0, |r| r.sample_rate);
         self.take_reported = None;
         let latency = self.take_latency();
-        self.take_plan = Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes, latency });
+        self.take_plan =
+            Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes, latency, loop_from });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
@@ -2125,8 +2107,15 @@ impl SoundApp {
             None => (Vec::new(), None, self.record_start),
         };
         let tracks = takes.len().max(1);
-        let plan =
-            plan.unwrap_or_else(|| soundcraft_engine::io::Recording { start, pass: None, punch: self.punch, rate: 0, takes: Vec::new(), latency });
+        let plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
+            start,
+            pass: None,
+            punch: self.punch,
+            rate: 0,
+            takes: Vec::new(),
+            latency,
+            loop_from: None,
+        });
         self.punch = None;
         self.autosaved_rev = 0;
         // A remote recorder sends these to the booth (`net_ui`).
