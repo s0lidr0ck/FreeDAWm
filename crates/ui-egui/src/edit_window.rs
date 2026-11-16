@@ -3368,7 +3368,7 @@ fn fade_drag_preview(clip: &Clip, fade_in: bool, to: Samples) -> Option<soundcra
     let original = if fade_in { clip.fade_in } else { clip.fade_out };
     Some(soundcraft_model::Fade {
         len: range.end.saturating_sub(range.start),
-        shape: if original.len > 0 { original.shape } else { soundcraft_model::FadeShape::SCurve },
+        shape: if original.len > 0 { original.shape } else { soundcraft_model::FadeShape::EqualPower },
         curvature: if original.len > 0 { original.curvature } else { 0.0 },
     })
 }
@@ -4626,7 +4626,10 @@ mod tests {
                 let range = fade_drag_range(&clip, fade_in, sample_at(&before, tl, release.x)).unwrap();
                 let mut expected = before.clone();
                 let c = expected.find_clip_mut(clip.id).unwrap();
-                let fade = soundcraft_model::Fade { len: range.end - range.start, shape: soundcraft_model::FadeShape::SCurve, curvature: 0.0 };
+                // A new fade is equal power; one already there keeps its shape and bend.
+                let orig = if fade_in { clip.fade_in } else { clip.fade_out };
+                let (shape, curvature) = if orig.len > 0 { (orig.shape, orig.curvature) } else { (soundcraft_model::FadeShape::EqualPower, 0.0) };
+                let fade = soundcraft_model::Fade { len: range.end - range.start, shape, curvature };
                 if fade_in {
                     c.fade_in = fade;
                 } else {
