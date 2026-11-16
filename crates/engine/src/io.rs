@@ -1055,6 +1055,10 @@ impl StemsJob {
                 for x in &mut solo.tracks {
                     x.mixer.solo = x.id == t.id;
                 }
+                // The stem's own solo isolates it in place: an AFL or PFL solo held in the
+                // session is only a listen, which a bounce ignores, and must not turn this one
+                // into a listen that leaves the whole mix playing.
+                solo.edit.solo_mode = "sip".into();
                 (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo))
             })
             .collect();
@@ -4295,6 +4299,36 @@ mod stem_tests {
         let n = r["files"].as_array().map_or(0, Vec::len);
         assert_eq!(n, 7, "{r}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Owner's decision: stems ignore an AFL or PFL solo, as a bounce does. With one held, every
+    /// stem is the same as with no solo (each its own track, not the whole mix).
+    #[test]
+    fn stems_ignore_an_afl_or_pfl_solo() {
+        use soundcraft_model::TrackKind;
+        let render = |e: &mut crate::Engine, tag: &str| -> Vec<Vec<u8>> {
+            let dir = std::env::temp_dir().join(format!("soundcraft-stems-listen-{tag}-{}", std::process::id()));
+            let r = e
+                .execute(
+                    "file.bounce_stems",
+                    &serde_json::json!({"dir": dir.to_string_lossy(), "start": {"seconds": 10.0}, "end": {"seconds": 10.5}}),
+                )
+                .unwrap();
+            let mut files: Vec<String> = r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+            files.sort();
+            let out = files.iter().map(|f| std::fs::read(f).unwrap()).collect();
+            let _ = std::fs::remove_dir_all(&dir);
+            out
+        };
+        let mut e = crate::demo::demo_engine();
+        let plain = render(&mut e, "plain");
+        assert!(plain.len() > 1 && plain.windows(2).any(|w| w[0] != w[1]), "the stems differ from each other");
+        let first = e.session().tracks.iter().find(|t| t.kind == TrackKind::Audio || t.kind == TrackKind::Instrument).unwrap().id;
+        for mode in ["afl", "pfl"] {
+            e.session_mut().edit.solo_mode = mode.into();
+            e.session_mut().track_mut(first).unwrap().mixer.solo = true;
+            assert_eq!(render(&mut e, mode), plain, "{mode}");
+        }
     }
 }
 

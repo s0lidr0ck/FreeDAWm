@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (width and balance lanes; design for keying a track from an aux) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (stems ignore an AFL or PFL solo) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -115,7 +115,7 @@ K-system scales, and the master a loudness meter.
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
-| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Works**: in the AFL and PFL solo modes (Options › Solo Mode, or the Control Room) a solo mutes nothing; the soloed tracks are summed after the fader and pan (AFL) or before the fader (PFL) into a listen bus that replaces the mix on the monitor path while any is soloed, at its own level; the mix, bounces and cue mixes are untouched |
+| AFL / PFL on a listen bus | ● | ● | ○ | ● | **Works**: in the AFL and PFL solo modes (Options › Solo Mode, or the Control Room) a solo mutes nothing; the soloed tracks are summed after the fader and pan (AFL) or before the fader (PFL) into a listen bus that replaces the mix on the monitor path while any is soloed, at its own level; the mix, bounces, stems and cue mixes are untouched (stems ignore an AFL or PFL solo, the owner's decision: each stem is its own track as with no solo) |
 | Momentary solo | ● | ○ | ○ | ○ | **Missing**: the menu entry behaves as latch |
 
 ## F. Automation
@@ -368,6 +368,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | stems ignore an AFL or PFL solo, as a bounce does (owner's decision) |
 | 2026-11-16 | minor | width and balance lanes; a design for keying an ordinary track from an aux |
 | 2026-11-16 | minor | plug-in automation is read where the module's audio is (delay-compensated) |
 | 2026-11-16 | minor | tier 3: post-fader inserts |
