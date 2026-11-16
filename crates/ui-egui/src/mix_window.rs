@@ -2039,6 +2039,43 @@ fn send_route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, cu
         let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": visible[i].name}));
         ui.close();
     }
+    // Straight to a hardware output (a cue mix), or into a track (its input becomes the bus).
+    let outputs: Vec<String> = app.engine.session().outputs.iter().skip(1).map(|o| o.name.clone()).collect();
+    if !outputs.is_empty() {
+        ui.menu_button("Output", |ui| {
+            for name in &outputs {
+                let on = matches!(current, Some(Route::Hardware(h)) if h == name);
+                if ui.add(egui::Button::selectable(on, name.as_str())).clicked() {
+                    let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "output": name}));
+                    ui.close();
+                }
+            }
+        });
+    }
+    let tracks: Vec<(u64, String)> = app
+        .engine
+        .session()
+        .tracks
+        .iter()
+        .filter(|t| t.id != id && matches!(t.kind, TrackKind::Audio | TrackKind::Aux))
+        .map(|t| (t.id.0, t.name.clone()))
+        .collect();
+    if !tracks.is_empty() {
+        ui.menu_button("Track", |ui| {
+            for (tid, name) in &tracks {
+                if ui.button(name).on_hover_text("Its input becomes a bus this send feeds").clicked() {
+                    let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "to_track": tid}));
+                    ui.close();
+                }
+            }
+        });
+    }
+    if let Some(snd) = app.engine.session().track(id).and_then(|t| t.mixer.sends.get(slot).cloned().flatten()) {
+        let mut follow = snd.pan_follows_main;
+        if ui.checkbox(&mut follow, "Pan Follows Main").on_hover_text("The send's pan follows the track's main pan").changed() {
+            let _ = app.run("mix.send_level", json!({"track": id.0, "slot": slot, "pan_follows_main": follow}));
+        }
+    }
     ui.separator();
     if ui.button("new bus...").clicked() {
         let mut n = busses.len() + 1;

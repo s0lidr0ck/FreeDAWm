@@ -2383,14 +2383,29 @@ impl MixEngine {
         // `process_strip`): the post-fader buffer `post_at` samples back, the pre-fader copy
         // `pre_at`.
         let back = |d: usize| pos.saturating_sub(i64::try_from(d).unwrap_or(0));
+        // Options › More › Pre-Fader Sends Ignore Mute: a muted (or solo-muted) track's pre-fader
+        // sends still play, as cue mixes want.
+        let pre_ignores_mute = s.edit.flag(PRE_SENDS_IGNORE_MUTE);
         for (i, snd) in t.mixer.sends.iter().enumerate() {
             let Some(snd) = snd else { continue };
-            if strip.silent {
+            if strip.silent && !(snd.pre_fader && pre_ignores_mute) {
                 continue;
             }
             let src = if snd.pre_fader { &strip.pre } else { &strip.buf };
-            let Route::Bus(b) = &snd.target else { continue };
-            let Some(dst) = self.busses.get_mut(b) else { continue };
+            // A send reaches a bus, or a hardware output (or the main mix) directly.
+            let dst: (&mut Vec<Vec<f32>>, ChannelFormat) = match out_dest(s, &snd.target) {
+                Dest::Bus(b) => match self.busses.get_mut(&b) {
+                    Some(d) => (&mut d.buf, d.fmt),
+                    None => continue,
+                },
+                Dest::Main => (&mut self.main, self.main_fmt),
+                Dest::Hw(h) => match (self.hw.get_mut(h), s.outputs.get(h)) {
+                    (Some(d), Some(o)) if !d.is_empty() => (d, o.format),
+                    _ => continue,
+                },
+                Dest::None => continue,
+            };
+            let (dst_buf, dst_fmt) = dst;
             let apos = back(if snd.pre_fader { strip.pre_at } else { strip.post_at });
             let surround = snd.surround.as_ref().or(if snd.follow_main_pan { t.mixer.surround.as_ref() } else { None });
             // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
@@ -2408,11 +2423,15 @@ impl MixEngine {
                     continue;
                 }
                 // Mono sends use the send's own pan; a stereo send's pan balances it (see
-                // `stereo_send_pans`).
-                let p = send_pan(t, i, snd.pan, at);
-                let stereo = if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) };
-                let m = build_matrix(src_fmt, src.len(), dst.fmt, dst.buf.len(), &PanSpec { stereo, surround }, law);
-                apply_matrix_span(src, span, &mut dst.buf, &m, gain);
+                // `stereo_send_pans`). A send whose pan follows the main pan takes the track's.
+                let stereo = if snd.pan_follows_main {
+                    [pan_at(t, 0, at), pan_at(t, 1, at)]
+                } else {
+                    let p = send_pan(t, i, snd.pan, at);
+                    if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) }
+                };
+                let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
+                apply_matrix_span(src, span, dst_buf, &m, gain);
             }
         }
         let dest = strip.dest;
@@ -2461,6 +2480,9 @@ impl MixEngine {
         }
     }
 }
+
+/// The `Session::edit` flag of Options › More › Pre-Fader Sends Ignore Mute.
+pub const PRE_SENDS_IGNORE_MUTE: &str = "mix.pre_sends_ignore_mute";
 
 /// The live path for low-latency monitoring (`options.low_latency_monitoring`), filled by
 /// [`llm_scope`]. Make it with [`LlmScope::reserve`] (off the audio thread); filling it then
@@ -6403,6 +6425,42 @@ mod tests {
         assert_eq!(first(&s), Some(0));
         s.track_mut(st).unwrap().mixer.delay = 100;
         assert_eq!(first(&s), Some(100));
+    }
+
+    /// A send reaches a hardware output as well as a bus; its pan can follow the main pan; and
+    /// with the option on, a muted track's pre-fader send still plays.
+    #[test]
+    fn sends_reach_outputs_follow_the_main_pan_and_can_ignore_mute() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.outputs.push(soundcraft_model::OutputPath { name: "Cue".into(), format: ChannelFormat::Stereo, first_channel: 2 });
+        let mut snd = soundcraft_model::SendSlot::new(Route::Hardware("Cue".into()));
+        snd.level_db = 0.0;
+        s.track_mut(t).unwrap().mixer.sends[0] = Some(snd);
+        s.track_mut(t).unwrap().mixer.output = Route::None;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut buf = vec![vec![0.0; 512]; 4];
+        let mut cue = |eng: &mut MixEngine, s: &Session, at: i64| {
+            eng.render(s, at, 512, &mut buf);
+            let h = &eng.hw[1];
+            (h[0][300], h[1][300])
+        };
+        let c = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
+        let (l, r) = cue(&mut eng, &s, 0);
+        assert!((l - c).abs() < 1e-3 && (r - c).abs() < 1e-3, "centred send into the cue output: {l} {r}");
+        // Following the main pan (hard left), the send goes left.
+        s.track_mut(t).unwrap().mixer.pan = vec![-1.0];
+        s.track_mut(t).unwrap().mixer.sends[0].as_mut().unwrap().pan_follows_main = true;
+        let (l, r) = cue(&mut eng, &s, 512);
+        assert!((l - 0.5).abs() < 1e-3 && r.abs() < 1e-3, "follows the main pan: {l} {r}");
+        // Muted: a pre-fader send is silent unless the option says otherwise.
+        s.track_mut(t).unwrap().mixer.mute = true;
+        s.track_mut(t).unwrap().mixer.sends[0].as_mut().unwrap().pre_fader = true;
+        for b in 2..6 {
+            cue(&mut eng, &s, b * 512);
+        }
+        assert!(cue(&mut eng, &s, 6 * 512).0.abs() < 1e-6, "muted");
+        s.edit.set_flag(PRE_SENDS_IGNORE_MUTE, true);
+        assert!((cue(&mut eng, &s, 7 * 512).0 - 0.5).abs() < 1e-3, "the pre-fader send ignores the mute");
     }
 
     /// The session's pan law sets a centred mono track's level (tier 2: a choice of pan law).

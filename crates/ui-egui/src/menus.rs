@@ -765,6 +765,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("edit.snap_to_markers", soundcraft_engine::edit::SNAP_TO_MARKERS),
     ("edit.snap_to_zero_crossings", soundcraft_engine::edit::SNAP_TO_ZERO),
     ("track.suspend_groups", "groups.suspended"),
+    ("mix.pre_sends_ignore_mute", "mix.pre_sends_ignore_mute"),
     ("options.low_latency_monitoring", "options.low_latency_monitoring"),
     ("options.keyboard_lock", "options.edit_tool_mode_keyboard_lock"),
     ("view.track_number", "edit_view.track_number"),

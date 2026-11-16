@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: width, balance and track delay) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2: sends to outputs and tracks) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -33,7 +33,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
-| D. Sends and routing | 10 sends, busses of any format, routing folders | Medium: sends reach busses only |
+| D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, solo safe, relative groups with a choice of attributes | Medium: no listen bus, one VCA level |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; faders follow | **Large**: plug-in values block-rate, no controller input |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
@@ -93,11 +93,11 @@ K-system scales, and the master a loudness meter.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Eight or more sends, pre or post fader | ● | ● | ● | ● | **Works**: ten |
-| Send level, pan and mute, automatable | ● | ● | ● | ● | **Works**: a stereo send's pan balances it |
-| Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Partial**: busses only |
+| Send level, pan and mute, automatable | ● | ● | ● | ● | **Works**: a stereo send's pan balances it; Pan Follows Main in the send's menu makes it take the track's pan and its automation |
+| Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Works**: a send's menu offers busses, Output ▸ (straight to a hardware output) and Track ▸ (the track's input becomes the bus the send feeds) (`mix.send` `output`, `to_track`) |
 | A new send comes with its return | ● | ● | ● | ● | **Works**: a send to a new bus from the Mix window makes its aux (`mix.send` `return: true`) |
 | Default send level setting | ● | ◐ | ● | ◐ | **Works**: silent or 0 dB (Options › More › Default Send Level; any level by `mix.default_send_level`) |
-| Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Missing**: mute silences every send |
+| Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Options › More › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
 | Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Partial**: copies volume only and ignores the selected range |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
 | Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** |
@@ -271,7 +271,7 @@ one a mix engineer would not forgive.
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | Needs MIDI input, which exists; surfaces (HUI/MCU) stay in G-10 |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done** (width and balance are not automatable yet) |
-| Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Return, default level and loop refusal done**; sends to tracks and hardware outputs remain |
+| Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
 | Real-time bounce | 4–6 | |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Attributes (by command), suspend all and VCA assignment done**; attributes in the Group dialog and nested VCAs remain |
@@ -296,6 +296,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: sends to outputs and tracks |
 | 2026-11-16 | minor | tier 2: width, balance and track delay |
 | 2026-11-16 | minor | tier 2: RMS and K scales, a master loudness meter |
 | 2026-11-16 | minor | tier 2: CLAP plug-ins take a key |

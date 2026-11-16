@@ -143,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assign Send",
             [],
             None,
-            "{track?, slot?: 0..9|a..j, bus: name, level_db?: 0 (kept when re-targeting), pre_fader?: false}",
+            "{track?, slot?: 0..9|a..j, bus: name | output: hardware output name | to_track: track (its input becomes a bus the send feeds), level_db?: 0 (kept when re-targeting), pre_fader?: false, pan_follows_main?: bool}",
             has_selection,
             send
         ),
@@ -156,7 +156,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({}))
         }),
-        cmd!("mix.send_level", "Send Level", [], None, "{track?, slot, db?, pan?, mute?, pre_fader?}", has_selection, send_level),
+        cmd!("mix.send_level", "Send Level", [], None, "{track?, slot, db?, pan?, mute?, pre_fader?, pan_follows_main?}", has_selection, send_level),
+        cmd!(
+            "mix.pre_sends_ignore_mute",
+            "Pre-Fader Sends Ignore Mute",
+            ["Options", "More"],
+            None,
+            "{value?: bool} — a muted or solo-muted track's pre-fader sends still play (cue mixes); toggles when omitted",
+            always,
+            |e, p| {
+                let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !e.session().edit.flag(soundcraft_mix::PRE_SENDS_IGNORE_MUTE));
+                e.session_mut().edit.set_flag(soundcraft_mix::PRE_SENDS_IGNORE_MUTE, on);
+                Ok(json!({"value": on}))
+            }
+        ),
         cmd!(
             "mix.default_send_level",
             "Default Send Level",
@@ -492,9 +505,16 @@ fn insert_move(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 fn send(e: &mut Engine, p: &Value) -> Result<Value> {
-    let bus = str_param(p, "bus").ok_or_else(|| bad("mix.send", "`bus` required"))?.to_string();
     let t = tracks_required(e, "mix.send", p)?.first().copied().ok_or_else(|| bad("mix.send", "no track"))?;
     let explicit = optional_slot(p, "mix.send", SEND_SLOTS)?;
+    if let Some(out) = str_param(p, "output") {
+        return send_to_output(e, p, t, explicit, out);
+    }
+    let bus = match (str_param(p, "bus"), p.get("to_track")) {
+        (Some(b), _) => b.to_string(),
+        (None, Some(_)) => track_input_bus(e, p, t)?,
+        (None, None) => return Err(bad("mix.send", "`bus`, `output` or `to_track` required")),
+    };
     // A send that feeds its track back into itself plays silence: refused (a new bus cannot).
     if let Some(b) = e.session().bus_by_name(&bus)
         && e.session().route_loops(t, &soundcraft_model::Route::Bus(b.id))
@@ -518,6 +538,7 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
+    sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
@@ -530,6 +551,61 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
         aux
     });
     Ok(json!({"slot": slot, "bus": bid, "return": ret}))
+}
+
+/// A send straight to a hardware output (a cue mix, an outboard effect): by the output's name.
+fn send_to_output(e: &mut Engine, p: &Value, t: TrackId, explicit: Option<usize>, out: &str) -> Result<Value> {
+    const C: &str = "mix.send";
+    let i = e.session().output_index(out).ok_or_else(|| bad(C, format!("no output named `{out}` (Setup › I/O)")))?;
+    let name = e.session().outputs.get(i).map(|o| o.name.clone()).unwrap_or_default();
+    let default_db = default_send_db(e.session());
+    let tr = e.session_mut().track_mut(t).ok_or_else(|| bad(C, "no track"))?;
+    let slot = explicit.or_else(|| tr.mixer.sends.iter().position(Option::is_none)).ok_or_else(|| bad(C, "all send slots are in use"))?;
+    let target = soundcraft_model::Route::Hardware(name.clone());
+    let mut sl = match tr.mixer.sends.get(slot).cloned().flatten() {
+        Some(old) => SendSlot { target, ..old },
+        None => SendSlot { level_db: default_db, ..SendSlot::new(target) },
+    };
+    sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
+    sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
+    sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
+    if let Some(x) = tr.mixer.sends.get_mut(slot) {
+        *x = Some(sl);
+    }
+    Ok(json!({"slot": slot, "output": name}))
+}
+
+/// The bus a send to track `to_track` feeds: the track's input bus, or a new one ("<name> In")
+/// made its input. Only audio and aux tracks take one; a send into itself is refused.
+fn track_input_bus(e: &mut Engine, p: &Value, from: TrackId) -> Result<String> {
+    const C: &str = "mix.send";
+    let to = track_param(e, C, p, "to_track")?.ok_or_else(|| bad(C, "`to_track` names no track"))?;
+    if to == from {
+        return Err(bad(C, "a track can't send into itself"));
+    }
+    let tt = e.session().track(to).ok_or_else(|| bad(C, "no such track"))?;
+    if !matches!(tt.kind, soundcraft_model::TrackKind::Audio | soundcraft_model::TrackKind::Aux) {
+        return Err(bad(C, "only an audio or aux track takes a send"));
+    }
+    if let soundcraft_model::Route::Bus(b) = tt.mixer.input
+        && let Some(bus) = e.session().busses.iter().find(|x| x.id == b)
+    {
+        return Ok(bus.name.clone());
+    }
+    let base = format!("{} In", tt.name);
+    let mut name = base.clone();
+    let mut k = 2;
+    while e.session().bus_by_name(&name).is_some() || e.session().track_by_name(&name).is_some() {
+        name = format!("{base} {k}");
+        k += 1;
+    }
+    let fmt = if tt.format.channels() == 1 { soundcraft_model::ChannelFormat::Mono } else { tt.format };
+    let s = e.session_mut();
+    let bid = s.add_bus(&name, fmt);
+    if let Some(x) = s.track_mut(to) {
+        x.mixer.input = soundcraft_model::Route::Bus(bid);
+    }
+    Ok(name)
 }
 
 /// The `s.edit.values` key of the level a new send starts at, dB (−144: silent, as Pro Tools'
@@ -562,6 +638,9 @@ fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
             if let Some(m) = p.get("pre_fader").and_then(Value::as_bool) {
                 o.pre_fader = m;
             }
+            if let Some(m) = p.get("pan_follows_main").and_then(Value::as_bool) {
+                o.pan_follows_main = m;
+            }
         }
     }
     let sl = s
@@ -580,6 +659,9 @@ fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     if let Some(m) = p.get("pre_fader").and_then(Value::as_bool) {
         sl.pre_fader = m;
+    }
+    if let Some(m) = p.get("pan_follows_main").and_then(Value::as_bool) {
+        sl.pan_follows_main = m;
     }
     let out = json!({"send": sl.clone()});
     let i = u8::try_from(slot).unwrap_or(0);
@@ -1227,6 +1309,40 @@ mod tests {
         // Retargeting keeps the send's level.
         e.execute("mix.send", &json!({"tracks": [t], "bus": "B", "slot": 2})).unwrap();
         assert_eq!(level(&e, 2), -6.0);
+    }
+
+    /// A send goes straight to a hardware output, or into a track (whose input becomes the bus
+    /// it feeds); its pan can follow the main pan; pre-fader sends can ignore the mute.
+    #[test]
+    fn sends_reach_outputs_and_tracks() {
+        let mut e = Engine::default();
+        let ids = e.execute("track.new", &json!({"count": 2})).unwrap()["tracks"].clone();
+        let (a, b) = (ids[0].as_u64().unwrap(), ids[1].as_u64().unwrap());
+        e.session_mut().outputs.push(soundcraft_model::OutputPath {
+            name: "Cue 1".into(),
+            first_channel: 2,
+            format: soundcraft_model::ChannelFormat::Stereo,
+        });
+        let r = e.execute("mix.send", &json!({"tracks": [a], "output": "Cue 1", "pre_fader": true, "pan_follows_main": true})).unwrap();
+        let snd = |e: &Engine, slot: usize| e.session().track(TrackId(a)).unwrap().mixer.sends[slot].clone().unwrap();
+        assert_eq!(r["output"], "Cue 1");
+        let s0 = snd(&e, 0);
+        assert_eq!(s0.target, soundcraft_model::Route::Hardware("Cue 1".into()));
+        assert!(s0.pre_fader && s0.pan_follows_main);
+        assert!(e.execute("mix.send", &json!({"tracks": [a], "output": "Nowhere"})).is_err());
+        // Into track B: its input becomes a new bus, which a second send reuses.
+        e.execute("mix.send", &json!({"tracks": [a], "to_track": b, "slot": 1})).unwrap();
+        let input = e.session().track(TrackId(b)).unwrap().mixer.input.clone();
+        let soundcraft_model::Route::Bus(bus) = input else { panic!("{input:?}") };
+        assert_eq!(snd(&e, 1).target, soundcraft_model::Route::Bus(bus));
+        let n = e.session().busses.len();
+        e.execute("mix.send", &json!({"tracks": [a], "to_track": b, "slot": 2})).unwrap();
+        assert_eq!(e.session().busses.len(), n, "the track's input bus is reused");
+        assert!(e.execute("mix.send", &json!({"tracks": [a], "to_track": a})).is_err());
+        e.execute("mix.send_level", &json!({"track": a, "slot": 0, "pan_follows_main": false})).unwrap();
+        assert!(!snd(&e, 0).pan_follows_main);
+        assert_eq!(e.execute("mix.pre_sends_ignore_mute", &json!({})).unwrap()["value"], true);
+        assert!(e.session().edit.flag(soundcraft_mix::PRE_SENDS_IGNORE_MUTE));
     }
 
     /// Mix bug 15: an output or a send that fed a track back into itself was accepted and went
