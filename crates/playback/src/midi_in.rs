@@ -214,6 +214,11 @@ impl MidiHub {
         (0..128u8).filter(|p| words[usize::from(p / 64)] & (1u64 << (p % 64)) != 0).collect()
     }
 
+    /// Forgets the notes held (All MIDI Notes Off: their note-offs may never come).
+    pub fn clear_held(&self) {
+        self.held.iter().for_each(|w| w.store(0, Ordering::Relaxed));
+    }
+
     fn note_held(&self, msg: [u8; 3]) {
         let (kind, pitch) = (msg[0] & 0xF0, msg[1] & 0x7F);
         let Some(word) = self.held.get(usize::from(pitch / 64)) else { return };

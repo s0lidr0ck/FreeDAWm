@@ -134,6 +134,8 @@ enum Cmd {
     Action(TrackId, ModuleId, &'static str),
     /// A note played on a track's instrument now (note-off at velocity 0): auditions.
     Audition(TrackId, u8, u8),
+    /// All MIDI Notes Off: every instrument lets go of every note and pedal now.
+    AllNotesOff,
     /// Audio played straight to the output now, over the mix (`None` stops it): a preview of
     /// audio that is not in the session, as Juke's hit picker's. The UI keeps a clone of each, so
     /// the audio thread never frees one.
@@ -736,6 +738,13 @@ impl AudioState {
                 Cmd::Audition(track, note, velocity) => {
                     // (no allocation: a lookup and the plugin's event queue)
                     self.mix.audition(track, note, velocity);
+                }
+                Cmd::AllNotesOff => {
+                    // (no allocation: fixed arrays and the plugins' event queues)
+                    self.mix.all_notes_off();
+                    if let Some(h) = &self.midi {
+                        h.clear_held();
+                    }
                 }
                 Cmd::Preview(p) => {
                     // (no free: the UI holds a clone of the one replaced)
@@ -2920,6 +2929,13 @@ impl Player {
     /// audition): a note-on at `velocity`, a note-off at 0.
     pub fn audition(&self, track: TrackId, note: u8, velocity: u8) {
         let _ = self.tx.send(Cmd::Audition(track, note, velocity));
+    }
+
+    /// All MIDI Notes Off (panic): every instrument lets go of every note and pedal at the next
+    /// block, whatever played it ([`MixEngine::all_notes_off`]), and the hub forgets the keys it
+    /// thought held.
+    pub fn all_notes_off(&self) {
+        let _ = self.tx.send(Cmd::AllNotesOff);
     }
 
     /// Plays `audio` (planar, at `rate`) straight to the output now, over the mix, whether or not

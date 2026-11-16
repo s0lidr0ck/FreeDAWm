@@ -84,7 +84,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Global MIDI thru switch | ● | ● | ● | ● | **Works** in the devices window; the Options menu item is **Flag only** |
 | A played note is heard through the track's instrument with the transport stopped | ● | ● | ● | ● | **Works** |
 | Stuck-note protection on stop, disarm, input change, device unplugged | ● | ● | ● | ● | **Works**, except a quick unplug and replug |
-| Panic (all notes off) | ● | ● | ● | ● | **Flag only**: the menu item and its key do nothing |
+| Panic (all notes off) | ● | ● | ● | ● | **Works** (Event › All MIDI Notes Off, Cmd+Shift+.) |
 | Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Missing**: Low Latency Monitoring covers audio tracks only |
 | MIDI activity or velocity meter on the track | ● | ● | ● | ● | **Partial**: only on the take being recorded |
 | MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Missing**: a MIDI track records but is silent |
@@ -232,7 +232,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 3 | A take erases everything under its whole range, even if one note was played, although the old part was audible during the take | `engine/src/edit.rs:254-255` |
 | 4 | **Fixed.** Record pressed while a loop plays and the playhead is before it: the take now knows the loop (`midi_devices::finish_take` takes the transport's), its first pass runs from the record point to the loop's end and each later pass is the loop. Test: `midi_record::tests::record_pressed_before_a_playing_loop_keeps_every_pass` | `engine/src/midi_record.rs` (`pass_range`); `ui-egui/src/midi_devices.rs` |
 | 5 | In a loop, a downbeat played slightly early is moved to the end of the pass before, where it is cut to almost nothing and its note-off is orphaned. With input quantize it snaps to the loop end, outside the clip. The same happens to a note played just before Stop | `engine/src/midi_record.rs:80, 146-149` |
-| 6 | All MIDI Notes Off does nothing: the request is queued and then ignored | `engine/src/cmd/event.rs:84-86`; `ui-egui/src/lib.rs:2332` |
+| 6 | **Fixed.** All MIDI Notes Off now reaches the audio thread (`Player::all_notes_off`): every instrument gets the note-offs of the keys live input holds, sustain and sostenuto up, All Notes Off and All Sound Off on all 16 channels and its own voice reset; clips playing chase their controllers again. Test: `mix` `tests::all_notes_off_lets_go_of_every_note_and_pedal_now` | `mix/src/lib.rs` (`MixEngine::all_notes_off`); `playback/src/lib.rs`; `ui-egui/src/lib.rs` |
 | 7 | A message buffer holding several messages loses all but the first. Likely on macOS, where one packet can carry a chord; lost note-offs mean stuck notes. Depends on the MIDI library's behaviour and needs checking on a Mac | `playback/src/midi_in.rs:110-122` |
 | 8 | A take stopped with the sustain pedal down keeps the pedal-down with no release, so sustain can hang after the clip. A pedal pressed before the take starts is lost | `engine/src/band_print.rs:225-230`; `engine/src/midi_record.rs:138` |
 | 9 | Events lost because the window stopped redrawing during a take (more than 16,384 waiting) are counted but never reported. Lost note-offs show as notes running to the end of the clip | `playback/src/midi_in.rs:28, 318`; `ui-egui/src/lib.rs:2456-2458` |
@@ -312,3 +312,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bug 1 fixed: notes played before the transport rolls begin the take instead of being dropped |
 | 2026-11-16 | minor | Bug 2 fixed: loop passes after the first land on a copy of the track's playlist, not an empty one |
 | 2026-11-16 | minor | Bugs 4 and 14 fixed: Record pressed before or inside a playing loop keeps every pass and leaves what came before the punch point |
+| 2026-11-16 | minor | Bug 6 fixed: All MIDI Notes Off lets go of every note and pedal |

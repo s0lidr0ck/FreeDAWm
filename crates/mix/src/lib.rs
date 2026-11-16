@@ -1227,6 +1227,29 @@ impl MixEngine {
         true
     }
 
+    /// All MIDI Notes Off (panic): every instrument lets go of every note and pedal now, whatever
+    /// played it (clips, live input, modules, auditions): the notes live input holds get their
+    /// note-offs, every channel gets sustain up, All Notes Off and All Sound Off, and the plugin's
+    /// own reset of its voices runs. Clips playing on chase their controllers again on the next
+    /// block. Audio thread: does not allocate.
+    pub fn all_notes_off(&mut self) {
+        for strip in self.strips.values_mut() {
+            if let Some(inst) = strip.instrument.as_mut() {
+                strip.live_held.release_ports(u16::MAX, |m| inst.plugin.midi_raw(0, m));
+                for ch in 0..16u8 {
+                    for (cc, v) in [(64, 0), (66, 0), (123, 0), (120, 0)] {
+                        inst.plugin.midi_raw(0, [0xB0 | ch, cc, v]);
+                    }
+                }
+                inst.plugin.all_notes_off();
+            }
+            strip.live_held = HeldNotes::default();
+            strip.held.clear();
+            strip.midi_held.clear();
+            strip.chase = true;
+        }
+    }
+
     /// The value bus of link group `group` as of the last sync (`None`: no module is in it).
     pub fn link_slab(&self, group: u32) -> Option<&Arc<LinkSlab>> {
         self.links.iter().find(|g| g.group == group).map(|g| &g.slab)
@@ -7194,6 +7217,31 @@ mod tests {
         render_block(&mut eng, &s, 0);
         render_block(&mut eng, &s, 0);
         assert_eq!(take_heard(&heard), vec![(true, 0, [0x80, 62, 0])]);
+    }
+
+    #[test]
+    fn all_notes_off_lets_go_of_every_note_and_pedal_now() {
+        let (s, mut eng, heard) = armed_with_clip_note();
+        eng.monitor_only = true;
+        play_live(&mut eng, true, &[(1, 0, [0x91, 60, 100]), (2, 0, [0xB1, 64, 127])]);
+        render_block(&mut eng, &s, 0);
+        take_heard(&heard);
+        eng.all_notes_off();
+        let got = take_heard(&heard);
+        assert_eq!(got.first(), Some(&(true, 0, [0x81, 60, 0])), "the held key's own note-off first");
+        for ch in 0..16u8 {
+            for cc in [64, 66, 123, 120] {
+                assert!(got.contains(&(true, 0, [0xB0 | ch, cc, 0])), "channel {ch} CC {cc}");
+            }
+        }
+        assert_eq!(got.last(), Some(&ALL_OFF));
+        // Nothing is left held: disarmed, the track lets nothing go again.
+        eng.live_midi.clear();
+        let mut s = s;
+        s.tracks[0].mixer.record_arm = false;
+        render_block(&mut eng, &s, 0);
+        render_block(&mut eng, &s, 0);
+        assert!(take_heard(&heard).iter().all(|h| h.2[0] & 0xF0 != 0x80), "no second note-off");
     }
 
     #[test]
