@@ -2088,6 +2088,11 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             }
         }
         if cmd == "track.commit" {
+            // Commit Selection: only the edit selection's range, the source track muting it.
+            let sel = app.engine.session().edit.selection;
+            if !sel.is_empty() && ui.button("Commit Selection").clicked() {
+                let _ = app.run(cmd, json!({"tracks": selection, "start": sel.start, "end": sel.end}));
+            }
             freeze_submenu(app, ui, id, &selection);
         }
     }

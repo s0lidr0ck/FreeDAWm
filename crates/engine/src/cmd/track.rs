@@ -159,7 +159,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             super::freeze::freeze
         ),
-        cmd!("track.commit", "Commit...", ["Track"], Some("Alt+Shift+C"), "{tracks?}", has_selection, commit),
+        cmd!(
+            "track.commit",
+            "Commit...",
+            ["Track"],
+            Some("Alt+Shift+C"),
+            "{tracks?, start?, end?} — renders each track through its inserts to a new track; with a range, only that range (the source track mutes it and stays active)",
+            has_selection,
+            commit
+        ),
         cmd!("track.bounce", "Bounce...", ["Track"], Some("Cmd+Alt+Shift+B"), "{tracks?}", has_selection, commit),
         cmd!("track.bypass_inserts", "All", ["Track", "Bypass Inserts"], None, "{tracks?, bypass?: bool}", has_selection, bypass_inserts),
         cmd!("track.mute_sends", "All", ["Track", "Mute Sends"], None, "{tracks?, mute?: bool}", has_selection, mute_sends),
@@ -1081,9 +1089,19 @@ fn delete_unused_playlists(tr: &mut soundcraft_model::Track) -> usize {
 
 fn commit(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.commit", p)?;
+    // With `start` and `end`, only that range (Commit Selection).
+    let part = match (position_param(e, "track.commit", p, "start")?, position_param(e, "track.commit", p, "end")?) {
+        (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+        (None, None) => None,
+        _ => return Err(bad("track.commit", "give both `start` and `end`, or neither")),
+    };
     let mut out = Vec::new();
     for t in tracks {
-        if let Some(id) = crate::io::commit_track(e, t)? {
+        let made = match part {
+            Some((a, b)) => crate::io::commit_track_range(e, t, a, b)?,
+            None => crate::io::commit_track(e, t)?,
+        };
+        if let Some(id) = made {
             out.push(id);
         }
     }

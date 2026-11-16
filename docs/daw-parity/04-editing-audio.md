@@ -164,7 +164,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Consolidate a selection to one new file | ● | ● | ● | ● | **Works** |
-| Bounce a clip or range in place, with or without effects | ● | ● | ● | ● | **Partial**: whole track only, always through its inserts; the new track keeps the pan, trim and fader, pan and send automation (bug 10, fixed) |
+| Bounce a clip or range in place, with or without effects | ● | ● | ● | ● | **Works**: with effects, the track menu's Commit Selection renders the selection through the inserts to a new track at its place and mutes it on the source, which stays active (whole-track Commit as before); without effects, Consolidate. The new track keeps the pan, fader, pan and send automation (bug 10, fixed) |
 | Export clips as files | ● | ● | ● | ● | **Works**: each clip alone, a muted one as it sounds unmuted (bug 22, fixed) |
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
@@ -358,6 +358,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Bugs 19 and 21 fixed, 20 partly: unused playlists, processed clips' fades and markers, coalescing on every playlist |
 | 2026-11-16 | minor | Bugs 15 and 23 fixed, 24 partly; tier 2: undo leaves the view and tool alone |
 | 2026-11-16 | minor | Tier 2, first slice: clip groups select as one; status of tiers 2 and 3 |
+| 2026-11-16 | minor | Tier 2: Commit Selection (bounce a range in place with effects) |
 | 2026-11-16 | minor | Tier 2: fade dialog with a shape for each side, presets and batch fades |
 | 2026-11-16 | minor | Tier 2: audio quantize with strength and swing |
 | 2026-11-16 | minor | Tier 2: the clip gain line is edited on the clip |

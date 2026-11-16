@@ -1360,6 +1360,36 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
     let s = e.session_arc();
     let Some(tr) = s.track(t) else { return Ok(None) };
     let Some(range) = commit_range(&s, tr)? else { return Ok(None) };
+    commit_with(e, t, range, false)
+}
+
+/// The range `track.commit {start, end}` renders of `tr`: the span asked for, refused when empty
+/// or too long, `None` on a track that cannot commit.
+pub(crate) fn commit_part(s: &Session, tr: &soundcraft_model::Track, start: Samples, end: Samples) -> Result<Option<Range>> {
+    if !tr.kind.is_audio_path() || tr.kind == TrackKind::Master {
+        return Ok(None);
+    }
+    let range = Range::new(start.max(0), end.max(0));
+    if range.is_empty() {
+        return Err(crate::cmd::bad("track.commit", "the range to commit is empty"));
+    }
+    refuse_longer(s, "track.commit", &tr.name, "commit", range.len(), render_limit(tr.channels().max(2)))?;
+    Ok(Some(range))
+}
+
+/// Commits `range` of track `t` (Commit Selection): a new track below it holds the range rendered
+/// through the inserts, at the range's place; on `t` the clips are separated at the range's
+/// edges and muted inside it, so the two play what `t` played. `t` stays active.
+pub fn commit_track_range(e: &mut Engine, t: TrackId, start: Samples, end: Samples) -> Result<Option<TrackId>> {
+    let s = e.session_arc();
+    let Some(tr) = s.track(t) else { return Ok(None) };
+    let Some(range) = commit_part(&s, tr, start, end)? else { return Ok(None) };
+    commit_with(e, t, range, true)
+}
+
+fn commit_with(e: &mut Engine, t: TrackId, range: Range, part: bool) -> Result<Option<TrackId>> {
+    let s = e.session_arc();
+    let Some(tr) = s.track(t) else { return Ok(None) };
     // A host may have rendered it already, through its live instances (`RenderJob`).
     let audio = match e.take_prepared(t, &crate::render_job::RenderKind::Commit { range }) {
         Some(audio) => audio,
@@ -1401,10 +1431,18 @@ pub fn commit_track(e: &mut Engine, t: TrackId) -> Result<Option<TrackId>> {
         ntr.mixer.vca = mixer.vca;
         ntr.automation = lanes;
         if let Some(pl) = ntr.playlist_mut() {
-            pl.clips.push(Clip::audio(cid, name, src, 0, 0, range.len()));
+            pl.clips.push(Clip::audio(cid, name, src, 0, range.start, range.len()));
         }
     }
-    if let Some(old) = s.track_mut(t) {
+    if part {
+        crate::edit::separate_at(s, t, range.start);
+        crate::edit::separate_at(s, t, range.end);
+        if let Some(pl) = s.track_mut(t).and_then(|x| x.playlist_mut()) {
+            for c in pl.clips.iter_mut().filter(|c| c.start >= range.start && c.end() <= range.end) {
+                c.muted = true;
+            }
+        }
+    } else if let Some(old) = s.track_mut(t) {
         old.inactive = true;
         old.hidden = true;
     }
@@ -4226,6 +4264,27 @@ mod strip_tests {
     /// Parity bug 10: Commit carries the pan and fader/pan/send automation to the new track; the
     /// inserts' automation is in the render and stays behind, and so is the trim (the render is
     /// taken after it: carried over too, it would be applied twice).
+    /// Commit Selection renders only the range, at its place, and mutes it on the source track,
+    /// which stays active; the two together play what the source played.
+    #[test]
+    fn committing_a_selection_renders_that_range_in_place() {
+        let (mut e, t) = tones(&[0], 48_000);
+        e.execute("mix.insert", &json!({"track": t.0, "slot": 0, "plugin": "gain"})).unwrap();
+        let r = e.execute("track.commit", &json!({"tracks": [t.0], "start": 12_000, "end": 24_000})).unwrap();
+        let nt = TrackId(r["tracks"][0].as_u64().unwrap());
+        let s = e.session();
+        let new: Vec<(Samples, Samples)> = s.track(nt).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(new, vec![(12_000, 12_000)]);
+        let src = s.track(t).unwrap();
+        assert!(!src.inactive && !src.hidden, "the source track keeps playing outside the range");
+        let spans: Vec<(Samples, Samples, bool)> = src.clips().iter().map(|c| (c.start, c.length, c.muted)).collect();
+        assert_eq!(spans, vec![(0, 12_000, false), (12_000, 12_000, true), (24_000, 24_000, false)]);
+        let heard = soundcraft_mix::render_clips(s, nt, Range::new(12_000, 24_000));
+        assert!(heard[0].iter().all(|x| (x - 0.5).abs() < 0.01), "the range rendered through the unity gain");
+        assert!(e.execute("track.commit", &json!({"tracks": [t.0], "start": 5_000})).is_err(), "both ends or neither");
+        assert!(e.execute("track.commit", &json!({"tracks": [t.0], "start": 5_000, "end": 5_000})).is_err(), "an empty range");
+    }
+
     #[test]
     fn commit_carries_pan_trim_and_automation() {
         use soundcraft_model::AutoParam;

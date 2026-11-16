@@ -61,12 +61,19 @@ impl RenderJob {
             "track.commit" | "track.bounce" => {
                 let id = if id == "track.bounce" { "track.bounce" } else { "track.commit" };
                 let tracks = crate::cmd::tracks_required(e, id, params)?;
+                let part = match (crate::cmd::position_param(e, id, params, "start")?, crate::cmd::position_param(e, id, params, "end")?) {
+                    (Some(a), Some(b)) if id == "track.commit" => Some((a.min(b), a.max(b))),
+                    _ => None,
+                };
                 let s = e.session();
                 let mut todo = Vec::new();
                 for t in tracks {
-                    if let Some(tr) = s.track(t)
-                        && let Some(range) = crate::io::commit_range(s, tr)?
-                    {
+                    let range = match (s.track(t), part) {
+                        (Some(tr), Some((a, b))) => crate::io::commit_part(s, tr, a, b)?,
+                        (Some(tr), None) => crate::io::commit_range(s, tr)?,
+                        (None, _) => None,
+                    };
+                    if let Some(range) = range {
                         todo.push((t, RenderKind::Commit { range }));
                     }
                 }
