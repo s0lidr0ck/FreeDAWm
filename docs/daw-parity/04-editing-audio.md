@@ -69,7 +69,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Mute tool | ◐ | ● | ● | ● | **Missing** as a tool; Mute Clips is a key |
 | Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
-| Scrub tool with audio | ● | ◐ | ● | ● | **Partial**: moves the playhead silently (section 1) |
+| Scrub tool with audio | ● | ◐ | ● | ● | **Works** on clips: plays what it passes, both ways, at the drag's speed (not the track's inserts; section 1) |
 | Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Missing**: the tooltip promises it |
 
 ## B. Edit modes, grid and nudge

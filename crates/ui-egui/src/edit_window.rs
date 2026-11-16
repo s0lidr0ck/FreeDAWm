@@ -3271,7 +3271,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
                 _ if at_origin - c.start < c.end() - at_origin => Gesture::TrimStart { clip: c.id, track: track.id, to: c.start },
                 _ => Gesture::TrimEnd { clip: c.id, track: track.id, to: c.end() },
             }),
-            Tool::Scrubber => Some(Gesture::Scrub { last: at }),
+            Tool::Scrubber => {
+                // The track pressed, or every selected track when it is one of them.
+                let tracks = if s.edit.selected_tracks.contains(&track.id) { s.edit.selected_tracks.clone() } else { vec![track.id] };
+                Some(Gesture::Scrub { last: at_origin, tracks })
+            }
             Tool::Pencil if auto_view.is_none() && track.kind.is_midi() => {
                 hit.is_none().then_some(Gesture::MidiClip { track: track.id, from: at_origin, to: at_origin })
             }
@@ -3578,7 +3582,15 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 invalid_fade = true;
             }
         }
-        Some(Gesture::Scrub { last }) => {
+        Some(Gesture::Scrub { last, tracks }) => {
+            // What the pointer passed over since the last frame plays in about a frame's time.
+            let seconds = f64::from(ctx.input(|i| i.stable_dt)).clamp(1.0 / 120.0, 0.1) * 1.25;
+            if !app.engine.transport.playing
+                && let Some(player) = &app.player
+                && let Some((audio, rate)) = crate::scrub::chunk(&s, tracks, *last, at, seconds)
+            {
+                player.preview(audio, rate);
+            }
             *last = at;
             let _ = app.engine.execute("transport.locate", &json!({"at": at}));
         }
@@ -5368,7 +5380,7 @@ mod tests {
     #[test]
     fn a_gesture_left_over_after_the_release_is_dropped() {
         let mut h = harness(1);
-        h.state_mut().gesture = Some(Gesture::Scrub { last: 0 });
+        h.state_mut().gesture = Some(Gesture::Scrub { last: 0, tracks: Vec::new() });
         h.step();
         assert!(h.state().gesture.is_none());
     }

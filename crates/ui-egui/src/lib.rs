@@ -84,6 +84,7 @@ pub mod sampler_window;
 pub mod scope;
 pub mod score_editor;
 pub mod scout;
+pub mod scrub;
 pub mod session_key;
 pub mod shale_ui;
 pub mod shortcut_editor;
@@ -722,8 +723,10 @@ pub enum Gesture {
         anchor: (f32, f32),
         height: f32,
     },
+    /// The Scrubber dragged: where it was last frame, and the tracks it plays (`scrub`).
     Scrub {
         last: Samples,
+        tracks: Vec<TrackId>,
     },
     Fader {
         track: TrackId,

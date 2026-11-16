@@ -82,7 +82,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Scrub audio by dragging | ● | ◐ | ● | ● | **Missing**: the Scrubber tool moves the playhead silently |
+| Scrub audio by dragging | ● | ◐ | ● | ● | **Partial**: the Scrubber plays the track it drags over (or the selected tracks), forwards and backwards at the drag's speed, with clip gain, fades and clip effects but not the track's inserts or fader; not while playing, not on the ruler |
 | Shuttle / jog at variable speed | ● | ○ | ● | ● | **Missing** |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
 | Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Missing** in the interface; the player already accepts 0.1–4× |
@@ -205,7 +205,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 |---|---:|---|
 | Declick: short ramps on stop, start, locate and loop wrap; automatic edge fades on clips | 6–10 | **Done** (2026-11-16) |
 | Loop range and loop on/off change while playing | 3–5 | **Done** (2026-11-16) |
-| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | Held rewind / fast forward **done** (2026-11-16); scrub audio not started (the resampler it needed is in) |
+| Scrub audio (Scrubber tool, ruler drag) and held rewind / fast forward | 10–16 | **Mostly done** (2026-11-16): held rewind / fast forward; the Scrubber plays the clips it passes (`ui-egui/src/scrub.rs`). Left: through the mixer (inserts, fader), on the ruler, while playing |
 | A band-limited resampler for device-rate mismatch, speed changes and stretched clips | 6–10 | **Done** for the device-rate and speed path (2026-11-16): `playback/src/resample.rs`, 16 frames of added delay off the direct path; stretched clips still read with linear interpolation in the mixer |
 | Preview: files in the browser and import dialog, clips in the Clip List; at session tempo and in sync | 14–22 | **Partly done** (2026-11-16): Workspace files and Clip List clips at a preview level (`ui-egui/src/audition.rs`); left: the import dialog, session tempo, in sync with playback |
 | Real-time stretch that follows tempo: a tick timebase that works for audio, at least two algorithms, draggable warp markers | 30–45 | The largest item; is G-15 in `gaps.md`, widened |
@@ -236,6 +236,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | tier 2: scrub audio with the Scrubber |
 | 2026-11-16 | minor | tier 2: auditioning files in the Workspace and clips in the Clip List |
 | 2026-11-16 | minor | tier 2: Pause, typing a position into the counter, held rewind and fast forward |
 | 2026-11-16 | minor | tier 2: a band-limited resampler for other device rates and speeds |
