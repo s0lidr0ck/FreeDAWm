@@ -14,7 +14,7 @@ use crate::theme::{bold, regular};
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use soundcraft_dsp::ParamInfo;
-use soundcraft_dsp::plugins::multisampler::parse_sample_key;
+use soundcraft_dsp::plugins::multisampler::{ON_KEY_DOWN, PART_OFF_DB, PARTS, ZoneSpec, parse_sample_key};
 use soundcraft_model::{Insert, TrackId};
 use std::collections::BTreeMap;
 
@@ -75,25 +75,79 @@ pub fn key_spans(notes: &[u8]) -> Vec<(u8, u8, u8)> {
         .collect()
 }
 
+/// A block on the shelves: the samples that answer the same keys and velocities. `note` is the
+/// one they were recorded at, `below` the velocity under their range (0 at the bottom), `top`
+/// the highest they answer, and `takes` how many take turns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cell {
+    pub note: u8,
+    pub lokey: u8,
+    pub hikey: u8,
+    pub below: u8,
+    pub top: u8,
+    pub takes: usize,
+}
+
+/// The instrument's parts that hold samples: each one's number (from 0) and name. A captured
+/// instrument has none to show (it is all one part).
+pub fn parts(ins: &Insert) -> Vec<(usize, String)> {
+    let mut out: BTreeMap<usize, String> = BTreeMap::new();
+    for z in ins.samples.keys().filter_map(|k| ZoneSpec::parse(k)) {
+        out.entry(z.part).or_insert(z.part_name);
+    }
+    out.into_iter().map(|(i, name)| (i, if name.is_empty() { format!("Part {}", i + 1) } else { name })).collect()
+}
+
+/// The blocks to draw, and the part they are (`None`: a captured instrument's samples). Of a
+/// library with several parts, the one with the most notes is drawn.
+pub fn cells(ins: &Insert) -> (Vec<Cell>, Option<usize>) {
+    let zones: Vec<ZoneSpec> = ins.samples.keys().filter_map(|k| ZoneSpec::parse(k)).filter(|z| z.trigger == ON_KEY_DOWN).collect();
+    let main = (0..PARTS).max_by_key(|p| (zones.iter().filter(|z| z.part == *p).count(), PARTS - p)).filter(|_| !zones.is_empty());
+    let mut out: Vec<Cell> = Vec::new();
+    for z in zones.iter().filter(|z| Some(z.part) == main) {
+        match out.iter_mut().find(|c| (c.lokey, c.hikey, c.below, c.top) == (z.lokey, z.hikey, z.lovel.saturating_sub(1), z.hivel)) {
+            Some(cell) => cell.takes += usize::from(z.seq > 0),
+            None => out.push(Cell { note: z.root, lokey: z.lokey, hikey: z.hikey, below: z.lovel.saturating_sub(1), top: z.hivel, takes: 1 }),
+        }
+    }
+    if main.is_some() {
+        return (out, main);
+    }
+    let shelves = shelves(ins);
+    let recorded: Vec<u8> = shelves.keys().copied().collect();
+    for (note, lokey, hikey) in key_spans(&recorded) {
+        let mut below = 0;
+        for &(velocity, takes) in shelves.get(&note).map(Vec::as_slice).unwrap_or(&[]) {
+            out.push(Cell { note, lokey, hikey, below, top: velocity, takes });
+            below = velocity;
+        }
+    }
+    (out, None)
+}
+
 /// The whole editor.
 pub fn editor(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
-    let (outer, _) = ui.allocate_exact_size(vec2(W - 16.0, H), Sense::hover());
+    // A library's parts get a knob each under the others.
+    let parts = parts(ins);
+    let extra = if parts.is_empty() { 0.0 } else { 40.0 + parts.len().div_ceil(2) as f32 * 50.0 };
+    let (outer, _) = ui.allocate_exact_size(vec2(W - 16.0, H + extra), Sense::hover());
     let p = ui.painter_at(outer);
     p.rect_filled(outer, CornerRadius::same(6), WALNUT);
     let (x0, x1) = (outer.min.x + 12.0, outer.max.x - 12.0);
     let title = Rect::from_min_max(pos2(x0, outer.min.y + 8.0), pos2(x1, outer.min.y + 50.0));
-    let shelves = shelves(ins);
-    title_bar(app, ui, &p, title, tid, ins, &shelves);
+    let (cells, shown) = cells(ins);
+    title_bar(app, ui, &p, title, tid, ins, &cells);
     let side_w = 300.0;
     let (top, bottom) = (title.max.y + 10.0, outer.max.y - 12.0);
     let main = Rect::from_min_max(pos2(x0, top), pos2(x1 - side_w - 12.0, bottom));
     let side = Rect::from_min_max(pos2(x1 - side_w, top), pos2(x1, bottom));
-    map_card(app, ui, &p, main, tid, ins, &shelves);
-    side_card(app, ui, &p, side, tid, ins);
+    let shown = shown.and_then(|i| parts.iter().find(|(n, _)| *n == i)).filter(|_| parts.len() > 1).map(|(_, name)| name.as_str());
+    map_card(app, ui, &p, main, tid, ins, &cells, shown);
+    side_card(app, ui, &p, side, tid, ins, &parts);
 }
 
 /// The top bar: the wordmark, what the instrument holds, and its buttons.
-fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, shelves: &BTreeMap<u8, Layers>) {
+fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, cells: &[Cell]) {
     let g = p.layout_no_wrap("Pantry".into(), bold(30.0), AMBER);
     let w = g.size().x;
     p.galley(pos2(r.min.x, r.center().y - g.size().y * 0.5), g, AMBER);
@@ -104,7 +158,11 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
         values += a.frames() * a.num_channels();
         secs += a.frames() as f64 / f64::from(a.sample_rate().max(1));
     }
-    let layers = shelves.values().map(Vec::len).max().unwrap_or(0);
+    let mut by_note: BTreeMap<u8, usize> = BTreeMap::new();
+    for c in cells {
+        *by_note.entry(c.note).or_default() += 1;
+    }
+    let layers = by_note.values().copied().max().unwrap_or(0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let (name, facts) = if ins.samples.is_empty() {
         ("Empty".to_string(), "capture a track, load one, or drop samples here".to_string())
@@ -113,8 +171,8 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
             format!("{} sample{}", ins.samples.len(), plural(ins.samples.len())),
             format!(
                 "{} note{} · {layers} layer{} · {:.0} s · {:.0} MB",
-                shelves.len(),
-                plural(shelves.len()),
+                by_note.len(),
+                plural(by_note.len()),
                 plural(layers),
                 secs,
                 values as f64 * 4.0 / 1.0e6
@@ -195,13 +253,16 @@ fn layer_colour(velocity: u8) -> Color32 {
 }
 
 /// The shelves: every sample over its keys and velocities, with a strip of keys underneath.
-fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, shelves: &BTreeMap<u8, Layers>) {
+fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, cells: &[Cell], shown: Option<&str>) {
     card(p, r);
     section(p, pos2(r.min.x + 16.0, r.min.y + 22.0), "Shelves");
     p.text(
         pos2(r.min.x + 92.0, r.min.y + 23.0),
         Align2::LEFT_CENTER,
-        "keys left to right, velocity bottom to top · press a block to hear it",
+        match shown {
+            Some(part) => format!("the {part} part · keys left to right, velocity bottom to top · press a block to hear it"),
+            None => "keys left to right, velocity bottom to top · press a block to hear it".to_string(),
+        },
         regular(12.0),
         DIM,
     );
@@ -209,7 +270,7 @@ fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
     let keys_h = 34.0;
     let map = Rect::from_min_max(pos2(r.min.x + 16.0 + gutter, r.min.y + 44.0), pos2(r.max.x - 16.0, r.max.y - 16.0 - keys_h - 6.0));
     p.rect_filled(map, CornerRadius::same(6), WELL);
-    let notes: Vec<u8> = shelves.keys().copied().collect();
+    let notes: Vec<u8> = cells.iter().map(|c| c.note).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     // The keys shown: the recorded notes with a little room each side (a piano's, when empty).
     let (first, last) = match (notes.first(), notes.last()) {
         (Some(&a), Some(&b)) => (a.saturating_sub(6), b.saturating_add(6).min(127)),
@@ -227,39 +288,33 @@ fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
     let blend = param(ins, "layer_blend") / 100.0;
     let pointer = ui.input(|i| i.pointer.latest_pos()).filter(|pos| map.contains(*pos));
     let mut hovered: Option<String> = None;
-    for (note, lo, hi) in key_spans(&notes) {
-        if hi < first || lo > last {
-            continue;
+    for c in cells.iter().filter(|c| c.hikey >= first && c.lokey <= last) {
+        let (xa, xb) = (key_x(c.lokey.max(first)), key_x(c.hikey.min(last)) + key_w);
+        let cell = Rect::from_min_max(pos2(xa + 0.5, vel_y(f32::from(c.top)) + 0.5), pos2(xb - 0.5, vel_y(f32::from(c.below)) - 0.5));
+        p.rect_filled(cell, CornerRadius::same(2), layer_colour(c.top));
+        // The bottom of a layer's range mixes with the layer below it.
+        if c.below > 0 && blend > 0.0 {
+            let mixed = Rect::from_min_max(pos2(cell.min.x, cell.max.y - cell.height() * blend), cell.max);
+            p.rect_filled(mixed, CornerRadius::same(2), layer_colour(c.below).gamma_multiply(0.55));
         }
-        let (xa, xb) = (key_x(lo.max(first)), key_x(hi.min(last)) + key_w);
-        let mut below = 0u8;
-        for (i, &(velocity, takes)) in shelves.get(&note).map(Vec::as_slice).unwrap_or(&[]).iter().enumerate() {
-            let cell = Rect::from_min_max(pos2(xa + 0.5, vel_y(f32::from(velocity)) + 0.5), pos2(xb - 0.5, vel_y(f32::from(below)) - 0.5));
-            let colour = layer_colour(velocity);
-            p.rect_filled(cell, CornerRadius::same(2), colour);
-            // The bottom of a layer's range mixes with the layer below it.
-            if i > 0 && blend > 0.0 {
-                let mixed = Rect::from_min_max(pos2(cell.min.x, cell.max.y - cell.height() * blend), cell.max);
-                p.rect_filled(mixed, CornerRadius::same(2), layer_colour(below).gamma_multiply(0.55));
+        if c.takes > 1 && cell.width() >= 8.0 && cell.height() >= 8.0 {
+            for t in 0..c.takes.min(4) {
+                p.circle_filled(pos2(cell.min.x + 4.0 + t as f32 * 5.0, cell.min.y + 4.0), 1.5, INK);
             }
-            if takes > 1 && cell.width() >= 8.0 && cell.height() >= 8.0 {
-                for t in 0..takes.min(4) {
-                    p.circle_filled(pos2(cell.min.x + 4.0 + t as f32 * 5.0, cell.min.y + 4.0), 1.5, INK);
-                }
-            }
-            if pointer.is_some_and(|pos| cell.contains(pos)) {
-                p.rect_stroke(cell, CornerRadius::same(2), Stroke::new(1.5, CREAM), StrokeKind::Inside);
-                let name = soundcraft_midi::note_name;
-                hovered = Some(format!(
-                    "{} · keys {} to {} · velocity {} to {velocity} · {takes} take{}",
-                    name(note),
-                    name(lo),
-                    name(hi),
-                    u16::from(below) + 1,
-                    if takes == 1 { "" } else { "s" }
-                ));
-            }
-            below = velocity;
+        }
+        if pointer.is_some_and(|pos| cell.contains(pos)) {
+            p.rect_stroke(cell, CornerRadius::same(2), Stroke::new(1.5, CREAM), StrokeKind::Inside);
+            let name = soundcraft_midi::note_name;
+            hovered = Some(format!(
+                "{} · keys {} to {} · velocity {} to {} · {} take{}",
+                name(c.note),
+                name(c.lokey),
+                name(c.hikey),
+                u16::from(c.below) + 1,
+                c.top,
+                c.takes,
+                if c.takes == 1 { "" } else { "s" }
+            ));
         }
     }
     p.rect_stroke(map, CornerRadius::same(6), Stroke::new(1.0, Color32::from_black_alpha(120)), StrokeKind::Inside);
@@ -278,7 +333,7 @@ fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
     let black = |n: u8| matches!(n % 12, 1 | 3 | 6 | 8 | 10);
     for k in first..=last {
         let x = key_x(k);
-        let recorded = shelves.contains_key(&k);
+        let recorded = notes.contains(&k);
         let h = if black(k) { keys_h * 0.62 } else { keys_h };
         let fill = if recorded {
             AMBER
@@ -356,6 +411,9 @@ fn value_text(ins: &Insert, id: &str) -> String {
     if id == "velocity_curve" {
         return format!("{v:.2}");
     }
+    if PART_LEVELS.contains(&id) && v <= PART_OFF_DB {
+        return "Off".to_string();
+    }
     info.format(v)
 }
 
@@ -395,6 +453,10 @@ fn knob(app: &mut SoundApp, ui: &mut Ui, p: &Painter, at: Pos2, tid: TrackId, in
     p.text(pos2(c.x + rad + 10.0, c.y + 8.0), Align2::LEFT_CENTER, value_text(ins, id), bold(13.5), TEXT);
 }
 
+/// Each part's level parameter.
+const PART_LEVELS: [&str; PARTS] =
+    ["part1_level", "part2_level", "part3_level", "part4_level", "part5_level", "part6_level", "part7_level", "part8_level"];
+
 /// The side card's sections, top to bottom: a name, a note, and its knobs (parameter, label).
 const SECTIONS: [(&str, &str, &[(&str, &str)]); 4] = [
     ("Dynamics", "how the layers meet", &[("velocity_curve", "Velocity Curve"), ("layer_blend", "Layer Blend")]),
@@ -404,7 +466,7 @@ const SECTIONS: [(&str, &str, &[(&str, &str)]); 4] = [
 ];
 
 /// The side card: Dynamics, Envelope, Pitch and Output.
-fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert) {
+fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, parts: &[(usize, String)]) {
     card(p, r);
     let col = (r.width() - 24.0) / 2.0;
     let mut y = r.min.y + 22.0;
@@ -423,6 +485,19 @@ fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
         }
         y += knobs.len().div_ceil(2) as f32 * 50.0 + 26.0;
     }
+    // A library's parts sound together, each at its own level (all the way down: off).
+    if !parts.is_empty() {
+        p.line_segment([pos2(r.min.x + 12.0, y - 14.0), pos2(r.max.x - 12.0, y - 14.0)], Stroke::new(1.0, TOBACCO_HI));
+        section(p, pos2(r.min.x + 16.0, y), "Parts");
+        p.text(pos2(r.max.x - 16.0, y + 1.0), Align2::RIGHT_CENTER, "sound together", regular(12.0), DIM);
+        y += 14.0;
+        for (k, (index, name)) in parts.iter().enumerate() {
+            let at = pos2(r.min.x + 12.0 + (k % 2) as f32 * col, y + (k / 2) as f32 * 50.0);
+            if let Some(id) = PART_LEVELS.get(*index) {
+                knob(app, ui, p, at, tid, ins, id, name);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -438,6 +513,49 @@ mod tests {
         let s = shelves(&ins);
         assert_eq!(s.keys().copied().collect::<Vec<_>>(), [48, 60]);
         assert_eq!((s[&48].as_slice(), s[&60].as_slice()), (&[(100, 1)][..], &[(64, 2), (127, 1)][..]));
+    }
+
+    #[test]
+    fn a_library_shows_its_biggest_part_and_names_them_all() {
+        let mut ins = Insert::new(PANTRY);
+        let mut add = |index: usize, part: usize, name: &str, set: &dyn Fn(&mut ZoneSpec)| {
+            let mut z = ZoneSpec { index, part, part_name: name.into(), ..ZoneSpec::default() };
+            set(&mut z);
+            ins.samples.insert(z.key(), soundcraft_model::SourceId(index as u64 + 1));
+        };
+        add(0, 0, "pad", &|z| (z.lokey, z.hikey, z.root) = (21, 60, 48));
+        add(1, 1, "notes", &|z| (z.lokey, z.hikey, z.root, z.hivel) = (30, 34, 34, 70));
+        add(2, 1, "notes", &|z| (z.lokey, z.hikey, z.root, z.lovel) = (30, 34, 34, 71));
+        add(3, 1, "notes", &|z| (z.lokey, z.hikey, z.root, z.lovel, z.seq) = (35, 39, 39, 1, 1));
+        add(4, 1, "notes", &|z| (z.lokey, z.hikey, z.root, z.lovel, z.seq) = (35, 39, 39, 1, 2));
+        add(5, 2, "", &|z| z.trigger = soundcraft_dsp::plugins::multisampler::ON_KEY_UP);
+        assert_eq!(parts(&ins), [(0, "pad".to_string()), (1, "notes".to_string()), (2, "Part 3".to_string())]);
+        let (cells, shown) = cells(&ins);
+        assert_eq!(shown, Some(1));
+        assert_eq!(
+            cells,
+            [
+                Cell { note: 34, lokey: 30, hikey: 34, below: 0, top: 70, takes: 1 },
+                Cell { note: 34, lokey: 30, hikey: 34, below: 70, top: 127, takes: 1 },
+                Cell { note: 39, lokey: 35, hikey: 39, below: 0, top: 127, takes: 2 },
+            ]
+        );
+        // A captured instrument: its notes over the keys nearest them, no parts to show.
+        let mut ins = Insert::new(PANTRY);
+        for key in ["n60.v127.r1", "n60.v64.r1", "n60.v64.r2"] {
+            ins.samples.insert(key.into(), soundcraft_model::SourceId(1));
+        }
+        assert!(parts(&ins).is_empty());
+        assert_eq!(
+            super::cells(&ins),
+            (
+                vec![
+                    Cell { note: 60, lokey: 0, hikey: 127, below: 0, top: 64, takes: 2 },
+                    Cell { note: 60, lokey: 0, hikey: 127, below: 64, top: 127, takes: 1 }
+                ],
+                None
+            )
+        );
     }
 
     #[test]
@@ -505,7 +623,7 @@ mod tests {
     #[test]
     fn every_knob_is_a_parameter_of_the_instrument() {
         let info = soundcraft_dsp::plugin_info(PANTRY).unwrap();
-        let shown: Vec<&str> = SECTIONS.iter().flat_map(|s| s.2.iter().map(|k| k.0)).collect();
+        let shown: Vec<&str> = SECTIONS.iter().flat_map(|s| s.2.iter().map(|k| k.0)).chain(PART_LEVELS).collect();
         assert_eq!(shown.len(), info.params.len(), "every parameter has a knob");
         assert!(shown.iter().all(|id| info.param(id).is_some()));
     }

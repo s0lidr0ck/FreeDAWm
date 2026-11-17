@@ -19,7 +19,9 @@ use super::*;
 use crate::cmd;
 use serde_json::json;
 use soundcraft_audio_io::{AudioBuffer, FileFormat};
-use soundcraft_dsp::plugins::multisampler::{LAYERS, NOTES, ROBINS, parse_sample_key, sample_key};
+use soundcraft_dsp::plugins::multisampler::{
+    LAYERS, NOTES, ON_KEY_DOWN, ON_KEY_UP, ON_PEDAL_DOWN, ON_PEDAL_UP, PART_OFF_DB, PARTS, ROBINS, ZONES, ZoneSpec, parse_sample_key, sample_key,
+};
 use soundcraft_midi::{Note, Sequence, note_name};
 use soundcraft_model::{ChannelFormat, Clip, Insert, Route, TrackKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -403,15 +405,36 @@ fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
     )
 }
 
-/// A key-down region of an SFZ file.
+/// A sample of an instrument file, and where it plays.
 #[derive(Debug, Clone, PartialEq)]
 struct Region {
     /// The sample's path as the file gives it (after `default_path`), with `/` separators.
     sample: String,
+    /// The note it was recorded at, the top of its velocity range (or, of a file Pantry saved
+    /// from a capture, the velocity it was played at) and its round-robin take, from 1.
     note: u8,
     velocity: u8,
-    /// Round-robin take, from 1.
     robin: usize,
+    /// A captured sample of a file Pantry saved: placed by note, velocity and take, its ranges
+    /// worked out by the instrument.
+    captured: bool,
+    /// Everything about where and how it plays (its index and part number are set on loading;
+    /// frames count in the file's own sample rate), and its part's name.
+    zone: ZoneSpec,
+    part: String,
+}
+
+/// A level as Decent Sampler writes it: decibels (`-3.0dB`) or a linear gain (`0.7`).
+fn level_db(text: &str) -> Option<f32> {
+    let t = text.trim();
+    let db = match t.to_ascii_lowercase().strip_suffix("db") {
+        Some(db) => db.trim().parse::<f32>().ok()?,
+        None => {
+            let gain = t.parse::<f32>().ok()?;
+            if gain <= 0.000_25 { PART_OFF_DB } else { 20.0 * gain.log10() }
+        }
+    };
+    db.is_finite().then_some(db.clamp(-144.0, 24.0))
 }
 
 /// A note as SFZ writes it: a number, or a name (`c4` is 60).
@@ -461,29 +484,82 @@ fn parse_sfz(text: &str) -> Vec<Region> {
     let mut finish = |region: &mut Opcodes, control: &Opcodes, global: &Opcodes, master: &Opcodes, group: &Opcodes, out: &mut Vec<Region>| {
         let get = |k: &str| region.get(k).or_else(|| group.get(k)).or_else(|| master.get(k)).or_else(|| global.get(k)).map(String::as_str);
         let sample = get("sample").map(|s| s.trim().replace('\\', "/")).filter(|s| !s.is_empty() && !s.starts_with('*'));
-        // Not the notes themselves: release samples, and sounds a controller sets off (pedal noise).
-        let on_controller = region
-            .keys()
-            .chain(group.keys())
-            .chain(master.keys())
-            .chain(global.keys())
-            .any(|k| k.starts_with("on_locc") || k.starts_with("on_hicc") || k.starts_with("start_locc") || k.starts_with("start_hicc"));
         // Of an instrument with keyswitched versions (`sw_last`), the one it starts on.
         let switched_off = get("sw_last").and_then(sfz_note).is_some_and(|last| match get("sw_default").and_then(sfz_note) {
             Some(default) => last != default,
             None => *first_switch.get_or_insert(last) != last,
         });
-        let key_down = get("trigger").is_none_or(|t| t.trim().eq_ignore_ascii_case("attack")) && !on_controller && !switched_off;
-        if let Some(sample) = sample.filter(|_| key_down) {
+        // What sets it off: a key going down or coming up, or the sustain pedal. A sound another
+        // controller starts is left out.
+        let started_by =
+            |k: &String| k.starts_with("on_locc") || k.starts_with("on_hicc") || k.starts_with("start_locc") || k.starts_with("start_hicc");
+        let controllers: Vec<&String> =
+            region.keys().chain(group.keys()).chain(master.keys()).chain(global.keys()).filter(|k| started_by(k)).collect();
+        let whole = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok());
+        let trigger = if controllers.is_empty() {
+            match get("trigger").map(|t| t.trim().to_ascii_lowercase()).as_deref() {
+                None | Some("attack") => Some(ON_KEY_DOWN),
+                Some("release" | "release_key") => Some(ON_KEY_UP),
+                _ => None,
+            }
+        } else if controllers.iter().all(|k| k.ends_with("cc64")) {
+            Some(if whole("on_locc64").unwrap_or(0.0) >= 64.0 { ON_PEDAL_DOWN } else { ON_PEDAL_UP })
+        } else {
+            None
+        };
+        if let (Some(sample), Some(trigger), false) = (sample, trigger, switched_off) {
             let dir = control.get("default_path").map(|d| d.trim().replace('\\', "/")).unwrap_or_default();
+            let key = get("key").and_then(sfz_note);
+            let (lokey, hikey) =
+                (key.or_else(|| get("lokey").and_then(sfz_note)).unwrap_or(0), key.or_else(|| get("hikey").and_then(sfz_note)).unwrap_or(127));
             // The note it was recorded at, or the one key it plays.
-            let single = get("lokey").and_then(sfz_note).filter(|lo| get("hikey").and_then(sfz_note) == Some(*lo));
-            let note = get("pitch_keycenter").or_else(|| get("key")).and_then(sfz_note).or(single).unwrap_or(60);
-            // A file Pantry saved says what each sample was played at; else the top of its range.
-            let velocity =
-                get("pantry_velocity").or_else(|| get("hivel")).and_then(|v| v.trim().parse::<i64>().ok()).map_or(127, |v| v.clamp(1, 127) as u8);
-            let robin = get("seq_position").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
-            out.push(Region { sample: format!("{dir}{sample}"), note, velocity, robin });
+            let note = get("pitch_keycenter").and_then(sfz_note).or(key).or((lokey == hikey).then_some(lokey)).unwrap_or(60);
+            let vel = |k: &str, d: u8| whole(k).map_or(d, |v| v.clamp(1.0, 127.0) as u8);
+            let (lovel, hivel) = (vel("lovel", 1), vel("hivel", 127));
+            let seq = whole("seq_position").map(|v| v.clamp(1.0, 63.0) as u8);
+            let frames = |k: &str| whole(k).filter(|v| *v >= 0.0).map_or(0, |v| v.min(f64::from(u32::MAX)) as u32);
+            let looped = get("loop_mode").is_some_and(|m| m.trim().starts_with("loop_")) && frames("loop_end") > frames("loop_start");
+            let captured = whole("pantry_velocity").map(|v| v.clamp(1.0, 127.0) as u8);
+            let part = match get("pantry_part_name").or_else(|| get("master_label")).map(str::trim).filter(|n| !n.is_empty()) {
+                Some(name) => name.to_string(),
+                None => match trigger {
+                    ON_KEY_DOWN => "Notes",
+                    ON_KEY_UP => "Release",
+                    _ => "Pedal",
+                }
+                .to_string(),
+            };
+            let zone = ZoneSpec {
+                lokey: lokey.min(hikey),
+                hikey: lokey.max(hikey),
+                root: note,
+                lovel: lovel.min(hivel),
+                hivel: lovel.max(hivel),
+                seq: seq.unwrap_or(0),
+                trigger,
+                gain_db: whole("volume").map_or(0.0, |v| v.clamp(-144.0, 24.0) as f32),
+                cents: (whole("tune").unwrap_or(0.0) + 100.0 * whole("transpose").unwrap_or(0.0)).clamp(-4800.0, 4800.0) as f32,
+                start: frames("offset"),
+                // (SFZ's `end` is the last frame played)
+                end: whole("end").filter(|v| *v > 0.0).map_or(0, |v| (v.min(f64::from(u32::MAX - 1)) as u32).saturating_add(1)),
+                loop_start: if looped { frames("loop_start") } else { 0 },
+                loop_end: if looped { frames("loop_end").saturating_add(1) } else { 0 },
+                xfade: if looped { frames("pantry_xfade") } else { 0 },
+                keytrack: whole("pitch_keytrack").is_none_or(|v| v != 0.0),
+                veltrack: whole("amp_veltrack").map_or(1.0, |v| (v / 100.0).clamp(0.0, 1.0) as f32),
+                ref_vel: vel("pantry_ref", 127),
+                ..ZoneSpec::default()
+            };
+            out.push(Region {
+                sample: format!("{dir}{sample}"),
+                note,
+                // A file Pantry saved says what each captured sample was played at.
+                velocity: captured.unwrap_or(hivel),
+                robin: usize::from(seq.unwrap_or(1)),
+                captured: captured.is_some(),
+                zone,
+                part,
+            });
         }
         region.clear();
     };
@@ -632,26 +708,69 @@ fn archive_path(base: &str, sample: &str) -> String {
     parts.join("/")
 }
 
-/// The key-down samples of a Decent Sampler preset (`.dspreset`), in file order: each
-/// `<sample>` with its `path`, `rootNote`, `hiVel` and `seqPosition`, a value it lacks taken from
-/// its `<group>`, then from `<groups>`. Only the mapping is read.
-fn parse_dspreset(text: &str) -> std::result::Result<Vec<Region>, String> {
+/// A Decent Sampler preset's samples (`.dspreset`), in file order, and the levels its controls
+/// give its parts. A `<sample>` takes a value it lacks from its `<group>`, then from `<groups>`;
+/// levels and tunings add up down that chain. A part is a group's first tag (else its name), and
+/// its level the value of the control bound to that tag's volume. Only the mapping is read: no
+/// interface, effects or envelopes.
+fn parse_dspreset(text: &str) -> std::result::Result<(Vec<Region>, BTreeMap<String, f32>), String> {
     use crate::dawproject::xml::Element;
-    fn walk(e: &Element, inherited: &[&Element], out: &mut Vec<Region>) {
+    fn walk(e: &Element, inherited: &[&Element], out: &mut Vec<Region>, levels: &mut BTreeMap<String, f32>) {
+        // A control bound to a tag's volume: that part's level.
+        if e.name == "control" {
+            let bound = e.children_named("binding").find(|b| b.attr("level") == Some("tag") && b.attr("parameter") == Some("AMP_VOLUME"));
+            if let (Some(tag), Some(db)) = (bound.and_then(|b| b.attr("identifier")), e.attr("value").and_then(level_db)) {
+                levels.insert(tag.trim().to_string(), db);
+            }
+            return;
+        }
         if e.name == "sample" {
             let get = |k: &str| e.attr(k).or_else(|| inherited.iter().rev().find_map(|g| g.attr(k)));
-            let enabled = get("enabled").is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"));
-            let key_down = enabled && get("trigger").is_none_or(|t| t.trim().eq_ignore_ascii_case("attack"));
-            let Some(path) = e.attr("path").map(|p| p.trim().replace('\\', "/")).filter(|p| !p.is_empty() && key_down) else { return };
+            // A value at every level of the chain (levels and tunings add up).
+            let every = |k: &str| -> Vec<&str> { inherited.iter().copied().chain([e]).filter_map(|g| g.attr(k)).collect() };
+            let whole = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok());
             let note = |k: &str| get(k).and_then(sfz_note);
-            let single = note("loNote").filter(|lo| note("hiNote") == Some(*lo));
-            let whole = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok()).map(|v| v.round() as i64);
-            out.push(Region {
-                sample: path,
-                note: note("rootNote").or(single).unwrap_or(60),
-                velocity: whole("hiVel").map_or(127, |v| v.clamp(1, 127) as u8),
-                robin: whole("seqPosition").map_or(1, |v| v.clamp(1, 64) as usize),
-            });
+            let enabled = get("enabled").is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"));
+            let pedal = whole("onLoCC64").or(whole("onHiCC64")).is_some();
+            let trigger = match get("trigger").map(|t| t.trim().to_ascii_lowercase()).as_deref() {
+                _ if pedal => Some(if whole("onLoCC64").unwrap_or(0.0) >= 64.0 { ON_PEDAL_DOWN } else { ON_PEDAL_UP }),
+                None | Some("attack") => Some(ON_KEY_DOWN),
+                Some("release") => Some(ON_KEY_UP),
+                _ => None,
+            };
+            let path = e.attr("path").map(|p| p.trim().replace('\\', "/")).filter(|p| !p.is_empty());
+            let (Some(path), Some(trigger), true) = (path, trigger, enabled) else { return };
+            let (lokey, hikey) = (note("loNote").unwrap_or(0), note("hiNote").unwrap_or(127));
+            let root = note("rootNote").or((lokey == hikey).then_some(lokey)).unwrap_or(60);
+            let vel = |k: &str, d: u8| whole(k).map_or(d, |v| v.round().clamp(1.0, 127.0) as u8);
+            let (lovel, hivel) = (vel("loVel", 1), vel("hiVel", 127));
+            let seq = whole("seqPosition").map(|v| v.round().clamp(1.0, 63.0) as u8);
+            let frames = |k: &str| whole(k).filter(|v| *v >= 0.0).map_or(0, |v| v.min(f64::from(u32::MAX - 1)) as u32);
+            let looped = get("loopEnabled").is_some_and(|v| v.trim().eq_ignore_ascii_case("true")) && frames("loopEnd") > frames("loopStart");
+            // The group's first tag names the part; a group without one, its own name.
+            let group = inherited.iter().rev().find(|g| g.name == "group");
+            let tag = group.and_then(|g| g.attr("tags")).and_then(|t| t.split(',').next()).map(str::trim).filter(|t| !t.is_empty());
+            let part = tag.or_else(|| group.and_then(|g| g.attr("name")).map(str::trim).filter(|n| !n.is_empty())).unwrap_or("Notes").to_string();
+            let zone = ZoneSpec {
+                lokey: lokey.min(hikey),
+                hikey: lokey.max(hikey),
+                root,
+                lovel: lovel.min(hivel),
+                hivel: lovel.max(hivel),
+                seq: seq.unwrap_or(0),
+                trigger,
+                gain_db: every("volume").into_iter().filter_map(level_db).sum::<f32>().clamp(-144.0, 24.0),
+                cents: (100.0 * every("tuning").into_iter().filter_map(|v| v.trim().parse::<f32>().ok()).sum::<f32>()).clamp(-4800.0, 4800.0),
+                start: frames("start"),
+                end: frames("end").saturating_add(u32::from(frames("end") > 0)),
+                loop_start: if looped { frames("loopStart") } else { 0 },
+                loop_end: if looped { frames("loopEnd").saturating_add(1) } else { 0 },
+                xfade: if looped { frames("loopCrossfade") } else { 0 },
+                keytrack: whole("pitchKeyTrack").is_none_or(|v| v != 0.0),
+                veltrack: whole("ampVelTrack").map_or(1.0, |v| v.clamp(0.0, 1.0) as f32),
+                ..ZoneSpec::default()
+            };
+            out.push(Region { sample: path, note: root, velocity: hivel, robin: usize::from(seq.unwrap_or(1)), captured: false, zone, part });
             return;
         }
         let mut chain = inherited.to_vec();
@@ -659,13 +778,121 @@ fn parse_dspreset(text: &str) -> std::result::Result<Vec<Region>, String> {
             chain.push(e);
         }
         for c in &e.children {
-            walk(c, &chain, out);
+            walk(c, &chain, out, levels);
         }
     }
-    let root = Element::parse(text)?;
-    let mut out = Vec::new();
-    walk(&root, &[], &mut out);
-    Ok(out)
+    // Presets are written by hand: Decent Sampler opens ones a strict reader would refuse.
+    let root = Element::parse_lenient(text)?;
+    let (mut out, mut levels) = (Vec::new(), BTreeMap::new());
+    walk(&root, &[], &mut out, &mut levels);
+    Ok((out, levels))
+}
+
+/// Puts an instrument file's `regions` in track `t`'s Pantry in place of what it holds: the
+/// captured samples of a file Pantry saved by note, velocity and take ([`attach`]), every other
+/// one as a zone of its own, in parts named as the file names them (eight at most, the rest
+/// joining the last) at the `levels` it gives them. `dir` is where the samples are: a folder, or
+/// with `library` a folder inside that archive. Returns the samples and zones placed, the notes
+/// and most layers a note has, what did not fit, and the parts' names.
+fn attach_regions(
+    e: &mut Engine,
+    id: &str,
+    t: TrackId,
+    regions: &[Region],
+    levels: &BTreeMap<String, f32>,
+    dir: &Path,
+    mut library: Option<&mut Library>,
+    what: &str,
+) -> Result<(usize, usize, usize, usize, Vec<String>)> {
+    let packed = library.is_some();
+    let place = |sample: &str| if packed { PathBuf::from(archive_path(&dir.to_string_lossy(), sample)) } else { dir.join(sample) };
+    let captured: Vec<Wanted> = regions
+        .iter()
+        .filter(|r| r.captured)
+        .map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: place(&r.sample), packed })
+        .collect();
+    let (mut samples, mut notes, mut layers, mut skipped) = attach(e, id, t, &captured, true, what, library.as_deref_mut())?;
+    let zones: Vec<&Region> = regions.iter().filter(|r| !r.captured).collect();
+    let mut parts: Vec<String> = Vec::new();
+    for r in &zones {
+        if !parts.contains(&r.part) && parts.len() < PARTS {
+            parts.push(r.part.clone());
+        }
+    }
+    let rate = e.session().sample_rate.hz();
+    // A file several zones play is decoded once: its source, and its own sample rate.
+    let mut decoded: BTreeMap<PathBuf, (soundcraft_model::SourceId, u32)> = BTreeMap::new();
+    let mut total = 0usize;
+    // Each part's layers of each note it holds.
+    let mut ranges: BTreeMap<(usize, u8), BTreeSet<(u8, u8)>> = BTreeMap::new();
+    for (index, r) in zones.iter().enumerate() {
+        if index >= ZONES {
+            skipped += 1;
+            continue;
+        }
+        let file = place(&r.sample);
+        let (src, file_rate) = match decoded.get(&file) {
+            Some(found) => *found,
+            None => {
+                let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
+                let ext = file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
+                let bytes = match library.as_deref_mut() {
+                    Some(lib) => lib.read(&file.to_string_lossy(), MAX_PACKED_SAMPLE_BYTES).map_err(EngineError::Io)?,
+                    None => crate::io::read_file(&file)?,
+                };
+                let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+                if buf.frames() == 0 || buf.num_channels() == 0 {
+                    return Err(EngineError::Io(format!("{name}: no audio")));
+                }
+                let file_rate = buf.sample_rate.max(1);
+                let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES)
+                    .ok_or_else(|| EngineError::Io(format!("{name}: too long for one note (two minutes at most)")))?;
+                total = total.saturating_add(buf.frames().saturating_mul(buf.num_channels()));
+                if total > crate::io::MAX_IMPORT_SAMPLES {
+                    return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
+                }
+                let from = (!packed).then(|| file.to_string_lossy().into_owned());
+                let src = crate::io::add_source(e.session_mut(), &name, buf, from.as_deref(), format.format);
+                decoded.insert(file.clone(), (src, file_rate));
+                (src, file_rate)
+            }
+        };
+        // The file counts its frames at its own rate; the session holds it at the session's.
+        let scale = |f: u32| (f64::from(f) * f64::from(rate) / f64::from(file_rate)).round().min(f64::from(u32::MAX)) as u32;
+        let part = parts.iter().position(|p| *p == r.part).unwrap_or(parts.len().saturating_sub(1));
+        let spec = ZoneSpec {
+            index,
+            part,
+            part_name: parts.get(part).cloned().unwrap_or_default(),
+            start: scale(r.zone.start),
+            end: scale(r.zone.end),
+            loop_start: scale(r.zone.loop_start),
+            loop_end: scale(r.zone.loop_end),
+            xfade: scale(r.zone.xfade),
+            ..r.zone.clone()
+        };
+        if spec.trigger == ON_KEY_DOWN {
+            ranges.entry((spec.part, spec.root)).or_default().insert((spec.lovel, spec.hivel));
+        }
+        let ins = multisampler_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
+        ins.samples.insert(spec.key(), src);
+        samples += 1;
+    }
+    if !zones.is_empty() {
+        notes += ranges.keys().map(|(_, root)| *root).collect::<BTreeSet<_>>().len();
+        layers = layers.max(ranges.values().map(BTreeSet::len).max().unwrap_or(0));
+        // A library's levels follow the velocity from full scale, and its layers switch as it
+        // was made to; its parts start at the levels its own controls give them.
+        if let Some(ins) = multisampler_mut(e, t) {
+            ins.params.insert("velocity_curve".into(), 2.0);
+            ins.params.insert("layer_blend".into(), 0.0);
+            for i in 0..PARTS {
+                let level = parts.get(i).and_then(|name| levels.get(name)).copied().unwrap_or(0.0);
+                ins.params.insert(format!("part{}_level", i + 1), level.clamp(PART_OFF_DB, 12.0));
+            }
+        }
+    }
+    Ok((samples, notes, layers, skipped, parts))
 }
 
 /// A sample to put in a Pantry: the note it was recorded at, its velocity, its take (from 1) and
@@ -774,7 +1001,9 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut library: Option<Library> = None;
     let mut presets: Vec<String> = Vec::new();
     let mut name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Multisample").to_string();
-    let wanted: Vec<Wanted> = match kind.as_str() {
+    let mut levels = BTreeMap::new();
+    let mut inside = dir.clone();
+    let regions: Vec<Region> = match kind.as_str() {
         // A Decent Sampler library: one of its presets, the samples read out of the archive.
         "dslibrary" => {
             let mut lib = Library::new(crate::io::open_read(&path)?)
@@ -794,40 +1023,30 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
                 ))
             })?;
             let xml = lib.read(&entry, MAX_SFZ_BYTES as u64).map_err(EngineError::Io)?;
-            let regions = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{entry}: {err}")))?;
-            let base = Path::new(&entry).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+            let (regions, found) = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{entry}: {err}")))?;
+            levels = found;
+            inside = Path::new(&entry).parent().map(Path::to_path_buf).unwrap_or_default();
             name = stem(&entry);
             presets = presets.iter().map(|n| stem(n)).collect();
             library = Some(lib);
             regions
-                .iter()
-                .map(|r| Wanted {
-                    note: r.note,
-                    velocity: r.velocity,
-                    robin: r.robin,
-                    file: PathBuf::from(archive_path(&base, &r.sample)),
-                    packed: true,
-                })
-                .collect()
         }
         "dspreset" => {
             let xml = crate::io::read_file_max(&path, MAX_SFZ_BYTES as u64)?;
-            let regions = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{shown}: {err}")))?;
-            regions.iter().map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample), packed: false }).collect()
+            let (regions, found) = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{shown}: {err}")))?;
+            levels = found;
+            regions
         }
         _ => {
             let mut budget = MAX_SFZ_BYTES;
             expand_sfz(&path, &dir, 0, &mut Vec::new(), &mut text, &mut budget)?;
             parse_sfz(&text)
-                .iter()
-                .map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample), packed: false })
-                .collect()
         }
     };
-    if wanted.is_empty() {
+    if regions.is_empty() {
         return Err(none());
     }
-    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, true, &shown, library.as_mut())?;
+    let (samples, notes, layers, skipped, parts) = attach_regions(e, id, t, &regions, &levels, &inside, library.as_mut(), &shown)?;
     // A file Pantry saved brings the instrument's settings with it.
     let saved: Option<BTreeMap<String, f64>> =
         text.lines().find_map(|l| l.trim().strip_prefix(PARAMS_LINE)).and_then(|j| serde_json::from_str(j).ok());
@@ -840,7 +1059,9 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
             }
         }
     }
-    Ok(json!({"track": t.0, "name": name, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "presets": presets}))
+    Ok(
+        json!({"track": t.0, "name": name, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "presets": presets, "parts": parts}),
+    )
 }
 
 /// File extensions a sample is imported from (what the audio decoder reads).
@@ -953,7 +1174,10 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut held: Vec<(u8, u8, usize, soundcraft_model::SourceId)> =
         ins.samples.iter().filter_map(|(k, src)| parse_sample_key(k).map(|(n, v, r)| (n as u8, v, r + 1, *src))).collect();
     held.sort();
-    if held.is_empty() {
+    let mut zones: Vec<(ZoneSpec, soundcraft_model::SourceId)> =
+        ins.samples.iter().filter_map(|(k, src)| ZoneSpec::parse(k).map(|z| (z, *src))).collect();
+    zones.sort_by_key(|(z, _)| z.index);
+    if held.is_empty() && zones.is_empty() {
         return Err(bad(id, "the Multisampler holds no samples to save"));
     }
     let notes: Vec<u8> = held.iter().map(|h| h.0).collect::<BTreeSet<_>>().into_iter().collect();
@@ -995,8 +1219,64 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
             "<region> sample={file} pitch_keycenter={note} lokey={lokey} hikey={hikey} lovel={lovel} hivel={hivel} pantry_velocity={velocity}{seq}\n"
         ));
     }
+    // A library's zones, each spelled out; a file several play is written once.
+    let mut written: BTreeMap<soundcraft_model::SourceId, String> = BTreeMap::new();
+    for (z, src) in &zones {
+        let file = match written.get(src) {
+            Some(file) => file.clone(),
+            None => {
+                let audio = s.pool.get(*src).ok_or_else(|| EngineError::Io(format!("zone {}: its audio is missing", z.index)))?;
+                let file = format!("z{:04}_{}.wav", z.index, note_name(z.root).replace('#', "s"));
+                let wav = soundcraft_audio_io::encode(&audio.buffer(), &options).map_err(|err| EngineError::Io(format!("{file}: {err}")))?;
+                bytes = bytes.saturating_add(wav.len());
+                crate::io::write_file(&folder.join(&file).to_string_lossy(), &wav)?;
+                written.insert(*src, file.clone());
+                file
+            }
+        };
+        let mut line = format!(
+            "<region> sample={file} lokey={} hikey={} pitch_keycenter={} lovel={} hivel={} volume={:.1} tune={:.0} amp_veltrack={:.0} pantry_ref={} pantry_part_name={}",
+            z.lokey,
+            z.hikey,
+            z.root,
+            z.lovel,
+            z.hivel,
+            z.gain_db,
+            z.cents,
+            z.veltrack * 100.0,
+            z.ref_vel,
+            if z.part_name.is_empty() { format!("Part {}", z.part + 1) } else { z.part_name.clone() },
+        );
+        let mut add = |text: String| {
+            line.push(' ');
+            line.push_str(&text);
+        };
+        match z.trigger {
+            ON_KEY_UP => add("trigger=release".into()),
+            ON_PEDAL_DOWN => add("on_locc64=64 on_hicc64=127".into()),
+            ON_PEDAL_UP => add("on_locc64=0 on_hicc64=63".into()),
+            _ => {}
+        }
+        if z.seq > 0 {
+            add(format!("seq_position={}", z.seq));
+        }
+        if z.start > 0 {
+            add(format!("offset={}", z.start));
+        }
+        if z.end > 0 {
+            add(format!("end={}", z.end - 1));
+        }
+        if z.loop_end > 0 {
+            add(format!("loop_mode=loop_continuous loop_start={} loop_end={} pantry_xfade={}", z.loop_start, z.loop_end - 1, z.xfade));
+        }
+        if !z.keytrack {
+            add("pitch_keytrack=0".into());
+        }
+        text.push_str(&line);
+        text.push('\n');
+    }
     crate::io::write_file(&path.to_string_lossy(), text.as_bytes())?;
-    Ok(json!({"path": path.to_string_lossy(), "name": stem, "samples": held.len(), "bytes": bytes.saturating_add(text.len())}))
+    Ok(json!({"path": path.to_string_lossy(), "name": stem, "samples": held.len() + zones.len(), "bytes": bytes.saturating_add(text.len())}))
 }
 
 #[cfg(test)]
@@ -1027,8 +1307,22 @@ mod tests {
         TrackId(v["tracks"][0].as_u64().unwrap())
     }
 
-    fn region(sample: &str, note: u8, velocity: u8, robin: usize) -> Region {
-        Region { sample: sample.into(), note, velocity, robin }
+    /// A key-down sample in brief: its file, the note it was recorded at, the top of its
+    /// velocity range and its take.
+    fn region(sample: &str, note: u8, velocity: u8, robin: usize) -> (String, u8, u8, usize) {
+        (sample.into(), note, velocity, robin)
+    }
+
+    fn key_down(regions: &[Region]) -> Vec<(String, u8, u8, usize)> {
+        regions.iter().filter(|r| r.zone.trigger == ON_KEY_DOWN).map(|r| (r.sample.clone(), r.note, r.velocity, r.robin)).collect()
+    }
+
+    /// The zones a track's Pantry holds, by index.
+    fn zones(e: &Engine, t: TrackId) -> Vec<ZoneSpec> {
+        let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        let mut z: Vec<ZoneSpec> = ins.samples.keys().filter_map(|k| ZoneSpec::parse(k)).collect();
+        z.sort_by_key(|z| z.index);
+        z
     }
 
     #[test]
@@ -1049,7 +1343,7 @@ mod tests {
             <region> sample=release.wav trigger=release\n<region> sample=*sine\n<region> lokey=1\n\
             <group>\n<region>\nsample=late.wav\nkey=72";
         assert_eq!(
-            parse_sfz(text),
+            key_down(&parse_sfz(text)),
             [
                 region("Samples/060_C4_v040_rr1.wav", 60, 40, 1),
                 region("Samples/060_C4_v040_rr2.wav", 60, 40, 2),
@@ -1082,8 +1376,15 @@ mod tests {
             (Some("Tones"), Some(4), Some(2), Some(2), Some(0))
         );
         let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
-        // The second sample for one place is that layer's next take.
-        assert_eq!(ins.samples.keys().map(String::as_str).collect::<Vec<_>>(), ["n48.v127.r1", "n48.v60.r1", "n60.v127.r1", "n60.v127.r2"]);
+        // Each region is a zone of its own: two layers of one note, and two samples that sound
+        // together on another.
+        let z = zones(&e, t);
+        assert_eq!(
+            z.iter().map(|z| (z.root, z.lovel, z.hivel, z.seq)).collect::<Vec<_>>(),
+            [(48, 1, 60, 0), (48, 1, 127, 0), (60, 1, 127, 1), (60, 1, 127, 1)]
+        );
+        assert!(z.iter().all(|z| z.part == 0 && z.part_name == "Notes" && z.ref_vel == 127));
+        assert_eq!(ins.params.get("velocity_curve"), Some(&2.0));
         assert!(ins.samples.values().all(|s| e.session().source(*s).is_some()));
         // Loading again replaces what was there; one undo step takes a load back.
         std::fs::write(&sfz, "<region> sample=a.wav key=50\n").unwrap();
@@ -1334,9 +1635,14 @@ mod tests {
         let mut e = Engine::default();
         let t = track(&mut e, MULTISAMPLER);
         let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
-        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64()), (Some(2), Some(1), Some(2)));
-        let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
-        assert_eq!(ins.samples.keys().map(String::as_str).collect::<Vec<_>>(), ["n57.v127.r1", "n57.v50.r1"]);
+        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64()), (Some(4), Some(1), Some(2)));
+        // The two layers of the note, its release sample and the pedal's noise, each in its part.
+        let z = zones(&e, t);
+        assert_eq!(
+            z.iter().map(|z| (z.trigger, z.lovel, z.hivel)).collect::<Vec<_>>(),
+            [(ON_KEY_DOWN, 1, 50), (ON_KEY_DOWN, 51, 127), (ON_KEY_UP, 1, 127), (ON_PEDAL_DOWN, 1, 127)]
+        );
+        assert_eq!(v["parts"], json!(["Notes", "Release", "Pedal"]));
         // Includes in the middle of a line, a variable that starts like another, and a keyswitched
         // second version of the same notes, which is left out.
         std::fs::write(d.join("maps").join("v1.sfz"), "#define $VEL soft\n#define $VELTRACK 99\n").unwrap();
@@ -1350,9 +1656,9 @@ mod tests {
         assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(1), Some(0)));
         // A file that includes itself, or one that is not there, fails without hanging.
         std::fs::write(&sfz, "#include \"Main.sfz\"\n<region> sample=A_soft.wav key=57\n").unwrap();
-        // (nine copies of its one region: four takes fit a layer)
+        // (nine copies of its one region)
         let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
-        assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(4), Some(5)));
+        assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(9), Some(0)));
         std::fs::write(&sfz, "#include \"gone.sfz\"\n").unwrap();
         assert!(e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).is_err());
     }
@@ -1377,7 +1683,7 @@ mod tests {
     #[test]
     fn a_decent_sampler_preset_gives_its_key_down_samples() {
         assert_eq!(
-            parse_dspreset(DSPRESET).unwrap(),
+            key_down(&parse_dspreset(DSPRESET).unwrap().0),
             [
                 region("Samples/c_soft.wav", 48, 60, 1),
                 region("Samples/e_soft.wav", 52, 60, 1),
@@ -1385,11 +1691,92 @@ mod tests {
                 region("Samples/c_hard_2.wav", 48, 127, 2),
             ]
         );
-        assert!(parse_dspreset("<DecentSampler><groups/></DecentSampler>").unwrap().is_empty());
+        assert!(parse_dspreset("<DecentSampler><groups/></DecentSampler>").unwrap().0.is_empty());
         assert!(parse_dspreset("not xml <").is_err());
         assert_eq!(archive_path("Piano/Presets", "../Samples/./a.wav"), "Piano/Samples/a.wav");
         assert_eq!(archive_path("", "Samples\\a.wav"), "Samples/a.wav");
         assert_eq!(archive_path("", "../../a.wav"), "a.wav");
+    }
+
+    /// A preset with what a sampled piano's has: a looped pad under the notes, layers with their
+    /// own levels and tunings, a start past the file's lead-in, release samples, a pedal noise,
+    /// and controls that set each part's level.
+    const LAYERED: &str = r#"<DecentSampler>
+  <ui><tab>
+    <control parameterName="Notes" value="0.5"><binding type="amp" level="tag" identifier="notes" parameter="AMP_VOLUME"/></control>
+    <control parameterName="Texture" value="0"><binding type="amp" level="tag" identifier="pad" parameter="AMP_VOLUME"/></control>
+    <control parameterName="Cutoff" value="22000" style="rotary" width="80" style="linear_bar_vertical"><binding type="effect" level="instrument" position="0" parameter="FX_FILTER_FREQUENCY"/></control>
+  </tab></ui>
+  <groups volume="-3dB">
+    <group name="PAD" tags="pad" volume="3.0dB">
+      <sample path="Samples/c_soft.wav" rootNote="48" loNote="40" hiNote="52" start="441" loopEnabled="true" loopStart="882" loopEnd="2204" loopCrossfade="44"/>
+    </group>
+    <group name="SOFT" tags="notes" tuning="0.5">
+      <sample path="Samples/c_soft.wav" volume="2.0dB" tuning="0.25" rootNote="48" loNote="44" hiNote="48" loVel="1" hiVel="70"/>
+    </group>
+    <group name="HARD" tags="notes">
+      <sample path="Samples/c_hard_1.wav" rootNote="48" loNote="44" hiNote="48" loVel="71" hiVel="127" end="2204"/>
+    </group>
+    <group name="RT" tags="release" trigger="release"><sample path="Samples/c_rel.wav" rootNote="48" loNote="44" hiNote="48"/></group>
+    <group name="PEDAL" tags="pedal">
+      <sample path="Samples/e_soft.wav" rootNote="0" loNote="127" hiNote="127" onLoCC64="90" onHiCC64="127" pitchKeyTrack="0"/>
+    </group>
+  </groups>
+</DecentSampler>"#;
+
+    #[test]
+    fn a_layered_preset_loads_as_parts_with_their_levels_and_saves_and_loads_back() {
+        let d = dir("layered");
+        std::fs::create_dir_all(d.join("Samples")).unwrap();
+        for f in ["c_soft.wav", "e_soft.wav", "c_hard_1.wav", "c_rel.wav"] {
+            tone_wav(&d.join("Samples").join(f), 44_100);
+        }
+        let preset = d.join("Layered.dspreset");
+        std::fs::write(&preset, LAYERED).unwrap();
+        let mut e = Engine::default();
+        let t = track(&mut e, MULTISAMPLER);
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": preset.to_string_lossy()})).unwrap();
+        assert_eq!(
+            (v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64(), &v["parts"]),
+            (Some(5), Some(1), Some(2), &json!(["pad", "notes", "release", "pedal"]))
+        );
+        let z = zones(&e, t);
+        let pantry = |e: &Engine, t: TrackId| e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        let ins = pantry(&e, t);
+        // The pad: its part, its keys, and (at the session's 48 kHz, from the file's 44.1) where
+        // it starts and loops; the group's and the instrument's levels add up.
+        let pad = &z[0];
+        assert_eq!((pad.part, pad.part_name.as_str(), pad.lokey, pad.hikey, pad.root), (0, "pad", 40, 52, 48));
+        assert_eq!((pad.start, pad.loop_start, pad.loop_end, pad.xfade, pad.gain_db), (480, 960, 2400, 48, 0.0));
+        // The soft layer: 2 dB over the instrument's -3, the group's and its own tuning together.
+        assert_eq!((z[1].part, z[1].lovel, z[1].hivel, z[1].gain_db, z[1].cents), (1, 1, 70, -1.0, 75.0));
+        assert_eq!((z[2].part, z[2].lovel, z[2].hivel, z[2].end), (1, 71, 127, 2400));
+        assert_eq!((z[3].part, z[3].trigger), (2, ON_KEY_UP));
+        assert_eq!((z[4].part, z[4].trigger, z[4].keytrack), (3, ON_PEDAL_DOWN, false));
+        // The file the pad and the soft layer both play is one source.
+        assert_eq!(ins.samples[&z[0].key()], ins.samples[&z[1].key()]);
+        assert_eq!(ins.samples.values().collect::<BTreeSet<_>>().len(), 4);
+        // Each part at the level its control gives it: the pad off, the notes at half.
+        assert_eq!(ins.params["part1_level"], PART_OFF_DB);
+        assert!((ins.params["part2_level"] + 6.02).abs() < 0.01);
+        assert_eq!((ins.params["part3_level"], ins.params["layer_blend"], ins.params["velocity_curve"]), (0.0, 0.0, 2.0));
+        // Saved to a file and loaded into another Pantry: the same zones, parts and levels.
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "part1_level", "value": -12.0})).unwrap();
+        let sfz = d.join("Kept.sfz");
+        let v = e.execute("mix.multisample_save", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!(v["samples"], 5);
+        let other = track(&mut e, MULTISAMPLER);
+        let v = e.execute("mix.multisample_load", &json!({"track": other.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), &v["parts"]), (Some(5), &json!(["pad", "notes", "release", "pedal"])));
+        assert_eq!(zones(&e, other), z);
+        let back = pantry(&e, other);
+        assert_eq!((back.params["part1_level"], back.params["layer_blend"]), (-12.0, 0.0));
+        assert_eq!(back.samples.values().collect::<BTreeSet<_>>().len(), 4);
+        // It plays: the session's renderer hears the notes.
+        let made = e
+            .execute("track.capture_multisample", &json!({"track": other.0, "low": 46, "high": 46, "layers": 1, "hold": 0.05, "tail": 0.1}))
+            .unwrap();
+        assert_eq!((made["samples"].as_u64(), made["silent"].as_u64()), (Some(1), Some(0)));
     }
 
     #[test]
@@ -1408,9 +1795,19 @@ mod tests {
         let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": preset.to_string_lossy()})).unwrap();
         assert_eq!(
             (v["name"].as_str(), v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64()),
-            (Some("Upright"), Some(4), Some(2), Some(2))
+            (Some("Upright"), Some(5), Some(2), Some(2))
         );
-        assert_eq!(keys(&e), ["n48.v127.r1", "n48.v127.r2", "n48.v60.r1", "n52.v60.r1"]);
+        let z = zones(&e, t);
+        assert_eq!(
+            z.iter().map(|z| (z.root, z.lokey, z.hikey, z.hivel, z.seq, z.trigger)).collect::<Vec<_>>(),
+            [
+                (48, 46, 50, 60, 0, ON_KEY_DOWN),
+                (52, 52, 52, 60, 0, ON_KEY_DOWN),
+                (48, 0, 127, 127, 1, ON_KEY_DOWN),
+                (48, 0, 127, 127, 2, ON_KEY_DOWN),
+                (48, 0, 127, 127, 0, ON_KEY_UP)
+            ]
+        );
         // The same instrument packed as a library, with a second preset beside it.
         let mut w = crate::dawproject::archive::ArchiveWriter::new(std::io::Cursor::new(Vec::new()));
         w.add("Upright/Upright Close.dspreset", DSPRESET.as_bytes()).unwrap();
@@ -1424,9 +1821,9 @@ mod tests {
         let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": lib.to_string_lossy()})).unwrap();
         assert_eq!(
             (v["name"].as_str(), v["samples"].as_u64(), &v["presets"]),
-            (Some("Upright Close"), Some(4), &json!(["Upright Close", "Upright Far"]))
+            (Some("Upright Close"), Some(5), &json!(["Upright Close", "Upright Far"]))
         );
-        assert_eq!(keys(&e).len(), 4);
+        assert_eq!(keys(&e).len(), 5);
         // Its samples have no files of their own: they are the session's to save.
         let s = e.session();
         let ins = s.track(t).and_then(|tr| tr.instrument.clone()).unwrap();
@@ -1462,13 +1859,26 @@ mod tests {
     #[ignore = "needs FREEDAWM_TEST_DSPRESET: a Decent Sampler preset of a real library"]
     fn a_real_decent_sampler_preset_maps() {
         let path = PathBuf::from(std::env::var("FREEDAWM_TEST_DSPRESET").unwrap());
-        let regions = parse_dspreset(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let notes: BTreeSet<u8> = regions.iter().map(|r| r.note).collect();
-        let velocities: BTreeSet<u8> = regions.iter().map(|r| r.velocity).collect();
-        let takes: BTreeSet<usize> = regions.iter().map(|r| r.robin).collect();
-        println!("{} samples, {} notes, velocities {:?}, takes {:?}", regions.len(), notes.len(), velocities, takes);
-        for r in regions.iter().take(2) {
-            println!("  {r:?}");
+        let (regions, levels) = parse_dspreset(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut parts: BTreeMap<&str, Vec<&Region>> = BTreeMap::new();
+        for r in &regions {
+            parts.entry(r.part.as_str()).or_default().push(r);
+        }
+        println!("{} samples in {} parts", regions.len(), parts.len());
+        for (name, of) in &parts {
+            let notes: BTreeSet<u8> = of.iter().map(|r| r.note).collect();
+            let ranges: BTreeSet<(u8, u8)> = of.iter().map(|r| (r.zone.lovel, r.zone.hivel)).collect();
+            let triggers: BTreeSet<u8> = of.iter().map(|r| r.zone.trigger).collect();
+            let loops = of.iter().filter(|r| r.zone.loop_end > 0).count();
+            println!(
+                "  {name}: {} samples, {} notes, velocities {ranges:?}, triggers {triggers:?}, {loops} looped, level {:?} dB",
+                of.len(),
+                notes.len(),
+                levels.get(*name)
+            );
+        }
+        if let Some(r) = regions.first() {
+            println!("  first: {} {:?}", r.sample, r.zone);
         }
         assert!(!regions.is_empty());
     }
@@ -1489,6 +1899,7 @@ mod tests {
         let mut e = Engine::default();
         let t = track(&mut e, MULTISAMPLER);
         let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
-        assert_eq!((v["samples"].as_u64(), v["layers"].as_u64(), v["skipped"].as_u64()), (Some(20), Some(16), Some(4)));
+        // A library's regions are zones of their own, whatever their number.
+        assert_eq!((v["samples"].as_u64(), v["layers"].as_u64(), v["skipped"].as_u64()), (Some(24), Some(18), Some(0)));
     }
 }
