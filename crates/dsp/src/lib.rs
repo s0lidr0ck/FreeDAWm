@@ -600,6 +600,12 @@ pub trait PluginStateReader: Send {
     fn load_preset(&mut self, _kind: u32, _location: Option<&str>, _load_key: Option<&str>) -> bool {
         false
     }
+    /// The instance is gone though its slot is still filled: a plug-in run in its own process
+    /// whose process crashed or hung (it is silenced; an effect passes its input through).
+    /// Restarting it makes it again. False by default.
+    fn crashed(&self) -> bool {
+        false
+    }
 }
 
 impl<F: FnMut() -> Option<Vec<u8>> + Send> PluginStateReader for F {

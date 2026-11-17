@@ -29,7 +29,7 @@ const C: &str = "mix.module_preset";
 const MAX_STATE_BYTES: usize = 64 << 20;
 
 /// A fresh `Insert::state_load` value (never 0, never one handed out before in this process).
-fn next_load() -> u64 {
+pub(super) fn next_load() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed).max(1)
 }

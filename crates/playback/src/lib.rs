@@ -2772,6 +2772,13 @@ impl Player {
         self.side().capture_states()
     }
 
+    /// Whether the third-party plugin in this slot is gone though its slot is filled (one run in
+    /// its own process that crashed or hung; see [`PluginStateReader::crashed`]): Restart makes
+    /// it again.
+    pub fn plugin_crashed(&self, track: TrackId, slot: SlotKey) -> bool {
+        self.side().states.get(&(track, slot)).is_some_and(|r| r.crashed())
+    }
+
     /// Reads the state of one live third-party plugin (`None`: no such instance, or nothing to
     /// read yet), so a module copied, moved or removed keeps what was set in its editor.
     pub fn capture_state(&self, track: TrackId, slot: SlotKey) -> Option<Vec<u8>> {

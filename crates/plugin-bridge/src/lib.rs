@@ -205,6 +205,9 @@ pub mod proto {
         pub tail: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub state: Option<String>,
+        /// The plug-in's parameter values by index, after a state is loaded (`None`: not said).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub values: Vec<Option<f32>>,
     }
 
     /// The plug-in as the helper loaded it.

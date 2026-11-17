@@ -267,6 +267,21 @@ pub(crate) fn open_window(app: &mut SoundApp, track: TrackId, module: ModuleId) 
 /// A hosted plugin's menu items for its slot: "Show Parameters…" (the generic window) and
 /// "Capture Thumbnail Now" (enabled while its own editor is open).
 pub(crate) fn hosted_menu_items(app: &mut SoundApp, ui: &mut Ui, track: TrackId, key: SlotKey) {
+    let crashed = app.player.as_ref().is_some_and(|p| p.plugin_crashed(track, key));
+    let resp = ui.add_enabled(crashed, egui::Button::new("Restart Plug-in"));
+    let resp = resp
+        .on_hover_text("Its own process crashed or stopped answering: start it again with its last state")
+        .on_disabled_hover_text("Offered when a plug-in run in its own process has crashed");
+    if resp.clicked() {
+        let module = match key {
+            SlotKey::Instrument => json!("instrument"),
+            SlotKey::Module(m) => json!(m.0),
+        };
+        if let Err(e) = app.run("ui.plugin_restart", json!({"track": track.0, "module": module})) {
+            app.ui.status = e;
+        }
+        ui.close();
+    }
     if ui.button("Show Parameters…").clicked() {
         show_parameters(app, track, key);
         ui.close();
@@ -280,6 +295,27 @@ pub(crate) fn hosted_menu_items(app: &mut SoundApp, ui: &mut Ui, track: TrackId,
         crate::browser::thumbs::capture_now(app, (track, key));
         ui.close();
     }
+}
+
+/// `ui.plugin_restart {track, module: id | "instrument"}`: makes a hosted plug-in's instance again
+/// from its last state (read from the running instance, or the one a crashed plug-in last had)
+/// and the parameter values the session holds (`mix.module_restart`).
+pub(crate) fn restart_command(app: &mut SoundApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let track = p.get("track").and_then(serde_json::Value::as_u64).map(TrackId).ok_or("`track` required")?;
+    let module = p.get("module").cloned().ok_or("`module` required")?;
+    let slot = match &module {
+        serde_json::Value::String(s) if s.trim().eq_ignore_ascii_case("instrument") => SlotKey::Instrument,
+        v => SlotKey::Module(ModuleId(v.as_u64().and_then(|m| u32::try_from(m).ok()).ok_or("`module` must be a module id or \"instrument\"")?)),
+    };
+    app.sync_player();
+    let mut params = json!({"track": track.0, "module": module});
+    if let Some(state) = app.player.as_ref().and_then(|pl| pl.capture_state(track, slot)) {
+        params["state"] = json!(soundcraft_model::b64::encode(&state));
+    }
+    let r = app.run("mix.module_restart", params)?;
+    app.sync_player();
+    app.ui.status = "Plug-in restarted with its last state".into();
+    Ok(r)
 }
 
 /// Opens or closes a module's drawer (one per strip).
@@ -527,7 +563,10 @@ fn tile(app: &mut SoundApp, ui: &mut Ui, track: &Track, index: usize, ins: &Inse
     let meter = meters.and_then(|m| m.modules.iter().find(|x| x.module == ins.id));
     let face = face(ins);
     let name = tile_name(ins);
-    let failed = meter.is_some_and(|m| m.failed);
+    // A plug-in run in its own process whose process crashed: silenced, an effect passing its
+    // input through, until Restart Plug-in (its menu).
+    let crashed = app.player.as_ref().is_some_and(|p| p.plugin_crashed(id, SlotKey::Module(ins.id)));
+    let failed = crashed || meter.is_some_and(|m| m.failed);
     let off = ins.bypass || !ins.active;
     let open = app.ui.drawers.get(&id) == Some(&ins.id);
     // Frozen (Track › Freeze): the tile still opens its drawer and its menu (to move the freeze
@@ -628,6 +667,8 @@ fn tile(app: &mut SoundApp, ui: &mut Ui, track: &Track, index: usize, ins: &Inse
     }
     let right = if missing {
         Some(("missing".to_string(), t.text_dim))
+    } else if crashed {
+        Some(("crashed".to_string(), t.meter_red))
     } else if failed {
         Some(("failed".to_string(), t.meter_red))
     } else if !ins.active {
@@ -1072,6 +1113,40 @@ mod tests {
         let player = soundcraft_playback::Player::new(engine.session_arc());
         player.attach_state_reader(kick.id, SlotKey::Module(comp), Box::new(|| Some(b"live".to_vec())));
         (SoundApp::new(engine, Some(player), crate::Services::default()), kick.id, bass, comp)
+    }
+
+    /// A stand-in for a plug-in run in its own process whose process crashed: it answers the
+    /// state it last had, and says it crashed.
+    struct Crashed;
+    impl soundcraft_dsp::PluginStateReader for Crashed {
+        fn save_state(&mut self) -> Option<Vec<u8>> {
+            Some(b"last".to_vec())
+        }
+        fn crashed(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_crashed_plug_in_is_restarted_with_its_last_state() {
+        let mut engine = soundcraft_engine::demo::demo_engine();
+        let kick = engine.session().track_by_name("Kick").unwrap().id;
+        let mut ins = Insert::new("clap:org.example.gone");
+        ins.params.insert("7".into(), 0.5);
+        ins.set_state_bytes(b"saved");
+        let m = engine.session_mut().track_mut(kick).unwrap().mixer.add_module(ins, None).unwrap();
+        let player = soundcraft_playback::Player::new(engine.session_arc());
+        player.attach_state_reader(kick, SlotKey::Module(m), Box::new(Crashed));
+        let mut app = SoundApp::new(engine, Some(player), crate::Services::default());
+        assert!(app.player.as_ref().unwrap().plugin_crashed(kick, SlotKey::Module(m)), "its tile and menu say so");
+        let module = |app: &SoundApp| app.engine.session().track(kick).unwrap().mixer.module(m).cloned().unwrap();
+        let load = module(&app).state_load;
+        app.run("ui.plugin_restart", json!({"track": kick.0, "module": m.0})).unwrap();
+        let after = module(&app);
+        assert_eq!(after.state_bytes().as_deref(), Some(&b"last"[..]), "the state it last had");
+        assert_ne!(after.state_load, load, "made again from it");
+        assert_eq!(after.params.get("7"), Some(&0.5));
+        assert!(app.run("ui.plugin_restart", json!({"track": kick.0, "module": "nonsense"})).is_err());
     }
 
     fn state_of(app: &SoundApp, track: TrackId, module: ModuleId) -> Option<Vec<u8>> {

@@ -75,6 +75,7 @@ pub(crate) mod module_asset;
 pub(crate) mod module_ceiling;
 pub(crate) mod module_link;
 mod module_preset;
+mod module_restart;
 mod more_util;
 pub mod movie_bounce;
 pub mod notes;
@@ -262,6 +263,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(module_asset::specs());
         v.extend(module_link::specs());
         v.extend(module_preset::specs());
+        v.extend(module_restart::specs());
         v.extend(instrument::specs());
         v.extend(midi_input::specs());
         v.extend(midi_fx::specs());

@@ -146,6 +146,9 @@ struct Status {
     /// The plug-in is being dropped (its helper's end is not a crash).
     closing: AtomicBool,
     name: Mutex<String>,
+    /// The plug-in's state as last read from it or loaded into it: what a crashed plug-in
+    /// still answers, so Restart brings it back as it was.
+    last_state: Mutex<Option<Vec<u8>>>,
 }
 
 /// The pipe and the process.
@@ -182,6 +185,27 @@ impl Control {
         if reply.ok { Ok(reply) } else { Err(reply.error.unwrap_or_else(|| "refused".into())) }
     }
 
+    /// The plug-in's state, read now (and kept), or once its process is gone the one last read
+    /// or loaded.
+    fn fetch_state(&self) -> Option<Vec<u8>> {
+        match self.call(&Request::SaveState).ok().and_then(|r| unhex(&r.state?)) {
+            Some(state) => {
+                *self.status.last_state.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
+                Some(state)
+            }
+            None if self.status.dead.load(Ordering::Acquire) => self.status.last_state.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            None => None,
+        }
+    }
+
+    /// Loads `data` into the plug-in (and keeps it as its last state); the reply carries its
+    /// parameter values as the state set them. `None` when it did not take it.
+    fn put_state(&self, data: &[u8]) -> Option<Reply> {
+        let reply = self.call(&Request::LoadState { state: hex(data) }).ok()?;
+        *self.status.last_state.lock().unwrap_or_else(PoisonError::into_inner) = Some(data.to_vec());
+        Some(reply)
+    }
+
     fn kill(&self) {
         let mut c = self.child.lock().unwrap_or_else(PoisonError::into_inner);
         let _ = c.kill();
@@ -197,8 +221,11 @@ pub struct BridgedPlugin {
     /// The exchange's shared file and the audio thread's side of it, once prepared.
     shm: Option<Shm>,
     host: Option<Host>,
-    /// Parameter values as last set, by the index of `info.params`.
+    /// Parameter values as last set or loaded, by the index of `info.params`.
     values: Vec<f32>,
+    /// Which of them were set by the host since the plug-in's state was last loaded: those go
+    /// to a new exchange again (the rest the plug-in holds itself, from its state).
+    touched: Vec<bool>,
     offline: bool,
     /// The offline flag the current exchange was prepared with.
     prepared_offline: bool,
@@ -241,6 +268,7 @@ impl BridgedPlugin {
             hung: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             name: Mutex::new(id.into()),
+            last_state: Mutex::new(None),
         });
         let (tx, rx) = channel();
         let st = Arc::clone(&status);
@@ -258,7 +286,9 @@ impl BridgedPlugin {
                 if !st.closing.load(Ordering::Acquire) {
                     let name = st.name.lock().unwrap_or_else(PoisonError::into_inner).clone();
                     let how = if st.hung.load(Ordering::Acquire) { "stopped answering" } else { "crashed" };
-                    crate::report(format!("{name} {how} in its own process: it is silenced, and the session goes on"));
+                    crate::report(format!(
+                        "{name} {how} in its own process: it is silenced, and the session goes on (Restart Plug-in on its insert brings it back)"
+                    ));
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -284,6 +314,7 @@ impl BridgedPlugin {
             shm: None,
             host: None,
             values: Vec::new(),
+            touched: Vec::new(),
             offline: false,
             prepared_offline: false,
             rate: 48_000.0,
@@ -296,6 +327,7 @@ impl BridgedPlugin {
         *p.status.name.lock().unwrap_or_else(PoisonError::into_inner) = info.name.clone();
         p.info = leaked_info(id, &info);
         p.values = p.info.params.iter().map(|q| q.default).collect();
+        p.touched = vec![false; p.values.len()];
         p.adopt(shm, &reply, 2, 1024);
         Ok(p)
     }
@@ -328,8 +360,9 @@ impl BridgedPlugin {
 
     fn adopt(&mut self, shm: Shm, reply: &Reply, channels: usize, max: usize) {
         let mut host = Host::new(channels, max, self.info.is_instrument);
-        // Parameters set before this exchange go with its first block.
-        for (i, v) in self.values.iter().enumerate() {
+        // Parameters the host set go with the new exchange's first block (one queued for the
+        // old exchange may not have gone); the others stay as the plug-in's state has them.
+        for (i, v) in self.values.iter().enumerate().filter(|(i, _)| self.touched.get(*i).copied().unwrap_or(false)) {
             host.queue(Event::Param { index: u32::try_from(i).unwrap_or(u32::MAX), value: *v });
         }
         (self.shm, self.host) = (Some(shm), Some(host));
@@ -453,6 +486,9 @@ impl Plugin for BridgedPlugin {
         if let Some(x) = self.values.get_mut(i) {
             *x = v;
         }
+        if let Some(t) = self.touched.get_mut(i) {
+            *t = true;
+        }
         if let Some(h) = &mut self.host {
             h.queue(Event::Param { index: u32::try_from(i).unwrap_or(u32::MAX), value: v });
         }
@@ -532,15 +568,40 @@ impl Plugin for BridgedPlugin {
     }
 
     fn save_state(&mut self) -> Option<Vec<u8>> {
-        unhex(&self.control.call(&Request::SaveState).ok()?.state?)
+        self.control.fetch_state()
     }
 
     fn load_state(&mut self, data: &[u8]) -> bool {
-        self.control.call(&Request::LoadState { state: hex(data) }).is_ok()
+        let Some(reply) = self.control.put_state(data) else { return false };
+        // The state sets the parameters now: the host's copy follows it.
+        for (i, v) in reply.values.iter().enumerate() {
+            if let (Some(v), Some(x)) = (v, self.values.get_mut(i)) {
+                *x = *v;
+            }
+        }
+        self.touched.iter_mut().for_each(|t| *t = false);
+        true
     }
 
     fn state_reader(&mut self) -> Option<Box<dyn soundcraft_dsp::PluginStateReader>> {
-        let control = Arc::clone(&self.control);
-        Some(Box::new(move || unhex(&control.call(&Request::SaveState).ok()?.state?)))
+        Some(Box::new(Reader(Arc::clone(&self.control))))
+    }
+}
+
+/// A bridged plug-in's state on the UI thread: read and loaded over the pipe; once its process
+/// is gone, the state it last had, and it says it crashed (so the app offers Restart).
+struct Reader(Arc<Control>);
+
+impl soundcraft_dsp::PluginStateReader for Reader {
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        self.0.fetch_state()
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.0.put_state(data).is_some()
+    }
+
+    fn crashed(&self) -> bool {
+        self.0.status.dead.load(Ordering::Acquire)
     }
 }

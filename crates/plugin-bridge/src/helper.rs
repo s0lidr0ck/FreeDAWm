@@ -106,14 +106,25 @@ fn handle(served: &mut Option<Served>, req: Request) -> Reply {
             _ => failed("the plug-in did not save its state"),
         },
         Request::LoadState { state } => {
-            let took = match (served.as_mut(), unhex(&state)) {
-                (Some(s), Some(b)) => s.plugin.load_state(&b),
-                _ => false,
-            };
-            if took { Reply { ok: true, ..Reply::default() } } else { failed("the plug-in did not take the state") }
+            match (served.as_mut(), unhex(&state)) {
+                // Its parameters as the state set them, for the host's copy.
+                (Some(s), Some(b)) => {
+                    if s.plugin.load_state(&b) {
+                        Reply { ok: true, values: values_of(s), ..Reply::default() }
+                    } else {
+                        failed("the plug-in did not take the state")
+                    }
+                }
+                _ => failed("the plug-in did not take the state"),
+            }
         }
         Request::Quit => Reply { ok: true, ..Reply::default() },
     }
+}
+
+/// The plug-in's parameter values, by the index the host sends (`None` for one it does not say).
+fn values_of(s: &Served) -> Vec<Option<f32>> {
+    s.ids.iter().map(|id| s.plugin.param(id).filter(|v| v.is_finite())).collect()
 }
 
 /// Makes plug-in `id`: a `clap:` one (the bundles in `dir` made known first), or for tests a

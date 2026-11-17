@@ -121,6 +121,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.meter_ballistics", "Meter Ballistics", "", None),
     ("ui.copy_imported_audio", "Copy Imported Audio into the Project", "", None),
     ("ui.plugin_process", "Run CLAP Plug-ins in Their Own Process", "", None),
+    ("ui.plugin_restart", "Restart Plug-in", "", None),
     // The monitor stage (`monitor_ui`): heard on this computer, never in a bounce.
     ("monitor.ear", "Ear Correction", "", None),
     ("monitor.sim", "Simulated Output", "", None),
@@ -1254,6 +1255,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.vocal_preset_save" {
         return Some(crate::vocal_editor::panel::save_command(app, p));
+    }
+    if id == "ui.plugin_restart" {
+        return Some(crate::chain_view::restart_command(app, p));
     }
     if let Some(r) = crate::preferences::run(app, id, p) {
         return Some(r);

@@ -170,6 +170,43 @@ fn a_clap_plug_in_is_described_in_a_helper_and_a_crash_there_is_only_the_helpers
 }
 
 #[test]
+fn a_crashed_plug_in_keeps_its_last_state_and_a_restart_brings_it_back() {
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let mut p = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    p.prepare(48_000.0, 128, 2);
+    // Gain 2 lives in the plug-in's own state (the fixture saves gain and mode).
+    let mut gain2 = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(gain2.set_param("7", 2.0));
+    gain2.prepare(48_000.0, 128, 2);
+    play(&mut gain2, 0, 4);
+    let state = gain2.save_state().expect("the fixture keeps a state");
+    drop(gain2);
+    assert!(p.load_state(&state));
+    let mut reader = p.state_reader().unwrap();
+    assert!(!reader.crashed());
+    p.kill_helper();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !reader.crashed() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(reader.crashed(), "the app is told, so it offers Restart");
+    // Gone, it still answers the state it last had: what Restart makes it again from.
+    assert_eq!(reader.save_state(), Some(state.clone()));
+    assert_eq!(p.save_state(), Some(state.clone()));
+    let mut again = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(again.load_state(&state));
+    assert_eq!(again.param("7"), Some(2.0), "the host's copy follows the state, and is not sent back over it");
+    again.prepare(48_000.0, 128, 2);
+    let (sent, heard) = play(&mut again, 0, 30);
+    if again.overruns() == 0 {
+        for b in 2..30 {
+            assert!(heard[b].iter().zip(&sent[b - 1]).all(|(h, s)| (h - s * 2.0).abs() < 1e-6), "block {b}: gain 2 again");
+        }
+    }
+    assert!(!again.crashed());
+}
+
+#[test]
 fn a_clap_plug_in_runs_in_its_own_process() {
     // Loaded only in the helper: this process never loads the plug-in's binary.
     let mut p = BridgedPlugin::spawn_with(exe(), "clap:org.soundcraft.test.gain", Some(clap_fixture())).unwrap();
