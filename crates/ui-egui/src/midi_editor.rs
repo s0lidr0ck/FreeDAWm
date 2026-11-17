@@ -317,6 +317,8 @@ pub struct MidiEditorState {
     pub pending_zoom: Option<f32>,
     /// The zoom factor the view is at, if it is at one.
     pub zoom_factor: Option<f32>,
+    /// A note dragged on a track showing Notes ([`crate::track_notes`]).
+    pub track_drag: Option<crate::track_notes::TrackNoteDrag>,
     /// The 14-bit and RPN/NRPN lanes shown under the controller lanes.
     pub wide_lanes: Vec<soundcraft_engine::cmd::midi_wide::WideLane>,
     /// A freehand drag in one of them: its lane and the (tick, value) points so far.
@@ -374,6 +376,7 @@ impl Default for MidiEditorState {
             hover: None,
             pending_zoom: None,
             zoom_factor: None,
+            track_drag: None,
             wide_lanes: Vec::new(),
             wide_draw: None,
             drawn_wide: Vec::new(),

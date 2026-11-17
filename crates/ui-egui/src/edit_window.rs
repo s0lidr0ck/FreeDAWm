@@ -2515,31 +2515,23 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
         }
         ClipContent::Video { .. } => {} // thumbnails: video_track::draw_lane
         ClipContent::Midi { sequence } => {
-            let (lo, hi) = sequence.notes.iter().fold((127u8, 0u8), |(lo, hi), n| (lo.min(n.pitch), hi.max(n.pitch)));
-            let (lo, hi) = if lo > hi { (48, 72) } else { (lo.saturating_sub(2), hi.saturating_add(2)) };
-            let span = f32::from(hi.saturating_sub(lo).max(1));
-            let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
             let p = painter.with_clip_rect(vis);
-            for n in sequence.notes.iter().filter(|n| n.start >= 0) {
-                let a = s.tempo.tick_to_samples(base.saturating_add(n.start), s.sample_rate);
-                let b = s.tempo.tick_to_samples(base.saturating_add(n.end()), s.sample_rate).min(clip.end());
-                let nx0 = x_of(s, tl, a);
-                let nx1 = x_of(s, tl, b).max(nx0 + 2.0);
-                if nx1 < vis.min.x || nx0 > vis.max.x {
+            let picked =
+                |i: usize| app.midi.clip == Some(clip.id) && app.midi.selected.contains(&i) && crate::track_notes::edits_notes(track, s.edit.tool);
+            for (i, r) in crate::track_notes::note_rects(s, clip, tl, body_r) {
+                if r.max.x < vis.min.x || r.min.x > vis.max.x {
                     continue;
                 }
-                let y = body_r.max.y - 3.0 - (f32::from(n.pitch.saturating_sub(lo)) / span) * (body_r.height() - 6.0);
-                let nh = ((body_r.height() - 6.0) / span).clamp(1.5, 6.0);
+                let Some(n) = sequence.notes.get(i) else { continue };
                 let vcol = if crate::theme::is_light() {
                     Color32::from_rgb(20, 20 + n.velocity, 40)
                 } else {
                     wave.gamma_multiply(0.5 + f32::from(n.velocity) / 254.0)
                 };
-                p.rect_filled(
-                    Rect::from_min_max(pos2(nx0, y - nh * 0.5), pos2(nx1, y + nh * 0.5)),
-                    1.0,
-                    if selected { Color32::from_rgb(16, 16, 16) } else { vcol },
-                );
+                p.rect_filled(r, 1.0, if selected { Color32::from_rgb(16, 16, 16) } else { vcol });
+                if picked(i) {
+                    p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_rgb(250, 250, 250)), StrokeKind::Outside);
+                }
             }
         }
     }
@@ -3356,6 +3348,10 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     let at = sample_at(&s, tl, p.x).max(0);
     let origin = if resp.drag_started() { ui.input(|i| i.pointer.press_origin()).unwrap_or(p) } else { p };
     let at_origin = sample_at(&s, tl, origin.x).max(0);
+    // On a MIDI track showing Notes, its notes are edited in place.
+    if sub.is_none() && crate::track_notes::interact(app, ui, &resp, track, lane, tl) {
+        return;
+    }
     // Clean Vocal's badge on a cleaned clip: a click flips Original/Cleaned (undoable).
     if let Some(c) = clip_at(track, at).filter(|c| clean_badge(&s, tl, lane, c).is_some_and(|r| r.contains(p))) {
         if resp.hovered() {

@@ -118,6 +118,7 @@ pub mod theme;
 pub mod timeline_link;
 pub mod toolbar;
 pub mod tour;
+pub mod track_notes;
 pub mod user_files;
 pub mod value_entry;
 mod vault_ui;

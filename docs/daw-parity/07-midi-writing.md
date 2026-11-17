@@ -67,7 +67,7 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Piano roll opened from a clip, docked or in its own window | ● | ● | ● | ● | **Works** |
-| Notes edited directly on the track | ● | ◐ | ○ | ● | **Flag only**: the view exists in the menu; nothing handles it (design below, not built) |
+| Notes edited directly on the track | ● | ◐ | ○ | ● | **Works**: a MIDI or instrument track showing Notes (their default view) is a small piano roll: its clip's lowest to highest note fill the clip's height. With the Smart, Grabber or Pencil tool a drag on a note moves it in time and pitch (the editor's selected notes with it), a drag on its right end resizes it, a click selects it in the MIDI Editor (Shift adds), Alt-click deletes it, and the Pencil clicked on empty clip space adds a note there; moves snap to the editor's grid from the bar (Alt: free). Each is the editor's own command, one undo step. A double-click still opens the editor. Clip moves are made by the clip's empty space or name bar, or with the track showing Clips (`ui-egui/src/track_notes.rs`) |
 | Draw, move, resize, copy by dragging, delete | ● | ● | ● | ● | **Works**; drawing needs the main window's Pencil tool |
 | Marquee, shift-click, select all | ● | ● | ● | ● | **Works** |
 | Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Works**: a click on a piano key selects that pitch's notes (Shift adds, a drag along the keys adds each key's); Invert Selection, Select Same Pitch and Select by Rule… (pitch, velocity, length and beat-of-the-bar ranges, in the MIDI Operations window) in the editor's More menu |
@@ -588,3 +588,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Commits noted on the follow-up's MIDI rows |
 | 2026-11-17 | minor | Subtractive Synth: filter types, LFO, sub and noise, key tracking, mono and legato |
 | 2026-11-17 | minor | 14-bit controllers and RPN/NRPN parameters as one lane value |
+| 2026-11-17 | minor | Notes edited directly on a MIDI track showing Notes |
