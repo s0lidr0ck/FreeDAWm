@@ -3697,6 +3697,12 @@ fn fade_curve_drag_value(fade: soundcraft_model::Fade, anchor: (f32, f32), heigh
 }
 
 /// Runs before anything is painted, against the last frame's layout.
+/// How often a warp marker being dragged is moved for real (and heard), seconds.
+const WARP_AUDITION_SECS: f64 = 0.08;
+
+/// Where the undo history stood when a warp-marker drag first moved its marker (egui temp data).
+const WARP_DRAG_BASE: &str = "warp_drag_base";
+
 fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     app.point_readout = None;
     if app.gesture.is_none() || matches!(app.gesture, Some(Gesture::Fader { .. })) {
@@ -3705,6 +3711,14 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     let (s, tl) = (app.engine.session_arc(), rect(app.edit_layout.timeline));
     let p = ctx.pointer_latest_pos();
     if !ctx.input(|i| i.pointer.any_down()) {
+        // A warp-marker drag moved its marker to be heard: those steps go, quietly, and the
+        // release makes the move as one step.
+        if let Some(n) = ctx.data_mut(|d| d.remove_temp::<usize>(egui::Id::new(WARP_DRAG_BASE))) {
+            while app.engine.undo_history().len() > n && app.engine.undo_label() == Some("Warp Marker") {
+                app.engine.undo_discard();
+            }
+        }
+        let s = app.engine.session_arc();
         finish_drag(app, &s, tl, p);
         return;
     }
@@ -3737,8 +3751,26 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.ui.status = "Copy".into();
             }
         }
-        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. } | Gesture::WarpMarker { to, .. }) => {
-            *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command))
+        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. }) => *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::WarpMarker { clip, index, to }) => {
+            let new = drag_snap(&s, at, ctx.input(|i| i.modifiers.command));
+            // Heard while dragging: the marker moves as the pointer goes (at most every
+            // WARP_AUDITION_SECS), the real-time stretcher playing it. The release takes these
+            // steps back and makes the move once, so the drag is one undo step.
+            let now = ctx.input(|i| i.time);
+            let last = egui::Id::new("warp_audition_at");
+            if new != *to {
+                *to = new;
+                if ctx.data(|d| d.get_temp::<f64>(last)).is_none_or(|t| now - t >= WARP_AUDITION_SECS) {
+                    ctx.data_mut(|d| d.insert_temp(last, now));
+                    let base = egui::Id::new(WARP_DRAG_BASE);
+                    if ctx.data(|d| d.get_temp::<usize>(base)).is_none() {
+                        let n = app.engine.undo_history().len();
+                        ctx.data_mut(|d| d.insert_temp(base, n));
+                    }
+                    let _ = app.engine.execute("clip.warp_marker", &json!({"clip": clip.0, "op": "move", "index": *index, "to": new}));
+                }
+            }
         }
         Some(Gesture::MidiClip { to, .. }) => *to = at,
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
@@ -3969,6 +4001,7 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         }
         Some(Gesture::TrimEnd { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, false),
         Some(Gesture::WarpMarker { clip, index, to }) => {
+            // (The moves made to hear the drag were taken back by `drive_drag`: this is its one step.)
             let _ = app.run("clip.warp_marker", json!({"clip": clip.0, "op": "move", "index": index, "to": to}));
         }
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
@@ -4562,13 +4595,26 @@ mod tests {
         assert_eq!(c.source(), clip.source(), "adding a marker renders nothing");
         let at = warp_positions(h.state().engine.session(), &c)[1];
         let undo_len = h.state().engine.undo_history().len();
-        drag(&mut h, pos2(x_of(&s, tl, at), y), pos2(x_of(&s, tl, at) + 40.0, y));
+        // Dragged: the marker moves (and is heard) before the release.
+        let (from, to) = (pos2(x_of(&s, tl, at), y), pos2(x_of(&s, tl, at) + 40.0, y));
+        h.hover_at(from);
+        h.drag_at(from);
+        h.step();
+        for k in 1..=8 {
+            h.hover_at(from + (to - from) * (k as f32 / 8.0));
+            h.step();
+        }
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert!(warp_positions(h.state().engine.session(), &c)[1] > at, "moved while dragging");
+        h.drop_at(to);
+        h.step();
         let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
         let moved = warp_positions(h.state().engine.session(), &c)[1];
         assert!(moved > at, "{at} → {moved}");
         assert_ne!(c.source(), clip.source(), "the clip plays the warped render");
         assert_eq!((c.start, c.length), (clip.start, clip.length), "the clip keeps its place");
-        assert_eq!(h.state().engine.undo_history().len(), undo_len + 1, "one step");
+        let hist = h.state().engine.undo_history();
+        assert_eq!(hist.len(), undo_len + 1, "one step: {:?}", &hist[undo_len..]);
         click_with(&mut h, pos2(x_of(&s, tl, moved), y), egui::Modifiers::ALT);
         h.run_steps(2);
         assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.warp.len(), 2);
