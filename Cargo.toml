@@ -23,6 +23,7 @@ soundcraft-ml = { path = "crates/ml" }
 soundcraft-clap-host = { path = "crates/clap-host" }
 soundcraft-vst3-host = { path = "crates/vst3-host" }
 soundcraft-plugin-scan = { path = "crates/plugin-scan" }
+soundcraft-plugin-bridge = { path = "crates/plugin-bridge" }
 soundcraft-au-host = { path = "crates/au-host" }
 soundcraft-model = { path = "crates/model" }
 soundcraft-sysmem = { path = "crates/sysmem" }

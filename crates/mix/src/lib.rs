@@ -6507,6 +6507,12 @@ fn pre_fader_session(s: &Session, track: TrackId, trim_automation: bool) -> Sess
     solo
 }
 
+/// Plug-ins run in their own process that crashed or hung since the last call, said once each
+/// (see `soundcraft_plugin_bridge`).
+pub fn take_plugin_crash_reports() -> Vec<String> {
+    soundcraft_plugin_bridge::take_crash_reports()
+}
+
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
 /// A factory tests install ahead of the built-in and hosted ones ([`set_test_plugin_factory`]).
 type TestFactory = fn(&str) -> Option<Box<dyn Plugin>>;
@@ -6529,6 +6535,8 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     external_midi::create(id)
         .or_else(|| track_midi::create(id))
         .or_else(|| soundcraft_dsp::create(id))
+        // In a process of its own when that is opted into (`FREEDAWM_PLUGIN_PROCESS=1`).
+        .or_else(|| soundcraft_plugin_bridge::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
         .or_else(|| soundcraft_au_host::create(id))

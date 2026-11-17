@@ -2379,6 +2379,14 @@ impl SoundApp {
         }
     }
 
+    /// A plug-in run in its own process that crashed or hung: said on the status line (it is
+    /// silenced already, an effect passing its input through; the session goes on).
+    fn watch_bridged_plugins(&mut self) {
+        if let Some(last) = soundcraft_mix::take_plugin_crash_reports().pop() {
+            self.ui.status = last;
+        }
+    }
+
     /// Stop the transport, keeping a take in progress, when the audio output fails.
     fn watch_output(&mut self) {
         let Some(p) = &self.player else { return };
@@ -2898,6 +2906,7 @@ impl SoundApp {
             }
         }
         self.watch_output();
+        self.watch_bridged_plugins();
         self.watch_input();
         if self.engine.transport.recording {
             self.refine_take_plan();

@@ -6111,6 +6111,7 @@ dependencies = [
  "soundcraft-engine",
  "soundcraft-midi",
  "soundcraft-model",
+ "soundcraft-plugin-bridge",
  "soundcraft-time",
  "soundcraft-vst3-host",
 ]
@@ -6194,6 +6195,18 @@ dependencies = [
  "soundcraft-model",
  "soundcraft-time",
  "windows-registry",
+]
+
+[[package]]
+name = "soundcraft-plugin-bridge"
+version = "0.9.11"
+dependencies = [
+ "log",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "soundcraft-clap-host",
+ "soundcraft-dsp",
 ]
 
 [[package]]
