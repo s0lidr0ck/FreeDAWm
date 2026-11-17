@@ -284,6 +284,142 @@ pub fn fit_plan(s: &Session, track: TrackId, against: Option<TrackId>, only: Opt
     out
 }
 
+/// One note of the backing part moved by Fit to lead's timing alignment: where it sounds
+/// (session samples) and how far its start and end move (samples, + later).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlignMove {
+    pub r: NoteRef,
+    pub start: Samples,
+    pub end: Samples,
+    pub d_start: Samples,
+    pub d_end: Samples,
+}
+
+/// The shortest stretch of audio a timing alignment leaves between two warp points (seconds).
+pub const ALIGN_MIN_SEGMENT_S: f64 = 0.004;
+/// The most a timing alignment squeezes or stretches the audio between two warp points.
+pub const ALIGN_MAX_RATIO: f64 = 3.0;
+
+/// Fit to lead's timing alignment: each of `track`'s notes (only `only` when given) paired with
+/// the note of `against` it overlaps most (each lead note taken once, the largest overlaps
+/// first), and its start and end moved toward the lead note's by `strength` (0..1) of the
+/// difference, at most `max_shift` samples either way. Notes with no partner or nothing to move
+/// are left out.
+pub fn align_plan(s: &Session, track: TrackId, against: TrackId, only: Option<&[NoteRef]>, strength: f64, max_shift: Samples) -> Vec<AlignMove> {
+    let notes: Vec<StudioNote> = studio_notes(s, track).into_iter().filter(|n| only.is_none_or(|o| o.contains(&n.r))).collect();
+    let lead = if against == track { Vec::new() } else { studio_notes(s, against) };
+    // The pitch tracker places a note's edges to its hop (5 ms): where the voice starts out of
+    // silence or stops into it, the edge is taken from the audio instead, the same way on both
+    // tracks, so they line up closer than a hop.
+    let edges = |t: TrackId, ns: Vec<StudioNote>| -> Vec<StudioNote> {
+        ns.into_iter()
+            .map(|mut n| {
+                let (a, b) = (sharp_edge(s, t, n.start, true), sharp_edge(s, t, n.end, false));
+                if a < b {
+                    (n.start, n.end) = (a, b);
+                }
+                n
+            })
+            .collect()
+    };
+    let (notes, lead) = (edges(track, notes), edges(against, lead));
+    let mut pairs: Vec<(Samples, usize, usize)> = Vec::new();
+    for (i, n) in notes.iter().enumerate() {
+        for (j, l) in lead.iter().enumerate() {
+            let ov = n.end.min(l.end).saturating_sub(n.start.max(l.start));
+            if ov > 0 {
+                pairs.push((ov, i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let (mut used_n, mut used_l) = (vec![false; notes.len()], vec![false; lead.len()]);
+    let max_shift = max_shift.max(0);
+    let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+    let shift = |d: Samples| ((d as f64 * strength).round() as Samples).clamp(-max_shift, max_shift);
+    let mut out = Vec::new();
+    for (_, i, j) in pairs {
+        if used_n.get(i).copied().unwrap_or(true) || used_l.get(j).copied().unwrap_or(true) {
+            continue;
+        }
+        let (Some(n), Some(l)) = (notes.get(i), lead.get(j)) else { continue };
+        if let Some(u) = used_n.get_mut(i) {
+            *u = true;
+        }
+        if let Some(u) = used_l.get_mut(j) {
+            *u = true;
+        }
+        let (d_start, d_end) = (shift(l.start - n.start), shift(l.end - n.end));
+        if d_start != 0 || d_end != 0 {
+            out.push(AlignMove { r: n.r, start: n.start, end: n.end, d_start, d_end });
+        }
+    }
+    out.sort_by_key(|m| (m.start, m.r));
+    out
+}
+
+/// A note edge near `at` on `track` (session samples) where the voice starts out of silence
+/// (`start`) or stops into it: within five analysis hops (25 ms) of `at`, the first (or last)
+/// sample above a fifth of the loudest there, when the far end of that stretch is near silent
+/// (below a twentieth). `at` itself otherwise (an edge inside a phrase, between two pitches).
+pub fn sharp_edge(s: &Session, track: TrackId, at: Samples, start: bool) -> Samples {
+    let reach = (0.025 * f64::from(s.sample_rate.hz())) as Samples;
+    let quiet = (0.002 * f64::from(s.sample_rate.hz())) as usize;
+    let (a, b) = (at.saturating_sub(reach), at.saturating_add(reach));
+    let Some(t) = s.track(track) else { return at };
+    let Some(c) = t.clips().iter().find(|c| c.is_audio() && c.start <= a && b <= c.end()) else { return at };
+    let n = usize::try_from(b - a).unwrap_or(0);
+    let Some(ch) = soundcraft_mix::clip_heard_window(s, c, c.source_offset().saturating_add(a - c.start), n) else { return at };
+    let mut x = vec![0.0f32; n];
+    for chan in &ch {
+        for (d, v) in x.iter_mut().zip(chan) {
+            *d = d.max(v.abs());
+        }
+    }
+    let peak = x.iter().copied().fold(0.0f32, f32::max);
+    if peak.is_nan() || peak <= 1e-4 || x.len() <= quiet * 2 {
+        return at;
+    }
+    let far = if start { x.get(..quiet) } else { x.get(x.len() - quiet..) };
+    if far.unwrap_or_default().iter().any(|v| *v >= peak / 20.0) {
+        return at;
+    }
+    let found = if start { x.iter().position(|v| *v > peak / 5.0) } else { x.iter().rposition(|v| *v > peak / 5.0) };
+    found.map_or(at, |i| a.saturating_add(Samples::try_from(i).unwrap_or(0)))
+}
+
+/// The warp points `(from, to)` (session samples) of a clip over `[start, end)` that move the
+/// note starts and ends of `moves` (those inside the clip), with the clip's edges kept where
+/// they are. A point that would cross or crowd its neighbour (closer than `min_gap` samples on
+/// either side, or a stretch beyond [`ALIGN_MAX_RATIO`]) is left out, so the map always rises.
+pub fn align_points(start: Samples, end: Samples, moves: &[AlignMove], min_gap: Samples) -> Vec<(Samples, Samples)> {
+    let mut want: Vec<(Samples, Samples)> = moves
+        .iter()
+        .flat_map(|m| [(m.start, m.start.saturating_add(m.d_start)), (m.end, m.end.saturating_add(m.d_end))])
+        .filter(|(from, to)| *from > start && *from < end && *to > start && *to < end)
+        .collect();
+    want.sort_by_key(|p| p.0);
+    let ok = |a: (Samples, Samples), b: (Samples, Samples)| {
+        let (din, dout) = (b.0 - a.0, b.1 - a.1);
+        din >= min_gap && dout >= min_gap && {
+            let r = dout as f64 / din as f64;
+            (1.0 / ALIGN_MAX_RATIO..=ALIGN_MAX_RATIO).contains(&r)
+        }
+    };
+    let mut out = vec![(start, start)];
+    for p in want {
+        if out.last().is_some_and(|last| ok(*last, p)) {
+            out.push(p);
+        }
+    }
+    let edge = (end, end);
+    while out.len() > 1 && out.last().is_some_and(|last| !ok(*last, edge)) {
+        out.pop();
+    }
+    out.push(edge);
+    out
+}
+
 /// One note of a harmony to make: the source note, where it sounds and the harmony's pitch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HarmonyNote {

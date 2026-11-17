@@ -64,7 +64,7 @@ pub fn picker_body(ui: &mut Ui, root: &mut u8, minor: &mut bool) {
 
 /// The nearest grid line (a moved key always lands on the grid).
 fn grid_snap(s: &Session, at: Samples) -> Samples {
-    s.edit.grid.snap(at.max(0), s.sample_rate, &s.tempo, s.frame_rate).max(0)
+    s.edit.grid.snap(at.max(0), &s.grid_ctx()).max(0)
 }
 
 /// Draws the Key ruler and runs its clicks, drags and menus.

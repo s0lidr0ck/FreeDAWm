@@ -24,8 +24,6 @@ const KNOWN_UNREACHED: &[&str] = &[
     "setup.reset_edit_state",
     "track.pin",
     "track.trim_automation_write",
-    "track.vca",
-    "transport.pause",
     "transport.status",
     "video.offset",
     "view.sub_counter",
@@ -42,6 +40,7 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("automation.write_range", "Glide to Current was mis-aliased to it: needs a param and value"),
     ("event.renumber_bars", "a no-op (bars start at 1)"),
     ("event.retrospective_record", "no live MIDI capture buffer feeds it"),
+    ("midi.note_add", "for agents: the MIDI editor adds notes with midi.notes_add, Musical Typing's step mode with event.step_input"),
     ("options.auto_spot_clips", "stored flag nothing reads"),
     ("options.calibration_mode", "stored flag nothing reads"),
     ("options.destructive_punch", "stored flag nothing reads"),
@@ -52,16 +51,12 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("options.markers_follow_edit", "stored flag nothing reads"),
     ("options.midi_live_mode", "stored flag nothing reads"),
     ("options.midi_thru", "stored flag nothing reads"),
-    ("options.pre_fader_metering", "stored flag nothing reads"),
     ("options.transport_online", "stored flag nothing reads"),
-    ("setup.click_countoff", "shown greyed out (coming soon): needs its own window"),
     ("setup.current_feet_frames", "needs a position and has no dialog"),
     ("setup.current_timecode", "needs a position and has no dialog"),
     ("setup.disk_allocation", "a stored setting with no window"),
     ("setup.external_timecode_offset", "a stored setting with no window; nothing reads it"),
-    ("setup.midi_beat_clock", "a stored setting with no window; no clock output reads it"),
     ("setup.midi_input_devices", "shown greyed out (coming soon): needs its own window"),
-    ("setup.midi_input_filter", "a stored setting with no window"),
     ("setup.midi_studio", "a stored setting with no window"),
     ("setup.peripherals", "a stored setting with no window"),
     ("setup.preferences", "Setup › Preferences… opens the Preferences window instead; this reads the session's settings for agents"),
@@ -204,5 +199,16 @@ fn the_window_sync_options_are_check_items_in_window_sync() {
     for id in ["window.sync_selection", "window.sync_scroll", "window.sync_folders", "window.sync_visibility"] {
         assert!(menus::UI_COMMANDS.iter().any(|c| c.0 == id), "{id} is a UI command");
         assert!(commands.contains(id), "{id} is reachable from the menu bar");
+    }
+}
+
+/// Commands that only store a setting nothing reads stay off the menu bar, and agents are told
+/// (their description ends with the engine's note).
+#[test]
+fn stored_only_commands_stay_off_the_menus() {
+    let shown = menu_commands();
+    for id in soundcraft_engine::cmd::STORED_ONLY {
+        assert!(OFF_THE_MENUS.iter().any(|(off, _)| off == id), "{id} is stored only but not listed as off the menus");
+        assert!(!shown.contains(*id), "{id} only stores a setting, yet the menu bar shows it");
     }
 }

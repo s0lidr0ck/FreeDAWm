@@ -22,13 +22,16 @@ pub const HOLD_UNTIL_CLEARED: f32 = 1000.0;
 pub struct Ballistics {
     pub release_db_s: f32,
     pub hold_secs: f32,
+    /// What the bars show and how they are numbered.
+    pub scale: crate::widgets::MeterScale,
 }
 
 impl Ballistics {
     pub fn of(ui: &crate::UiState) -> Ballistics {
         let release = if ui.meter_release_db_s.is_finite() { ui.meter_release_db_s.clamp(3.0, 120.0) } else { DEFAULT_RELEASE };
         let hold = if ui.meter_hold_secs.is_finite() { ui.meter_hold_secs.clamp(0.0, HOLD_UNTIL_CLEARED) } else { DEFAULT_HOLD };
-        Ballistics { release_db_s: release, hold_secs: hold }
+        let scale = crate::widgets::MeterScale::from_id(&ui.meter_scale).unwrap_or_default();
+        Ballistics { release_db_s: release, hold_secs: hold, scale }
     }
 }
 
@@ -67,8 +70,14 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, Stri
             if let Some(h) = num("hold_secs") {
                 app.ui.meter_hold_secs = h.clamp(0.0, HOLD_UNTIL_CLEARED);
             }
+            if let Some(sc) = p.get("scale").and_then(Value::as_str) {
+                let Some(m) = crate::widgets::MeterScale::from_id(sc) else {
+                    return Some(Err(format!("unknown meter scale `{sc}` (peak, rms, peak_rms, vu, k20, k14 or k12)")));
+                };
+                app.ui.meter_scale = m.id().to_string();
+            }
             let b = Ballistics::of(&app.ui);
-            Ok(json!({"release_db_s": b.release_db_s, "hold_secs": b.hold_secs}))
+            Ok(json!({"release_db_s": b.release_db_s, "hold_secs": b.hold_secs, "scale": b.scale.id()}))
         }
         // The engine's `setup.copy_imported_audio` too: in the app it is this computer's setting.
         "ui.copy_imported_audio" | "setup.copy_imported_audio" => {
@@ -320,9 +329,24 @@ fn metering(app: &mut SoundApp, ui: &mut Ui) {
             report(app, "ui.meter_ballistics", json!({"hold_secs": v}));
         }
         ui.end_row();
+        ui.label("Scale");
+        let mut chosen = None;
+        egui::ComboBox::from_id_salt("prefs_meter_scale").selected_text(b.scale.label()).show_ui(ui, |ui| {
+            for (sc, id, label) in crate::widgets::MeterScale::ALL {
+                if ui.selectable_label(sc == b.scale, label).clicked() {
+                    chosen = Some(id);
+                }
+            }
+        });
+        if let Some(id) = chosen {
+            report(app, "ui.meter_ballistics", json!({"scale": id}));
+        }
+        ui.end_row();
     });
     ui.label(
-        egui::RichText::new("A click on a meter clears its clip light and peak (Alt-click: every track's).")
+        egui::RichText::new(
+            "RMS scales average over 300 ms; VU and K-system scales are numbered from their reference level. The hold line and clip light always follow the peak. A click on a meter clears its clip light and peak (Alt-click: every track's).",
+        )
             .font(regular(10.5))
             .color(Tokens::current().text_dim),
     );

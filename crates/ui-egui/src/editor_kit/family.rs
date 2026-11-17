@@ -211,7 +211,8 @@ pub(crate) fn dial_param(
         return ui.interact(rect, ui.id().with(("vst-dial-missing", id)), Sense::hover());
     };
     let v01 = info.to_normalized(param(host, id));
-    let out = dial(ui, rect, id, pal, v01, o);
+    let o = DialOpts { info: Some(info), ..*o };
+    let out = dial(ui, rect, id, pal, v01, &o);
     if out.started {
         end_gesture(app);
         push_undo(st, host, fam);

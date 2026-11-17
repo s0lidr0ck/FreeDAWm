@@ -289,6 +289,10 @@ pub struct Track {
     /// layer; used once. `None`: each pass makes a new layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_layer: Option<usize>,
+    /// MIDI effects ahead of the instrument (instrument and MIDI tracks), run in this order on
+    /// everything the instrument is given; at most [`crate::MAX_MIDI_FX`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_fx: Vec<crate::MidiFx>,
 }
 
 fn yes() -> bool {
@@ -350,6 +354,7 @@ impl Track {
             vocal: None,
             layers_open: false,
             record_layer: None,
+            midi_fx: Vec::new(),
         }
     }
 

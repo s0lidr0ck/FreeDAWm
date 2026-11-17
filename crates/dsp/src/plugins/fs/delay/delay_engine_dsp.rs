@@ -56,8 +56,17 @@ pub const P_DIVISION_R: usize = 34;
 pub const NUM_PARAMS: usize = 35;
 
 // ------------------------------------------------------------------ constants
-/// Per line: 10.9 s at 48k, 5.4 s at 96k (longer settings clamp).
+/// Per line at 44.1 and 48 kHz: 10.9 s at 48k (longer settings clamp). The C++ keeps this many
+/// samples at every rate (5.4 s at 96k, 2.7 s at 192k); here a line holds the same 10.9 s at any
+/// rate ([`line_len`]).
 pub const BUF: i32 = 524_288;
+
+/// Samples a delay line holds at `sample_rate`: [`BUF`] up to 48 kHz, the same time above it, so
+/// a long synced delay keeps its length (and the tempo) at 96 and 192 kHz.
+pub fn line_len(sample_rate: f64) -> usize {
+    let scaled = (f64::from(BUF) * sample_rate / 48_000.0).ceil();
+    if scaled.is_finite() && scaled > f64::from(BUF) { (scaled as usize).min(1 << 24) } else { BUF as usize }
+}
 pub const APBUF: i32 = 4096;
 pub const PSBUF: i32 = 32_768;
 /// Compander reference level.
@@ -963,25 +972,26 @@ fn soft_limit(w: f32) -> f32 {
 
 // ------------------------------------------------------------------ delay reads
 fn read_delay(l: &Line, delay_samples: f32) -> f32 {
-    let d = clamp_t(delay_samples, 2.0, (BUF - 8) as f32);
+    let buf_len = l.buf.len() as i32;
+    let d = clamp_t(delay_samples, 2.0, (buf_len - 8) as f32);
     let di = d as i32;
     let fr = d - di as f32;
 
     let mut i1 = l.write_pos - di;
     if i1 < 0 {
-        i1 += BUF;
+        i1 += buf_len;
     }
     let mut i0 = i1 + 1;
-    if i0 >= BUF {
-        i0 -= BUF;
+    if i0 >= buf_len {
+        i0 -= buf_len;
     }
     let mut i2 = i1 - 1;
     if i2 < 0 {
-        i2 += BUF;
+        i2 += buf_len;
     }
     let mut i3 = i2 - 1;
     if i3 < 0 {
-        i3 += BUF;
+        i3 += buf_len;
     }
 
     let y0 = l.buf[i0 as usize];
@@ -999,16 +1009,17 @@ fn read_delay(l: &Line, delay_samples: f32) -> f32 {
 // The C++'s two `if`s, kept as written (same result as `clamp`, as BUF - 2 > 1).
 #[allow(clippy::manual_clamp)]
 fn read_raw(l: &Line, delay_samples: i32) -> f32 {
+    let buf_len = l.buf.len() as i32;
     let mut d = delay_samples;
     if d < 1 {
         d = 1;
     }
-    if d > BUF - 2 {
-        d = BUF - 2;
+    if d > buf_len - 2 {
+        d = buf_len - 2;
     }
     let mut i = l.write_pos - d;
     if i < 0 {
-        i += BUF;
+        i += buf_len;
     }
     l.buf[i as usize]
 }
@@ -1353,7 +1364,7 @@ impl State {
 fn write_line(l: &mut Line, w: f32) {
     l.buf[l.write_pos as usize] = w;
     l.write_pos += 1;
-    if l.write_pos >= BUF {
+    if l.write_pos >= l.buf.len() as i32 {
         l.write_pos = 0;
     }
 }
@@ -1656,9 +1667,13 @@ impl DelayEngineDsp {
         self.s.fs = sample_rate as f32;
         let fs = self.s.fs;
 
+        let n = line_len(sample_rate);
         for l in &mut self.ln {
-            // `buf.assign (BUF, 0)` / `ps.assign (PSBUF, 0)`: same contents, in place.
-            l.buf.fill(0.0);
+            // `buf.assign (BUF, 0)` / `ps.assign (PSBUF, 0)`: same contents, in place. The line
+            // holds the same time at every rate ([`line_len`]): it grows (allocates) only when
+            // prepared at a higher rate than ever before, never on a reset.
+            l.buf.clear();
+            l.buf.resize(n, 0.0);
             l.ps.fill(0.0);
         }
 
@@ -2289,7 +2304,7 @@ impl DelayEngineDsp {
         if s.reverse_on {
             room = 2.1; // a reverse grain reaches back two delay times
         }
-        let lim = (BUF as f32 - 64.0) / room - s.mod_samples;
+        let lim = (ln[0].buf.len() as f32 - 64.0) / room - s.mod_samples;
         s.target_l = clamp_t(t_l - s.loop_comp, 8.0, lim);
         s.target_r = clamp_t(t_r - s.loop_comp, 8.0, lim);
     }

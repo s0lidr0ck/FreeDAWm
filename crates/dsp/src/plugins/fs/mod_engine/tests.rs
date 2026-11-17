@@ -83,6 +83,49 @@ fn registered_with_no_latency_and_a_quarter_second_tail() {
     assert_eq!(p.tail_samples(), 12_000);
 }
 
+/// Bug 6 of the built-in effects parity list: a flanger at full Regen rings for seconds, past the
+/// fixed quarter second a bounce or freeze stopped at.
+#[test]
+fn a_flanger_with_regen_reports_a_longer_tail() {
+    let mut p = crate::create("fs_mod").unwrap();
+    p.prepare(48_000.0, 512, 2);
+    p.set_param("circuit", 7.0);
+    assert_eq!(p.tail_samples(), 12_000, "no Regen: as before");
+    p.set_param("regen", 1.0);
+    let full = p.tail_samples();
+    assert!(full > 3 * 48_000, "{full}");
+    p.set_param("circuit", 0.0);
+    assert_eq!(p.tail_samples(), 12_000, "a circuit with no Regen loop");
+    // Measured: the A/DA at full Regen, fed a burst, is still ringing at a quarter second and
+    // has died away by the reported tail.
+    let mut q = crate::create("fs_mod").unwrap();
+    q.set_param("circuit", 7.0);
+    q.set_param("regen", 1.0);
+    q.set_param("noise", 0.0);
+    q.prepare(48_000.0, 512, 2);
+    let n = full + 48_000;
+    let mut io = [vec![0.0f32; n], vec![0.0f32; n]];
+    for c in io.iter_mut() {
+        for (i, x) in c.iter_mut().take(480).enumerate() {
+            *x = 0.5 * (i as f32 * 0.3).sin();
+        }
+    }
+    let mut at = 0;
+    while at < n {
+        let m = 512.min(n - at);
+        let mut blk: Vec<Vec<f32>> = io.iter().map(|c| c[at..at + m].to_vec()).collect();
+        q.process(&mut blk, m);
+        for (c, b) in io.iter_mut().zip(&blk) {
+            c[at..at + m].copy_from_slice(b);
+        }
+        at += m;
+    }
+    let peak = |r: std::ops::Range<usize>| io.iter().map(|c| c[r.clone()].iter().fold(0.0f32, |m, x| m.max(x.abs()))).fold(0.0, f32::max);
+    let early = peak(12_000..24_000);
+    let late = peak(full..n);
+    assert!(late < early * 0.01, "early {early}, after the tail {late}");
+}
+
 #[test]
 fn rate_maps_as_the_editor_prints_it() {
     // Rate 5 is the circuit's stock rate; the ends are the table's.
@@ -198,6 +241,37 @@ fn tempo_sync_follows_transport() {
     s.set_param("sync", 0.0);
     assert!((rate(&mut s, &t, &mut io, &mut r) - 4.0).abs() < 1e-3);
     assert_eq!(engine_ptr, s.engine() as *const ModEngineDsp);
+}
+
+/// Built-in effects parity, bug 15: Sync took the LFO's rate from the tempo but not its phase from
+/// the song position, so the sweep sat wherever Play happened to start it.
+#[test]
+fn a_synced_lfo_locks_to_the_song_position() {
+    let phase_after_play_at = |quarters: f64| {
+        let mut s = prepared();
+        s.set_param("circuit", 11.0);
+        s.set_param("sync", 1.0);
+        s.set_param("division", 5.0); // 1/4: a cycle a beat
+        let mut io = vec![sine(256, 0.5), sine(256, 0.5)];
+        let mut t = Transport { tempo: 120.0, playing: true, quarters, ..Transport::default() };
+        // Prime a block stopped (the parameters reach the engine), then play from `quarters`.
+        t.playing = false;
+        s.set_transport(&t);
+        s.process(&mut io, 256);
+        t.playing = true;
+        s.set_transport(&t);
+        s.process(&mut io, 256);
+        let mut r = [f32::NAN; 8];
+        s.readouts(&mut r);
+        r[0]
+    };
+    // 256 samples at 120 BPM is 0.0107 of a beat.
+    let step = 256.0 / 48_000.0 * 2.0;
+    for q in [0.0, 0.25, 3.5, 17.75] {
+        let want = ((q + step) % 1.0) as f32;
+        let got = phase_after_play_at(q);
+        assert!((got - want).abs() < 1e-3, "from quarter {q}: {got} vs {want}");
+    }
 }
 
 #[test]

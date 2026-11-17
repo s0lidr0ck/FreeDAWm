@@ -126,7 +126,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create...",
             ["Edit", "Fades"],
             Some("Cmd+F"),
-            "{shape?: linear|equal power|s-curve|exponential|logarithmic, tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1}",
+            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
             has_range,
             fades_create
         ),
@@ -153,6 +153,33 @@ pub fn specs() -> Vec<CommandSpec> {
             snap_to_grid
         ),
         cmd!(
+            noundo "edit.snap_to_clips",
+            "Snap to Clip Edges",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to clip edges within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_CLIPS)
+        ),
+        cmd!(
+            noundo "edit.snap_to_markers",
+            "Snap to Markers",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to markers within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_MARKERS)
+        ),
+        cmd!(
+            noundo "edit.snap_to_zero_crossings",
+            "Snap to Zero Crossings",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — selection edges and the insertion snap to the nearest zero crossing of the audio under them (within 5 ms)",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_ZERO)
+        ),
+        cmd!(
             noundo "edit.shuffle_lock",
             "Shuffle Lock",
             [],
@@ -171,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Clips",
             [],
             None,
-            "{clips?: [id], by?: samples, to?: position for the first clip that can move (Grid modes snap its sync point), track?: where the first clip's track goes; the others keep their distance}",
+            "{clips?: [id], by?: samples, to?: position for the first clip that can move (Grid modes snap its sync point), track?: where the first clip's track goes; the others keep their distance, alone?: bool (an active edit group's other tracks stay)}",
             has_selection,
             move_clips
         ),
@@ -180,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Trim Clip",
             [],
             None,
-            "{clip: id, start?: position, end?: position} — moves the clip's edges like the Trim tool, in the current Edit mode",
+            "{clip: id, start?: position, end?: position, alone?: bool} — moves the clip's edges like the Trim tool, in the current Edit mode; the rest of its clip group, and the clips an active edit group's other tracks hold there, move the same edge as far unless `alone`",
             always,
             trim_clip
         ),
@@ -270,6 +297,9 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
     if range.is_empty() {
         return Err(bad(id, "selection is empty"));
     }
+    if let Some(objects) = object_clips(e, p, &tracks) {
+        return cut_copy_objects(e, &objects, range, cut);
+    }
     let mut cb = Clipboard::of_range(e.session(), range);
     let follow = e.session().edit.automation_follows_edit;
     for t in &tracks {
@@ -281,13 +311,10 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
                 tr.automation
                     .iter()
                     .map(|l| {
-                        let mut l2 = l.clone();
-                        l2.points = l
-                            .points
-                            .iter()
-                            .filter(|p| range.contains(p.at))
-                            .map(|p| soundcraft_model::AutomationPoint { at: p.at - range.start, ..*p })
-                            .collect();
+                        let mut l2 = soundcraft_model::AutomationLane::new(l.param.clone());
+                        l2.enabled = l.enabled;
+                        // The curve as it runs through the range, its edges included.
+                        l2.points = l.slice(range.start, range.end);
                         l2
                     })
                     .collect()
@@ -321,6 +348,93 @@ fn cut_copy(e: &mut Engine, p: &Value, cut: bool, id: &str) -> Result<Value> {
     Ok(json!({"clips": n, "length": range.len()}))
 }
 
+/// Clips picked as objects (Grabber clicks, `edit.select {clips}`), grouped by track: the
+/// selected clips on `tracks`, when no range is passed and the edit selection is still the span
+/// they set. Delete, Cut and Copy then act on those clips only, never on what lies between them.
+fn object_clips(e: &Engine, p: &Value, tracks: &[TrackId]) -> Option<Vec<(TrackId, Vec<soundcraft_model::ClipId>)>> {
+    if ["start", "end", "length"].iter().any(|k| p.get(k).is_some()) {
+        return None;
+    }
+    let s = e.session();
+    let found: Vec<(TrackId, &soundcraft_model::Clip)> = s.edit.selected_clips.iter().filter_map(|id| s.find_clip(*id)).collect();
+    let span = found.iter().map(|(_, c)| c.range()).reduce(|a, b| soundcraft_time::Range::new(a.start.min(b.start), a.end.max(b.end)))?;
+    if span != s.edit.selection {
+        return None;
+    }
+    let mut out: Vec<(TrackId, Vec<soundcraft_model::ClipId>)> = Vec::new();
+    for (t, c) in found.into_iter().filter(|(t, _)| tracks.contains(t)) {
+        match out.iter_mut().find(|(x, _)| *x == t) {
+            Some((_, ids)) => ids.push(c.id),
+            None => out.push((t, vec![c.id])),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Cut or Copy of clips picked as objects: the clipboard holds just those clips (and, with
+/// Automation Follows Edit, the automation under them), timed from the start of `span`.
+fn cut_copy_objects(e: &mut Engine, objects: &[(TrackId, Vec<soundcraft_model::ClipId>)], span: soundcraft_time::Range, cut: bool) -> Result<Value> {
+    let mut cb = Clipboard::of_range(e.session(), span);
+    let s = e.session();
+    let follow = s.edit.automation_follows_edit;
+    for (t, ids) in objects {
+        let picked: Vec<&soundcraft_model::Clip> =
+            s.track(*t).map(|tr| tr.clips().iter().filter(|c| ids.contains(&c.id)).collect()).unwrap_or_default();
+        let under = |at: Samples| picked.iter().any(|c| c.range().contains(at));
+        cb.tracks.push(
+            picked
+                .iter()
+                .map(|c| {
+                    let mut c = (*c).clone();
+                    c.start -= span.start;
+                    c
+                })
+                .collect(),
+        );
+        let lanes = s
+            .track(*t)
+            .map(|tr| {
+                tr.automation
+                    .iter()
+                    .map(|l| {
+                        let mut l2 = l.clone();
+                        l2.points = l
+                            .points
+                            .iter()
+                            .filter(|p| follow && under(p.at))
+                            .map(|p| soundcraft_model::AutomationPoint { at: p.at - span.start, ..*p })
+                            .collect();
+                        l2
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        cb.automation.push(lanes);
+    }
+    if cut {
+        let sh = shuffle(e.session());
+        let s = e.session_mut();
+        for (t, ids) in objects {
+            let gone = ops::remove_clips(s, *t, ids, sh);
+            if follow
+                && !sh
+                && let Some(tr) = s.track_mut(*t)
+            {
+                for c in &gone {
+                    for l in &mut tr.automation {
+                        l.clear_range(c.start, c.end());
+                    }
+                }
+            }
+        }
+        s.edit.selected_clips.clear();
+        s.edit.selection = soundcraft_time::Range::point(span.start);
+    }
+    let n: usize = cb.tracks.iter().map(Vec::len).sum();
+    e.clipboard = cb;
+    Ok(json!({"clips": n, "length": span.len()}))
+}
+
 /// Remove `r` from a track, closing the gap in Shuffle mode; automation follows when `follow`.
 fn cut_track(s: &mut Session, t: TrackId, r: soundcraft_time::Range, sh: bool, follow: bool) {
     if follow && let Some(tr) = s.track_mut(t) {
@@ -339,7 +453,7 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
     let at = match given {
         Some(at) => at,
         None if s.edit.edit_mode == EditMode::GridRelative => {
-            s.edit.grid.line_at_or_before(s.edit.selection.start, s.sample_rate, &s.tempo, s.frame_rate).saturating_add(cb.grid_offset)
+            s.edit.grid.line_at_or_before(s.edit.selection.start, &s.grid_ctx()).saturating_add(cb.grid_offset)
         }
         None => s.edit.selection.start,
     };
@@ -355,14 +469,8 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         pasted += ops::paste(s, *t, at, clips, cb.length, sh).map_err(|why| bad("edit.paste", why))?.len();
         if follow && let (Some(lanes), Some(tr)) = (cb.automation.get(i % cb.automation.len().max(1)), s.track_mut(*t)) {
-            for l in lanes {
-                let dst = tr.lane_mut(&l.param);
-                if !l.points.is_empty() {
-                    dst.clear_range(at, at + cb.length);
-                }
-                for pt in &l.points {
-                    dst.set_point(pt.at + at, pt.value);
-                }
+            for l in lanes.iter().filter(|l| !l.points.is_empty()) {
+                tr.lane_mut(&l.param).paste_slice(at, cb.length, &l.points);
             }
         }
     }
@@ -375,6 +483,14 @@ fn clear(e: &mut Engine, p: &Value) -> Result<Value> {
     let range = range_param(e, "edit.clear", p)?;
     let ids = clip_ids_param(e, p);
     let sh = shuffle(e.session());
+    if let Some(objects) = object_clips(e, p, &tracks) {
+        let s = e.session_mut();
+        let n: usize = objects.iter().map(|(t, ids)| ops::remove_clips(s, *t, ids, sh).len()).sum();
+        // The span the clips set goes too, so pressing Delete again cannot clear what lay between them.
+        s.edit.selected_clips.clear();
+        s.edit.selection = soundcraft_time::Range::point(s.edit.selection.start);
+        return Ok(json!({"removed": n}));
+    }
     let s = e.session_mut();
     let mut n = 0;
     if range.is_empty() && !ids.is_empty() {
@@ -499,7 +615,19 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
         (Some(a), None) => ed.selection = soundcraft_time::Range::point(a.max(0)),
         _ => {}
     }
-    if let Some(c) = clips {
+    if let Some(mut c) = clips {
+        // A clip in a clip group brings the whole group (unless `exact`), so it selects, moves,
+        // copies and deletes as one; so does an active edit group the clip's track is in, with
+        // the clips its other tracks hold at that time.
+        if !exact {
+            let groups: Vec<u64> = c.iter().filter_map(|id| s.find_clip(*id)).filter_map(|(_, x)| x.group).collect();
+            for x in s.tracks.iter().flat_map(|t| t.clips()).filter(|x| x.group.is_some_and(|g| groups.contains(&g))) {
+                if !c.contains(&x.id) {
+                    c.push(x.id);
+                }
+            }
+            c = ops::with_edit_groups(s, &c);
+        }
         // Selecting clips also selects their range and tracks (Grabber click).
         let mut range: Option<soundcraft_time::Range> = None;
         let mut trs = Vec::new();
@@ -590,10 +718,8 @@ fn duplicate(e: &mut Engine, p: &Value) -> Result<Value> {
         n += ops::paste(s, *t, range.end, &clips, range.len(), sh).map_err(|why| bad("edit.duplicate", why))?.len();
         if follow && let Some(tr) = s.track_mut(*t) {
             for l in &mut tr.automation {
-                let pts: Vec<_> = l.points.iter().filter(|p| range.contains(p.at)).copied().collect();
-                for pt in pts {
-                    l.set_point(pt.at + range.len(), pt.value);
-                }
+                let pts = l.slice(range.start, range.end);
+                l.paste_slice(range.end, range.len(), &pts);
             }
         }
     }
@@ -612,12 +738,53 @@ fn repeat(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session_mut();
     for t in &tracks {
         let clips = ops::copy_range(s, *t, range);
+        let musical = s.track(*t).is_some_and(|tr| tr.ticks_timebase);
         for k in 1..=count {
-            let at = range.start.saturating_add(range.len().saturating_mul(k));
-            ops::paste(s, *t, at, &clips, range.len(), sh).map_err(|why| bad("edit.repeat", why))?;
+            let (at, len, copy) = if musical {
+                repeat_in_ticks(s, range, &clips, k)
+            } else {
+                (range.start.saturating_add(range.len().saturating_mul(k)), range.len(), clips.clone())
+            };
+            ops::paste(s, *t, at, &copy, len, sh).map_err(|why| bad("edit.repeat", why))?;
         }
     }
     Ok(json!({"repeats": count}))
+}
+
+/// Copy `k` of a Repeat on a tick-timebase track: it starts `k` selection lengths in ticks after
+/// the selection, and each MIDI clip in it is placed and sized by its ticks there, so the copies
+/// stay on the bars under a changing tempo (audio clips keep their offset in samples). Returns
+/// where the copy starts, its length and its clips.
+fn repeat_in_ticks(
+    s: &soundcraft_model::Session,
+    range: soundcraft_time::Range,
+    clips: &[soundcraft_model::Clip],
+    k: i64,
+) -> (i64, i64, Vec<soundcraft_model::Clip>) {
+    let (map, sr) = (&s.tempo, s.sample_rate);
+    let ticks = |x: i64| map.samples_to_ticks_f(x, sr);
+    let at_tick = |t: f64| {
+        let x = map.ticks_f_to_samples_f(t, sr).round();
+        if x.is_finite() { x.clamp(0.0, i64::MAX as f64 / 2.0) as i64 } else { 0 }
+    };
+    let (t0, t1) = (ticks(range.start), ticks(range.end));
+    let span = (t1 - t0) * k as f64;
+    let at = at_tick(t0 + span);
+    let len = at_tick(t1 + span).saturating_sub(at).max(1);
+    let copy = clips
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) {
+                let a = range.start.saturating_add(c.start);
+                let (a, b) = (at_tick(ticks(a) + span), at_tick(ticks(a.saturating_add(c.length)) + span));
+                c.start = a.saturating_sub(at);
+                c.length = b.saturating_sub(a).max(1);
+            }
+            c
+        })
+        .collect();
+    (at, len, copy)
 }
 
 fn shift(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -672,7 +839,7 @@ fn separate_on_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "edit.separate_on_grid", p)?;
     let r = range_param(e, "edit.separate_on_grid", p)?;
     let s = e.session_mut();
-    let lines = s.edit.grid.lines(r.start, r.end, s.sample_rate, &s.tempo, s.frame_rate, 10_000);
+    let lines = s.edit.grid.lines(r.start, r.end, &s.grid_ctx(), 10_000);
     let mut n = 0;
     for t in &tracks {
         for at in &lines {
@@ -732,10 +899,11 @@ fn trim_to_file(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some((frames, lo, hi)) = trim_limits(s, id)
             && let Some(c) = s.find_clip_mut(id)
         {
-            let off = c.source_offset();
-            let new_start = c.start - off;
+            // The file's ends on the timeline, at the clip's stretch.
+            let new_start = c.start - c.timeline_span(c.source_offset());
+            let file_end = new_start + c.timeline_span(frames);
             c.trim_start_to(new_start.max(lo));
-            c.trim_end_to((new_start + frames).min(hi));
+            c.trim_end_to(file_end.min(hi));
             n += 1;
         }
     }
@@ -751,9 +919,10 @@ fn trim_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some((frames, lo, hi)) = trim_limits(s, id)
             && let Some(c) = s.find_clip_mut(id)
         {
-            let file_start = c.start - c.source_offset();
+            let file_start = c.start - c.timeline_span(c.source_offset());
+            let file_end = file_start + c.timeline_span(frames);
             c.trim_start_to(r.start.max(file_start).max(lo));
-            c.trim_end_to(r.end.min(file_start + frames).min(hi));
+            c.trim_end_to(r.end.min(file_end).min(hi));
             n += 1;
         }
     }
@@ -855,22 +1024,61 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         if p.get("shape").is_some_and(|v| !v.is_string()) {
             return Err(bad("edit.fades_create", "shape must be a fade shape name"));
         }
-        let fade = Fade { len: length.min(available), shape, curvature };
-        let clip = e.session_mut().find_clip_mut(id).ok_or_else(|| bad("edit.fades_create", "clip not found"))?;
-        if fade_in {
-            clip.fade_in = fade;
-        } else {
-            clip.fade_out = fade;
+        // A grouped clip's fade goes on every member of its group (each within its own length),
+        // unless `alone`.
+        let ids = if bool_or(p, "alone", false) { vec![id] } else { ops::group_members(e.session(), id) };
+        let mut n = 0;
+        for id in ids {
+            let Some(clip) = e.session_mut().find_clip_mut(id) else { continue };
+            let available = clip.length.min(clip.end().saturating_sub(clip.start));
+            if available <= 0 {
+                continue;
+            }
+            let fade = Fade { len: length.min(available), shape, curvature };
+            if fade_in {
+                clip.fade_in = fade;
+            } else {
+                clip.fade_out = fade;
+            }
+            n += 1;
         }
-        return Ok(json!({"fades": 1}));
+        return Ok(json!({"fades": n}));
     }
     if p.get("curvature").is_some() {
         return Err(bad("edit.fades_create", "curvature requires a clip and side"));
     }
     let tracks = tracks_required(e, "edit.fades_create", p)?;
     let r = range_param(e, "edit.fades_create", p)?;
+    // Each side may have its own shape and bend; `batch_length` fades clips inside the range.
+    let side_shape = |key: &str| -> Result<FadeShape> {
+        match str_param(p, key) {
+            None => Ok(shape),
+            Some(v) => FadeShape::from_id(v).ok_or_else(|| bad("edit.fades_create", format!("unknown fade shape `{v}`"))),
+        }
+    };
+    let bend = |key: &str| -> Result<f32> {
+        match p.get(key) {
+            None => Ok(0.0),
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && (-1.0..=1.0).contains(x))
+                .map(|x| x as f32)
+                .ok_or_else(|| bad("edit.fades_create", format!("`{key}` must be a number from -1 to 1"))),
+        }
+    };
+    let batch = match p.get("batch_length") {
+        None => None,
+        Some(v) => Some(v.as_i64().filter(|l| *l >= 0).ok_or_else(|| bad("edit.fades_create", "`batch_length` must be a sample count"))?),
+    };
+    let spec = ops::FadeSpec {
+        in_shape: side_shape("in_shape")?,
+        in_curvature: bend("in_curvature")?,
+        out_shape: side_shape("out_shape")?,
+        out_curvature: bend("out_curvature")?,
+        batch,
+    };
     let s = e.session_mut();
-    let n: usize = tracks.iter().map(|t| ops::create_fades(s, *t, r, shape)).sum();
+    let n: usize = tracks.iter().map(|t| ops::create_fades_with(s, *t, r, &spec)).sum();
     if n == 0 {
         return Err(bad("edit.fades_create", "the selection must cover a clip start, end or the boundary between two clips"));
     }
@@ -909,8 +1117,8 @@ fn nudge(e: &mut Engine, p: &Value) -> Result<Value> {
     let count = i64_or(p, "count", 1).clamp(1, 1000);
     let s = e.session();
     let value = if bool_or(p, "next", false) { s.edit.nudge.stepped(true) } else { s.edit.nudge };
-    let step = value.step_samples(s.edit.selection.start, s.sample_rate, &s.tempo, s.frame_rate) * count * if dir == 0 { 1 } else { dir };
-    let ids = clip_ids_param(e, p);
+    let step = value.step_samples(s.edit.selection.start, &s.grid_ctx()) * count * if dir == 0 { 1 } else { dir };
+    let ids = nudge_clips(e, p);
     let s = e.session_mut();
     let n = if ids.is_empty() { 0 } else { ops::move_clips(s, &ids, step, &[]) };
     s.edit.selection = s.edit.selection.shifted(step);
@@ -920,8 +1128,26 @@ fn nudge(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"moved": n, "by": step}))
 }
 
+/// The clips a nudge moves: those named or selected as objects, else those wholly inside the
+/// edit selection on the selected tracks. A clip the selection only partly covers stays: the
+/// selection moves without it rather than dragging along material outside it.
+fn nudge_clips(e: &Engine, p: &Value) -> Vec<soundcraft_model::ClipId> {
+    let s = e.session();
+    if p.get("clips").is_some() || p.get("clip").is_some() || !s.edit.selected_clips.is_empty() || s.edit.selection.is_empty() {
+        return clip_ids_param(e, p);
+    }
+    let r = s.edit.selection;
+    s.tracks
+        .iter()
+        .filter(|t| s.edit.selected_tracks.contains(&t.id))
+        .flat_map(|t| t.clips().iter().filter(|c| c.start >= r.start && c.end() <= r.end).map(|c| c.id))
+        .collect()
+}
+
 fn move_clips(e: &mut Engine, p: &Value) -> Result<Value> {
+    // An active edit group moves the clips its other tracks hold there too, unless `alone`.
     let ids = clip_ids_param(e, p);
+    let ids = if bool_or(p, "alone", false) { ids } else { ops::with_edit_groups(e.session(), &ids) };
     if ids.is_empty() {
         return Err(bad("edit.move_clips", "no clips"));
     }
@@ -963,7 +1189,20 @@ fn trim_clip(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("edit.trim_clip", "pass `start` and/or `end`"));
     }
     let sh = shuffle(e.session());
+    let before = e.session().find_clip(id).map(|(_, c)| (c.start, c.end())).ok_or_else(|| bad("edit.trim_clip", "no such clip"))?;
     let c = ops::trim_clip(e.session_mut(), id, start, end, sh).ok_or_else(|| bad("edit.trim_clip", "no such clip, or it is edit-locked"))?;
+    // The rest of a clip group moves the same edge by as much, unless `alone`.
+    let (ds, de) = (c.start - before.0, c.end() - before.1);
+    if !bool_or(p, "alone", false) && (ds != 0 || de != 0) {
+        for other in ops::group_members(e.session(), id).into_iter().filter(|o| *o != id) {
+            let Some((os, oe)) = e.session().find_clip(other).map(|(_, x)| (x.start, x.end())) else { continue };
+            let start = (start.is_some() && ds != 0).then(|| os.saturating_add(ds));
+            let end = (end.is_some() && de != 0).then(|| oe.saturating_add(de));
+            if start.is_some() || end.is_some() {
+                let _ = ops::trim_clip(e.session_mut(), other, start, end, sh);
+            }
+        }
+    }
     Ok(json!({"start": c.start, "end": c.end()}))
 }
 
@@ -1103,6 +1342,44 @@ mod tests {
         }
     }
 
+    /// Mix bug 7: paste and duplicate dropped automation curves and left the old points under
+    /// the new ones.
+    #[test]
+    fn paste_and_duplicate_carry_curves_and_replace_the_old_points() {
+        use soundcraft_model::AutoParam;
+        let mut e = Engine::default();
+        let t = TrackId(e.execute("track.new", &json!({"count": 1})).unwrap()["tracks"][0].as_u64().unwrap());
+        let set = |e: &mut Engine, at: i64, v: f32| {
+            e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": at, "value": v})).unwrap();
+        };
+        set(&mut e, 0, 0.0);
+        set(&mut e, 100, -20.0);
+        set(&mut e, 300, -6.0);
+        e.execute("automation.set_curve", &json!({"track": t.0, "param": "volume", "at": 0, "curve": 0.6})).unwrap();
+        for at in [1000, 1050, 1150] {
+            set(&mut e, at, 6.0);
+        }
+        let lane = |e: &Engine| e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        let src = lane(&e);
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 200})).unwrap();
+        e.execute("edit.paste", &json!({"tracks": [t.0], "at": 1000})).unwrap();
+        let l = lane(&e);
+        assert!(!l.points.iter().any(|p| p.at == 1050 || p.at == 1150), "the old points went: {:?}", l.points);
+        assert!(l.points.iter().any(|p| p.at == 1000 && p.curve == 0.6), "the curve came along: {:?}", l.points);
+        for k in [20, 50, 100, 150, 199] {
+            assert!((l.value_at(1000 + k, 0.0) - src.value_at(k, 0.0)).abs() < 1e-3, "pasted at {k}");
+        }
+        // Duplicate: the same, right after the range.
+        let before = lane(&e);
+        e.execute("edit.duplicate", &json!({"tracks": [t.0], "start": 0, "end": 200})).unwrap();
+        let l = lane(&e);
+        assert!(l.points.iter().any(|p| p.at == 200 && p.curve == 0.6), "{:?}", l.points);
+        for k in [20, 50, 100, 199] {
+            assert!((l.value_at(200 + k, 0.0) - src.value_at(k, 0.0)).abs() < 1e-3, "duplicated at {k}");
+        }
+        assert!((l.value_at(400, 0.0) - before.value_at(400, 0.0)).abs() < 1e-3, "after the copy the old curve resumes");
+    }
+
     #[test]
     fn selecting_what_is_already_selected_leaves_the_document_alone() {
         let mut e = Engine::default();
@@ -1125,7 +1402,16 @@ mod tests {
 
     fn note(start: i64, length: i64, pitch: u8) -> soundcraft_midi::Note {
         let q = soundcraft_time::TICKS_PER_QUARTER;
-        soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start: start * q, length: length * q }
+        soundcraft_midi::Note {
+            probability: 100,
+            pitch,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: start * q,
+            length: length * q,
+        }
     }
 
     #[test]
@@ -1142,7 +1428,7 @@ mod tests {
     fn consolidating_midi_merges_the_clips_as_they_sound() {
         let (mut e, t, at) = keys();
         let s = e.session_mut();
-        let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64 };
+        let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64, shape: Default::default() };
         let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![] };
         let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![] };
         let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc] };
@@ -1167,7 +1453,7 @@ mod tests {
         let s = e.session_mut();
         let q = soundcraft_time::TICKS_PER_QUARTER;
         let lower = soundcraft_midi::Note { channel: 2, ..note(0, 1, 48) };
-        let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127 };
+        let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127, shape: Default::default() };
         let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks] };
         // A plain clip whose notes say channel 10: it plays them on channel 1.
         let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] };

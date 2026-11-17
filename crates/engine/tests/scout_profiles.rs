@@ -38,6 +38,8 @@ fn audio(rate: u32) -> Vec<Vec<f32>> {
 /// A session with a stereo track "Gtr" holding `audio` as one clip at 1 s.
 fn session(audio: &[Vec<f32>]) -> (Engine, Range) {
     let mut s = Session { name: "Song".into(), ..Session::default() };
+    // The strip must hear exactly the file: no automatic edge fades on the clip's hard edges.
+    s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
     let rate = s.sample_rate.hz();
     let at = i64::from(rate);
     let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Gtr"));

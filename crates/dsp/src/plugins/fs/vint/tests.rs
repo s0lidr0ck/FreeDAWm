@@ -102,10 +102,47 @@ fn table_matches_the_cpp_order_and_defaults() {
 }
 
 #[test]
-fn registered_and_reports_no_latency() {
+fn registered_and_reports_the_oversampling_latency() {
     let p = crate::create("fs_vint").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
-    assert_eq!(p.latency(), 0, "the C++ reports no latency");
+    assert_eq!(p.latency(), 5, "Normal (4x): the half-bands' delay (the C++ reports none)");
+}
+
+/// How late `s` delivers a quiet 500 Hz tone at `sr`, in samples (its phase delay).
+fn measured_delay(s: &mut Vint, sr: f32) -> f64 {
+    let n = sr as usize;
+    let w = std::f64::consts::TAU * 500.0 / f64::from(sr);
+    let src: Vec<f32> = (0..n).map(|i| (0.05 * (w * i as f64).sin()) as f32).collect();
+    let mut io = vec![src.clone(), src];
+    run(s, &mut io, 512);
+    let (mut re, mut im) = (0.0f64, 0.0f64);
+    for (i, &y) in io[0].iter().enumerate().skip(n / 2) {
+        re += f64::from(y) * (w * i as f64).sin();
+        im += f64::from(y) * (w * i as f64).cos();
+    }
+    -im.atan2(re) / w
+}
+
+#[test]
+fn reported_latency_is_the_measured_delay() {
+    // Regression: Vint reported no latency though its oversamplers delay everything a few
+    // samples, so delay compensation left it late. At every rate and quality, the dry path
+    // (Mix 0) and the flat default circuits come out late by what is reported (the Passive and
+    // the Console decimate early at Insane, through matching filters).
+    for sr in [44_100.0f32, 48_000.0, 96_000.0] {
+        for (quality, want) in [(0.0, 4), (1.0, 5), (2.0, 6)] {
+            for (circuit, mix) in [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (3.0, 1.0)] {
+                let mut s = Vint::new();
+                s.set_param("quality", quality);
+                s.set_param("circuit", circuit);
+                s.set_param("mix", mix);
+                s.prepare(sr, 512, 2);
+                assert_eq!(s.latency(), want, "sr {sr}, quality {quality}");
+                let d = measured_delay(&mut s, sr);
+                assert!((d - want as f64).abs() < 0.75, "sr {sr}, quality {quality}, circuit {circuit}, mix {mix}: measured {d:.2}");
+            }
+        }
+    }
 }
 
 #[test]

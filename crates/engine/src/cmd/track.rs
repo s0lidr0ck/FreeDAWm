@@ -16,10 +16,40 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             new_track
         ),
-        cmd!("track.group", "Group...", ["Track"], Some("Cmd+G"), "{name?, tracks?, edit?: true, mix?: true}", has_selection, group),
+        cmd!(
+            "track.group",
+            "Group...",
+            ["Track"],
+            Some("Cmd+G"),
+            "{name?, tracks?, edit?: true, mix?: true, attributes?: [volume|mute|solo|record|pan|sends|automation] (default: the first four)}",
+            has_selection,
+            group
+        ),
+        cmd!(
+            "track.suspend_groups",
+            "Suspend All Groups",
+            ["Track"],
+            None,
+            "{value?: bool} — every group stops linking (toggles when omitted)",
+            always,
+            |e, p| {
+                let flag = super::mix::GROUPS_SUSPENDED;
+                let v = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !e.session().edit.flag(flag));
+                e.session_mut().edit.set_flag(flag, v);
+                Ok(json!({"value": v}))
+            }
+        ),
         cmd!("track.ungroup", "Delete Group", [], None, "{group: id|name}", always, delete_group),
         cmd!("track.group_toggle", "Toggle Group Active", [], None, "{group: id|name}", always, toggle_group),
-        cmd!("track.group_modify", "Modify Group", [], None, "{group: id|name, name?, tracks?, edit?, mix?}", always, modify_group),
+        cmd!(
+            "track.group_modify",
+            "Modify Group",
+            [],
+            None,
+            "{group: id|name, name?, tracks?, edit?, mix?, attributes?: [volume|mute|solo|record|pan|sends|automation]}",
+            always,
+            modify_group
+        ),
         cmd!(
             "track.duplicate",
             "Duplicate...",
@@ -116,7 +146,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Track",
             [],
             None,
-            "{track, to: index, count?: n (the track and the n-1 after it move as one block, e.g. a folder with its members; `to` counts without the block)}",
+            "{track, to: index, count?: n (the track and the n-1 after it move as one block; default: a folder with its members, else 1; `to` counts without the block)}",
             has_tracks,
             move_track
         ),
@@ -129,7 +159,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             super::freeze::freeze
         ),
-        cmd!("track.commit", "Commit...", ["Track"], Some("Alt+Shift+C"), "{tracks?}", has_selection, commit),
+        cmd!(
+            "track.commit",
+            "Commit...",
+            ["Track"],
+            Some("Alt+Shift+C"),
+            "{tracks?, start?, end?} — renders each track through its inserts to a new track; with a range, only that range (the source track mutes it and stays active)",
+            has_selection,
+            commit
+        ),
         cmd!("track.bounce", "Bounce...", ["Track"], Some("Cmd+Alt+Shift+B"), "{tracks?}", has_selection, commit),
         cmd!("track.bypass_inserts", "All", ["Track", "Bypass Inserts"], None, "{tracks?, bypass?: bool}", has_selection, bypass_inserts),
         cmd!("track.mute_sends", "All", ["Track", "Mute Sends"], None, "{tracks?, mute?: bool}", has_selection, mute_sends),
@@ -150,6 +188,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.selected_tracks = vec![t];
             Ok(json!({"track": t}))
         }),
+        // The clip lights are the app's meters (`SoundApp::run_with` clears them after this
+        // runs, from every route); a headless engine has none.
         cmd!("track.clear_clip_indicators", "Clear All Clip Indicators", ["Track"], Some("Alt+C"), "{}", always, |_, _| Ok(json!({"cleared": true}))),
         cmd!("track.clear_trim_automation", "Clear Trim Automation", ["Track"], None, "{tracks?}", has_selection, super::track_more::clear_trim),
         cmd!("track.create_click", "Create Click Track", ["Track"], None, "{}", always, create_click),
@@ -161,12 +201,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let s = e.session_mut();
             let mut n = 0;
             for t in tracks {
-                if let Some(tr) = s.track_mut(t)
-                    && let Some(active) = tr.playlists.get(tr.active_playlist).cloned()
-                {
-                    n += tr.playlists.len() - 1;
-                    tr.playlists = vec![active];
-                    tr.active_playlist = 0;
+                if let Some(tr) = s.track_mut(t) {
+                    n += delete_unused_playlists(tr);
                 }
             }
             Ok(json!({"deleted": n}))
@@ -189,6 +225,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 && e.session().track(v).is_none_or(|t| t.kind != TrackKind::Vca)
             {
                 return Err(bad("track.vca", "`vca` must be a VCA Master track"));
+            }
+            // A VCA may follow another VCA, but never itself, through any chain.
+            if let Some(v) = vca {
+                let s = e.session();
+                let mut at = Some(v);
+                for _ in 0..=soundcraft_mix::MAX_VCA_DEPTH {
+                    let Some(cur) = at else { break };
+                    if tracks.contains(&cur) {
+                        return Err(bad("track.vca", "a VCA can't follow itself (through the VCAs it controls)"));
+                    }
+                    at = s.track(cur).and_then(|t| t.mixer.vca).map(soundcraft_model::TrackId);
+                }
             }
             let s = e.session_mut();
             for t in &tracks {
@@ -285,7 +333,7 @@ fn new_track(e: &mut Engine, p: &Value) -> Result<Value> {
         ChannelFormat::Mono
     };
     let format = match str_param(p, "format") {
-        Some(f) => ChannelFormat::from_id(f).ok_or_else(|| bad("track.new", format!("unknown format `{f}`")))?,
+        Some(f) => mixable_format("track.new", ChannelFormat::from_id(f).ok_or_else(|| bad("track.new", format!("unknown format `{f}`")))?)?,
         None => default_fmt,
     };
     let name = str_param(p, "name").map(str::to_string);
@@ -301,7 +349,9 @@ fn new_track(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             if kind == TrackKind::Instrument {
                 t.instrument = Some(soundcraft_model::Insert::new(instrument.clone().unwrap_or_else(|| "subtractive_synth".into())));
-                // Plays whatever MIDI keyboard is plugged in once armed.
+            }
+            if kind.is_midi() {
+                // Plays (an instrument) and records whatever MIDI keyboard is plugged in once armed.
                 t.mixer.input = Route::Midi(soundcraft_model::MidiIn::all());
             }
         }
@@ -326,6 +376,8 @@ fn group(e: &mut Engine, p: &Value) -> Result<Value> {
     let letter = (b'a'..=b'z').map(char::from).find(|c| !s.groups.iter().any(|g| g.letter == *c)).unwrap_or('z');
     let name = str_param(p, "name").map_or_else(|| format!("Group {}", s.groups.len() + 1), str::to_string);
     let color = s.next_track_color();
+    let attributes = group_attributes(p, "track.group")?.unwrap_or_else(|| vec!["volume".into(), "mute".into(), "solo".into(), "record".into()]);
+    let s = e.session_mut();
     s.groups.push(Group {
         id,
         name,
@@ -335,9 +387,27 @@ fn group(e: &mut Engine, p: &Value) -> Result<Value> {
         mix: bool_or(p, "mix", true),
         active: true,
         color,
-        attributes: vec!["volume".into(), "mute".into(), "solo".into(), "record".into()],
+        attributes,
     });
     Ok(json!({"group": id}))
+}
+
+/// A group's `attributes` param: what its members share (see [`super::mix::GROUP_ATTRIBUTES`]).
+/// `None` when not given.
+fn group_attributes(p: &Value, cmd: &str) -> Result<Option<Vec<String>>> {
+    let Some(v) = p.get("attributes") else { return Ok(None) };
+    let list = v.as_array().ok_or_else(|| bad(cmd, "`attributes` is a list"))?;
+    let mut out: Vec<String> = Vec::new();
+    for a in list {
+        let a = a.as_str().map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
+        if !super::mix::GROUP_ATTRIBUTES.contains(&a.as_str()) {
+            return Err(bad(cmd, format!("unknown attribute `{a}` (one of {})", super::mix::GROUP_ATTRIBUTES.join(", "))));
+        }
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    Ok(Some(out))
 }
 
 fn find_group(e: &Engine, p: &Value, cmd: &str) -> Result<GroupId> {
@@ -403,8 +473,12 @@ fn modify_group(e: &mut Engine, p: &Value) -> Result<Value> {
             Some(n)
         }
     };
+    let attributes = group_attributes(p, CMD)?;
     let s = e.session_mut();
     let Some(gr) = s.groups.iter_mut().find(|x| x.id == g) else { return Err(bad(CMD, "unknown `group`")) };
+    if let Some(a) = attributes {
+        gr.attributes = a;
+    }
     if let Some(n) = name {
         gr.name = n;
     }
@@ -413,7 +487,7 @@ fn modify_group(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     gr.edit = bool_or(p, "edit", gr.edit);
     gr.mix = bool_or(p, "mix", gr.mix);
-    Ok(json!({"group": g, "name": gr.name, "tracks": gr.members, "edit": gr.edit, "mix": gr.mix}))
+    Ok(json!({"group": g, "name": gr.name, "tracks": gr.members, "edit": gr.edit, "mix": gr.mix, "attributes": gr.attributes}))
 }
 
 fn duplicate(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -479,12 +553,14 @@ fn split_mono(e: &mut Engine, p: &Value) -> Result<Value> {
             let mut clips = src.clips().to_vec();
             for c in &mut clips {
                 c.id = s.new_clip_id();
-                // Mono tracks read channel 0 of the source; record the channel in the name for now.
+                // Each new track plays its own channel of the source (not a fold of all of them).
                 c.name = format!("{}.{suffix}", c.name);
+                if matches!(c.content, soundcraft_model::ClipContent::Audio { .. }) {
+                    c.source_channel = u16::try_from(ch).ok();
+                }
             }
             if let Some(tr) = s.track_mut(id) {
                 tr.mixer.pan = vec![if ch == 0 { -1.0 } else { 1.0 }];
-                tr.comments = format!("source_channel={ch}");
                 if let Some(pl) = tr.playlist_mut() {
                     pl.clips = clips;
                 }
@@ -675,6 +751,7 @@ fn remove_from_folder(e: &mut Engine, p: &Value) -> Result<Value> {
 fn change_width(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.change_width", p)?;
     let f = str_param(p, "format").and_then(ChannelFormat::from_id).ok_or_else(|| bad("track.change_width", "`format` required"))?;
+    let f = mixable_format("track.change_width", f)?;
     let s = e.session_mut();
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
@@ -846,7 +923,7 @@ fn height_step(e: &mut Engine, p: &Value, taller: bool) -> Result<Value> {
 fn view(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.view", p)?;
     let v = str_param(p, "view").ok_or_else(|| bad("track.view", "`view` required"))?.to_string();
-    let plain = matches!(v.as_str(), "waveform" | "pitch" | "blocks" | "notes" | "regions" | "clip_gain" | "playlists");
+    let plain = matches!(v.as_str(), "waveform" | "pitch" | "blocks" | "notes" | "regions" | "clip_gain" | "warp" | "playlists");
     // Automation views are stored by text id; a legacy chain position becomes the module's id.
     let mut views = Vec::new();
     for t in &tracks {
@@ -960,7 +1037,11 @@ fn auto_lanes(e: &mut Engine, p: &Value) -> Result<Value> {
 fn move_track(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = track_param(e, "track.move", p, "track")?.ok_or_else(|| bad("track.move", "`track` required"))?;
     let to = i64_or(p, "to", 0).max(0) as usize;
-    let count = i64_or(p, "count", 1).max(1) as usize;
+    // A folder moves with its members unless a count says otherwise.
+    let count = match p.get("count") {
+        Some(_) => i64_or(p, "count", 1).max(1) as usize,
+        None => crate::edit::folder_block(e.session(), t),
+    };
     let s = e.session_mut();
     if let Some(i) = s.track_index(t) {
         let end = i.saturating_add(count).min(s.tracks.len());
@@ -971,11 +1052,56 @@ fn move_track(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// Delete Unused Playlists: every playlist but the one shown and the take layers its comp was
+/// swiped from (those are in use). The comp's references to its layers, and the record target,
+/// follow the layers that stay (they are indexes); a target that went is cleared. Returns how
+/// many went.
+fn delete_unused_playlists(tr: &mut soundcraft_model::Track) -> usize {
+    let active = tr.active_playlist;
+    let used: Vec<usize> = tr.clips().iter().filter_map(|c| c.from_layer).collect();
+    let keep: Vec<bool> = (0..tr.playlists.len()).map(|i| i == active || used.contains(&i)).collect();
+    // Old index -> new index for the playlists that stay.
+    let mut map = vec![None; keep.len()];
+    let mut next = 0usize;
+    for (i, k) in keep.iter().enumerate() {
+        if *k && let Some(m) = map.get_mut(i) {
+            *m = Some(next);
+            next += 1;
+        }
+    }
+    let gone = keep.iter().filter(|k| !**k).count();
+    let mut i = 0usize;
+    tr.playlists.retain(|_| {
+        let k = keep.get(i).copied().unwrap_or(true);
+        i += 1;
+        k
+    });
+    let moved = |l: Option<usize>| l.and_then(|l| map.get(l).copied().flatten());
+    tr.active_playlist = moved(Some(active)).unwrap_or(0);
+    tr.record_layer = moved(tr.record_layer).filter(|l| *l != tr.active_playlist);
+    for pl in &mut tr.playlists {
+        for c in &mut pl.clips {
+            c.from_layer = moved(c.from_layer);
+        }
+    }
+    gone
+}
+
 fn commit(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.commit", p)?;
+    // With `start` and `end`, only that range (Commit Selection).
+    let part = match (position_param(e, "track.commit", p, "start")?, position_param(e, "track.commit", p, "end")?) {
+        (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+        (None, None) => None,
+        _ => return Err(bad("track.commit", "give both `start` and `end`, or neither")),
+    };
     let mut out = Vec::new();
     for t in tracks {
-        if let Some(id) = crate::io::commit_track(e, t)? {
+        let made = match part {
+            Some((a, b)) => crate::io::commit_track_range(e, t, a, b)?,
+            None => crate::io::commit_track(e, t)?,
+        };
+        if let Some(id) = made {
             out.push(id);
         }
     }
@@ -1090,7 +1216,7 @@ pub(crate) fn midi_route(v: &str) -> Option<soundcraft_model::MidiIn> {
     let t = v.trim();
     let rest = t.get(..5).filter(|h| h.eq_ignore_ascii_case("midi:")).and_then(|_| t.get(5..))?.trim();
     let all = rest.is_empty() || rest.eq_ignore_ascii_case("all") || rest.eq_ignore_ascii_case("all inputs");
-    Some(soundcraft_model::MidiIn { device: (!all).then(|| rest.to_string()), channel: 0 })
+    Some(soundcraft_model::MidiIn { device: (!all).then(|| rest.to_string()), channel: 0, ..Default::default() })
 }
 
 /// A Band musician named as a route: `musician:N` or `Musician N` (case-insensitive), N 1..=6.
@@ -1230,11 +1356,16 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
                 _ => return Err(bad(cmd, "`channel` is 0 (Omni) or 1-16")),
             };
         }
-        let r = Route::Midi(m);
+        let r = Route::Midi(m.clone());
         let s = e.session_mut();
         for t in &tracks {
             if let Some(tr) = s.track_mut(*t) {
-                tr.mixer.input = r.clone();
+                // Another port or channel: the track's input transform stays.
+                let transform = match &tr.mixer.input {
+                    Route::Midi(old) => old.transform,
+                    _ => soundcraft_model::MidiTransform::default(),
+                };
+                tr.mixer.input = Route::Midi(soundcraft_model::MidiIn { transform, ..m.clone() });
             }
         }
         return Ok(json!({key: r}));
@@ -1264,6 +1395,10 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
             .map_or(ChannelFormat::Stereo, |t| if t.kind == TrackKind::Aux { t.format } else { ChannelFormat::Stereo });
         r = Route::Bus(s.add_bus(&name.clone(), fmt));
     }
+    // A route that feeds a track back into itself plays silence: refused.
+    if let Some(tr) = tracks.iter().filter_map(|t| s.track(*t)).find(|tr| if input { s.input_loops(tr.id, &r) } else { s.route_loops(tr.id, &r) }) {
+        return Err(bad(cmd, format!("That would feed `{}` into itself", tr.name)));
+    }
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
             if input {
@@ -1281,12 +1416,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ambisonics_above_third_order_is_refused_and_third_order_is_filled() {
+        let mut e = Engine::default();
+        for f in ["4th Order Ambisonics", "7th Order Ambisonics"] {
+            let err = e.execute("track.new", &json!({"format": f})).unwrap_err().to_string();
+            assert!(err.contains("at most 16"), "{err}");
+        }
+        let t = e.execute("track.new", &json!({"format": "Mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+        assert!(e.execute("track.change_width", &json!({"tracks": [t], "format": "5th Order Ambisonics"})).is_err());
+        assert!(e.execute("setup.io", &json!({"action": "create_bus", "name": "Amb", "format": "6th Order Ambisonics"})).is_err());
+        // A mono clip panned into a 3rd-order main output reaches all 16 channels, not only W Y Z X.
+        e.execute("setup.main_format", &json!({"format": "3rd Order Ambisonics"})).unwrap();
+        use soundcraft_model::{Clip, SourceAudio, SourceId};
+        let s = e.session_mut();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4000]] };
+        s.pool.insert(SourceId(9), std::sync::Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        let tr = s.track_mut(TrackId(t)).unwrap();
+        tr.mixer.pan = vec![-0.6];
+        tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "a", SourceId(9), 0, 0, 4000));
+        let out = soundcraft_mix::render_range(e.session(), soundcraft_time::Range::new(0, 2048), 512);
+        assert_eq!(out.len(), 16);
+        let silent: Vec<usize> = (4..16).filter(|c| out[*c].iter().all(|v| v.abs() < 1e-6)).collect();
+        // On the horizon, off centre: the 2nd- and 3rd-order horizontal components must sound.
+        for c in [4usize, 8, 9, 15] {
+            assert!(!silent.contains(&c), "ACN {c} silent; silent: {silent:?}");
+        }
+    }
+
+    #[test]
+    fn split_into_mono_gives_each_track_its_own_channel() {
+        // Bug: both new tracks played the left channel.
+        use soundcraft_model::{Clip, SourceAudio, SourceId};
+        let mut e = Engine::default();
+        let s = e.session_mut();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Gtr"));
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.8; 2000], vec![0.2; 2000]] };
+        s.pool.insert(SourceId(3), std::sync::Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "g", SourceId(3), 0, 0, 2000));
+        let out = e.execute("track.split_into_mono", &json!({"tracks": [t.0]})).unwrap();
+        let ids: Vec<soundcraft_model::TrackId> =
+            out["tracks"].as_array().unwrap().iter().map(|v| soundcraft_model::TrackId(v.as_u64().unwrap())).collect();
+        assert_eq!(ids.len(), 2);
+        for (k, (tid, want)) in ids.iter().zip([0.8f32, 0.2]).enumerate() {
+            let s = e.session();
+            let tr = s.track(*tid).unwrap();
+            assert_eq!(tr.clips()[0].source_channel, Some(k as u16));
+            assert!(tr.comments.is_empty(), "no channel note left in the comments");
+            let heard = soundcraft_mix::render_clips(s, *tid, soundcraft_time::Range::new(0, 100));
+            assert!((heard[0][50] - want).abs() < 1e-6, "track {k} plays its channel: {}", heard[0][50]);
+        }
+        // A session saved before the field existed opens with it unset.
+        let mut v = serde_json::to_value(&e.session().track(ids[1]).unwrap().clips()[0]).unwrap();
+        assert_eq!(v["source_channel"], json!(1));
+        v.as_object_mut().unwrap().remove("source_channel");
+        let old: Clip = serde_json::from_value(v).unwrap();
+        assert_eq!(old.source_channel, None);
+    }
+
+    #[test]
     fn midi_input_routes() {
         let mut e = Engine::default();
         let keys = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
         let tid = soundcraft_model::TrackId(keys);
         let input = |e: &Engine| e.session().track(tid).unwrap().mixer.input.clone();
-        let midi = |device: Option<&str>, channel| Route::Midi(soundcraft_model::MidiIn { device: device.map(str::to_string), channel });
+        let midi = |device: Option<&str>, channel| {
+            Route::Midi(soundcraft_model::MidiIn { device: device.map(str::to_string), channel, ..Default::default() })
+        };
         assert_eq!(input(&e), midi(None, 0), "a new instrument track takes MIDI: All Inputs");
         e.execute("track.input", &json!({"tracks": [keys], "input": "MIDI: Focusrite USB MIDI", "channel": 3})).unwrap();
         assert_eq!(input(&e), midi(Some("Focusrite USB MIDI"), 3));
@@ -1300,7 +1497,7 @@ mod tests {
         let text = serde_json::to_string(e.session()).unwrap();
         let back: soundcraft_model::Session = serde_json::from_str(&text).unwrap();
         assert_eq!(back.track(tid).unwrap().mixer.input, midi(None, 0));
-        assert_eq!(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 2 }.label(), "MIDI: Keys (ch 2)");
+        assert_eq!(soundcraft_model::MidiIn { device: Some("Keys".into()), channel: 2, ..Default::default() }.label(), "MIDI: Keys (ch 2)");
     }
 
     #[test]
@@ -1476,6 +1673,19 @@ mod tests {
         assert_eq!(vca(&e), None);
         assert!(e.undo());
         assert_eq!(vca(&e), Some(master.0));
+    }
+
+    /// A VCA can follow another VCA (nested VCAs), but never itself through the chain.
+    #[test]
+    fn vcas_nest_without_loops() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "vca", "name": "Inner"})).unwrap();
+        e.execute("track.new", &json!({"kind": "vca", "name": "Outer"})).unwrap();
+        let (inner, outer) = (e.session().tracks[0].id, e.session().tracks[1].id);
+        e.execute("track.vca", &json!({"tracks": [inner.0], "vca": outer.0})).unwrap();
+        assert_eq!(e.session().track(inner).unwrap().mixer.vca, Some(outer.0));
+        assert!(e.execute("track.vca", &json!({"tracks": [outer.0], "vca": inner.0})).is_err(), "a loop");
+        assert!(e.execute("track.vca", &json!({"tracks": [outer.0], "vca": outer.0})).is_err(), "itself");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! CompEngine factory presets, embedded from `Engine 1 - Comp/Presets/Factory/*.json` (copied verbatim
-//! into `presets/`), in file-name order.
+//! into `presets/`), in file-name order. "Duck Under Voice" is FreeDAWm's own (it needs the key
+//! input FreeDAWm added).
 
 /// `(name, json)` for every factory preset.
 pub static PRESETS: &[(&str, &str)] = &[
@@ -30,6 +31,7 @@ pub static PRESETS: &[(&str, &str)] = &[
     ("Drum Bus Glue", include_str!("presets/Drum Bus Glue.json")),
     ("Drum Bus Split", include_str!("presets/Drum Bus Split.json")),
     ("Drum Bus Thrust", include_str!("presets/Drum Bus Thrust.json")),
+    ("Duck Under Voice", include_str!("presets/Duck Under Voice.json")),
     ("Dyna Nashville", include_str!("presets/Dyna Nashville.json")),
     ("Dyna Squash", include_str!("presets/Dyna Squash.json")),
     ("EL8 All-Rounder", include_str!("presets/EL8 All-Rounder.json")),

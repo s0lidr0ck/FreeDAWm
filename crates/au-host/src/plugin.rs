@@ -36,6 +36,8 @@ pub struct AuPlugin {
     channels: usize,
     latency: usize,
     tail: usize,
+    /// Told to render offline ([`Plugin::set_offline`]); the unit hears it at the next prepare.
+    offline: bool,
 }
 
 impl AuPlugin {
@@ -54,6 +56,7 @@ impl AuPlugin {
             channels: 2,
             latency: 0,
             tail: 0,
+            offline: false,
         }
     }
 
@@ -112,7 +115,7 @@ impl Plugin for AuPlugin {
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
         let sr = if sample_rate.is_finite() && sample_rate > 0.0 { f64::from(sample_rate) } else { 48_000.0 };
         self.channels = channels.clamp(1, MAX_CHANNELS);
-        match self.inst.configure(sr, max_block, self.channels) {
+        match self.inst.configure(sr, max_block, self.channels, self.offline) {
             Ok(_) => {
                 self.latency = self.inst.latency();
                 self.tail = self.inst.tail();
@@ -133,6 +136,10 @@ impl Plugin for AuPlugin {
         self.events.clear();
         self.held = [0; 128];
         self.inst.reset();
+    }
+
+    fn set_offline(&mut self, offline: bool) {
+        self.offline = offline;
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {

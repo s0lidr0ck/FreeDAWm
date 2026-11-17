@@ -17,6 +17,10 @@ pub struct PairedDevice {
     /// Has connected as a remote recorder (it is expected at Record).
     #[serde(default)]
     pub follows: bool,
+    /// Paired over the encrypted local link: its key (hex), the only one it may connect with,
+    /// and only over that link. Empty: paired over the plain link or by invite.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
 }
 
 /// The booth this PC follows as a remote recorder.
@@ -49,6 +53,12 @@ pub struct FollowConfig {
     /// Following over the internet: the booth's address from its invite (JSON); empty on the LAN.
     #[serde(default)]
     pub internet: String,
+    /// The booth's encrypted local link: its key (hex), kept from the first pairing over it (a
+    /// booth answering with another key is refused), and its address there (`ip:udp port`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub booth_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub booth_lan: String,
 }
 
 fn one() -> f32 {
@@ -67,6 +77,8 @@ impl Default for FollowConfig {
             hear_mix: false,
             mix_gain: 1.0,
             internet: String::new(),
+            booth_key: String::new(),
+            booth_lan: String::new(),
         }
     }
 }
@@ -119,6 +131,14 @@ pub struct NetConfig {
     pub internet_host: bool,
     #[serde(default)]
     pub relay_url: String,
+    /// Offer the encrypted local link (QUIC on UDP at `port`, beside the TCP listener) while
+    /// listening; on by default.
+    #[serde(default = "yes")]
+    pub encrypted_link: bool,
+    /// Take PCs over the encrypted local link only: the plain TCP link then serves the phone's
+    /// remote page and nothing else. On by default; a value already saved is kept.
+    #[serde(default = "yes")]
+    pub encrypted_only: bool,
 }
 
 impl Default for NetConfig {
@@ -136,6 +156,8 @@ impl Default for NetConfig {
             internet_key: String::new(),
             internet_host: false,
             relay_url: String::new(),
+            encrypted_link: true,
+            encrypted_only: true,
         }
     }
 }
@@ -193,11 +215,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("freedawm-net-cfg-{}", std::process::id()));
         let path = dir.join("network.json");
         let mut c = c;
-        c.paired.push(PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "abc".into(), follows: false });
+        c.paired.push(PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "abc".into(), follows: false, key: String::new() });
         c.save(&path).unwrap();
         assert_eq!(NetConfig::load(&path), c);
         assert_eq!(c.device("abc").map(|d| d.name.as_str()), Some("Phone"));
         assert!(c.device("").is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pcs_take_the_encrypted_link_only_by_default_and_a_saved_choice_stays() {
+        assert!(NetConfig::default().encrypted_only);
+        let unset: NetConfig = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert!(unset.encrypted_only, "settings saved before the option existed take the default");
+        let saved: NetConfig = serde_json::from_str(r#"{"encrypted_only": false}"#).unwrap();
+        assert!(!saved.encrypted_only, "a choice already saved is kept");
     }
 }

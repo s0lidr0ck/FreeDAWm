@@ -56,6 +56,8 @@ impl TakeClock for AppClock {
 #[derive(Debug, Clone, Default)]
 struct PairJob {
     request: Option<String>,
+    /// Where the request went (the booth's address, or a bridge to its encrypted link).
+    addr: String,
     result: Arc<Mutex<Option<Result<Value, String>>>>,
 }
 
@@ -86,6 +88,13 @@ pub struct NetState {
     invite_edit: String,
     join: PairJob,
     join_status: String,
+    /// The encrypted local link: this PC's listening endpoint (a booth), what the window says
+    /// about it, the endpoint a remote PC dials out from, and the booth's link (address, key)
+    /// a pairing in progress runs over.
+    lan: Option<soundcraft_net::internet::Internet>,
+    lan_note: String,
+    lan_client: Option<soundcraft_net::internet::Internet>,
+    pair_lan: Option<(String, String)>,
 }
 
 impl NetState {
@@ -122,6 +131,10 @@ impl NetState {
             invite_edit: String::new(),
             join: PairJob::default(),
             join_status: String::new(),
+            lan: None,
+            lan_note: String::new(),
+            lan_client: None,
+            pair_lan: None,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -155,8 +168,11 @@ impl NetState {
                 self.error = None;
                 let name = self.hub.pc_name();
                 let role = if cfg.follow.enabled { "recorder" } else { "booth" };
+                // The encrypted local link: UDP on the same port number, beside the TCP listener.
+                let lan = if cfg.encrypted_link { self.start_lan(port) } else { None };
+                let lan_ref = lan.as_ref().map(|(p, k)| (*p, k.as_str()));
                 if let Some(d) = self.discovery()
-                    && let Err(e) = d.announce(&name, port, role)
+                    && let Err(e) = d.announce_with(&name, port, role, lan_ref)
                 {
                     log::warn!("network: {e}");
                 }
@@ -165,7 +181,82 @@ impl NetState {
         }
     }
 
+    /// This PC's key (hex in the network settings; made once): its identity on the encrypted
+    /// local link and over the internet.
+    fn identity(&self) -> [u8; 32] {
+        use soundcraft_net::internet::{key_from_hex, key_hex, new_key};
+        let cfg = self.hub.config();
+        match key_from_hex(&cfg.internet_key) {
+            Some(k) => k,
+            None => {
+                let k = new_key();
+                self.hub.update_config(|c| c.internet_key = key_hex(&k));
+                k
+            }
+        }
+    }
+
+    /// Starts the encrypted local link on UDP `port`: its endpoint, bridged to the hub's
+    /// encrypted-link listener. Returns its port and key, or says in the window why not.
+    fn start_lan(&mut self, port: u16) -> Option<(u16, String)> {
+        self.stop_lan();
+        let started = soundcraft_net::internet::Internet::start_lan(self.identity(), port).and_then(|ep| {
+            let local = self.hub.listen_secure()?;
+            ep.serve_lan_to(local);
+            Ok(ep)
+        });
+        match started {
+            Ok(ep) => {
+                let udp = ep.udp_port().unwrap_or(port);
+                let key = ep.key_hex();
+                self.lan_note = format!("Encrypted local link on: UDP port {udp}, beside TCP port {port}.");
+                self.lan = Some(ep);
+                Some((udp, key))
+            }
+            Err(e) => {
+                self.hub.stop_secure();
+                self.lan_note = format!("Encrypted local link off: {e}. PCs connect over the plain link.");
+                None
+            }
+        }
+    }
+
+    fn stop_lan(&mut self) {
+        self.lan = None;
+        self.hub.stop_secure();
+    }
+
+    /// The endpoint this PC dials booths' encrypted local links from (any free UDP port).
+    fn lan_client(&mut self) -> Result<&soundcraft_net::internet::Internet, String> {
+        if self.lan_client.is_none() {
+            self.lan_client = Some(soundcraft_net::internet::Internet::start_lan(self.identity(), 0)?);
+        }
+        self.lan_client.as_ref().ok_or_else(|| "no encrypted link".to_string())
+    }
+
+    /// A local port bridged to the booth's encrypted local link at `addr` (`ip:udp port`) with
+    /// key `key` (hex): only the PC holding that key can answer there.
+    fn lan_bridge(&mut self, addr: &str, key: &str) -> Result<String, String> {
+        let sock: std::net::SocketAddr = addr.parse().map_err(|_| format!("the booth's encrypted link address `{addr}` is not one"))?;
+        let host = soundcraft_net::internet::lan_addr(key, sock).ok_or("the booth's key is damaged: pair again")?;
+        Ok(self.lan_client()?.bridge_to(host)?.to_string())
+    }
+
+    /// Which link following uses now, in words (the Network window says it).
+    fn follow_link(&self) -> &'static str {
+        let cfg = self.hub.config();
+        let kind = if !cfg.follow.internet.is_empty() {
+            soundcraft_net::hub::LinkKind::Internet
+        } else if !cfg.follow.booth_key.is_empty() && !cfg.follow.booth_lan.is_empty() {
+            soundcraft_net::hub::LinkKind::Encrypted
+        } else {
+            soundcraft_net::hub::LinkKind::Plain
+        };
+        kind.text()
+    }
+
     fn stop_listening(&mut self) {
+        self.stop_lan();
         self.hub.stop();
         if let Some(d) = &mut self.discovery {
             d.withdraw();
@@ -187,14 +278,35 @@ impl NetState {
                     return;
                 }
             }
+        } else if !cfg.follow.booth_key.is_empty() && !cfg.follow.booth_lan.is_empty() {
+            // The encrypted local link, to the key pinned when it was paired; the booth's address
+            // there as it announces it now when it moved.
+            let lan = self
+                .discovery
+                .as_ref()
+                .and_then(|d| d.found().into_iter().find(|f| f.name == cfg.follow.booth_name))
+                .and_then(|f| f.lan)
+                .filter(|(_, k)| *k == cfg.follow.booth_key)
+                .map_or_else(|| cfg.follow.booth_lan.clone(), |(a, _)| a);
+            if lan != cfg.follow.booth_lan {
+                self.hub.update_config(|c| c.follow.booth_lan = lan.clone());
+            }
+            match self.lan_bridge(&lan, &cfg.follow.booth_key) {
+                Ok(a) => a,
+                Err(e) => {
+                    self.error = Some(e);
+                    return;
+                }
+            }
         } else {
             cfg.follow.booth_addr.clone()
         };
+        let secure = !over_internet && !cfg.follow.booth_key.is_empty() && !cfg.follow.booth_lan.is_empty();
         let target = FollowTarget { booth_name: cfg.follow.booth_name.clone(), addr, token: cfg.follow.token.clone(), my_name: self.hub.pc_name() };
         let f = Follower::start(target, self.outbox.clone(), Some(self.clock.clone() as Arc<dyn TakeClock>));
         let waker_ctx = ctx.clone();
         f.set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
-        if over_internet {
+        if over_internet || secure {
             self.follower = Some(f);
             return;
         }
@@ -474,6 +586,16 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// Pairing requests waiting: their codes, on screen, wherever the user is.
+/// What a paired device can do, and how far the local link can be trusted: shown in the Network
+/// window, under the switch that lets the network in.
+pub(crate) const LOCAL_LINK_NOTE: &str = "A paired device can do everything you can do here: run any command, click, take screenshots, \
+open and save sessions. The phone's page, and PCs on the plain link, use a link that is not encrypted: anyone else on the network can read \
+what passes over it. PCs pair over the encrypted local link when this PC offers it (below); connections over the internet are encrypted too. \
+Pair only devices you trust, on a network you trust.";
+
+/// The same, short, under a pairing code.
+pub(crate) const PAIRING_NOTE: &str = "Pair only a device you trust: once paired it can do everything you can do here.";
+
 pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(net) = &app.net else { return };
     let pending = net.hub.pending_pairings();
@@ -495,6 +617,7 @@ pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
         }
         ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        ui.label(egui::RichText::new(PAIRING_NOTE).small().color(t.text_dim));
     });
     if let Some(id) = deny {
         net.hub.deny_pairing(&id);
@@ -514,6 +637,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     };
     let t = Tokens::current();
+    let talkback = app.engine.session().control_room.as_ref().map(|c| c.talkback.clone());
+    let mut talk = None;
     egui::Window::new("Network").open(&mut open).default_size(vec2(560.0, 860.0)).resizable(true).show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let cfg = net.hub.config();
@@ -543,6 +668,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 net.hub.update_config(|c| c.enabled = allow);
                 if allow { net.start_listening() } else { net.stop_listening() }
             }
+            ui.label(egui::RichText::new(LOCAL_LINK_NOTE).small().color(t.text_dim));
             ui.horizontal(|ui| {
                 ui.label("Port:");
                 let mut port = i64::from(cfg.port);
@@ -552,6 +678,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
                 ui.label(egui::RichText::new("(the page and the control channel share it)").small().color(t.text_dim));
             });
+            link_section(ui, &mut net);
             if let Some(e) = &net.error {
                 ui.colored_label(t.rec, e);
             }
@@ -581,6 +708,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                                 format!("{}: {}{}", r.name, r.state, if r.detail.is_empty() { String::new() } else { format!(" · {}", r.detail) }),
                             );
                         }
+                        talk = talk_section(ui, talkback.as_ref(), net.hub.stream_listeners());
                     });
                 });
             } else {
@@ -631,6 +759,9 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     });
     app.net = Some(net);
     app.ui.show_network = open;
+    if let Some(on) = talk {
+        let _ = app.run("monitor.talkback", json!({"on": on}));
+    }
 }
 
 fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pick_folder: Option<&dyn Fn(&str) -> Option<String>>) {
@@ -649,6 +780,8 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
                     net.hub.update_config(|c| {
                         if c.follow.booth_name != name {
                             c.follow.token.clear();
+                            c.follow.booth_key.clear();
+                            c.follow.booth_lan.clear();
                         }
                         c.follow.booth_name = name;
                         c.follow.booth_addr = addr;
@@ -688,6 +821,24 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             *job.lock().unwrap_or_else(PoisonError::into_inner) = None;
             net.pair.request = None;
             net.pair_status = "Asking the booth…".into();
+            // Over the booth's encrypted local link when it offers one (pairing there binds this
+            // PC's key and keeps the booth's).
+            let lan = found.iter().find(|f| f.name == cfg.follow.booth_name).and_then(|f| f.lan.clone());
+            net.pair_lan = None;
+            let addr = match lan {
+                Some((a, k)) => match net.lan_bridge(&a, &k) {
+                    Ok(bridge) => {
+                        net.pair_lan = Some((a, k));
+                        bridge
+                    }
+                    Err(e) => {
+                        log::info!("network: pairing over the plain link: {e}");
+                        addr
+                    }
+                },
+                None => addr,
+            };
+            net.pair.addr = addr.clone();
             let me = me.clone();
             let c = ctx.clone();
             std::thread::spawn(move || {
@@ -707,11 +858,15 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             Ok(v) => {
                 let token = v["token"].as_str().unwrap_or("").to_string();
                 let booth = v["pc"].as_str().unwrap_or("").to_string();
+                let lan = net.pair_lan.take();
                 net.hub.update_config(|c| {
                     c.follow.token = token;
                     if !booth.is_empty() {
                         c.follow.booth_name = booth;
                     }
+                    // Paired over the encrypted link: its key is kept (later links refuse
+                    // another); over the plain one, none.
+                    (c.follow.booth_lan, c.follow.booth_key) = lan.unwrap_or_default();
                 });
                 net.pair.request = None;
                 net.pair_status = "Paired.".into();
@@ -732,7 +887,7 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             ui.add(egui::TextEdit::singleline(&mut net.code_edit).desired_width(70.0).hint_text("0000"));
             if ui.button("Pair").clicked() {
                 let job = Arc::clone(&net.pair.result);
-                let (addr, code, c) = (cfg.follow.booth_addr.clone(), net.code_edit.trim().to_string(), ctx.clone());
+                let (addr, code, c) = (net.pair.addr.clone(), net.code_edit.trim().to_string(), ctx.clone());
                 net.code_edit.clear();
                 std::thread::spawn(move || {
                     let r = pair_confirm(&addr, &req, &code).map(|(token, pc)| json!({"token": token, "pc": pc}));
@@ -782,6 +937,65 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         let badge = net.follow.badge(f);
         let detail = if f.connected() { String::new() } else { format!(" ({})", f.state()) };
         ui.colored_label(if badge.recording() { t.rec } else { t.text }, format!("{}{detail}", badge.text()));
+        ui.label(egui::RichText::new(format!("Link: {}", net.follow_link())).small().color(t.text_dim))
+            .on_hover_text("Encrypted local link: QUIC to the booth's key, kept since pairing. Not encrypted: the plain TCP link of earlier versions; pair again with a booth that offers the encrypted link to move to it");
+    }
+}
+
+/// The encrypted local link's switches and what it is doing, and the talk key to a remote
+/// performer.
+fn link_section(ui: &mut egui::Ui, net: &mut NetState) {
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    let mut offer = cfg.encrypted_link;
+    if ui
+        .checkbox(&mut offer, "Offer the encrypted local link")
+        .on_hover_text(
+            "QUIC on a UDP port beside the TCP one (the same number): PCs on this network pair and connect over it, encrypted, bound to their keys",
+        )
+        .changed()
+    {
+        net.hub.update_config(|c| c.encrypted_link = offer);
+        if net.hub.listening_port().is_some() {
+            net.start_listening();
+        }
+    }
+    let mut only = cfg.encrypted_only;
+    if ui
+        .add_enabled(offer || only, egui::Checkbox::new(&mut only, "Take PCs over the encrypted link only"))
+        .on_hover_text("The plain link then serves the phone's remote page and nothing else: PCs paired over it must pair again")
+        .changed()
+    {
+        net.hub.update_config(|c| c.encrypted_only = only);
+    }
+    if net.hub.listening_port().is_some() && !net.lan_note.is_empty() {
+        ui.label(egui::RichText::new(&net.lan_note).small().color(t.text_dim));
+    }
+    for (name, kind) in net.hub.links() {
+        ui.label(egui::RichText::new(format!("{name}: {}", kind.text())).small());
+    }
+}
+
+/// The talk key to a performer hearing this PC's mix (the control room's talkback `tb`, into
+/// the stream sent to him; never recorded), shown while one listens. Returns the talkback
+/// switch to set (`monitor.talkback`) when the key is pressed or let go.
+fn talk_section(ui: &mut egui::Ui, tb: Option<&soundcraft_model::Talkback>, listeners: usize) -> Option<bool> {
+    if listeners == 0 {
+        return None;
+    }
+    let t = Tokens::current();
+    match tb.filter(|b| !b.input.is_empty()) {
+        Some(b) => {
+            let r = ui
+                .add(egui::Button::new(if b.on { "Talking…" } else { "Talk to the performer" }).sense(Sense::click_and_drag()))
+                .on_hover_text("Hold to talk: the control room's talkback input goes into the mix he hears, the music dimmed. Never recorded");
+            let down = r.is_pointer_button_down_on();
+            (down != b.on).then_some(down)
+        }
+        None => {
+            ui.label(egui::RichText::new("To talk to the performer, choose a talkback input in Window › Control Room.").small().color(t.text_dim));
+            None
+        }
     }
 }
 
@@ -1190,9 +1404,9 @@ pub fn demo(app: &mut SoundApp) -> Result<(), String> {
         c.enabled = true;
         c.pc_name = "Booth".into();
         c.paired = vec![
-            PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo-phone".into(), follows: false },
-            PairedDevice { name: "Stage PC".into(), kind: "browser".into(), token: "demo-stage".into(), follows: false },
-            PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: piano.clone(), follows: true },
+            PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo-phone".into(), follows: false, key: String::new() },
+            PairedDevice { name: "Stage PC".into(), kind: "browser".into(), token: "demo-stage".into(), follows: false, key: String::new() },
+            PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: piano.clone(), follows: true, key: String::new() },
         ];
     });
     let port = net.hub.listen(soundcraft_net::config::DEFAULT_PORT).or_else(|_| net.hub.listen(0))?;
@@ -1285,8 +1499,8 @@ pub fn demo_audio(app: &mut SoundApp) -> Result<(), String> {
         c.enabled = true;
         c.pc_name = "Booth".into();
         c.paired = vec![
-            PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo-phone".into(), follows: false },
-            PairedDevice { name: "Guitar PC".into(), kind: "pc".into(), token: guitar.clone(), follows: true },
+            PairedDevice { name: "Phone".into(), kind: "browser".into(), token: "demo-phone".into(), follows: false, key: String::new() },
+            PairedDevice { name: "Guitar PC".into(), kind: "pc".into(), token: guitar.clone(), follows: true, key: String::new() },
         ];
     });
     let port = net.hub.listen(soundcraft_net::config::DEFAULT_PORT).or_else(|_| net.hub.listen(0))?;
@@ -1611,9 +1825,10 @@ mod tests {
     #[test]
     fn a_followers_take_shows_as_a_local_recording_and_then_as_sent() {
         use egui_kittest::kittest::Queryable;
-        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), ..NetConfig::default() }, None);
+        // The follower is on the plain link: the booth takes PCs there (on by default: off here).
+        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), encrypted_only: false, ..NetConfig::default() }, None);
         hub.update_config(|c| {
-            c.paired = vec![PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: "piano".into(), follows: true }];
+            c.paired = vec![PairedDevice { name: "Piano PC".into(), kind: "pc".into(), token: "piano".into(), follows: true, key: String::new() }];
         });
         let port = hub.listen(0).unwrap();
         let mut booth = Booth { e: Engine::default(), view: HostView::default() };

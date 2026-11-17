@@ -56,7 +56,18 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
         widths[0] = small_w(ui, chan_text);
     }
     let cells = slim::pill_row(x0, w, y, &widths, &[2]);
-    let rects = HeaderRects { chan: cells[0], undo: cells[1], slot_1: cells[2], slot_2: cells[3], bypass: cells[4], prev, next, name };
+    let rects = HeaderRects {
+        chan: cells[0],
+        undo: cells[1],
+        slot_1: cells[2],
+        slot_2: cells[3],
+        bypass: cells[4],
+        prev,
+        next,
+        name,
+        listen: None,
+        sur_link: None,
+    };
     header_controls(st, app, ui, host, &rects);
     y += btn_h + GAP + 2.0;
 

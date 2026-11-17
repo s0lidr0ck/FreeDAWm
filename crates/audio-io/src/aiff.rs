@@ -238,6 +238,11 @@ impl<W: Write + Seek> Writer<W> {
     }
 }
 
+/// [`header`] for a take recorded block by block ([`crate::take_header`]).
+pub(crate) fn take_header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64) -> Result<Vec<u8>> {
+    header(channels, sample_rate, depth, frames)
+}
+
 /// Everything before the sample data of an AIFF holding `frames` frames; its length doesn't
 /// depend on `frames`.
 fn header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64) -> Result<Vec<u8>> {

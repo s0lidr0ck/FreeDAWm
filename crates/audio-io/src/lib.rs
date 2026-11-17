@@ -34,7 +34,7 @@ pub use mp3::mp3_rate;
 
 pub use buffer::AudioBuffer;
 use std::io::{Seek, Write};
-pub use wav::{StreamLayout, stream_layout};
+pub use wav::{StreamLayout, bext_time_reference_offset, stream_layout};
 
 /// Errors from probing, decoding and encoding.
 #[derive(Debug, thiserror::Error)]
@@ -443,6 +443,60 @@ impl<W: Write + Seek> FileEncoder<W> {
 /// The WAVE_FORMAT_EXTENSIBLE speaker mask of a WAV file, if it has one.
 pub fn wav_channel_mask(bytes: &[u8]) -> Option<u32> {
     wav::read_channel_mask(bytes)
+}
+
+/// The header of a take file holding `frames` frames: a WAV (with a `bext` chunk when `bwf` is
+/// given; RF64 above 4 GiB) or an AIFF (AIFF-C `fl32` for float), at `depth`. Its length doesn't
+/// depend on `frames`, so a recorder can rewrite it in place as the file grows. Samples follow
+/// it as [`take_sample`] writes them.
+pub fn take_header(format: FileFormat, channels: usize, sample_rate: u32, depth: BitDepth, bwf: Option<&BwfInfo>, frames: u64) -> Result<Vec<u8>> {
+    if channels == 0 || sample_rate == 0 {
+        return Err(AudioError::Encode("a take needs channels and a sample rate".into()));
+    }
+    match format {
+        FileFormat::Wav => wav::header(channels, sample_rate, pcm::sample_format(depth), bwf, None, frames, false),
+        FileFormat::Aiff => aiff::take_header(channels, sample_rate, depth, frames),
+        other => Err(AudioError::Unsupported(format!("takes are not recorded as {other:?}"))),
+    }
+}
+
+/// Appends sample `x` to `out` as a take file of `format` at `depth` holds it (WAV little-endian,
+/// AIFF big-endian; integers rounded and clipped, no dither: an input is never finer than 24 bits).
+pub fn take_sample(format: FileFormat, depth: BitDepth, x: f32, out: &mut Vec<u8>) {
+    let x = if x.is_finite() { x } else { 0.0 };
+    let big = format == FileFormat::Aiff;
+    let int = |bits: u32| {
+        let full = (1i64 << (bits - 1)) as f64;
+        ((f64::from(x) * full).round() as i64).clamp(-(full as i64), full as i64 - 1)
+    };
+    match depth {
+        BitDepth::Float32 => out.extend_from_slice(&if big { x.to_be_bytes() } else { x.to_le_bytes() }),
+        BitDepth::Int16 => {
+            let v = int(16) as i16;
+            out.extend_from_slice(&if big { v.to_be_bytes() } else { v.to_le_bytes() });
+        }
+        BitDepth::Int24 => {
+            let b = (int(24) as i32).to_le_bytes();
+            if big {
+                out.extend_from_slice(&[b[2], b[1], b[0]]);
+            } else {
+                out.extend_from_slice(&[b[0], b[1], b[2]]);
+            }
+        }
+        BitDepth::Int32 => {
+            let v = int(32) as i32;
+            out.extend_from_slice(&if big { v.to_be_bytes() } else { v.to_le_bytes() });
+        }
+    }
+}
+
+/// Bytes [`take_sample`] writes per sample.
+pub fn take_sample_bytes(depth: BitDepth) -> usize {
+    match depth {
+        BitDepth::Int16 => 2,
+        BitDepth::Int24 => 3,
+        BitDepth::Int32 | BitDepth::Float32 => 4,
+    }
 }
 
 /// The header of a 32-bit float WAV holding `frames` frames (little-endian samples follow it). Its

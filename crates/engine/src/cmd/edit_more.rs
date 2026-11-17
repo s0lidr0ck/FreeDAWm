@@ -128,8 +128,11 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.play_timeline", "Play Timeline", ["Edit", "Selection"], None, "{} — plays the timeline selection", always, |e, _| {
             let s = e.session();
             let r = if s.edit.timeline_selection.is_empty() { s.edit.selection } else { s.edit.timeline_selection };
-            e.transport_requests.push(TransportRequest::Locate(r.start));
-            e.transport_requests.push(TransportRequest::Play);
+            // The timeline range itself, never the edit selection (they differ when unlinked);
+            // looped with Loop Playback on, else once to its end.
+            let looped = (s.edit.loop_playback && !r.is_empty()).then_some(r);
+            let end = (looped.is_none() && !r.is_empty()).then_some(r.end);
+            e.transport_requests.push(TransportRequest::PlayRange { from: r.start.max(0), end, looped });
             Ok(json!({"start": r.start, "end": r.end}))
         }),
         cmd!(
@@ -304,12 +307,7 @@ fn auto_copy(e: &mut Engine, p: &Value, which: Lanes, cut: bool, id: &str) -> Re
                     .map(|l| {
                         let mut out = AutomationLane::new(l.param.clone());
                         out.enabled = l.enabled;
-                        let (_, _, def) = l.param.range();
-                        out.set_point(0, l.value_at(r.start, def));
-                        for pt in l.points.iter().filter(|pt| pt.at > r.start && pt.at < r.end) {
-                            out.set_point(pt.at - r.start, pt.value);
-                        }
-                        out.set_point(r.len() - 1, l.value_at(r.end - 1, def));
+                        out.points = l.slice(r.start, r.end);
                         out
                     })
                     .collect()
@@ -399,17 +397,11 @@ fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": n}))
 }
 
-fn fx_prefix(c: ClipId) -> String {
-    format!("clip_fx.{}.", c.0)
-}
-
 fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let first = *ids.first().ok_or_else(|| bad(id, "select a clip"))?;
     if copy {
-        let pre = fx_prefix(first);
-        let fx: Vec<(String, f64)> =
-            e.session().edit.values.iter().filter_map(|(k, v)| k.strip_prefix(&pre).map(|name| (name.to_string(), *v))).collect();
+        let fx: Vec<(String, f64)> = e.session().find_clip(first).map(|(_, c)| c.effects.clone()).unwrap_or_default();
         if fx.is_empty() {
             return Err(bad(id, "the clip has no clip effects"));
         }
@@ -418,12 +410,11 @@ fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -
     let mut removed = 0;
     if remove {
         let s = e.session_mut();
-        for c in &ids {
-            let pre = fx_prefix(*c);
-            let before = s.edit.values.len();
-            s.edit.values.retain(|k, _| !k.starts_with(&pre));
-            removed += before - s.edit.values.len();
-            s.edit.set_flag(&format!("clip_fx.bypass.{}", c.0), false);
+        for id in &ids {
+            let Some(c) = s.find_clip_mut(*id) else { continue };
+            removed += c.effects.len();
+            c.effects.clear();
+            c.effects_bypass = false;
         }
     }
     Ok(json!({"clips": ids.len(), "copied": e.clipboard.clip_effects.len(), "removed": removed}))
@@ -436,11 +427,11 @@ fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let fx = e.clipboard.clip_effects.clone();
     let s = e.session_mut();
-    for c in &ids {
-        let pre = fx_prefix(*c);
-        s.edit.values.retain(|k, _| !k.starts_with(&pre));
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        c.effects.clear();
         for (k, v) in &fx {
-            s.edit.values.insert(format!("{pre}{k}"), *v);
+            c.set_effect(k, *v);
         }
     }
     Ok(json!({"clips": ids.len()}))
@@ -546,12 +537,10 @@ fn paste_to_current_automation(e: &mut Engine, p: &Value) -> Result<Value> {
             .as_ref()
             .and_then(|f| f.iter().find(|(x, _)| x == t).map(|(_, a)| a.clone()))
             .unwrap_or_else(|| AutoParam::parse(&tr.view).unwrap_or(AutoParam::Volume));
-        let lane = tr.lane_mut(&dst);
-        lane.clear_range(at, at.saturating_add(cb.length));
-        for pt in &src.points {
-            lane.set_point(at.saturating_add(pt.at), map_value(pt.value, &src.param, &dst));
-            written += 1;
-        }
+        let pts: Vec<_> =
+            src.points.iter().map(|pt| soundcraft_model::AutomationPoint { value: map_value(pt.value, &src.param, &dst), ..*pt }).collect();
+        tr.lane_mut(&dst).paste_slice(at, cb.length, &pts);
+        written += pts.len();
     }
     Ok(json!({"points": written}))
 }
@@ -568,10 +557,8 @@ fn duplicate_extend(e: &mut Engine, p: &Value) -> Result<Value> {
         n += ops::paste(s, *t, r.end, &clips, r.len(), sh).map_err(|why| bad(id, why))?.len();
         if follow && let Some(tr) = s.track_mut(*t) {
             for l in &mut tr.automation {
-                let pts: Vec<_> = l.points.iter().filter(|pt| r.contains(pt.at)).copied().collect();
-                for pt in pts {
-                    l.set_point(pt.at.saturating_add(r.len()), pt.value);
-                }
+                let pts = l.slice(r.start, r.end);
+                l.paste_slice(r.end, r.len(), &pts);
             }
         }
     }
@@ -806,8 +793,8 @@ fn coalesce_volume_to_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         let lane = tr.lane(&AutoParam::Volume).cloned();
         let fader = tr.mixer.volume_db;
-        let Some(pl) = tr.playlist_mut() else { continue };
-        for c in pl.clips.iter_mut().filter(|c| c.is_audio()) {
+        // Every playlist and take layer: the fader and its automation go for all of them.
+        for c in tr.playlists.iter_mut().flat_map(|pl| pl.clips.iter_mut()).filter(|c| c.is_audio()) {
             let mut offs: Vec<Samples> = vec![0, c.length];
             offs.extend(c.gain_env.iter().map(|x| x.0));
             if let Some(l) = &lane {
@@ -1153,7 +1140,16 @@ mod tests {
     fn merging_midi_keeps_a_printed_clips_channels() {
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
-        let n = |pitch: u8, channel: u8| soundcraft_midi::Note { pitch, velocity: 100, release_velocity: 64, channel, start: 0, length: 240 };
+        let n = |pitch: u8, channel: u8| soundcraft_midi::Note {
+            probability: 100,
+            pitch,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel,
+            start: 0,
+            length: 240,
+        };
         let id = s.new_clip_id();
         ops::place_clip(&mut s, t, Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![] }));
         let mut e = Engine::new(s);

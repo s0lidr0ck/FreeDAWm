@@ -59,6 +59,8 @@ pub struct BrowserState {
     pub favourites: Vec<String>,
     /// Plugin ids, newest first, at most [`RECENT_MAX`].
     pub recent: Vec<String>,
+    /// Plugin ids kept out of the insert menu (its Show or Hide Effects).
+    pub hidden: Vec<String>,
     /// Plugin id to the category the user filed it under, over the catalog's own.
     #[serde(deserialize_with = "lenient_overrides")]
     pub category_overrides: BTreeMap<String, BrowserCategory>,

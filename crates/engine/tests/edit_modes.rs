@@ -120,7 +120,7 @@ fn clip_list_drops_land_on_a_clip_boundary_in_shuffle() {
 fn grid_moves_to_a_position_snap_or_keep_their_offset() {
     let (mut e, t, [_, b]) = engine("grid");
     let s = e.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     run(&mut e, "edit.move_clips", json!({"clips": [b.0], "to": step + 1000}));
     assert_eq!(clips(&e, t)[1].0, step);
     run(&mut e, "edit.mode", json!({"mode": "relative_grid"}));
@@ -208,7 +208,7 @@ fn clips_dragged_from_several_tracks_keep_their_tracks_apart() {
 fn relative_grid_pastes_keep_the_offset_from_the_grid() {
     let (mut e, t, [_, b]) = engine("relative_grid");
     let s = e.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     run(&mut e, "edit.select", json!({"clips": [b.0]}));
     run(&mut e, "edit.copy", json!({}));
     run(&mut e, "edit.select", json!({"tracks": [t.0], "start": 3 * step}));

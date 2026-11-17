@@ -82,7 +82,7 @@ pub const PRESET_PARAMS: [&str; 22] = [
 ];
 
 /// The preset facts: `storageKey`, and what `getPresetParams` leaves out.
-const FAM: Family = Family::new("Swale", &["trim", "level", "tempoSrc", "bpm"]);
+pub(crate) const FAM: Family = Family::new("Swale", &["trim", "level", "tempoSrc", "bpm"]);
 
 /// The editor's own state.
 #[derive(Clone, Default, Debug)]

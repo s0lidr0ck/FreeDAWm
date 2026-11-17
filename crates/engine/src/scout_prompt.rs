@@ -18,8 +18,11 @@ use std::fmt::Write as _;
 /// listed) after Manners, then from 46 000 for Lull (900: its nineteen parameters and its line), and from 47 000 for Sift,
 /// and from 48 000 for the Vitalizer's six parameters in Vint (400), and from 49 000 for Imprint (350),
 /// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ, and from
-/// 50 500 for Mend (350).
-pub const MAX_CHARS: usize = 50_850;
+/// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
+/// sixteen parameters and their lines), and from 51 500 for Keel and Heft (1 100: their sixteen
+/// parameters and their lines), and from 52 600 for Pantry (800: its eleven parameter lines and
+/// its line).
+pub const MAX_CHARS: usize = 53_400;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -48,6 +51,12 @@ pub fn guides_format() -> Value {
 pub fn purpose(id: &str) -> &'static str {
     match id {
         "fs_amp" => "Guitar/bass amp: seven tube amps solved from their schematics, built-in or impulse-response cabinet, Auto Level, output trim.",
+        "heft" => {
+            "Bass enhancer: harmonics of the band below Frequency added above it (Character even/odd), Original Bass keeps or removes the lows."
+        }
+        "keel" => {
+            "Bass amp: Tube, Solid State or Grind preamp (4x oversampled), bass-mid-treble stack, Bright, 4x10/1x15/8x10 cabinet blended with the DI, Squeeze limiter."
+        }
         "fs_chamber" => "Reverb chamber you build yourself: room geometry, materials, speaker and mic placement.",
         "fs_cleanq" => {
             "24-band dynamic EQ (bells, shelves, cuts; any band can be dynamic) with a dynamic ceiling; Scout's EQ guides are drawn on it."
@@ -94,7 +103,7 @@ pub fn purpose(id: &str) -> &'static str {
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
         "multisampler" => {
-            "Instrument: Pantry multisampler, an instrument recorded note by note at several velocities (velocity layers that blend, round-robins, sustain pedal); `track.capture_multisample` makes one from any instrument track through its modules, `mix.multisample_save` keeps one as an SFZ file with its samples, `mix.multisample_load` loads an SFZ file, `mix.multisample_import` takes captured sample files by their names (`docs/pantry.md`)."
+            "Instrument: Pantry multisampler, an instrument sampled note by note in velocity layers; `track.capture_multisample` makes one from an instrument track, `mix.multisample_load` loads SFZ or Decent Sampler (`docs/pantry.md`)."
         }
         "juke" => {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
@@ -109,6 +118,12 @@ pub fn purpose(id: &str) -> &'static str {
         "invert" => "Utility: polarity (phase) inversion per channel.",
         "dc_offset_removal" => "Utility: removes DC offset (a very low high-pass).",
         "signal_generator" => "Utility: test tones and noise (replaces the input).",
+        "dither" => "Utility: TPDF dither to 16, 20 or 24 bits, optional noise shaping; last on a master.",
+        "channel_tool" => "Utility: swap, mono, one side, M/S encode/decode, per-channel polarity, gain, DC filter.",
+        "spectrum" => "Meter: FFT spectrum (sum, L, R, mid, side) with slope and peak hold; sound untouched.",
+        "loudness" => "Meter: BS.1770 loudness (momentary, short-term, integrated, range, true peak) against a target.",
+        "phase_meter" => "Meter: stereo correlation (lowest held), balance and goniometer; sound untouched.",
+        "tuner" => "Meter: tuner (nearest note, cents off, A4 415-466 Hz); Mute silences while tuning.",
         _ => "",
     }
 }
@@ -370,6 +385,14 @@ mod tests {
             }
         }
         assert!(text.contains("scout-guides"));
+        // The meters, Channel Tool and Dither (listed since 5f123a2) are among them, with the
+        // utilities.
+        let utilities = text.find("## Utilities").unwrap_or(usize::MAX);
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "channel_tool", "dither"] {
+            let at = text.find(&format!("(`{id}`")).unwrap_or(0);
+            assert!(at > utilities, "{id} listed with the utilities");
+            assert!(!purpose(id).is_empty(), "{id}");
+        }
     }
 
     #[test]

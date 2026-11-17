@@ -95,6 +95,25 @@ pub fn engine(plugin_id: &str) -> Option<&'static EngineReg> {
     ENGINES.iter().copied().find(|e| e.info.id == plugin_id)
 }
 
+/// The C++-faithful build of an engine whose FreeDAWm default departs from the C++ on purpose
+/// (a fix the owner chose over the original), prepared at 48 kHz as [`crate::create`] makes a
+/// plugin: what the fidelity test renders, so the rest of the port is still held to the C++.
+/// `None` for every other engine, whose default build is already the C++'s.
+pub fn cpp_reference(plugin_id: &str) -> Option<Box<dyn Plugin>> {
+    let mut p: Box<dyn Plugin> = match plugin_id {
+        // the dry is delayed to sit with the voices, and reported as latency
+        "fs_pitch" => Box::new(pitch::Pitch::cpp_reference()),
+        // half-band oversampling with a reported latency, not the C++'s Butterworth
+        "fs_dist" => Box::new(dist::Dist::cpp_reference()),
+        "fs_filter" => Box::new(filter::Filter::cpp_reference()),
+        // the output cuts redesigned at the prepared rate
+        "fs_reverb" => Box::new(reverb::ReverbEngine::cpp_reference()),
+        _ => return None,
+    };
+    p.prepare(48_000.0, 1024, 2);
+    Some(p)
+}
+
 /// The id of every engine's own bypass parameter (kept in the parameter order, hidden in the UI).
 const ENGINE_BYPASS: &str = "bypass";
 
@@ -142,13 +161,15 @@ impl FsPreset {
 }
 
 /// The bundled factory presets of a plugin as `(name, json)` pairs: a FireStation engine's, or
-/// Rez's, Lull's or Sprawl's own (built-ins with presets in the same form). Empty for any other id.
+/// Rez's, Lull's, Sprawl's or Keel's own (built-ins with presets in the same form). Empty for any other id.
 pub fn factory_presets(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
     match engine(plugin_id) {
         Some(e) => e.presets,
         None if plugin_id == super::rez::REZ_INFO.id => super::rez::presets::factory_presets(),
         None if plugin_id == super::lull::LULL_INFO.id => super::lull::presets::factory_presets(),
         None if plugin_id == super::sprawl::SPRAWL_INFO.id => super::sprawl::presets::factory_presets(),
+        None if plugin_id == super::keel::KEEL_INFO.id => super::keel::presets::factory_presets(),
+        None if plugin_id == super::heft::HEFT_INFO.id => super::heft::presets::factory_presets(),
         None => &[],
     }
 }

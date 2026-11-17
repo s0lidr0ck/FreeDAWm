@@ -11,9 +11,12 @@
 //!   (Style re-derives the windows from the Grain knob as it stands). Here `set_param` only stores
 //!   the value; `process` does the wrapper's push (all values after `prepare`/`reset`, else the
 //!   changed ones) before handing the block to the engine.
-//! - Latency: none reported. The dry path is untouched; `getVoiceLatencyMs` (how late the shifted
-//!   voices are) is shown by the editor, "not reported to the host as latency". Here it is
-//!   readout `[3]`, and `latency()` stays 0.
+//! - Latency: the C++ reports none and leaves the dry untouched, so after delay compensation its
+//!   shifted voices trail the mix by up to the window (`getVoiceLatencyMs`, readout `[3]`).
+//!   FreeDAWm delays the dry to the middle of the voices' sweep and reports that delay as
+//!   `latency()` (see `pitch_engine_dsp`'s notes), so the whole output lands on the grid. It
+//!   follows Style, Grain and the rate; OC-2 is 0. [`Pitch::cpp_reference`] is the C++'s way,
+//!   for the fidelity test.
 //! - Bypass: the engine's own `bypass` parameter is a 0.002-per-sample crossfade to the dry
 //!   input (translated in `process`). It is kept in order but hidden (group ""): the UI uses the
 //!   module's bypass.
@@ -182,6 +185,14 @@ impl Pitch {
         }
     }
 
+    /// The C++'s behaviour exactly (dry untouched, no latency reported), for the fidelity test.
+    pub fn cpp_reference() -> Self {
+        let mut p = Self::new();
+        p.dsp.set_align_dry(false);
+        p.dsp.prepare(48_000.0);
+        p
+    }
+
     /// `prepareToPlay` at `sr`: on a module that has not played yet, the fresh path (the engine
     /// as `new` made it, prepared, a full push at the next block); on a live one, what moved is
     /// pushed, then the engine prepares on its own state with every glide at its target.
@@ -206,6 +217,11 @@ impl Pitch {
                 self.last_pushed[i] = v;
                 self.dsp.set_parameter(i, v);
             }
+        }
+        if force {
+            // The first block after a prepare: the dry delay starts at the tap these values set,
+            // not faded over from the engine's defaults.
+            self.dsp.seat_dry();
         }
     }
 
@@ -248,9 +264,21 @@ impl Plugin for Pitch {
         self.prepare_at(sr);
     }
 
+    fn latency(&self) -> usize {
+        // The engine's dry tap (0 for OC-2 and the C++ reference). Until the first block after a
+        // prepare has pushed the values, the engine still holds the old ones: the tap they will
+        // set is worked out from the stored values instead.
+        if self.force_push && self.dsp.aligns_dry() {
+            let sr = self.dsp.sample_rate() as f32;
+            return usize::try_from(d::dry_delay_samples(self.p.choice(d::P_STYLE) as i32, self.p.v(d::P_GRAIN), sr)).unwrap_or(0);
+        }
+        self.dsp.latency_samples()
+    }
+
     fn tail_samples(&self) -> usize {
-        // max(`getTailLengthSeconds` = 0, the deepest a shifted voice reads behind the input).
-        d::BUF as usize
+        // max(`getTailLengthSeconds` = 0, the deepest a shifted voice reads behind the input),
+        // plus the dry delay.
+        d::BUF as usize + self.latency()
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {

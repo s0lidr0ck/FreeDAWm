@@ -39,6 +39,14 @@
 //!
 //! Rust additions: [`ReverbEngineDsp::restore_initial`] (a fresh engine in place) and the read-only
 //! accessors at the end (the strip's readouts and graph).
+//!
+//! One deliberate difference (owner-approved): the C++ designs the output cuts only when their
+//! knob moves, so the constructor's `prepare (48000.0)` designs stay in force at any other rate
+//! until then (at 96 kHz the default cuts sit at about twice their labelled frequency). Here
+//! `prepare` redesigns them at its rate whenever they were made at another one; at 48 kHz nothing
+//! changes. [`ReverbEngineDsp::set_cpp_designs`] keeps the C++'s way, for the fidelity test. (The
+//! colour converters need no such fix here: Color's default, Now, has none, so they are first
+//! designed when Color is chosen, at the rate then in force.)
 
 // The C++ literals (0.7071f and friends) are kept as written, not swapped for the constants.
 #![allow(clippy::approx_constant)]
@@ -497,6 +505,11 @@ pub struct ReverbEngineDsp {
     tempo_knob: f32,
     host_bpm: f32,
     host_playing: bool,
+    /// Rust: `prepare` redesigns the output cuts at its rate (FreeDAWm). Off: the C++'s, which
+    /// keeps designs made at another rate.
+    rate_designs: bool,
+    /// The rate the output cuts' designs were made at (0: none yet).
+    designs_sr: f64,
 
     // ---- smoothed
     dry_g_sm: f32,
@@ -699,6 +712,8 @@ impl ReverbEngineDsp {
             tempo_knob: 0.4,
             host_bpm: 0.0,
             host_playing: false,
+            rate_designs: true,
+            designs_sr: 0.0,
             dry_g_sm: 1.0,
             wet_g_sm: 0.0,
             level_sm: 1.0,
@@ -842,7 +857,7 @@ impl ReverbEngineDsp {
     /// every `prepareToPlay`, until those knobs move.
     pub fn reset_live(&mut self) {
         let sr = self.sr;
-        let designs = (self.last_lc, self.last_hc, self.out_lc, self.out_hc, self.coef_color, self.col_in, self.col_out);
+        let designs = (self.last_lc, self.last_hc, self.out_lc, self.out_hc, self.coef_color, self.col_in, self.col_out, self.designs_sr);
         let k = (
             [
                 self.decay_knob,
@@ -896,7 +911,7 @@ impl ReverbEngineDsp {
         self.tempo_src_idx = tempo_src;
         self.color_idx = color;
         [self.bypassed, self.frozen, self.trails_on, self.synced] = k.2;
-        (self.last_lc, self.last_hc, self.out_lc, self.out_hc, self.coef_color, self.col_in, self.col_out) = designs;
+        (self.last_lc, self.last_hc, self.out_lc, self.out_hc, self.coef_color, self.col_in, self.col_out, self.designs_sr) = designs;
         for q in self.out_lc.iter_mut().chain(self.out_hc.iter_mut()).chain(self.col_in.iter_mut()).chain(self.col_out.iter_mut()) {
             q.z1 = 0.0;
             q.z2 = 0.0;
@@ -955,6 +970,7 @@ impl ReverbEngineDsp {
         std::mem::swap(&mut fresh.casc, &mut self.casc);
         fresh.host_bpm = self.host_bpm;
         fresh.host_playing = self.host_playing;
+        fresh.rate_designs = self.rate_designs;
         // The old members now hold only empty vectors: nothing is freed here.
         *self = fresh;
     }
@@ -1121,6 +1137,17 @@ impl ReverbEngineDsp {
         self.level_sm = knob_to_level_gain(self.level_knob);
         self.width_sm = self.width_knob * 2.0;
         self.char_sm = self.char_knob;
+
+        // Rust (see the module notes): designs made at another rate are made again at this one.
+        if self.rate_designs && self.designs_sr != self.sr {
+            if self.last_lc >= 0.0 {
+                self.design_low_cut();
+            }
+            if self.last_hc >= 0.0 {
+                self.design_high_cut();
+            }
+        }
+        self.designs_sr = self.sr;
 
         self.apply_pitch();
         self.apply_machine();
@@ -2138,16 +2165,35 @@ impl ReverbEngineDsp {
         // output EQ
         if self.lc_knob != self.last_lc {
             self.last_lc = self.lc_knob;
-            let f = knob_to_low_cut_hz(self.lc_knob);
-            set_hp(&mut self.out_lc[0], f, sr, 0.7071);
-            set_hp(&mut self.out_lc[1], f, sr, 0.7071);
+            self.design_low_cut();
         }
         if self.hc_knob != self.last_hc {
             self.last_hc = self.hc_knob;
-            let f = min_d(knob_to_high_cut_hz(self.hc_knob), 0.45 * sr);
-            set_lp(&mut self.out_hc[0], f, sr, 0.7071);
-            set_lp(&mut self.out_hc[1], f, sr, 0.7071);
+            self.design_high_cut();
         }
+    }
+
+    /// The output low cut for `lastLc` at the current rate (`updateControl`'s design).
+    fn design_low_cut(&mut self) {
+        let sr = self.sr;
+        let f = knob_to_low_cut_hz(self.last_lc);
+        set_hp(&mut self.out_lc[0], f, sr, 0.7071);
+        set_hp(&mut self.out_lc[1], f, sr, 0.7071);
+    }
+
+    /// The output high cut for `lastHc` at the current rate (`updateControl`'s design).
+    fn design_high_cut(&mut self) {
+        let sr = self.sr;
+        let f = min_d(knob_to_high_cut_hz(self.last_hc), 0.45 * sr);
+        set_lp(&mut self.out_hc[0], f, sr, 0.7071);
+        set_lp(&mut self.out_hc[1], f, sr, 0.7071);
+    }
+
+    /// The C++'s way with the output cuts (designed only when their knob moves, so a design made
+    /// at another rate stays): the fidelity test's build. Before
+    /// `prepare`; [`ReverbEngineDsp::restore_initial`] and the resets keep it.
+    pub fn set_cpp_designs(&mut self, on: bool) {
+        self.rate_designs = !on;
     }
 
     // ------------------------------------------------------------------ Rust additions: read-only views

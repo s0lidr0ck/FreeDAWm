@@ -26,6 +26,10 @@ const ORIGIN: &str = "origin";
 const LOCK: &str = "lock";
 /// The plan of a recording still running when the folder was written.
 const RECORDING: &str = "recording.json";
+/// The MIDI a recording running in the folder heard so far, spilled as it comes: a header line
+/// (`{"latency":…}`), then one recorded event per line, and `{"drop":pass}` for a loop pass
+/// Undo Last Pass took back. A line a crash cut short is ignored.
+const MIDI_SPILL: &str = "recording-midi.jsonl";
 /// While changes keep coming, the newest is written at most this often.
 const INTERVAL: Duration = Duration::from_secs(1);
 const STOPPED: &str = "the autosave thread stopped";
@@ -42,6 +46,12 @@ enum Job {
     /// Done with the session's folder: keep it for the next launch, or delete it.
     Close(bool),
     Flush(Sender<std::result::Result<(), String>>),
+    /// A take begins: the MIDI spilled for an earlier one goes; this one's latency heads the file.
+    MidiStart(soundcraft_time::Samples),
+    /// MIDI the take heard, to append.
+    Midi(Vec<crate::midi_record::RecordedEvent>),
+    /// A loop pass taken back.
+    MidiDrop(u16),
 }
 
 impl Autosaver {
@@ -49,7 +59,17 @@ impl Autosaver {
     pub fn new(root: PathBuf) -> Autosaver {
         let (tx, rx) = channel();
         let failure = Arc::new(Mutex::new(None));
-        let writer = Writer { root, failure: Arc::clone(&failure), folder: None, pending: None, last: None, written: Ok(()) };
+        let writer = Writer {
+            root,
+            failure: Arc::clone(&failure),
+            folder: None,
+            pending: None,
+            last: None,
+            written: Ok(()),
+            midi: Vec::new(),
+            midi_reset: false,
+            midi_synced: None,
+        };
         let thread = std::thread::Builder::new().name("soundcraft-autosave".into()).spawn(move || writer.run(&rx));
         if let Err(e) = &thread {
             report(&failure, format!("{STOPPED}: {e}"));
@@ -61,6 +81,25 @@ impl Autosaver {
     /// recording running in it.
     pub fn write(&self, session: Arc<Session>, origin: Option<String>, recording: Option<Recording>) {
         self.send(Job::Write(session, origin, recording));
+    }
+
+    /// A take begins (any take: the MIDI spilled for the one before is no longer wanted), its
+    /// MIDI to be placed `latency` samples earlier than heard.
+    pub fn midi_take(&self, latency: soundcraft_time::Samples) {
+        self.send(Job::MidiStart(latency));
+    }
+
+    /// MIDI the running take heard, spilled to the folder at once (a crash loses at most what the
+    /// system had not written yet).
+    pub fn midi(&self, events: Vec<crate::midi_record::RecordedEvent>) {
+        if !events.is_empty() {
+            self.send(Job::Midi(events));
+        }
+    }
+
+    /// Loop recording: pass `pass` was taken back (Undo Last Pass).
+    pub fn midi_drop(&self, pass: u16) {
+        self.send(Job::MidiDrop(pass));
     }
 
     /// Done with the open session's folder: keep it for the next launch, or delete it.
@@ -113,6 +152,11 @@ struct Writer {
     last: Option<Instant>,
     /// How the newest write into the open folder went, for `Flush`.
     written: std::result::Result<(), String>,
+    /// MIDI spill lines not written yet (the folder is made with the first session write).
+    midi: Vec<String>,
+    /// The spill file starts over at the next write.
+    midi_reset: bool,
+    midi_synced: Option<Instant>,
 }
 
 impl Writer {
@@ -126,13 +170,32 @@ impl Writer {
                 Ok(Job::Write(session, origin, recording)) => self.pending = Some((session, origin, recording)),
                 Ok(Job::Flush(reply)) => {
                     self.write_pending();
+                    self.write_midi(true);
                     let _ = reply.send(self.written.clone());
+                }
+                Ok(Job::MidiStart(latency)) => {
+                    self.midi = vec![format!("{{\"latency\":{latency}}}")];
+                    self.midi_reset = true;
+                    self.write_midi(false);
+                }
+                Ok(Job::Midi(events)) => {
+                    self.midi.extend(events.iter().filter_map(|e| serde_json::to_string(e).ok()));
+                    self.write_midi(false);
+                }
+                Ok(Job::MidiDrop(pass)) => {
+                    self.midi.push(format!("{{\"drop\":{pass}}}"));
+                    self.write_midi(false);
                 }
                 Ok(Job::Close(keep)) => {
                     if keep {
                         self.write_pending();
                     }
+                    if keep {
+                        self.write_midi(true);
+                    }
                     self.pending = None;
+                    self.midi.clear();
+                    self.midi_reset = false;
                     self.written = Ok(());
                     if let Some(a) = self.folder.take()
                         && !keep
@@ -143,6 +206,7 @@ impl Writer {
                 Err(RecvTimeoutError::Timeout) => self.write_pending(),
                 Err(RecvTimeoutError::Disconnected) => {
                     self.write_pending();
+                    self.write_midi(true);
                     return;
                 }
             }
@@ -164,6 +228,35 @@ impl Writer {
         };
         if let Err(e) = &self.written {
             report(&self.failure, e.clone());
+        }
+        // The folder exists now: MIDI that came before it goes in.
+        self.write_midi(false);
+    }
+
+    /// Appends the MIDI lines waiting to the open folder's spill file (starting it over first
+    /// when a take began), handed to the system at once and synced to the disk at most every
+    /// [`INTERVAL`] (always when `sync`).
+    fn write_midi(&mut self, sync: bool) {
+        let Some(path) = self.folder.as_ref().map(|a| a.dir.join(MIDI_SPILL)) else { return };
+        if self.midi.is_empty() && !self.midi_reset {
+            return;
+        }
+        let mut text = String::new();
+        for line in self.midi.drain(..) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        let reset = std::mem::take(&mut self.midi_reset);
+        let due = sync || self.midi_synced.is_none_or(|t| t.elapsed() >= INTERVAL);
+        let written = std::fs::OpenOptions::new().create(true).write(true).append(!reset).truncate(reset).open(&path).and_then(|mut f| {
+            f.write_all(text.as_bytes())?;
+            if due { f.sync_data() } else { Ok(()) }
+        });
+        if due {
+            self.midi_synced = Some(Instant::now());
+        }
+        if let Err(e) = written {
+            report(&self.failure, format!("{}: {e}", path.display()));
         }
     }
 }
@@ -214,7 +307,8 @@ impl Autosave {
     fn write(&mut self, session: &Session, origin: Option<&str>, recording: Option<&Recording>) -> Result<()> {
         let base = origin.and_then(|p| Path::new(p).parent()).and_then(|p| std::path::absolute(p).ok());
         let audio_dir = self.dir.join("Audio Files");
-        let mut s = session.clone();
+        // Stretches still heard live are rendered, so the copy holds their audio.
+        let mut s = crate::stretch_jobs::rendered(session).unwrap_or_else(|| session.clone());
         let mut copies = BTreeMap::new();
         for src in &mut s.sources {
             let file = if Path::new(&src.path).is_absolute() { Some(PathBuf::from(&src.path)) } else { base.as_ref().map(|b| b.join(&src.path)) };
@@ -335,8 +429,51 @@ pub fn recover(e: &mut Engine, left: &Leftover) -> Result<Vec<String>> {
     e.path = left.origin.clone();
     if let Some((plan, takes)) = unfinished {
         crate::io::place_recording(e, &plan, takes);
+        recover_midi(e, &left.dir, &plan);
     }
     Ok(missing)
+}
+
+/// The MIDI take spilled in `dir` while the recording `plan` ran: placed on the armed MIDI and
+/// instrument tracks as Stop would have (its loop passes, punches and record mode), up to its
+/// last event.
+fn recover_midi(e: &mut Engine, dir: &Path, plan: &Recording) {
+    let Ok(text) = std::fs::read_to_string(dir.join(MIDI_SPILL)) else { return };
+    let (latency, events) = read_spill(&text);
+    let Some(last) = events.iter().map(|x| x.at).max() else { return };
+    let take = crate::midi_record::MidiTake {
+        start: plan.start,
+        end: last.saturating_add(1).max(plan.start),
+        looped: plan.pass.map(|p| {
+            let from = plan.loop_from.unwrap_or(plan.start);
+            soundcraft_time::Range::new(from, from.saturating_add(p))
+        }),
+        punch: plan.punch,
+        latency,
+    };
+    crate::midi_record::record_punches(e, &take, &plan.punches, &events);
+}
+
+/// A MIDI spill's latency and events, the passes taken back left out (lines a crash cut short,
+/// or not understood, skipped).
+fn read_spill(text: &str) -> (soundcraft_time::Samples, Vec<crate::midi_record::RecordedEvent>) {
+    let mut latency = 0;
+    let mut events = Vec::new();
+    let mut dropped = Vec::new();
+    for line in text.lines() {
+        if let Ok(e) = serde_json::from_str::<crate::midi_record::RecordedEvent>(line) {
+            events.push(e);
+        } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(l) = v.get("latency").and_then(serde_json::Value::as_i64) {
+                latency = l;
+            }
+            if let Some(p) = v.get("drop").and_then(serde_json::Value::as_u64).and_then(|p| u16::try_from(p).ok()) {
+                dropped.push(p);
+            }
+        }
+    }
+    events.retain(|x| !dropped.contains(&x.pass));
+    (latency, events)
 }
 
 /// The takes of the recording `left` holds the plan of, repaired, minus those already in `s`.
@@ -352,7 +489,7 @@ fn unfinished_takes(left: &Leftover, s: &Session, skipped: &mut Vec<String>) -> 
         if std::fs::canonicalize(&t.path).is_ok_and(|p| known.contains(&p)) {
             continue;
         }
-        match repair_take(&t.path, &folders, t.channels, plan.rate) {
+        match repair_take(&t.path, &folders, t.channels, plan.rate, t.file) {
             Ok(frames) if frames > 0 => takes.push((t.track, t.path.clone())),
             Ok(_) => {}
             Err(err) => {
@@ -375,7 +512,8 @@ fn take_folders(left: &Leftover) -> Vec<PathBuf> {
 /// Make a take file's header cover all the audio in it; returns its frames. The recorder
 /// rewrites the header only every second, so a crash leaves up to a second uncovered. Only a
 /// regular file in one of `folders` that starts with the header the recorder writes is touched.
-fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32) -> std::io::Result<u64> {
+fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32, file: Option<crate::io::TakeFile>) -> std::io::Result<u64> {
+    use soundcraft_audio_io::{BitDepth, FileFormat};
     let refuse = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, why.to_string());
     if !std::fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(refuse("not a regular file"));
@@ -384,25 +522,44 @@ fn repair_take(path: &Path, folders: &[PathBuf], channels: usize, rate: u32) -> 
     if !folder.is_some_and(|d| folders.contains(&d)) {
         return Err(refuse("not in a folder FreeDAWm records into"));
     }
-    let header = |frames| soundcraft_audio_io::wav_float_header(channels, rate, frames).map_err(std::io::Error::other);
+    let file = file.unwrap_or(crate::io::TakeFile { format: FileFormat::Wav, depth: BitDepth::Float32, bwf: false });
+    // A `bext` chunk has a fixed size: the one in the file is kept as it is.
+    let bwf = file.bwf.then(soundcraft_audio_io::BwfInfo::default);
+    let header =
+        |frames| soundcraft_audio_io::take_header(file.format, channels, rate, file.depth, bwf.as_ref(), frames).map_err(std::io::Error::other);
     let expected = header(0)?;
     let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
     let mut head = vec![0u8; expected.len()];
-    if std::io::Read::read_exact(&mut f, &mut head).is_err() || !is_take_header(&head, &expected) {
+    if std::io::Read::read_exact(&mut f, &mut head).is_err() || !is_take_header(&head, &expected, file.format) {
         return Err(refuse("not a take FreeDAWm recorded"));
     }
     let audio = f.metadata()?.len().saturating_sub(expected.len() as u64);
-    let frames = audio / (channels.max(1) as u64 * 4);
+    let frame = (channels.max(1) * soundcraft_audio_io::take_sample_bytes(file.depth)) as u64;
+    let frames = audio / frame;
+    let mut fresh = header(frames)?;
+    if let Some(at) = expected.windows(4).position(|w| w == b"bext") {
+        let len = expected.get(at + 4..at + 8).and_then(|b| b.try_into().ok()).map_or(0, |b| u32::from_le_bytes(b) as usize);
+        let end = at.saturating_add(8).saturating_add(len);
+        if let (Some(dst), Some(src)) = (fresh.get_mut(at..end), head.get(at..end)) {
+            dst.copy_from_slice(src);
+        }
+    }
     std::io::Seek::rewind(&mut f)?;
-    f.write_all(&header(frames)?)?;
+    f.write_all(&fresh)?;
     f.sync_all()?;
     Ok(frames)
 }
 
-/// `head` is a take header like `expected` (the recorder's header for no frames yet): RIFF or
-/// RF64 WAVE, the same format chunk at the same place, and the data chunk right after it all.
-/// Only the sizes and frame counts may differ.
-fn is_take_header(head: &[u8], expected: &[u8]) -> bool {
+/// `head` is a take header like `expected` (the recorder's header for no frames yet). A WAV:
+/// RIFF or RF64 WAVE, the same format chunk at the same place, and the data chunk right after it
+/// all. An AIFF: FORM AIFF or AIFC, the sound data chunk right after it all. Only the sizes and
+/// frame counts (and a `bext` chunk's text) may differ.
+fn is_take_header(head: &[u8], expected: &[u8], format: soundcraft_audio_io::FileFormat) -> bool {
+    if format == soundcraft_audio_io::FileFormat::Aiff {
+        let magic = head.get(..4) == Some(b"FORM") && head.get(8..12) == expected.get(8..12);
+        let ssnd = expected.len().checked_sub(16).and_then(|at| head.get(at..at + 4)) == Some(b"SSND");
+        return magic && ssnd;
+    }
     let magic = matches!(head.get(..4), Some(b"RIFF" | b"RF64")) && head.get(8..12) == Some(b"WAVE");
     let fmt = expected.windows(4).position(|w| w == b"fmt ");
     let fmt_len = fmt.and_then(|at| expected.get(at + 4..at + 8)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
@@ -447,6 +604,45 @@ mod tests {
     use serde_json::json;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{ChannelFormat, Clip, TrackKind};
+
+    #[test]
+    fn recovery_repairs_takes_of_every_recording_format() {
+        use soundcraft_audio_io::{BitDepth, BwfInfo, FileFormat, take_header, take_sample};
+        let dir = std::env::temp_dir().join(format!("soundcraft-repair-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("Audio Files");
+        std::fs::create_dir_all(&folder).unwrap();
+        let folders = vec![std::fs::canonicalize(&folder).unwrap()];
+        let bwf = BwfInfo { originator: "FreeDAWm".into(), description: "Vox_01".into(), ..BwfInfo::default() };
+        for (format, depth, with_bwf, name) in [
+            (FileFormat::Wav, BitDepth::Int24, true, "Vox_01.wav"),
+            (FileFormat::Wav, BitDepth::Int16, false, "Vox_02.wav"),
+            (FileFormat::Aiff, BitDepth::Int24, false, "Vox_03.aif"),
+            (FileFormat::Aiff, BitDepth::Float32, false, "Vox_04.aif"),
+        ] {
+            // A crash right after the first header: it covers no frames, 300 follow it.
+            let mut bytes = take_header(format, 2, 48_000, depth, with_bwf.then_some(&bwf), 0).unwrap();
+            for i in 0..600 {
+                take_sample(format, depth, (i as f32 / 600.0) - 0.5, &mut bytes);
+            }
+            let path = folder.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let file = crate::io::TakeFile { format, depth, bwf: with_bwf };
+            assert_eq!(repair_take(&path, &folders, 2, 48_000, Some(file)).unwrap(), 300, "{name}");
+            let fixed = std::fs::read(&path).unwrap();
+            let info = soundcraft_audio_io::probe(&fixed, None).unwrap();
+            assert_eq!((info.format, info.frames), (format, 300), "{name}");
+            if with_bwf {
+                assert_eq!(info.bwf.unwrap().originator, "FreeDAWm", "the bext chunk is kept");
+            }
+            // A take of another format is not this one.
+            let other = crate::io::TakeFile { format: FileFormat::Wav, depth: BitDepth::Float32, bwf: false };
+            if format == FileFormat::Aiff {
+                assert!(repair_take(&path, &folders, 2, 48_000, Some(other)).is_err());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_autosave_from_before_the_rename_is_still_found() {
@@ -575,8 +771,16 @@ mod tests {
         std::fs::create_dir_all(take.parent().unwrap()).unwrap();
         let audio: Vec<u8> = (0..480).flat_map(|i| (i as f32 / 1000.0).to_le_bytes()).collect();
         std::fs::write(&take, [soundcraft_audio_io::wav_float_header(1, 48_000, 100).unwrap(), audio].concat()).unwrap();
-        let plan =
-            Recording { start: 48_000, pass: None, punch: None, rate: 48_000, takes: vec![Take { track, path: take, channels: 1 }], latency: 0 };
+        let plan = Recording {
+            start: 48_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            latency: 0,
+            loop_from: None,
+            punches: Vec::new(),
+        };
         let clips = |e: &Engine| e.session().track(track).unwrap().clips().iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan.clone()));
@@ -594,6 +798,55 @@ mod tests {
         recover(&mut again, &leftovers(&root)[0]).unwrap();
         assert_eq!((clips(&again), again.session().sources.len()), (vec![(48_000, 480)], 1), "placed once");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_midi_take_still_recording_at_a_crash_is_placed_on_recovery() {
+        use crate::midi_record::RecordedEvent;
+        let root = folder("autosave-midi-take");
+        let mut e = Engine::default();
+        let t = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        e.execute("track.input", &json!({"tracks": [t], "input": "midi:all"})).unwrap();
+        e.execute("mix.record_arm", &json!({"tracks": [t], "value": true})).unwrap();
+        // Looping over the first bar (96,000 samples), recording from its start.
+        let plan = Recording {
+            start: 0,
+            pass: Some(96_000),
+            punch: None,
+            rate: 48_000,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: Some(0),
+            punches: Vec::new(),
+        };
+        let ev = |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass };
+        let w = Autosaver::new(root.clone());
+        // An earlier take's MIDI is not this one's.
+        w.midi_take(0);
+        w.midi(vec![ev(0, 30, 0)]);
+        w.write(e.session_arc(), None, Some(plan.clone()));
+        w.midi_take(480);
+        w.midi(vec![ev(0, 36, 0), ev(24_000, 38, 1)]);
+        w.midi_drop(1);
+        w.midi(vec![ev(48_000, 42, 2)]);
+        // The app dies here (the folder is kept, as at a crash); a line the crash cut short is
+        // ignored.
+        drop(w);
+        let dir = std::fs::read_dir(&root).unwrap().flatten().next().unwrap().path();
+        std::fs::OpenOptions::new().append(true).open(dir.join(MIDI_SPILL)).unwrap().write_all(b"{\"at\":12").unwrap();
+        let left = leftovers(&root);
+        assert!(left[0].recording);
+        let mut r = Engine::default();
+        recover(&mut r, &left[0]).unwrap();
+        let tr = r.session().track(soundcraft_model::TrackId(t)).unwrap();
+        let notes: Vec<(u8, i64)> =
+            tr.clips().iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect::<Vec<_>>()).collect();
+        // Merged (the default): passes 1 and 3 in one clip, at their places, 480 samples earlier;
+        // pass 2 was taken back.
+        let q = soundcraft_time::TICKS_PER_QUARTER;
+        assert_eq!(notes, vec![(36, 0), (42, 2 * q)]);
+        assert_eq!(r.undo_label(), Some("Record"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -628,8 +881,13 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: paths.iter().map(|p| Take { track, path: p.clone(), channels: 1 }).collect(),
+            takes: paths
+                .iter()
+                .map(|p| Take { track, path: p.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None })
+                .collect(),
             latency: 0,
+            loop_from: None,
+            punches: Vec::new(),
         };
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan));

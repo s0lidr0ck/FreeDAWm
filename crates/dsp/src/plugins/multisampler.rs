@@ -28,9 +28,10 @@
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use super::sampler::{hermite, pan_display};
+use super::sampler::pan_display;
 use super::synth::{Adsr, AdsrRates, Event, EventKind, EventQueue, MAX_EVENTS, Stage};
 use crate::params::{Params, lin, log, param_plumbing};
+use crate::resample::hermite;
 use crate::util::{Smoother, frames_in, ms_to_samples, sane_channels, sane_sr};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Unit, db_to_gain};
 
@@ -726,6 +727,8 @@ impl Multisampler {
             EventKind::AllOff => self.voices.iter_mut().for_each(Voice::release),
             EventKind::Sustain(on) => self.set_pedal(on),
             EventKind::Bend(ratio) => self.bend = if ratio.is_finite() && ratio > 0.0 { f64::from(ratio) } else { 1.0 },
+            // (no vibrato: the mod wheel does nothing here)
+            EventKind::Mod(_) => {}
             EventKind::ResetControllers => {
                 self.set_pedal(false);
                 self.bend = 1.0;

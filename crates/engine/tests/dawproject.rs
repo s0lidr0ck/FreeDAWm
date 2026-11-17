@@ -96,7 +96,11 @@ fn bitwig_cc_automation_in_clips_becomes_controller_events() {
     let cc: Vec<_> = sequence.ctrls.iter().filter(|c| c.kind == soundcraft_midi::CtrlKind::Cc(1)).collect();
     assert_eq!((cc[0].tick, cc[0].value), (0, 0));
     assert!(cc.iter().any(|c| c.tick == 4 * 960 && c.value == 127), "full at beat 4");
-    assert!(cc.iter().any(|c| c.tick == 3 * 960 + 960 / 2 && c.value > 64 && c.value < 127), "ramping between 3 and 4: {cc:?}");
+    // A linear segment comes in as a ramp from its first point (it was written out as steps).
+    assert!(
+        cc.iter().any(|c| c.tick == 3 * 960 && c.value == 64 && c.shape == soundcraft_midi::CtrlShape::Ramp(0.0)),
+        "ramping between 3 and 4: {cc:?}"
+    );
     assert!(cc.iter().filter(|c| c.tick > 2 * 960 && c.tick < 3 * 960).count() == 0, "flat between 2 and 3: no events");
     assert!(cc.iter().all(|c| c.tick <= 8 * 960));
     assert_eq!(t.clips()[0].length, beats_to_samples(&s, 8.0));
@@ -337,6 +341,23 @@ fn export_then_import_gives_back_everything_mapped() {
         s.pool.get(id).unwrap().buffer().channels[0][1000..1010].to_vec()
     };
     assert_eq!(src(&a), src(&b));
+}
+
+#[test]
+fn muted_notes_are_left_out_of_an_export() {
+    use soundcraft_midi::{Note, Sequence};
+    use soundcraft_model::{ChannelFormat, Clip};
+    let n = |pitch, start, muted| Note { probability: 100, pitch, velocity: 100, muted, release_velocity: 64, channel: 0, start, length: 240 };
+    let mut a = Session::default();
+    let t = a.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+    let id = a.new_clip_id();
+    let seq = Sequence { notes: vec![n(60, 0, false), n(62, 480, true), n(64, 960, false)], ctrls: vec![] };
+    soundcraft_engine::edit::place_clip(&mut a, t, Clip::midi(id, "Part", 0, 96_000, seq));
+    let (w, done) = dawproject::export::export(&a, std::io::Cursor::new(Vec::new())).unwrap();
+    assert!(done.notes.iter().any(|x| x.contains("Muted notes")), "{:?}", done.notes);
+    let (b, _) = import(&w.into_inner());
+    let ClipContent::Midi { sequence } = &track(&b, "Keys").clips()[0].content else { panic!() };
+    assert_eq!(sequence.notes, vec![n(60, 0, false), n(64, 960, false)], "the muted note is gone, the others as they were");
 }
 
 #[test]

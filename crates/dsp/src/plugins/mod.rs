@@ -5,12 +5,16 @@ pub mod dynamics;
 pub mod eq;
 pub mod fs;
 pub mod harmonic;
+pub mod heft;
 pub mod imprint;
 pub mod juke;
+pub mod keel;
 pub mod lull;
 pub mod mend;
+pub mod meters;
 pub mod modulation;
 pub mod multisampler;
+mod per_channel;
 pub mod pitch;
 pub mod reverb;
 pub mod rez;
@@ -26,7 +30,7 @@ pub mod vault;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 35] = [
+const BUILTINS: [&PluginInfo; 42] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -49,6 +53,8 @@ const BUILTINS: [&PluginInfo; 35] = [
     &harmonic::RECT_INFO,
     &pitch::PITCH_INFO,
     &sprawl::SPRAWL_INFO,
+    &keel::KEEL_INFO,
+    &heft::HEFT_INFO,
     &utility::SHIFT_INFO,
     &imprint::IMPRINT_INFO,
     &utility::GAIN_INFO,
@@ -57,6 +63,11 @@ const BUILTINS: [&PluginInfo; 35] = [
     &utility::DC_INFO,
     &utility::GEN_INFO,
     &utility::DITHER_INFO,
+    &meters::TOOL_INFO,
+    &meters::SPECTRUM_INFO,
+    &meters::LOUDNESS_INFO,
+    &meters::PHASE_INFO,
+    &meters::TUNER_INFO,
     &synth::SYNTH_INFO,
     &drums::DRUM_INFO,
     &sampler::SAMPLER_INFO,
@@ -91,8 +102,15 @@ pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[&test_link::TEST_LINK_INFO, 
 #[cfg(not(feature = "test-plugins"))]
 pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[];
 
-/// Constructs an (unprepared) plugin by id.
+/// Constructs an (unprepared) plugin by id. A stereo-only plugin comes wrapped so it processes
+/// every channel of a wider track ([`per_channel::PerChannel`]).
 pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
+    let p = instantiate_one(id)?;
+    Some(if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p })
+}
+
+/// One instance of a plugin by id, never wrapped.
+fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {
         "eq_1band" => Box::new(eq::Eq1::new()),
         "eq_7band" => Box::new(eq::Eq7::new()),
@@ -116,6 +134,8 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "rectifier" => Box::new(harmonic::Rectifier::new()),
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
         "sprawl" => Box::new(sprawl::Sprawl::new()),
+        "keel" => Box::new(keel::Keel::new()),
+        "heft" => Box::new(heft::Heft::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "imprint" => Box::new(imprint::Imprint::new()),
         "gain" => Box::new(utility::Gain::new()),
@@ -124,6 +144,11 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "dc_offset_removal" => Box::new(utility::DcRemoval::new()),
         "signal_generator" => Box::new(utility::SignalGenerator::new()),
         "dither" => Box::new(utility::Dither::new()),
+        "channel_tool" => Box::new(meters::ChannelTool::new()),
+        "spectrum" => Box::new(meters::Spectrum::new()),
+        "loudness" => Box::new(meters::Loudness::new()),
+        "phase_meter" => Box::new(meters::PhaseMeter::new()),
+        "tuner" => Box::new(meters::Tuner::new()),
         "subtractive_synth" => Box::new(synth::SubtractiveSynth::new()),
         "drum_synth" => Box::new(drums::DrumSynth::new()),
         "sampler" => Box::new(sampler::Sampler::new()),
@@ -164,6 +189,8 @@ mod tests {
         "rectifier",
         "pitch_shifter",
         "sprawl",
+        "keel",
+        "heft",
         "time_shift",
         "imprint",
         "gain",
@@ -172,6 +199,11 @@ mod tests {
         "dc_offset_removal",
         "signal_generator",
         "dither",
+        "channel_tool",
+        "spectrum",
+        "loudness",
+        "phase_meter",
+        "tuner",
         "subtractive_synth",
         "drum_synth",
         "sampler",

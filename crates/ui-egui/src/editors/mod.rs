@@ -12,9 +12,12 @@ pub mod copyq;
 pub mod delay;
 pub mod dist;
 pub mod filter;
+pub mod heft;
+pub mod keel;
 pub mod levelup;
 pub mod lull;
 pub mod manners;
+pub mod meters;
 pub mod mod_engine;
 pub mod pitch;
 pub mod reverb;
@@ -52,5 +55,39 @@ pub(crate) fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: Mod
             true
         }
         None => false,
+    }
+}
+
+/// What `plugin`'s editor keeps out of its presets besides Bypass (each editor's
+/// `getPresetParams`): every save path leaves these out of a user preset and every load ignores
+/// them, so a preset saved from the narrow drawer is the one the wide editor would write.
+pub(crate) fn not_in_presets(plugin: &str) -> &'static [&'static str] {
+    match plugin {
+        "fs_amp" => &amp::NOT_IN_PRESETS,
+        "fs_chamber" => chamber::FAMILY.not_in_presets,
+        "fs_comp" => &comp::NOT_IN_PRESETS,
+        "fs_copyq" => copyq::FAMILY.not_in_presets,
+        "fs_delay" => delay::FAM.not_in_presets,
+        "fs_dist" => dist::FAMILY.not_in_presets,
+        "fs_filter" => filter::FAMILY.not_in_presets,
+        "fs_levelup" => &levelup::NOT_IN_PRESETS,
+        "heft" => heft::FAMILY.not_in_presets,
+        "keel" => keel::FAMILY.not_in_presets,
+        "lull" => lull::FAMILY.not_in_presets,
+        "fs_manners" => manners::FAMILY.not_in_presets,
+        "fs_mod" => mod_engine::FAMILY.not_in_presets,
+        "fs_pitch" => pitch::FAMILY.not_in_presets,
+        "fs_reverb" => reverb::FAM.not_in_presets,
+        "rez" => rez::FAMILY.not_in_presets,
+        "fs_sat" => sat::FAMILY.not_in_presets,
+        "fs_shale" => shale::FAM.not_in_presets,
+        "fs_sift" => sift::FAMILY.not_in_presets,
+        "sprawl" => sprawl::FAMILY.not_in_presets,
+        "fs_swale" => swale::FAM.not_in_presets,
+        "fs_tape" => tape::FAMILY.not_in_presets,
+        "fs_transient" => transient::FAMILY.not_in_presets,
+        "fs_twine" => &twine::NOT_IN_PRESETS,
+        "fs_vint" => vint::FAMILY.not_in_presets,
+        _ => &[],
     }
 }

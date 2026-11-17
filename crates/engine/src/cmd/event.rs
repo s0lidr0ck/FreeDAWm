@@ -30,20 +30,30 @@ pub fn specs() -> Vec<CommandSpec> {
             "Quantize...",
             ["Event", "MIDI Operations"],
             Some("Alt+0"),
-            "{grid?: 1/16 | ticks, strength?: 100, swing?: 0, clips?}",
+            "{grid?: 1/16 | ticks, strength?: 100, swing?: 0, groove?: name (event.grooves; instead of the grid lines), window?: 100 (only notes within this % of half a grid step), random?: 0 (% of half a step), ends?: false (quantize note ends too), keep_length?: true, clips?, indices?: [n] (one clip: those notes)} — lines counted from each bar",
             has_selection,
             quantize
         ),
-        cmd!("event.transpose", "Transpose...", ["Event", "MIDI Operations"], Some("Alt+T"), "{semitones, clips?}", has_selection, |e, p| {
-            let st = i64_or(p, "semitones", 0).clamp(-127, 127) as i32;
-            midi_op(e, p, move |n| soundcraft_midi::ops::transpose(n, st))
-        }),
+        cmd!(
+            "event.transpose",
+            "Transpose...",
+            ["Event", "MIDI Operations"],
+            Some("Alt+T"),
+            "{semitones, clips?, indices?}",
+            has_selection,
+            |e, p| {
+                let st = i64_or(p, "semitones", 0).clamp(-127, 127) as i32;
+                midi_op(e, p, move |n, _| {
+                    soundcraft_midi::ops::transpose_within(n, st);
+                })
+            }
+        ),
         cmd!(
             "event.change_velocity",
             "Change Velocity...",
             ["Event", "MIDI Operations"],
             None,
-            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max?, clips?}",
+            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max?, clips?, indices?}",
             has_selection,
             velocity
         ),
@@ -52,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Duration...",
             ["Event", "MIDI Operations"],
             Some("Alt+P"),
-            "{set?|add?|scale?|legato?: gap, clips?}",
+            "{set?|add?|scale?|legato?: gap, clips?, indices?: [n] (one clip: those notes; legato to the next picked note)}",
             has_selection,
             duration
         ),
@@ -247,9 +257,18 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("event.insert_time", "give `start` and `length` or `end`"));
     }
     let s = e.session_mut();
+    let sr = s.sample_rate;
+    let at = s.tempo.samples_to_ticks(r.start, sr);
+    if s.tempo.in_ramp(at) {
+        return Err(bad("event.insert_time", "the start is inside a tempo ramp; insert time before or after it"));
+    }
+    // The inserted time plays at the tempo in effect where it goes in.
+    let ticks =
+        soundcraft_time::to_samples(r.len() as f64 * s.tempo.tempo_at_tick(at) * soundcraft_time::TICKS_PER_QUARTER as f64 / (sr.as_f64() * 60.0));
     let ids: Vec<_> = s.tracks.iter().map(|t| t.id).collect();
     for t in ids {
-        crate::edit::insert_silence(s, t, r);
+        // Every playlist and take layer, not only the one shown.
+        on_every_playlist(s, t, |s| crate::edit::insert_silence(s, t, r));
         if let Some(tr) = s.track_mut(t) {
             for l in &mut tr.automation {
                 l.shift_from(r.start, r.len());
@@ -262,7 +281,44 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
             m.end += r.len();
         }
     }
+    for (k, _) in &mut s.key_signatures {
+        if *k >= r.start && *k > 0 {
+            *k = k.saturating_add(r.len());
+        }
+    }
+    s.tempo.insert_ticks(at, ticks);
+    // The Band's chord and section lanes (in ticks) move with the music after the point; a chord
+    // or section running across it grows by the inserted time.
+    for c in &mut s.band.chords {
+        if c.tick >= at {
+            c.tick = c.tick.saturating_add(ticks);
+        } else if c.tick.saturating_add(c.length_ticks) > at {
+            c.length_ticks = c.length_ticks.saturating_add(ticks);
+        }
+    }
+    for b in &mut s.band.sections {
+        if b.start_tick >= at {
+            b.start_tick = b.start_tick.saturating_add(ticks);
+        } else if b.start_tick.saturating_add(b.length_ticks) > at {
+            b.length_ticks = b.length_ticks.saturating_add(ticks);
+        }
+    }
     Ok(json!({"inserted": r.len()}))
+}
+
+/// Run `f` on each of a track's playlists in turn (the edit primitives work on the active one),
+/// then show the one that was shown.
+fn on_every_playlist(s: &mut soundcraft_model::Session, t: soundcraft_model::TrackId, mut f: impl FnMut(&mut soundcraft_model::Session)) {
+    let Some((n, shown)) = s.track(t).map(|tr| (tr.playlists.len(), tr.active_playlist)) else { return };
+    for i in 0..n {
+        if let Some(tr) = s.track_mut(t) {
+            tr.active_playlist = i;
+        }
+        f(s);
+    }
+    if let Some(tr) = s.track_mut(t) {
+        tr.active_playlist = shown;
+    }
 }
 
 fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -271,10 +327,17 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("event.cut_time", "selection is empty"));
     }
     let s = e.session_mut();
+    let sr = s.sample_rate;
+    let (from, to) = (s.tempo.samples_to_ticks(r.start, sr), s.tempo.samples_to_ticks(r.end, sr));
+    if s.tempo.in_ramp(from) || s.tempo.in_ramp(to) {
+        return Err(bad("event.cut_time", "an end of the range is inside a tempo ramp; cut time outside it"));
+    }
     let ids: Vec<_> = s.tracks.iter().map(|t| t.id).collect();
     for t in ids {
-        crate::edit::clear_range(s, t, r, false);
-        crate::edit::shift_from(s, t, r.end, -r.len());
+        on_every_playlist(s, t, |s| {
+            crate::edit::clear_range(s, t, r, false);
+            crate::edit::shift_from(s, t, r.end, -r.len());
+        });
         if let Some(tr) = s.track_mut(t) {
             for l in &mut tr.automation {
                 l.clear_range(r.start, r.end);
@@ -289,51 +352,202 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
             m.end -= r.len();
         }
     }
+    // Key changes inside the range go; the key in effect at its end carries on from its start.
+    let carried = s.key_signatures.iter().filter(|(k, _)| r.contains(*k)).max_by_key(|(k, _)| *k).map(|(_, key)| key.clone());
+    s.key_signatures.retain(|(k, _)| !r.contains(*k));
+    for (k, _) in &mut s.key_signatures {
+        if *k >= r.end {
+            *k = k.saturating_sub(r.len());
+        }
+    }
+    if let Some(key) = carried
+        && !s.key_signatures.iter().any(|(k, _)| *k == r.start)
+    {
+        s.key_signatures.push((r.start, key));
+        s.key_signatures.sort_by_key(|(k, _)| *k);
+    }
+    s.tempo.remove_ticks(from, to);
+    // The Band's chords and sections lose what was inside the cut and close up after it.
+    let cut = to.saturating_sub(from);
+    let squeeze = |start: i64, len: i64| -> Option<(i64, i64)> {
+        let end = start.saturating_add(len);
+        let map = |t: i64| {
+            if t <= from {
+                t
+            } else if t >= to {
+                t.saturating_sub(cut)
+            } else {
+                from
+            }
+        };
+        let (a, b) = (map(start), map(end));
+        (b > a).then_some((a, b - a))
+    };
+    s.band.chords.retain_mut(|c| match squeeze(c.tick, c.length_ticks) {
+        Some((a, l)) => {
+            c.tick = a;
+            c.length_ticks = l;
+            true
+        }
+        None => false,
+    });
+    s.band.sections.retain_mut(|b| match squeeze(b.start_tick, b.length_ticks) {
+        Some((a, l)) => {
+            b.start_tick = a;
+            b.length_ticks = l;
+            true
+        }
+        None => false,
+    });
     Ok(json!({"removed": r.len()}))
 }
 
-fn midi_op(e: &mut Engine, p: &Value, f: impl Fn(&mut [soundcraft_midi::Note])) -> Result<Value> {
-    let ids = clip_ids_param(e, p);
-    let s = e.session_mut();
-    let mut n = 0;
-    for id in ids {
-        if let Some(c) = s.find_clip_mut(id)
-            && let ClipContent::Midi { sequence } = &mut c.content
-        {
-            f(&mut sequence.notes);
-            sequence.sort();
-            n += sequence.notes.len();
-        }
-    }
-    Ok(json!({"notes": n}))
+/// Where a clip's notes sit in the session: the tick its start is at and the tempo map, for
+/// operations that work against the bar lines.
+pub(super) struct ClipTime<'a> {
+    base: i64,
+    map: &'a soundcraft_time::TempoMap,
 }
 
-fn grid_ticks(p: &Value) -> i64 {
+impl ClipTime<'_> {
+    /// The bar holding `t` (clip ticks): its start and the next bar's start, in clip ticks.
+    fn bar(&self, t: i64) -> (i64, i64) {
+        let abs = self.base.saturating_add(t);
+        let bar = self.map.bar_beat_at_tick(abs).bar;
+        let a = self.map.bar_start_tick(bar);
+        let b = self.map.bar_start_tick(bar.saturating_add(1));
+        (a.saturating_sub(self.base), b.saturating_sub(self.base))
+    }
+}
+
+/// Runs `f` on the notes of the clips picked, or with `indices` on those notes of the one clip
+/// named (the MIDI Editor's selection) -> {notes, indices?: where the picked notes are after the
+/// re-sort}.
+pub(super) fn midi_op(e: &mut Engine, p: &Value, f: impl Fn(&mut [soundcraft_midi::Note], &ClipTime)) -> Result<Value> {
+    let ids = clip_ids_param(e, p);
+    let only: Option<Vec<usize>> = match p.get("indices") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => {
+            if ids.len() != 1 {
+                return Err(bad("event", "`indices` needs exactly one clip"));
+            }
+            let mut v: Vec<usize> = a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect();
+            v.sort_unstable();
+            v.dedup();
+            Some(v)
+        }
+        Some(_) => return Err(bad("event", "`indices` must be a list of note numbers")),
+    };
+    let s = e.session_mut();
+    let sr = s.sample_rate;
+    let map = s.tempo.clone();
+    let mut n = 0;
+    let mut kept = None;
+    for id in ids {
+        if let Some(c) = s.find_clip_mut(id) {
+            let time = ClipTime { base: map.samples_to_ticks(c.start, sr), map: &map };
+            if let ClipContent::Midi { sequence } = &mut c.content {
+                match &only {
+                    None => {
+                        f(&mut sequence.notes, &time);
+                        sequence.sort();
+                        n += sequence.notes.len();
+                    }
+                    Some(idx) => {
+                        let idx: Vec<usize> = idx.iter().copied().filter(|i| *i < sequence.notes.len()).collect();
+                        let mut picked: Vec<soundcraft_midi::Note> = idx.iter().filter_map(|i| sequence.notes.get(*i).copied()).collect();
+                        f(&mut picked, &time);
+                        for (i, note) in idx.iter().zip(picked) {
+                            if let Some(slot) = sequence.notes.get_mut(*i) {
+                                *slot = note;
+                            }
+                        }
+                        n += idx.len();
+                        kept = Some(super::midi::sort_tracked(sequence, &idx));
+                    }
+                }
+            }
+        }
+    }
+    Ok(match kept {
+        Some(k) => json!({"notes": n, "indices": k}),
+        None => json!({"notes": n}),
+    })
+}
+
+/// A note value as ticks: "1/1" (or "bar") to "1/128", with "t" for a triplet, "d" or "." for
+/// dotted, "q" for a quintuplet ("1/8t", "1/16d", "1/4."). `None` for anything else.
+pub fn note_value_ticks(text: &str) -> Option<i64> {
+    let t = text.trim().to_ascii_lowercase();
+    if t == "bar" || t == "1" {
+        return Some(TICKS_PER_QUARTER * 4);
+    }
+    let body = t.strip_prefix("1/")?;
+    let (digits, kind) = match body.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => (body.get(..i)?, body.get(i..)?),
+        None => (body, ""),
+    };
+    let n: i64 = digits.parse().ok()?;
+    if !matches!(n, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128) {
+        return None;
+    }
+    let plain = TICKS_PER_QUARTER * 4 / n;
+    match kind {
+        "" => Some(plain),
+        "t" => Some(plain * 2 / 3),
+        "d" | "." => Some(plain * 3 / 2),
+        "q" => Some(plain * 4 / 5),
+        _ => None,
+    }
+}
+
+/// The `grid` parameter: ticks, or a note value ([`note_value_ticks`]); 1/16 when left out. A
+/// grid that can't be read is refused rather than silently made 1/16.
+pub(crate) fn grid_ticks(id: &str, p: &Value) -> Result<i64> {
     match p.get("grid") {
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(240).clamp(1, TICKS_PER_QUARTER * 16),
-        Some(Value::String(s)) => match s.trim() {
-            "1/1" | "1" | "bar" => TICKS_PER_QUARTER * 4,
-            "1/2" => TICKS_PER_QUARTER * 2,
-            "1/4" => TICKS_PER_QUARTER,
-            "1/8" => TICKS_PER_QUARTER / 2,
-            "1/8t" => TICKS_PER_QUARTER / 3,
-            "1/16t" => TICKS_PER_QUARTER / 6,
-            "1/32" => TICKS_PER_QUARTER / 8,
-            "1/64" => TICKS_PER_QUARTER / 16,
-            _ => TICKS_PER_QUARTER / 4,
-        },
-        _ => TICKS_PER_QUARTER / 4,
+        None | Some(Value::Null) => Ok(TICKS_PER_QUARTER / 4),
+        Some(Value::Number(n)) => {
+            n.as_i64().map(|v| v.clamp(1, TICKS_PER_QUARTER * 16)).ok_or_else(|| bad(id, "`grid` must be whole ticks or a note value like 1/8t"))
+        }
+        Some(Value::String(s)) => note_value_ticks(s)
+            .filter(|t| *t > 0)
+            .ok_or_else(|| bad(id, format!("unknown grid `{s}`: use 1/1 to 1/128, with t (triplet), d (dotted) or q (quintuplet)"))),
+        Some(_) => Err(bad(id, "`grid` must be ticks or a note value like 1/8t")),
     }
 }
 
 fn quantize(e: &mut Engine, p: &Value) -> Result<Value> {
     let opts = QuantizeOptions {
-        grid_ticks: grid_ticks(p),
+        grid_ticks: grid_ticks("event.quantize", p)?,
         strength: (f32_or(p, "strength", 100.0) / 100.0).clamp(0.0, 1.0),
         swing: (f32_or(p, "swing", 0.0) / 100.0).clamp(0.0, 1.0),
+        include_within: (f32_or(p, "window", 100.0) / 100.0).clamp(0.0, 1.0),
+        random: (f32_or(p, "random", 0.0) / 100.0).clamp(0.0, 1.0),
+        quantize_ends: bool_or(p, "ends", false),
+        preserve_duration: bool_or(p, "keep_length", true),
         ..QuantizeOptions::default()
     };
-    midi_op(e, p, move |n| soundcraft_midi::ops::quantize(n, &opts))
+    let groove = match str_param(p, "groove").map(str::trim).filter(|g| !g.is_empty()) {
+        Some(name) => Some(
+            super::groove::groove_named(e.session(), name)
+                .ok_or_else(|| bad("event.quantize", format!("no groove called '{name}' (see event.grooves)")))?,
+        ),
+        None => None,
+    };
+    // The grid counts from each bar's start, as the MIDI Editor draws it. A note in the clip is
+    // not moved before its start (where it would no longer play).
+    midi_op(e, p, move |n, t| {
+        let inside: Vec<bool> = n.iter().map(|x| x.start >= 0).collect();
+        match &groove {
+            Some(g) => soundcraft_midi::ops::quantize_to_groove(n, g, &opts, soundcraft_midi::ops::DEFAULT_SEED, |x| t.bar(x).0),
+            None => soundcraft_midi::ops::quantize_on(n, &opts, soundcraft_midi::ops::DEFAULT_SEED, |x| t.bar(x)),
+        }
+        for (x, was) in n.iter_mut().zip(inside) {
+            if was && x.start < 0 {
+                x.start = 0;
+            }
+        }
+    })
 }
 
 fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -345,10 +559,13 @@ fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
         VelocityOp::Scale((v as f32).clamp(0.0, 10.0))
     } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
         VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 }
-    } else {
+    } else if p.get("min").is_some() || p.get("max").is_some() {
         VelocityOp::Limit { min: i64_or(p, "min", 1).clamp(1, 127) as u8, max: i64_or(p, "max", 127).clamp(1, 127) as u8 }
+    } else {
+        // Nothing to do is said, not done silently.
+        return Err(bad("event.change_velocity", "give set, add, scale, from and to, or min and max"));
     };
-    midi_op(e, p, move |n| soundcraft_midi::ops::change_velocity(n, op))
+    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity(n, op))
 }
 
 fn duration(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -358,18 +575,23 @@ fn duration(e: &mut Engine, p: &Value) -> Result<Value> {
         DurationOp::Add(v)
     } else if let Some(v) = p.get("scale").and_then(Value::as_f64) {
         DurationOp::Scale((v as f32).clamp(0.01, 100.0))
-    } else {
+    } else if p.get("legato").is_some() {
         DurationOp::Legato { gap: i64_or(p, "legato", 0).max(0) }
+    } else {
+        // Legato only when asked for: run with no values (a menu item) it used to apply legato.
+        return Err(bad("event.change_duration", "give set, add, scale or legato"));
     };
-    midi_op(e, p, move |n| soundcraft_midi::ops::change_duration(n, op))
+    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_duration(n, op))
 }
 
 fn add_note(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let id = *ids.first().ok_or_else(|| bad("event.midi_note", "`clip` required"))?;
     let note = soundcraft_midi::Note {
+        probability: 100,
         pitch: i64_or(p, "pitch", 60).clamp(0, 127) as u8,
         velocity: i64_or(p, "velocity", 100).clamp(1, 127) as u8,
+        muted: false,
         release_velocity: 64,
         channel: i64_or(p, "channel", 0).clamp(0, 15) as u8,
         start: i64_or(p, "start_ticks", 0).max(0),
@@ -401,10 +623,20 @@ fn add_marker(e: &mut Engine, p: &Value) -> Result<Value> {
         (None, Some(a), Some(b)) => (a, b),
         (None, Some(p), None) | (None, None, Some(p)) => (p, p),
         _ if kind == MarkerKind::Selection => (sel.start, sel.end),
-        _ => (if e.transport.playing { e.transport.position } else { sel.start }, sel.start),
+        // A point marker: at the playhead while playing, else at the selection start (never a
+        // length running from one to the other).
+        _ => {
+            let at = if e.transport.playing { e.transport.position } else { sel.start };
+            (at, at)
+        }
     };
     let s = e.session_mut();
-    let n = s.markers.len() + 1;
+    // The first "Marker N" from the count up that no marker is called (after a delete the count
+    // alone repeats a name).
+    let mut n = s.markers.len() + 1;
+    while s.markers.iter().any(|m| m.name == format!("Marker {n}")) && n < s.markers.len().saturating_mul(2).saturating_add(2) {
+        n += 1;
+    }
     let name = str_param(p, "name").map_or_else(|| format!("Marker {n}"), str::to_string);
     let id = s.add_marker(&name, kind, a.max(0), b.max(a).max(0));
     if let Some(m) = s.markers.iter_mut().find(|m| m.id == id) {
@@ -515,7 +747,8 @@ fn recall_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     match m.kind {
         MarkerKind::Marker => s.edit.selection = soundcraft_time::Range::point(m.start),
         MarkerKind::Selection => s.edit.selection = soundcraft_time::Range::new(m.start, m.end),
-        MarkerKind::None => {}
+        // A location that only recalls view settings leaves the playhead where it is.
+        MarkerKind::None => return Ok(json!({"at": null})),
     }
     s.edit.playhead = m.start;
     e.transport_requests.push(crate::TransportRequest::Locate(m.start));
@@ -557,6 +790,82 @@ mod tests {
         let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
         let v: Vec<u64> = n["notes"].as_array().unwrap().iter().map(|x| x["velocity"].as_u64().unwrap()).collect();
         assert_eq!(v, vec![10, 60, 110]);
+    }
+
+    fn midi_clip_at(e: &mut crate::Engine, start: i64, end: i64, notes: &[(i64, i64)]) -> u64 {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": start, "end": end})).unwrap()["clip"].as_u64().unwrap();
+        for (st, len) in notes {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": st, "length_ticks": len})).unwrap();
+        }
+        clip
+    }
+
+    fn starts_lengths(e: &mut crate::Engine, clip: u64) -> Vec<(i64, i64)> {
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        n["notes"].as_array().unwrap().iter().map(|x| (x["start"].as_i64().unwrap(), x["length"].as_i64().unwrap())).collect()
+    }
+
+    /// Bug 14: Insert Time and Cut Time move the Band's chord and section lanes with the music.
+    #[test]
+    fn insert_and_cut_time_move_the_band_lanes() {
+        use soundcraft_model::{ChannelFormat, ChordEvent, SectionBlock, TrackKind};
+        let mut e = crate::Engine::default();
+        e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let s = e.session_mut();
+        for (id, tick) in [(1, 0), (2, 3_840), (3, 7_680)] {
+            s.band.chords.push(ChordEvent { id, tick, length_ticks: 3_840, slot: 0, bass: -1 });
+        }
+        s.band.sections.push(SectionBlock { start_tick: 3_840, length_ticks: 7_680, ..Default::default() });
+        // One bar (96 000 samples at 120 bpm) in at bar 2.
+        e.execute("event.insert_time", &json!({"start": 96_000, "length": 96_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 7_680, 11_520]);
+        assert_eq!(e.session().band.sections[0].start_tick, 7_680);
+        e.execute("event.cut_time", &json!({"start": 96_000, "end": 192_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 3_840, 7_680]);
+        // Cutting bar 2 takes its chord away.
+        e.execute("event.cut_time", &json!({"start": 96_000, "end": 192_000})).unwrap();
+        let ticks: Vec<i64> = e.session().band.chords.iter().map(|c| c.tick).collect();
+        assert_eq!(ticks, vec![0, 3_840]);
+        assert_eq!((e.session().band.sections[0].start_tick, e.session().band.sections[0].length_ticks), (3_840, 3_840));
+    }
+
+    /// Bug 1: Quantize and Legato with `indices` (the MIDI Editor's selection) change only those
+    /// notes, and say where they are after the re-sort.
+    #[test]
+    fn quantize_and_legato_touch_only_the_picked_notes() {
+        let mut e = crate::Engine::default();
+        let clip = midi_clip_at(&mut e, 0, 192_000, &[(10, 100), (250, 100), (500, 100), (1000, 100)]);
+        let r = e.execute("event.quantize", &json!({"clips": [clip], "grid": 240, "indices": [1]})).unwrap();
+        assert_eq!(r["indices"], json!([1]));
+        assert_eq!(starts_lengths(&mut e, clip), vec![(10, 100), (240, 100), (500, 100), (1000, 100)]);
+        // Legato among the picked notes: the first lasts to the next picked one, not the next note.
+        e.execute("event.change_duration", &json!({"clips": [clip], "legato": 0, "indices": [0, 3]})).unwrap();
+        assert_eq!(starts_lengths(&mut e, clip), vec![(10, 990), (240, 100), (500, 100), (1000, 100)]);
+        // Without `indices`: every note, as before.
+        e.execute("event.quantize", &json!({"clips": [clip], "grid": 240})).unwrap();
+        assert_eq!(starts_lengths(&mut e, clip).iter().map(|x| x.0).collect::<Vec<_>>(), vec![0, 240, 480, 960]);
+        // `indices` with more than one clip is refused rather than guessed at.
+        let other = midi_clip_at(&mut e, 192_000, 288_000, &[(0, 10)]);
+        assert!(e.execute("event.quantize", &json!({"clips": [clip, other], "indices": [0]})).is_err());
+    }
+
+    /// Bug 2: the grid and the swing count from the bar lines, not from the clip's start.
+    #[test]
+    fn quantize_counts_the_grid_from_the_bar() {
+        let mut e = crate::Engine::default();
+        // 120 bpm at 48 kHz: 25 samples a tick. The clip starts 100 ticks after bar 1.
+        let clip = midi_clip_at(&mut e, 2_500, 192_000, &[(10, 50), (150, 50), (370, 50)]);
+        e.execute("event.quantize", &json!({"clips": [clip], "grid": 240})).unwrap();
+        // Bar lines at 0, 240, 480 are -100, 140, 380 in the clip; the first note stays inside.
+        assert_eq!(starts_lengths(&mut e, clip).iter().map(|x| x.0).collect::<Vec<_>>(), vec![0, 140, 380]);
+        // Swing delays the bar's off-beat 1/8 (tick 480 + 160), not the clip's.
+        let clip = midi_clip_at(&mut e, 2_500, 192_000, &[(400, 50)]);
+        e.execute("event.quantize", &json!({"clips": [clip], "grid": 480, "swing": 100})).unwrap();
+        assert_eq!(starts_lengths(&mut e, clip)[0].0, 540);
     }
 
     /// The tempo-ruler dialog runs `event.tempo` with `bpm` and `at`; the change must land at that position.

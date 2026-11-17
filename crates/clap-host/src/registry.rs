@@ -382,7 +382,8 @@ fn build_info(d: &ClapDescriptor, inst: &Instance) -> &'static PluginInfo {
         params: Box::leak(params.into_boxed_slice()),
         is_instrument: d.is_instrument,
         audiosuite: false,
-        sidechain: false,
+        // A second (non-main) audio input port is the plugin's sidechain: the host offers a key.
+        sidechain: inst.audio_ports(true).is_ok_and(|ports| crate::plugin::key_port(&ports).is_some()),
         link: None,
         references: 0,
         midi_out: false,

@@ -16,8 +16,12 @@
 //!   Circuit's setter re-derives the model and clears every solver state, so pushing it every
 //!   block would stop the filter ever running. Here `set_param` only stores the value; `process`
 //!   does the wrapper's push (all values after `prepare`/`reset`, else the changed ones).
-//! - Latency: none (IIR only). Tail: `getTailLengthSeconds` is 1 s (a self-oscillating filter
-//!   keeps ringing), so `tail_samples` is one second.
+//! - Latency: the C++ reports none. FreeDAWm's steeper anti-alias filters (see
+//!   `filter_engine_dsp`) delay the output 5 samples, which `latency()` reports;
+//!   [`Filter::cpp_reference`] is the C++'s oversampling, for the fidelity test. Tail:
+//!   `getTailLengthSeconds` is 1 s; here it is at least that, and as long as the circuit rings
+//!   at its Reso and lowest corner ([`filter_engine_dsp::ring_seconds`]), a minute
+//!   ([`MAX_TAIL_S`]) for a self-oscillating ladder.
 //! - Bypass: the engine's own `bypass` parameter passes the input straight through (the
 //!   modulation keeps running), translated in the engine. It is kept in order but hidden
 //!   (group ""): the UI uses the module's bypass.
@@ -61,6 +65,10 @@ use crate::params::{Params, fs_choice, fs_toggle, knob01};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Transport, gain_to_db};
 use filter_config::{NOTES, STEP_COUNTS, format_value};
 use filter_engine_dsp as d;
+
+/// The longest tail reported, in seconds: a self-oscillating filter (Moog or MS-20 at the top of
+/// Reso) rings for ever, and a bounce or freeze stops a minute after the input.
+pub const MAX_TAIL_S: f64 = 60.0;
 
 /// The tempo the value texts assume for the Note readout. The editor prints the length at the
 /// tempo in force (`formatValue (index, v, bpm)`), which a parameter's own `fn(f32)` text cannot
@@ -224,6 +232,15 @@ impl Filter {
         }
     }
 
+    /// The C++'s oversampling exactly (Butterworth anti-alias filters, no latency), for the
+    /// fidelity test. `restore_initial` keeps the choice.
+    pub fn cpp_reference() -> Self {
+        let mut p = Self::new();
+        p.dsp.set_cpp_oversampling(true);
+        p.dsp.prepare(48_000.0);
+        p
+    }
+
     /// `prepareToPlay` at `sr`, fresh before any audio, else on the live instance (see the
     /// module notes).
     fn prepare_at(&mut self, sr: f64) {
@@ -300,9 +317,17 @@ impl Plugin for Filter {
         self.dsp.set_host_transport(transport.playing, bpm, ppq);
     }
 
+    fn latency(&self) -> usize {
+        // the half-band oversampler's delay (0 for the C++ reference and while engine-bypassed)
+        self.dsp.latency_samples()
+    }
+
     fn tail_samples(&self) -> usize {
-        // getTailLengthSeconds: 1 s.
-        self.dsp.sample_rate().max(0.0) as usize
+        // getTailLengthSeconds is 1 s; a resonant setting low down rings longer (bug 6 of the
+        // effects parity list), so the tail follows the circuit, Reso and lowest corner, at
+        // least 1 s and at most a minute (a self-oscillating filter never stops).
+        let s = d::ring_seconds(|i| self.p.v(i)).min(MAX_TAIL_S);
+        (s * self.dsp.sample_rate().max(0.0)) as usize
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {

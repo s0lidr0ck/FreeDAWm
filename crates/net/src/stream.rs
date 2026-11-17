@@ -123,6 +123,8 @@ pub struct MixEncoder {
     /// 48 kHz frames out so far this epoch, and waiting to be encoded.
     out_frames: u64,
     pending: Vec<f32>,
+    /// While stopped and talking: the talkback's own clock (frames since it started).
+    idle: Option<i64>,
 }
 
 impl MixEncoder {
@@ -139,6 +141,7 @@ impl MixEncoder {
             start_pos: 0,
             out_frames: 0,
             pending: Vec::new(),
+            idle: None,
         }
     }
 
@@ -159,14 +162,29 @@ impl MixEncoder {
     pub fn feed(&mut self, blocks: &[TapBlock]) -> Vec<StreamPacket> {
         let mut out = Vec::new();
         for b in blocks {
-            if !b.rolling {
+            // Stopped, the stream carries only talkback, on a clock of its own (its own epoch:
+            // the performer is not recording, and the roll after it starts a new one).
+            let rolled = if b.rolling {
+                if self.idle.take().is_some() {
+                    self.next = None;
+                }
+                b.rolled
+            } else if b.talk {
+                let at = *self.idle.get_or_insert_with(|| {
+                    self.next = None;
+                    0
+                });
+                self.idle = Some(at.saturating_add((b.samples.len() / 2) as i64));
+                at
+            } else {
                 // Stopped: the next roll is a new epoch.
                 self.next = None;
+                self.idle = None;
                 continue;
-            }
-            if self.next != Some(b.rolled) {
+            };
+            if self.next != Some(rolled) {
                 self.epoch += 1;
-                self.start_rolled = b.rolled;
+                self.start_rolled = rolled;
                 self.start_pos = b.position;
                 self.out_frames = 0;
                 self.pending.clear();
@@ -174,7 +192,7 @@ impl MixEncoder {
                 // A fresh encoder: its delay restarts with the epoch.
                 self.enc = None;
             }
-            self.next = Some(b.rolled.saturating_add((b.samples.len() / 2) as i64));
+            self.next = Some(rolled.saturating_add((b.samples.len() / 2) as i64));
             let mut conv = Vec::with_capacity(b.samples.len() + 8);
             self.rs.run(&b.samples, &mut conv);
             self.pending.extend_from_slice(&conv);
@@ -544,7 +562,7 @@ mod tests {
                     s[k as usize * 2 + 1] = 0.9;
                 }
             }
-            let b = TapBlock { rolled: host_rolled, position: 100_000 + host_rolled, rolling: true, samples: s };
+            let b = TapBlock { rolled: host_rolled, position: 100_000 + host_rolled, rolling: true, talk: false, samples: s };
             host_rolled += block as i64;
             for p in enc.feed(&[b]) {
                 let r = net.rand();
@@ -616,7 +634,7 @@ mod tests {
     #[test]
     fn a_locate_starts_a_new_epoch_and_flushes() {
         let mut enc = MixEncoder::new(48_000);
-        let blk = |rolled: i64, pos: i64| TapBlock { rolled, position: pos, rolling: true, samples: vec![0.0; 1920] };
+        let blk = |rolled: i64, pos: i64| TapBlock { rolled, position: pos, rolling: true, talk: false, samples: vec![0.0; 1920] };
         let a = enc.feed(&[blk(0, 0), blk(960, 960)]);
         assert_eq!(a.len(), 2);
         // Stop, then Play somewhere else: the take clock restarts at 0, a new epoch.
@@ -640,5 +658,43 @@ mod tests {
         dec.pump(&q);
         let (_, pos) = dec.at_index(q.played()).unwrap();
         assert!((pos - (10.0 - CODEC_DELAY as f64 / 48_000.0)).abs() < 1e-6, "{pos}");
+    }
+
+    #[test]
+    fn stopped_the_stream_carries_talkback_only_and_the_roll_after_it_starts_afresh() {
+        let mut enc = MixEncoder::new(48_000);
+        // Stopped blocks keep their take clock where it stopped (it does not move).
+        let idle = |talk: bool| TapBlock {
+            rolled: 5_000,
+            position: 9_000,
+            rolling: false,
+            talk,
+            samples: (0..1920).map(|i| 0.3 * ((i / 2) as f32 * 0.06).sin()).collect(),
+        };
+        assert!(enc.feed(&[idle(false), idle(false)]).is_empty(), "silence while stopped is not sent");
+        let t = enc.feed(&vec![idle(true); 10]);
+        assert_eq!(t.len(), 10, "talkback is, on its own clock");
+        assert!(t.windows(2).all(|w| w[1].seq == w[0].seq + 1 && w[1].epoch == w[0].epoch));
+        assert!((t[1].rolled - t[0].rolled - 0.02).abs() < 1e-9);
+        // The roll after it is a new epoch: the performer drops what is left of the talk.
+        let r = enc.feed(&[TapBlock { rolled: 0, position: 0, rolling: true, talk: false, samples: vec![0.0; 1920] }]);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].epoch, t[0].epoch + 1);
+        assert!(r[0].rolled.abs() < 1e-9);
+        // The performer, stopped, hears it.
+        let mut dec = MixDecoder::new(48_000);
+        let q = StreamIn::default();
+        q.set_on(true);
+        for p in &t {
+            dec.on_packet(p.clone(), &q);
+        }
+        // The audio thread takes the new epoch's flush first, as it would between blocks.
+        q.mix_into(&mut [], &mut [], 0, 0, false);
+        dec.target_ms = 150.0;
+        dec.pump(&q);
+        let (mut l, mut r) = (vec![0f32; 7200], vec![0f32; 7200]);
+        q.mix_into(&mut l, &mut r, 7200, 0, false);
+        let peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.05, "talkback heard while stopped: peak {peak}, queued {}, played {}", q.queued(), q.played());
     }
 }

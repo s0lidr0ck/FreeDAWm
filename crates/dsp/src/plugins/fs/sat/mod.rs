@@ -13,8 +13,11 @@
 //!   rest untouched (the Rust host contract for extra channels).
 //! - `ScopedNoDenormals` (flush-to-zero): no safe Rust equivalent. It only changes values below
 //!   ~1e-38, far under the fidelity bar; `silence_tail_is_cheap` guards the CPU side.
-//! - No `setLatencySamples` anywhere: the half-band IIR oversamplers report no latency, so
-//!   `latency()` is 0, and the C++ render tool's output is not shifted either.
+//! - No `setLatencySamples` anywhere: the C++ reports no latency, though its half-band IIR
+//!   oversamplers delay dry and wet alike by a few samples. FreeDAWm reports that delay as
+//!   `latency()` (`SatEngineDsp::latency_samples`: 4, 5 or 6 samples at 2x, 4x or 8x), so delay
+//!   compensation lines Sat up with the rest of the mix. The audio is unchanged (the C++ render
+//!   tool's output is not shifted either).
 //! - No tail (`getTailLengthSeconds` is 0). Meters (`takeInputPeak`/`takeOutputPeak`) feed
 //!   `readouts`. The preset dirty-tracking and editor are UI-only.
 
@@ -166,6 +169,11 @@ impl Plugin for Sat {
         self.dsp.reset();
     }
 
+    fn latency(&self) -> usize {
+        // the oversampling's own delay; it follows Quality (and Iron's 4x floor)
+        self.dsp.latency_samples()
+    }
+
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         let nc = self.channels.min(io.len());
         self.dsp.process(io, nc, frames);
@@ -230,10 +238,46 @@ mod tests {
     }
 
     #[test]
-    fn registered_and_reports_no_latency() {
+    fn registered_and_reports_the_oversampling_latency() {
         let p = crate::create("fs_sat").unwrap();
         assert_eq!(p.info().category, Category::FireStation);
-        assert_eq!(p.latency(), 0, "the C++ reports no latency (IIR half-bands)");
+        assert_eq!(p.latency(), 5, "Normal (4x): the half-bands' delay (the C++ reports none)");
+    }
+
+    /// How late `s` delivers a quiet 500 Hz tone at `sr`, in samples (its phase delay).
+    fn measured_delay(s: &mut Sat, sr: f32) -> f64 {
+        let n = sr as usize;
+        let w = std::f64::consts::TAU * 500.0 / f64::from(sr);
+        let src: Vec<f32> = (0..n).map(|i| (0.05 * (w * i as f64).sin()) as f32).collect();
+        let mut io = vec![src.clone(), src];
+        run(s, &mut io, 512);
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, &y) in io[0].iter().enumerate().skip(n / 2) {
+            re += f64::from(y) * (w * i as f64).sin();
+            im += f64::from(y) * (w * i as f64).cos();
+        }
+        -im.atan2(re) / w
+    }
+
+    #[test]
+    fn reported_latency_is_the_measured_delay() {
+        // Regression: Sat reported no latency though its oversamplers delay everything a few
+        // samples, so delay compensation left it late. At every rate and quality, the dry path
+        // (Mix 0) and the default circuit at a quiet level come out late by what is reported.
+        for sr in [44_100.0f32, 48_000.0, 96_000.0] {
+            for (quality, circuit, want) in [(0.0, 1.0, 4), (1.0, 1.0, 5), (2.0, 1.0, 6), (0.0, 0.0, 5)] {
+                for mix in [0.0, 1.0] {
+                    let mut s = Sat::new();
+                    s.set_param("quality", quality);
+                    s.set_param("circuit", circuit);
+                    s.set_param("mix", mix);
+                    s.prepare(sr, 512, 2);
+                    assert_eq!(s.latency(), want, "sr {sr}, quality {quality}, circuit {circuit} (Iron is 4x at least)");
+                    let d = measured_delay(&mut s, sr);
+                    assert!((d - want as f64).abs() < 0.75, "sr {sr}, quality {quality}, circuit {circuit}, mix {mix}: measured {d:.2}");
+                }
+            }
+        }
     }
 
     #[test]

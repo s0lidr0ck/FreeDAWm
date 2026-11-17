@@ -210,7 +210,10 @@ impl Plugin for LoFi {
         let ch = self.held.len().min(io.len());
         let frames = frames_in(io, frames, ch);
         let step = 2f32.powf(1.0 - self.p.v(0));
-        let inc = (self.p.v(1) / self.sr).min(1.0);
+        // The knob's top (48 kHz) is "no rate reduction" at any session rate (it stopped there, so
+        // at 96 kHz and up the top still halved the rate).
+        let top = LOFI_PARAMS[1].max;
+        let inc = if self.p.v(1) >= top { 1.0 } else { (self.p.v(1) / self.sr).min(1.0) };
         for n in 0..frames {
             let m = self.mix.next();
             let nz = self.noise.next();

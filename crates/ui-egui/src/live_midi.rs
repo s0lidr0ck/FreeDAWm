@@ -32,13 +32,13 @@ pub struct LiveTake {
 }
 
 /// Whether `track` records live MIDI (armed, a MIDI or instrument track on a MIDI input) and,
-/// if so, the port it listens to (`None`: all inputs).
-fn records_midi(track: &Track) -> Option<Option<&str>> {
+/// if so, the port it listens to (`None`: all inputs) and the channel (0: all).
+fn records_midi(track: &Track) -> Option<(Option<&str>, u8)> {
     if !track.mixer.record_arm || !track.kind.is_midi() || track.inactive {
         return None;
     }
     match &track.mixer.input {
-        Route::Midi(m) => Some(m.device.as_deref()),
+        Route::Midi(m) => Some((m.device.as_deref(), m.channel)),
         _ => None,
     }
 }
@@ -48,7 +48,7 @@ pub fn live_take(app: &SoundApp, track: &Track) -> Option<LiveTake> {
     if !app.engine.transport.recording || app.countoff_status().is_some() {
         return None;
     }
-    let port = records_midi(track)?;
+    let (port, channel) = records_midi(track)?;
     // A remote recorder's track on the booth's own remote port is drawn by `net_ui`.
     if port.is_some_and(|p| p.starts_with("Remote: ")) {
         return None;
@@ -56,9 +56,24 @@ pub fn live_take(app: &SoundApp, track: &Track) -> Option<LiveTake> {
     let start = app.take_plan.as_ref().map_or(app.record_start, |p| p.start);
     let end = app.position().max(start);
     let events = crate::midi_devices::recorded_events(app, &app.midi_rec);
-    let mine = |name: &str| port.is_none_or(|p| p == name);
+    // What the track will keep (its port and channel), where it will be placed: the take's
+    // latency earlier (`soundcraft_engine::midi_record::played_at`), not where it was heard.
+    let mine = |e: &&soundcraft_engine::midi_record::RecordedEvent| {
+        port.is_none_or(|p| p == e.port) && (channel == 0 || e.msg[0] >= 0xF0 || (e.msg[0] & 0x0F) + 1 == channel)
+    };
+    let latency = crate::midi_devices::take_latency(app);
+    let placed = |at: Samples| if at >= start { at.saturating_sub(latency).max(start) } else { at.saturating_sub(latency) };
     let mut notes: Vec<LiveNote> = Vec::new();
-    for e in events.iter().filter(|e| mine(&e.port)) {
+    // As the track's input transform makes it.
+    let transform = match &track.mixer.input {
+        Route::Midi(m) => m.transform,
+        _ => soundcraft_model::MidiTransform::default(),
+    };
+    let shown = events
+        .iter()
+        .filter(mine)
+        .filter_map(|e| Some(soundcraft_engine::midi_record::RecordedEvent { at: placed(e.at), msg: transform.apply(e.msg)?, ..e.clone() }));
+    for e in shown {
         let kind = e.msg[0] & 0xF0;
         let pitch = e.msg[1];
         if kind == 0x90 && e.msg[2] > 0 {
@@ -168,5 +183,19 @@ mod tests {
         app.engine.transport.recording = true;
         app.midi_rec.push(RecordedMidi { at: 10, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x90, 60, 100], pass: 0 });
         assert!(live_take(&app, &track).unwrap().notes.is_empty());
+    }
+
+    #[test]
+    fn a_track_on_one_channel_shows_only_that_channels_notes() {
+        let mut app = armed_piano();
+        let id = app.engine.session().tracks[0].id.0;
+        app.engine.execute("track.input", &json!({"tracks": [id], "input": "midi:all", "channel": 2})).unwrap();
+        let track = app.engine.session().tracks[0].clone();
+        app.engine.transport.recording = true;
+        let slot = soundcraft_playback::midi_in::TYPING_SLOT as u8;
+        app.midi_rec.push(RecordedMidi { at: 10, port: slot, msg: [0x90, 60, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 20, port: slot, msg: [0x91, 62, 100], pass: 0 });
+        let pitches: Vec<u8> = live_take(&app, &track).unwrap().notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![62]);
     }
 }

@@ -58,7 +58,7 @@ pub const ACCENT: u32 = 0xFFA8_D86B;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 
 /// A/B and Undo walk every parameter.
-const FAMILY: Family = Family::new("Sprawl", &[]);
+pub(crate) const FAMILY: Family = Family::new("Sprawl", &[]);
 
 /// The widths of the four control groups (they fill the editor with [`GAP`] between them).
 const GROUP_W: [f32; 4] = [150.0, 150.0, 316.0, 154.0];

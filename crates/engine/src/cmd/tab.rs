@@ -22,7 +22,6 @@ struct Analysed {
     rate: SampleRate,
     clips: Vec<Clip>,
     audio: Vec<Weak<SourceAudio>>,
-    fx: Vec<(String, f64)>,
     hits: Vec<Samples>,
 }
 
@@ -144,19 +143,11 @@ fn analysed(s: &Session, t: TrackId, around: Range) -> Vec<Samples> {
         .iter()
         .filter_map(|c| if let ClipContent::Audio { source, .. } = c.content { s.pool.get(source).map(Arc::downgrade) } else { None })
         .collect();
-    let fx: Vec<(String, f64)> = clips
-        .iter()
-        .flat_map(|c| {
-            let pre = format!("clip_fx.{}.", c.id.0);
-            s.edit.values.range(pre.clone()..).take_while(move |(k, _)| k.starts_with(&pre)).map(|(k, v)| (k.clone(), *v))
-        })
-        .collect();
     let same = |a: &Analysed| {
         a.track == t
             && a.around == around
             && a.rate == s.sample_rate
             && a.clips == clips
-            && a.fx == fx
             && a.audio.len() == audio.len()
             && a.audio.iter().zip(&audio).all(|(x, y)| x.ptr_eq(y))
     };
@@ -168,7 +159,7 @@ fn analysed(s: &Session, t: TrackId, around: Range) -> Vec<Samples> {
     if kept.len() >= CACHE_LIMIT {
         kept.remove(0);
     }
-    kept.push(Analysed { track: t, around, rate: s.sample_rate, clips, audio, fx, hits: hits.clone() });
+    kept.push(Analysed { track: t, around, rate: s.sample_rate, clips, audio, hits: hits.clone() });
     hits
 }
 
@@ -274,7 +265,16 @@ mod tests {
         let mut s = Session::new("t", SampleRate::HZ_48000);
         let keys = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
         let mut seq = Sequence::default();
-        seq.notes.push(Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 4 * TICKS_PER_QUARTER, length: TICKS_PER_QUARTER });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 4 * TICKS_PER_QUARTER,
+            length: TICKS_PER_QUARTER,
+        });
         let id = s.new_clip_id();
         crate::edit::place_clip(&mut s, keys, Clip::midi(id, "Keys", 0, at(4.0), seq));
         let a = audio_track(&mut s, "A", &[(0.0, 4.0)], hits(&[1.0, 3.0], 4.0));

@@ -137,7 +137,7 @@ pub(crate) struct Editor {
 
 /// Draws Twine's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (Twine's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 2] = ["match", "chaff"];
+pub(crate) const NOT_IN_PRESETS: [&str; 2] = ["match", "chaff"];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);
@@ -462,7 +462,14 @@ fn knob(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, r: Rect, 
     let info = host.info.params.iter().find(|p| p.id == id)?;
     let value = param(host, id);
     let text = info.format(value);
-    let o = DialOpts { label: info.name, value_text: &text, default: info.to_normalized(info.default), tracked: true, ..DialOpts::default() };
+    let o = DialOpts {
+        label: info.name,
+        value_text: &text,
+        default: info.to_normalized(info.default),
+        tracked: true,
+        info: Some(info),
+        ..DialOpts::default()
+    };
     let out = dial(ui, r, id, &PALETTE, info.to_normalized(value), &o);
     if out.started {
         st.push_undo(snapshot(host));

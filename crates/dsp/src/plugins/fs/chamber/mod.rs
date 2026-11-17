@@ -410,7 +410,11 @@ impl ChamberMade {
         let rt = self.dsp.rt_low_out.max(self.dsp.rt_mid_out.max(self.dsp.rt_high_out));
         let pre = 0.001 * d::knob_to_pre_delay_ms(self.p.v(d::P_PRE_DELAY));
         let tape = 0.001 * d::knob_to_tape_ms(self.p.v(d::P_TAPE_TIME));
-        rt + pre + tape * 4.0
+        // The C++ counts four repeats; at high Repeats (a loop gain of up to 0.9) they take more
+        // to fall 80 dB, and a bounce or freeze would cut them off.
+        let gain = 0.9 * self.p.v(d::P_TAPE_REPEATS).clamp(0.0, 1.0);
+        let repeats = if self.p.v(d::P_TAPE_SEND) > 0.0 && gain > 1e-3 { (1e-4f32.ln() / gain.ln()).max(4.0) } else { 4.0 };
+        rt + pre + tape * repeats
     }
 }
 

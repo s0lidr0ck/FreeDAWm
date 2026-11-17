@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select/Split Notes...",
             ["Event", "MIDI Operations"],
             None,
-            "{clips?, pitch_from?: 0, pitch_to?: 127, action?: select|split} — split moves the matching notes to a new MIDI track",
+            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
             has_selection,
             select_split
         ),
@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Step Input...",
             ["Event", "MIDI Operations"],
             None,
-            "{track?, pitch?: 60 | pitches?: [..], duration?: '1/8'|ticks, velocity?: 100, rest?: bool, advance?: true}",
+            "{track?, pitch?: 60 | pitches?: [..], duration?: '1/8'|ticks, velocity?: 100, rest?: bool, tie?: bool (lengthen the notes ending at the insertion point by the duration), advance?: true}",
             has_tracks,
             step_input
         ),
@@ -113,7 +113,15 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| performance(e, p, true)
         ),
         cmd!(noundo "event.midi_track_offsets", "MIDI Track Offsets", ["Event"], None, "{track?, offset?: samples|{seconds}} — sets (or lists) per-track MIDI playback offsets", always, midi_offsets),
-        cmd!(noundo "event.midi_rtp", "MIDI Real-Time Properties", ["Event"], None, "{tracks?, velocity?: ±127, transpose?: ±127, duration?: % (100), delay?: ticks, clear?: bool}", always, midi_rtp),
+        cmd!(
+            "event.midi_rtp",
+            "MIDI Real-Time Properties",
+            ["Event"],
+            None,
+            "{tracks?, velocity?: ±127, transpose?: ±127, duration?: % (100), delay?: ticks, clear?: bool}",
+            always,
+            midi_rtp
+        ),
         cmd!(
             "event.extract_chords",
             "Extract Chords from Selection",
@@ -303,8 +311,7 @@ fn midi_clip_ids(e: &Engine, p: &Value) -> Vec<(TrackId, ClipId)> {
 
 fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.select_split_notes";
-    let from = i64_or(p, "pitch_from", 0).clamp(0, 127) as u8;
-    let to = i64_or(p, "pitch_to", 127).clamp(0, 127) as u8;
+    let rule = note_rule(p);
     let split = match str_param(p, "action") {
         None | Some("select") => false,
         Some("split") => true,
@@ -316,12 +323,25 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let s = e.session_mut();
     let mut matched = 0;
+    let mut found = Vec::new();
     let mut new_tracks: std::collections::BTreeMap<u64, TrackId> = Default::default();
     for (t, cid) in clips {
         let Some(c) = s.find_clip(cid).map(|(_, c)| c.clone()) else { continue };
         let ClipContent::Midi { sequence } = &c.content else { continue };
-        let (hit, rest) = soundcraft_midi::ops::split_notes(&sequence.notes, from, to);
+        // Bars as the clip sits on the timeline; notes hidden before its start never match.
+        let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+        let tempo = &s.tempo;
+        let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
+        let picked: Vec<usize> = soundcraft_midi::ops::select_matching(&sequence.notes, &rule, bar_start)
+            .into_iter()
+            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0))
+            .collect();
+        let (mut hit, mut rest) = (Vec::new(), Vec::new());
+        for (i, n) in sequence.notes.iter().enumerate() {
+            if picked.contains(&i) { hit.push(*n) } else { rest.push(*n) }
+        }
         matched += hit.len();
+        found.push(json!({"clip": cid.0, "indices": picked}));
         if !split || hit.is_empty() {
             continue;
         }
@@ -344,7 +364,31 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new() } };
         crate::edit::place_clip(s, nt, nc);
     }
-    Ok(json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()}))
+    let mut out = json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()});
+    if !split {
+        if let [one] = found.as_slice() {
+            out["indices"] = one["indices"].clone();
+        }
+        out["clips"] = Value::Array(found);
+    }
+    Ok(out)
+}
+
+/// The rule `event.select_split_notes` picks notes by (see its parameters).
+fn note_rule(p: &Value) -> soundcraft_midi::ops::NoteRule {
+    let d = soundcraft_midi::ops::NoteRule::default();
+    let pair = |a: &str, b: &str, lo: i64, hi: i64, dflt: (i64, i64)| match (p.get(a).and_then(Value::as_i64), p.get(b).and_then(Value::as_i64)) {
+        (None, None) => None,
+        (x, y) => Some((x.unwrap_or(dflt.0).clamp(lo, hi), y.unwrap_or(dflt.1).clamp(lo, hi))),
+    };
+    let byte = |x: (i64, i64)| (x.0 as u8, x.1 as u8);
+    soundcraft_midi::ops::NoteRule {
+        pitch: pair("pitch_from", "pitch_to", 0, 127, (0, 127)).map_or(d.pitch, byte),
+        velocity: pair("velocity_from", "velocity_to", 1, 127, (1, 127)).map_or(d.velocity, byte),
+        length: pair("length_from", "length_to", 1, i64::MAX, d.length).unwrap_or(d.length),
+        start: pair("start_from", "start_to", 0, i64::MAX, d.start).unwrap_or(d.start),
+        in_bar: pair("in_bar_from", "in_bar_to", 0, i64::MAX, (0, i64::MAX)),
+    }
 }
 
 fn input_quantize_state(s: &Session) -> Value {
@@ -402,6 +446,7 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
     let dur = note_ticks(p.get("duration"), TICKS_PER_QUARTER / 2);
     let vel = i64_or(p, "velocity", 100).clamp(1, 127) as u8;
     let rest = bool_or(p, "rest", false);
+    let tie = bool_or(p, "tie", false);
     let pitches: Vec<u8> = match p.get("pitches").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(Value::as_i64).map(|x| x.clamp(0, 127) as u8).take(16).collect(),
         None => vec![i64_or(p, "pitch", 60).clamp(0, 127) as u8],
@@ -433,9 +478,24 @@ fn step_input(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(c) = s.find_clip_mut(host) {
         let base = tempo.samples_to_ticks(c.start, sr);
         if let ClipContent::Midi { sequence } = &mut c.content {
-            if !rest {
+            if tie {
+                // The notes just entered (ending here) go on another step.
+                for n in sequence.notes.iter_mut().filter(|n| n.start.saturating_add(n.length) == tick - base) {
+                    n.length = n.length.saturating_add(dur);
+                    added += 1;
+                }
+            } else if !rest {
                 for pitch in &pitches {
-                    sequence.notes.push(Note { pitch: *pitch, velocity: vel, release_velocity: 64, channel: 0, start: tick - base, length: dur });
+                    sequence.notes.push(Note {
+                        probability: 100,
+                        pitch: *pitch,
+                        velocity: vel,
+                        muted: false,
+                        release_velocity: 64,
+                        channel: 0,
+                        start: tick - base,
+                        length: dur,
+                    });
                     added += 1;
                 }
             }
@@ -505,6 +565,10 @@ fn midi_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
         store_value(&mut s.edit, p, "transpose", &track_key("rtp", *t, "transpose"), -127.0, 127.0);
         store_value(&mut s.edit, p, "duration", &track_key("rtp", *t, "duration"), 1.0, 1000.0);
         store_value(&mut s.edit, p, "delay", &track_key("rtp", *t, "delay"), -1e7, 1e7);
+        // Playback quantize: a grid in ticks (0: off), its strength and swing in percent.
+        store_value(&mut s.edit, p, "quantize", &track_key("rtp", *t, "quantize"), 0.0, 15_360.0);
+        store_value(&mut s.edit, p, "q_strength", &track_key("rtp", *t, "q_strength"), 0.0, 100.0);
+        store_value(&mut s.edit, p, "q_swing", &track_key("rtp", *t, "q_swing"), 0.0, 100.0);
     }
     Ok(json!({"rtp": values_with_prefix(&s.edit, "rtp.")}))
 }
@@ -698,8 +762,13 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     if set_tempo && let Some(b) = bpm {
-        let tick = s.tempo.samples_to_ticks(r.start, sr);
-        s.tempo.set_tempo(tick, b).map_err(|err| bad(id, err.to_string()))?;
+        // The selection plays at the detected tempo; what follows keeps its tempo and its place.
+        let (t0, t1) = (s.tempo.samples_to_ticks(r.start, sr), s.tempo.samples_to_ticks(r.end, sr));
+        if s.tempo.in_ramp(t0) || s.tempo.in_ramp(t1) {
+            return Err(bad(id, "the selection starts or ends inside a tempo ramp"));
+        }
+        let len = soundcraft_time::to_samples(r.len() as f64 * b * TICKS_PER_QUARTER as f64 / (sr.as_f64() * 60.0));
+        s.tempo.set_span(t0, t1, len, b).map_err(|err| bad(id, err.to_string()))?;
     }
     let shown: Vec<Samples> = beats.iter().take(2000).copied().collect();
     Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated}))
@@ -707,7 +776,7 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.identify_beat";
-    let (r, t0, _) = selection_ticks(e, p, id)?;
+    let (r, t0, t1) = selection_ticks(e, p, id)?;
     let s = e.session();
     let m = s.tempo.meter_at_tick(t0);
     let bars = f64_or(p, "bars", 1.0).max(0.0);
@@ -719,8 +788,14 @@ fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
     let quarters = total_beats * 4.0 / f64::from(m.denominator.max(1));
     let secs = s.sample_rate.seconds(r.len());
     let bpm = quarters * 60.0 / secs;
+    if s.tempo.in_ramp(t0) || s.tempo.in_ramp(t1) {
+        return Err(bad(id, "the selection starts or ends inside a tempo ramp"));
+    }
+    // The selection becomes that many beats at the new tempo; the tempo in effect at its end
+    // resumes there, so what follows stays where it is.
+    let len = soundcraft_time::to_samples(quarters * TICKS_PER_QUARTER as f64);
     let s = e.session_mut();
-    s.tempo.set_tempo(t0, bpm).map_err(|err| bad(id, err.to_string()))?;
+    s.tempo.set_span(t0, t1, len, bpm).map_err(|err| bad(id, err.to_string()))?;
     Ok(json!({"bpm": bpm, "tick": t0}))
 }
 
@@ -743,8 +818,10 @@ fn retro_record(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         .min(max_tick);
         let note = Note {
+            probability: 100,
             pitch: i64_or(v, "pitch", 60).clamp(0, 127) as u8,
             velocity: i64_or(v, "velocity", 100).clamp(1, 127) as u8,
+            muted: false,
             release_velocity: 64,
             channel: i64_or(v, "channel", 0).clamp(0, 15) as u8,
             start: 0,
@@ -855,16 +932,20 @@ mod tests {
         e.execute("edit.select", &json!({"tracks": [t.0], "start": 0})).unwrap();
         e.execute("event.step_input", &json!({"pitch": 60, "duration": "1/4"})).unwrap();
         e.execute("event.step_input", &json!({"pitches": [64, 67], "duration": "1/4"})).unwrap();
+        // A tie lengthens the chord just entered (what ends at the insertion point) and moves on.
+        assert_eq!(e.execute("event.step_input", &json!({"tie": true, "duration": "1/4"})).unwrap()["notes"], 2);
         e.execute("event.step_input", &json!({"rest": true, "duration": "1/4"})).unwrap();
         let tr = e.session().track(t).unwrap();
         assert_eq!(tr.clips().len(), 1);
         let c = &tr.clips()[0];
-        assert_eq!(c.length, 3 * 24_000);
+        assert_eq!(c.length, 4 * 24_000);
         match &c.content {
-            ClipContent::Midi { sequence } => assert_eq!(sequence.notes.iter().map(|n| n.start).collect::<Vec<_>>(), vec![0, 960, 960]),
+            ClipContent::Midi { sequence } => {
+                assert_eq!(sequence.notes.iter().map(|n| (n.start, n.length)).collect::<Vec<_>>(), vec![(0, 960), (960, 1920), (960, 1920)])
+            }
             _ => panic!(),
         }
-        assert_eq!(e.session().edit.selection.start, 3 * 24_000);
+        assert_eq!(e.session().edit.selection.start, 4 * 24_000);
     }
 
     #[test]
@@ -930,6 +1011,43 @@ mod tests {
             ClipContent::Midi { sequence } => assert_eq!(sequence.notes[0].pitch, 72),
             _ => panic!(),
         }
+    }
+
+    /// Parity section 7: notes picked by rule (pitch, velocity, length, start, place in the bar),
+    /// returned per clip for the MIDI Editor to select; and a muted note stays but can be found.
+    #[test]
+    fn notes_are_selected_by_rule() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "velocity": 120},
+            {"pitch": 60, "start_ticks": 960, "velocity": 40, "length_ticks": 240},
+            {"pitch": 62, "start_ticks": 3840 + 960, "velocity": 100},
+            {"pitch": 64, "start_ticks": 3840 + 1000, "velocity": 100, "length_ticks": 960}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let pick = |e: &mut Engine, rule: Value| {
+            let mut p = rule;
+            p["clips"] = json!([cid]);
+            let r = e.execute("event.select_split_notes", &p).unwrap();
+            r["indices"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect::<Vec<_>>()
+        };
+        assert_eq!(pick(&mut e, json!({"pitch_from": 60, "pitch_to": 63})), vec![1, 2]);
+        assert_eq!(pick(&mut e, json!({"velocity_from": 100})), vec![0, 2, 3]);
+        assert_eq!(pick(&mut e, json!({"length_from": 480})), vec![3]);
+        assert_eq!(pick(&mut e, json!({"in_bar_from": 960, "in_bar_to": 1919})), vec![1, 2, 3]);
+        assert_eq!(pick(&mut e, json!({"start_from": 1000})), vec![2, 3]);
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid]})).unwrap();
+        assert_eq!(r["clips"][0]["clip"], cid);
+        // Mute two notes: they stay in the clip, and Set Notes can unmute them.
+        e.execute("midi.notes_set", &json!({"clip": cid, "indices": [1, 2], "muted": true})).unwrap();
+        let muted = |e: &Engine| match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.notes.iter().map(|n| n.muted).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        assert_eq!(muted(&e), vec![false, true, true, false]);
+        assert_eq!(e.undo_label(), Some("Set Notes"));
+        e.execute("midi.notes_set", &json!({"clip": cid, "indices": [2], "muted": false})).unwrap();
+        assert_eq!(muted(&e), vec![false, true, false, false]);
     }
 
     #[test]
@@ -1005,8 +1123,14 @@ mod tests {
         let undo = e.undo_history().len();
         e.execute("event.midi_rtp", &json!({"track": t.0, "transpose": 7})).unwrap();
         assert_eq!(e.session().edit.value(&track_key("rtp", t, "transpose"), 0.0), 7.0);
+        // Bug 10: a Real-Time Properties change is its own undo step, so undoing an earlier edit
+        // no longer reverts it unannounced.
+        assert_eq!(e.undo_history().len(), undo + 1);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().edit.value(&track_key("rtp", t, "transpose"), 0.0), 0.0);
+        let undo = e.undo_history().len();
         let r = e.execute("event.midi_track_offsets", &json!({"track": t.0, "offset": 480})).unwrap();
         assert_eq!(r["offsets"][0]["offset"], 480.0);
-        assert_eq!(e.undo_history().len(), undo, "settings are not undo steps");
+        assert_eq!(e.undo_history().len(), undo, "offsets are not undo steps");
     }
 }

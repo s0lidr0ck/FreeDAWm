@@ -10,6 +10,13 @@
 //! Newton-Raphson nodal solves, op-amps with gain-bandwidth / slew / rail limits, diode clippers
 //! solved on the Shockley equation. Only the selected circuit runs, 4x oversampled.
 //!
+//! Oversampling (FreeDAWm's, not the C++'s): two polyphase half-band IIR stages, the ones Sat and
+//! Vint use (`sat_halfband`): flat to 0.45 fs, and everything that would fold back below 0.45 fs
+//! rejected by 100 dB, at the cost of a 5-sample latency (reported). The C++ zero-stuffs into an
+//! 8th-order Butterworth at 0.4 fs, up and down, which rejects only about 16 dB at the original
+//! Nyquist and 28 dB at 0.6 fs (folding to 0.4 fs), so hot settings alias audibly; it is kept, for
+//! the fidelity test, behind [`DistEngineDsp::set_cpp_oversampling`].
+//!
 //! Translation notes (C++ behaviour reproduced deliberately):
 //! - `float` and `double` are kept exactly where the C++ has them.
 //! - `clampT` returns NaN for NaN (both comparisons false), unlike `f64::clamp` (which also
@@ -30,6 +37,8 @@
 
 // The C++ `pi` literal (3.14159265358979323846) is exactly `std::f64::consts::PI`.
 const PI: f64 = std::f64::consts::PI;
+
+use crate::plugins::fs::sat::sat_halfband::{self as hb, Stage};
 
 // ---------------------------------------------------------------- parameter events (declaration order = param1..param54)
 pub const P_DRIVE: usize = 0;
@@ -282,8 +291,11 @@ struct Jfet {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Channel {
+    /// The C++'s Butterworth anti-alias filters (the C++ reference build).
     up: [Biquad; 4],
     down: [Biquad; 4],
+    /// The half-band oversampler, base-rate stage first (FreeDAWm's).
+    os: [Stage; 2],
     in_hp_x1: f32,
     in_hp_y1: f32,
     out_hp_x1: f32,
@@ -359,6 +371,11 @@ struct Channel {
 /// Everything but the per-channel solver state: parameters, derived circuit values, coefficients.
 #[derive(Debug, Clone, Copy)]
 struct Settings {
+    // ---- oversampling (Rust)
+    /// Half-band oversampling (FreeDAWm) rather than the C++'s Butterworth.
+    halfband: bool,
+    /// The half-bands' round-trip delay, in samples.
+    os_latency: usize,
     // ---- parameter state
     drive_knob: f32,
     tone_knob: f32,
@@ -531,6 +548,8 @@ impl Default for Settings {
     /// The C++ default member initialisers.
     fn default() -> Self {
         Settings {
+            halfband: true,
+            os_latency: 0,
             drive_knob: 0.5,
             tone_knob: 0.5,
             level_knob: 0.5,
@@ -1189,7 +1208,13 @@ impl DistEngineDsp {
         s.os_t = 1.0 / os_fs;
 
         let fc = 0.4 * s.fs_base;
+        // the half-bands: their coefficients do not depend on the rate
+        let hb_coefs = [hb::coefs_for_stage(0), hb::coefs_for_stage(1)];
+        s.os_latency = hb::round_trip_latency(&hb_coefs, 2);
         for c in &mut self.ch {
+            for (st, coefs) in c.os.iter_mut().zip(&hb_coefs) {
+                st.set(coefs);
+            }
             c.up[0] = butter_lp(fc, os_fs, 0.5098);
             c.up[1] = butter_lp(fc, os_fs, 0.6013);
             c.up[2] = butter_lp(fc, os_fs, 0.8999);
@@ -1224,8 +1249,22 @@ impl DistEngineDsp {
     /// new C++ instance), in place: nothing is allocated. The caller pushes the parameters again.
     pub fn reset(&mut self) {
         let fs = self.s.fs_base;
+        let halfband = self.s.halfband;
         *self = DistEngineDsp::new();
+        self.s.halfband = halfband;
         self.prepare(fs);
+    }
+
+    /// The C++'s oversampling filters (zero-stuffing into an 8th-order Butterworth, no latency)
+    /// instead of FreeDAWm's half-bands: the fidelity test's build. Before `prepare`.
+    pub fn set_cpp_oversampling(&mut self, on: bool) {
+        self.s.halfband = !on;
+    }
+
+    /// How late the output is, in samples: the half-bands' delay, 0 with the C++'s filters or
+    /// while the engine's own bypass passes the input through.
+    pub fn latency_samples(&self) -> usize {
+        if self.s.halfband && !self.s.bypassed { self.s.os_latency } else { 0 }
     }
 
     /// `prepare (sampleRate)` on the live engine, for the host's transport reset (Play / Stop /
@@ -2098,6 +2137,40 @@ fn core_sample(s: &Settings, c: &mut Channel, vin: f64) -> f64 {
     }
 }
 
+// ---------------------------------------------------------------- oversampling
+/// One base-rate sample through the 4x oversampler around `core` (the circuit, at 4x).
+///
+/// `halfband`: FreeDAWm's two half-band stages (base-rate stage first, unity passband gain, the
+/// circuits fed the C++'s `f32` sample). Otherwise the C++'s: the sample zero-stuffed (x4) into
+/// the 8th-order Butterworth, the circuit run on all four, the same Butterworth on the way down,
+/// the last of the four kept.
+fn oversampled(halfband: bool, c: &mut Channel, vin: f32, mut core: impl FnMut(&mut Channel, f64) -> f64) -> f32 {
+    if halfband {
+        let u = hb::up4(&mut c.os, f64::from(vin));
+        let mut d = [0.0f64; 4];
+        for (dk, uk) in d.iter_mut().zip(u) {
+            *dk = f64::from(core(c, f64::from(uk as f32)) as f32);
+        }
+        return hb::down4(&mut c.os, d) as f32;
+    }
+    let mut y = 0.0f32;
+    for k in 0..4 {
+        let mut u = 0.0f32;
+        if k == 0 {
+            u = vin * 4.0;
+        }
+        for q in &mut c.up {
+            u = filter(q, u);
+        }
+        let mut d = core(c, f64::from(u)) as f32;
+        for q in &mut c.down {
+            d = filter(q, d);
+        }
+        y = d;
+    }
+    y
+}
+
 // ---------------------------------------------------------------- per-channel processing
 /// One base-rate sample of one channel: `(output, the NaN guard fired)`. On `true` the caller
 /// resets the solver states of both channels, as the C++ guard does in place.
@@ -2108,21 +2181,7 @@ fn process_channel(s: &Settings, c: &mut Channel, x: f32) -> (f32, bool) {
 
     let vin = hp_in * s.trim_sm * (INPUT_VOLTS as f32);
 
-    let mut y = 0.0f32;
-    for k in 0..4 {
-        let mut u = 0.0f32;
-        if k == 0 {
-            u = vin * 4.0;
-        }
-        for q in &mut c.up {
-            u = filter(q, u);
-        }
-        let mut d = core_sample(s, c, f64::from(u)) as f32;
-        for q in &mut c.down {
-            d = filter(q, d);
-        }
-        y = d;
-    }
+    let mut y = oversampled(s.halfband, c, vin, |c, u| core_sample(s, c, u));
 
     if s.circuit_idx == 2 || s.circuit_idx == 4 {
         // Muff / DS-1 passive tone: LP branch and HP branch blended by the pot
@@ -2210,5 +2269,112 @@ mod tests {
         d.set_parameter(P_OCD_HI - 1, 0.33);
         d.set_parameter(P_OCD_HI, 0.44);
         assert_eq!((d.s.lo[0], d.s.hi[0], d.s.lo[11], d.s.hi[11]), (0.11, 0.22, 0.33, 0.44));
+    }
+
+    /// `n` base-rate samples of `x` through channel 0's oversampler around `core`: the outputs.
+    fn chain(d: &mut DistEngineDsp, n: usize, x: impl Fn(usize) -> f32, mut core: impl FnMut(&mut Channel, f64) -> f64) -> Vec<f32> {
+        let halfband = d.s.halfband;
+        (0..n).map(|i| oversampled(halfband, &mut d.ch[0], x(i), &mut core)).collect()
+    }
+
+    /// The amplitude and phase delay (samples) of `y[from..]` at `w` radians per sample.
+    fn tone_of(y: &[f32], w: f64, from: usize) -> (f64, f64) {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, &v) in y.iter().enumerate().skip(from) {
+            re += f64::from(v) * (w * i as f64).sin();
+            im += f64::from(v) * (w * i as f64).cos();
+        }
+        let n = (y.len() - from) as f64;
+        (2.0 * re.hypot(im) / n, -im.atan2(re) / w)
+    }
+
+    fn engine(halfband: bool, sr: f64) -> DistEngineDsp {
+        let mut d = DistEngineDsp::new();
+        d.set_cpp_oversampling(!halfband);
+        d.prepare(sr);
+        d
+    }
+
+    #[test]
+    fn oversampling_latency_is_its_measured_delay() {
+        // With the circuit taken out (identity at 4x), a 300 Hz tone comes through the half-bands
+        // late by the reported latency, at every rate. The C++'s Butterworth reports none though
+        // it delays the signal more (printed for the record).
+        for sr in [44_100.0, 48_000.0, 96_000.0] {
+            let w = std::f64::consts::TAU * 300.0 / sr;
+            let n = sr as usize;
+            let mut d = engine(true, sr);
+            assert_eq!(d.latency_samples(), 5, "{sr}");
+            let (amp, delay) = tone_of(&chain(&mut d, n, |i| (0.5 * (w * i as f64).sin()) as f32, |_, u| u), w, n / 2);
+            assert!((amp - 0.5).abs() < 1e-3, "{sr}: unity in the passband ({amp})");
+            assert!((delay - 5.0).abs() < 0.6, "{sr}: measured {delay:.2}");
+            let mut r = engine(false, sr);
+            assert_eq!(r.latency_samples(), 0);
+            let (_, cpp) = tone_of(&chain(&mut r, n, |i| (0.5 * (w * i as f64).sin()) as f32, |_, u| u), w, n / 2);
+            println!("{sr}: half-bands {delay:.2} samples (reported 5); the C++'s Butterworth {cpp:.2} (reported 0)");
+        }
+        // The engine's own bypass passes the input untouched: no latency then.
+        let mut d = engine(true, 48_000.0);
+        d.set_parameter(P_BYPASS, 1.0);
+        assert_eq!(d.latency_samples(), 0);
+    }
+
+    #[test]
+    fn oversampling_rejects_what_would_fold_into_the_band() {
+        // Regression: the C++'s 8th-order Butterworth at 0.4 fs rejected only ~16 dB at the
+        // original Nyquist and ~28 dB at 0.6 fs, so what the circuits made above Nyquist folded
+        // back audibly. A tone made at 4x in the circuit's place, at f above the base Nyquist,
+        // leaves the decimator at |f - fs|; the half-bands hold every such fold below 0.45 fs
+        // under -90 dB. And on the way up, the image of a 0.4 fs tone (at 0.6 fs) the circuit
+        // would see is as far down.
+        let sr = 48_000.0;
+        let n = 48_000;
+        for halfband in [true, false] {
+            let mut worst = f64::NEG_INFINITY;
+            for f in [0.55, 0.6, 0.75, 0.9, 1.1, 1.3, 1.45] {
+                let mut d = engine(halfband, sr);
+                let w4 = std::f64::consts::TAU * f / 4.0;
+                let mut k = 0usize;
+                let y = chain(
+                    &mut d,
+                    n,
+                    |_| 0.0,
+                    |_, _| {
+                        k += 1;
+                        (w4 * k as f64).sin()
+                    },
+                );
+                let folded = (f - f.round()).abs();
+                let (amp, _) = tone_of(&y, std::f64::consts::TAU * folded, n / 2);
+                let db = 20.0 * amp.max(1e-12).log10();
+                worst = worst.max(db);
+                if halfband {
+                    assert!(db < -90.0, "{f} fs folds to {folded} fs at {db:.1} dB");
+                }
+            }
+            // images: the 4x signal the circuit gets for a 0.4 fs tone, at 0.4 fs and 0.6 fs
+            let mut d = engine(halfband, sr);
+            let mut seen = Vec::with_capacity(4 * n);
+            let w = std::f64::consts::TAU * 0.4;
+            chain(
+                &mut d,
+                n,
+                |i| (w * i as f64).sin() as f32,
+                |_, u| {
+                    seen.push(u as f32);
+                    0.0
+                },
+            );
+            let (tone, _) = tone_of(&seen, w / 4.0, 2 * n);
+            let (image, _) = tone_of(&seen, std::f64::consts::TAU * 0.6 / 4.0, 2 * n);
+            let image_db = 20.0 * (image / tone).max(1e-12).log10();
+            println!("halfband {halfband}: worst fold {worst:.1} dB, image {image_db:.1} dB");
+            if halfband {
+                assert!(image_db < -90.0, "{image_db:.1} dB");
+            } else {
+                // what the C++ lets through (the bug, pinned so the comparison stays honest)
+                assert!(worst > -30.0 && image_db > -35.0, "{worst:.1} / {image_db:.1}");
+            }
+        }
     }
 }

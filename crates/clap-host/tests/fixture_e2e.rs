@@ -13,7 +13,7 @@ const SYNTH: &str = "clap:org.soundcraft.test.synth";
 fn scan_lists_both_fixture_plugins() {
     let dir = fixture_dir();
     let found = soundcraft_clap_host::scan_paths(&[dir.to_path_buf()]);
-    assert_eq!(found.len(), 5);
+    assert_eq!(found.len(), 6);
     let g = found.iter().find(|d| d.id == GAIN).unwrap();
     assert_eq!(g.name, "Fixture Gain");
     assert_eq!(g.vendor, "SoundCraft tests");
@@ -311,4 +311,29 @@ fn state_handle_loads_into_the_running_instance() {
     drop(q);
     assert!(!handle.load_state(&blob), "the instance is gone");
     assert!(!handle.load_preset(1, None, Some("quiet")));
+}
+
+/// A plugin with a second (non-main) input port takes a sidechain key there.
+#[test]
+fn a_second_input_port_is_a_sidechain_fed_from_the_key() {
+    fixture_dir();
+    const KEYED: &str = "clap:org.soundcraft.test.keyed";
+    assert!(soundcraft_clap_host::plugin_info(KEYED).unwrap().sidechain, "a non-main input port offers a key");
+    assert!(!soundcraft_clap_host::plugin_info(GAIN).unwrap().sidechain);
+    let mut p = soundcraft_clap_host::create(KEYED).unwrap();
+    p.prepare(48_000.0, 64, 2);
+    let key = vec![vec![0.25f32; 100], vec![-0.5f32; 100]];
+    let mut io = vec![vec![0.5f32; 100], vec![0.5f32; 100]];
+    // Longer than one activated block: the key follows the main input piece by piece.
+    p.process_with_sidechain(&mut io, 100, Some(&key));
+    assert!(io[0].iter().all(|&x| (x - 0.75).abs() < 1e-6), "{:?}", &io[0][..4]);
+    assert!(io[1].iter().all(|&x| x.abs() < 1e-6), "{:?}", &io[1][..4]);
+    // A mono key feeds both key channels.
+    let mut io = vec![vec![0.5f32; 64], vec![0.5f32; 64]];
+    p.process_with_sidechain(&mut io, 64, Some(&[vec![0.1f32; 64]]));
+    assert!(io[1].iter().all(|&x| (x - 0.6).abs() < 1e-6), "{:?}", &io[1][..4]);
+    // No key: the key port is silent, not left holding the last key.
+    let mut io = vec![vec![0.5f32; 64], vec![0.5f32; 64]];
+    p.process(&mut io, 64);
+    assert!(io.iter().flatten().all(|&x| (x - 0.5).abs() < 1e-6), "{:?}", &io[0][..4]);
 }

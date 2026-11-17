@@ -107,7 +107,16 @@ fn chord_file(chords: &[&[u8]]) -> Vec<u8> {
     let mut seq = Sequence::default();
     for (i, pitches) in chords.iter().enumerate() {
         for &p in pitches.iter() {
-            seq.notes.push(Note { pitch: p, velocity: 100, release_velocity: 64, channel: 0, start: i as i64 * bar, length: bar });
+            seq.notes.push(Note {
+                probability: 100,
+                pitch: p,
+                velocity: 100,
+                muted: false,
+                release_velocity: 64,
+                channel: 0,
+                start: i as i64 * bar,
+                length: bar,
+            });
         }
     }
     let smf = Smf {
@@ -165,17 +174,35 @@ fn hostile_smf_is_an_error_not_a_panic() {
     assert!(preview_midi_import(&smpte, None).is_err(), "SMPTE");
     // Drums only (channel 10) have no chords.
     let mut seq = Sequence::default();
-    seq.notes.push(Note { pitch: 36, velocity: 100, release_velocity: 64, channel: 9, start: 0, length: 960 });
+    seq.notes.push(Note { probability: 100, pitch: 36, velocity: 100, muted: false, release_velocity: 64, channel: 9, start: 0, length: 960 });
     let drums = write_smf(&Smf { format: 1, tracks: vec![SmfTrack { name: String::new(), sequence: seq }], ..Smf::default() }).unwrap_or_default();
     assert!(preview_midi_import(&drums, None).is_err());
     // Chords that start very far in (drum notes walk the time out): bounded work, no huge allocation.
     let step = 0x0F00_0000i64;
     let mut seq = Sequence::default();
     for k in 1..=1000 {
-        seq.notes.push(Note { pitch: 36, velocity: 100, release_velocity: 64, channel: 9, start: k * step, length: 1 });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch: 36,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 9,
+            start: k * step,
+            length: 1,
+        });
     }
     for p in [60u8, 64, 67] {
-        seq.notes.push(Note { pitch: p, velocity: 100, release_velocity: 64, channel: 0, start: 1000 * step, length: 3840 });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch: p,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 1000 * step,
+            length: 3840,
+        });
     }
     let far = write_smf(&Smf { format: 1, tracks: vec![SmfTrack { name: String::new(), sequence: seq }], ..Smf::default() });
     assert!(far.is_ok());

@@ -136,12 +136,39 @@ fn table_matches_the_cpp_order_and_defaults() {
 }
 
 #[test]
-fn registered_with_no_latency_and_an_eight_second_tail() {
+fn registered_with_no_latency_and_at_least_an_eight_second_tail() {
     let mut p = crate::create("fs_delay").unwrap();
     assert_eq!(p.info().category, Category::FireStation);
     p.prepare(48_000.0, 512, 2);
     assert_eq!(p.latency(), 0);
+    // Default 350 ms at 40% loop gain: eleven echoes to -80 dB, over the C++'s 8 s floor.
+    let t = p.tail_samples();
+    assert!((384_000..480_000).contains(&t), "{t}");
+    // Little feedback: the floor.
+    p.set_param("feedback", 0.0);
     assert_eq!(p.tail_samples(), 384_000);
+}
+
+/// Bug 6 of the built-in effects parity list: the tail was 8 s whatever the feedback or freeze,
+/// so a bounce or freeze cut long echoes off.
+#[test]
+fn the_tail_follows_the_feedback_the_time_and_freeze() {
+    let mut p = crate::create("fs_delay").unwrap();
+    p.prepare(48_000.0, 512, 2);
+    let at = |p: &dyn Plugin| p.tail_samples() as f64 / 48_000.0;
+    // 1 s echoes at 70% (80% loop gain): about 43 of them to fall 80 dB.
+    p.set_param("time", 50f32.log(100.0));
+    p.set_param("feedback", 0.7);
+    let long = at(&*p);
+    assert!(long > 40.0, "{long}");
+    p.set_param("feedback", 0.3);
+    let short = at(&*p);
+    assert!(short < long && short > 8.0, "{short}");
+    p.set_param("freeze", 1.0);
+    assert_eq!(at(&*p), MAX_TAIL_S);
+    p.set_param("freeze", 0.0);
+    p.set_param("feedback", 1.0);
+    assert_eq!(at(&*p), MAX_TAIL_S, "a runaway loop");
 }
 
 #[test]
@@ -163,6 +190,27 @@ fn readouts_report_the_echo_time() {
     // And the UI's own map agrees.
     let (l, rr) = dc::delay_ms(0.6215, false, 6, 1, 0.5, 0.5, 0, 120.0);
     assert!((l - 350.0).abs() < 0.05 && (rr - 350.0).abs() < 0.05);
+}
+
+/// Bug 7 of the built-in effects parity list: the lines held 524288 samples at every rate, so at
+/// 192 kHz a synced whole note at 60 BPM (4 s) was cut to 2.7 s and lost the tempo.
+#[test]
+fn a_long_synced_delay_keeps_its_time_at_high_rates() {
+    for sr in [44_100.0f32, 48_000.0, 96_000.0, 192_000.0] {
+        let mut s = Delay::new();
+        s.set_param("sync", 1.0);
+        s.set_param("division", 13.0);
+        s.set_param("tempoSrc", 1.0);
+        s.set_param("tempo", 0.1);
+        s.prepare(sr, 512, 2);
+        let mut io = vec![sine(512, 0.3), sine(512, 0.3)];
+        s.process(&mut io, 512);
+        let r = readouts(&s);
+        assert!((r[0] - 4000.0).abs() < 1.0, "{sr}: {}", r[0]);
+    }
+    assert_eq!(d::line_len(48_000.0), d::BUF as usize);
+    assert_eq!(d::line_len(44_100.0), d::BUF as usize, "as the C++ at the common rates");
+    assert_eq!(d::line_len(192_000.0), 4 * d::BUF as usize);
 }
 
 #[test]
@@ -567,8 +615,14 @@ fn reset_does_not_allocate() {
         assert_eq!(ptrs, s.engine().buffer_ptrs());
         s.process(&mut io, 512);
     }
+    // A higher rate than ever before grows the lines (`prepare`, off the audio thread); a reset
+    // there allocates nothing, and nor does going back down and up again.
     s.prepare(96_000.0, 1024, 2);
     assert_eq!(engine_ptr, s.engine() as *const DelayEngineDsp);
+    let ptrs = s.engine().buffer_ptrs();
+    s.reset();
+    s.prepare(48_000.0, 1024, 2);
+    s.prepare(96_000.0, 1024, 2);
     assert_eq!(ptrs, s.engine().buffer_ptrs());
     assert!(all_finite(&io));
 }

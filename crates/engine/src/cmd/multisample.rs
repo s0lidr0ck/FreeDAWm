@@ -319,7 +319,16 @@ impl CaptureJob {
             let (hold_len, slot) = (sr.samples(held).max(1), sr.samples(held + self.tail).max(1));
             let mut strike = |job: &Self, at: Samples, len: Samples, velocity: u8| {
                 let ((on, sounds), (off, lets_go)) = (job.event(at), job.event(at.saturating_add(len)));
-                seq.notes.push(Note { pitch: note, velocity, release_velocity: 64, channel: 0, start: on, length: off.saturating_sub(on).max(1) });
+                seq.notes.push(Note {
+                    pitch: note,
+                    velocity,
+                    release_velocity: 64,
+                    channel: 0,
+                    muted: false,
+                    probability: 100,
+                    start: on,
+                    length: off.saturating_sub(on).max(1),
+                });
                 (sounds, lets_go)
             };
             for &velocity in &self.velocities {
@@ -343,7 +352,13 @@ impl CaptureJob {
         } else {
             for (kind, value) in [(Strike::PedalDown, 127), (Strike::PedalUp, 0)] {
                 let (tick, on) = self.event(at);
-                seq.ctrls.push(soundcraft_midi::CtrlEvent { tick, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(64), value });
+                seq.ctrls.push(soundcraft_midi::CtrlEvent {
+                    tick,
+                    channel: 0,
+                    kind: soundcraft_midi::CtrlKind::Cc(64),
+                    value,
+                    shape: Default::default(),
+                });
                 cuts.push(Cut { kind, on, start: on });
                 at = at.saturating_add(sr.samples(CAPTURE_PEDAL_SECS));
             }

@@ -177,7 +177,7 @@ impl Rig {
     /// The grid line nearest `at`.
     fn grid(&self, at: i64) -> i64 {
         let s = self.app.engine.session();
-        s.edit.grid.snap(at, s.sample_rate, &s.tempo, s.frame_rate)
+        s.edit.grid.snap(at, &s.grid_ctx())
     }
 }
 

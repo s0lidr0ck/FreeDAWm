@@ -258,10 +258,8 @@ fn render_clip(e: &Engine, track: TrackId, clip: &Clip, bare: bool) -> Vec<Vec<f
         c.gain_db = 0.0;
         c.gain_env.clear();
         c.muted = false;
-    }
-    if bare {
         // ... and without its clip effects, which stay on the clip and keep playing live.
-        tmp.edit.set_flag(&format!("clip_fx.bypass.{}", clip.id.0), true);
+        c.effects_bypass = true;
     }
     soundcraft_mix::render_clips(&tmp, track, clip.range())
 }
@@ -705,6 +703,7 @@ pub(crate) fn apply_inner(e: &mut Engine, job: &MlJob, result: MlResult) -> Resu
                             channel,
                             kind: soundcraft_midi::CtrlKind::Program,
                             value: i32::from(program),
+                            shape: Default::default(),
                         });
                         seq.sort();
                     }
@@ -1147,7 +1146,16 @@ pub fn midi_sequence(s: &soundcraft_model::Session, start: Samples, len: Samples
             continue;
         }
         let b = tick(n.end).clamp(a + 1, last);
-        seq.notes.push(Note { pitch: n.pitch.min(127), velocity: n.velocity.clamp(1, 127), release_velocity: 64, channel, start: a, length: b - a });
+        seq.notes.push(Note {
+            probability: 100,
+            pitch: n.pitch.min(127),
+            velocity: n.velocity.clamp(1, 127),
+            muted: false,
+            release_velocity: 64,
+            channel,
+            start: a,
+            length: b - a,
+        });
     }
     trim_same_pitch_overlaps(&mut seq.notes);
     for (a, b) in &t.pedals {
@@ -1157,8 +1165,8 @@ pub fn midi_sequence(s: &soundcraft_model::Session, start: Samples, len: Samples
         }
         // Up again before the clip ends, so the pedal never hangs past it.
         let b = tick(*b).clamp(a, last - 1);
-        seq.ctrls.push(CtrlEvent { tick: a, channel, kind: CtrlKind::Cc(64), value: 127 });
-        seq.ctrls.push(CtrlEvent { tick: b, channel, kind: CtrlKind::Cc(64), value: 0 });
+        seq.ctrls.push(CtrlEvent { tick: a, channel, kind: CtrlKind::Cc(64), value: 127, shape: Default::default() });
+        seq.ctrls.push(CtrlEvent { tick: b, channel, kind: CtrlKind::Cc(64), value: 0, shape: Default::default() });
     }
     if !t.bends.is_empty() {
         let mut bends: Vec<(i64, i32)> = t.bends.iter().map(|(at, v)| (tick(*at), (*v).clamp(-8192, 8191))).filter(|(at, _)| *at < last).collect();
@@ -1189,7 +1197,13 @@ pub fn midi_sequence(s: &soundcraft_model::Session, start: Samples, len: Samples
         }
         bends.extend(extra);
         bends.sort_by_key(|b| b.0);
-        seq.ctrls.extend(bends.into_iter().map(|(tick, value)| CtrlEvent { tick, channel, kind: CtrlKind::PitchBend, value }));
+        seq.ctrls.extend(bends.into_iter().map(|(tick, value)| CtrlEvent {
+            tick,
+            channel,
+            kind: CtrlKind::PitchBend,
+            value,
+            shape: Default::default(),
+        }));
     }
     seq.sort();
     seq

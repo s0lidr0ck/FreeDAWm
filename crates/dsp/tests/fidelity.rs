@@ -8,6 +8,10 @@
 //! -40 dB, and a case that passes the normal -60 dB bar while it has an exception fails as a STALE
 //! EXCEPTION (so an exception cannot linger and later hide a regression).
 //!
+//! Where FreeDAWm departs from the C++ on purpose (an owner-approved fix), the render uses the
+//! engine's C++-faithful build (`plugins::fs::cpp_reference`), so the rest of the port is still
+//! held to the reference.
+//!
 //! The render mirrors `FireStation/Tools/renderfile.cpp`: prepare at the case's rate (a plain tag:
 //! the same input samples at every rate), THEN set the case's values, then process in the case's
 //! block size. Values are set in the plugin's parameter order, the order the C++ wrapper pushes
@@ -159,7 +163,9 @@ fn read_wav(path: &Path) -> Vec<Vec<f32>> {
 }
 
 fn render(id: &str, case: &Case, input: &[Vec<f32>]) -> Vec<Vec<f32>> {
-    let mut p = soundcraft_dsp::create(id).unwrap_or_else(|| panic!("unknown plugin {id}"));
+    // An engine with a deliberate FreeDAWm difference renders its C++-faithful build here.
+    let mut p =
+        soundcraft_dsp::plugins::fs::cpp_reference(id).or_else(|| soundcraft_dsp::create(id)).unwrap_or_else(|| panic!("unknown plugin {id}"));
     let block = case.block.max(1);
     p.prepare(case.sr as f32, block, 2);
     for info in p.info().params {

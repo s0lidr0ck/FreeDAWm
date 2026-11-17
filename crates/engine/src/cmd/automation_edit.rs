@@ -223,6 +223,9 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
         if let Some(tr) = s.track_mut(*t) {
             let lane = tr.lane_mut(param);
             out.clear();
+            // The pasted points replace what the lane had between the first and the last.
+            let span = pts.last().map_or(0, |x| x.at);
+            lane.clear_range(at, at.saturating_add(span).saturating_add(1));
             for x in &pts {
                 let when = at.saturating_add(x.at);
                 lane.set_point_curved(when, x.value, Some(x.curve));
@@ -301,6 +304,15 @@ mod tests {
         e.execute("automation.copy", &json!({"track": t.0, "param": "volume", "start": 0, "end": 300})).unwrap();
         assert_eq!(e.clipboard.auto_points.len(), 4);
         assert!(e.execute("automation.copy", &json!({"track": t.0, "param": "volume", "points": [7]})).is_err(), "nothing there");
+    }
+
+    /// Mix bug 7: pasted points were laid over the old ones between them.
+    #[test]
+    fn pasted_points_replace_the_points_between_them() {
+        let (mut e, t) = volume_lane(&[(0, 0.0), (100, -6.0), (1000, 3.0), (1050, 3.0), (1100, 3.0), (2000, 3.0)]);
+        e.execute("automation.copy", &json!({"track": t.0, "param": "volume", "points": [0, 100]})).unwrap();
+        e.execute("automation.paste", &json!({"track": t.0, "at": 1000})).unwrap();
+        assert_eq!(points(&e, t), [(0, 0.0), (100, -6.0), (1000, 0.0), (1100, -6.0), (2000, 3.0)]);
     }
 
     #[test]

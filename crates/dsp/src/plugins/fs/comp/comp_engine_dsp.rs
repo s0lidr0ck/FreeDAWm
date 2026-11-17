@@ -128,6 +128,7 @@ struct Chan {
     v2: f32,
     dc_x: f32, // DC blocker on the colour residual
     dc_y: f32,
+    heard: f32, // Rust: what the detector heard this sample, after its filters (Listen)
     up: Hb,
     dn: Hb,
 }
@@ -1185,10 +1186,15 @@ impl LaneModel {
 
     //==============================================================================
     // sidechain: pick the source, filter it, and measure it the way the style's detector does
-    fn detect(&self, c: &mut Chan, x: f32) {
+    ///
+    /// `key` (Rust): an external key's sample. It replaces the style's own source, feedback
+    /// included: a keyed lane measures the key, feed-forward, through the same filters.
+    fn detect(&self, c: &mut Chan, x: f32, key: Option<f32>) {
         let mut s = x;
 
-        if self.sty == 6 || self.is_fb {
+        if let Some(k) = key {
+            s = k;
+        } else if self.sty == 6 || self.is_fb {
             s = c.fb;
         } else if self.sty == 2 {
             s = c.fb + self.opt_ff * x;
@@ -1222,6 +1228,7 @@ impl LaneModel {
             c.t3y = y3;
             s = y3 * self.th_norm;
         }
+        c.heard = s;
 
         if self.sty == 4 {
             // what reaches the rectifier before the sidechain VCA's gain reduction is applied (volts)
@@ -1665,11 +1672,14 @@ impl CompLane {
     /// summing, doing it per lane would add the untouched channel three times. The wrapper
     /// does it once. What is done here is zeroing the gain on the channel this mode ignores,
     /// because that is a property of this lane's detector.
-    pub fn process_sample(&mut self, p0: f32, p1: f32, ch_mode: i32, pwr: f32) -> (f32, f32) {
+    ///
+    /// `key` (Rust): the external key's two sides, in the same channel mode as `p0`/`p1`; `None`
+    /// keys from the lane's own input as the C++ does.
+    pub fn process_sample(&mut self, p0: f32, p1: f32, ch_mode: i32, pwr: f32, key: Option<(f32, f32)>) -> (f32, f32) {
         let m = &self.m;
         let (c_l, c_r) = (&mut self.c_l, &mut self.c_r);
-        m.detect(c_l, p0);
-        m.detect(c_r, p1);
+        m.detect(c_l, p0, key.map(|k| k.0));
+        m.detect(c_r, p1, key.map(|k| k.1));
 
         let lk = if ch_mode >= 2 { 0.0 } else { m.p_link };
         // link: the louder channel's detector reading drives both ...
@@ -1708,6 +1718,11 @@ impl CompLane {
         self.m.ag_num = new_num;
         self.m.ag_den = new_den;
         (w0, w1)
+    }
+
+    /// What the two detectors heard on the last sample, after their filters (Listen).
+    pub fn heard(&self) -> (f32, f32) {
+        (self.c_l.heard, self.c_r.heard)
     }
 
     /// The more negative of the two channels, for the gain-reduction meter.
@@ -1954,6 +1969,8 @@ pub struct CompEngineDsp {
     blk_in_pk: f32,
     blk_out_pk: f32,
     blk_lane_gr: [f32; NUM_LANES],
+    /// Rust: play what the detectors hear (Listen).
+    listen: bool,
 }
 
 impl Default for CompEngineDsp {
@@ -2014,6 +2031,7 @@ impl CompEngineDsp {
             blk_in_pk: 0.0,
             blk_out_pk: 0.0,
             blk_lane_gr: [0.0; NUM_LANES],
+            listen: false,
         }
     }
 
@@ -2174,10 +2192,21 @@ impl CompEngineDsp {
     /// most 2 and buffers at least `num_samples` long).
     #[allow(clippy::needless_range_loop)] // `n` indexes both channels, as the C++ loop does
     pub fn process(&mut self, channels: &mut [Vec<f32>], num_channels: usize, num_samples: usize) {
+        self.process_keyed(channels, num_channels, num_samples, None);
+    }
+
+    /// [`Self::process`] with an external key (Rust addition): `key` holds one or two buffers at
+    /// least `num_samples` long (one is used for both sides). Every lane's detector measures the
+    /// key instead of its own input, in the channel mode in force (mid/side when it is), through
+    /// its sidechain filters; in Multiband every band hears the whole key. While Listen is on the
+    /// output is what the first active lane's detectors hear (the key or the input, after the SC HPF), and the
+    /// compressed signal is not heard.
+    pub fn process_keyed(&mut self, channels: &mut [Vec<f32>], num_channels: usize, num_samples: usize, key: Option<&[Vec<f32>]>) {
         if num_channels == 0 || channels.is_empty() {
             return;
         }
         let stereo = num_channels >= 2 && channels.len() >= 2;
+        let key = key.filter(|k| k.first().is_some_and(|b| b.len() >= num_samples) && k.get(1).is_none_or(|b| b.len() >= num_samples));
 
         for n in 0..num_samples {
             if self.ctl == 0 {
@@ -2235,6 +2264,13 @@ impl CompEngineDsp {
 
             let pwr = x0 * x0 + x1 * x1;
 
+            let keyed = key.map(|k| {
+                let k0 = k[0][n];
+                let k1 = k.get(1).map_or(k0, |b| b[n]);
+                let (k0, k1) = if k0.is_finite() && k1.is_finite() { (k0, k1) } else { (0.0, 0.0) };
+                if ms_on { (0.5 * (k0 + k1), 0.5 * (k0 - k1)) } else { (k0, k1) }
+            });
+
             // ---- the parallel sum. Every lane sees the same input; none sees another's output.
             let mut s0 = 0.0f32;
             let mut s1 = 0.0f32;
@@ -2262,7 +2298,7 @@ impl CompEngineDsp {
                     let lp = if first { pwr } else { (if ms_on { 2.0 } else { 1.0 }) * (c0 * c0 + c1 * c1) };
                     first = false;
 
-                    let (w0, w1) = self.lanes[i].process_sample(c0, c1, self.ch_mode, lp);
+                    let (w0, w1) = self.lanes[i].process_sample(c0, c1, self.ch_mode, lp, keyed);
                     let g = self.level_gain(i);
                     c0 = g * w0;
                     c1 = g * w1;
@@ -2292,7 +2328,7 @@ impl CompEngineDsp {
                 }
 
                 let lane_pwr = if self.multiband { band0[i] * band0[i] + band1[i] * band1[i] } else { pwr };
-                let (w0, w1) = self.lanes[i].process_sample(band0[i], band1[i], self.ch_mode, lane_pwr);
+                let (w0, w1) = self.lanes[i].process_sample(band0[i], band1[i], self.ch_mode, lane_pwr, keyed);
 
                 // Lane A at unity multiplies by exactly 1.0f.
                 let g = self.level_gain(i);
@@ -2314,12 +2350,20 @@ impl CompEngineDsp {
                 s0 = p0;
             }
 
-            let wl = if ms_on { s0 + s1 } else { s0 };
-            let wr = if ms_on { s0 - s1 } else { s1 };
+            let mut wl = if ms_on { s0 + s1 } else { s0 };
+            let mut wr = if ms_on { s0 - s1 } else { s1 };
+            if self.listen {
+                // what the detectors hear, in place of the compressed signal and the dry
+                let lane = self.lane_on.iter().position(|&on| on).unwrap_or(0);
+                let (h0, h1) = self.lanes[lane].heard();
+                wl = if ms_on { h0 + h1 } else { h0 };
+                wr = if ms_on { h0 - h1 } else { h1 };
+            }
+            let dry_now = if self.listen { 0.0 } else { self.dry_s };
 
             // Dry is its own fader beside the lanes, and the result is their SUM.
-            let pl = x0 * self.dry_s + wl * self.ms_fade;
-            let pr = x1 * self.dry_s + wr * self.ms_fade;
+            let pl = x0 * dry_now + wl * self.ms_fade;
+            let pr = x1 * dry_now + wr * self.ms_fade;
 
             let y0 = pl + self.byp_s * (x0 - pl);
             let y1 = pr + self.byp_s * (x1 - pr);
@@ -2359,6 +2403,11 @@ impl CompEngineDsp {
                 self.meter_count = 0;
             }
         }
+    }
+
+    /// Listen (Rust addition): play what the detectors hear instead of the result.
+    pub fn set_listen(&mut self, on: bool) {
+        self.listen = on;
     }
 
     fn level_gain(&self, i: usize) -> f32 {

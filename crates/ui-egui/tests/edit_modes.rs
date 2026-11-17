@@ -118,7 +118,7 @@ fn shuffle_drags_swap_clips() {
 fn grid_drags_snap_the_dragged_clip_not_the_one_under_the_pointer() {
     let (mut app, ctx, t, ids) = app("grid", "grabber", &[(1000, SEC), (3 * SEC + 777, SEC)]);
     let s = app.engine.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     drag(&ctx, &mut app, t, SEC / 2, 3 * SEC + SEC / 2);
     assert_eq!(starts(&app, &ids[..1])[0] % step, 0);
 }
@@ -177,7 +177,7 @@ fn snap_to_grid_snaps_the_edit_cursor_while_slip_moves_stay_free() {
     let (mut app, ctx, t, ids) = app("slip", "grabber", &[(1000, SEC)]);
     app.engine.execute("edit.snap_to_grid", &json!({})).unwrap();
     let s = app.engine.session();
-    let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
     drag(&ctx, &mut app, t, SEC / 2, SEC / 2 + 10_000);
     let moved = starts(&app, &ids)[0];
     assert!(moved > 1000 && moved % step != 0, "{moved}");
@@ -249,6 +249,56 @@ fn toolbar_clicks_add_snap_to_grid_lock_shuffle_and_switch_grid_modes_despite_th
         click(&mut h, label, Modifiers::NONE);
         assert_eq!(state(&h).0, want, "{label}");
     }
+}
+
+#[test]
+fn options_overlap_layer_keeps_the_clip_a_drag_lands_on_and_the_top_one_takes_clicks() {
+    let (mut app, ctx, t, ids) = app("slip", "grabber", &[(0, 4 * SEC), (6 * SEC, SEC)]);
+    let path = "Options > Overlap > Layer";
+    let id = soundcraft_ui_egui::menus::command_for_path(path, &soundcraft_ui_egui::menus::ui_aliases()).unwrap();
+    soundcraft_ui_egui::menus::invoke_menu(&mut app, &id, path);
+    assert!(soundcraft_ui_egui::menus::item_state(&app, path, Some(&id)).1, "Layer is checked");
+    assert!(!soundcraft_ui_egui::menus::item_state(&app, "Options > Overlap > Overwrite", Some(&id)).1);
+    // The second clip dragged onto the middle of the first: both stay whole.
+    drag(&ctx, &mut app, t, 6 * SEC + SEC / 2, 2 * SEC);
+    let s = app.engine.session();
+    let (a, b) = (s.find_clip(ids[0]).unwrap().1.clone(), s.find_clip(ids[1]).unwrap().1.clone());
+    assert_eq!((a.start, a.length), (0, 4 * SEC), "the clip underneath is not cut");
+    assert_eq!(b.layer, a.layer + 1, "the dropped clip is on top");
+    assert!((b.start - (1.5 * SEC as f64) as i64).abs() < SEC / 10, "{}", b.start);
+    // One undo puts the drag back.
+    let moved = starts(&app, &ids);
+    app.engine.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), vec![0, 6 * SEC]);
+    app.engine.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), moved);
+    // A click where they overlap picks the top clip.
+    frame(&ctx, &mut app, vec![]);
+    let at = point(&app, t, 2 * SEC);
+    click(&ctx, &mut app, at);
+    assert_eq!(app.engine.session().edit.selected_clips, vec![ids[1]]);
+}
+
+#[test]
+fn a_grabber_drag_on_an_edit_grouped_track_moves_the_group_and_trims_follow() {
+    let (mut app, ctx, t, ids) = tracks("slip", "grabber", &[&[(SEC, 2 * SEC)], &[(SEC, 2 * SEC)], &[(SEC, 2 * SEC)]]);
+    app.engine.execute("track.group", &json!({"tracks": [t[0].0, t[1].0], "name": "Drums"})).unwrap();
+    drag(&ctx, &mut app, t[0], 2 * SEC, 3 * SEC);
+    let moved = starts(&app, &ids);
+    assert!((moved[0] - 2 * SEC).abs() < SEC / 10, "{moved:?}");
+    assert_eq!(moved[1], moved[0], "the grouped track's clip moves as far");
+    assert_eq!(moved[2], SEC, "the track outside the group stays");
+    // One undo step for both.
+    app.engine.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(starts(&app, &ids), vec![SEC, SEC, SEC]);
+    // The Trim tool on one grouped clip's end trims the other's too.
+    app.engine.execute("edit.tool", &json!({"tool": "trim"})).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    drag(&ctx, &mut app, t[1], 3 * SEC - 200, 2 * SEC);
+    let len = |i: usize| app.engine.session().find_clip(ids[i]).unwrap().1.length;
+    assert!(len(1) < 2 * SEC - SEC / 2, "{}", len(1));
+    assert_eq!(len(0), len(1));
+    assert_eq!(len(2), 2 * SEC);
 }
 
 #[test]

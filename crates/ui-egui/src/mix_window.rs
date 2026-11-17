@@ -3,13 +3,16 @@
 use crate::SoundApp;
 use crate::theme::{Tokens, bold, regular, rgb};
 use crate::widgets::{
-    PannerEdit, PannerSpeaker, db_text, fader, fader_slot, groove, input_monitor_key, inset, meter, meter_scale, multi_meter, pan_knob, pan_text,
+    PannerEdit, PannerSpeaker, db_text, fader, fader_slot, groove, input_monitor_key, inset, meter_scale, multi_meter, pan_knob, pan_text,
     raised_key, rec_toggle, selector_box, selector_box_with_tooltip, shade, surround_panner, text_toggle, vgradient,
 };
 use egui::{Align2, Color32, CornerRadius, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use soundcraft_model::{ChannelFormat, ModuleId, Route, StripSize, SurroundPan, Track, TrackId, TrackKind};
 use soundcraft_playback::MeterSnapshot;
+
+/// The Object/Bed switch is a mark for now: say so where it is clicked.
+pub(crate) const OBJECT_HOVER: &str = "Marks the track as an immersive object or as bed. A mark only: objects are not rendered yet, so the track plays through its panner into the bed either way.";
 
 /// A strip's width: Wide 150, Slim 80; `Auto` follows the Mix window's global toggle
 /// (`global_wide`, wide unless View › Narrow Mix / Slim Strips is on).
@@ -399,7 +402,11 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             _ if track.kind == TrackKind::Instrument => instrument_slot(app, ui, track, sr),
             Some(k) => insert_slot(app, ui, track, k, sr, false),
             None if track.kind == TrackKind::Midi => {
-                ui.painter().text(sr.center(), Align2::CENTER_CENTER, "MIDI in: all", regular(9.0), t.text_dim);
+                let input = match &track.mixer.input {
+                    soundcraft_model::Route::Midi(m) => m.label(),
+                    _ => "MIDI: none".to_string(),
+                };
+                ui.painter().text(sr.center(), Align2::CENTER_CENTER, input, regular(9.0), t.text_dim);
             }
             None => {}
         }
@@ -411,7 +418,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             let on = app.engine.session().edit.flag(&format!("object.{}", id.0));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(sec));
             let label = egui::RichText::new(if on { "OBJECT" } else { "BED" }).font(bold(9.0));
-            if c.add_sized(sec.size(), egui::Button::new(label).selected(on)).on_hover_text("Route as an immersive object or to the bed").clicked() {
+            if c.add_sized(sec.size(), egui::Button::new(label).selected(on)).on_hover_text(OBJECT_HOVER).clicked() {
                 let _ = app.run("track.object", json!({"tracks": [id.0], "object": !on}));
             }
         }
@@ -601,7 +608,11 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             let cx = if n == 2 { x0 + inner_w * (0.25 + 0.5 * i as f32) } else { x0 + inner_w * 0.5 };
             let kr = Rect::from_center_size(pos2(cx, y + 17.0), vec2(ks, ks));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(kr));
-            let mut v = track.mixer.pan.get(i).copied().unwrap_or(0.0);
+            // The knob follows its automation as the fader does.
+            let mut v = app
+                .engine
+                .automation_shown(id, &soundcraft_model::AutoParam::Pan(i as u8))
+                .unwrap_or_else(|| track.mixer.pan.get(i).copied().unwrap_or(0.0));
             let before = v;
             let resp = pan_knob(&mut c, ks, &mut v, "Pan (drag; double-click centres)");
             if (v - before).abs() > f32::EPSILON {
@@ -612,6 +623,13 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             if resp.dragged() {
                 app.hold_control(id, soundcraft_model::AutoParam::Pan(i as u8));
             }
+            resp.context_menu(|ui| {
+                crate::midi_learn::menu_items(
+                    app,
+                    ui,
+                    soundcraft_model::MidiTarget::Param { track: id, param: soundcraft_model::AutoParam::Pan(i as u8) },
+                );
+            });
             let _ = resp.on_hover_text("Alt-drag: all tracks · Alt+Shift-drag: selected tracks");
             let pr = Rect::from_center_size(pos2(cx, y + 42.0), vec2(ks + 8.0, 13.0));
             inset(ui.painter(), pr, t.counter_bg);
@@ -689,7 +707,13 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     // In Trim mode the fader sets the trim the pass writes to the trim lane (centred on 0 dB),
     // as in Pro Tools; the volume stays where it is.
     let trim_mode = track.mixer.automation_mode == soundcraft_model::AutomationMode::Trim;
-    let shown_db = if trim_mode { app.engine.trim_shown(id) } else { track.mixer.volume_db };
+    // A fader follows its automation while the track reads it and the fader is not held.
+    let shown_db = if trim_mode {
+        app.engine.trim_shown(id)
+    } else {
+        app.engine.automation_shown(id, &soundcraft_model::AutoParam::Volume).unwrap_or(track.mixer.volume_db)
+    };
+    crate::midi_learn::context_at(app, ui, fr, crate::midi_learn::volume(id));
     if let Some(db) = fader(ui, fr, shown_db, ui.id().with(("fader", id.0))) {
         app.gesture = Some(crate::Gesture::Fader { track: id, start_db: shown_db });
         if trim_mode {
@@ -727,10 +751,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         multi_meter(ui, mr, &lv, &labels, md.clip);
     } else if chans >= 2 {
         let mw = mr.width() / 2.0 - 1.0;
-        meter(ui, Rect::from_min_size(mr.min, vec2(mw, mr.height())), md.level[0], md.hold[0], md.clip);
-        meter(ui, Rect::from_min_size(pos2(mr.min.x + mw + 2.0, mr.min.y), vec2(mw, mr.height())), md.level[1], md.hold[1], md.clip);
+        crate::widgets::meter_of(ui, Rect::from_min_size(mr.min, vec2(mw, mr.height())), &md, 0);
+        crate::widgets::meter_of(ui, Rect::from_min_size(pos2(mr.min.x + mw + 2.0, mr.min.y), vec2(mw, mr.height())), &md, 1);
     } else {
-        meter(ui, mr, md.level[0], md.hold[0], md.clip);
+        crate::widgets::meter_of(ui, mr, &md, 0);
     }
     if md.gr > 0.1 {
         ui.painter().text(pos2(mr.center().x, mr.min.y - 3.0), Align2::CENTER_BOTTOM, format!("-{:.0}", md.gr), regular(8.0), t.meter_yellow);
@@ -1090,6 +1114,14 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         if ui.add(egui::Button::selectable(ins.bypass, "Bypass")).clicked() {
             run_pick(app, ui, "mix.module_bypass", json!({"track": id.0, "module": ins.id.0}));
         }
+        // Inactive: the module does not run at all (its CPU is free), as Pro Tools' Make Inactive.
+        if ui.add(egui::Button::selectable(!ins.active, "Inactive")).clicked() {
+            run_pick(app, ui, "mix.module_active", json!({"track": id.0, "module": ins.id.0}));
+        }
+        // Post-Fader: the module runs after the fader and mute (Cubase's slots 7-8).
+        if ui.add(egui::Button::selectable(ins.post_fader, "Post-Fader")).on_hover_text("Run after the fader and mute").clicked() {
+            run_pick(app, ui, "mix.module_post_fader", json!({"track": id.0, "module": ins.id.0}));
+        }
         if edit_list && crate::module_drawer::has_drawer(&ins.plugin) && ui.button("Open in Window").clicked() {
             // The generic window: every parameter as a slider, outside the Mix window.
             crate::chain_view::open_window(app, id, ins.id);
@@ -1123,10 +1155,12 @@ pub(crate) enum Pick {
 /// The picker's groups of built-in plugins (effects, or `instruments`), in order: the FireStation
 /// engines and the stock plugins listed with them ([`soundcraft_dsp::PluginInfo::with_engines`])
 /// first (by name, under [`BUILT_IN_GROUP`]), then the rest by category in the registry's order ("Utilities" for
-/// the effects, "Built-in" for the instruments). Only the listed plugins
+/// the effects, Dither and the meters among them; "Built-in" for the instruments). Only the listed plugins
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
     use soundcraft_dsp::Category;
+    // Dither is a utility here, not a group of its own (the owner's call).
+    let group_of = |p: &soundcraft_dsp::PluginInfo| if p.category == Category::Dither { Category::Other } else { p.category };
     let listed = || soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument == instruments);
     let mut out = Vec::new();
     let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
@@ -1136,8 +1170,8 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
     }
     let mut cats: Vec<Category> = Vec::new();
     for p in listed().filter(|p| !p.with_engines()) {
-        if !cats.contains(&p.category) {
-            cats.push(p.category);
+        if !cats.contains(&group_of(p)) {
+            cats.push(group_of(p));
         }
     }
     for c in cats {
@@ -1146,7 +1180,7 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
             Category::Instrument => "Built-in".to_string(),
             c => format!("{c:?}"),
         };
-        out.push((name, listed().filter(|p| !p.with_engines() && p.category == c).collect()));
+        out.push((name, listed().filter(|p| !p.with_engines() && group_of(p) == c).collect()));
     }
     out
 }
@@ -1192,7 +1226,27 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
         }
         return;
     }
-    let groups = picker_groups(false);
+    // Favourites and recents first (the browser's stars and the last inserted).
+    let effect = |id: &String| soundcraft_dsp::plugin_info(id).is_none_or(|p| !p.is_instrument);
+    for (name, ids) in [("Favourites", app.ui.browser.favourites.clone()), ("Recent", app.ui.browser.recent.clone())] {
+        let ids: Vec<String> = ids.into_iter().filter(|i| effect(i) && !app.ui.browser.hidden.contains(i)).collect();
+        if !ids.is_empty() {
+            ui.menu_button(name, |ui| {
+                for pid in &ids {
+                    let label = soundcraft_dsp::plugin_info(pid).map_or_else(|| crate::chain_view::plugin_name(pid), crate::plugin_titles::titled);
+                    if ui.button(label).clicked() {
+                        pick_module(app, ui, id, pick, pid);
+                    }
+                }
+            });
+        }
+    }
+    let hidden = app.ui.browser.hidden.clone();
+    let groups: Vec<_> = picker_groups(false)
+        .into_iter()
+        .map(|(g, l)| (g, l.into_iter().filter(|p| !hidden.iter().any(|h| h == p.id)).collect::<Vec<_>>()))
+        .filter(|(_, l)| !l.is_empty())
+        .collect();
     let fs_first = groups.first().is_some_and(|(g, _)| g == BUILT_IN_GROUP);
     for (i, (group, list)) in groups.into_iter().enumerate() {
         ui.menu_button(group, |ui| {
@@ -1211,6 +1265,22 @@ pub(crate) fn module_picker(app: &mut SoundApp, ui: &mut Ui, id: TrackId, pick: 
     if let Some(plugin) = hosted_menus(ui, false) {
         pick_module(app, ui, id, pick, &plugin);
     }
+    ui.separator();
+    // The effects this menu shows: unticked ones are kept out of it (search still finds them).
+    ui.menu_button("Show or Hide Effects", |ui| {
+        for (_, list) in picker_groups(false) {
+            for p in list {
+                let mut shown = !app.ui.browser.hidden.iter().any(|h| h == p.id);
+                if ui.checkbox(&mut shown, crate::plugin_titles::titled(p)).changed() {
+                    if shown {
+                        app.ui.browser.hidden.retain(|h| h != p.id);
+                    } else {
+                        app.ui.browser.hidden.push(p.id.to_string());
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// Adds (or swaps in) the plugin picked and, as DAWs do, opens it once the audio engine has it
@@ -1223,6 +1293,10 @@ fn pick_module(app: &mut SoundApp, ui: &Ui, track: TrackId, pick: Pick, plugin: 
     match r {
         Ok(v) => {
             if let Some(m) = v["module"].as_u64().and_then(|m| u32::try_from(m).ok()) {
+                // A new insert starts from its plug-in's default preset, when one is chosen.
+                if matches!(pick, Pick::Add(_)) {
+                    crate::preset_house::apply_default(app, track, ModuleId(m));
+                }
                 app.pending_open = Some((track, ModuleId(m)));
             }
         }
@@ -1571,7 +1645,9 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
 /// A built-in plugin's description, else a hosted CLAP (`clap:<id>`), VST3 (`vst3:<class id>`) or
 /// Audio Unit (`au:<type>:<subtype>:<manufacturer>`) plugin's.
 pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
-    soundcraft_dsp::plugin_info(id)
+    soundcraft_mix::external_midi::plugin_info(id)
+        .or_else(|| soundcraft_mix::track_midi::plugin_info(id))
+        .or_else(|| soundcraft_dsp::plugin_info(id))
         .or_else(|| soundcraft_clap_host::plugin_info(id))
         .or_else(|| soundcraft_vst3_host::plugin_info(id))
         .or_else(|| soundcraft_au_host::plugin_info(id))
@@ -1625,6 +1701,13 @@ fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r:
     if fresp.drag_stopped() {
         app.engine.end_merge();
     }
+    fresp.context_menu(|ui| {
+        crate::midi_learn::menu_items(
+            app,
+            ui,
+            soundcraft_model::MidiTarget::Param { track: id, param: soundcraft_model::AutoParam::SendLevel(slot as u8) },
+        );
+    });
     if fresp.clicked() && ui.input(|i| i.modifiers.alt) {
         let _ = app.run("mix.send_level", json!({"track": id.0, "slot": slot, "db": 0.0}));
     } else if fresp.double_clicked() {
@@ -2022,13 +2105,50 @@ fn send_route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, cu
         let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": visible[i].name}));
         ui.close();
     }
+    // Straight to a hardware output (a cue mix), or into a track (its input becomes the bus).
+    let outputs: Vec<String> = app.engine.session().outputs.iter().skip(1).map(|o| o.name.clone()).collect();
+    if !outputs.is_empty() {
+        ui.menu_button("Output", |ui| {
+            for name in &outputs {
+                let on = matches!(current, Some(Route::Hardware(h)) if h == name);
+                if ui.add(egui::Button::selectable(on, name.as_str())).clicked() {
+                    let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "output": name}));
+                    ui.close();
+                }
+            }
+        });
+    }
+    let tracks: Vec<(u64, String)> = app
+        .engine
+        .session()
+        .tracks
+        .iter()
+        .filter(|t| t.id != id && matches!(t.kind, TrackKind::Audio | TrackKind::Aux))
+        .map(|t| (t.id.0, t.name.clone()))
+        .collect();
+    if !tracks.is_empty() {
+        ui.menu_button("Track", |ui| {
+            for (tid, name) in &tracks {
+                if ui.button(name).on_hover_text("Its input becomes a bus this send feeds").clicked() {
+                    let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "to_track": tid}));
+                    ui.close();
+                }
+            }
+        });
+    }
+    if let Some(snd) = app.engine.session().track(id).and_then(|t| t.mixer.sends.get(slot).cloned().flatten()) {
+        let mut follow = snd.pan_follows_main;
+        if ui.checkbox(&mut follow, "Pan Follows Main").on_hover_text("The send's pan follows the track's main pan").changed() {
+            let _ = app.run("mix.send_level", json!({"track": id.0, "slot": slot, "pan_follows_main": follow}));
+        }
+    }
     ui.separator();
     if ui.button("new bus...").clicked() {
         let mut n = busses.len() + 1;
         while busses.iter().any(|bus| bus.name == format!("Bus {n}")) || app.engine.session().track_by_name(&format!("Bus {n}")).is_some() {
             n += 1;
         }
-        let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}")}));
+        let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}"), "return": true}));
         ui.close();
     }
 }
@@ -2105,6 +2225,21 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         crate::midi_devices::input_menu(app, ui, id);
         crate::band::input_menu(app, ui, id);
         crate::band::module_input_menu(app, ui, id);
+    } else {
+        crate::midi_devices::output_menu(app, ui, id);
+    }
+    if input && session.track(id).is_some_and(|t| t.kind == TrackKind::Audio) {
+        ui.separator();
+        let on = session.track(id).is_some_and(|t| t.mixer.record_inserts);
+        let tip = "The take is what the trim, polarity and inserts make of the input (printed), not the input as it came in";
+        if ui.add(egui::Button::selectable(on, "Record with inserts")).on_hover_text(tip).clicked() {
+            let _ = app.run("mix.record_inserts", json!({"track": id.0, "value": !on}));
+            ui.close();
+        }
+    }
+    // An instrument or MIDI track plays its instrument: a bus is no input for it.
+    if input && session.track(id).is_some_and(|t| t.kind.is_midi()) {
+        return;
     }
     ui.separator();
     let busses: Vec<String> = app.engine.session().busses.iter().map(|b| b.name.clone()).collect();
@@ -2175,10 +2310,15 @@ mod tests {
         assert!(fs.contains(&"Manners") && fs.contains(&"Rez") && fs.contains(&"Sprawl"), "Rez and Sprawl are offered with the engines: {fs:?}");
         // Then the utilities; no stock effects, no instruments, no format groups.
         let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
-        assert_eq!(names, ["Built-In", "Utilities"]);
+        assert_eq!(names, ["Built-In", "Utilities"], "Dither has no group of its own");
         let ids: Vec<&str> = groups[1].1.iter().map(|p| p.id).collect();
-        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
+        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "channel_tool"] {
             assert!(ids.contains(&id), "{id}");
+        }
+        // The meters and Dither are utilities (the owner's call), not in the first group.
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither"] {
+            assert!(ids.contains(&id), "{id} under Utilities");
+            assert!(groups[0].1.iter().all(|p| p.id != id), "{id} not with the engines");
         }
         for (_, l) in &groups {
             assert!(l.iter().all(|p| p.listed() && !p.is_instrument));
@@ -2186,7 +2326,7 @@ mod tests {
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
-        assert!(groups[1].1.iter().all(|p| p.category == Category::Other));
+        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither));
         // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);

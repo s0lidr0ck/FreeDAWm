@@ -1,10 +1,10 @@
 //! Secondary floating windows (Window menu).
 
 use crate::SoundApp;
-use crate::theme::{Tokens, mono, rgb};
+use crate::theme::{Tokens, rgb};
 use egui::{Color32, Sense, vec2};
 use serde_json::json;
-use soundcraft_model::{AutomationMode, ChannelFormat, ClipContent};
+use soundcraft_model::{AutomationMode, ChannelFormat};
 use soundcraft_playback::AudioConfig;
 use soundcraft_playback::devices::{AudioSystem, DeviceInfo};
 use std::sync::Arc;
@@ -24,10 +24,117 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     playback_engine(app, ctx);
     io_setup(app, ctx);
     crate::midi_devices::show(app, ctx);
+    crate::surfaces::show(app, ctx);
+    crate::midi_learn::show(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     crate::net_ui::show(app, ctx);
     shortcuts_window(app, ctx);
     clip_effects(app, ctx);
+    loudness(app, ctx);
+    mix_snapshots(app, ctx);
+    crate::control_room::show(app, ctx);
+}
+
+/// Window › Mix Snapshots: store the mix under a name, recall it whole or by section, on every
+/// track or the selected ones (`mix.snapshot_*`, one undo step each).
+fn mix_snapshots(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_mix_snapshots;
+    if !open {
+        return;
+    }
+    let snaps: Vec<String> = app.engine.session().mix_snapshots.iter().map(|s| s.name.clone()).collect();
+    let id = egui::Id::new("mix_snapshot_sections");
+    let mut sections: Vec<bool> = ctx.data(|d| d.get_temp::<Vec<bool>>(id)).unwrap_or_else(|| vec![true; soundcraft_model::SNAPSHOT_SECTIONS.len()]);
+    let only_id = egui::Id::new("mix_snapshot_selected_only");
+    let mut only_selected = ctx.data(|d| d.get_temp::<bool>(only_id)).unwrap_or(false);
+    let mut run: Option<(&'static str, serde_json::Value)> = None;
+    win(ctx, &mut open, "Mix Snapshots", vec2(300.0, 320.0), |ui| {
+        if ui.button("Store New Snapshot").on_hover_text("Every strip's settings as they are now").clicked() {
+            run = Some(("mix.snapshot_store", json!({})));
+        }
+        ui.separator();
+        if snaps.is_empty() {
+            ui.label(egui::RichText::new("No snapshots yet.").weak());
+        }
+        for (i, name) in snaps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.small_button("Recall").clicked() {
+                    let picked: Vec<&str> =
+                        soundcraft_model::SNAPSHOT_SECTIONS.iter().zip(&sections).filter(|(_, on)| **on).map(|((s, _), _)| *s).collect();
+                    let mut p = json!({"snapshot": i, "sections": picked});
+                    if only_selected {
+                        p["tracks"] = json!(app.engine.session().edit.selected_tracks.iter().map(|t| t.0).collect::<Vec<_>>());
+                    }
+                    run = Some(("mix.snapshot_recall", p));
+                }
+                if ui.small_button("Update").on_hover_text("Store the mix now in this snapshot").clicked() {
+                    run = Some(("mix.snapshot_store", json!({"replace": i})));
+                }
+                if ui.small_button("Delete").clicked() {
+                    run = Some(("mix.snapshot_delete", json!({"snapshot": i})));
+                }
+            });
+        }
+        ui.separator();
+        ui.label("Recall");
+        for ((_, label), on) in soundcraft_model::SNAPSHOT_SECTIONS.iter().zip(sections.iter_mut()) {
+            ui.checkbox(on, *label);
+        }
+        ui.checkbox(&mut only_selected, "Selected tracks only");
+    });
+    ctx.data_mut(|d| {
+        d.insert_temp(id, sections);
+        d.insert_temp(only_id, only_selected);
+    });
+    app.ui.show_mix_snapshots = open;
+    if let Some((cmd, p)) = run {
+        let _ = app.run(cmd, p);
+    }
+}
+
+/// Window › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport
+/// rolls: momentary (400 ms), short-term (3 s), integrated and the highest true peak since the
+/// last reset.
+fn loudness(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_loudness;
+    let reading = app.meter_snapshot.main.loudness;
+    let has_output = app.player.is_some();
+    let mut reset = false;
+    let fmt = |v: f32, floor: f32| if v.is_finite() && v > floor { format!("{v:.1}") } else { "-".into() };
+    win(ctx, &mut open, "Loudness Meter", vec2(240.0, 170.0), |ui| {
+        let rows: [(&str, f32, f32, &str); 5] = match reading {
+            Some(r) => [
+                ("Momentary", r.momentary, -70.0, "LUFS"),
+                ("Short-term", r.short_term, -70.0, "LUFS"),
+                ("Integrated", r.integrated, -70.0, "LUFS"),
+                ("Max momentary", r.max_momentary, -70.0, "LUFS"),
+                ("True peak", r.true_peak_db, -100.0, "dBTP"),
+            ],
+            None => [
+                ("Momentary", f32::NAN, 0.0, "LUFS"),
+                ("Short-term", f32::NAN, 0.0, "LUFS"),
+                ("Integrated", f32::NAN, 0.0, "LUFS"),
+                ("Max momentary", f32::NAN, 0.0, "LUFS"),
+                ("True peak", f32::NAN, 0.0, "dBTP"),
+            ],
+        };
+        egui::Grid::new("loudness_grid").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+            for (label, v, floor, unit) in rows {
+                ui.label(label);
+                ui.label(egui::RichText::new(format!("{} {unit}", fmt(v, floor))).monospace());
+                ui.end_row();
+            }
+        });
+        if !has_output {
+            ui.label(egui::RichText::new("No audio output: nothing is measured.").weak());
+        }
+        reset = ui.button("Reset").on_hover_text("Start the integrated loudness, maximum and true peak afresh").clicked();
+    });
+    app.ui.show_loudness = open;
+    if reset {
+        let _ = app.run("ui.loudness_reset", json!({}));
+    }
 }
 
 fn audio_health(app: &mut SoundApp, ctx: &egui::Context) {
@@ -114,11 +221,11 @@ fn automation(app: &mut SoundApp, ctx: &egui::Context) {
         });
         ui.separator();
         ui.label("Enabled parameters");
-        for f in ["volume", "pan", "mute", "send level", "send pan", "send mute", "plugin"] {
-            let id = format!("automation.enable.{}", f.replace(' ', "_"));
-            let mut on = !app.engine.session().edit.flag(&format!("{id}.off"));
-            if crate::widgets::checkbox(ui, &mut on, f).changed() {
-                app.engine.session_mut().edit.set_flag(&format!("{id}.off"), !on);
+        // What passes write: a type switched off still plays its lanes.
+        for ty in soundcraft_engine::cmd::WRITE_TYPES {
+            let mut on = !app.engine.session().edit.flag(&soundcraft_engine::cmd::write_disabled_flag(ty));
+            if crate::widgets::checkbox(ui, &mut on, ty.replace('_', " ")).changed() {
+                let _ = app.run("automation.enable", json!({"type": ty, "value": on}));
             }
         }
         ui.separator();
@@ -231,39 +338,17 @@ fn metadata(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_metadata = open;
 }
 
+/// A standard MIDI file by its name: `.mid`, `.midi`, `.smf` or `.kar`, in any case (`SONG.MID`).
+pub fn is_midi_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| ["mid", "midi", "smf", "kar"].iter().any(|m| x.eq_ignore_ascii_case(m)))
+}
+
 fn event_list(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_event_list;
-    win(ctx, &mut open, "MIDI Event List", vec2(420.0, 360.0), |ui| {
-        let Some(cid) = crate::midi_editor::target_clip(app) else {
-            ui.label("Select a MIDI clip.");
-            return;
-        };
-        let notes = match app.engine.session().find_clip(cid).map(|(_, c)| c.content.clone()) {
-            Some(ClipContent::Midi { sequence }) => sequence.notes,
-            _ => Vec::new(),
-        };
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("evl").num_columns(5).striped(true).show(ui, |ui| {
-                for h in ["Start (ticks)", "Note", "Vel", "Length", ""] {
-                    ui.label(egui::RichText::new(h).strong());
-                }
-                ui.end_row();
-                for (i, n) in notes.iter().enumerate() {
-                    ui.label(egui::RichText::new(n.start.to_string()).font(mono(11.0)));
-                    ui.label(soundcraft_midi::note_name(n.pitch));
-                    let mut v = i64::from(n.velocity);
-                    if ui.add(egui::DragValue::new(&mut v).range(1..=127)).changed() {
-                        let _ = app.engine.execute("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}));
-                    }
-                    ui.label(n.length.to_string());
-                    if ui.small_button("✕").clicked() {
-                        let _ = app.run("midi.note_delete", json!({"clip": cid.0, "indices": [i]}));
-                    }
-                    ui.end_row();
-                }
-            });
-        });
-    });
+    win(ctx, &mut open, "MIDI Event List", vec2(640.0, 420.0), |ui| crate::midi_event_list::show(app, ui));
     app.ui.show_event_list = open;
 }
 
@@ -447,6 +532,13 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             }
             ui.label(egui::RichText::new(&dir).small());
         });
+        ui.horizontal(|ui| {
+            ui.label("Preview level");
+            ui.add(egui::Slider::new(&mut app.ui.preview_db, -40.0..=6.0).suffix(" dB"));
+            if (app.audition.playing.is_some() || crate::audition::loading(app)) && ui.button("■ Stop").clicked() {
+                crate::audition::stop(app);
+            }
+        });
         ui.separator();
         let mut entries: Vec<(String, bool)> = std::fs::read_dir(&dir)
             .map(|rd| {
@@ -471,14 +563,22 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             for (name, is_dir) in entries.into_iter().take(2000) {
                 let path = std::path::Path::new(&dir).join(&name).to_string_lossy().into_owned();
                 let label = if is_dir { format!("📁 {name}") } else { format!("🔊 {name}") };
-                let r = ui.selectable_label(false, label);
+                let audio = !is_dir && !soundcraft_model::is_session_path(&name) && !is_midi_file(&name);
+                let on = audio && app.audition.playing.as_deref() == Some(path.as_str());
+                let r = ui.selectable_label(on, label);
+                if audio && r.clicked() && !r.double_clicked() {
+                    // A click auditions the file (again: stops it); a double-click imports it.
+                    crate::audition::file(app, &path);
+                }
                 if r.double_clicked() {
                     if is_dir {
                         app.ui.workspace_dir = path;
                     } else if soundcraft_model::is_session_path(&name) {
                         let _ = crate::dialogs::run_or_ask(app, "session.open", json!({"path": path}));
-                    } else if name.ends_with(".mid") || name.ends_with(".midi") {
-                        let _ = app.run("file.import_midi", json!({"path": path}));
+                    } else if is_midi_file(&name) {
+                        // At the insertion point, as the line under the list says (and audio does).
+                        let at = app.engine.session().edit.selection.start;
+                        let _ = app.run("file.import_midi", json!({"path": path, "at": at}));
                     } else {
                         let at = app.engine.session().edit.selection.start;
                         let _ = app.run("file.import_audio", json!({"path": path, "at": at}));
@@ -486,7 +586,10 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
-        ui.label(egui::RichText::new("Double-click to import audio/MIDI at the insertion point or open a session.").small());
+        ui.label(
+            egui::RichText::new("Click an audio file to hear it; double-click to import audio/MIDI at the insertion point or open a session.")
+                .small(),
+        );
     });
     app.ui.show_workspace = open;
 }
@@ -673,6 +776,10 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
             ui.label(format!("{sr} Hz{note}"));
             ui.end_row();
         });
+        // The chosen device missing, so the default plays: said here as long as it holds.
+        if let Some(n) = app.player.as_ref().and_then(|p| p.fallback_notice(&app.ui.audio)) {
+            ui.colored_label(egui::Color32::from_rgb(220, 140, 40), n);
+        }
         ui.separator();
         engine_status(app, ui);
         ui.separator();
@@ -1245,7 +1352,7 @@ pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     crate::hearing_ui::window(app, ctx);
 }
 
-/// Clip Effects: per-clip EQ, dynamics and gain (stored as `clip_fx.<clip>.*` values).
+/// Clip Effects: per-clip EQ, dynamics and gain (stored on the clip, `Clip::effects`).
 pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_clip_effects;
     win(ctx, &mut open, "Clip Effects", vec2(560.0, 420.0), |ui| {
@@ -1263,7 +1370,7 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
             return;
         };
         let name = app.engine.session().find_clip(cid).map(|(_, c)| c.name.clone()).unwrap_or_default();
-        let bypass = app.engine.session().edit.flag(&format!("clip_fx.bypass.{}", cid.0));
+        let bypass = app.engine.session().find_clip(cid).is_some_and(|(_, c)| c.effects_bypass);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&name).strong());
             if ui.selectable_label(bypass, "Bypass").clicked() {
@@ -1276,7 +1383,7 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
                 let _ = app.run("edit.clear_clip_effects", json!({"clips": [cid.0]}));
             }
         });
-        let get = |app: &SoundApp, k: &str, d: f32| app.engine.session().edit.values.get(&format!("clip_fx.{}.{k}", cid.0)).map_or(d, |v| *v as f32);
+        let get = |app: &SoundApp, k: &str, d: f32| app.engine.session().find_clip(cid).and_then(|(_, c)| c.effect(k)).map_or(d, |v| v as f32);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.columns(2, |cols| {
                 for (col, (title, plugin, prefix)) in cols.iter_mut().zip([("EQ", "eq_7band", "eq."), ("Dynamics", "compressor", "comp.")]) {

@@ -58,7 +58,7 @@ pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 const SIDE_B: Color32 = argb(0xFFFF_C46B);
 
 /// A/B and Undo walk every parameter.
-const FAMILY: Family = Family::new("Rez", &[]);
+pub(crate) const FAMILY: Family = Family::new("Rez", &[]);
 
 /// The widths of the four control groups (they fill the editor with [`GAP`] between them).
 const GROUP_W: [f32; 4] = [150.0, 296.0, 170.0, 154.0];

@@ -288,6 +288,15 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let mut filter: String = ui.ctx().memory(|m| m.data.get_temp(fkey)).unwrap_or_default();
     ui.add(egui::TextEdit::singleline(&mut filter).hint_text("🔍 Find clips").desired_width(f32::INFINITY));
     ui.ctx().memory_mut(|m| m.data.insert_temp(fkey, filter.clone()));
+    if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
+        let unused = unused_sources(app.engine.session());
+        if unused.is_empty() {
+            app.ui.status = "Every file is used".into();
+        } else {
+            let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
+            let _ = app.run("edit.select", json!({"sources": ids}));
+        }
+    }
     let needle = filter.to_lowercase();
     let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -307,6 +316,17 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                         ui.close();
                     }
                     ui.separator();
+                }
+                if !whole {
+                    if ui.button("Audition").clicked() {
+                        crate::audition::clip(app, ClipId(id));
+                        ui.close();
+                    }
+                    if ui.button("Rename…").clicked() {
+                        let _ = app.run("edit.select", json!({"clips": [id], "exact": true}));
+                        app.dialogs.open_for_command(&app.engine, "clip.rename");
+                        ui.close();
+                    }
                 }
                 if ui.button("Clear…").clicked() {
                     let (clips, sources) = if whole { (vec![], vec![SourceId(id)]) } else { (vec![ClipId(id)], vec![]) };
@@ -332,11 +352,47 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 if whole { bold(11.0) } else { regular(11.0) },
                 t.text,
             );
-            if resp.clicked() {
+            if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
+                // Alt-click auditions a clip, as in Pro Tools.
+                crate::audition::clip(app, ClipId(id));
+            } else if resp.clicked() {
                 let _ = app.run("edit.select", if whole { json!({"sources": [id]}) } else { json!({"clips": [id]}) });
+                if !whole {
+                    reveal_clip(app, ClipId(id));
+                }
             }
         }
     });
+}
+
+/// The files no clip plays on any track's playlists (a drum kit's pad samples, which its
+/// instrument plays, count as used).
+pub fn unused_sources(s: &soundcraft_model::Session) -> Vec<SourceId> {
+    let mut used: std::collections::HashSet<SourceId> =
+        s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
+    for c in s.all_clips() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content {
+            used.insert(*source);
+        }
+        if let Some(k) = c.clean_alt() {
+            used.insert(k.source);
+        }
+    }
+    s.sources.iter().map(|src| src.id).filter(|id| !used.contains(id)).collect()
+}
+
+/// Scrolls the Edit window to `clip` when it is off screen.
+fn reveal_clip(app: &mut SoundApp, id: ClipId) {
+    let s = app.engine.session();
+    let Some((_, c)) = s.find_clip(id) else { return };
+    let (start, end) = (c.start, c.end());
+    let z = &s.edit.zoom;
+    let width = f64::from(app.edit_layout.timeline[2] - app.edit_layout.timeline[0]).max(1.0);
+    let shown = (z.scroll, z.scroll.saturating_add((width * z.samples_per_px.max(0.01)) as i64));
+    if end <= shown.0 || start >= shown.1 {
+        let margin = ((shown.1 - shown.0) / 10).max(0);
+        let _ = app.run("view.scroll", json!({"to": start.saturating_sub(margin).max(0)}));
+    }
 }
 
 /// Floating windows.
@@ -376,20 +432,22 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                     (cmd == "transport.play" && app.is_playing()) || (cmd == "transport.record" && app.engine.transport.recording),
                     cmd,
                 );
+                let resp = match crate::record_unavailable(cfg!(target_arch = "wasm32")) {
+                    Some(why) if cmd == "transport.record" => resp.on_hover_text(why),
+                    _ => resp,
+                };
                 if cmd == "transport.record"
                     && let Some(why) = app.record_hint()
                 {
                     egui::Tooltip::for_widget(&resp).show(|ui| ui.label(why));
                 }
-                if resp.clicked() {
-                    let _ = app.run(cmd, json!({}));
-                }
+                crate::toolbar::transport_key(app, ui, &resp, cmd);
             }
             if flags.contains("view.transport.output_meters") {
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 26.0), Sense::hover());
                 let m = app.main_meter;
-                crate::widgets::meter(ui, Rect::from_min_size(r.min, vec2(10.0, 26.0)), m.level[0], m.hold[0], m.clip);
-                crate::widgets::meter(ui, Rect::from_min_size(pos2(r.min.x + 12.0, r.min.y), vec2(10.0, 26.0)), m.level[1], m.hold[1], m.clip);
+                crate::widgets::meter_of(ui, Rect::from_min_size(r.min, vec2(10.0, 26.0)), &m, 0);
+                crate::widgets::meter_of(ui, Rect::from_min_size(pos2(r.min.x + 12.0, r.min.y), vec2(10.0, 26.0)), &m, 1);
             }
         });
         let s = app.engine.session();
@@ -425,8 +483,26 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                     ("Loop Rec", loop_rec, "options.loop_record"),
                     ("Pre/Post", prepost, "options.pre_post_roll"),
                 ] {
-                    if ui.selectable_label(on, label).clicked() {
+                    let r = ui.selectable_label(on, label);
+                    if r.clicked() {
                         let _ = app.run(cmd, json!({}));
+                    }
+                    if cmd == "options.midi_merge" {
+                        // The MIDI record mode: Merge is this switch; right-click for the others.
+                        let mode = soundcraft_engine::midi_record::record_mode(app.engine.session());
+                        r.on_hover_text("On: a MIDI take merges into the clips under it. Right-click for the record mode").context_menu(|ui| {
+                            for (m, text) in [
+                                (soundcraft_engine::midi_record::RecordMode::Replace, "Replace"),
+                                (soundcraft_engine::midi_record::RecordMode::Merge, "Merge"),
+                                (soundcraft_engine::midi_record::RecordMode::NewPlaylist, "New Playlist"),
+                                (soundcraft_engine::midi_record::RecordMode::TakeLanes, "Keep Takes as Lanes"),
+                            ] {
+                                if ui.radio(mode == m, text).clicked() {
+                                    let _ = app.run("options.midi_record_mode", json!({"mode": m.name()}));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 }
             });
@@ -636,6 +712,10 @@ fn docked_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginView,
         })
         .max_height((screen.height() - 48.0).max(120.0))
         .constrain(true);
+    if app.ui.pinned_plugins.contains(&(tid, key)) {
+        // Pinned: drawn over every other window in the main window.
+        window = window.order(egui::Order::Foreground);
+    }
     if v.juke {
         let size = (crate::juke_window::WINDOW_SIZE + vec2(0.0, DETACH_BAR_H)).min(screen.size() - vec2(24.0, 48.0));
         window = window.default_size(size).resizable(true);
@@ -679,6 +759,15 @@ fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
                 app.ui.detached_plugins.push(key);
             }
         }
+        let pinned = app.ui.pinned_plugins.contains(&key);
+        let r = ui.selectable_label(pinned, "📌 Pin").on_hover_text("Keep this window on top of the others");
+        if r.clicked() {
+            if pinned {
+                app.ui.pinned_plugins.retain(|k| *k != key);
+            } else {
+                app.ui.pinned_plugins.push(key);
+            }
+        }
         ui.label(egui::RichText::new(format!("{} · {}", v.tname, v.name)).color(Tokens::current().text_dim).small());
     });
 }
@@ -695,6 +784,10 @@ fn detached_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginVie
     let (tid, key) = (v.tid, v.key);
     let title = format!("{} · {}", v.tname, v.name);
     let mut builder = egui::ViewportBuilder::default().with_title(title).with_resizable(true).with_min_inner_size([320.0, 200.0]);
+    if app.ui.pinned_plugins.contains(&(tid, key)) {
+        // Pinned: the system keeps the window over every other one.
+        builder = builder.with_window_level(egui::WindowLevel::AlwaysOnTop);
+    }
     let remembered = app.ui.plugin_window_rects.get(&v.ins.plugin).copied();
     match remembered.filter(|r| r.iter().all(|x| x.is_finite()) && r[2] >= 200.0 && r[3] >= 120.0) {
         Some([x, y, w, h]) => builder = builder.with_position([x, y]).with_inner_size([w, h]),
@@ -1023,7 +1116,12 @@ pub(crate) fn preset_menu(
                     .and_then(serde_json::Value::as_object)
                     .into_iter()
                     .flatten()
-                    .filter(|(k, val)| info.params.iter().any(|pi| pi.id == k.as_str()) && val.as_f64().is_some_and(f64::is_finite))
+                    .filter(|(k, val)| {
+                        info.params.iter().any(|pi| pi.id == k.as_str())
+                            && k.as_str() != "bypass"
+                            && !crate::editors::not_in_presets(info.id).contains(&k.as_str())
+                            && val.as_f64().is_some_and(f64::is_finite)
+                    })
                     .map(|(k, val)| (k.clone(), val.clone()))
                     .collect();
                 let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": params, "preset": n}));
@@ -1038,15 +1136,82 @@ pub(crate) fn preset_menu(
         ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
         if ui.button("Save").clicked() {
             let clean = soundcraft_engine::io::sanitize_name(&name);
-            let body = json!({"format": "soundcraft-plugin-preset", "plugin": info.id, "params": ins.params});
-            let ok = std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{clean}.json")), body.to_string()).is_ok();
-            app.ui.status = if ok { format!("Saved preset {clean}") } else { "Could not save the preset".into() };
-            if ok {
-                let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": {}, "preset": clean}));
+            if crate::editor_kit::presets::is_factory_name(info, &clean) {
+                // A user preset of a factory preset's name would never load (the factory one wins).
+                app.ui.status = format!("{clean} is a factory preset: pick another name");
+            } else {
+                // The file the wide editor's Save writes: name, tags, the same parameters, the
+                // editor's extra block.
+                let skip = crate::editors::not_in_presets(info.id);
+                let value = |id: &str| ins.params.get(id).copied().or_else(|| info.param(id).map(|p| p.default)).unwrap_or(0.0);
+                let extra = if info.id == "fs_cleanq" { crate::editors::cleanq::preset_extra(ui.ctx(), tid, ins) } else { None };
+                let body = crate::editor_kit::presets::user_preset_body(info, skip, value, &clean, "", extra);
+                // The one save path every view uses.
+                let ok = crate::preset_house::write_user(app, info.id, &clean, &body).is_ok();
+                app.ui.status = if ok { format!("Saved preset {clean}") } else { "Could not save the preset".into() };
+                if ok {
+                    let _ = app.run("mix.module_params", json!({"track": tid.0, "module": module.0, "params": {}, "preset": clean}));
+                }
             }
         }
     });
     ui.ctx().memory_mut(|m| m.data.insert_temp(key, name));
+    preset_housekeeping(app, ui, tid, info, ins, &names);
+}
+
+/// The preset menu's housekeeping rows: rename the user preset in use, choose the preset new
+/// inserts start from, and A/B compare.
+fn preset_housekeeping(
+    app: &mut SoundApp,
+    ui: &mut Ui,
+    tid: soundcraft_model::TrackId,
+    info: &soundcraft_dsp::PluginInfo,
+    ins: &soundcraft_model::Insert,
+    names: &[String],
+) {
+    use crate::preset_house as ph;
+    ui.separator();
+    // Rename the user preset this module shows.
+    if names.contains(&ins.preset) {
+        let key = egui::Id::new(("preset_rename", tid.0, ins.id.0));
+        let mut to: String = ui.ctx().memory(|m| m.data.get_temp(key)).unwrap_or_else(|| ins.preset.clone());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut to).desired_width(140.0));
+            if ui.button("Rename").on_hover_text(format!("Rename the user preset {}", ins.preset)).clicked() {
+                app.ui.status = match ph::rename_user(app, info, &ins.preset, &to) {
+                    Ok(n) => format!("Renamed preset to {n}"),
+                    Err(e) => e,
+                };
+            }
+        });
+        ui.ctx().memory_mut(|m| m.data.insert_temp(key, to));
+    }
+    // The default for new inserts.
+    let default = ph::default_for(app, info.id);
+    let shown = ins.preset.trim();
+    if !shown.is_empty()
+        && shown != "<factory default>"
+        && default.as_deref() != Some(shown)
+        && ui.button(format!("Start New Inserts From \"{shown}\"")).clicked()
+    {
+        app.ui.status = match ph::set_default(app, info.id, Some(shown)) {
+            Ok(()) => format!("New {} inserts start from {shown}", info.name),
+            Err(e) => e,
+        };
+        ui.close();
+    }
+    if let Some(d) = default
+        && ui.button(format!("Clear Default Preset ({d})")).clicked()
+    {
+        let _ = ph::set_default(app, info.id, None);
+        ui.close();
+    }
+    // A/B compare.
+    let b = ph::on_b(ui.ctx(), tid, ins.id);
+    if ui.button(if b { "Compare: Back to A" } else { "Compare: Switch to B" }).on_hover_text("Two settings to flip between").clicked() {
+        ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        ui.close();
+    }
 }
 
 /// Where a plugin window of `size` opens: around `anchor` (the pointer when it was opened), moved

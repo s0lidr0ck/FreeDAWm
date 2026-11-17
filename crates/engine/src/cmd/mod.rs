@@ -8,27 +8,40 @@ use std::sync::OnceLock;
 
 mod audio_midi;
 pub(crate) mod auto_write;
-pub use auto_write::TOUCH_HOLD_SECONDS;
+pub use auto_write::{KEEP_PASS_POINTS, TOUCH_HOLD_SECONDS, WRITE_TYPES, write_disabled_flag};
 mod audiosuite;
 mod automation_edit;
 mod band;
 pub mod chord_lane;
 mod clap;
-mod clip;
+pub(crate) mod clip;
 mod clip_clean;
 mod clip_list;
 mod clip_more;
+mod clip_props;
 pub mod comp;
+mod discard_take;
 mod edit;
 mod edit_more;
 pub mod editor_link;
-mod event;
+pub mod event;
 pub(crate) mod event_more;
 mod file;
 pub(crate) mod freeze;
+pub mod mix_snapshot;
 mod module_record;
+pub mod monitor;
+pub mod overlap;
+pub mod pan_law;
+mod record_format;
+mod record_print;
+pub mod strip_shape;
 pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
+pub mod clip_follow;
+pub mod clip_midi;
+pub mod clip_shared;
+pub mod groove;
 mod health;
 mod instrument;
 pub mod juke;
@@ -42,6 +55,11 @@ mod lyrics;
 mod midi;
 mod midi_cleanup;
 pub mod midi_ctrl;
+pub mod midi_fx;
+pub mod midi_input;
+pub mod midi_learn;
+mod midi_ops;
+pub mod midi_out;
 mod mix;
 pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,6 +74,7 @@ pub(crate) mod module_ceiling;
 pub(crate) mod module_link;
 mod module_preset;
 mod more_util;
+pub mod movie_bounce;
 pub mod notes;
 mod options;
 mod pattern;
@@ -63,6 +82,7 @@ mod plugin_state;
 mod query;
 pub(crate) mod sampler;
 mod scout;
+mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
@@ -70,17 +90,20 @@ mod tab;
 pub mod tempo;
 mod track;
 mod track_more;
-mod transport;
+pub mod transport;
 mod video;
 mod view;
 mod view_more;
 mod vocal;
 mod vocal_studio;
 mod vst3;
+pub mod warp;
 mod zoom_toggle;
 
 pub use clap::plugin_info;
-pub use file::bounce_job;
+pub use file::{MAX_TAIL_SECS as MAX_BOUNCE_TAIL_SECS, bounce_job, stems_job};
+pub use mix::{GROUPS_SUSPENDED, default_send_db};
+pub use more_util::env_db;
 /// What the UI needs of Scout: the store refusal for a capture no longer pending, and "same section".
 pub use scout::{NOT_PENDING as SCOUT_NOT_PENDING, same_as as scout_same_as};
 
@@ -121,7 +144,28 @@ pub struct CommandInfo {
     pub disabled_reason: Option<String>,
 }
 
+/// Commands that store a setting nothing in FreeDAWm reads yet. The menu bar leaves them out;
+/// agents and scripts still reach them, so their description says so ([`STORED_ONLY_NOTE`]).
+pub const STORED_ONLY: &[&str] = &[
+    "options.auto_spot_clips",
+    "options.calibration_mode",
+    "setup.peripherals",
+    "setup.transcription_settings",
+    "view.clip_ara_note_overlay",
+    "view.clip_scene_take",
+    "view.track_transcription_lane",
+    "view.transport_ableton_link",
+];
+
+/// Appended to the description of every [`STORED_ONLY`] command.
+pub const STORED_ONLY_NOTE: &str = " — stored only: nothing in FreeDAWm reads this setting yet";
+
 impl CommandSpec {
+    /// Whether this command only stores a setting nothing reads yet ([`STORED_ONLY`]).
+    pub fn stored_only(&self) -> bool {
+        STORED_ONLY.contains(&self.id)
+    }
+
     pub fn info(&self, e: &Engine) -> CommandInfo {
         let en = (self.enabled)(e);
         CommandInfo {
@@ -129,7 +173,7 @@ impl CommandSpec {
             label: self.label.into(),
             menu: self.menu.iter().map(|s| s.to_string()).collect(),
             shortcut: self.shortcut.map(str::to_string),
-            params: self.params.into(),
+            params: if self.stored_only() { format!("{}{STORED_ONLY_NOTE}", self.params) } else { self.params.into() },
             enabled: en.is_ok(),
             disabled_reason: en.err(),
         }
@@ -155,6 +199,9 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(file::specs());
         v.extend(edit::specs());
         v.extend(module_record::specs());
+        v.extend(record_print::specs());
+        v.extend(record_format::specs());
+        v.extend(discard_take::specs());
         v.extend(edit_more::specs());
         v.extend(view::specs());
         v.extend(track::specs());
@@ -164,12 +211,18 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(juke::specs());
         v.extend(multisample::specs());
         v.extend(clip_clean::specs());
+        v.extend(clip_props::specs());
         v.extend(event::specs());
         v.extend(mix::specs());
         v.extend(mix_view::specs());
         v.extend(automation_edit::specs());
         v.extend(auto_write::specs());
         v.extend(options::specs());
+        v.extend(pan_law::specs());
+        v.extend(overlap::specs());
+        v.extend(monitor::specs());
+        v.extend(strip_shape::specs());
+        v.extend(mix_snapshot::specs());
         v.extend(transport::specs());
         v.extend(tab::specs());
         v.extend(query::specs());
@@ -178,11 +231,17 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audio_midi::specs());
         v.extend(midi::specs());
         v.extend(midi_ctrl::specs());
+        v.extend(groove::specs());
+        v.extend(clip_follow::specs());
+        v.extend(clip_midi::specs());
+        v.extend(clip_shared::specs());
         v.extend(midi_cleanup::specs());
+        v.extend(midi_ops::specs());
         v.extend(view_more::specs());
         v.extend(track_more::specs());
         v.extend(chain::specs());
         v.extend(clip_more::specs());
+        v.extend(warp::specs());
         v.extend(clip_list::specs());
         v.extend(event_more::specs());
         v.extend(tempo::specs());
@@ -198,11 +257,17 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(module_link::specs());
         v.extend(module_preset::specs());
         v.extend(instrument::specs());
+        v.extend(midi_input::specs());
+        v.extend(midi_fx::specs());
+        v.extend(midi_out::specs());
+        v.extend(midi_learn::specs());
         v.extend(sampler::specs());
         v.extend(video::specs());
         v.extend(zoom_toggle::specs());
         v.extend(editor_link::specs());
         v.extend(scout::specs());
+        v.extend(scout_apply::specs());
+        v.extend(movie_bounce::specs());
         v.extend(scout_profile::specs());
         v.extend(looping::specs());
         v.extend(band::specs());
@@ -277,6 +342,23 @@ pub fn has_clipboard(e: &Engine) -> std::result::Result<(), String> {
 }
 
 // ---- params ------------------------------------------------------------------------------
+
+/// `f` if the mixer can carry it, else why not (4th- to 7th-order Ambisonics).
+pub fn mixable_format(cmd: &str, f: soundcraft_model::ChannelFormat) -> Result<soundcraft_model::ChannelFormat> {
+    if f.mixable() {
+        Ok(f)
+    } else {
+        Err(bad(
+            cmd,
+            format!(
+                "{} needs {} channels; the mixer carries at most {} (Ambisonics up to 3rd order)",
+                f.label(),
+                f.channels(),
+                soundcraft_model::ChannelFormat::MAX_MIX_CHANNELS
+            ),
+        ))
+    }
+}
 
 pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams(cmd.to_string(), msg.into())
@@ -426,6 +508,17 @@ pub fn clip_ids_param(e: &Engine, p: &Value) -> Vec<ClipId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_only_commands_say_so_to_agents() {
+        let e = Engine::default();
+        for id in STORED_ONLY {
+            let c = command_specs().iter().find(|c| c.id == *id).unwrap_or_else(|| panic!("no command {id}"));
+            assert!(c.info(&e).params.ends_with(STORED_ONLY_NOTE), "{id}: {}", c.info(&e).params);
+        }
+        let other = command_specs().iter().find(|c| c.id == "transport.play").unwrap();
+        assert!(!other.info(&e).params.contains("stored only"));
+    }
 
     #[test]
     fn ids_are_unique_and_documented() {

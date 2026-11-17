@@ -40,7 +40,7 @@ pub const SIZE: Vec2 = vec2(860.0, K_HEIGHT);
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFF6F_C7B8));
 
 /// The preset catalogue's key; every parameter but `bypass` is in a preset.
-const FAMILY: Family = Family::new("Manners", &[]);
+pub(crate) const FAMILY: Family = Family::new("Manners", &[]);
 
 const FOOT_NOTE: &str =
     "Tame turns down what covers its neighbours \u{00B7} Recover lifts what is covered \u{00B7} drag the edges of the display to set where it works";

@@ -173,13 +173,20 @@ mod tests {
         keyed.sidechain = Some(SidechainSource { track: kick, pre_fader: false });
         let mb = s.track_mut(bass).unwrap().mixer.add_module(keyed, None).unwrap();
         assert_eq!(key_problem(&s, bass, mb), None);
-        // Kick keyed from Bass would silence Bass's key; from the aux it can't render.
+        // Kick keyed from Bass would silence Bass's key; the aux (which Kick does not feed) is fine.
         let c = source_choices(&s, kick, mk, false);
         assert_eq!(c.iter().map(|x| x.0).collect::<Vec<_>>(), [bass, aux]);
-        assert!(c.iter().all(|x| x.2.is_some()), "{c:?}");
-        // Bass may take Kick or the aux? Not the aux (an audio track can't wait for an aux).
+        assert!(c[0].2.is_some() && c[1].2.is_none(), "{c:?}");
+        // Bass may take Kick or the aux (it renders after the aux).
         let c = source_choices(&s, bass, mb, false);
-        assert!(c[0].2.is_none() && c[1].2.is_some(), "{c:?}");
+        assert!(c[0].2.is_none() && c[1].2.is_none(), "{c:?}");
+        // An aux Bass feeds would be a loop.
+        let b = soundcraft_model::BusId(5);
+        s.track_mut(aux).unwrap().mixer.input = soundcraft_model::Route::Bus(b);
+        s.track_mut(bass).unwrap().mixer.output = soundcraft_model::Route::Bus(b);
+        let c = source_choices(&s, bass, mb, false);
+        assert!(c[1].2.is_some(), "{c:?}");
+        s.track_mut(bass).unwrap().mixer.output = soundcraft_model::Route::Main;
         s.track_mut(kick).unwrap().inactive = true;
         assert_eq!(key_problem(&s, bass, mb), Some(SidechainProblem::Inactive));
     }

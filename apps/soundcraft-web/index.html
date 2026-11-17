@@ -36,6 +36,62 @@
       });
     })();
   </script>
+  <script>
+    // The session kept between visits, in this browser's origin-private file system (OPFS):
+    // nothing is sent anywhere. Used by the app's `store` module; every call may reject.
+    window.freedawmStore = (function () {
+      var DIR = 'freedawm-session';
+      function root() {
+        return navigator.storage.getDirectory().then(function (r) { return r.getDirectoryHandle(DIR, { create: true }); });
+      }
+      function dirFor(path, create) {
+        var parts = path.split('/');
+        var name = parts.pop();
+        return parts.reduce(function (p, part) {
+          return p.then(function (d) { return d.getDirectoryHandle(part, { create: create }); });
+        }, root()).then(function (d) { return [d, name]; });
+      }
+      function walk(d, pre, out) {
+        var it = d.entries();
+        function next() {
+          return it.next().then(function (r) {
+            if (r.done) return out;
+            var name = r.value[0], h = r.value[1];
+            if (h.kind === 'directory') return walk(h, pre + name + '/', out).then(next);
+            out.push(pre + name);
+            return next();
+          });
+        }
+        return next();
+      }
+      return {
+        available: function () {
+          return !!(window.isSecureContext && navigator.storage && navigator.storage.getDirectory &&
+            window.FileSystemFileHandle && FileSystemFileHandle.prototype.createWritable);
+        },
+        put: function (path, bytes) {
+          var copy = new Uint8Array(bytes);
+          return dirFor(path, true).then(function (dn) { return dn[0].getFileHandle(dn[1], { create: true }); })
+            .then(function (f) { return f.createWritable(); })
+            .then(function (w) { return w.write(copy).then(function () { return w.close(); }); });
+        },
+        get: function (path) {
+          return dirFor(path, false).then(function (dn) { return dn[0].getFileHandle(dn[1]); })
+            .then(function (f) { return f.getFile(); })
+            .then(function (file) { return file.arrayBuffer(); })
+            .then(function (b) { return new Uint8Array(b); }, function () { return null; });
+        },
+        list: function () { return root().then(function (d) { return walk(d, '', []); }); },
+        remove: function (path) {
+          return dirFor(path, false).then(function (dn) { return dn[0].removeEntry(dn[1]); }).catch(function () {});
+        },
+        clear: function () {
+          return navigator.storage.getDirectory().then(function (r) { return r.removeEntry(DIR, { recursive: true }); })
+            .catch(function (e) { if (!e || e.name !== 'NotFoundError') throw e; });
+        }
+      };
+    })();
+  </script>
   <div id="soundcraft_loading">Loading FreeDAWm&hellip;</div>
 </body>
 </html>

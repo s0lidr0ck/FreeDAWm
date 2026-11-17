@@ -42,8 +42,9 @@
 //! - The host transport (plan A3): `set_transport` hands the session tempo to the engine as the
 //!   FireStation Delay engine takes its host's (`setHostTransport`; 20..999 BPM, else none), and
 //!   while Sync is on a valid host tempo stands in for the Tempo knob. With no transport (the
-//!   render tool has none) the C++ path is unchanged. The LFO free-runs as in the C++ (no phase
-//!   lock to the song position); a seek resets it with the rest of the engine.
+//!   render tool has none) the C++ path is unchanged. While the host plays with Sync on, each
+//!   block's LFO phase comes from the song position (`ModEngineDsp::lock_lfo`), so the
+//!   sweep sits on the grid; the C++ free-runs. Stopped, it free-runs as in the C++.
 //! - Never-crash: a non-finite output sample is written as 0 (the C++ would pass it on).
 
 // The C++ literals (6.2831853f, 0.7071f) are kept as written, not swapped for the constants.
@@ -263,6 +264,9 @@ pub struct ModEngine {
     /// Which parameters an automation lane drives (`set_param_automated`): Link leaves a laned
     /// Level alone, and a full push re-evaluates Link only when a listened one is laned.
     automated: [bool; NUM_PARAMS],
+    /// The song position in quarter notes at the start of the next block, while the host plays
+    /// (the LFO locks to it, see `ModEngineDsp::lock_lfo`).
+    lock_at: Option<f64>,
 }
 
 impl Default for ModEngine {
@@ -280,6 +284,7 @@ impl ModEngine {
             force_push: true,
             channels: 2,
             processed: false,
+            lock_at: None,
             level_from_host: false,
             automated: [false; NUM_PARAMS],
         }
@@ -361,6 +366,22 @@ impl ModEngine {
     }
 }
 
+/// How long Mod rings on after the input stops, in seconds: the C++'s 0.25 s
+/// (`getTailLengthSeconds`), plus, for the two flangers, as long as their Regen loop takes to
+/// fall 80 dB (a loop of at most 20 ms at a gain of Regen times the circuit's ceiling: about
+/// 3.6 s at full Regen on the A/DA).
+pub(crate) fn tail_seconds(p: &Params) -> f64 {
+    let circuit = (p.v(d::P_CIRCUIT) + 0.5) as i32;
+    let ceiling = match circuit {
+        6 => 0.88,
+        7 => 0.95,
+        _ => 0.0,
+    };
+    let gain = f64::from(p.v(d::P_REGEN).clamp(0.0, 1.0)) * ceiling;
+    let ring = if gain > 1e-3 { 0.020 * (1e-4f64).ln() / gain.ln() } else { 0.0 };
+    0.25 + ring
+}
+
 impl Plugin for ModEngine {
     fn info(&self) -> &'static PluginInfo {
         &MOD_INFO
@@ -396,18 +417,23 @@ impl Plugin for ModEngine {
     }
 
     fn tail_samples(&self) -> usize {
-        // `getTailLengthSeconds`: 0.25 s.
-        (0.25 * self.dsp.sample_rate()) as usize
+        (tail_seconds(&self.p) * self.dsp.sample_rate()) as usize
     }
 
     fn set_transport(&mut self, transport: &Transport) {
         self.dsp.set_host_transport(transport.playing, transport.tempo as f32);
+        if transport.playing {
+            self.lock_at = Some(transport.quarters);
+        }
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         self.processed = true;
         self.follow_link();
         self.push_params();
+        if let Some(at) = self.lock_at.take() {
+            self.dsp.lock_lfo(at);
+        }
         let nc = self.channels.min(io.len());
         if nc == 0 {
             return;

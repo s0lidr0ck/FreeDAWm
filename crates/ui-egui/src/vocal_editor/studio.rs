@@ -523,6 +523,17 @@ pub fn bar(app: &mut SoundApp, ui: &mut Ui, rect: Rect, editing: TrackId) {
         {
             fit_to_lead(app, editing);
         }
+        let align = tb.add_enabled(editing_has_notes(app, editing), egui::Button::new("Align timing"));
+        store(ui.ctx(), "studio-align", align.rect);
+        if align
+            .on_hover_text(format!(
+                "Move the starts and ends of the {} notes onto the lead's (at most 100 ms each), keeping their pitch",
+                if app.vocal.selected.is_empty() { "editing track's" } else { "selected" }
+            ))
+            .clicked()
+        {
+            align_timing(app, editing);
+        }
     }
     // Right side: back to the plain editor.
     let right = Rect::from_min_max(pos2(rect.right() - 110.0, inner.top()), pos2(inner.right(), inner.bottom()));
@@ -553,6 +564,26 @@ pub fn fit_to_lead(app: &mut SoundApp, track: TrackId) {
         Ok(v) => {
             let k = v["moved"].as_array().map_or(0, Vec::len);
             app.ui.status = if k == 0 { "Fit to lead: every note fits already".into() } else { format!("Fit to lead: moved {k} notes") };
+        }
+        Err(e) => app.ui.status = e,
+    }
+}
+
+/// Align timing (Fit to lead's timing half alone) on the selected notes (all of the editing
+/// track's without a selection).
+pub fn align_timing(app: &mut SoundApp, track: TrackId) {
+    let against = studied(app).against;
+    let mut p = json!({"track": track.0, "align_timing": true, "fit_pitch": false});
+    if let Some(a) = against {
+        p["against"] = json!(a.0);
+    }
+    if !app.vocal.selected.is_empty() {
+        p["notes"] = json!(app.vocal.selected.iter().collect::<Vec<_>>());
+    }
+    match app.run("vocal.fit_to_lead", p) {
+        Ok(v) => {
+            let k = v["aligned"].as_array().map_or(0, Vec::len);
+            app.ui.status = if k == 0 { "Align timing: every note lines up already".into() } else { format!("Align timing: moved {k} notes") };
         }
         Err(e) => app.ui.status = e,
     }

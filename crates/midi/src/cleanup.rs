@@ -651,9 +651,12 @@ impl Held<'_> {
                     *r = true;
                 }
             }
-            added.push((CtrlEvent { tick: attack, channel: up_channel, kind: CtrlKind::Cc(SUSTAIN_CC), value: 0 }, 0));
+            added.push((CtrlEvent { tick: attack, channel: up_channel, kind: CtrlKind::Cc(SUSTAIN_CC), value: 0, shape: Default::default() }, 0));
             if !player_up {
-                added.push((CtrlEvent { tick: catch_at, channel: down_channel, kind: CtrlKind::Cc(SUSTAIN_CC), value: 127 }, 2));
+                added.push((
+                    CtrlEvent { tick: catch_at, channel: down_channel, kind: CtrlKind::Cc(SUSTAIN_CC), value: 127, shape: Default::default() },
+                    2,
+                ));
                 let held_to = catch_at.saturating_add(1);
                 let from = work.partition_point(|s| s.note.start < attack);
                 for slot in work.iter_mut().skip(from).take_while(|s| s.note.start < catch_at) {
@@ -828,7 +831,7 @@ mod tests {
     const TPM: f64 = 1.92;
 
     fn n(pitch: u8, start: i64, len: i64, vel: u8) -> Note {
-        Note { pitch, velocity: vel, release_velocity: 64, channel: 0, start, length: len }
+        Note { probability: 100, pitch, velocity: vel, muted: false, release_velocity: 64, channel: 0, start, length: len }
     }
 
     fn chord(start: i64, end: i64, root: u8, pcs: &[u8]) -> ChordSpan {
@@ -860,7 +863,7 @@ mod tests {
     }
 
     fn pedal(tick: i64, value: i32) -> CtrlEvent {
-        CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(64), value }
+        CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(64), value, shape: Default::default() }
     }
 
     #[test]
@@ -1078,8 +1081,10 @@ mod tests {
         let mut r = |m: u64| rng.next_u64() % m.max(1);
         let ns = (0..notes)
             .map(|_| Note {
+                probability: 100,
                 pitch: 21 + r(88) as u8,
                 velocity: 1 + r(127) as u8,
+                muted: false,
                 release_velocity: 64,
                 channel: r(2) as u8,
                 start: r(span as u64) as i64,
@@ -1358,8 +1363,13 @@ mod tests {
     #[test]
     fn no_chords_leaves_pedal_alone() {
         let notes = [n(64, 0, 300, 90), n(65, 1920, 960, 90)];
-        let ctrls =
-            [pedal(0, 127), CtrlEvent { tick: 400, channel: 0, kind: CtrlKind::Cc(1), value: 30 }, pedal(1850, 0), pedal(1880, 127), pedal(3800, 0)];
+        let ctrls = [
+            pedal(0, 127),
+            CtrlEvent { tick: 400, channel: 0, kind: CtrlKind::Cc(1), value: 30, shape: Default::default() },
+            pedal(1850, 0),
+            pedal(1880, 127),
+            pedal(3800, 0),
+        ];
         let out = cleanup(&CleanupInput { ctrls: &ctrls, ..input(&notes, &[], settings(100, 100, 100, 100, true)) });
         assert_eq!(out.sequence.ctrls, ctrls.to_vec());
         assert_eq!(out.report.pedal_changes, 0);

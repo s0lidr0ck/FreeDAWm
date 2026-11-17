@@ -1,0 +1,24 @@
+{
+  "engine": "CompEngine",
+  "name": "Duck Under Voice",
+  "group": "Ducking",
+  "tags": "Clean · Key",
+  "desc": "Music or a bed that steps back while the voice talks. Choose the voice track as the key; without one it compresses its own input.",
+  "values": {
+    "style": "Clean",
+    "amount": 0.6,
+    "ratio": 0.4428,
+    "attack": 0.54,
+    "release": 0.583,
+    "makeup": 0.333333,
+    "knee": 0.4,
+    "scHpf": 0.557,
+    "color": 0.5,
+    "link": 1,
+    "autoGain": 0,
+    "variant": "A",
+    "detMode": "0",
+    "chanMode": "Stereo",
+    "dry": 0.0
+  }
+}

@@ -2,7 +2,7 @@ use soundcraft_midi::ops::*;
 use soundcraft_midi::*;
 
 fn n(pitch: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity: 100, release_velocity: 64, channel: 0, start, length }
+    Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 fn starts(notes: &[Note]) -> Vec<i64> {
@@ -34,6 +34,24 @@ fn quantize_swing() {
     let mut notes = vec![n(60, 480, 10)];
     quantize(&mut notes, &QuantizeOptions { grid_ticks: 480, swing: 0.5, ..Default::default() });
     assert_eq!(starts(&notes), vec![560]);
+}
+
+#[test]
+fn quantize_on_counts_the_grid_and_swing_from_each_span() {
+    // A clip starting 100 ticks after a bar: the bar's lines are at -100, 140, 380 ... in the
+    // clip's ticks, not at 0, 240, 480.
+    let bar = |_: i64| (-100, 1820);
+    let mut notes = vec![n(60, 0, 10), n(60, 150, 10), n(60, 370, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 240, ..Default::default() }, 1, bar);
+    assert_eq!(starts(&notes), vec![-100, 140, 380]);
+    // Swing delays the bar's second line, not the clip's.
+    let mut notes = vec![n(60, 400, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 480, swing: 1.0, ..Default::default() }, 1, bar);
+    assert_eq!(starts(&notes), vec![540]);
+    // A 7/8 bar (3360 ticks) is not a whole number of quarters: the next bar's start is a line.
+    let mut notes = vec![n(60, 3300, 10)];
+    quantize_on(&mut notes, &QuantizeOptions { grid_ticks: 960, ..Default::default() }, 1, |_| (0, 3360));
+    assert_eq!(starts(&notes), vec![3360]);
 }
 
 #[test]
@@ -104,6 +122,43 @@ fn transpose_clamps() {
     assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![0, 0, 27]);
     transpose(&mut notes, i32::MAX);
     assert!(notes.iter().all(|n| n.pitch == 127));
+}
+
+#[test]
+fn reverse_half_time_strum_and_humanize() {
+    let mut notes = vec![n(60, 0, 240), n(62, 480, 480)];
+    reverse(&mut notes);
+    assert_eq!(starts(&notes), vec![720, 0]);
+    let mut notes = vec![n(60, 960, 240), n(62, 1440, 480)];
+    scale_time(&mut notes, 2.0);
+    assert_eq!(notes.iter().map(|x| (x.start, x.length)).collect::<Vec<_>>(), vec![(960, 480), (1920, 960)]);
+    scale_time(&mut notes, 0.5);
+    assert_eq!(notes.iter().map(|x| (x.start, x.length)).collect::<Vec<_>>(), vec![(960, 240), (1440, 480)]);
+    // A C triad strummed up, 30 ticks a string; the ends stay.
+    let mut notes = vec![n(67, 0, 960), n(60, 0, 960), n(64, 0, 960), n(72, 960, 10)];
+    strum(&mut notes, 30, true);
+    assert_eq!(
+        notes.iter().map(|x| (x.pitch, x.start, x.end())).collect::<Vec<_>>(),
+        vec![(67, 60, 960), (60, 0, 960), (64, 30, 960), (72, 960, 970)]
+    );
+    let mut a = vec![n(60, 1000, 100); 8];
+    let mut b = a.clone();
+    humanize(&mut a, 20, 10, 7);
+    humanize(&mut b, 20, 10, 7);
+    assert_eq!(a, b, "seeded");
+    assert!(a.iter().all(|x| (980..=1020).contains(&x.start) && (90..=110).contains(&x.velocity)));
+    assert!(a.iter().any(|x| x.start != 1000));
+}
+
+/// Bug 6: a chord moved past the top keeps its intervals.
+#[test]
+fn transpose_within_keeps_the_shape() {
+    let mut notes = vec![n(100, 0, 1), n(104, 0, 1), n(120, 0, 1)];
+    assert_eq!(transpose_within(&mut notes, 24), 7);
+    assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![107, 111, 127]);
+    assert_eq!(transpose_within(&mut notes, i32::MIN), -107);
+    assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![0, 4, 20]);
+    assert_eq!(fitting_shift(&[], 5), 0);
 }
 
 #[test]
@@ -186,10 +241,10 @@ fn sequence_helpers() {
     let mut seq = Sequence {
         notes: vec![n(64, 100, 50), n(60, 100, 10), n(60, 100, 30), n(60, 0, 10), Note { channel: 2, ..n(60, 0, 10) }],
         ctrls: vec![
-            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 1 },
-            CtrlEvent { tick: 5, channel: 0, kind: CtrlKind::Cc(1), value: 2 },
-            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 3 },
-            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(2), value: 4 },
+            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 1, shape: Default::default() },
+            CtrlEvent { tick: 5, channel: 0, kind: CtrlKind::Cc(1), value: 2, shape: Default::default() },
+            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 3, shape: Default::default() },
+            CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(2), value: 4, shape: Default::default() },
         ],
     };
     assert_eq!(seq.end_tick(), 500);
@@ -211,7 +266,108 @@ fn sequence_helpers() {
 
 #[test]
 fn sequence_serde_round_trip() {
-    let seq = Sequence { notes: vec![n(60, 0, 1)], ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9 }] };
+    let seq = Sequence {
+        notes: vec![n(60, 0, 1)],
+        ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9, shape: Default::default() }],
+    };
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(serde_json::from_str::<Sequence>(&json).unwrap(), seq);
+}
+
+#[test]
+fn grooves_are_built_in_and_followed() {
+    let all = builtin_grooves();
+    let swing = all.iter().find(|g| g.name == "Swing 8ths 66%").unwrap();
+    assert_eq!((swing.period, swing.points.clone()), (960, vec![0, 633]));
+    // Counted from the bar (at 100): the off-beat of beat 2 is 100 + 960 + 633.
+    assert_eq!(swing.nearest(100 + 960 + 500, 100), 100 + 960 + 633);
+    assert_eq!(swing.nearest(100 + 960 + 900, 100), 100 + 1920, "the next period's first point");
+    assert!(Groove::new("x", 0, &[1]).is_none() && Groove::new("x", 10, &[]).is_none());
+    let mut v = vec![n(60, 470, 100), n(62, 100, 100)];
+    let opts = QuantizeOptions { grid_ticks: 480, ..QuantizeOptions::default() };
+    quantize_to_groove(&mut v, swing, &opts, DEFAULT_SEED, |_| 0);
+    assert_eq!(starts(&v), vec![633, 0]);
+}
+
+#[test]
+fn a_groove_is_taken_from_notes() {
+    // 16ths, each off-beat 16th 40 ticks late, one bar of 4/4.
+    let v: Vec<Note> = (0..16).map(|k| n(60, k * 240 + if k % 2 == 1 { 40 } else { 0 }, 60)).collect();
+    let g = groove_from_notes("feel", &v, 3840, 240, |_| 0).unwrap();
+    assert_eq!(g.points.len(), 16);
+    assert_eq!(&g.points[..4], &[0, 280, 480, 760]);
+    assert!(groove_from_notes("none", &[], 3840, 240, |_| 0).is_none());
+}
+
+#[test]
+fn quantize_window_ends_and_playback_quantize() {
+    let opts = QuantizeOptions { grid_ticks: 240, include_within: 0.5, ..QuantizeOptions::default() };
+    // Within half of half a step (60 ticks) moves; 100 off does not.
+    let mut v = vec![n(60, 50, 100), n(60, 340, 100)];
+    quantize(&mut v, &opts);
+    assert_eq!(starts(&v), vec![0, 340]);
+    let opts = QuantizeOptions { grid_ticks: 240, quantize_ends: true, ..QuantizeOptions::default() };
+    let mut v = vec![n(60, 10, 200)];
+    quantize(&mut v, &opts);
+    assert_eq!((v[0].start, v[0].length), (0, 240));
+    let opts = QuantizeOptions { grid_ticks: 240, preserve_duration: false, ..QuantizeOptions::default() };
+    let mut v = vec![n(60, 10, 200)];
+    quantize(&mut v, &opts);
+    assert_eq!((v[0].start, v[0].length), (0, 210), "the end stays put");
+    let q = PlayQuantize { grid: 240, strength: 0.5, swing: 0.0, groove: None };
+    assert_eq!(q.start(100, (0, 3840)), 50);
+    let off = PlayQuantize { grid: 0, strength: 1.0, swing: 0.0, groove: None };
+    assert_eq!(off.start(77, (0, 3840)), 77);
+}
+
+#[test]
+fn notes_are_picked_by_rule() {
+    let mut v = vec![n(60, 0, 240), n(62, 960, 480), n(64, 3840 + 960, 240), n(72, 4000, 960)];
+    v[1].velocity = 40;
+    let bar = |t: i64| t.div_euclid(3840) * 3840;
+    assert_eq!(select_matching(&v, &NoteRule::default(), bar), vec![0, 1, 2, 3]);
+    let r = NoteRule { pitch: (65, 60), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![0, 1, 2]);
+    let r = NoteRule { velocity: (80, 127), length: (1, 480), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![0, 2]);
+    // Beat 2 of any bar.
+    let r = NoteRule { in_bar: Some((960, 1919)), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![1, 2]);
+    let r = NoteRule { start: (900, 4000), ..NoteRule::default() };
+    assert_eq!(select_matching(&v, &r, bar), vec![1, 3]);
+}
+
+#[test]
+fn a_muted_note_round_trips_and_old_notes_load_unmuted() {
+    let mut a = n(60, 0, 10);
+    let json = serde_json::to_string(&a).unwrap();
+    assert!(!json.contains("muted"), "an unmuted note saves as before: {json}");
+    a.muted = true;
+    let back: Note = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+    assert!(back.muted);
+    let old: Note = serde_json::from_str(r#"{"pitch":60,"velocity":100,"release_velocity":64,"channel":0,"start":0,"length":10}"#).unwrap();
+    assert!(!old.muted);
+}
+
+#[test]
+fn a_groove_from_notes_keeps_their_accents() {
+    // 8ths over one bar: on-beats played at 110, off-beats at 70 (the average 90).
+    let v: Vec<Note> = (0..8).map(|k| Note { velocity: if k % 2 == 0 { 110 } else { 70 }, ..n(60, k * 480, 60) }).collect();
+    let g = groove_from_notes("accents", &v, 3840, 480, |_| 0).unwrap();
+    assert_eq!(g.accents, vec![20, -20, 20, -20, 20, -20, 20, -20]);
+    assert_eq!((g.accent(10, 0), g.accent(470, 0)), (20, -20), "the nearest point's accent");
+    // Quantizing flat notes to it gives them the accents, by the strength.
+    let mut flat: Vec<Note> = (0..4).map(|k| n(60, k * 480 + 15, 60)).collect();
+    let opts = QuantizeOptions { grid_ticks: 480, strength: 0.5, ..QuantizeOptions::default() };
+    quantize_to_groove(&mut flat, &g, &opts, DEFAULT_SEED, |_| 0);
+    assert_eq!(flat.iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![110, 90, 110, 90]);
+    // Played: the same, the notes left alone.
+    let q = PlayQuantize { grid: 480, strength: 1.0, swing: 0.0, groove: Some(g.clone()) };
+    assert!(q.accents());
+    assert_eq!((q.velocity(15, (0, 3840), 100), q.velocity(495, (0, 3840), 100)), (120, 80));
+    // Timing-only grooves (the built-in ones, older ones) change no velocity, and save as before.
+    let swing = builtin_grooves().into_iter().next().unwrap();
+    assert!(swing.accents.is_empty() && !serde_json::to_string(&swing).unwrap().contains("accents"));
+    let old: Groove = serde_json::from_str(r#"{"name":"x","period":960,"points":[0,600]}"#).unwrap();
+    assert_eq!(old.accent(600, 0), 0);
 }

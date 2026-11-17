@@ -533,7 +533,7 @@ fn another_clip_on_the_same_track_shows_as_ghosts_and_a_muted_clip_does_not() {
     other.id = s.new_clip_id();
     other.content = ClipContent::Midi {
         sequence: soundcraft_midi::Sequence {
-            notes: vec![Note { pitch: 50, velocity: 90, release_velocity: 64, channel: 0, start: 480, length: 480 }],
+            notes: vec![Note { probability: 100, pitch: 50, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 480, length: 480 }],
             ctrls: Vec::new(),
         },
     };

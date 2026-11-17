@@ -231,7 +231,7 @@ pub(crate) struct Editor {
 
 /// Draws Amp's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (Amp's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 15] = [
+pub(crate) const NOT_IN_PRESETS: [&str; 15] = [
     "quality",
     "input",
     "jtmInput",
@@ -630,7 +630,15 @@ fn knob(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, pal: &Vst
     let Some(info) = host.info.params.iter().find(|p| p.id == id) else { return };
     let value = param(host, id);
     let text = info.format(value);
-    let o = DialOpts { label, value_text: &text, default: info.to_normalized(info.default), tracked: true, inactive, ..DialOpts::default() };
+    let o = DialOpts {
+        label,
+        value_text: &text,
+        default: info.to_normalized(info.default),
+        tracked: true,
+        inactive,
+        info: Some(info),
+        ..DialOpts::default()
+    };
     let out = dial(ui, r, id, pal, info.to_normalized(value), &o);
     if let Some(t) = tooltip(id) {
         let _ = out.response.clone().on_hover_text(t);

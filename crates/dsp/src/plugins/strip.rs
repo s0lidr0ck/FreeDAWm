@@ -82,6 +82,9 @@ pub struct ChannelStrip {
     input: Smoother,
     output: Smoother,
     ch: usize,
+    /// The gate and compressor sections were on last block.
+    gate_was_on: bool,
+    comp_was_on: bool,
 }
 
 impl Default for ChannelStrip {
@@ -100,6 +103,8 @@ impl ChannelStrip {
             input: Smoother::new(1.0),
             output: Smoother::new(1.0),
             ch: 0,
+            gate_was_on: true,
+            comp_was_on: true,
         };
         s.comp.set_param("knee", 6.0);
         for &(idx, _, _) in ROUTES {
@@ -174,10 +179,20 @@ impl Plugin for ChannelStrip {
                 }
             }
         }
-        if self.p.on(1) {
+        // A section switched back on starts clean, not from the gain reduction it had when it
+        // was switched off.
+        let (gate_on, comp_on) = (self.p.on(1), self.p.on(5));
+        if gate_on && !self.gate_was_on {
+            self.gate.reset();
+        }
+        if comp_on && !self.comp_was_on {
+            self.comp.reset();
+        }
+        (self.gate_was_on, self.comp_was_on) = (gate_on, comp_on);
+        if gate_on {
             self.gate.process(io, frames);
         }
-        if self.p.on(5) {
+        if comp_on {
             self.comp.process(io, frames);
         }
         if self.p.on(11) {

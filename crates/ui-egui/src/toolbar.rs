@@ -242,7 +242,43 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
     let rec_line = (counting.is_none() && app.engine.transport.recording).then(|| record_line(app, pos));
     let main_y = if lp.is_some() || counting.is_some() || rec_line.is_some() { main_r.center().y - 4.0 } else { main_r.center().y };
     let main_col = if counting.is_some() { t.rec } else { t.counter_text };
-    ui.painter().text(pos2(main_r.max.x - 18.0, main_y), Align2::RIGHT_CENTER, txt, mono(26.0), main_col);
+    // A click on the number types a position into it (Enter locates there, Escape leaves it);
+    // the triangle beside it picks the format.
+    let edit_id = ui.id().with("main_counter_typing");
+    let typing: Option<String> = ui.data(|d| d.get_temp(edit_id));
+    let number_r = Rect::from_min_max(main_r.min, pos2(main_r.max.x - 18.0, main_r.max.y));
+    if let Some(mut text) = typing {
+        let field = Rect::from_min_max(pos2(number_r.min.x + 6.0, main_y - 16.0), pos2(number_r.max.x, main_y + 16.0));
+        let out = ui.put(
+            field,
+            egui::TextEdit::singleline(&mut text)
+                .hint_text(egui::RichText::new(&txt).font(mono(22.0)))
+                .font(mono(22.0))
+                .horizontal_align(egui::Align::RIGHT)
+                .text_color(main_col)
+                .frame(egui::Frame::NONE),
+        );
+        out.request_focus();
+        let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        if enter || escape || out.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(edit_id));
+            // Enter on an empty field leaves the playhead where it is.
+            if enter
+                && !text.trim().is_empty()
+                && let Err(e) = locate_typed(app, &text)
+            {
+                app.ui.status = e;
+            }
+        } else {
+            ui.data_mut(|d| d.insert_temp(edit_id, text));
+        }
+    } else {
+        ui.painter().text(pos2(main_r.max.x - 18.0, main_y), Align2::RIGHT_CENTER, txt, mono(26.0), main_col);
+        let number = ui.interact(number_r, ui.id().with("main_counter_number"), Sense::click());
+        if number.on_hover_text("Click to type a position; Enter locates there").clicked() && counting.is_none() {
+            ui.data_mut(|d| d.insert_temp(edit_id, String::new()));
+        }
+    }
     if let Some((bar, _, bars)) = counting {
         let label = format!("COUNT-OFF {bar}/{bars} · not recording yet");
         ui.painter().text(pos2(main_r.max.x - 18.0, main_r.max.y - 5.0), Align2::RIGHT_CENTER, label, mono(8.5), t.rec);
@@ -254,7 +290,8 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
         let label = format!("LOOP {} – {}", fmt_pos(app, lp.start, main_fmt), fmt_pos(app, lp.end, main_fmt));
         ui.painter().text(pos2(main_r.max.x - 18.0, main_r.max.y - 5.0), Align2::RIGHT_CENTER, label, mono(8.5), col);
     }
-    let resp = ui.interact(main_r, ui.id().with("main_counter"), Sense::click());
+    let format_r = Rect::from_min_max(pos2(main_r.max.x - 18.0, main_r.min.y), main_r.max);
+    let resp = ui.interact(format_r, ui.id().with("main_counter"), Sense::click());
     icons::draw(ui.painter(), Rect::from_center_size(pos2(main_r.max.x - 9.0, main_r.center().y), vec2(10.0, 10.0)), "triangle_down", t.text_dim);
     egui::Popup::menu(&resp).show(|ui| {
         for f in TimeFormat::ALL {
@@ -283,6 +320,49 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
     let st = if app.engine.is_dirty() { "modified" } else { "saved" };
     let dev = app.player.as_ref().map_or("no audio engine", |p| if p.silent { "silent clock" } else { "audio on" });
     ui.painter().text(pos2(r.max.x - 8.0, y), Align2::RIGHT_CENTER, format!("{st} · {dev}"), regular(10.0), t.text_dim);
+}
+
+/// How long Rewind or Fast Forward is held before it winds rather than jumps, in seconds.
+pub const WIND_AFTER: f64 = 0.25;
+
+/// The speed of a held Rewind or Fast Forward after `held` seconds, in session seconds per
+/// second: from 2× doubling each second up to 32×.
+pub fn wind_speed(held: f64) -> f64 {
+    (2.0 * (held - WIND_AFTER).max(0.0).exp2()).min(32.0)
+}
+
+/// A transport key's click runs `cmd`. Rewind and Fast Forward also wind while held, faster
+/// the longer they are (a short click still jumps a second).
+pub(crate) fn transport_key(app: &mut SoundApp, ui: &Ui, resp: &egui::Response, cmd: &str) {
+    if !matches!(cmd, "transport.rewind" | "transport.fast_forward") {
+        if resp.clicked() {
+            let _ = app.run(cmd, json!({}));
+        }
+        return;
+    }
+    let id = resp.id.with("wind_held");
+    let was = ui.data(|d| d.get_temp::<f64>(id));
+    // Pressed on the key, and held from then on wherever the pointer drifts.
+    if resp.is_pointer_button_down_on() || (was.is_some() && ui.input(|i| i.pointer.primary_down())) {
+        let dt = f64::from(ui.input(|i| i.stable_dt)).clamp(0.0, 0.1);
+        let held = was.unwrap_or(0.0) + dt;
+        ui.data_mut(|d| d.insert_temp(id, held));
+        if held > WIND_AFTER {
+            let _ = app.run(cmd, json!({"seconds": wind_speed(held) * dt}));
+        }
+        ui.ctx().request_repaint();
+    } else {
+        let held = ui.data_mut(|d| d.remove_temp::<f64>(id)).unwrap_or(0.0);
+        if resp.clicked() && held <= WIND_AFTER {
+            let _ = app.run(cmd, json!({}));
+        }
+    }
+}
+
+/// Locates to `text` typed into the main counter, read in the main counter's format.
+pub fn locate_typed(app: &mut SoundApp, text: &str) -> Result<(), String> {
+    let f = app.engine.session().edit.main_counter;
+    app.run("transport.locate", json!({"at": format!("{}:{}", f.id(), text.trim())})).map(|_| ())
 }
 
 fn grid_nudge(app: &mut SoundApp, ui: &mut Ui) {
@@ -452,9 +532,8 @@ fn transport(app: &mut SoundApp, ui: &mut Ui) {
                     ("end", "transport.go_to_end", "Go to End (End)"),
                 ] {
                     // Four keys under the five above.
-                    if icon_button(ui, vec2(48.0, 22.0), icon, false, tip).clicked() {
-                        let _ = app.run(cmd, json!({}));
-                    }
+                    let resp = icon_button(ui, vec2(48.0, 22.0), icon, false, tip);
+                    transport_key(app, ui, &resp, cmd);
                 }
             });
         });
@@ -614,7 +693,7 @@ fn output_meter(app: &mut SoundApp, ui: &mut Ui) {
     let w = (r.width() - 6.0) / 2.0;
     for c in 0..2 {
         let rr = Rect::from_min_size(pos2(r.min.x + 2.0 + c as f32 * (w + 2.0), r.min.y), vec2(w, r.height()));
-        crate::widgets::meter(ui, rr, m.level[c], m.hold[c], m.clip);
+        crate::widgets::meter_of(ui, rr, &m, c);
     }
 }
 
@@ -638,9 +717,8 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
     let ui = &mut row;
     let key_size = vec2(30.0, 26.0);
     for (icon, cmd, tip) in [("rtz", "transport.rtz", "Return to Zero (Home)"), ("rewind", "transport.rewind", "Rewind")] {
-        if icon_button(ui, key_size, icon, false, tip).clicked() {
-            let _ = app.run(cmd, json!({}));
-        }
+        let resp = icon_button(ui, key_size, icon, false, tip);
+        transport_key(app, ui, &resp, cmd);
     }
     let (r, resp) = ui.allocate_exact_size(key_size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop"));
@@ -670,9 +748,8 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
         let _ = app.run("transport.record", json!({}));
     }
     for (icon, cmd, tip) in [("ffwd", "transport.fast_forward", "Fast Forward"), ("end", "transport.go_to_end", "Go to End (End)")] {
-        if icon_button(ui, key_size, icon, false, tip).clicked() {
-            let _ = app.run(cmd, json!({}));
-        }
+        let resp = icon_button(ui, key_size, icon, false, tip);
+        transport_key(app, ui, &resp, cmd);
     }
     if icon_button(ui, key_size, "loop", looped, "Loop Playback (Cmd+Shift+L)").clicked() {
         let _ = app.run("options.loop_playback", json!({}));

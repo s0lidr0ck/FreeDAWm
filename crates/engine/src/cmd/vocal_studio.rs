@@ -6,8 +6,8 @@ use super::*;
 use crate::cmd;
 use crate::vocal::NoteRef;
 use crate::vocal_studio::{
-    HarmonyNote, MatchTo, TuneStep, clashes, compared_track, fit_plan, harmony_name, harmony_plan, lead_track, match_plan, studio_tracks,
-    track_status, tune_all_plan, unison_stacks,
+    ALIGN_MIN_SEGMENT_S, AlignMove, HarmonyNote, MatchTo, TuneStep, align_plan, align_points, clashes, compared_track, fit_plan, harmony_name,
+    harmony_plan, lead_track, match_plan, studio_tracks, track_status, tune_all_plan, unison_stacks,
 };
 use serde_json::json;
 use soundcraft_model::{StudioTuning, TrackKind, VocalTune};
@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fit to Lead",
             [],
             None,
-            "{track?, against?: track, notes?: [{clip, note}], align_timing?: false} — moves each clashing note of `track` (default: the first selected track; `notes`: only those, else all) by whole semitones to the nearest tone within a fourth that clashes with no note of `against` sounding with it (default: the session's lead) nor with the chord, and is in the key: chord tones first, then the smaller move. Notes that fit already, or have nowhere to go, stay. Sets the notes' offset (as dragging them does). `align_timing` (moving note starts and ends to the lead's) is not available yet and is refused. Undoable, one step. Returns {track, against, moved: [{clip, note, semitones}]}",
+            "{track?, against?: track, notes?: [{clip, note}], fit_pitch?: true, align_timing?: false, strength?: 0..100 (%, default 100), max_shift_ms?: 1..500 (default 100)} — `fit_pitch`: moves each clashing note of `track` (default: the first selected track; `notes`: only those, else all) by whole semitones to the nearest tone within a fourth that clashes with no note of `against` sounding with it (default: the session's lead) nor with the chord, and is in the key: chord tones first, then the smaller move. Notes that fit already, or have nowhere to go, stay. Sets the notes' offset (as dragging them does). `align_timing`: each note is paired with the lead note it overlaps most and its start and end move `strength` of the way to the lead's, at most `max_shift_ms`; each clip with notes to move is rendered again with a pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), and its tuning is carried onto the new audio and re-analysed before the command returns. Refused while either track is being analysed or a clip is edit-locked. Undoable, one step. Returns {track, against, moved: [{clip, note, semitones}], aligned?: [{clip, note, start_ms, end_ms}]}",
             has_selection,
             fit_to_lead
         ),
@@ -184,8 +184,22 @@ fn clashes_query(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 fn fit_to_lead(e: &mut Engine, p: &Value) -> Result<Value> {
-    if p.get("align_timing").and_then(Value::as_bool).unwrap_or(false) {
-        return Err(EngineError::Unsupported("Fit to lead's timing alignment is not available yet: leave align_timing off".into()));
+    let flag = |k: &str, d: bool| match p.get(k) {
+        None => Ok(d),
+        Some(v) => v.as_bool().ok_or_else(|| bad(FIT, format!("`{k}` must be true or false"))),
+    };
+    let align = flag("align_timing", false)?;
+    let pitch = flag("fit_pitch", true)?;
+    let num = |k: &str, lo: f64, hi: f64, d: f64| match p.get(k) {
+        None => Ok(d),
+        Some(v) => {
+            v.as_f64().filter(|x| x.is_finite() && (lo..=hi).contains(x)).ok_or_else(|| bad(FIT, format!("`{k}` must be a number from {lo} to {hi}")))
+        }
+    };
+    let strength = num("strength", 0.0, 100.0, 100.0)? / 100.0;
+    let max_ms = num("max_shift_ms", 1.0, MAX_ALIGN_SHIFT_MS, 100.0)?;
+    if !align && !pitch {
+        return Err(bad(FIT, "nothing to do: fit_pitch and align_timing are both off"));
     }
     let track = match track_param(e, FIT, p, "track")? {
         Some(t) => t,
@@ -201,19 +215,132 @@ fn fit_to_lead(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad(FIT, "choose an audio track"));
     }
     let against = compared_track(s, against).filter(|a| *a != track);
-    let plan = fit_plan(s, track, against, only.as_deref());
-    if plan.is_empty() {
-        return Ok(json!({"track": track, "against": against, "moved": []}));
+    if align {
+        let lead = against.ok_or_else(|| bad(FIT, "no lead to align to: pass `against`"))?;
+        let waiting: Vec<String> =
+            [track, lead].iter().filter(|t| track_status(s, **t).analysing).filter_map(|t| s.track(*t).map(|tr| tr.name.clone())).collect();
+        if !waiting.is_empty() {
+            return Err(bad(FIT, format!("analysing {} — try again in a moment", waiting.join(", "))));
+        }
+        if let Some(c) = s.track(track).and_then(|t| t.clips().iter().find(|c| c.edit_locked && c.is_audio())) {
+            return Err(bad(FIT, format!("{} is edit-locked", c.name)));
+        }
     }
-    let refs: Vec<NoteRef> = plan.iter().map(|(r, _)| *r).collect();
-    let (refs, analyses) = super::vocal::note_refs(e, FIT, &json!({"notes": refs}))?;
-    let by: std::collections::BTreeMap<NoteRef, i32> = plan.iter().copied().collect();
-    super::vocal::change_edits(e, &refs, &analyses, |r, ed| {
-        let d = by.get(&r).copied().unwrap_or(0);
-        ed.offset_cents += d as f32 * 100.0;
-    });
+    let plan = if pitch { fit_plan(s, track, against, only.as_deref()) } else { Vec::new() };
+    if !plan.is_empty() {
+        let refs: Vec<NoteRef> = plan.iter().map(|(r, _)| *r).collect();
+        let (refs, analyses) = super::vocal::note_refs(e, FIT, &json!({"notes": refs}))?;
+        let by: std::collections::BTreeMap<NoteRef, i32> = plan.iter().copied().collect();
+        super::vocal::change_edits(e, &refs, &analyses, |r, ed| {
+            let d = by.get(&r).copied().unwrap_or(0);
+            ed.offset_cents += d as f32 * 100.0;
+        });
+    }
     let moved: Vec<Value> = plan.iter().map(|(r, d)| json!({"clip": r.clip, "note": r.note, "semitones": d})).collect();
-    Ok(json!({"track": track, "against": against, "moved": moved}))
+    let mut out = json!({"track": track, "against": against, "moved": moved});
+    if let (true, Some(lead)) = (align, against) {
+        let max_shift = (max_ms / 1000.0 * e.session().sample_rate.as_f64()).round() as Samples;
+        out["aligned"] = json!(align_timing(e, track, lead, only.as_deref(), strength, max_shift));
+    }
+    Ok(out)
+}
+
+/// The largest `max_shift_ms` Fit to lead's timing alignment takes.
+const MAX_ALIGN_SHIFT_MS: f64 = 500.0;
+
+/// Fit to lead's timing alignment ([`align_plan`]): each clip of `track` with notes to move is
+/// rendered again with its note starts and ends warped onto the lead's (Straighten's
+/// pitch-keeping stretch, the clip's edges staying put; warp markers kept so Remove Warp
+/// restores the original), its tuning carried onto the new audio through the warp and matched
+/// to a fresh analysis, run here so the edits land in the same undo step. Returns the notes
+/// moved, with their shifts in milliseconds.
+fn align_timing(e: &mut Engine, track: TrackId, lead: TrackId, only: Option<&[NoteRef]>, strength: f64, max_shift: Samples) -> Vec<Value> {
+    let s = e.session();
+    let sr = s.sample_rate.as_f64();
+    let moves = align_plan(s, track, lead, only, strength, max_shift);
+    let mut by_clip: std::collections::BTreeMap<soundcraft_model::ClipId, Vec<AlignMove>> = std::collections::BTreeMap::new();
+    for m in &moves {
+        by_clip.entry(m.r.clip).or_default().push(*m);
+    }
+    let channels = s.track(track).map_or(1, |t| t.channels().max(1));
+    let min_gap = (ALIGN_MIN_SEGMENT_S * sr).round() as Samples;
+    // Render first (reading only), then change the session.
+    let mut done: Vec<(soundcraft_model::Clip, Vec<(Samples, Samples)>, Vec<Vec<f32>>)> = Vec::new();
+    for (id, ms) in &by_clip {
+        let Some((_, c)) = s.find_clip(*id) else { continue };
+        let points = align_points(c.start, c.end(), ms, min_gap);
+        if points.len() <= 2 {
+            continue;
+        }
+        let f = |x: Samples| crate::tempo_detect::warp_at(&points, x as f64).round() as Samples;
+        let cuts: Vec<Samples> = points.iter().map(|p| p.0).collect();
+        // The clip as heard before tuning: the tuning is carried, not baked in.
+        let outs = super::tempo::warp_render(s, &[(vec![c], channels)], &cuts, &f, soundcraft_mix::clip_heard_window, true);
+        let Some(audio) = outs.into_iter().next() else { continue };
+        done.push((c.clone(), points, audio));
+    }
+    let mut ids = Vec::with_capacity(done.len());
+    for (c, points, audio) in done {
+        let s = e.session();
+        let Some((t, _)) = s.find_clip(c.id) else { continue };
+        let f = |x: Samples| crate::tempo_detect::warp_at(&points, x as f64).round() as Samples;
+        let tune = c.tune_live().cloned().map(|mut tu| {
+            if let Some(a) = crate::vocal::analysis_for(s, &c) {
+                carry_tune(&mut tu, &c, &a, &f);
+            }
+            tu
+        });
+        let s = e.session_mut();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: audio };
+        let name = s.track(t).map(|x| x.name.clone()).unwrap_or_default();
+        let src = crate::io::add_source(s, &format!("{name}-Aligned"), buf, None, soundcraft_audio_io::FileFormat::Wav);
+        // Remove Warp goes back to the original, as after Straighten.
+        if let soundcraft_model::ClipContent::Audio { source, offset } = c.content {
+            let key = |k: &str| format!("elastic.{}.{k}", c.id.0);
+            if !s.edit.values.contains_key(&key("src")) {
+                s.edit.values.insert(key("src"), source.0 as f64);
+                s.edit.values.insert(key("off"), offset as f64);
+                s.edit.values.insert(key("len"), c.length as f64);
+                s.edit.values.insert(key("start"), c.start as f64);
+            }
+        }
+        let mut nc = c.clone();
+        nc.content = soundcraft_model::ClipContent::Audio { source: src, offset: 0 };
+        nc.warp = points.iter().map(|(a, _)| (a - c.start, f(*a) - c.start)).collect();
+        nc.tune = tune.map(|mut tu| {
+            tu.source = Some(src);
+            tu.analysed = 0;
+            tu
+        });
+        super::more_util::replace_clip(s, t, c.id, nc);
+        ids.push(c.id);
+    }
+    crate::vocal::analyse_now(e, &ids);
+    let ms = |d: Samples| (d as f64 / sr * 10_000.0).round() / 10.0;
+    moves
+        .iter()
+        .filter(|m| ids.contains(&m.r.clip))
+        .map(|m| json!({"clip": m.r.clip, "note": m.r.note, "start_ms": ms(m.d_start), "end_ms": ms(m.d_end)}))
+        .collect()
+}
+
+/// `tu` (the tuning of `c`, made on its analysis `a`) carried through the warp `f` onto a render
+/// of the clip whose sample 0 is the clip start: the frames of its edited notes and of its
+/// segment cuts go where the warp puts them, so the next analysis matches the edits by overlap.
+fn carry_tune(tu: &mut VocalTune, c: &soundcraft_model::Clip, a: &soundcraft_vocal::VocalAnalysis, f: &dyn Fn(Samples) -> Samples) {
+    crate::vocal::sync_note_spans(tu, a);
+    let m = crate::vocal::FrameMap::of(c, a);
+    let hop = Samples::from(a.track.hop_samples.max(1));
+    let to = |fr: u32| {
+        let rel = f(m.time(fr)).saturating_sub(c.start).max(0);
+        u32::try_from(rel.saturating_add(hop / 2) / hop).unwrap_or(u32::MAX)
+    };
+    tu.note_spans = tu.note_spans.iter().map(|(id, (a0, a1))| (*id, (to(*a0), to(*a1).max(to(*a0).saturating_add(1))))).collect();
+    for op in &mut tu.seg_ops {
+        match op {
+            soundcraft_vocal::SegOp::Split { at } | soundcraft_vocal::SegOp::Join { at } => *at = to(*at),
+        }
+    }
 }
 
 /// "centre" or "edge".
@@ -672,7 +799,7 @@ mod tests {
         assert_eq!(st["tracks"][1]["clashes"], 1);
         assert_eq!(st["tracks"][0]["clashes"], 0, "the lead is checked against the chord and key only");
         // Fit to lead: no chords, so the nearest tone in key that doesn't clash: F# (down wins a tie).
-        assert!(e.execute("vocal.fit_to_lead", &json!({"track": bv.0, "align_timing": true})).is_err());
+        assert!(e.execute("vocal.fit_to_lead", &json!({"track": bv.0, "align_timing": 1})).is_err());
         let undo = e.undo_history().len();
         let f = e.execute("vocal.fit_to_lead", &json!({"track": bv.0})).unwrap();
         assert_eq!(f["moved"].as_array().unwrap().len(), 1, "{f}");
@@ -950,5 +1077,122 @@ mod tests {
         }
         assert!(e.undo());
         assert!(e.session().track(dbl).unwrap().clips()[0].tune.is_none());
+    }
+
+    /// Sung notes (Hz, start, end in seconds) on silence `total` seconds long.
+    fn sung(notes: &[(f64, f64, f64)], total: f64) -> Vec<f32> {
+        let mut x = vec![0.0f32; (total * f64::from(RATE)) as usize];
+        for (f, a, b) in notes {
+            let at = (a * f64::from(RATE)) as usize;
+            for (d, v) in x.iter_mut().skip(at).zip(vowel(*f, b - a)) {
+                *d = v;
+            }
+        }
+        x
+    }
+
+    /// Where each sung note of `x` starts and ends (samples): runs above a level, gaps of 50 ms
+    /// or more between them.
+    fn sounding(x: &[f32]) -> Vec<(usize, usize)> {
+        let gap = (0.05 * f64::from(RATE)) as usize;
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        for (i, v) in x.iter().enumerate() {
+            if v.abs() < 0.01 {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if i - last.1 < gap => last.1 = i,
+                _ => out.push((i, i)),
+            }
+        }
+        out
+    }
+
+    fn heard(e: &Engine, t: TrackId) -> Vec<f32> {
+        let c = e.session().track(t).unwrap().clips()[0].clone();
+        soundcraft_mix::clip_heard_window(e.session(), &c, c.source_offset(), c.length as usize).unwrap().remove(0)
+    }
+
+    /// A lead and a double of it sung early and late (E4, G4 under the lead's G#4, B4), the
+    /// double's starts and ends off by 17 to 41 ms.
+    fn loose_double() -> (Engine, TrackId, TrackId) {
+        let mut s = Session::default();
+        s.band.key = 4; // E major
+        let lead = [(hz(64.0), 0.20, 0.70), (hz(68.0), 0.95, 1.45), (hz(71.0), 1.70, 2.10)];
+        let dbl = [(hz(64.0), 0.237, 0.721), (hz(67.0), 0.927, 1.491), (hz(71.0), 1.729, 2.083)];
+        let (lt, a) = add(&mut s, "Lead Vox", sung(&lead, 2.5));
+        let (dt, b) = add(&mut s, "BV 1", sung(&dbl, 2.5));
+        let mut e = Engine::new(s);
+        crate::vocal::run_until_idle(&mut e, &[a, b]).unwrap();
+        (e, lt, dt)
+    }
+
+    #[test]
+    fn align_timing_lands_the_double_on_the_lead_and_keeps_its_pitch() {
+        let (mut e, lead, dbl) = loose_double();
+        let ms = |n: usize| n as f64 * 1000.0 / f64::from(RATE);
+        let lead_on = sounding(&heard(&e, lead));
+        let before_on = sounding(&heard(&e, dbl));
+        assert_eq!(lead_on.len(), 3);
+        assert_eq!(before_on.len(), 3);
+        let before = crate::vocal_studio::studio_notes(e.session(), dbl);
+        let before_pitch: Vec<f32> = before.iter().map(|n| n.pitch).collect();
+        assert!(e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "align_timing": "yes"})).is_err());
+        assert!(e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "align_timing": true, "strength": 120})).is_err());
+        assert!(e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "fit_pitch": false})).is_err(), "nothing to do");
+        let undo = e.undo_history().len();
+        let r = e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "align_timing": true})).unwrap();
+        assert_eq!(e.undo_history().len(), undo + 1, "one undo step");
+        assert_eq!(r["moved"].as_array().unwrap().len(), 1, "the G4 under G#4 is fitted too: {r}");
+        assert_eq!(r["aligned"].as_array().unwrap().len(), 3, "{r}");
+        // Every start and end lands within a few ms of the lead's.
+        let after_on = sounding(&heard(&e, dbl));
+        assert_eq!(after_on.len(), 3, "{after_on:?}");
+        for (k, (l, d)) in lead_on.iter().zip(&after_on).enumerate() {
+            assert!(ms(l.0.abs_diff(d.0)) <= 3.0, "note {k} starts {:.1} ms from the lead's", ms(l.0.abs_diff(d.0)));
+            assert!(ms(l.1.abs_diff(d.1)) <= 3.0, "note {k} ends {:.1} ms from the lead's", ms(l.1.abs_diff(d.1)));
+        }
+        // Re-analysed in the same step; the pitch is unchanged, and the fitted note keeps its fit.
+        let c = e.session().track(dbl).unwrap().clips()[0].clone();
+        assert!(!c.warp.is_empty(), "warp markers kept");
+        assert!(crate::vocal::analysis_for(e.session(), &c).is_some(), "analysed before returning");
+        let after = crate::vocal_studio::studio_notes(e.session(), dbl);
+        assert_eq!(after.iter().map(|n| n.midi()).collect::<Vec<_>>(), [64, 66, 71], "the fitted F# carried over");
+        for (k, (a, b)) in after.iter().zip(&before_pitch).enumerate() {
+            let want = if k == 1 { b - 100.0 } else { *b };
+            assert!((a.pitch - want).abs() < 8.0, "note {k}: {} c, was {want} c", a.pitch);
+        }
+        // Undo: the original audio and timing (analysed again, as the background would).
+        assert!(e.undo());
+        let c = e.session().track(dbl).unwrap().clips()[0].id;
+        crate::vocal::run_until_idle(&mut e, &[c]).unwrap();
+        assert_eq!(sounding(&heard(&e, dbl)), before_on);
+        // The largest shift, and the strength.
+        let r = e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "align_timing": true, "fit_pitch": false, "max_shift_ms": 10})).unwrap();
+        for m in r["aligned"].as_array().unwrap() {
+            assert!(m["start_ms"].as_f64().unwrap().abs() <= 10.0 && m["end_ms"].as_f64().unwrap().abs() <= 10.0, "{m}");
+        }
+        assert!(e.undo());
+        crate::vocal::run_until_idle(&mut e, &[c]).unwrap();
+        let r = e.execute("vocal.fit_to_lead", &json!({"track": dbl.0, "align_timing": true, "fit_pitch": false, "strength": 50})).unwrap();
+        let first = &r["aligned"][0];
+        assert!((first["start_ms"].as_f64().unwrap() + 18.5).abs() <= 6.0, "half of 37 ms early: {first}");
+        let half = sounding(&heard(&e, dbl));
+        let off = ms(half[0].0.abs_diff(lead_on[0].0));
+        assert!((12.0..=25.0).contains(&off), "half way: {off:.1} ms");
+    }
+
+    #[test]
+    fn align_points_rise_and_keep_the_clip_edges() {
+        use crate::vocal::NoteRef;
+        use crate::vocal_studio::{AlignMove, align_points};
+        let r = NoteRef { clip: ClipId(1), note: soundcraft_vocal::NoteId(0) };
+        let m = |start, end, d_start, d_end| AlignMove { r, start, end, d_start, d_end };
+        // Two notes whose moves would cross: the second's start is dropped.
+        let p = align_points(0, 10_000, &[m(1000, 3000, 500, 0), m(3100, 5000, -600, 0)], 100);
+        assert_eq!(p, [(0, 0), (1000, 1500), (3000, 3000), (5000, 5000), (10_000, 10_000)]);
+        assert!(p.windows(2).all(|w| w[1].0 > w[0].0 && w[1].1 > w[0].1));
+        // Points outside the clip are ignored.
+        assert_eq!(align_points(2000, 4000, &[m(1000, 3000, 100, 100)], 100), [(2000, 2000), (3000, 3100), (4000, 4000)]);
     }
 }

@@ -4,6 +4,7 @@
 //! not wander. Gain computers work in the log domain with smoothed gain reduction.
 
 use crate::biquad::{Biquad, Coeffs, FilterType};
+use crate::meter::TP_TAPS;
 use crate::params::{Params, lin, log, param_plumbing, toggle};
 use crate::util::{DelayLine, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain, gain_to_db};
@@ -71,6 +72,12 @@ pub struct Compressor {
     makeup: Smoother,
     mix: Smoother,
     lookahead: usize,
+    /// The look-ahead a change crossfades from, and how far along (1: done; a change waits for the
+    /// crossfade before it).
+    la_from: usize,
+    la_xf: f32,
+    /// Nothing has run through since `prepare` or `reset`: a look-ahead change applies at once.
+    fresh: bool,
     gr_meter: f32,
     /// Highest detector input level (linear, after the sidechain filter) in the last block.
     level_meter: f32,
@@ -95,6 +102,9 @@ impl Compressor {
             makeup: Smoother::new(1.0),
             mix: Smoother::new(1.0),
             lookahead: 0,
+            la_from: 0,
+            la_xf: 1.0,
+            fresh: true,
             gr_meter: 0.0,
             level_meter: 0.0,
         };
@@ -116,8 +126,14 @@ impl Compressor {
         for b in &mut self.sc {
             b.set(FilterType::HighPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, sr);
         }
+        // A look-ahead change is taken up in `process`, crossfading between the two taps (it
+        // jumped, and clicked).
+    }
+
+    /// The look-ahead the knob asks for (taken up once a running crossfade ends).
+    fn wanted_lookahead(&self) -> usize {
         let max = self.delay.first().map(|d| d.max_delay() as usize).unwrap_or(0);
-        self.lookahead = (ms_to_samples(self.p.v(9), sr).round() as usize).min(max);
+        (ms_to_samples(self.p.v(9), self.sr).round() as usize).min(max)
     }
 
     /// Processes one frame of gain computation from a sidechain level (linear).
@@ -160,6 +176,9 @@ impl Plugin for Compressor {
         self.gr = 0.0;
         self.gr_meter = 0.0;
         self.level_meter = 0.0;
+        self.lookahead = self.wanted_lookahead();
+        self.la_xf = 1.0;
+        self.fresh = true;
         self.makeup.snap();
         self.mix.snap();
     }
@@ -168,7 +187,16 @@ impl Plugin for Compressor {
         let ch = self.sc.len().min(io.len());
         let frames = frames_in(io, frames, ch);
         let hpf = self.p.on(6);
+        if std::mem::take(&mut self.fresh) {
+            self.lookahead = self.wanted_lookahead();
+        } else if self.la_xf >= 1.0 && self.wanted_lookahead() != self.lookahead {
+            (self.la_from, self.la_xf) = (self.lookahead, 0.0);
+            self.lookahead = self.wanted_lookahead();
+        }
         let la = self.lookahead;
+        let xf_step = 1.0 / (0.010 * self.sr).max(1.0);
+        // Limit is a brickwall: no sample leaves above the threshold (before make-up).
+        let ceiling = if self.limiting() { db_to_gain(self.p.v(0)) } else { f32::INFINITY };
         let mut max_gr = 0.0f32;
         let mut max_level = 0.0f32;
         for n in 0..frames {
@@ -186,14 +214,21 @@ impl Plugin for Compressor {
             max_level = max_level.max(level);
             let gr = self.gain_for(level);
             max_gr = max_gr.max(gr);
-            let g = db_to_gain(-gr) * self.makeup.next();
+            let reduce = db_to_gain(-gr);
+            let makeup = self.makeup.next();
             let m = self.mix.next();
+            let xf = self.la_xf;
             for c in 0..ch {
                 let (Some(buf), Some(d)) = (io.get_mut(c), self.delay.get_mut(c)) else { continue };
                 let Some(x) = buf.get_mut(n) else { continue };
                 d.push(*x);
-                let dry = if la == 0 { *x } else { d.tap(la + 1) };
-                *x = dry * (1.0 - m) + dry * g * m;
+                let tap = |d: &DelayLine, l: usize| d.tap(l + 1);
+                let dry = if xf < 1.0 { tap(d, self.la_from) * (1.0 - xf) + tap(d, la) * xf } else { tap(d, la) };
+                let r = if (dry * reduce).abs() > ceiling { ceiling / dry.abs() } else { reduce };
+                *x = dry * (1.0 - m) + dry * r * makeup * m;
+            }
+            if xf < 1.0 {
+                self.la_xf = (xf + xf_step).min(1.0);
             }
         }
         self.gr_meter = max_gr;
@@ -201,7 +236,8 @@ impl Plugin for Compressor {
     }
 
     fn latency(&self) -> usize {
-        self.lookahead
+        // The look-ahead set (a change crossfades to it in the next blocks).
+        self.wanted_lookahead()
     }
 
     fn gain_reduction_db(&self) -> f32 {
@@ -539,7 +575,15 @@ pub struct Maximizer {
     drive: Smoother,
     ceiling: Smoother,
     gr_meter: f32,
+    /// The 4x interpolator's phases and each channel's last samples (newest first): the peaks
+    /// between samples count, so the output's true peak stays under the ceiling, not only its
+    /// samples.
+    tp: [[f32; TP_TAPS]; crate::meter::TP_PHASES],
+    hist: Vec<[f32; TP_TAPS]>,
 }
+
+/// How far behind the newest sample the interpolated peak sits: the audio waits as long too.
+const TP_DELAY: usize = TP_TAPS / 2;
 
 impl Default for Maximizer {
     fn default() -> Self {
@@ -563,6 +607,8 @@ impl Maximizer {
             drive: Smoother::new(1.0),
             ceiling: Smoother::new(1.0),
             gr_meter: 0.0,
+            tp: crate::meter::tp_coefs(),
+            hist: Vec::new(),
         };
         m.update();
         m
@@ -586,10 +632,11 @@ impl Plugin for Maximizer {
         self.delay = (0..sane_channels(channels))
             .map(|_| {
                 let mut d = DelayLine::default();
-                d.allocate(self.la + 2);
+                d.allocate(self.la + TP_DELAY + 2);
                 d
             })
             .collect();
+        self.hist = vec![[0.0; TP_TAPS]; self.delay.len()];
         self.req = vec![1.0; self.la];
         self.smooth = vec![1.0; self.la];
         self.drive.set_time(20.0, self.sr);
@@ -608,6 +655,7 @@ impl Plugin for Maximizer {
         self.drive.snap();
         self.ceiling.snap();
         self.gr_meter = 0.0;
+        self.hist.iter_mut().for_each(|h| *h = [0.0; TP_TAPS]);
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -623,7 +671,15 @@ impl Plugin for Maximizer {
                 let (Some(buf), Some(d)) = (io.get(c), self.delay.get_mut(c)) else { continue };
                 let x = buf.get(n).copied().filter(|v| v.is_finite()).unwrap_or(0.0) * drive;
                 d.push(x);
-                peak = peak.max(x.abs());
+                if let Some(h) = self.hist.get_mut(c) {
+                    h.copy_within(0..TP_TAPS - 1, 1);
+                    h[0] = x;
+                    peak = peak.max(h[TP_DELAY].abs());
+                    for ph in &self.tp {
+                        let y: f32 = ph.iter().zip(h.iter()).map(|(a, b)| a * b).sum();
+                        peak = peak.max(y.abs());
+                    }
+                }
             }
             let req = if peak > ceil { ceil / peak } else { 1.0 };
             if let Some(r) = self.req.get_mut(self.idx) {
@@ -645,7 +701,7 @@ impl Plugin for Maximizer {
             for c in 0..ch {
                 let (Some(buf), Some(d)) = (io.get_mut(c), self.delay.get(c)) else { continue };
                 if let Some(x) = buf.get_mut(n) {
-                    *x = (d.tap(la) * g).clamp(-ceil, ceil);
+                    *x = (d.tap(la + TP_DELAY) * g).clamp(-ceil, ceil);
                 }
             }
         }
@@ -653,7 +709,7 @@ impl Plugin for Maximizer {
     }
 
     fn latency(&self) -> usize {
-        self.la - 1
+        self.la - 1 + TP_DELAY
     }
 
     fn gain_reduction_db(&self) -> f32 {

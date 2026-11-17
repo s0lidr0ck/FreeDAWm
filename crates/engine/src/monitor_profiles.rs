@@ -152,6 +152,18 @@ pub fn plan(rate: f32, ear: Option<&HearingProfile>, ear_on: bool, sim: Option<&
         if let Some(hz) = d.lowpass_hz {
             curve = curve.cut(true, hz, rate);
         }
+        // Nothing is ever boosted above the mix, whatever the fit made of the measured curve:
+        // the loudest point across the audible band (24 steps an octave) is at the mix's level
+        // at most.
+        let top = 20_000f32.min(0.45 * rate);
+        let peak = (0..=240)
+            .map(|i| 20.0 * 2f32.powf(i as f32 / 24.0))
+            .filter(|hz| *hz <= top)
+            .map(|hz| curve.magnitude_db(hz, rate))
+            .fold(f32::MIN, f32::max);
+        if peak > 0.0 {
+            curve = curve.turned_down(peak);
+        }
         Sim { curve, width: d.width }
     });
     Plan { rate, sim_on: sim_on && sim.is_some(), sim, ear: ear.map(|h| ear_curves(&h.left, &h.right, rate)), ear_on: ear_on && ear.is_some() }
@@ -195,11 +207,12 @@ mod tests {
         assert!(s.width < 0.1);
         assert!(s.curve.magnitude_db(80.0, 48_000.0) < -35.0 && s.curve.magnitude_db(4000.0, 48_000.0) > -6.0);
         assert!(plan(48_000.0, None, true, None, true).is_idle());
-        // Every embedded file reads, and none boosts the mix.
+        // Every embedded file reads, and none boosts the mix: where a fit rises above it (one
+        // measured curve does, by 0.6 dB at 15 kHz), the whole profile is turned down by that.
         assert_eq!(builtin_devices().len(), MEASURED.len() + 1);
         for d in builtin_devices() {
             let c = plan(48_000.0, None, false, Some(&d), true).sim.unwrap().curve;
-            assert!((0..120).all(|i| c.magnitude_db(20.0 * 2f32.powf(i as f32 / 12.0), 48_000.0) < 0.6), "{}", d.name);
+            assert!((0..120).all(|i| c.magnitude_db(20.0 * 2f32.powf(i as f32 / 12.0), 48_000.0) < 0.01), "{}", d.name);
         }
     }
 }

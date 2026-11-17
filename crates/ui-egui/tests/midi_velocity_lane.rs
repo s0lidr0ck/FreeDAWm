@@ -138,7 +138,16 @@ fn a_line_from_empty_space_ramps_the_notes_under_it() {
 fn stems_of_a_chord_stand_apart() {
     let notes: Vec<soundcraft_midi::Note> = [(60, 0), (64, 0), (67, 0), (72, 960)]
         .iter()
-        .map(|(p, s)| soundcraft_midi::Note { pitch: *p, velocity: 100, release_velocity: 64, channel: 0, start: *s, length: 240 })
+        .map(|(p, s)| soundcraft_midi::Note {
+            probability: 100,
+            pitch: *p,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: *s,
+            length: 240,
+        })
         .collect();
     assert_eq!(midi_editor::stem_offsets(&notes), vec![0.0, 4.0, 8.0, 0.0]);
 }

@@ -686,7 +686,12 @@ impl Ex<'_> {
                 el.set("playStart", "0.0");
                 el.set("playStop", fmt_num(end - start));
                 let mut notes = Element::new("Notes").with("id", self.id());
-                for n in &sequence.notes {
+                // DAWproject cannot mark a note muted: a muted note is left out, or it would come
+                // back sounding.
+                if sequence.notes.iter().any(|n| n.muted) {
+                    self.note("Muted notes are left out (DAWproject cannot mark a note muted)");
+                }
+                for n in sequence.notes.iter().filter(|n| !n.muted) {
                     notes.push(
                         Element::new("Note")
                             .with("time", fmt_num(n.start as f64 / TPQ))
@@ -724,7 +729,10 @@ impl Ex<'_> {
             CtrlKind::PolyPressure(p) => (3, p),
             CtrlKind::Program => (4, 0),
         };
-        for c in &seq.ctrls {
+        // A straight ramp is a linear point; a curved one goes as steps.
+        let curved = seq.ctrls.iter().any(|c| matches!(c.shape, soundcraft_midi::CtrlShape::Ramp(k) if k.abs() > 1e-3));
+        let ctrls = if curved { seq.stepped_ctrls(10) } else { seq.ctrls.clone() };
+        for c in &ctrls {
             let k = (c.channel, key(c.kind));
             if !keys.contains(&k) {
                 keys.push(k);
@@ -742,12 +750,17 @@ impl Ex<'_> {
             }
             let mut p = Element::new("Points").with("id", self.id()).with("unit", "normalized");
             p.push(target);
-            for c in seq.ctrls.iter().filter(|c| c.channel == channel && key(c.kind) == (kind, n)) {
+            for c in ctrls.iter().filter(|c| c.channel == channel && key(c.kind) == (kind, n)) {
                 let v = match c.kind {
                     CtrlKind::PitchBend => f64::from(c.value.clamp(-8192, 8191) + 8192) / 16383.0,
                     _ => f64::from(c.value.clamp(0, 127)) / 127.0,
                 };
-                p.push(Element::new("RealPoint").with("time", fmt_num(c.tick as f64 / TPQ)).with("value", fmt_num(v)).with("interpolation", "hold"));
+                p.push(
+                    Element::new("RealPoint")
+                        .with("time", fmt_num(c.tick as f64 / TPQ))
+                        .with("value", fmt_num(v))
+                        .with("interpolation", if c.shape.is_step() { "hold" } else { "linear" }),
+                );
             }
             out.push(p);
         }
@@ -767,6 +780,11 @@ impl Ex<'_> {
             AutoParam::SendPan(i) => (AutoParam::SendPan(*i), "normalized", Box::new(|v: f32| f64::from((v.clamp(-1.0, 1.0) + 1.0) / 2.0))),
             AutoParam::Mute => (AutoParam::Mute, "", Box::new(|v: f32| if v >= 0.5 { 1.0 } else { 0.0 })),
             AutoParam::SendMute(i) => (AutoParam::SendMute(*i), "", Box::new(|v: f32| if v >= 0.5 { 0.0 } else { 1.0 })),
+            AutoParam::Width | AutoParam::Balance => {
+                let n = format!("{}: {} automation is not carried", t.name, lane.param.label());
+                self.note(n);
+                return None;
+            }
             AutoParam::Trim => {
                 let n = format!("{}: trim automation is not carried", t.name);
                 self.note(n);

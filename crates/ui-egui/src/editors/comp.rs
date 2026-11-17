@@ -149,8 +149,9 @@ pub(crate) struct Editor {
 }
 
 /// Draws Comp's editor for `module` on `track`.
-/// What `getPresetParams` leaves out besides `bypass` (CompEngine's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 0] = [];
+/// What `getPresetParams` leaves out besides `bypass` (CompEngine's `Presets.h`), and FreeDAWm's
+/// Listen (a monitoring switch, not a sound).
+pub(crate) const NOT_IN_PRESETS: [&str; 1] = ["listen"];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);
@@ -469,13 +470,18 @@ fn auto_gain_ui(st: &Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, r: Re
 }
 
 /// After a recall (`loadPreset`): presets from before Multiband do not mention it; they load in
-/// Parallel at the default crossovers, joining the recall's undo step.
+/// Parallel at the default crossovers (`fs_presets::fill_missing`, which every other recall path
+/// applies too), joining the recall's undo step.
 fn after_recall(app: &mut SoundApp, host: &Host, params: Option<&serde_json::Map<String, serde_json::Value>>, recalled: bool) {
     if let Some(m) = params {
-        let missing: Vec<(&str, f32)> = ["split", "xoverLo", "xoverHi"]
-            .into_iter()
-            .filter(|k| !m.contains_key(*k))
-            .filter_map(|k| host.info.params.iter().find(|p| p.id == k).map(|p| (p.id, p.default)))
+        let mut filled = m.clone();
+        crate::fs_presets::fill_missing(host.info, &mut filled);
+        let missing: Vec<(&str, f32)> = host
+            .info
+            .params
+            .iter()
+            .filter(|p| !m.contains_key(p.id))
+            .filter_map(|p| filled.get(p.id).and_then(serde_json::Value::as_f64).map(|v| (p.id, v as f32)))
             .collect();
         if !missing.is_empty() {
             set_params_merged(app, host, &missing, RECALL_GESTURE);
@@ -505,6 +511,9 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
     let chan = param(host, "chanMode").round() as i32;
     let chan_text = model::channel_mode_name(chan);
     let chan_r = place_right(&mut row, small_w(ui, chan_text).max(74.0));
+    let listen_r = place_right(&mut row, small_w(ui, "Listen"));
+    let wide = host.session.track(host.track).is_some_and(|t| t.channels() > 2);
+    let link_r = wide.then(|| place_right(&mut row, small_w(ui, "Link all")));
 
     // the title claims its own width on the left, the strip centres in what is left
     let title_w = p.layout_no_wrap("Comp Engine".into(), font(TITLE_SIZE, true), Color32::WHITE).size().x + 14.0;
@@ -518,7 +527,18 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
         pos2(prev.right() + 6.0, strip.center().y - (btn_h + 2.0) / 2.0),
         pos2(next.left() - 6.0, strip.center().y + (btn_h + 2.0) / 2.0),
     );
-    let rects = HeaderRects { bypass: bypass_r, slot_1: a_r, slot_2: b_r, undo: undo_r, chan: chan_r, prev, next, name: name_r };
+    let rects = HeaderRects {
+        bypass: bypass_r,
+        slot_1: a_r,
+        slot_2: b_r,
+        undo: undo_r,
+        chan: chan_r,
+        prev,
+        next,
+        name: name_r,
+        listen: Some(listen_r),
+        sur_link: link_r,
+    };
     header_controls(st, app, ui, host, &rects);
 }
 
@@ -532,6 +552,10 @@ pub(super) struct HeaderRects {
     pub prev: Rect,
     pub next: Rect,
     pub name: Rect,
+    /// Listen (hear the detector); `None` where the layout has no room.
+    pub listen: Option<Rect>,
+    /// Link all channels; only on a track wider than stereo.
+    pub sur_link: Option<Rect>,
 }
 
 /// The header's controls and their gestures: Bypass, the 1 / 2 slots, Undo, Channels and the
@@ -566,6 +590,22 @@ fn header_controls(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host
     }
     if small_pill(ui, chan_r, "chanMode", chan_text, chan > 0, false, None).clicked() {
         set_params(app, host, &[("chanMode", ((chan.clamp(0, 3) + 1) % 4) as f32)]);
+    }
+    // FreeDAWm's own: hear what the detectors hear (the key when one is chosen), and link a
+    // surround track's channels
+    if let Some(r) = h.listen {
+        let on = param(host, "listen") > 0.5;
+        let resp = small_pill(ui, r, "listen", "Listen", on, false, None);
+        let tip = if host.ins.sidechain.is_some() { "Hear the key through the SC HPF" } else { "Hear the input through the SC HPF" };
+        if resp.on_hover_text(tip).clicked() {
+            set_params(app, host, &[("listen", if on { 0.0 } else { 1.0 })]);
+        }
+    }
+    if let Some(r) = h.sur_link {
+        let on = param(host, "surLink") > 0.5;
+        if small_pill(ui, r, "surLink", "Link all", on, false, None).on_hover_text("Every channel follows the loudest one").clicked() {
+            set_params(app, host, &[("surLink", if on { 0.0 } else { 1.0 })]);
+        }
     }
 
     for (r, left) in [(prev, true), (next, false)] {
@@ -610,6 +650,7 @@ fn knob_laid(
         default: info.to_normalized(info.default),
         layout,
         small,
+        info: (model::steps(base, v.style) <= 1).then_some(info),
         ..DialOpts::default()
     };
     let out = dial(ui, r, base, &PALETTE, info.to_normalized(param(host, id)), &o);

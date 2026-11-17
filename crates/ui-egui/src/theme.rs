@@ -715,7 +715,9 @@ mod tests {
             assert!(!uis[i + 1..].iter().any(|o| o.id == u.id), "{} listed twice", u.id);
             let category = soundcraft_dsp::plugin_info(u.id).map(|p| p.category);
             assert!(
-                category == Some(soundcraft_dsp::Category::FireStation) || soundcraft_dsp::LISTED_STOCK.contains(&u.id),
+                category == Some(soundcraft_dsp::Category::FireStation)
+                    || soundcraft_dsp::LISTED_STOCK.contains(&u.id)
+                    || soundcraft_dsp::METER_PLUGINS.contains(&u.id),
                 "{}: {category:?}",
                 u.id
             );

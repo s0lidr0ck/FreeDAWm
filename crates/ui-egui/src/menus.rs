@@ -9,6 +9,10 @@ use soundcraft_engine::catalog;
 /// UI-layer commands: (id, label, catalog path or "", shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", "", None),
+    ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
+    ("ui.midi_undo_pass", "Undo Last Pass", "Event > More MIDI > Undo Last Pass", None),
+    ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
+    ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
@@ -26,6 +30,10 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.memory_locations", "Memory Locations", "Window > Memory Locations", Some("Cmd+5")),
     ("window.undo_history", "Undo History", "Window > Undo History", None),
     ("window.notes", "Notes", "", None),
+    ("window.loudness", "Loudness Meter", "", None),
+    ("window.mix_snapshots", "Mix Snapshots", "", None),
+    ("window.control_room", "Control Room", "", None),
+    ("ui.loudness_reset", "Reset Loudness Meter", "", None),
     ("window.lyrics", "Lyrics", "", None),
     ("window.teleprompter", "Teleprompter", "", None),
     ("window.teleprompter_separate", "Teleprompter in Separate Window", "", None),
@@ -66,6 +74,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.config_update", "Update Active Configuration", "Window > Configurations > Update Active Configuration", None),
     ("window.config_auto_update", "Auto-Update Active Configuration", "Window > Configurations > Auto-Update Active Configuration", None),
     ("window.renderer", "Renderer", "Window > Renderer", None),
+    ("window.tour", "Tour of FreeDAWm", "Window > Tour of FreeDAWm", None),
     ("window.ui_customization", "UI Customization", "Window > UI Customization", None),
     ("window.arrange_tile", "Tile", "Window > Arrange > Tile", None),
     ("window.arrange_tile_h", "Tile Horizontal", "Window > Arrange > Tile Horizontal", None),
@@ -93,6 +102,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.time_ops", "Time Operations", "", None),
     ("window.midi_ops", "MIDI Operations", "", None),
     ("window.rtp", "MIDI Real-Time Properties", "", None),
+    ("window.input_quantize", "Input Quantize", "", None),
+    ("window.click_countoff", "Click/Countoff", "", None),
+    ("window.midi_offsets", "MIDI Track Offsets", "", None),
     ("window.playback_engine", "Playback Engine", "", None),
     ("ui.audio_device", "Audio Device", "", None),
     ("setup.record_offset", "Record Offset", "", None),
@@ -101,6 +113,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.reset_underruns", "Reset Underruns", "", None),
     ("window.io_setup", "I/O Setup", "", None),
     ("window.midi_inputs", "MIDI Input Devices", "Setup > MIDI > MIDI Input Devices...", None),
+    ("window.control_surfaces", "Control Surfaces", "Setup > Control Surfaces...", None),
+    ("window.midi_mappings", "MIDI Mappings", "Setup > MIDI Mappings...", None),
     ("window.network", "Network", "Setup > Network...", None),
     ("window.shortcuts", "Keyboard Shortcuts", "", None),
     ("window.preferences", "Preferences", "", None),
@@ -134,6 +148,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.imprint.save", "Save Imprint IR…", "", None),
     ("ui.mix.wide_editors", "Plugin Editors as in the VST", "View > Mix Window Views > Plugin Editors as in the VST", None),
     ("ui.mix.slim_editors", "Slim Plugin Editors", "View > Mix Window Views > Slim Plugin Editors", None),
+    ("ui.mix.editors_larger", "Plugin Editors Larger", "View > Mix Window Views > Plugin Editors Larger", None),
+    ("ui.mix.editors_smaller", "Plugin Editors Smaller", "View > Mix Window Views > Plugin Editors Smaller", None),
+    ("ui.mix.editors_actual", "Plugin Editors at Actual Size", "View > Mix Window Views > Plugin Editors at Actual Size", None),
     // Channel width for the Mix window's selected channels, or all (`channel_width`).
     ("ui.mix.width.slim", "Slim Selected Channels", "", None),
     ("ui.mix.width.wide", "Wide Selected Channels", "", None),
@@ -249,6 +266,10 @@ pub const AUDIOSUITE: &[(&str, &str)] = &[
 /// Commands that open a dialog when invoked from a menu (programmatic calls never do).
 const DIALOG_COMMANDS: &[&str] = &[
     "clip.clear",
+    "transport.varispeed",
+    "clip.transpose",
+    "clip.loop_in_place",
+    "lyrics.find",
     "track.new",
     "file.bounce_mix",
     "session.new",
@@ -264,7 +285,6 @@ const DIALOG_COMMANDS: &[&str] = &[
     "edit.shift",
     "edit.fades_create",
     "setup.session",
-    "event.quantize",
     "event.transpose",
     "event.change_velocity",
     "edit.strip_silence",
@@ -709,6 +729,8 @@ fn hover_text(id: &str) -> Option<&'static str> {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
+        "window.control_room" => Some("Monitor speakers with level, dim and mono; AFL/PFL listen; cue mixes and talkback"),
+        "window.loudness" => Some("The master's loudness (momentary, short-term, integrated LUFS) and true peak while it plays"),
         "window.teleprompter" => Some("Big lyrics that follow the playhead through the lines on the Lyrics ruler"),
         "window.teleprompter_separate" => Some("The Teleprompter in its own window (e.g. on the singer's screen); closing it docks it back"),
         "window.lyrics" => Some("Write the lyrics: line numbers, syllable counts, rhymes; place lines on the Lyrics ruler"),
@@ -766,6 +788,11 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
 
 /// View and option toggles that keep their state as a session flag: command id → flag.
 const FLAG_TOGGLES: &[(&str, &str)] = &[
+    ("edit.snap_to_clips", soundcraft_engine::edit::SNAP_TO_CLIPS),
+    ("edit.snap_to_markers", soundcraft_engine::edit::SNAP_TO_MARKERS),
+    ("edit.snap_to_zero_crossings", soundcraft_engine::edit::SNAP_TO_ZERO),
+    ("track.suspend_groups", "groups.suspended"),
+    ("mix.pre_sends_ignore_mute", "mix.pre_sends_ignore_mute"),
     ("options.low_latency_monitoring", "options.low_latency_monitoring"),
     ("options.keyboard_lock", "options.edit_tool_mode_keyboard_lock"),
     ("view.track_number", "edit_view.track_number"),
@@ -777,6 +804,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("view.clip_overlap_shadows", "view.clip.overlap_shadows"),
     ("view.clip_transparency", "view.clip.transparency"),
     ("view.clip_gain_line", "view.clip.gain_line"),
+    ("transport.varispeed_keep_pitch", "transport.varispeed_keep_pitch"),
     ("view.clip_gain_info", "view.clip.gain_info"),
     ("view.clip_effects_status", "view.clip.effects_status"),
     ("view.clip_time_current", "view.clip.time.current"),
@@ -812,6 +840,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
     Some(match id {
         Some("options.loop_playback") => e.loop_playback,
         Some("options.loop_record") => e.loop_record,
+        Some("options.quickpunch") => e.quickpunch,
         Some("options.pre_post_roll") => e.pre_post_roll,
         Some("options.link_timeline_edit") => e.link_timeline_edit,
         Some("options.insertion_follows_playback") => e.insertion_follows_playback,
@@ -819,11 +848,18 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("options.automation_follows_edit") => e.automation_follows_edit,
         Some("options.click") => e.click,
         Some("options.delay_compensation") => e.delay_compensation,
+        Some("options.pre_fader_metering") => e.pre_fader_metering,
+        Some("automation.thin_after_pass") => !e.flag(soundcraft_engine::cmd::KEEP_PASS_POINTS),
+        Some("options.auto_fades") => e.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS) > 0.0,
         // `video.online` keeps the opposite flag (the engine's `OFFLINE_FLAG`).
         Some("video.online") => !e.flag("video.offline"),
         Some("options.scrolling") => e.scrolling == scrolling_mode(leaf),
+        Some("options.record_mode") => record_mode(leaf) == if e.record_mode == "normal" { "replace" } else { e.record_mode.as_str() },
         // Only Solo in Place and X-OR are offered: X-OR is on or it isn't.
         Some("options.solo_mode") => e.solo_mode.contains("xor") == leaf.starts_with("X-OR"),
+        Some("mix.pan_law") => Some(soundcraft_engine::cmd::pan_law::current(app.engine.session())) == pan_law_db(leaf),
+        Some("edit.overlap_mode") => soundcraft_engine::cmd::overlap::current(app.engine.session()).id() == leaf.to_ascii_lowercase(),
+        Some("mix.default_send_level") => soundcraft_engine::cmd::default_send_db(app.engine.session()) == default_send_db(leaf),
         Some(i) if i.starts_with("view.edit_") && !matches!(i, "view.edit_all" | "view.edit_minimal") => {
             e.flag("edit_view.all") || i.strip_prefix("view.edit_").is_some_and(|v| e.flag(&format!("edit_view.{v}")))
         }
@@ -841,6 +877,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("view.main_counter") => e.main_counter.id() == ruler_id(leaf),
         Some("clip.edit_lock") => selected_clips_all(app, |c| c.edit_locked),
         Some("clip.time_lock") => selected_clips_all(app, |c| c.time_locked),
+        Some("clip.gain_bypass") => selected_clips_all(app, |c| c.gain_bypass),
         Some("window.mix") => app.ui.window == MainWindow::Mix,
         Some("window.edit") => app.ui.window == MainWindow::Edit,
         Some("window.mix_separate") => app.ui.mix_separate,
@@ -860,6 +897,9 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.automation") => app.ui.show_automation,
         Some("window.undo_history") => app.ui.show_undo_history,
         Some("window.notes") => app.ui.show_notes,
+        Some("window.loudness") => app.ui.show_loudness,
+        Some("window.mix_snapshots") => app.ui.show_mix_snapshots,
+        Some("window.control_room") => app.ui.show_control_room,
         Some("window.lyrics") => app.ui.show_lyrics,
         Some("window.teleprompter") => app.ui.show_teleprompter,
         Some("window.teleprompter_separate") => app.ui.teleprompter_separate,
@@ -908,6 +948,25 @@ fn selected_clips_all(app: &SoundApp, f: impl Fn(&soundcraft_model::Clip) -> boo
     let ids = soundcraft_engine::cmd::clip_ids_param(&app.engine, &json!({}));
     let clips: Vec<_> = ids.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| c)).collect();
     !clips.is_empty() && clips.into_iter().all(f)
+}
+
+/// `mix.default_send_level`'s level for a Default Send Level item ("Silent" or "0 dB").
+fn default_send_db(leaf: &str) -> f32 {
+    leaf.trim_end_matches("dB").trim().parse().unwrap_or(-144.0)
+}
+
+/// `mix.pan_law`'s law for a Pan Law item ("-4.5 dB").
+fn pan_law_db(leaf: &str) -> Option<f64> {
+    leaf.trim_end_matches("dB").trim().parse().ok()
+}
+
+/// `options.record_mode`'s mode for a Record Mode item.
+fn record_mode(leaf: &str) -> &'static str {
+    match leaf {
+        "Keep Takes as Lanes" => "lanes",
+        "New Playlist per Take" => "playlists",
+        _ => "replace",
+    }
 }
 
 /// `options.scrolling`'s mode for an Edit Window Scrolling item.
@@ -967,6 +1026,10 @@ fn params_for(path: &str, id: &str) -> Value {
         "view.ruler" => json!({"ruler": ruler_id(leaf)}),
         "view.main_counter" => json!({"format": ruler_id(leaf)}),
         "options.scrolling" => json!({"mode": scrolling_mode(leaf)}),
+        "options.record_mode" => json!({"mode": record_mode(leaf)}),
+        "mix.pan_law" => json!({"law": pan_law_db(leaf)}),
+        "edit.overlap_mode" => json!({"mode": leaf.to_ascii_lowercase()}),
+        "mix.default_send_level" => json!({"db": default_send_db(leaf)}),
         "options.solo_mode" => {
             json!({"mode": if leaf.starts_with("AFL") { "afl" } else if leaf.starts_with("PFL") { "pfl" } else { "sip" }, "xor": leaf.starts_with("X-OR")})
         }
@@ -987,6 +1050,8 @@ const MENU_WINDOWS: &[(&str, &str)] = &[
     ("Setup > Playback Engine...", "window.playback_engine"),
     ("Setup > I/O...", "window.io_setup"),
     ("Setup > MIDI Input Devices...", "window.midi_inputs"),
+    ("Setup > Control Surfaces...", "window.control_surfaces"),
+    ("Setup > MIDI Mappings...", "window.midi_mappings"),
     ("Setup > Network...", "window.network"),
     ("Setup > Keyboard Shortcuts...", "window.shortcuts"),
     ("Setup > Preferences...", "window.preferences"),
@@ -996,6 +1061,8 @@ const MENU_WINDOWS: &[(&str, &str)] = &[
     ("Event > Time Operations > Time Operations Window", "window.time_ops"),
     ("Event > MIDI Operations > MIDI Operations Window", "window.midi_ops"),
     ("Event > MIDI Real-Time Properties", "window.rtp"),
+    ("Event > MIDI Operations > Input Quantize...", "window.input_quantize"),
+    ("Event > MIDI Track Offsets", "window.midi_offsets"),
 ];
 
 /// The shortcut a menu item shows for `id`: the user's, else the registry's (blank for none).
@@ -1075,6 +1142,11 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         app.ui.audiosuite = p.get("process").and_then(Value::as_str).map(str::to_string);
         return;
     }
+    // Quantize… and Change Duration… ask for their values in the MIDI Operations window (run with
+    // none, Change Duration applied legato and Quantize always used 16ths).
+    if crate::ops_windows::open_midi_op(app, soundcraft_engine::canonical_id(id)) {
+        return;
+    }
     if wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id) {
         return;
     }
@@ -1094,7 +1166,9 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
 /// Keyboard shortcut for a dialog command, or one that would close a modified session: open its
 /// dialog. Returns true when handled.
 pub fn invoke_shortcut_dialog(app: &mut SoundApp, id: &str) -> bool {
-    (wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id)) || crate::dialogs::ask_to_save(app, id, &json!({}))
+    crate::ops_windows::open_midi_op(app, id)
+        || (wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id))
+        || crate::dialogs::ask_to_save(app, id, &json!({}))
 }
 
 /// Commands that open a dialog first: the listed ones, Score Setup, and anything that needs a path.
@@ -1110,13 +1184,27 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "ui.quantize_audio" | "event.quantize" | "event.change_duration" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    if id == "ui.capture_midi" {
+        return Some(crate::midi_devices::capture(app));
+    }
+    if id == "window.step_input" {
+        crate::step_input::toggle(app);
+        return Some(Ok(json!({"open": app.step.open})));
+    }
+    if id == "ui.midi_undo_pass" {
+        return Some(crate::midi_devices::undo_last_pass(app));
+    }
+    if id == "ui.quantize_audio" {
+        app.dialogs.open = Some(crate::dialogs::Dialog::QuantizeAudio { strength: 100.0, swing: 0.0 });
+        return Some(Ok(json!({})));
     }
     // The MIDI Editor's state and tools: `linked` sets its 🔗 Link; Select all, Split, Join,
     // Grid, ghosts, zoom and the note bar (`midi_edit_tools::command`).
@@ -1275,7 +1363,21 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.memory_locations" => toggle(&mut app.ui.show_memory_locations),
         "window.undo_history" => toggle(&mut app.ui.show_undo_history),
         "window.notes" => toggle(&mut app.ui.show_notes),
+        "window.loudness" => toggle(&mut app.ui.show_loudness),
+        "window.mix_snapshots" => toggle(&mut app.ui.show_mix_snapshots),
+        "window.control_room" => toggle(&mut app.ui.show_control_room),
+        "ui.loudness_reset" => {
+            if let Some(p) = &app.player {
+                p.reset_loudness();
+            }
+            app.meter_snapshot.main.loudness = None;
+            json!({"reset": app.player.is_some()})
+        }
         "window.lyrics" => toggle(&mut app.ui.show_lyrics),
+        "window.tour" => {
+            crate::tour::open(app);
+            json!({"step": 0})
+        }
         "window.teleprompter" => toggle(&mut app.ui.show_teleprompter),
         "window.teleprompter_separate" => {
             let v = toggle(&mut app.ui.teleprompter_separate);
@@ -1313,9 +1415,14 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.time_ops" => toggle(&mut app.ui.show_time_ops),
         "window.midi_ops" => toggle(&mut app.ui.show_midi_ops),
         "window.rtp" => toggle(&mut app.ui.show_rtp),
+        "window.input_quantize" => toggle(&mut app.ui.show_input_quantize),
+        "window.click_countoff" => toggle(&mut app.ui.show_click_countoff),
+        "window.midi_offsets" => toggle(&mut app.ui.show_midi_offsets),
         "window.playback_engine" => toggle(&mut app.ui.show_playback_engine),
         "window.io_setup" => toggle(&mut app.ui.show_io_setup),
         "window.midi_inputs" => toggle(&mut app.ui.show_midi_inputs),
+        "window.control_surfaces" => toggle(&mut app.ui.show_surfaces),
+        "window.midi_mappings" => toggle(&mut app.ui.show_midi_maps),
         "window.network" => toggle(&mut app.ui.show_network),
         "window.shortcuts" => toggle(&mut app.ui.show_shortcuts),
         "window.color_palette" => toggle(&mut app.ui.show_color_palette),
@@ -1448,6 +1555,17 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
                 },
             };
             json!({"on": app.ui.slim_editors})
+        }
+        "ui.mix.editors_larger" | "ui.mix.editors_smaller" | "ui.mix.editors_actual" => {
+            // `{scale?: number}` sets the size (0.75..2); without it, a step up, down or back to 1.
+            let now = app.ui.editor_scale;
+            app.ui.editor_scale = match (p.get("scale").and_then(Value::as_f64), id) {
+                (Some(s), _) => crate::editor_kit::editor_scale(s as f32),
+                (None, "ui.mix.editors_larger") => crate::editor_kit::step_editor_scale(now, true),
+                (None, "ui.mix.editors_smaller") => crate::editor_kit::step_editor_scale(now, false),
+                _ => 1.0,
+            };
+            json!({"scale": app.ui.editor_scale})
         }
         "ui.mix.ceiling_learn" => return Some(crate::cleanq_ceiling::learn_command(app, p)),
         "ui.imprint.save" => return Some(crate::imprint_ui::save_command(app, p)),
