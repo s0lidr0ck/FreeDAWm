@@ -270,11 +270,15 @@ mod tests {
         let v = e.execute("mix.module_add", &json!({"track": t.0, "plugin": soundcraft_mix::hw_insert::ID})).unwrap();
         let m = soundcraft_model::ModuleId(v["module"].as_u64().unwrap() as u32);
         let mut app = SoundApp::new(e, None, Services::default());
+        // Not pinged yet: its slot says "not measured" (it compensates nothing).
+        let fresh = app.engine.session().track(t).unwrap().mixer.module(m).unwrap().clone();
+        assert!(crate::mix_window::hw_unmeasured(&fresh));
         let before = app.record_offset().measured;
         app.measuring_insert = Some((t, m));
         app.finish_measure(Ok(1234));
         let ins = app.engine.session().track(t).unwrap().mixer.module(m).unwrap().clone();
         assert_eq!(ins.params.get("latency").copied(), Some(1234.0));
+        assert!(!crate::mix_window::hw_unmeasured(&ins), "measured now");
         assert_eq!(app.record_offset().measured, before, "the record offset is untouched");
         assert!(app.ui.status.contains("1234 samples"), "{}", app.ui.status);
         assert!(crate::mix_window::picker_groups(false).iter().any(|(g, l)| g == "Utilities" && l.iter().any(|p| p.id == "hw_insert")));

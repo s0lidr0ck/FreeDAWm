@@ -86,7 +86,7 @@ K-system scales, and the master a loudness meter.
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Partial** (2026-11-17): "Multi-Mono" on a chain module's right-click menu (`mix.module_multi_mono`, `Insert::multi_mono`) runs one mono instance per channel of a wider track, built-in or hosted, all linked to the module's parameters, automation and stored state (the instances are made with the module's, off the audio thread, by the stereo-only wrapper `PerChannel` with a first instance of one channel). Left: unlinked mode with a parameter set and lanes per channel, and a channel picker in the plug-in window (about 4–6 h) |
-| Hardware inserts with latency measurement | ● | ● | ● | ● | **Works** in code (2026-11-17, to the design below): Utilities › Hardware Insert (`hw_insert`) sends the track out of an output path and takes it back from an input path, compensated by its round trip; Ping in its drawer measures that round trip on its own paths (`setup.measure_latency` with `insert`) and stores it. Offline it passes through, its latency kept (a real-time bounce prints the gear). Tested with a loopback in code; hearing gear through it and checking the ping lines it up need an interface with a cable or outboard unit from output to input. Not measured, it compensates nothing (the design's fallback to the device estimate is not built) |
+| Hardware inserts with latency measurement | ● | ● | ● | ● | **Works** in code (2026-11-17, to the design below): Utilities › Hardware Insert (`hw_insert`) sends the track out of an output path and takes it back from an input path, compensated by its round trip; Ping in its drawer measures that round trip on its own paths (`setup.measure_latency` with `insert`) and stores it. Offline it passes through, its latency kept (a real-time bounce prints the gear). Tested with a loopback in code; hearing gear through it and checking the ping lines it up need an interface with a cable or outboard unit from output to input. Not measured, it compensates nothing (the design's fallback to the device estimate is not built), and since 2026-11-17 (@@HWNM@@) its slot says "not measured" (dimmed, with the reason on hover) and its drawer says no delay compensation is applied until it is pinged |
 
 ## D. Sends and routing
 
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | a Hardware Insert not pinged says "not measured" on its slot |
 | 2026-11-17 | minor | linked multi-mono processing |
 | 2026-11-17 | minor | automation inside clips (moved in and out of the track's lanes; the clip-lane drawing is left) |
 | 2026-11-17 | minor | hardware inserts with a ping for their round trip |

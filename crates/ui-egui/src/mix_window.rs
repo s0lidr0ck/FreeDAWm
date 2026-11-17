@@ -1157,6 +1157,11 @@ fn level_icon(r: Rect) -> Rect {
 /// `edit_list`: a row of the Edit window's inserts list, named "<module> insert" (long names
 /// ellipsized), with "Open in Window" for built-ins; else the Mix window's INSTRUMENT row, named
 /// "Insert A…", which never opens a built-in's generic window.
+/// A Hardware Insert whose round trip has not been measured (Ping): it compensates nothing.
+pub(crate) fn hw_unmeasured(ins: &soundcraft_model::Insert) -> bool {
+    ins.plugin == soundcraft_mix::hw_insert::ID && ins.params.get("latency").copied().unwrap_or(0.0) <= 0.0
+}
+
 pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect, edit_list: bool) {
     let t = Tokens::current();
     let id = track.id;
@@ -1179,8 +1184,15 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         None => empty_slot(ui.painter(), r, resp.hovered(), Mark::Dot),
         Some(i) => {
             let faces = if i.bypass { t.slot_bypassed } else { t.slot_face };
-            let color = if info.is_some() { t.text } else { t.text_dim };
-            let shown = if edit_list { ellipsize(ui.painter(), &name, slot_text_width(r)) } else { name.clone() };
+            let color = if info.is_some() && !hw_unmeasured(i) { t.text } else { t.text_dim };
+            let shown = if hw_unmeasured(i) {
+                // Not pinged: it compensates nothing, and says so on its slot.
+                ellipsize(ui.painter(), &format!("{name} · not measured"), slot_text_width(r))
+            } else if edit_list {
+                ellipsize(ui.painter(), &name, slot_text_width(r))
+            } else {
+                name.clone()
+            };
             used_slot(ui.painter(), r, faces, Mark::Dot, &shown, color, None);
         }
     }
@@ -1209,7 +1221,9 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
     let cmd = if ui.ctx().os().is_mac() { "⌘" } else { "Ctrl+" };
     // What the module costs, read only while the pointer is on it.
     let load = if resp.hovered() { crate::chain_view::module_load(app, id, ins.id) } else { String::new() };
-    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more{load}"));
+    let unmeasured =
+        if hw_unmeasured(&ins) { "\nRound trip not measured: no delay compensation until it is pinged (Ping in its drawer)" } else { "" };
+    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more{load}{unmeasured}"));
     resp.context_menu(|ui| {
         ui.set_min_width(170.0);
         if ui.add(egui::Button::selectable(ins.bypass, "Bypass")).clicked() {

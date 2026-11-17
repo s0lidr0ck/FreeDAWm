@@ -43,7 +43,7 @@ pub(crate) fn drawer_rows(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: 
         let text = if latency > 0 {
             format!("Round trip {latency} samples ({:.1} ms)", latency as f64 * 1000.0 / rate)
         } else {
-            "Round trip not measured: the device's estimate is used".to_string()
+            "Round trip not measured: no delay compensation until it is pinged".to_string()
         };
         ui.label(egui::RichText::new(text).color(Tokens::current().text_dim));
         ping = ui
