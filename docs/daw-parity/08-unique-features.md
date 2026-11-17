@@ -286,7 +286,7 @@ same pass as the items above; these are the starting points.
   plain link then serves the phone's page alone; on by default since the owner's decision of
   2026-11-16, a value already saved is kept), and which link each PC is on. *Not built:* the
   password-authenticated exchange over the code (SPAKE2): no such crate is in the dependency
-  tree and hand-written key-exchange code was not wanted. Without it, a machine that answers the
+  tree and hand-written key-exchange code was not wanted (a design naming the crate is below, for the owner to approve). Without it, a machine that answers the
   very first contact with its own key (by forging the booth's mDNS record) could still sit in the
   middle of that one pairing, as it can on the plain link today; once paired the keys are pinned.
   PCs paired over the plain link keep working there only while Take PCs over the encrypted link
@@ -367,6 +367,47 @@ same pass as the items above; these are the starting points.
     a bridge equals the in-process bounce sample for sample.
   - *First step when picked up.* The shared-memory block exchange and its test (two threads of
     one process standing in for the two processes), then the helper binary, then the option.
+- *First pairing by a password-authenticated key exchange (design, 2026-11-17; not built: needs a
+  new dependency, the owner to approve).* The weak spot left by the encrypted local link is the
+  very first contact: a machine that forges the booth's mDNS record answers with its own key and
+  could sit between the two for that one pairing. The fix is to make the four-digit code prove
+  the keys. *Crate:* `spake2` (RustCrypto's PAKEs, MIT OR Apache-2.0, pure Rust, no unsafe;
+  SPAKE2 over Ed25519). It would bring `curve25519-dalek` 4 beside the 5.0 already in the tree
+  (through iroh) and `hkdf`; no C code, nothing that opens a port or sends anything new. A
+  hand-written exchange stays ruled out. *Exchange* (in `net/src/pairing.rs`, inside the QUIC
+  connection the remote PC already opens to the key in the mDNS record, so nothing new
+  listens): the booth is side B, the remote PC side A, identities `freedawm-booth` and
+  `freedawm-pc`, password the code shown on the booth's screen. Each sends its SPAKE2 message
+  (33 bytes); each derives the shared key `k`; each then sends
+  `HMAC-SHA256(HKDF(k, "freedawm pairing confirm"), role || booth key || PC key)` over the two
+  QUIC public keys as each side sees them in the TLS session. A side whose check fails drops the
+  connection and counts a failed attempt (the attempt limits as now). The code itself is never
+  sent. A machine in the middle holds a different TLS key towards each side, so the confirm
+  messages cannot match unless it guessed the code, one online guess per attempt (at most the
+  attempt limit out of 10 000). Once confirmed, the keys are pinned exactly as now. *Kept as is:*
+  the phone's page on the plain link (a browser cannot run it), PCs already paired (their keys are
+  pinned), and nothing changes for a PC with an older FreeDAWm: the booth answers its pairing with
+  "update FreeDAWm on this computer" (a version field in the pairing hello). *Tests:* two hubs in
+  one process pair over loopback with the right code and refuse a wrong one; a third hub relaying
+  between them with its own key (the forged-record case) makes both sides fail the confirm and
+  count an attempt; a recorded exchange replayed fails; the attempt limit still locks.
+- *Editor windows, VST3 and Audio Units through the bridge (design, 2026-11-17).* *Editor:* the
+  helper opens the plug-in's editor as a top-level window of its own (CLAP `gui` floating, VST3
+  `IPlugView` in a window the helper makes, AU's view in an `NSWindow`), on the helper's main
+  thread, which already serves the pipe; the serve loop gains a platform event pump between
+  blocks (Win32 `PeekMessage`, Cocoa run loop for a slice, X11/Wayland through the same helper
+  the in-process editors use). The pipe carries `editor_open`, `editor_close`, `editor_raise`,
+  and the helper sends unrequested lines for parameter changes the editor makes (`param`, with
+  gesture begin and end), latency and tail changes, and "editor closed", read by the pipe's reader
+  thread into the queue the UI's `idle` drains as it does for in-process editors (`EditorEdit`).
+  Embedding the editor in FreeDAWm's own window across processes is platform work for later
+  (`XEmbed`/foreign-window parenting, a child `HWND` from another process, no supported way on
+  macOS). *VST3:* the helper makes the plug-in with `soundcraft-vst3-host` (its id `vst3:…`)
+  exactly as it does CLAP now; the bridge, the exchange and the crash handling do not change;
+  the scan's VST3 results already carry the bundle path for `dir`. *AU:* the same with
+  `soundcraft-au-host` on macOS; an AU's out-of-process loading by the system (AUv3 extensions)
+  is left to the system. *Order:* VST3 first (its test plug-in is in the tree, so it is a
+  tested step), then the CLAP editor (needs a desktop session to test), then AU (needs a Mac).
 
 ## Sources
 
@@ -385,6 +426,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Designs: the first pairing by a password-authenticated key exchange (the crate named, not added), and editor windows, VST3 and AU through the plug-in bridge |
 | 2026-11-17 | minor | Plug-ins in their own process: a CLAP plug-in's description is read in a helper too, and one that crashed there is never loaded in the app |
 | 2026-11-17 | minor | Plug-ins in their own process: a Preferences option (off by default, the variable overrides it) and the helper in every package |
 | 2026-11-17 | minor | Rows reconciled with the code: control room, mixer snapshots, handles, QuickPunch, Capture MIDI, clips following chords, warp markers and Mackie/HUI built elsewhere; launcher, mastering page, rack and macros, browser build, EUCON, ARA, hardware DSP, cloud, loop library and vocal synthesis not planned here, with the reason |
