@@ -643,6 +643,7 @@ pub(crate) fn history_go(app: &mut SoundApp, undo: usize, redo: usize) {
 
 /// The plugin windows drawn in `ctx`'s viewport: each over the window that opened it.
 pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
+    follow_selection(app);
     let wins = app.ui.plugin_windows.clone();
     let mut keep = Vec::new();
     for (tid, key) in wins {
@@ -691,6 +692,44 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }
     }
     app.ui.plugin_windows = keep;
+}
+
+/// Moves every following plugin window ([`crate::UiState::following_plugins`]) to the track
+/// selected last, when that track has the same plug-in: its instrument, or its first module of
+/// that plug-in. A window whose plug-in the track lacks stays where it is; one already open there
+/// is not opened twice. Pin, detach and follow go with the window.
+pub(crate) fn follow_selection(app: &mut SoundApp) {
+    let s = app.engine.session();
+    let Some(&sel) = s.edit.selected_tracks.last() else { return };
+    let Some(to) = s.track(sel) else { return };
+    let mut moves = Vec::new();
+    for &(tid, key) in &app.ui.following_plugins {
+        if tid == sel {
+            continue;
+        }
+        let plugin = s.track(tid).and_then(|t| match key {
+            soundcraft_mix::SlotKey::Instrument => t.instrument.as_ref().map(|i| i.plugin.clone()),
+            soundcraft_mix::SlotKey::Module(m) => t.module(m).map(|i| i.plugin.clone()),
+        });
+        let Some(plugin) = plugin else { continue };
+        let target = match key {
+            soundcraft_mix::SlotKey::Instrument => to.instrument.as_ref().filter(|i| i.plugin == plugin).map(|_| soundcraft_mix::SlotKey::Instrument),
+            soundcraft_mix::SlotKey::Module(_) => to.mixer.inserts.iter().find(|i| i.plugin == plugin).map(|i| soundcraft_mix::SlotKey::Module(i.id)),
+        };
+        if let Some(target) = target {
+            moves.push(((tid, key), (sel, target)));
+        }
+    }
+    for (from, to) in moves {
+        if app.ui.plugin_windows.contains(&to) {
+            continue;
+        }
+        for list in [&mut app.ui.plugin_windows, &mut app.ui.pinned_plugins, &mut app.ui.detached_plugins, &mut app.ui.following_plugins] {
+            for k in list.iter_mut().filter(|k| **k == from) {
+                *k = to;
+            }
+        }
+    }
 }
 
 /// What a plugin window shows: a slot's plugin, with what it is.
@@ -791,6 +830,15 @@ fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
                 app.ui.pinned_plugins.retain(|k| *k != key);
             } else {
                 app.ui.pinned_plugins.push(key);
+            }
+        }
+        let following = app.ui.following_plugins.contains(&key);
+        let r = ui.selectable_label(following, "Follow").on_hover_text("Show this plug-in on whichever track is selected");
+        if r.clicked() {
+            if following {
+                app.ui.following_plugins.retain(|k| *k != key);
+            } else {
+                app.ui.following_plugins.push(key);
             }
         }
         ui.label(egui::RichText::new(format!("{} · {}", v.tname, v.name)).color(Tokens::current().text_dim).small());
@@ -1313,4 +1361,47 @@ pub(crate) fn full_editors(app: &mut SoundApp, ctx: &egui::Context) {
         }
     }
     app.ui.full_editors = keep;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soundcraft_engine::Engine;
+    use soundcraft_mix::SlotKey;
+    use soundcraft_model::ModuleId;
+
+    /// The parity list's "follow the selected track": a plug-in window with Follow on moves to
+    /// the same plug-in on the track selected next, keeping its pin; a track without it leaves
+    /// the window where it is.
+    #[test]
+    fn a_following_plugin_window_moves_with_the_selection() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        for name in ["A", "B", "C"] {
+            engine.execute("track.new", &json!({"name": name})).unwrap();
+        }
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let ids: Vec<TrackId> = app.engine.session().tracks.iter().map(|t| t.id).collect();
+        let add = |app: &mut SoundApp, t: TrackId, p: &str| -> ModuleId {
+            let r = app.run("mix.module_add", json!({"track": t.0, "plugin": p})).unwrap();
+            ModuleId(u32::try_from(r["module"].as_u64().unwrap()).unwrap())
+        };
+        let ma = add(&mut app, ids[0], "heft");
+        add(&mut app, ids[1], "keel");
+        let mb = add(&mut app, ids[1], "heft");
+        add(&mut app, ids[2], "keel");
+        let win = (ids[0], SlotKey::Module(ma));
+        app.ui.plugin_windows.push(win);
+        app.ui.pinned_plugins.push(win);
+        app.ui.following_plugins.push(win);
+        app.run("edit.select", json!({"tracks": [ids[1].0]})).unwrap();
+        follow_selection(&mut app);
+        let moved = (ids[1], SlotKey::Module(mb));
+        assert_eq!(app.ui.plugin_windows, [moved]);
+        assert_eq!(app.ui.pinned_plugins, [moved]);
+        assert_eq!(app.ui.following_plugins, [moved]);
+        // C has no Heft: the window stays on B
+        app.run("edit.select", json!({"tracks": [ids[2].0]})).unwrap();
+        follow_selection(&mut app);
+        assert_eq!(app.ui.plugin_windows, [moved]);
+    }
 }

@@ -286,6 +286,10 @@ pub struct UiState {
     /// Plugin windows pinned on top of the others (the window's Pin button).
     #[serde(skip)]
     pub pinned_plugins: Vec<(TrackId, SlotKey)>,
+    /// Plugin windows that follow the selected track (the window's Follow button): selecting
+    /// another track shows the same plug-in there, if it has one.
+    #[serde(skip)]
+    pub following_plugins: Vec<(TrackId, SlotKey)>,
     /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
     /// the next detached window of that plugin opens there.
     #[serde(default, rename = "plugin_windows.rects")]
@@ -591,6 +595,7 @@ impl Default for UiState {
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),
             pinned_plugins: Vec::new(),
+            following_plugins: Vec::new(),
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),

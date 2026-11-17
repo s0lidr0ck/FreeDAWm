@@ -70,7 +70,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | Medium: no glitch or multi-effect; no mastering assistant (beat repeat and a gater dropped by the owner) |
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 955 factory presets, a searchable browser, chain and track presets, one save path, rename, a default per effect, A/B everywhere | Small |
-| J. Editors | Custom editors for 26 effects, live graphs on mixer tiles, sizes 75–200 %, typed values, pinned windows | Small: no follow-the-selected-track |
+| J. Editors | Custom editors for 26 effects, live graphs on mixer tiles, sizes 75–200 %, typed values, pinned windows that can follow the selection | Small |
 | K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no racks or macros, no modulators |
 
 Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
@@ -235,7 +235,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | EQ curve with draggable points; compressor curve and history | ● | ● | ● | ● | **Works** |
 | Resizable or scalable windows | ◐ | ● | ● | ● | **Works**: View › Mix Window Views › Plugin Editors Larger / Smaller / at Actual Size (75–200 %; the editor drawn scaled, gestures mapped back), and the slim layout |
 | Several editors open; detach to their own windows | ● | ● | ● | ● | **Works** |
-| Pin on top; follow the selected track | ● | ● | ◐ | ● | **Partial**: a plug-in window's Pin keeps it on top (a detached one at the system's level); no follow-the-selection |
+| Pin on top; follow the selected track | ● | ● | ◐ | ● | **Works**: a plug-in window's Pin keeps it on top (a detached one at the system's level); its Follow moves it to the same plug-in on the track selected next (its first of that plug-in), pin and detach going with it; a track without it leaves the window where it is. Test: `panels` `a_following_plugin_window_moves_with_the_selection` |
 | Type a value into any control | ● | ● | ● | ● | **Works**: Ctrl+click (Cmd+click) a knob or dial in any editor, drawer or tile and type the value as shown (with or without its unit, a choice's name, On/Off) |
 | Fine adjust; reset by double-click | ● | ● | ● | ● | **Works** |
 | Undo inside the editor | ◐ | ● | ● | ● | **Works**, and every move is also a session undo step |
@@ -375,3 +375,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Lo-Fi offered under Utilities: bit and sample-rate reduction in the menu |
 | 2026-11-17 | minor | CleanQ factory preset Tilt |
 | 2026-11-17 | minor | Copy Settings and Paste Settings in every drawer and plug-in window |
+| 2026-11-17 | minor | Plug-in windows can follow the selected track |
