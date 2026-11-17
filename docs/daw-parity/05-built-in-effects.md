@@ -126,7 +126,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Tape machine | ◐ | ◐ | ● | ● | **Works**: four machines, wow, flutter, hiss |
 | Tube, transformer and console saturation | ● | ● | ● | ● | **Works** (Sat: five circuits) |
 | Overdrive, distortion and fuzz pedals | ● | ● | ● | ● | **Works** (Dist: twelve) |
-| Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp; Dist and Filter use a weak filter (bug 8) |
+| Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp, and in Dist and Filter since bug 8 (half-band stages); left: the hard clippers (RAT, Fuzz Face, Big Muff) at full drive still alias, which only a higher factor than 4x removes, at twice their processor cost; not done here |
 | Bit and sample-rate reduction | ● | ● | ● | ● | **Works**: Lo-Fi (bit depth 1–24, sample rate down to 500 Hz, noise, mix) is offered under Utilities again, the one stock effect the lists show; Vint's Sampler circuit is a fixed 12-bit model |
 | Exciter / enhancer | ◐ | ◐ | ● | ◐ | **Works** (Vint Enhancer) |
 | Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator) |
@@ -147,7 +147,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Gated / non-linear | ● | ◐ | ● | ◐ | **Dropped by the owner** |
 | Convolution with your own impulse responses | ● | ● | ● | ● | **Works** (Vault): zero latency, true stereo, up to 10 s |
 | Bundled impulse-response library | ● | ● | ● | ● | **Not planned here**: the owner is sourcing the impulse responses; until then one generated hall |
-| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only |
+| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only. Reverse, trim and stretch are not built: the response is made from its file path by the asset system, so an edit needs its own key through the engine, the mix and the drawer (design below, about 6–8 h) |
 | Capture your own impulse responses | ○ | ● | ● | ○ | **Works** (Imprint) |
 | Pre-delay synced to tempo | ◐ | ● | ● | ● | **Works** in Reverb; not in Vault or ChamberMade |
 | Freeze, ducking, modulation, damping | ◐ | ◐ | ● | ● | **Works** in Reverb; the duck follows the reverb's own input only |
@@ -254,7 +254,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels), leaving the LFE out |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Works** (built in section 6, K): right-click a plug-in knob on the chain › Learn MIDI Controller; Setup › MIDI Mappings lists them. Learning from a plug-in's own window or the drawer's knobs is section 6's leftover |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Works**: up to 8 per track (an insert's menu › Modulators…): an LFO (sine, triangle, saw, square, random; 0.01–40 Hz or locked to the bar, 4 bars to 1/32) or an envelope follower (attack, release; the track's signal entering the inserts), each moving up to 8 plug-in parameters by -100 to 100 % of their range in the plug-in's own taper, around the stored or automated value. The plug-ins that take sample-accurate changes get the movement every 64 samples, others once a block. Not verified by listening. Tests: `mix/tests/modulators.rs`, `engine` `modulators_are_added_set_aimed_and_removed` |
-| Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
+| Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Partial**: every insert's wet/dry mix runs one effect in parallel with its own dry signal; a rack with parallel chains, mid/side or band splits and macro knobs is not built (a module hosting chains; design below, about 14–22 h). Chains are a straight line of up to 32 |
 | Console channel strip | ● | ● | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden, and Channel Strip is the two together (it still loads from old sessions) |
 | Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Works**: each module's share of a processor core in the last block (`ModuleMeter::load`), shown on hovering its chain tile or its insert slot; none on the web build. Test: `module_meters` `a_running_module_reports_its_processor_load` |
 | Works in the browser build | — | — | — | — | **Partial**: Mend passes audio through; no user presets. The rest is not planned here: the owner has stopped work on the browser build |
@@ -332,6 +332,48 @@ and amps, a reverb built from a room's geometry, impulse-response capture, match
 profiles, a resonance suppressor and an automatic balance EQ (none of the four ships either),
 de-noise and de-reverb on an insert, and loudness matching against reference tracks.
 
+## Designs
+
+### Modulators (round three, built)
+
+- **Model.** `Track::modulators` (at most 8): `Modulator { id, kind: Lfo | Envelope, bypass,
+  shape, rate_hz, sync, attack_ms, release_ms, targets }`, each target a chain module, one of its
+  parameter ids and a depth of -1 to 1. Saved with the session; an old session has none.
+- **Engine.** Each strip keeps a fixed `ModRun` (phase, envelope level, the values at the
+  block's start and end). Before the chain runs, an LFO's phase advances (free, or from the song
+  position when locked and playing) and an envelope follows the strip's input peak (0 at -60 dBFS,
+  1 at 0 dBFS). After a module's block-start values and lanes are applied, every targeted
+  parameter is set to its stored or laned value moved by the sum of `depth × value` in the
+  plug-in's normalised taper; a plug-in that takes timed changes gets the value every 64 samples
+  between the block's two values. The moved parameter is marked unsent, so when a modulator goes
+  the plain value is sent again. No allocation.
+- **Commands and UI.** `mix.modulator_add`, `_set`, `_target`, `_remove`, each one undo step; the
+  Modulators window from an insert's menu.
+- **Left.** Modulating send levels, pan or the fader (only plug-in parameters); showing the
+  movement on the knobs; a modulator keyed from another track.
+
+### Editing Vault's impulse response (not built)
+
+Vault's response is made ready off the audio thread from its file path by the asset system
+(`mix.module_ir` → `make_space_ir`), and that path is what a session saves, collects with its
+media and caches assets by. Reverse, trim and stretch therefore need: an edit stored beside the
+path (`Insert::assets["vaultIrEdit"]`, e.g. `rev=1,start=0.1,end=2.5,stretch=1.2`), applied to
+the decoded channels before `SpaceIr::new` (trim in seconds, reverse, stretch as a change of the
+file's rate); the asset cache keyed by path and edit together wherever a Vault response is made
+or looked up (the engine's command and session loading, the mix's hand-over, the drawer's
+picture); and a `mix.module_ir_edit` command with the drawer's controls. About 6–8 h.
+
+### A rack: parallel chains, splits and macros (not built)
+
+A module that hosts up to four chains of up to eight modules each (Juke already hosts effects
+on its buses through `Plugin::set_child`), split by: parallel (each chain hears the input), mid
+and side, or up to four bands (the Comp's crossovers, linear-phase later); each chain with a
+level, pan, mute and solo, summed at the output; eight macro knobs, each mapped to any of its
+modules' parameters with a range (the modulators' targets are the same shape). Latency: chains
+padded to the longest. The work is mostly in the model (a module with modules inside), the mix
+(slots inside slots, their automation and assets), the chain view and presets. About 14–22 h;
+until then every insert's wet/dry mix gives one effect in parallel with its own dry signal.
+
 ## Sources
 
 Versions as in [section 1](01-playback-audio.md#sources). Feature entries for the four come from
@@ -379,3 +421,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | A wet/dry mix on every insert slot |
 | 2026-11-17 | minor | Each module shows its processor load |
 | 2026-11-17 | minor | Modulators: LFOs and envelope followers for any plug-in parameter |
+| 2026-11-17 | minor | Designs for the modulators, impulse-response editing and a rack; what is left of oversampling, IR editing and the rack stated |
