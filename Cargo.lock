@@ -5535,9 +5535,9 @@ dependencies = [
 
 [[package]]
 name = "rusty-opus"
-version = "1.0.2"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46604e6809c06441da1cfdde1f0cc25a4f2bf42c7d005aa387c2875c02d78762"
+checksum = "2d71ff9c55e89cdfaf1a67c6130de98c45f4c711e922ca613f025d90b19b10f2"
 
 [[package]]
 name = "rusty_mp3"
