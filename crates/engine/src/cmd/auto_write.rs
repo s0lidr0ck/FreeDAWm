@@ -295,7 +295,7 @@ pub fn step_due(pos: Samples, last: Samples, step: Samples) -> bool {
 
 /// A mute-like control: a press, with nothing to hold.
 fn is_switch(p: &AutoParam) -> bool {
-    matches!(p, AutoParam::Mute | AutoParam::SendMute(_))
+    matches!(p, AutoParam::Mute | AutoParam::SendMute(_)) || p.is_bypass()
 }
 
 /// `held` plus, for a fader or a mute, the same control of the tracks that share it through an

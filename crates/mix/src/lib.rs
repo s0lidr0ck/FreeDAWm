@@ -2328,10 +2328,12 @@ impl MixEngine {
                         meter.failed = slot.failed;
                         if ins.active && !slot.failed {
                             apply_params(slot, ins, t, Some(ins.id), pos);
+                            apply_timed(slot, ins, t, ins.id, pos, frames);
                             full_m = full_m.saturating_add(slot.plugin.latency());
-                            let (run, room) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
+                            let byp = bypassed(t, ins, pos);
+                            let (run, room) = insert_step(slot, byp, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
                             fits &= room;
-                            if slot.llm_off && !ins.bypass && i < 64 {
+                            if slot.llm_off && !byp && i < 64 {
                                 bits |= 1 << i;
                             }
                             if run == LlmRun::Skip {
@@ -2396,8 +2398,9 @@ impl MixEngine {
                             && !slot.failed
                         {
                             apply_params(slot, ins, t, Some(ins.id), pos);
+                            apply_timed(slot, ins, t, ins.id, pos, frames);
                             full_m = full_m.saturating_add(slot.plugin.latency());
-                            let (run, room) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
+                            let (run, room) = insert_step(slot, bypassed(t, ins, pos), strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
                             fits &= room;
                             if run != LlmRun::Skip {
                                 slot.plugin.set_transport(&transport);
@@ -3367,9 +3370,11 @@ fn process_strip(
                     // move lines up with the audio it moves, in playback and bounce alike.
                     let apos = pos.saturating_sub(i64::try_from(strip.base.saturating_add(latency)).unwrap_or(0));
                     apply_params(slot, ins, t, Some(ins.id), apos);
-                    let (run, fits) = insert_step(slot, ins.bypass, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
+                    apply_timed(slot, ins, t, ins.id, apos, frames);
+                    let byp = bypassed(t, ins, apos);
+                    let (run, fits) = insert_step(slot, byp, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
                     strip.key_regrow |= !fits;
-                    if slot.llm_off && !ins.bypass {
+                    if slot.llm_off && !byp {
                         skipped = skipped.saturating_add(slot.plugin.latency());
                         if i < 64 {
                             bits |= 1 << i;
@@ -5391,6 +5396,52 @@ fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track
     });
 }
 
+/// How often inside a block a lane that changes there is read for a plugin that takes timed
+/// changes ([`Plugin::set_param_at`]), samples: the sends' and pans' grid.
+const TIMED_GRID: usize = 64;
+
+/// Sample-accurate plugin automation: for each laned parameter whose lane changes inside the
+/// block, its value every [`TIMED_GRID`] samples where it moves, as timed changes the plugin
+/// takes or declines (the default declines: the value then changes once per block, as before).
+/// A parameter sent so is resent at the next block's start.
+fn apply_timed(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track, module: ModuleId, pos: Samples, frames: usize) {
+    let end = pos.saturating_add(i64::try_from(frames).unwrap_or(0));
+    for ((k, v), applied) in ins.params.iter().zip(slot.applied.iter_mut()) {
+        let Some(l) = plugin_lane(t, module, k) else { continue };
+        // Only a lane with a point inside the block, or one ramping across it, moves here.
+        let first = l.value_at(pos, *v);
+        if l.points.iter().all(|p| p.at <= pos || p.at >= end) && (l.value_at(end, *v) - first).abs() <= f32::EPSILON {
+            continue;
+        }
+        let mut last = first;
+        let mut off = TIMED_GRID;
+        let mut sent = false;
+        while off < frames {
+            let x = l.value_at(pos.saturating_add(i64::try_from(off).unwrap_or(0)), *v);
+            if (x - last).abs() > f32::EPSILON {
+                if !slot.plugin.set_param_at(off, k, x) {
+                    break;
+                }
+                sent = true;
+                last = x;
+            }
+            off += TIMED_GRID;
+        }
+        if sent {
+            *applied = f32::NAN;
+        }
+    }
+}
+
+/// Whether module `ins` is bypassed at `pos`: its bypass lane when automation is read and the
+/// lane has points (1 bypassed, 0 running; a crossfade as for a click), else its switch.
+fn bypassed(t: &Track, ins: &soundcraft_model::Insert, pos: Samples) -> bool {
+    match plugin_lane(t, ins.id, soundcraft_model::BYPASS_PARAM) {
+        Some(l) => l.value_at(pos, if ins.bypass { 1.0 } else { 0.0 }) >= 0.5,
+        None => ins.bypass,
+    }
+}
+
 /// The lane that drives param `param` of chain module `module` as the render reads it: automation
 /// is read on the track and the lane has points. Shared by `apply_params` and
 /// [`scout::automated_params`].
@@ -6870,6 +6921,75 @@ mod tests {
             midi: MidiOut::new(),
         };
         (slot, ins, tr)
+    }
+
+    type Sent = std::sync::Arc<std::sync::Mutex<Vec<(usize, String, f32)>>>;
+
+    /// A plugin that takes timed changes when `2` is set, recording them in `1` (else as the
+    /// plugin it wraps).
+    struct Timed(Box<dyn Plugin>, Sent, bool);
+
+    impl Plugin for Timed {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            self.0.info()
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.0.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.0.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.0.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.0.param(id)
+        }
+        fn set_param_at(&mut self, offset: usize, id: &str, v: f32) -> bool {
+            if self.2 {
+                self.1.lock().unwrap().push((offset, id.to_string(), v));
+            }
+            self.2
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.0.process(io, frames);
+        }
+    }
+
+    /// Sample-accurate plugin automation: a lane ramping inside a block reaches a plugin that
+    /// takes timed changes as points on the 64-sample grid; a plugin that declines (every
+    /// built-in one) keeps its value once a block, as before; a flat block sends nothing timed.
+    #[test]
+    fn a_ramp_inside_a_block_reaches_a_plugin_as_timed_changes() {
+        for takes in [true, false] {
+            let (mut slot, ins, mut tr) = dist_slot("drive", 0.0);
+            for l in &mut tr.automation {
+                l.set_point(512, 1.0);
+                l.set_point(2048, 1.0);
+            }
+            let sent: Sent = Default::default();
+            let inner = std::mem::replace(&mut slot.plugin, soundcraft_dsp::create("fs_dist").unwrap());
+            slot.plugin = Box::new(Timed(inner, sent.clone(), takes));
+            apply_params(&mut slot, &ins, &tr, Some(ins.id), 0);
+            apply_timed(&mut slot, &ins, &tr, ins.id, 0, 512);
+            let got = sent.lock().unwrap().clone();
+            if takes {
+                let offs: Vec<usize> = got.iter().map(|g| g.0).collect();
+                assert_eq!(offs, (1..8).map(|k| k * 64).collect::<Vec<_>>(), "every 64 samples of the ramp");
+                assert!(got.iter().all(|g| g.1 == "drive"));
+                let v = got.last().unwrap().2;
+                assert!((v - 448.0 / 512.0).abs() < 1e-3, "{v}");
+                assert!(slot.applied.iter().any(|a| a.is_nan()), "resent at the next block's start");
+            } else {
+                assert!(got.is_empty());
+                assert!(slot.applied.iter().all(|a| !a.is_nan()), "a plugin that declines keeps its once-a-block value");
+            }
+            // A block where the lane stands still sends nothing timed.
+            sent.lock().unwrap().clear();
+            apply_params(&mut slot, &ins, &tr, Some(ins.id), 1024);
+            apply_timed(&mut slot, &ins, &tr, ins.id, 1024, 512);
+            assert!(sent.lock().unwrap().is_empty());
+        }
     }
 
     fn run_blocks(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, tr: &Track) {

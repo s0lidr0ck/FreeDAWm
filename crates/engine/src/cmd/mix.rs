@@ -846,6 +846,9 @@ pub(crate) fn current_value(tr: &soundcraft_model::Track, param: &AutoParam) -> 
         AutoParam::Trim => 0.0,
         AutoParam::Width => tr.mixer.width,
         AutoParam::Balance => tr.mixer.balance,
+        AutoParam::Plugin { module, param } if param == soundcraft_model::BYPASS_PARAM => {
+            tr.module_or_instrument(*module).map_or(0.0, |i| f32::from(u8::from(i.bypass)))
+        }
         AutoParam::Plugin { module, param } => tr.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }

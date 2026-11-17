@@ -358,6 +358,18 @@ impl Plugin for ClapPlugin {
         self.values.get(i).copied()
     }
 
+    /// A timed parameter event in the next block's queue (dropped when the queue is full).
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let Some(i) = self.info.params.iter().position(|p| p.id == id) else { return false };
+        let (Some(pi), Some(&cid)) = (self.info.params.get(i), self.ids.get(i)) else { return false };
+        let v = pi.clamp(value);
+        if let Some(slot) = self.values.get_mut(i) {
+            *slot = v;
+        }
+        self.push(Event::Param { time: u32::try_from(offset).unwrap_or(u32::MAX), id: cid, value: f64::from(v) });
+        true
+    }
+
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         self.run(io, frames, None);
     }

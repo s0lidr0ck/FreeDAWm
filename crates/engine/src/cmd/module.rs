@@ -220,7 +220,10 @@ pub(super) fn chain_remove(tr: &mut Track, id: ModuleId) -> Option<usize> {
 pub(super) fn do_bypass(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, value: Option<bool>) -> Result<Value> {
     let ins = find_mut(e, cmd, t, id)?;
     ins.bypass = value.unwrap_or(!ins.bypass);
-    Ok(json!({"bypass": ins.bypass}))
+    let on = ins.bypass;
+    // Written while a pass runs, as any control moved.
+    e.automation_changed(t, AutoParam::bypass(id));
+    Ok(json!({"bypass": on}))
 }
 
 pub(super) fn do_param(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: &Value) -> Result<Value> {

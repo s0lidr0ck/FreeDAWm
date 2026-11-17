@@ -68,6 +68,7 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
     let instrument = track.instrument.as_ref().map(|i| soundcraft_model::Insert { id: soundcraft_model::INSTRUMENT_MODULE, ..i.clone() });
     for ins in instrument.iter().chain(&track.mixer.inserts) {
         let Some(info) = crate::mix_window::plugin_info(&ins.plugin) else { continue };
+        v.push(Choice { group: Some(info.name.to_string()), param: AutoParam::bypass(ins.id), label: "Bypass".into() });
         for p in crate::edit_window::lane_params(track, ins, info) {
             let name = crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name);
             v.push(Choice {

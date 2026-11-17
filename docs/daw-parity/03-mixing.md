@@ -35,7 +35,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
-| F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated; faders follow | **Large**: plug-in values block-rate |
+| F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated, hosted plug-ins' sample-accurate; faders follow | **Large**: built-in plug-ins block-rate |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no real-time bounce, AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
@@ -127,7 +127,7 @@ K-system scales, and the master a loudness meter.
 | Volume, pan, mute, send level, pan and mute | ● | ● | ● | ● | **Works** |
 | Plug-in parameters, stock and third-party | ● | ● | ● | ● | **Works** for inserts |
 | Instrument parameters | ● | ● | ● | ● | **Missing** |
-| Plug-in bypass | ● | ● | ● | ● | **Missing** |
+| Plug-in bypass | ● | ● | ● | ● | **Works**: each module has a Bypass lane (in its group of the lane picker; `plugin:m<id>:@bypass`, 1 bypassed): read where the module's input is, crossfaded as a click is, written in a pass when the module is bypassed or switched back on |
 | Surround pan | ● | ● | ● | ● | **Missing** |
 | VCA and master fader | ● | ● | ● | ● | **Works** |
 
@@ -139,7 +139,7 @@ K-system scales, and the master a loudness meter.
 | Trim automation | ● | ○ | ● | ● | **Works** for volume |
 | Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Partial**: the Mix window's faders and pan knobs follow their lanes; plug-in controls and send knobs do not |
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
-| Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
+| Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; hosted CLAP and VST3 plug-ins get a lane that moves inside a block as timed parameter events on the same 64-sample grid (`Plugin::set_param_at`); the built-in plug-ins decline them by default and still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Works**: Touch glides back over the return time, 250 ms unless set in the Automation window (`automation.return_time`, 0 to 5 s) |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Works**: Write on Stop in the Automation window (`automation.write_on_stop`: to start, end, all or the selection), armed for the next pass as Pro Tools arms it: when it stops, each lane it wrote keeps its last value over that range, in the pass's undo step |
@@ -264,7 +264,7 @@ one a mix engineer would not forgive.
 
 | Work | Est. (h) | Notes |
 |---|---:|---|
-| Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends); plug-in values are delay-compensated (2026-11-16) but still change once per block: reading them sub-block needs the plug-in interface to take a block in pieces (or timed parameter events), which the built-in `Plugin::process` does not |
+| Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends) and for hosted CLAP and VST3 plug-ins (timed parameter events, 2026-11-17, to the design below); plug-in values are delay-compensated; the built-in plug-ins still change once per block until each takes `set_param_at` |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), remain; a key taken from an aux by an ordinary track is done (built from the design below) |
@@ -281,6 +281,29 @@ one a mix engineer would not forgive.
 AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**done**), 5–8; hardware
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
+
+### Design: sample-accurate plug-in automation (built 2026-11-17, first step)
+
+The fader section reads its lanes inside the block; a plug-in's parameters were set once per
+block (`apply_params` before `Plugin::process`). The built-in plug-in interface had no way to take
+a change part-way through a block.
+
+- **Interface.** `Plugin::set_param_at(offset, id, value) -> bool`, a default method that returns
+  false: a plug-in that takes a timed change returns true and applies it `offset` frames into the
+  next `process`. Every existing plug-in keeps the default, so nothing it does changes.
+- **Host.** After the block-start values (`apply_params`), `apply_timed` looks at each laned
+  parameter whose lane has a point inside the block (or ramps across it) and sends its value every
+  64 samples where it moves (the sends' and pans' grid), until the plug-in declines. A parameter
+  sent so is resent at the next block's start, so the plug-in and the host's record agree again.
+  Read at the same delay-compensated position as the block-start values; no allocation.
+- **Hosted plug-ins.** CLAP queues a timed `Param` event (its queue is time-ordered); VST3 adds a
+  point at the offset to the block's parameter queue (`IParameterChanges` already takes them).
+- **Built-ins, next step.** A built-in opts in by overriding `set_param_at`: it keeps the timed
+  changes (a fixed-size list) and splits its `process` at them, or ramps its own smoothed value
+  towards each. Left for each effect's own work: the change is per plug-in.
+- **Tests.** `a_ramp_inside_a_block_reaches_a_plugin_as_timed_changes` (`mix` lib): a ramp inside
+  a block reaches a plug-in that takes timed changes as points every 64 samples; one that declines
+  keeps its once-a-block value; a still block sends nothing timed.
 
 ### The control room (tier 3, built 2026-11-16 to this design)
 
@@ -383,6 +406,8 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | hosted plug-ins' automation is sample-accurate: timed parameter changes through a new, default-off plug-in method |
+| 2026-11-17 | minor | plug-in bypass is automatable |
 | 2026-11-17 | minor | linked and mirrored pans; the surround panner's centre % and LFE level get controls |
 | 2026-11-17 | minor | find and spill in the Mix window |
 | 2026-11-17 | minor | the Touch return time is set in the Automation window; Write on Stop; Show Last Touched |

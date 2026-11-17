@@ -319,6 +319,22 @@ impl Plugin for Vst3Plugin {
         self.values.get(i).copied()
     }
 
+    /// A point in the next block's parameter queue at its offset (dropped when the queue is
+    /// full).
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let Some(i) = self.info.params.iter().position(|p| p.id == id) else { return false };
+        let (Some(pi), Some(&vid)) = (self.info.params.get(i), self.ids.get(i)) else { return false };
+        let v = pi.clamp(value);
+        if let Some(slot) = self.values.get_mut(i) {
+            *slot = v;
+        }
+        let Some(n) = self.normalized_from_plain(i, v) else { return true };
+        if self.controls.len() < self.controls.capacity() {
+            self.controls.push((u32::try_from(offset).unwrap_or(u32::MAX), vid, n));
+        }
+        true
+    }
+
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         self.process_with_sidechain(io, frames, None);
     }

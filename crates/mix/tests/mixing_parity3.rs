@@ -36,6 +36,38 @@ fn settle(s: &Session, blocks: usize) -> (f32, f32) {
     (buf[0][BLOCK - 1], buf[1][BLOCK - 1])
 }
 
+/// A module's bypass lane switches it in and out as it plays (and the switch it overrides is
+/// left alone): a -20 dB gain bypassed from the middle of the render lets the signal through.
+#[test]
+fn a_bypass_lane_switches_a_module() {
+    let mut s = session();
+    let t = stereo(&mut s, 0.5, 0.5, BLOCK * 200);
+    let mut ins = soundcraft_model::Insert::new("gain");
+    ins.params.insert("gain".into(), -20.0);
+    let m = s.track_mut(t).unwrap().mixer.add_module(ins, None).unwrap();
+    let mut lane = soundcraft_model::AutomationLane::new(soundcraft_model::AutoParam::bypass(m));
+    lane.set_point(0, 0.0);
+    lane.set_point((BLOCK * 50) as i64, 0.0);
+    lane.set_point((BLOCK * 50 + 1) as i64, 1.0);
+    s.track_mut(t).unwrap().automation.push(lane);
+    let mut eng = MixEngine::new(48_000.0, BLOCK);
+    let mut buf = vec![vec![0.0f32; BLOCK]; 2];
+    let mut at = |b: usize, eng: &mut MixEngine| {
+        eng.render(&s, (b * BLOCK) as i64, BLOCK, &mut buf);
+        buf[0][BLOCK - 1]
+    };
+    let mut quiet = 0.0;
+    for b in 0..40 {
+        quiet = at(b, &mut eng);
+    }
+    let mut loud = 0.0;
+    for b in 40..120 {
+        loud = at(b, &mut eng);
+    }
+    assert!(loud > quiet * 5.0, "bypassed by its lane: {quiet} then {loud}");
+    assert!(!s.track(t).unwrap().mixer.module(m).unwrap().bypass, "the switch itself is left alone");
+}
+
 /// Polarity on one channel of a stereo track inverts that side only; the whole-track switch
 /// inverts both.
 #[test]

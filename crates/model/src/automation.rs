@@ -85,6 +85,7 @@ impl AutoParam {
             AutoParam::Trim => "trim".into(),
             AutoParam::Width => "width".into(),
             AutoParam::Balance => "balance".into(),
+            AutoParam::Plugin { module, param } if param == BYPASS_PARAM => format!("module {} bypass", module.0),
             AutoParam::Plugin { module, param } => format!("module {} {param}", module.0),
         }
     }
@@ -149,6 +150,22 @@ impl AutoParam {
             AutoParam::Trim => (-144.0, 24.0, 0.0),
             AutoParam::Plugin { .. } => (f32::MIN, f32::MAX, 0.0),
         }
+    }
+}
+
+/// The parameter id of a module's bypass lane (`plugin:m3:@bypass`): 1 bypassed, 0 running. No
+/// plugin parameter is named so (the `@` keeps it apart from every plugin's own ids).
+pub const BYPASS_PARAM: &str = "@bypass";
+
+impl AutoParam {
+    /// A module's bypass lane.
+    pub fn bypass(module: ModuleId) -> AutoParam {
+        AutoParam::Plugin { module, param: BYPASS_PARAM.into() }
+    }
+
+    /// Whether this is a module's bypass lane.
+    pub fn is_bypass(&self) -> bool {
+        matches!(self, AutoParam::Plugin { param, .. } if param == BYPASS_PARAM)
     }
 }
 

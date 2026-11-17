@@ -365,6 +365,15 @@ pub trait Plugin: Send {
     /// Sets a parameter (clamped into range; NaN becomes the default). `false` if `id` is unknown.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
     fn param(&self, id: &str) -> Option<f32>;
+    /// A parameter change `offset` frames into the next [`Plugin::process`] (sample-accurate
+    /// automation inside a block), after the [`Plugin::set_param`] values of its start. A plugin
+    /// that takes timed changes returns true (the hosted CLAP and VST3 ones queue them as
+    /// events); the default returns false and the host changes the value once per block, as it
+    /// always has. Same contract as `process`: never allocates or panics.
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let _ = (offset, id, value);
+        false
+    }
     /// In-place processing of `channels` planar buffers each `frames` long.
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize);
     /// [`Plugin::process`] with a sidechain key, for plugins whose [`PluginInfo::sidechain`] is
