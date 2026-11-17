@@ -107,7 +107,7 @@ Varispeed is the only whole-project speed control among the four.
 | Skip plug-ins on silent tracks | ● | ● | ● | ● | **Works**: Options › More › Suspend Plug-ins on Silence (off by default, so sessions sound as they did): an insert whose input and output have both been below −100 dBFS for a second is not run while its input stays silent, and the first sound runs it again in the same block; keyed modules and modules that send MIDI always run, and the strip's delay compensation is unchanged. A suspended module's state (a compressor's release) holds where it was |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
 | No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
-| Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: plug-ins (built-in and hosted) and Clip Effects modules are made on the UI thread and handed over with the session; a new track's own buffers and delay lines are still sized on the audio thread. Left: building a new track's strip (`Strip::new` and its buffers in `MixEngine::sync`) in `BuiltinPrep` and handing it over as instances are; not reached |
+| Realtime-safe audio thread | ● | ● | ● | ● | **Works**: plug-ins (built-in and hosted), Clip Effects modules and a new track's strip (its audio buffers, delay-compensation and key lines, MIDI rings) and a new bus's buffers are made on the UI thread by `BuiltinPrep` and handed over with the session; when the engine's tables of strips, meters and busses would grow, larger empty ones come along; a removed track's strip and outgrown tables go back to be freed off the audio thread (`RetiredStrips`). Fixed on the way: a strip's pre-fader and output buffers were made with only the last channel reserved, so the others grew while rendering. Lines are reserved for a mix delay up to a quarter second; a larger one still grows them in the render's sync, as before. The small lists `sync` rebuilds each time the session's structure changes are still made there |
 | Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only; designed below (Changing the session rate), not built |
 | Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Works**: Window › Control Room (section 3, E) |
 | Runs in a browser | ○ | ○ | ○ | ○ | **Works**, single-threaded |
@@ -263,8 +263,7 @@ function over `Session` with a test that fails when a new `Samples` field is add
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
 keeping the pitch; shuttle forwards through the mixer and backwards through the preview voice); per-clip transpose and non-destructive
 reverse, 8–12; clip effects that take any module, 8–12; automatic crossfades on overlap and layered
-editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plug-ins and Clip Effects are made off the audio thread now; build strips off the audio
-thread) and worker thread priority, 8–14; automatic device recovery, 3–6.
+editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plug-ins, Clip Effects and new strips are made off the audio thread now) and worker thread priority, 8–14; automatic device recovery, 3–6.
 
 **Where FreeDAWm is already level or ahead:** gapless looping, uninterrupted playback while
 editing, the breadth of delay compensation, formats read, clip gain envelopes with conversion to
@@ -284,6 +283,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: a new track's strip and a new bus's buffers are made off the audio thread |
 | 2026-11-17 | minor | Round three: a short import's tempo is detected and recorded |
 | 2026-11-17 | minor | Round three: skip ranges; the open rows say what is left and why; a design for changing the session rate |
 | 2026-11-17 | minor | Round three: audition around an edit, Dynamic Transport's play start and separate loop, automatic device return, suspend plug-ins on silence, loops that follow tempo and key at import, preview in tempo, in sync and on a chosen output |

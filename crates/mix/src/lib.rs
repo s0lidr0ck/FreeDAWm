@@ -86,7 +86,7 @@ mod monitor;
 mod prepare;
 mod rpn;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
-pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx};
+pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx, PreparedStrip, RetiredStrips, StripRoom};
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
@@ -814,6 +814,21 @@ impl Strip {
         }
     }
 
+    /// Address and capacity of the strip's main buffers and its delay lines (to check for
+    /// reallocation).
+    fn buffer_ids(&self) -> Vec<(usize, usize)> {
+        let lines = [&self.align, &self.align_pre, &self.out_extra, &self.track_delay].into_iter().flat_map(|l| l.buffer_ids());
+        let bufs = [&self.buf, &self.pre, &self.outbuf, &self.llm_dry].into_iter().flatten().map(|b| (b.as_ptr() as usize, b.capacity()));
+        let keys = self
+            .keys
+            .iter()
+            .flat_map(|k| k.buf.iter().map(|b| (b.as_ptr() as usize, b.capacity())).chain(k.delay.buffer_ids()).chain(k.main_delay.buffer_ids()));
+        bufs.chain(lines)
+            .chain(keys)
+            .chain([(self.fader_gain.as_ptr() as usize, self.fader_gain.capacity()), (self.midi_held.as_ptr() as usize, self.midi_held.capacity())])
+            .collect()
+    }
+
     /// The merged module MIDI this strip played in the block it last rendered.
     fn module_midi_in(&self) -> impl Iterator<Item = (u32, [u8; 3])> + '_ {
         self.midi_in.events().iter().map(|e| (e.offset, e.msg))
@@ -832,6 +847,13 @@ impl Strip {
     fn key_source(&self) -> KeySource<'_> {
         KeySource { buf: &self.buf, pre: &self.pre, post_at: self.post_at, pre_at: self.pre_at, muted: self.muted, stamp: self.stamp }
     }
+}
+
+/// `ch` empty buffers with room for `mb` samples each. (`vec![Vec::with_capacity(mb); ch]` would
+/// not do: a clone of an empty Vec has no capacity, so all but the last would grow while
+/// rendering.)
+fn reserved(ch: usize, mb: usize) -> Vec<Vec<f32>> {
+    (0..ch).map(|_| Vec::with_capacity(mb)).collect()
 }
 
 /// Renders sessions. Keep one per playback stream; plugin state persists across blocks.
@@ -943,6 +965,13 @@ pub struct MixEngine {
     /// Built-in instances and Clip Effects modules `sync` made itself although the host makes them
     /// ([`MixEngine::made_in_sync`]).
     made_in_sync: u64,
+    /// New tracks' strips and new busses' buffers handed over by the host, waiting for `sync`.
+    adopt_strips: Vec<PreparedStrip>,
+    adopt_busses: Vec<(BusId, Vec<Vec<f32>>)>,
+    /// Strips `sync` made itself although the host makes them ([`MixEngine::strips_made_in_sync`]).
+    strips_made_in_sync: u64,
+    /// Strips, tables and buffers taken out of service ([`MixEngine::take_retired_strips`]).
+    retired_strips: RetiredStrips,
     /// Instances `sync` took out of service, for the host to drop (see [`MixEngine::take_retired`]).
     retired: Vec<Box<dyn Plugin>>,
     /// Lent to an offline render ([`LiveInstances`]): `sync` parks the third-party slots it would
@@ -1197,6 +1226,10 @@ impl MixEngine {
             builtins: false,
             adopt_clip: HashMap::new(),
             made_in_sync: 0,
+            adopt_strips: Vec::new(),
+            adopt_busses: Vec::new(),
+            strips_made_in_sync: 0,
+            retired_strips: RetiredStrips::default(),
             retired: Vec::new(),
             lent: false,
             parked: HashMap::new(),
@@ -1363,13 +1396,67 @@ impl MixEngine {
     /// (its third-party instances and a [`BuiltinPrep`]'s built-in ones and Clip Effects
     /// modules). Does not allocate unless the adopt tables must grow.
     pub fn adopt_prepared(&mut self, p: Prepared) {
-        let Prepared { instances, clip_fx } = p;
+        let Prepared { instances, clip_fx, strips, busses, room } = p;
         self.adopt(instances);
+        if let Some(r) = room {
+            self.take_room(r);
+        }
+        if self.adopt_strips.is_empty() {
+            self.adopt_strips = strips;
+        } else {
+            self.adopt_strips.extend(strips);
+        }
+        if self.adopt_busses.is_empty() {
+            self.adopt_busses = busses;
+        } else {
+            self.adopt_busses.extend(busses);
+        }
         for c in clip_fx {
             if let Some(old) = self.adopt_clip.insert((c.track, c.clip), c) {
                 self.retired.extend(old.eq.into_iter().chain(old.comp));
             }
         }
+    }
+
+    /// Moves the strips, meters and busses into the host's larger empty tables (where they are
+    /// larger); the tables let go of are retired.
+    fn take_room(&mut self, r: StripRoom) {
+        let StripRoom { mut strips, mut meters, mut busses } = r;
+        if strips.capacity() > self.strips.capacity() {
+            strips.extend(self.strips.drain());
+            strips = std::mem::replace(&mut self.strips, strips);
+        }
+        if meters.capacity() > self.meters.capacity() {
+            meters.extend(self.meters.drain());
+            meters = std::mem::replace(&mut self.meters, meters);
+        }
+        if busses.capacity() > self.busses.capacity() {
+            busses.extend(self.busses.drain());
+            busses = std::mem::replace(&mut self.busses, busses);
+        }
+        self.retired_strips.strip_maps.push(strips);
+        self.retired_strips.meter_maps.push(meters);
+        self.retired_strips.bus_maps.push(busses);
+    }
+
+    /// Strips `sync` made itself (a new track's buffers sized on the render path) while the host
+    /// was to make them ([`MixEngine::set_prepared_builtins`]); a realtime host keeps this at 0.
+    #[doc(hidden)]
+    pub fn strips_made_in_sync(&self) -> u64 {
+        self.strips_made_in_sync
+    }
+
+    /// Address and capacity of a track's strip buffers and delay lines (see
+    /// [`PreparedStrip::buffer_ids`]).
+    #[doc(hidden)]
+    pub fn prepared_buffers(&self, t: TrackId) -> Vec<(usize, usize)> {
+        self.strips.get(&t).map(Strip::buffer_ids).unwrap_or_default()
+    }
+
+    /// Strips, tables and buffers taken out of service since the last call (drop them off the
+    /// audio thread). Does not allocate.
+    pub fn take_retired_strips(&mut self) -> RetiredStrips {
+        std::mem::take(&mut self.retired_strips)
     }
 
     /// Realtime mode for built-in plugins and Clip Effects too: the host makes them with a
@@ -1779,6 +1866,8 @@ impl MixEngine {
                 }
                 cx.retire(id, SlotKey::Instrument, st.instrument.take());
                 cx.retired_analysis.extend(st.analysis.drain(..).map(|(_, a)| a));
+                // Its buffers are freed off the audio thread too.
+                self.retired_strips.strips.push(st);
             }
             // The meter keeps its copies of the handles: hand those over too.
             if let Some(m) = self.meters.get_mut(&id) {
@@ -1787,7 +1876,20 @@ impl MixEngine {
         }
         for (ti, t) in s.tracks.iter().enumerate() {
             let ch = strip_channels(t, main_ch);
-            let strip = self.strips.entry(t.id).or_insert_with(Strip::new);
+            if !self.strips.contains_key(&t.id) {
+                // A realtime host made the strip with its buffers sized (`BuiltinPrep`).
+                let made = match self.adopt_strips.iter().position(|p| p.track == t.id) {
+                    Some(at) => self.adopt_strips.swap_remove(at).strip,
+                    None => {
+                        if self.builtins {
+                            self.strips_made_in_sync = self.strips_made_in_sync.saturating_add(1);
+                        }
+                        Strip::new()
+                    }
+                };
+                self.strips.insert(t.id, made);
+            }
+            let Some(strip) = self.strips.get_mut(&t.id) else { continue };
             if strip.buf.len() != ch || strip.buf.first().map_or(0, Vec::len) != mb {
                 strip.buf = vec![vec![0.0; mb]; ch];
             }
@@ -1799,7 +1901,7 @@ impl MixEngine {
             // Room for the pre-fader copy (pre-fader sends, keys and meters), so filling it never
             // allocates while rendering.
             if strip.pre.len() != ch || strip.pre.iter().any(|b| b.capacity() < mb) {
-                strip.pre = vec![Vec::with_capacity(mb); ch];
+                strip.pre = reserved(ch, mb);
             }
             let host = self.builtins.then_some(&mut self.adopt_clip);
             sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made);
@@ -1947,7 +2049,7 @@ impl MixEngine {
                 st.pre_key = true;
                 let ch = st.buf.len();
                 if st.pre.len() != ch || st.pre.iter().any(|b| b.capacity() < mb) {
-                    st.pre = vec![Vec::with_capacity(mb); ch];
+                    st.pre = reserved(ch, mb);
                 }
             }
         }
@@ -1963,6 +2065,7 @@ impl MixEngine {
             for (_, p) in self.adopt_clip.drain() {
                 cx.retired.extend(p.eq.into_iter().chain(p.comp));
             }
+            self.retired_strips.strips.extend(self.adopt_strips.drain(..).map(|p| p.strip));
         }
         if !self.external {
             self.retired.clear();
@@ -1977,11 +2080,32 @@ impl MixEngine {
             let n = b.format.channels().clamp(1, MAX_CHANNELS);
             let bus = self.busses.entry(b.id).or_insert_with(|| BusBuf { fmt: b.format, buf: Vec::new() });
             bus.fmt = b.format;
-            if bus.buf.len() != n {
-                bus.buf = vec![vec![0.0; mb]; n];
+            if bus.buf.len() != n || bus.buf.iter().any(|c| c.len() != mb) {
+                // A realtime host sized them (`BuiltinPrep`); the old ones are freed off the audio thread.
+                let made = match self.adopt_busses.iter().position(|(id, buf)| *id == b.id && buf.len() == n && buf.iter().all(|c| c.len() == mb)) {
+                    Some(at) => self.adopt_busses.swap_remove(at).1,
+                    None => vec![vec![0.0; mb]; n],
+                };
+                let old = std::mem::replace(&mut bus.buf, made);
+                if !old.is_empty() {
+                    self.retired_strips.buffers.push(old);
+                }
             }
         }
-        self.busses.retain(|id, _| s.bus(*id).is_some());
+        let retired = &mut self.retired_strips;
+        self.busses.retain(|id, b| {
+            let keep = s.bus(*id).is_some();
+            if !keep {
+                retired.buffers.push(std::mem::take(&mut b.buf));
+            }
+            keep
+        });
+        if !self.lent {
+            self.retired_strips.buffers.extend(self.adopt_busses.drain(..).map(|(_, b)| b));
+        }
+        if !self.external {
+            self.retired_strips.clear();
+        }
         self.order = plan.order;
         self.late = plan.late;
         self.reserve_delays(s);
@@ -2032,7 +2156,7 @@ impl MixEngine {
             if !aux && matches!(t.mixer.output, Route::Main | Route::Bus(_) | Route::Hardware(_)) {
                 st.out_extra.reserve(cap(&st.out_extra), ch);
                 if st.outbuf.len() != ch || st.outbuf.iter().any(|b| b.capacity() < mb) {
-                    st.outbuf = vec![Vec::with_capacity(mb); ch];
+                    st.outbuf = reserved(ch, mb);
                 }
             }
         }
@@ -10294,6 +10418,78 @@ mod tests {
         let mut bare = realtime();
         bare.render(&s, 0, 512, &mut out);
         assert_eq!(bare.made_in_sync(), 5, "two inserts, an instrument and two Clip Effects modules");
+    }
+
+    /// The realtime path: a track added while playing comes with its strip made and sized by the
+    /// `BuiltinPrep` (buffers, delay and key lines, MIDI rings), as does a new bus's buffers; the
+    /// render path seats them and renders with those very allocations, the same as an engine that
+    /// sizes its own; a removed track's strip goes back to be freed off the audio thread.
+    #[test]
+    fn a_new_tracks_strip_comes_sized_from_the_control_thread() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.edit.click = false;
+        let realtime = || {
+            let mut eng = MixEngine::new(48_000.0, 512);
+            eng.set_external_instances(true);
+            eng.set_prepared_builtins(true);
+            eng
+        };
+        let mut eng = realtime();
+        let mut prep = BuiltinPrep::default();
+        let mut reference = MixEngine::new(48_000.0, 512);
+        reference.set_external_instances(true);
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        let mut want = vec![vec![0.0f32; 512]; 2];
+        let mut block = 0i64;
+        let mut play = |s: &Session, eng: &mut MixEngine, prep: &mut BuiltinPrep, reference: &mut MixEngine| {
+            let p = prep.prepare(s, 512);
+            let ids: Vec<(TrackId, Vec<(usize, usize)>)> = p.strips.iter().map(|x| (x.track, x.buffer_ids())).collect();
+            eng.adopt_prepared(p);
+            for _ in 0..4 {
+                eng.render(s, block * 512, 512, &mut out);
+                reference.render(s, block * 512, 512, &mut want);
+                assert_eq!(out, want, "block {block}: the same as an engine sizing its own strips");
+                block += 1;
+            }
+            for (id, before) in &ids {
+                assert_eq!(&eng.prepared_buffers(*id), before, "the strip renders with the buffers made off the audio thread");
+            }
+            assert_eq!(eng.strips_made_in_sync(), 0, "the render path made no strip");
+            ids.len()
+        };
+        assert_eq!(play(&s, &mut eng, &mut prep, &mut reference), s.tracks.len());
+        // While playing: a stereo track with a compressor keyed by the first, a pre-fader send to a
+        // new bus and a track delay.
+        let bus = s.add_bus("Verb", ChannelFormat::Stereo);
+        let n = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("New"));
+        {
+            let tr = s.track_mut(n).unwrap();
+            let mut comp = Insert::new("compressor");
+            comp.sidechain = Some(soundcraft_model::SidechainSource { track: t, pre_fader: false });
+            tr.mixer.add_module(comp, None).unwrap();
+            let mut snd = soundcraft_model::SendSlot::new(Route::Bus(bus));
+            snd.pre_fader = true;
+            snd.level_db = 0.0;
+            tr.mixer.sends[0] = Some(snd);
+            tr.mixer.delay = 100;
+        }
+        assert_eq!(play(&s, &mut eng, &mut prep, &mut reference), 1, "only the new track's strip");
+        assert!(!eng.prepared_buffers(n).is_empty());
+        assert!(eng.busses[&bus].buf.len() == 2 && eng.busses[&bus].buf.iter().all(|c| c.len() == 512));
+        let _ = eng.take_retired_strips();
+        // Many tracks at once: the tables come larger, made off the audio thread.
+        let more: Vec<TrackId> = (0..40).map(|_| s.add_track(TrackKind::Audio, ChannelFormat::Mono, None)).collect();
+        assert_eq!(play(&s, &mut eng, &mut prep, &mut reference), 40);
+        assert!(eng.strips.capacity() >= s.tracks.len());
+        // Removed: the strip is retired, not dropped on the render path.
+        s.tracks.retain(|x| x.id != more[0]);
+        assert_eq!(play(&s, &mut eng, &mut prep, &mut reference), 0);
+        let gone = eng.take_retired_strips();
+        assert_eq!(gone.strips.len(), 1, "the removed track's strip waits to be freed elsewhere");
+        // An engine given nothing sizes its strips itself and says so.
+        let mut bare = realtime();
+        bare.render(&s, 0, 512, &mut out);
+        assert_eq!(bare.strips_made_in_sync(), s.tracks.len() as u64);
     }
 
     fn impulse_at(ch: &[f32]) -> Vec<usize> {

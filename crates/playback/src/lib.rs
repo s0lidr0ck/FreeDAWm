@@ -592,6 +592,8 @@ struct Garbage {
     assets: Vec<Arc<dyn soundcraft_dsp::SampleSource>>,
     /// Link group slabs the engine took out of service.
     links: Vec<Arc<soundcraft_dsp::LinkSlab>>,
+    /// Strips of removed tracks, buffers of removed or reshaped busses, outgrown tables.
+    strips: soundcraft_mix::RetiredStrips,
     /// The spare engine a lent engine's return replaced ([`Cmd::Return`]).
     engine: Option<Box<MixEngine>>,
     /// A replaced input feed, its buffer, and a replaced capture.
@@ -815,7 +817,8 @@ impl AudioState {
                         let plugins = old.drain_plugins();
                         let assets = old.take_retired_assets();
                         let links = old.take_retired_links();
-                        let _ = self.garbage.send(Garbage { plugins, assets, links, ..Garbage::default() });
+                        let strips = old.take_retired_strips();
+                        let _ = self.garbage.send(Garbage { plugins, assets, links, strips, ..Garbage::default() });
                         // The shared meter snapshot still holds copies of these handles: they leave
                         // with the new engine's garbage, after the next meter copy (see `send_garbage`).
                         self.mix.keep_retired_analysis(old.take_retired_analysis());
@@ -1225,8 +1228,9 @@ impl AudioState {
         let analysis = if meters_copied { self.mix.take_retired_analysis() } else { Vec::new() };
         let assets = self.mix.take_retired_assets();
         let links = self.mix.take_retired_links();
-        if !plugins.is_empty() || !analysis.is_empty() || !assets.is_empty() || !links.is_empty() {
-            let _ = self.garbage.send(Garbage { plugins, analysis, assets, links, ..Garbage::default() });
+        let strips = self.mix.take_retired_strips();
+        if !plugins.is_empty() || !analysis.is_empty() || !assets.is_empty() || !links.is_empty() || !strips.is_empty() {
+            let _ = self.garbage.send(Garbage { plugins, analysis, assets, links, strips, ..Garbage::default() });
         }
     }
 
@@ -2313,6 +2317,7 @@ impl Side {
             drop(g.engine);
             drop(g.assets);
             drop(g.links);
+            drop(g.strips);
             drop(g.feed);
             drop(g.input);
             drop(g.capture);
