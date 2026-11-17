@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (rows reconciled with the code) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (round three: strip, solo, bounce, automation and metering rows built) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -126,7 +126,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Volume, pan, mute, send level, pan and mute | ● | ● | ● | ● | **Works** |
 | Plug-in parameters, stock and third-party | ● | ● | ● | ● | **Works** for inserts |
-| Instrument parameters | ● | ● | ● | ● | **Missing** |
+| Instrument parameters | ● | ● | ● | ● | **Works**: built in the MIDI writing work (33c96ba): an instrument's parameters take lanes as an insert's do (listed under the instrument's name in the lane picker, `plugin:instrument:<param>`), played into built-in and hosted instruments and written by Touch, Latch and Write |
 | Plug-in bypass | ● | ● | ● | ● | **Works**: each module has a Bypass lane (in its group of the lane picker; `plugin:m<id>:@bypass`, 1 bypassed): read where the module's input is, crossfaded as a click is, written in a pass when the module is bypassed or switched back on |
 | Surround pan | ● | ● | ● | ● | **Missing** |
 | VCA and master fader | ● | ● | ● | ● | **Works** |
@@ -266,10 +266,10 @@ one a mix engineer would not forgive.
 |---|---:|---|
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends) and for hosted CLAP and VST3 plug-ins (timed parameter events, 2026-11-17, to the design below); plug-in values are delay-compensated; the built-in plug-ins still change once per block until each takes `set_param_at` |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
-| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables done**; bypass, instrument and surround pan lanes remain |
-| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP keys and the generic routing done**; VST3 and AU key buses, Comp's own detector (effects work), remain; a key taken from an aux by an ordinary track is done (built from the design below) |
+| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables, bypass lanes and instrument lanes done** (2026-11-17; instrument lanes by the MIDI writing work); surround pan lanes remain (the panner's x, y and z are not lanes yet) |
+| Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP and VST3 keys, the generic routing and Comp's detector done**; AU key buses remain (macOS); a key taken from an aux by an ordinary track is done (built from the design below) |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
-| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
+| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU, K and PPM scales, and Window › Loudness Meter with the loudness range |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Done** (2026-11-17); tags in FLAC, AIFF and Opus remain |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | instrument parameters were automated in the MIDI writing work; the suggested order brought up to date |
 | 2026-11-17 | minor | automation on tick-timebase tracks follows tempo changes |
 | 2026-11-17 | minor | copy a strip's settings onto the selected tracks |
 | 2026-11-17 | minor | send controls and built-in module controls follow their automation |
