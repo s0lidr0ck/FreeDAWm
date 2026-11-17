@@ -924,6 +924,12 @@ impl Engine {
                 if !Arc::ptr_eq(&before, &self.doc) {
                     self.refresh_vocal_fingerprints();
                 }
+                // Options › Snap › Adaptive Grid: a musical grid follows the zoom.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && let Some(g) = edit::adapted_grid(&self.doc).filter(|g| *g != self.doc.edit.grid)
+                {
+                    Arc::make_mut(&mut self.doc).edit.grid = g;
+                }
                 cmd::remember_selection(self, &before);
                 if self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") {
                     cmd::arm_follows_selection(self, &before);
@@ -961,6 +967,12 @@ impl Engine {
             .unwrap_or_else(|p| Err(EngineError::Internal(spec.id.to_string(), panic_message(&*p))));
         if result.is_err() && self.doc.edit.zoom != zoom {
             Arc::make_mut(&mut self.doc).edit.zoom = zoom;
+        }
+        // Options › Snap › Adaptive Grid: zooming re-picks a musical grid.
+        if self.doc.edit.zoom != zoom
+            && let Some(g) = edit::adapted_grid(&self.doc).filter(|g| *g != self.doc.edit.grid)
+        {
+            Arc::make_mut(&mut self.doc).edit.grid = g;
         }
         result
     }

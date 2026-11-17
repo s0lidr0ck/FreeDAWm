@@ -792,6 +792,8 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
 const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("edit.snap_to_clips", soundcraft_engine::edit::SNAP_TO_CLIPS),
     ("edit.snap_to_markers", soundcraft_engine::edit::SNAP_TO_MARKERS),
+    ("edit.snap_to_cursor", soundcraft_engine::edit::SNAP_TO_CURSOR),
+    ("edit.adaptive_grid", soundcraft_engine::edit::ADAPTIVE_GRID),
     ("edit.snap_to_zero_crossings", soundcraft_engine::edit::SNAP_TO_ZERO),
     ("track.suspend_groups", "groups.suspended"),
     ("mix.pre_sends_ignore_mute", "mix.pre_sends_ignore_mute"),

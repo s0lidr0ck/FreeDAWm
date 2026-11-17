@@ -189,6 +189,24 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| toggle_flag(e, p, ops::SNAP_TO_MARKERS)
         ),
         cmd!(
+            noundo "edit.adaptive_grid",
+            "Adaptive Grid",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — a musical grid follows the zoom: its note value is the one whose lines are nearest 16 points apart",
+            always,
+            |e, p| toggle_flag(e, p, ops::ADAPTIVE_GRID)
+        ),
+        cmd!(
+            noundo "edit.snap_to_cursor",
+            "Snap to Playhead",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to the playhead within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_CURSOR)
+        ),
+        cmd!(
             noundo "edit.snap_to_zero_crossings",
             "Snap to Zero Crossings",
             [],

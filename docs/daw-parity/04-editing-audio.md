@@ -83,8 +83,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
 | Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; typed values read "1/4.", "1/4 dotted", "1/8t" and "1/8 triplet" alike |
 | Grid in time, frames and samples | ● | ● | ● | ● | **Works**: lines do not drift and count from the session's timecode start (bug 18, fixed) |
-| Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
-| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
+| Grid that adapts to zoom | ◐ | ● | ● | ● | **Works**: Options › Snap › Adaptive Grid: a musical grid's note value follows the zoom, the one whose lines are nearest 16 points apart (bar down to 1/64; no dotted or triplet); a time, frame or sample grid stays as chosen |
+| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works**: Options › Snap › Clip Edges, Markers and Playhead, within 8 pixels; a nearer grid line wins; the suspend modifier lets go |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
 | Modifier to suspend snap while dragging | ● | ● | ● | ● | **Works** for moves, trims and selecting: held through a Selector drag, the selection's end goes free of the grid, clip edges and markers |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |

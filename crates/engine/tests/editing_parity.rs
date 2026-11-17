@@ -598,6 +598,29 @@ fn a_clip_groups_trims_and_fades_act_on_every_member() {
 
 // ---- tier 2: snapping to clip edges, markers and zero crossings ------------------------------
 
+/// Options › Snap › Adaptive Grid: a musical grid's note value follows the zoom, its lines
+/// about 16 points apart (120 bpm at 48 kHz: a 16th is 6,000 samples, a quarter 24,000).
+#[test]
+fn the_adaptive_grid_follows_the_zoom() {
+    use soundcraft_time::{GridValue, NoteValue};
+    let mut e = engine("grid");
+    let note = |e: &Engine| match e.session().edit.grid {
+        GridValue::Note { value, .. } => Some(value),
+        _ => None,
+    };
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 1500.0}));
+    assert_eq!(note(&e), Some(NoteValue::Sixteenth), "off: the grid stays");
+    run(&mut e, "edit.adaptive_grid", json!({}));
+    assert_eq!(note(&e), Some(NoteValue::Quarter), "on: a quarter is 16 points at this zoom");
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 375.0}));
+    assert_eq!(note(&e), Some(NoteValue::Sixteenth));
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 6000.0}));
+    assert_eq!(note(&e), Some(NoteValue::Bar), "zoomed out, bars");
+    run(&mut e, "view.grid", json!({"value": {"seconds": 1.0}}));
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 375.0}));
+    assert!(matches!(e.session().edit.grid, GridValue::Seconds(_)), "a time grid stays as chosen");
+}
+
 #[test]
 fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     use soundcraft_engine::edit::{magnet_target, snap_point, zero_crossing_near};
@@ -619,6 +642,11 @@ fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     assert_eq!(snap_point(s, 10_020, 10_100, 100, None, &[]), 10_000);
     run(&mut e, "edit.snap_to_markers", json!({}));
     assert_eq!(magnet_target(e.session(), 29_950, 100, &[]), Some(30_000));
+    // The playhead pulls only when asked.
+    e.session_mut().edit.playhead = 40_000;
+    assert_eq!(magnet_target(e.session(), 40_060, 100, &[]), None, "the playhead is off");
+    run(&mut e, "edit.snap_to_cursor", json!({}));
+    assert_eq!(magnet_target(e.session(), 40_060, 100, &[]), Some(40_000));
 
     // Zero crossings: a sine of period 100 in the clip's file, crossing every 50 samples.
     let wave: Vec<f32> = (0..100_000).map(|i| ((i as f64 + 0.5) * std::f64::consts::TAU / 100.0).sin() as f32).collect();

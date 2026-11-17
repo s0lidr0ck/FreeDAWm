@@ -1446,12 +1446,42 @@ pub fn group_members(s: &Session, id: ClipId) -> Vec<ClipId> {
 pub const SNAP_TO_CLIPS: &str = "edit.snap_to_clips";
 /// Edit-state flag: edit points snap to markers near them (Options › Snap to Markers).
 pub const SNAP_TO_MARKERS: &str = "edit.snap_to_markers";
+/// Edit-state flag: the musical grid follows the zoom (Options › Snap › Adaptive Grid), its note
+/// value the one whose lines are nearest [`ADAPTIVE_GRID_PX`] apart on screen.
+pub const ADAPTIVE_GRID: &str = "edit.adaptive_grid";
+/// How far apart, in points, an adaptive grid's lines aim to be.
+pub const ADAPTIVE_GRID_PX: f64 = 16.0;
+
+/// The grid an adaptive grid ([`ADAPTIVE_GRID`]) takes at the current zoom: `None` when it is
+/// off or the grid is not musical (time, frame and sample grids stay as chosen). Plain note
+/// values only (no dotted or triplet), measured at the left edge of the view.
+pub fn adapted_grid(s: &Session) -> Option<soundcraft_time::GridValue> {
+    use soundcraft_time::{GridValue, NoteValue};
+    let spp = s.edit.zoom.samples_per_px;
+    if !s.edit.flag(ADAPTIVE_GRID) || !matches!(s.edit.grid, GridValue::Note { .. }) || !(spp.is_finite() && spp > 0.0) {
+        return None;
+    }
+    let ctx = s.grid_ctx();
+    let at = s.edit.zoom.scroll.max(0);
+    NoteValue::ALL
+        .into_iter()
+        .map(|value| GridValue::Note { value, dotted: false, triplet: false })
+        .map(|g| {
+            let px = g.step_samples(at, &ctx) as f64 / spp;
+            (g, (px.max(1e-9) / ADAPTIVE_GRID_PX).ln().abs())
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(g, _)| g)
+}
+
+/// Edit-state flag: edit points snap to the playhead near them (Options › Snap › Playhead).
+pub const SNAP_TO_CURSOR: &str = "edit.snap_to_cursor";
 /// Edit-state flag: a selection's edges and the insertion snap to the nearest zero crossing of
 /// the audio under them (Options › Snap to Zero Crossings).
 pub const SNAP_TO_ZERO: &str = "edit.snap_to_zero_crossings";
 
-/// The clip edge or marker nearest `at` within `reach`, as [`SNAP_TO_CLIPS`] and
-/// [`SNAP_TO_MARKERS`] ask. Clip edges count on every visible track's active playlist, clips in
+/// The clip edge, marker or playhead nearest `at` within `reach`, as [`SNAP_TO_CLIPS`],
+/// [`SNAP_TO_MARKERS`] and [`SNAP_TO_CURSOR`] ask. Clip edges count on every visible track's active playlist, clips in
 /// `skip` (the ones being dragged) left out; a marker counts by its start, a range by its end too.
 pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) -> Option<Samples> {
     let reach = reach.max(0);
@@ -1469,6 +1499,9 @@ pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) 
                 take(c.end());
             }
         }
+    }
+    if s.edit.flag(SNAP_TO_CURSOR) {
+        take(s.edit.playhead);
     }
     if s.edit.flag(SNAP_TO_MARKERS) {
         for m in &s.markers {
