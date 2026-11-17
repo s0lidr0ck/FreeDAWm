@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
-| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on VST3 or AU |
+| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated; faders follow | **Large**: plug-in values block-rate |
@@ -43,7 +43,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 Two things every one of the four does and FreeDAWm does not yet: **plug-in automation that is
 sample-accurate** (the fader section's now is, and the faders follow it; plug-in values are delay-compensated but block-rate); and **a key input on
-VST3 and AU plug-ins** (CLAP plug-ins and the stock compressor and gates take one). Meters now have RMS, VU and
+AU plug-ins** (CLAP and VST3 plug-ins and the stock compressor and gates take one). Meters now have RMS, VU and
 K-system scales, and the master a loudness meter.
 
 ## A. Channels and the strip
@@ -83,7 +83,7 @@ K-system scales, and the master a loudness meter.
 | Chain presets | ● | ● | ● | ● | **Works** |
 | Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
 | Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
-| Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port are keyed (from the insert header, delay-compensated); VST3 aux buses and Audio Units are not |
+| Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
 | Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** |
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | VST3 plug-ins take a key on their auxiliary input |
 | 2026-11-17 | minor | momentary solo |
 | 2026-11-17 | minor | polarity per channel with a button on the strip; Copy to Send takes the selection, pan and mute |
 | 2026-11-17 | minor | rows reconciled with the code: the stock compressor's key, delay-compensated automation, surface writing, the meter plug-ins, the bounce range and normalising were already built; Atmos objects, binaural and ADM marked not planned here |

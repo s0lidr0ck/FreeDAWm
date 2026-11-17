@@ -59,6 +59,8 @@ pub struct Vst3Plugin {
     outputs: BusBuffers,
     has_input: bool,
     has_output: bool,
+    /// The input bus the sidechain key is fed to, when the plugin has one with channels.
+    key_bus: Option<usize>,
     event_input: bool,
     /// Held notes: a bitmask of MIDI channels per key.
     held: [u16; 128],
@@ -110,6 +112,7 @@ impl Vst3Plugin {
             outputs: BusBuffers::new(&[], 0),
             has_input: false,
             has_output: false,
+            key_bus: None,
             event_input: false,
             held: [0; 128],
             channels: 2,
@@ -265,6 +268,7 @@ impl Plugin for Vst3Plugin {
                 self.outputs = BusBuffers::new(&layout.outputs, mb);
                 self.has_input = layout.inputs.first().is_some_and(|&c| c > 0);
                 self.has_output = layout.outputs.first().is_some_and(|&c| c > 0);
+                self.key_bus = layout.key_bus.filter(|&b| layout.inputs.get(b).is_some_and(|&c| c > 0));
                 self.event_input = layout.event_input;
                 self.max_block = mb;
                 self.latency = self.inst.latency() as usize;
@@ -316,6 +320,12 @@ impl Plugin for Vst3Plugin {
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+        self.process_with_sidechain(io, frames, None);
+    }
+
+    /// The key (when the plugin has a sidechain bus) goes to that bus, a mono key to every one
+    /// of its channels; no key leaves the bus silent.
+    fn process_with_sidechain(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
         if !self.inst.is_active() || self.max_block == 0 {
             return;
         }
@@ -346,6 +356,16 @@ impl Plugin for Vst3Plugin {
                     let src = io.get(c.min(ch - 1)).and_then(|s| s.get(start..start + n));
                     if let (Some(src), Some(dst)) = (src, self.inputs.channel_mut(0, c).and_then(|d| d.get_mut(..n))) {
                         dst.copy_from_slice(src);
+                    }
+                }
+            }
+            if let Some(b) = self.key_bus {
+                for c in 0..self.inputs.channels(b) {
+                    let Some(dst) = self.inputs.channel_mut(b, c).and_then(|d| d.get_mut(..n)) else { continue };
+                    let kc = key.map_or(0, <[Vec<f32>]>::len);
+                    match key.and_then(|k| k.get(c.min(kc.saturating_sub(1)))).and_then(|s| s.get(start..start + n)) {
+                        Some(src) => dst.copy_from_slice(src),
+                        None => dst.fill(0.0),
                     }
                 }
             }

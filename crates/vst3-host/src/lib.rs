@@ -53,7 +53,9 @@
 //! session's values does not need. Offline renders set up the processor in `kOffline` mode
 //! ([`Plugin::set_offline`]).
 //!
-//! Not hosted yet: sidechain (aux buses are kept inactive) and 64-bit processing.
+//! A plugin's first auxiliary audio input is its sidechain: activated with the main buses and fed
+//! the key ([`Plugin::process_with_sidechain`]); other aux buses stay inactive. Not hosted yet:
+//! 64-bit processing.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

@@ -1449,6 +1449,9 @@ pub(crate) struct Layout {
     pub inputs: Vec<u32>,
     pub outputs: Vec<u32>,
     pub event_input: bool,
+    /// The input bus the sidechain key goes to: the first auxiliary audio input with channels,
+    /// activated beside the main buses (see [`Instance::key_bus`]).
+    pub key_bus: Option<usize>,
 }
 
 fn apply_transport(c: &mut sv::ProcessContext, t: &Transport) {
@@ -1730,6 +1733,20 @@ impl Instance {
         ok(unsafe { p.getBusArrangement(dir as sv::BusDirection, index, &mut arr) }).then_some(arr)
     }
 
+    /// The first auxiliary audio input bus with channels (after the main one): where a plugin
+    /// declares its sidechain input. None when it has none.
+    pub fn key_bus(&self) -> Option<usize> {
+        let din = sv::BusDirections_::kInput;
+        let n = self.bus_count(sv::MediaTypes_::kAudio, din);
+        (1..n).find_map(|i| {
+            // SAFETY: plain data; all-zero is valid.
+            let mut info: sv::BusInfo = unsafe { std::mem::zeroed() };
+            // SAFETY: valid component; index below the bus count; `info` is writable.
+            let got = ok(unsafe { self.component.getBusInfo(sv::MediaTypes_::kAudio as sv::MediaType, din as sv::BusDirection, i, &mut info) });
+            (got && info.busType == sv::BusTypes_::kAux as sv::BusType && info.channelCount > 0).then(|| usize::try_from(i).ok()).flatten()
+        })
+    }
+
     fn bus_channels(&self, dir: sv::BusDirections, index: i32) -> u32 {
         if let Some(arr) = self.arrangement(dir, index) {
             return arr.count_ones().min(MAX_BUS_CHANNELS);
@@ -1786,16 +1803,20 @@ impl Instance {
         if !tried_ok {
             log::debug!("vst3: plugin refused mono/stereo bus arrangements; using its own");
         }
+        let key_bus = self.key_bus();
         let layout = Layout {
             inputs: (0..nin).map(|i| self.bus_channels(din, i)).collect(),
             outputs: (0..nout).map(|i| self.bus_channels(dout, i)).collect(),
             event_input: self.bus_count(event, din) > 0,
+            key_bus,
         };
-        // Main buses on, aux buses off (VST3 still gets buffers for every bus).
+        // Main buses on, and the sidechain input; other aux buses off (VST3 still gets buffers
+        // for every bus).
         for (dir, n) in [(din, nin), (dout, nout)] {
             for i in 0..n {
+                let on = i == 0 || (dir == din && usize::try_from(i).ok() == key_bus);
                 // SAFETY: valid component; index below the bus count.
-                unsafe { self.component.activateBus(audio as sv::MediaType, dir as sv::BusDirection, i, u8::from(i == 0)) };
+                unsafe { self.component.activateBus(audio as sv::MediaType, dir as sv::BusDirection, i, u8::from(on)) };
             }
         }
         if layout.event_input {

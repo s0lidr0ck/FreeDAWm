@@ -172,12 +172,27 @@ impl IComponentTrait for GainProcessor {
     unsafe fn setIoMode(&self, _mode: IoMode) -> tresult {
         kResultOk
     }
-    unsafe fn getBusCount(&self, media: MediaType, _dir: BusDirection) -> i32 {
-        if media == MediaTypes_::kAudio as MediaType { 1 } else { 0 }
+    /// One main bus each way, and an auxiliary input: the sidechain, added to the output.
+    unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
+        match (media == MediaTypes_::kAudio as MediaType, dir == BusDirections_::kInput as BusDirection) {
+            (true, true) => 2,
+            (true, false) => 1,
+            _ => 0,
+        }
     }
     unsafe fn getBusInfo(&self, media: MediaType, dir: BusDirection, index: i32, bus: *mut BusInfo) -> tresult {
-        if media != MediaTypes_::kAudio as MediaType || index != 0 {
+        if media != MediaTypes_::kAudio as MediaType || !(0..=1).contains(&index) {
             return kInvalidArgument;
+        }
+        if index == 1 {
+            if dir != BusDirections_::kInput as BusDirection {
+                return kInvalidArgument;
+            }
+            audio_bus(bus, dir, "Sidechain");
+            let b = unsafe { &mut *bus };
+            b.busType = BusTypes_::kAux as BusType;
+            b.flags = 0;
+            return kResultOk;
         }
         audio_bus(bus, dir, "Main");
         kResultOk
@@ -217,7 +232,7 @@ impl IComponentTrait for GainProcessor {
 
 impl IAudioProcessorTrait for GainProcessor {
     unsafe fn setBusArrangements(&self, inputs: *mut SpeakerArrangement, n_in: i32, outputs: *mut SpeakerArrangement, n_out: i32) -> tresult {
-        if n_in != 1 || n_out != 1 {
+        if !(1..=2).contains(&n_in) || n_out != 1 {
             return kResultFalse;
         }
         let (i, o) = unsafe { (*inputs, *outputs) };
@@ -227,8 +242,8 @@ impl IAudioProcessorTrait for GainProcessor {
         self.arrangement.store(i, Ordering::Relaxed);
         kResultTrue
     }
-    unsafe fn getBusArrangement(&self, _dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
-        if index != 0 {
+    unsafe fn getBusArrangement(&self, dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
+        if index != 0 && !(index == 1 && dir == BusDirections_::kInput as BusDirection) {
             return kInvalidArgument;
         }
         unsafe { *arr = self.arrangement.load(Ordering::Relaxed) };
@@ -269,15 +284,18 @@ impl IAudioProcessorTrait for GainProcessor {
                 }
             }
         }
-        if d.numInputs != 1 || d.numOutputs != 1 {
+        if !(1..=2).contains(&d.numInputs) || d.numOutputs != 1 {
             return kResultOk;
         }
         let frames = d.numSamples.max(0) as usize;
         let g = 2.0 * f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
         let (ins, outs) = unsafe { (channels(&*d.inputs, frames), channels(&*d.outputs, frames)) };
-        for (i, o) in ins.iter().zip(outs) {
-            for (x, y) in i.iter().zip(o.iter_mut()) {
-                *y = g * x;
+        // The sidechain bus (when the host gave buffers for it) is added to the output.
+        let key = if d.numInputs == 2 { unsafe { channels(&*d.inputs.add(1), frames) } } else { Vec::new() };
+        for (c, (i, o)) in ins.iter().zip(outs).enumerate() {
+            let k = key.get(c);
+            for (n, (x, y)) in i.iter().zip(o.iter_mut()).enumerate() {
+                *y = g * x + k.and_then(|k| k.get(n)).copied().unwrap_or(0.0);
             }
         }
         kResultOk

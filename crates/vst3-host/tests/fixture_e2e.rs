@@ -126,6 +126,27 @@ fn gain_processes_audio_and_follows_params() {
     p.process(&mut io, 8);
 }
 
+/// A plugin's auxiliary input is its sidechain: the info says it takes a key, the key reaches that
+/// bus (the fixture adds it to its output), a mono key feeds both of its channels, and no key
+/// leaves it silent.
+#[test]
+fn the_aux_input_takes_the_key() {
+    let mut p = soundcraft_vst3_host::create(&id_of("Fixture Gain")).unwrap();
+    assert!(p.info().sidechain, "an aux input bus offers a key");
+    p.prepare(44_100.0, 256, 2);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    let key = vec![vec![0.125f32; 256], vec![0.0625f32; 256]];
+    p.process_with_sidechain(&mut io, 256, Some(&key));
+    assert!(io[0].iter().all(|&x| (x - 0.375).abs() < 1e-6), "{:?}", &io[0][..4]);
+    assert!(io[1].iter().all(|&x| (x + 0.0625).abs() < 1e-6), "{:?}", &io[1][..4]);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    p.process_with_sidechain(&mut io, 256, Some(&key[..1]));
+    assert!(io[1].iter().all(|&x| (x - 0.0).abs() < 1e-6), "a mono key on both sides: {:?}", &io[1][..4]);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    p.process(&mut io, 256);
+    assert!(io[0].iter().all(|&x| (x - 0.25).abs() < 1e-6), "no key, no key left over: {:?}", &io[0][..4]);
+}
+
 #[test]
 fn synth_plays_notes_at_their_offsets() {
     let id = id_of("Fixture Synth");
