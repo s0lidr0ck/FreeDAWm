@@ -36,6 +36,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             note_chase
         ),
+        cmd!(
+            noundo "midi.split_notes",
+            "Split Notes at the Cut",
+            [],
+            None,
+            "{on?: bool (default: toggle)} — splitting a MIDI clip cuts a note sounding across the cut in two, its rest starting the right clip (off: the note stays whole in the left clip, ending at the cut)",
+            always,
+            split_notes
+        ),
     ]
 }
 
@@ -179,6 +188,13 @@ fn note_chase(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session_mut();
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(!s.edit.flag("midi.note_chase"));
     s.edit.set_flag("midi.note_chase", on);
+    Ok(json!({"on": on}))
+}
+
+fn split_notes(e: &mut Engine, p: &Value) -> Result<Value> {
+    let s = e.session_mut();
+    let on = p.get("on").and_then(Value::as_bool).unwrap_or(!s.edit.flag(crate::edit::SPLIT_NOTES));
+    s.edit.set_flag(crate::edit::SPLIT_NOTES, on);
     Ok(json!({"on": on}))
 }
 

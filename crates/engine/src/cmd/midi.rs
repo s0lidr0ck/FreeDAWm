@@ -734,6 +734,43 @@ mod tests {
         assert_eq!(starts_pitches(&mut e, clip).first(), Some(&(-100, 60)));
     }
 
+    /// Parity section 7: with Split Notes at the Cut on, a note sounding across a split is cut in
+    /// two: the left clip's part ends at the cut and the right clip starts with the rest. Off,
+    /// the whole note stays in the left clip, as before.
+    #[test]
+    fn split_notes_at_the_cut_keeps_a_note_in_both_halves() {
+        let lens = |e: &mut Engine, clip: u64| -> Vec<(i64, i64, u64)> {
+            let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+            n["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| (x["start"].as_i64().unwrap(), x["length"].as_i64().unwrap(), x["pitch"].as_u64().unwrap()))
+                .collect()
+        };
+        for on in [false, true] {
+            let mut e = Engine::default();
+            let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+            let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 3_000, "length_ticks": 2_000})).unwrap();
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": 64, "start_ticks": 4_000, "length_ticks": 480})).unwrap();
+            assert_eq!(e.execute("midi.split_notes", &json!({"on": on})).unwrap()["on"], on);
+            // The cut at bar 2 (3 840 ticks).
+            e.execute("edit.separate", &json!({"tracks": [t.0], "at": 96_000})).unwrap();
+            let right = e.session().track(t).unwrap().clips()[1].id.0;
+            if on {
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 840, 60)]);
+                assert_eq!(lens(&mut e, right), vec![(0, 1_160, 60), (160, 480, 64)]);
+                // One undo puts the note back whole.
+                assert!(e.undo());
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 2_000, 60), (4_000, 480, 64)]);
+            } else {
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 2_000, 60)]);
+                assert_eq!(lens(&mut e, right), vec![(160, 480, 64)]);
+            }
+        }
+    }
+
     /// Bug 4: notes moved, copied or added past the clip's end grow it to the next bar line, but
     /// not over the next clip.
     #[test]

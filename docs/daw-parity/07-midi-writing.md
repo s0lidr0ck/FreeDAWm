@@ -176,7 +176,7 @@ The gaps are of four kinds:
 | Notes shown in the clip | ● | ● | ● | ● | **Works** |
 | Clips stay on their bars when the tempo changes | ● | ● | ● | ● | **Works** for MIDI clips on tick-timebase tracks, the default for MIDI and instrument tracks (bug 3, fixed) |
 | Track set to follow bars or absolute time | ● | ● | ● | ● | **Works** for MIDI clips: a tick track's clips follow tempo edits, a sample track's stay; audio clips stay in samples on either |
-| Split | ● | ● | ● | ● | **Partial**: a note across the cut stays in the left clip and stops at the cut; the right clip gets none of it but starts in the controller state from before the cut (bug 11, fixed) |
+| Split | ● | ● | ● | ● | **Works**: by default a note across the cut stays in the left clip and stops at the cut, and the right clip starts in the controller state from before the cut (bug 11, fixed). With MIDI Editor › More › Split Notes at the Cut (`midi.split_notes`, a session setting, off by default) the note is cut in two: the left part ends at the cut and the right clip starts with the rest (same velocities, channel and release velocity), so both halves sound it; this holds for every edit that splits (Separate, a range cut or clear). Heal Separation joins the clips but leaves the two parts as two notes |
 | Trim the end; drag it back out | ● | ● | ● | ● | **Works** |
 | Trim the start; drag it back out | ● | ● | ● | ● | **Works**: what falls before the new start is hidden, its controllers set the starting state, and dragging back returns it (bug 5, fixed) |
 | Join clips | ● | ● | ● | ● | **Works**: Consolidate merges any MIDI clips; Edit › Heal Separation joins neighbouring MIDI clips whose settings match (transpose, velocity, mute, playback quantize and the rest; not shared copies, patterns, clips under Cleanup or with a stored original performance), so a split heals back with the note across the cut whole; what either hid past the join is dropped |
@@ -443,3 +443,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | MusicXML export writes the key signature and spells the notes for it |
 | 2026-11-17 | minor | Heal Separation joins neighbouring MIDI clips with matching settings |
 | 2026-11-17 | minor | MusicXML export writes later key changes as new key signatures and spells the notes after them for the new key |
+| 2026-11-17 | minor | Split Notes at the Cut: a note across a split is kept in both halves |

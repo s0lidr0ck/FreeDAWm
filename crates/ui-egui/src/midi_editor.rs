@@ -815,6 +815,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui.checkbox(&mut chase, "Note Chase").on_hover_text("A note already sounding where playback starts is started there").changed() {
             let _ = app.run("midi.note_chase", json!({"on": chase}));
         }
+        let mut split = app.engine.session().edit.flag(soundcraft_engine::edit::SPLIT_NOTES);
+        if ui
+            .checkbox(&mut split, "Split Notes at the Cut")
+            .on_hover_text("Splitting a MIDI clip cuts a note across the cut in two, so both clips play their part of it")
+            .changed()
+        {
+            let _ = app.run("midi.split_notes", json!({"on": split}));
+        }
         let mut follows = clip.follow_chords.is_some();
         if ui
             .checkbox(&mut follows, "Follow Chord Lane")

@@ -33,8 +33,14 @@ impl<'a> TimeCtx<'a> {
     }
 }
 
-/// Split `clip` at absolute position `at` (strictly inside). Returns (left, right) where right gets `new_id`.
-pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> Option<(Clip, Clip)> {
+/// Edit-state flag: a split (and a cut or range edit, which splits) cuts a MIDI note sounding
+/// across the cut in two, its second part starting the right clip, instead of leaving the whole
+/// note in the left clip (ending there) and none in the right.
+pub const SPLIT_NOTES: &str = "midi.split_notes";
+
+/// Split `clip` at absolute position `at` (strictly inside). Returns (left, right) where right gets
+/// `new_id`. With `split_notes`, a note across the cut is cut in two (see [`SPLIT_NOTES`]).
+pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>, split_notes: bool) -> Option<(Clip, Clip)> {
     if at <= clip.start || at >= clip.end() {
         return None;
     }
@@ -47,9 +53,25 @@ pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> O
     right.fade_in = Fade::default();
     if let (ClipContent::Midi { sequence: ls }, ClipContent::Midi { sequence: rs }) = (&mut left.content, &mut right.content) {
         let boundary = t.ticks(at) - t.ticks(clip.start);
+        // Notes sounding across the cut (and not hidden before the clip's start): with
+        // `split_notes` the right clip starts with their rest and the left ones end at the cut.
+        let across: Vec<soundcraft_midi::Note> = if split_notes {
+            ls.notes.iter().filter(|n| n.start < boundary && n.end() > boundary && n.end() > 0).copied().collect()
+        } else {
+            Vec::new()
+        };
         ls.notes.retain(|n| n.start < boundary);
+        if split_notes {
+            for n in ls.notes.iter_mut().filter(|n| n.end() > boundary && n.end() > 0) {
+                n.length = (boundary - n.start).max(1);
+            }
+        }
         ls.ctrls.retain(|c| c.tick < boundary);
         rs.notes.retain(|n| n.start >= boundary);
+        let rest = across.into_iter().map(|n| soundcraft_midi::Note { start: boundary, length: n.end() - boundary, ..n });
+        let mut notes: Vec<soundcraft_midi::Note> = rest.collect();
+        notes.append(&mut rs.notes);
+        rs.notes = notes;
         // The right part keeps the controller state from before the cut (the program, the pedal,
         // the bend in force there): the last value of each, hidden before its start, which sets
         // the state it starts in.
@@ -138,6 +160,7 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let tc_tempo = s.tempo.clone();
     let sr = s.sample_rate;
     let t = TimeCtx { tempo: &tc_tempo, sr };
+    let split_notes = s.edit.flag(SPLIT_NOTES);
     let mut ids = Vec::new();
     let n_split = s.track(track).map_or(0, |tr| tr.clips().iter().filter(|c| at > c.start && at < c.end()).count());
     for _ in 0..n_split {
@@ -151,7 +174,7 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
         if at > c.start
             && at < c.end()
             && let Some(id) = ids.pop()
-            && let Some((l, r)) = split_clip(&c, at, id, t)
+            && let Some((l, r)) = split_clip(&c, at, id, t, split_notes)
         {
             if matches!(c.content, ClipContent::Midi { .. }) {
                 halves.push((c.id, r.id, t.ticks(at) - t.ticks(c.start)));
