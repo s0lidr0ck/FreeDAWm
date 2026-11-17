@@ -1,6 +1,6 @@
 # Four-DAW parity, section 6: recording MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (fixes and features, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (fixes and features, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). FreeDAWm is not affiliated with or endorsed by any of them.
@@ -68,8 +68,8 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Device names and aliases, a studio setup of what is connected | ● | ● | ● | ● | **Partial**: an alias per port (Setup › MIDI Input Devices, per computer) names it in the track input menus; no studio setup |
 | Per-device timing offset | ● | ◐ | ● | ● | **Works**: 0–100 ms per input port in Setup › MIDI Input Devices (per computer): its messages are placed that much earlier, heard and recorded |
 | Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port; FreeDAWm opens no virtual port of its own |
-| MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Missing** |
-| MIDI in the browser | ○ | ○ | ○ | ○ | **Missing**: the web build has no live MIDI (its menus leave the MIDI windows out) |
+| MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Not planned here**: the MIDI library in use (midir 0.11) speaks MIDI 1.0 only; MIDI 2.0 needs the systems' own UMP interfaces (CoreMIDI's, Windows MIDI Services, ALSA's UMP) and a MIDI 2.0 device to develop against |
+| MIDI in the browser | ○ | ○ | ○ | ○ | **Not planned here**: the owner has stopped work on the browser build (2026-11-17); its menus leave the MIDI windows out |
 | A take recorded on another computer arrives on the track | ○ | ○ | ○ | ○ | **Works** (remote recorder; the take arrives after the pass, not as a live stream) |
 
 ## B. What a track listens to, and hearing yourself
@@ -113,9 +113,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Bank select, 14-bit controllers, RPN and NRPN understood as such | ● | ◐ | ● | ● | **Partial**: kept as plain controllers and played in order; when playback starts mid-clip the chase follows RPN and NRPN (each parameter set before the play position is selected and set again, then the selection in effect restored) and sends the bank before the program (`mix::rpn`). Not shown or edited as one value in the editor; 14-bit pairs other than Data Entry are chased as two controllers |
 | SysEx | ● | ○ | ● | ● | **Missing** |
 | MPE (per-note bend, pressure, timbre) | ● | ● | ● | ● | **Partial**: the channels pass through and are kept; nothing sets up or understands a zone |
-| MIDI 2.0 resolution | ○ | ○ | ● | ◐ | **Missing** |
-| Controllers recorded onto notes already there | ● | ● | ● | ● | **Missing**: the take replaces the notes |
-| Controller moves recorded as plug-in or mixer automation | ● | ● | ● | ● | **Missing** |
+| MIDI 2.0 resolution | ○ | ○ | ● | ◐ | **Not planned here**: as MIDI 2.0 devices above (no MIDI 2.0 input to take it from) |
+| Controllers recorded onto notes already there | ● | ● | ● | ● | **Works** with Merge, the default record mode (`68d0dc0`): a take of only controllers joins the clip under it and its notes stay; Replace still clears what the take covers |
+| Controller moves recorded as plug-in or mixer automation | ● | ● | ● | ● | **Works** through MIDI learn (K): a learnt controller moves its fader, pan, send or plug-in knob through the control's own command, and a track in Write, Touch or Latch writes that move as automation, as it does a mouse move; the controller itself is kept out of the take |
 | Thin or reduce controller data on the way in | ● | ◐ | ● | ● | **Missing** |
 | A note held when recording starts | ◐ | ◐ | ◐ | ◐ | Dropped |
 | A note still held at Stop or at the loop end | ● | ● | ● | ● | **Works**: cut at the end; a pedal still down comes up there |
@@ -160,7 +160,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Capture what was just played without having pressed Record | ● | ● | ● | ● | **Works** while the transport plays: Event › More MIDI › Capture MIDI (desktop) makes a take of the playback under way or the last one, on the armed (or selected) tracks; with the transport stopped, what was played since is captured at the session's tempo from the playhead's bar, its first note on the downbeat |
 | Recording starts at the first note played | ● | ○ | ○ | ○ | **Missing** |
 | The take is drawn as it is played | ● | ● | ● | ● | **Works** |
-| Footswitch punch; record from a controller's transport keys | ● | ● | ● | ● | **Missing** |
+| Footswitch punch; record from a controller's transport keys | ● | ● | ● | ● | **Works**: learnt transport keys and footswitches (Setup › MIDI Mappings: Record, Punch In/Out, Play, Stop, …), MMC from any input and a surface's transport keys (K, *Transport from a controller*) |
 
 ## H. Processing on the way in
 
@@ -173,7 +173,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Record the effect's output, not the raw keys | ● | ● | ● | ● | **Missing**: a take keeps the keys as played (the effects play them again on playback) |
 | Scale or key lock on what you play | ○ | ◐ | ◐ | ● | **Works** with the Scale MIDI effect (its own root and scale; it does not follow the Key ruler) |
 | The chord track follows or shapes live input | ○ | ● | ◐ | ● | **Partial**: the chord picker names the chord you hold |
-| Programmable input transformer | ○ | ○ | ● | ● | **Missing** |
+| Programmable input transformer | ○ | ○ | ● | ● | **Not planned here**: Logic's and Cubase's; it is the logical editor's rule engine applied on the way in, which section 8 owns (not built there yet); the fixed Input Transform covers transpose, velocity, range and channel |
 
 ## I. Step entry and the computer keyboard
 
@@ -195,11 +195,11 @@ Compared in full in section 7; listed here for what matters while recording.
 | New instrument track ready to play | ● | ● | ● | ● | **Works** (subtractive synth, input set to all, stereo from the New Tracks dialog too) |
 | Drag an instrument from the browser to make a track | ● | ● | ● | ● | **Works** |
 | Third-party instruments | ● AAX | ● | ● AU | ● VST | **Works**: CLAP, VST3 and AU, with channels kept |
-| Piano and other sampled instruments in the box | ● | ● | ● | ● | **Missing**: a sampler with no library |
+| Piano and other sampled instruments in the box | ● | ● | ● | ● | **Not planned here**: needs sample content, which the owner is sourcing |
 | Synth | ● | ● | ● | ● | **Works**: 16 voices; velocity, sustain, pitch bend over Bend Range (0–24 semitones, 2 by default), the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default: turn it up; `2a60fad`); no aftertouch |
-| Sampler | ● | ● | ● | ● | **Partial**: velocity, sustain pedal, pitch bend over Bend Range, the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default); one sample, no zones |
+| Sampler | ● | ● | ● | ● | **Partial**: velocity, sustain pedal, pitch bend over Bend Range, the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default); one sample, no zones. **Not planned here**: zones and multisamples are the multisample instrument (Pantry) another session is building |
 | Drum machine and drum synth | ● | ● | ● | ● | **Works**: velocity layers; notes only |
-| Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Partial**: External MIDI plays it (MIDI output); its audio comes back on an ordinary audio track, and its own latency is not measured or compensated |
+| Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Partial**: External MIDI plays it (MIDI output); its audio comes back on an ordinary audio track. **Not planned here**: measuring and compensating its latency needs a hardware synth and a loopback to develop against |
 
 ## K. Controllers and sync
 
@@ -471,3 +471,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Juke's pads are recorded on an armed track that listens to Musical Typing |
 | 2026-11-16 | minor | Chase after a locate follows RPN and NRPN (select, then value) and sends the bank before the program |
 | 2026-11-16 | minor | Design for instruments with several outputs on their own mixer channels (not built); bug 10's remaining part re-checked |
+| 2026-11-17 | minor | Round three: rows reconciled with the code (controllers onto notes, controller moves as automation, footswitch punch already worked); the rows that cannot be built here say why |
