@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -96,7 +96,7 @@ Varispeed is the only whole-project speed control among the four.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Choose device, sample rate and buffer | ● | ● | ● | ● | **Works** (Playback Engine window) |
-| ASIO on Windows | ● | ● | n/a | ● | **Partial**: only in a personal build (`cargo xtask build-asio`) |
+| ASIO on Windows | ● | ● | n/a | ● | **Not planned here**: Steinberg's licensed SDK cannot be shipped; a personal build has it (`cargo xtask build-asio`) |
 | Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected |
 | Recover when the device disappears | ● | ● | ● | ● | **Partial**: detected and reported; reconnect is a manual button |
 | Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
@@ -130,7 +130,7 @@ Varispeed is the only whole-project speed control among the four.
 | Clip gain | ● | ● | ● | ● | **Works**, −144 to +36 dB |
 | Gain envelope inside the clip | ● | ● | ○ | ● | **Works**, with render and conversion to and from volume automation |
 | Fades drawn in real time, several shapes | ● | ● | ● | ● | **Works**: five shapes plus a continuous curve |
-| Crossfades | ● | ● | ● | ● | **Partial**: both sides always share one shape |
+| Crossfades | ● | ● | ● | ● | **Works**: Edit › Fades › Create… gives each side its own shape and bend (`b6812b6`, section 4, F) |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
 | Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
 | Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
@@ -145,7 +145,7 @@ Varispeed is the only whole-project speed control among the four.
 | Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
 | Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
 | Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
-| ARA editors | ● | ● | ● | ● | **Missing** |
+| ARA editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree (section 4, J) |
 
 ## G. Tempo and time-stretch
 
@@ -153,11 +153,11 @@ Varispeed is the only whole-project speed control among the four.
 |---|:-:|:-:|:-:|:-:|---|
 | Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Works** in the app: a pitch-preserving stretch (Elastic Properties, Conform, TCE, a tempo edit on an Elastic tick track, a warp-marker move) is heard at once through a granular reader in the clip read (no latency) while the offline WSOLA render is made in the background, which then replaces it; grainier than the render on sustained notes. The CLI and scripts still render in place |
 | Audio follows tempo changes | ● | ● | ● | ● | **Works**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, gives them the new length, heard at once through the real-time stretcher until the render is in |
-| Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
+| Choice of stretch algorithm | ● | ● | ● | ● | **Works**: polyphonic, rhythmic, monophonic and X-Form each splice differently in the background render, which replaces the one real-time grain stretcher heard while it is made |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
-| Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
+| Quantize audio to the grid | ● | ● | ● | ● | **Works**: Clip › Quantize Audio… moves clips by their sync points with a strength and swing; Straighten conforms whole tracks (section 4, I) |
 | Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |
-| Conform a clip to the session tempo | ● | ● | ● | ● | **Partial**: once, as varispeed, so the pitch changes |
+| Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving stretch on an Elastic one (section 4, bug 12) |
 | Loops that match tempo when dropped in | ● | ● | ● | ● | **Missing** |
 | Loops that match key | ○ | ◐ | ● | ◐ | **Missing** |
 
@@ -269,6 +269,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three reconciliation: crossfade shapes, audio quantize, conform and the stretch algorithms were already built; ASIO and ARA not planned here |
 | 2026-11-16 | minor | clip transpose: a background high-quality render replaces the live shifter |
 | 2026-11-16 | minor | the real-time stretch is heard at once in the app; a background worker swaps in the render |
 | 2026-11-16 | minor | the real-time stretcher in the clip read, behind the Elastic and warp paths |
