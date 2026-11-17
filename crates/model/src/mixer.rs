@@ -450,17 +450,23 @@ impl InputPath {
 }
 
 /// The device input channel that track channel `k` reads from an input of `width` channels
-/// starting at `first`: a mono input feeds both sides of a stereo track.
-pub fn track_input_channel(k: usize, first: usize, width: usize) -> usize {
-    first.saturating_add(k.min(width.saturating_sub(1)))
+/// starting at `first`: a mono input feeds every side of the track; a wider input feeds the
+/// track's channels in order, and a track wider than it hears silence on the channels past the
+/// input's (`None`), never a repeat of the input's last channel (a stereo input on a 5.1 track
+/// is heard and recorded on L and R alone).
+pub fn track_input_channel(k: usize, first: usize, width: usize) -> Option<usize> {
+    match width {
+        0 | 1 => Some(first),
+        _ => (k < width).then(|| first.saturating_add(k)),
+    }
 }
 
 /// The device input channel that track channel `k` of a `track_channels`-wide track reads when no
 /// hardware input is chosen, on a device with `device_inputs` channels: the device's first
-/// channels in order (a stereo track hears and records In 1-2), and on a device with fewer
-/// channels than the track, its last channel on the remaining sides (a mono device feeds both
-/// sides). Monitoring and recording both use this, so what is heard is what is recorded.
-pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> usize {
+/// channels in order (a stereo track hears and records In 1-2); a mono device feeds every side,
+/// and a device with fewer channels than the track leaves the rest silent (`None`). Monitoring
+/// and recording both use this, so what is heard is what is recorded.
+pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> Option<usize> {
     track_input_channel(k, 0, track_channels.min(device_inputs).max(1))
 }
 
@@ -1784,22 +1790,27 @@ mod tests {
         }
     }
 
+    /// A mono input feeds every side; a wider one feeds the track in order, and a track wider
+    /// than its input is silent past it (bug 10 of the recording section).
     #[test]
     fn a_mono_input_feeds_both_sides() {
-        assert_eq!(track_input_channel(0, 4, 1), 4);
-        assert_eq!(track_input_channel(1, 4, 1), 4);
-        assert_eq!(track_input_channel(0, 6, 2), 6);
-        assert_eq!(track_input_channel(1, 6, 2), 7);
-        assert_eq!(track_input_channel(5, 6, 2), 7);
-        assert_eq!(track_input_channel(1, 3, 0), 3);
+        assert_eq!(track_input_channel(0, 4, 1), Some(4));
+        assert_eq!(track_input_channel(1, 4, 1), Some(4));
+        assert_eq!(track_input_channel(5, 4, 1), Some(4));
+        assert_eq!(track_input_channel(0, 6, 2), Some(6));
+        assert_eq!(track_input_channel(1, 6, 2), Some(7));
+        assert_eq!(track_input_channel(2, 6, 2), None, "a stereo input on a quad track: the rears are silent");
+        assert_eq!(track_input_channel(5, 6, 2), None);
+        assert_eq!(track_input_channel(1, 3, 0), Some(3));
     }
 
     #[test]
     fn no_input_is_the_devices_first_channels() {
         let chans = |track, device| (0..track).map(|k| default_input_channel(k, track, device)).collect::<Vec<_>>();
-        assert_eq!(chans(2, 8), [0, 1]);
-        assert_eq!(chans(2, 1), [0, 0]);
-        assert_eq!(chans(1, 8), [0]);
-        assert_eq!(chans(2, 0), [0, 0], "no device channels: nothing to read, never a panic");
+        assert_eq!(chans(2, 8), [Some(0), Some(1)]);
+        assert_eq!(chans(2, 1), [Some(0), Some(0)]);
+        assert_eq!(chans(1, 8), [Some(0)]);
+        assert_eq!(chans(4, 2), [Some(0), Some(1), None, None], "a quad track on a stereo device");
+        assert_eq!(chans(2, 0), [Some(0), Some(0)], "no device channels: nothing to read, never a panic");
     }
 }

@@ -3271,7 +3271,7 @@ fn process_strip(
             if let Some((first, width)) = strip.in_span {
                 let width = if strip.in_default { width.min(live.input.len()).max(1) } else { width };
                 for (k, dst) in strip.buf.iter_mut().enumerate() {
-                    if let Some(src) = live.input.get(track_input_channel(k, first, width)) {
+                    if let Some(src) = track_input_channel(k, first, width).and_then(|i| live.input.get(i)) {
                         for (d, x) in dst.iter_mut().zip(src.iter()).take(frames) {
                             *d = *x;
                         }
@@ -10545,7 +10545,7 @@ mod tests {
         eng.input = vec![vec![0.1; 512], vec![0.3; 512]];
         eng.render(&s, 0, 512, &mut out);
         assert!(out[0][100] > 0.01 && (out[1][100] / out[0][100] - 3.0).abs() < 1e-3, "{} {}", out[0][100], out[1][100]);
-        let heard: Vec<usize> = (0..2).map(|k| soundcraft_model::default_input_channel(k, 2, 2)).collect();
+        let heard: Vec<usize> = (0..2).filter_map(|k| soundcraft_model::default_input_channel(k, 2, 2)).collect();
         assert_eq!(heard, [0, 1]);
         eng.input = vec![vec![0.1; 512]];
         eng.render(&s, 512, 512, &mut out);

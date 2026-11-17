@@ -308,8 +308,8 @@ fn no_input_route_reads_the_devices_first_channels_as_its_take_records() {
     eng.input = device_input(2);
     eng.monitor_only = true;
     let out = render_blocks(&mut eng, &s, 2);
-    let want = |c: usize| eng.input[soundcraft_model::default_input_channel(c, 2, 2)][100];
-    assert_eq!((soundcraft_model::default_input_channel(0, 2, 2), soundcraft_model::default_input_channel(1, 2, 2)), (0, 1));
+    let want = |c: usize| eng.input[soundcraft_model::default_input_channel(c, 2, 2).unwrap()][100];
+    assert_eq!((soundcraft_model::default_input_channel(0, 2, 2), soundcraft_model::default_input_channel(1, 2, 2)), (Some(0), Some(1)));
     assert!((out[0][100] - want(0)).abs() < 1e-6 && (out[1][100] - want(1)).abs() < 1e-6, "{} {}", out[0][100], out[1][100]);
     assert!((out[0][100] - out[1][100]).abs() > 1e-3, "two different channels");
     // A mono device: its one channel on both sides.

@@ -3037,6 +3037,10 @@ impl TakePlan {
     }
 }
 
+/// A take channel no frame holds: the writer records silence there (a track wider than its
+/// input, see [`soundcraft_model::track_input_channel`]).
+pub const SILENT_CHANNEL: usize = usize::MAX;
+
 /// [`plan_takes`] with the bus-input tracks too: an armed audio track whose input is a bus
 /// records that bus as the mix renders it (no input device needed), its channels after the
 /// device's `input_channels` in each frame. With no input device (`input_channels` 0) only those
@@ -3062,7 +3066,7 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
                     soundcraft_model::Route::Hardware(name) => {
                         let refuse = || format!("{}: input “{name}” is not available on this device ({input_channels} inputs)", t.name);
                         let (first, width) = s.input_channels(name).ok_or_else(refuse)?;
-                        if (0..t.channels()).any(|k| soundcraft_model::track_input_channel(k, first, width) >= input_channels) {
+                        if (0..t.channels()).filter_map(|k| soundcraft_model::track_input_channel(k, first, width)).any(|c| c >= input_channels) {
                             return Err(refuse());
                         }
                     }
@@ -3084,14 +3088,16 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
             soundcraft_model::Route::Hardware(name) => {
                 let refuse = || format!("{}: input “{name}” is not available on this device ({input_channels} inputs)", t.name);
                 let (first, width) = s.input_channels(name).ok_or_else(refuse)?;
-                let chans: Vec<usize> = (0..t.channels()).map(|k| soundcraft_model::track_input_channel(k, first, width)).collect();
-                if chans.iter().any(|c| *c >= input_channels) {
+                let chans: Vec<Option<usize>> = (0..t.channels()).map(|k| soundcraft_model::track_input_channel(k, first, width)).collect();
+                if chans.iter().flatten().any(|c| *c >= input_channels) {
                     return Err(refuse());
                 }
-                chans
+                chans.into_iter().map(|c| c.unwrap_or(SILENT_CHANNEL)).collect()
             }
             // No hardware input: the channels the track monitors (`default_input_channel`).
-            _ => (0..t.channels()).map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels)).collect(),
+            _ => (0..t.channels())
+                .map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels).unwrap_or(SILENT_CHANNEL))
+                .collect(),
         };
         let stem = sanitize_name(&t.name);
         let ext = match s.record_file_type {
@@ -4251,6 +4257,16 @@ mod record_tests {
         armed(&mut e, "Pad", "stereo", "none");
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 8).unwrap()[0].1, vec![0, 1]);
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 1).unwrap()[0].1, vec![0, 0]);
+    }
+
+    /// A track wider than its input records the input's channels and silence on the rest
+    /// (bug 10 of the recording section): never the input's last channel repeated.
+    #[test]
+    fn a_track_wider_than_its_input_records_silence_past_it() {
+        let mut e = Engine::default();
+        e.execute("setup.io", &json!({"action": "create_input", "name": "Room", "format": "stereo", "first_channel": 2})).unwrap();
+        armed(&mut e, "Amb", "quad", "Room");
+        assert_eq!(plan_takes(&e, &test_dir("wider"), 8).unwrap()[0].1, vec![2, 3, SILENT_CHANNEL, SILENT_CHANNEL]);
     }
 
     #[test]
