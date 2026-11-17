@@ -85,6 +85,9 @@ impl ScoreSetup {
 pub struct Measure {
     pub numerator: u32,
     pub denominator: u32,
+    /// The key signature in force from this measure: sharps (above 0) or flats (below 0).
+    pub fifths: i32,
+    pub minor: bool,
     pub items: Vec<Item>,
 }
 
@@ -148,8 +151,20 @@ fn quantize(tick: i64) -> i64 {
     (tick.max(0) + UNIT / 2) / UNIT
 }
 
-/// (start unit, length in units, numerator, denominator) per measure, covering `end_unit`.
-fn measure_grid(s: &Session, end_unit: i64) -> Vec<(i64, i64, u32, u32)> {
+/// One measure of the grid: start unit, length in units, meter, and key signature.
+type Bar = (i64, i64, u32, u32, i32, bool);
+
+/// The key signature a measure starting at `tick` takes: the Key ruler's key there (a change
+/// up to a sixteenth into the bar counts, so one placed on the bar line a sample late still
+/// lands on it), else the band's.
+fn key_at_tick(s: &Session, tick: i64) -> (i32, bool) {
+    let at = s.tempo.tick_to_samples(tick.saturating_add(UNIT - 1), s.sample_rate);
+    let (tonic, scale) = crate::vocal::key_pc_at(s, at);
+    (key_fifths(tonic, scale), scale == 1)
+}
+
+/// The measures covering `end_unit`.
+fn measure_grid(s: &Session, end_unit: i64) -> Vec<Bar> {
     let mut v = Vec::new();
     let mut bar = 1;
     loop {
@@ -160,7 +175,8 @@ fn measure_grid(s: &Session, end_unit: i64) -> Vec<(i64, i64, u32, u32)> {
         if ub <= ua {
             break;
         }
-        v.push((ua, ub - ua, m.numerator, m.denominator));
+        let (fifths, minor) = key_at_tick(s, a);
+        v.push((ua, ub - ua, m.numerator, m.denominator, fifths, minor));
         bar += 1;
         if ub >= end_unit.max(1) || v.len() >= MAX_MEASURES {
             break;
@@ -180,7 +196,7 @@ fn split_units(mut units: i64) -> Vec<u32> {
     out
 }
 
-fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
+fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
     // Onsets → chords, each held until its longest note ends or the next onset.
     let mut onsets: std::collections::BTreeMap<i64, (i64, Vec<u8>)> = std::collections::BTreeMap::new();
     for (a, b, p) in notes {
@@ -198,7 +214,7 @@ fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure>
         spans.push((a, end, ps));
     }
     let mut measures = Vec::new();
-    for (ms, ml, num, den) in bars {
+    for (ms, ml, num, den, fifths, minor) in bars {
         let me = ms + ml;
         let mut items = Vec::new();
         let mut cursor = *ms;
@@ -230,7 +246,7 @@ fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure>
         if cursor < me {
             emit(cursor, me, &[], false, false, &mut items);
         }
-        measures.push(Measure { numerator: *num, denominator: *den, items });
+        measures.push(Measure { numerator: *num, denominator: *den, fifths: *fifths, minor: *minor, items });
     }
     measures
 }
@@ -287,25 +303,30 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
     for (i, p) in parts.iter().enumerate() {
         let _ = writeln!(x, "  <part id=\"P{}\">", i + 1);
         let mut meter = (0, 0);
+        let mut key = (setup.fifths, setup.minor);
         for (mi, m) in p.measures.iter().enumerate() {
             let _ = writeln!(x, "    <measure number=\"{}\">", mi + 1);
-            if mi == 0 || meter != (m.numerator, m.denominator) {
+            // The first measure takes the start key; a later one writes a key change.
+            let new_key = if mi == 0 { key } else { (m.fifths, m.minor) };
+            if mi == 0 || meter != (m.numerator, m.denominator) || new_key != key {
                 x.push_str("      <attributes>");
                 if mi == 0 {
-                    let _ = write!(
-                        x,
-                        "<divisions>4</divisions><key><fifths>{}</fifths><mode>{}</mode></key>",
-                        setup.fifths,
-                        if setup.minor { "minor" } else { "major" }
-                    );
+                    x.push_str("<divisions>4</divisions>");
                 }
-                let _ = write!(x, "<time><beats>{}</beats><beat-type>{}</beat-type></time>", m.numerator, m.denominator);
+                if mi == 0 || new_key != key {
+                    let _ = write!(x, "<key><fifths>{}</fifths><mode>{}</mode></key>", new_key.0, if new_key.1 { "minor" } else { "major" });
+                }
+                if mi == 0 || meter != (m.numerator, m.denominator) {
+                    let _ = write!(x, "<time><beats>{}</beats><beat-type>{}</beat-type></time>", m.numerator, m.denominator);
+                }
                 if mi == 0 {
                     x.push_str(if p.bass { "<clef><sign>F</sign><line>4</line></clef>" } else { "<clef><sign>G</sign><line>2</line></clef>" });
                 }
                 x.push_str("</attributes>\n");
                 meter = (m.numerator, m.denominator);
+                key = new_key;
             }
+            let fifths = key.0;
             for it in &m.items {
                 let (ty, dot) = note_type(it.units);
                 if it.pitches.is_empty() {
@@ -318,7 +339,7 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                     continue;
                 }
                 for (k, pitch) in it.pitches.iter().enumerate() {
-                    let (step, alter, octave) = spell_in(*pitch, setup.fifths);
+                    let (step, alter, octave) = spell_in(*pitch, fifths);
                     x.push_str("      <note>");
                     if k > 0 {
                         x.push_str("<chord/>");
@@ -339,7 +360,7 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                         x.push_str("<dot/>");
                     }
                     // Shown where the note differs from the signature (no courtesy accidentals).
-                    if alter != key_alter(setup.fifths, step) {
+                    if alter != key_alter(fifths, step) {
                         x.push_str(match alter {
                             1 => "<accidental>sharp</accidental>",
                             -1 => "<accidental>flat</accidental>",
@@ -593,6 +614,8 @@ mod tests {
             measures: vec![Measure {
                 numerator: 4,
                 denominator: 4,
+                fifths: -1,
+                minor: false,
                 items: vec![
                     Item { pitches: vec![70], units: 8, tie_start: false, tie_stop: false },
                     Item { pitches: vec![71], units: 8, tie_start: false, tie_stop: false },
@@ -607,6 +630,31 @@ mod tests {
         assert!(x.contains("<accidental>natural</accidental>"));
     }
 
+    /// Parity section 7: a key change on the Key ruler is written as a new key signature in the
+    /// measure it falls in, and the notes after it are spelled for the new key.
+    #[test]
+    fn a_key_change_later_is_written_where_it_falls() {
+        let mut s = Session::default();
+        s.key_signatures.push((0, "C major".into()));
+        // Bar 3 starts at tick 2 × 4 quarters (4/4).
+        let bar3 = s.tempo.tick_to_samples(8 * TICKS_PER_QUARTER, s.sample_rate);
+        s.key_signatures.push((bar3, "F major".into()));
+        let setup = ScoreSetup::from_session(&s);
+        let grid = measure_grid(&s, 4 * 16);
+        assert_eq!(grid.iter().map(|b| b.4).collect::<Vec<_>>(), vec![0, 0, -1, -1]);
+        // A# in bar 1 (C major: spelled sharp) and Bb in bar 3 (F major: in the key).
+        let measures = fill(&grid, &[(0, 4, 70), (32, 36, 70)]);
+        let part = Part { name: "Keys".into(), bass: false, measures };
+        let x = musicxml(&[part], &setup);
+        assert_eq!(x.matches("<key>").count(), 2, "{x}");
+        let m3 = x.split("<measure number=\"3\">").nth(1).unwrap_or_default();
+        assert!(m3.starts_with("\n      <attributes><key><fifths>-1</fifths><mode>major</mode></key></attributes>"), "{m3}");
+        assert!(m3.contains("<step>B</step><alter>-1</alter>"));
+        let m1 = x.split("<measure number=\"2\">").next().unwrap_or_default();
+        assert!(m1.contains("<step>A</step><alter>1</alter>") && m1.contains("<accidental>sharp</accidental>"));
+        assert_eq!(x.matches("<accidental>").count(), 1, "the Bb after the change carries none");
+    }
+
     #[test]
     fn spelling_and_staff_steps() {
         assert_eq!(spell(60), ('C', 0, 4));
@@ -619,7 +667,7 @@ mod tests {
     #[test]
     fn measures_fill_exactly_and_tie_across_bars() {
         // 4/4: one bar = 16 units. A note from unit 12 to 20 crosses the bar line.
-        let bars = vec![(0, 16, 4, 4), (16, 16, 4, 4)];
+        let bars = vec![(0, 16, 4, 4, 0, false), (16, 16, 4, 4, 0, false)];
         let m = fill(&bars, &[(0, 4, 60), (0, 4, 64), (12, 20, 67)]);
         assert_eq!(m.len(), 2);
         for meas in &m {

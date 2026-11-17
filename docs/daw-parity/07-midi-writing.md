@@ -166,7 +166,7 @@ The gaps are of four kinds:
 | Enter and edit notes in the score | ● | ● | ● | ● | **Works** as designed below: a value row (whole to 32nd, dotted, triplet, ♯ ♭ ♮ for the next note); a click on empty staff adds a note of that value snapped to the value's bar-counted grid, its pitch the line's or space's note in the key on the Key ruler (an F in G major is F♯); a click on a head selects it (Shift adds; the piano roll's selection); over the staff, Delete removes, Up and Down move a step of the key (Alt: a semitone), 1–6 choose the value and set the selected notes' length, A–G enter the nearest such note at the cursor and move it on, R rests. Each is one undo step through the piano roll's commands. No vertical drag of a head, and step entry from a MIDI keyboard is not wired |
 | Print the score | ● | ● | ● | ● | **Works** |
 | Lyrics, layout, parts | ◐ | ◐ | ● | ● | **Missing** |
-| MusicXML export and import | ● | ● | ● | ● | **Partial**: export only, to 16ths. The key at the start (the Key ruler's, else the band's) is written as the key signature, the notes spelled for it (flats in a flat key) with accidentals only where they leave it. No import, no key changes within the piece |
+| MusicXML export and import | ● | ● | ● | ● | **Partial**: export only, to 16ths. The key at the start (the Key ruler's, else the band's) is written as the key signature, and each later key change on the Key ruler as a new signature in the measure it falls in (a change up to a 16th after the bar line counts as on it); the notes are spelled for the key in force (flats in a flat key) with accidentals only where they leave it. No import |
 
 ## H. MIDI clips on the timeline
 
@@ -442,3 +442,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Copying MIDI between sessions already worked (the clipboard outlives the session); a test pins it |
 | 2026-11-17 | minor | MusicXML export writes the key signature and spells the notes for it |
 | 2026-11-17 | minor | Heal Separation joins neighbouring MIDI clips with matching settings |
+| 2026-11-17 | minor | MusicXML export writes later key changes as new key signatures and spells the notes after them for the new key |
