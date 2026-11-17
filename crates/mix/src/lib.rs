@@ -2512,15 +2512,22 @@ impl MixEngine {
         // through any track, send or insert. Only the playback engine sets `metronome`.
         // Not while monitoring only (transport stopped): the position does not advance there, so the
         // start of the same beat would repeat every block as a buzz.
+        // With a click output chosen (Setup › Click/Countoff), the clicks go to that hardware
+        // output alone instead of the main mix.
+        let click_to = click::output(s).filter(|i| self.hw.get(*i).is_some_and(|h| !h.is_empty()));
+        let clicks = match click_to.and_then(|i| self.hw.get_mut(i)) {
+            Some(h) => h,
+            None => &mut self.main,
+        };
         if self.metronome && !self.monitor_only && s.edit.click && (!s.edit.flag("click.only_during_record") || self.recording) {
-            click::render(s, pos, frames, &mut self.main);
+            click::render(s, pos, frames, clicks);
         }
         // The count-off before a take: its own clicks, counted from its start (the transport
         // stands at the record point meanwhile, so the tempo map cannot place them).
         if self.metronome
             && let Some((c, elapsed)) = self.countoff
         {
-            click::render_countoff(s, &c, elapsed, frames, &mut self.main);
+            click::render_countoff(s, &c, elapsed, frames, clicks);
         }
         // Output: min(out.len(), main channels) channels; any further output channels are silent.
         for (c, o) in out.iter_mut().enumerate() {
@@ -4199,6 +4206,17 @@ mod click {
             }
         }
     }
+
+    /// The hardware output (index in `Session::outputs`, never the main) the click plays on
+    /// instead of the main mix: the `click.output=<name>` setting, when it names one. Audio
+    /// thread: no allocation.
+    pub(crate) fn output(s: &Session) -> Option<usize> {
+        let name = s.edit.flags.iter().find_map(|f| f.strip_prefix(OUTPUT_PREFIX))?;
+        s.output_index(name).filter(|i| *i > 0)
+    }
+
+    /// The setting's prefix in the session's flags (`click.output=<output name>`).
+    const OUTPUT_PREFIX: &str = "click.output=";
 
     /// Click pitch for a MIDI note setting (clamped to the MIDI range).
     fn note_hz(note: f64) -> f64 {
@@ -10454,6 +10472,29 @@ mod tests {
         // Blocks that start mid-beat render the same clicks as a single pass.
         let split = render_playback(&s, len, 97, false);
         assert_eq!(out, split);
+    }
+
+    /// Setup › Click/Countoff › Output: the click plays on the chosen hardware output alone,
+    /// not in the main mix; an output that is not there sends it back to the main mix.
+    #[test]
+    fn the_click_plays_on_its_own_output() {
+        let mut s = Session::default();
+        s.edit.click = true;
+        s.outputs.push(soundcraft_model::OutputPath { name: "Drummer".into(), format: ChannelFormat::Stereo, first_channel: 2 });
+        s.edit.flags.insert("click.output=drummer".into());
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.metronome = true;
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        eng.render(&s, 0, 512, &mut out);
+        assert!(out.iter().all(|c| c.iter().all(|x| *x == 0.0)), "not in the main mix");
+        let peak = eng.hw[1][0].iter().take(200).fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.1, "on its output: {peak}");
+        s.edit.flags.remove("click.output=drummer");
+        s.edit.flags.insert("click.output=Gone".into());
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.metronome = true;
+        eng.render(&s, 0, 512, &mut out);
+        assert!(out[0].iter().take(200).any(|x| x.abs() > 0.1), "an unknown output: the main mix");
     }
 
     /// Mix bug 12: the output meter measured the click with the mix.

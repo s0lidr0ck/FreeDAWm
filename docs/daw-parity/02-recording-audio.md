@@ -115,7 +115,7 @@ what a user can do, apart from punch out on the fly.
 | Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Not planned here**: the only general route is ASIO's input-monitor call, which needs Steinberg's licensed SDK (a personal build only) and an interface that supports it to develop and test at all; Core Audio and ALSA have no common call for it |
 | Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Works**: silent within the take, heard in the pre- and post-roll |
 | Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Works**: Window › Control Room's cue mixes, fed by pre-fader sends to a hardware output, with a level and mute each (section 3) |
-| Click on its own output | ● | ● | ● | ● | **Missing**: the click is summed into the main mix |
+| Click on its own output | ● | ● | ● | ● | **Works**: Setup › Click/Countoff › Output plays the click (and the count-off) on one hardware output alone, a performer's phones, kept out of the main mix; Main mix is the default |
 | Talkback | ◐ | ◐ | ○ | ● | **Works**: a talkback input into the cues, held (Talk button or F11) or latched, dimming the monitor (Control Room) |
 | Input meters before the fader | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering makes every strip's meter, and so its clip light, read the level after the inserts and before the fader and mute (0.10.0; `pre_fader_metering_reads_the_level_before_the_fader`) |
 | Tuner | ● | ● | ● | ● | **Works**: the Chromatic Tuner plug-in (Insert › Utilities), which reads the note and cents and can mute the output while tuning (0.10.0) |
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |

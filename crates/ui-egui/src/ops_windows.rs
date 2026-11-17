@@ -160,6 +160,9 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     }
     let mut pickup = app.engine.session().edit.flag("midi.keep_pickup");
+    // Where the click plays: the main mix, or one hardware output alone (a performer's phones).
+    let outputs: Vec<String> = app.engine.session().outputs.iter().skip(1).map(|o| o.name.clone()).collect();
+    let click_out: Option<String> = app.engine.session().edit.flags.iter().find_map(|f| f.strip_prefix("click.output=").map(str::to_string));
     let (mut db, mut accent, mut normal, mut countoff, mut bars, mut only_rec) = {
         let e = &app.engine.session().edit;
         (
@@ -189,6 +192,24 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
         if crate::widgets::checkbox(ui, &mut only_rec, "Only while recording").changed() {
             p.insert("only_during_record".into(), json!(only_rec));
         }
+        ui.horizontal(|ui| {
+            ui.label("Output");
+            let shown = click_out.clone().unwrap_or_else(|| "Main mix".into());
+            egui::ComboBox::from_id_salt("click_output")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(click_out.is_none(), "Main mix").clicked() {
+                        p.insert("output".into(), json!("main"));
+                    }
+                    for o in &outputs {
+                        if ui.selectable_label(click_out.as_deref().is_some_and(|c| soundcraft_model::same_name(c, o)), o).clicked() {
+                            p.insert("output".into(), json!(o));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("A hardware output plays the click alone, kept out of the main mix (Setup › I/O names the outputs)");
+        });
         ui.separator();
         ui.horizontal(|ui| {
             if crate::widgets::checkbox(ui, &mut countoff, "Count off").changed() {

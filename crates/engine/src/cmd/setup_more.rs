@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "setup.current_feet_frames", "Current Feet+Frames Position...", ["Setup"], None, "{feet_frames: 'F+FF'} — the feet+frames reading at the insertion point", always, current_feet_frames),
         cmd!(noundo "setup.external_timecode_offset", "External Timecode Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset applied to incoming timecode", always, |e, p| offset_setting(e, p, "sync.external_offset")),
         cmd!(noundo "setup.video_sync_offset", "Video Sync Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset between audio and video playback", always, |e, p| offset_setting(e, p, "video.sync_offset")),
-        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool, keep_pickup?: bool (notes played during the count-off are kept in a MIDI take)}", always, click_countoff),
+        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool, keep_pickup?: bool (notes played during the count-off are kept in a MIDI take), output?: a hardware output's name for the click alone (empty or \"main\": the main mix)}", always, click_countoff),
         cmd!(query "setup.keyboard_shortcuts", "Keyboard Shortcuts...", ["Setup"], None, "{filter?} — every command shortcut", always, |_, p| {
             let f = str_param(p, "filter").map(str::to_ascii_lowercase);
             let rows: Vec<Value> = command_specs()
@@ -500,6 +500,16 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("keep_pickup").and_then(Value::as_bool) {
         s.edit.set_flag("midi.keep_pickup", v);
     }
+    if let Some(o) = str_param(p, "output") {
+        let o = o.trim();
+        if o.is_empty() || o.eq_ignore_ascii_case("main") {
+            set_text(&mut s.edit, "click.output", None);
+        } else {
+            let i = s.output_index(o).filter(|i| *i > 0).ok_or_else(|| bad("setup.click_countoff", format!("no hardware output named `{o}`")))?;
+            let name = s.outputs.get(i).map(|x| x.name.clone()).unwrap_or_default();
+            set_text(&mut s.edit, "click.output", Some(&name));
+        }
+    }
     Ok(json!({
         "volume_db": s.edit.value("click.volume_db", -6.0),
         "accent_note": s.edit.value("click.accent_note", 84.0),
@@ -510,6 +520,7 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
         "countoff_bars": s.edit.countoff_bars,
         "only_during_record": s.edit.flag("click.only_during_record"),
         "keep_pickup": s.edit.flag("midi.keep_pickup"),
+        "output": text(&s.edit, "click.output"),
     }))
 }
 
