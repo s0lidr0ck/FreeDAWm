@@ -25,7 +25,7 @@ of its own.
   pedal noises, a pad under it), each with its own level knob; turned all the way down, a part
   is off. Zones of different parts that answer a note sound together. Within a part, zones in a
   sequence (round-robins) take turns.
-- **Samples** are session sources (`Insert::samples`), saved in `Audio Files/` with the session.
+- **Samples** are session sources (`Insert::samples`), played from disk (see below).
   A library's zone is keyed by its whole description (`ZoneSpec::key`). A captured sample has a
   shorter key, `n{note}.v{velocity}.r{robin}` (the note it was recorded at, the velocity it was
   played with, its take 1–4), and the instrument works its zone out: a key plays the nearest
@@ -144,17 +144,46 @@ envelopes, and anything driven by a controller other than the sustain pedal.
   is read leniently, as Decent Sampler does (an attribute given twice keeps its first value).
 - **Decent Sampler library** (`.dslibrary`, a zip archive): one of its presets (`preset`; its
   first by name otherwise), the samples read out of the archive. They have no files of their own
-  afterwards, so they are saved with the session, or with **Save…** to the Library.
+  afterwards, so they are written into the session's `Audio Files/`, or with **Save…** to the
+  Library.
 
 **Save…** keeps all of it: a library's zones are written out in full, with their parts.
 
-Known gaps: per-group envelopes are not read (a pad's slow attack and release come from Pantry's
-one envelope); a library bigger than memory does not fit (every sample is held in memory, as
-32-bit float: a 16-layer piano is around 2 GB).
+Known gap: per-group envelopes are not read (a pad's slow attack and release come from Pantry's
+one envelope).
+
+## Playing from disk
+
+Pantry does not hold its samples in memory. A sample plays from its file through the session's
+disk cache (`soundcraft_model::disk`, the one audio clips play through): the first 16,384 frames
+of each (a third of a second at 48 kHz, `spill::SAMPLER_HEAD`) are kept in memory so a note
+starts at once, a voice asks for what it will play about a second before it gets there, and the
+disk thread reads it in. What has been played stays cached while the cache has room (a quarter
+of the computer's memory by default, shared with the session's audio, `FREEDAWM_DISK_CACHE_MB`
+to set it), so notes played before play again from memory. The window's top line gives the
+instrument's size and how much of it is in memory.
+
+- A library's WAV file at the session's sample rate is played from where it is: loading reads
+  only its header and its waveform, and the session names the file, so the library must stay
+  where it was.
+- Any other sample (FLAC or another compressed format, a WAV at another rate, one out of a
+  `.dslibrary`, a captured note) is decoded, brought to the session's rate and written as a
+  32-bit float WAV to play from: into the project's `Audio Files/`, or for a session not saved
+  yet its autosave folder (copied into the project at the first save). A load writes each as it
+  goes, so a library larger than memory loads; a load that fails removes what it wrote.
+- Samples under 65,536 values (a pedal noise, a short release) stay in memory.
+- An offline render (bounce, freeze, capture) waits for the disk and never drops a note. Live,
+  a note that outruns the disk (a slow or sleeping drive) plays silence until its audio
+  arrives, and counts as a disk underrun.
+- With `FREEDAWM_STREAM=0`, or in a headless engine with nowhere to write, samples are held in
+  memory as before.
+
+A capture is still held in memory until it finishes, then written out (about 1.4 GB for a piano
+every minor third at 12 layers).
 
 ## Not built yet
 
-- Playing from disk: every sample is held in memory.
+- Writing a capture to disk as it goes (it is held in memory until it finishes).
 - An envelope per part (a pad's slow attack and release); choosing a library's preset in the
   Load dialog.
 - Editing on the shelves: moving, replacing or removing a single sample, a zone's level.

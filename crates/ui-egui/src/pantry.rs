@@ -150,6 +150,13 @@ pub fn editor(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
     side_card(app, ui, &p, side, tid, ins, &parts);
 }
 
+/// What an instrument's samples come to, and how much of it is in memory when the rest plays
+/// from disk (`values`, `held`: samples over all channels, 4 bytes each).
+fn size_text(values: usize, held: usize) -> String {
+    let mb = |n: usize| n as f64 * 4.0 / 1.0e6;
+    if held < values { format!("{:.0} MB, {:.0} in memory", mb(values), mb(held)) } else { format!("{:.0} MB", mb(values)) }
+}
+
 /// The top bar: the wordmark, what the instrument holds, and its buttons.
 fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, cells: &[Cell]) {
     let g = p.layout_no_wrap("Pantry".into(), bold(30.0), AMBER);
@@ -157,9 +164,13 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     p.galley(pos2(r.min.x, r.center().y - g.size().y * 0.5), g, AMBER);
     p.text(pos2(r.min.x + w + 10.0, r.center().y + 4.0), Align2::LEFT_CENTER, "Multisampler", regular(14.0), DIM);
     let s = app.engine.session();
-    let (mut values, mut secs) = (0usize, 0.0f64);
+    // What the samples come to, and how much of that is held in memory: all of a sample not
+    // played from disk, the first frames of one that is.
+    let (mut values, mut held, mut secs) = (0usize, 0usize, 0.0f64);
     for a in ins.samples.values().filter_map(|id| s.pool.get(*id)) {
         values += a.frames() * a.num_channels();
+        let kept = if a.in_memory().is_some() { a.frames() } else { a.frames().min(soundcraft_engine::spill::SAMPLER_HEAD) };
+        held += kept * a.num_channels();
         secs += a.frames() as f64 / f64::from(a.sample_rate().max(1));
     }
     let mut by_note: BTreeMap<u8, usize> = BTreeMap::new();
@@ -174,12 +185,12 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
         (
             format!("{} sample{}", ins.samples.len(), plural(ins.samples.len())),
             format!(
-                "{} note{} · {layers} layer{} · {:.0} s · {:.0} MB",
+                "{} note{} · {layers} layer{} · {:.0} s · {}",
                 by_note.len(),
                 plural(by_note.len()),
                 plural(layers),
                 secs,
-                values as f64 * 4.0 / 1.0e6
+                size_text(values, held)
             ),
         )
     };

@@ -404,6 +404,8 @@ struct Voice {
     down: bool,
     /// The key came up with the pedal down: the pedal holds the note.
     pedalled: bool,
+    /// How far into a sample played from disk it has asked for, frames.
+    asked: f64,
 }
 
 impl Voice {
@@ -421,6 +423,7 @@ impl Voice {
             note: false,
             down: false,
             pedalled: false,
+            asked: 0.0,
         }
     }
 
@@ -447,6 +450,8 @@ pub struct Multisampler {
     /// Hits of each key so far in each part, for its sequences.
     turns: Vec<u8>,
     part_gain: [f32; PARTS],
+    /// Where voices of samples played from disk read them: what plays, and what a loop fades in.
+    windows: [Window; 2],
     voices: [Voice; VOICES],
     events: EventQueue,
     rates: AdsrRates,
@@ -475,6 +480,7 @@ impl Multisampler {
             layer_vel: vec![0; NOTES * LAYERS],
             turns: vec![0; PARTS * NOTES],
             part_gain: [1.0; PARTS],
+            windows: [Window::new(), Window::new()],
             voices: [Voice::new(); VOICES],
             events: EventQueue::new(),
             rates: AdsrRates::default(),
@@ -667,6 +673,7 @@ impl Multisampler {
             note,
             down: note,
             pedalled: false,
+            asked: 0.0,
         };
         v.env.gate_on();
     }
@@ -735,17 +742,24 @@ impl Multisampler {
         let Some((left, rest)) = io.split_first_mut() else { return };
         let (Some(left), right) = (left.get_mut(from..to), rest.first_mut().filter(|_| ch >= 2).and_then(|r| r.get_mut(from..to))) else { return };
         let mut right = right;
+        let [win, lead_win] = &mut self.windows;
         for v in self.voices.iter_mut().filter(|v| v.active) {
             let (Some(src), Some(z)) = (self.samples.get(v.slot).and_then(Option::as_deref), self.zones.get(v.slot)) else {
                 v.active = false;
                 continue;
             };
-            let Some(l) = src.channel(0) else {
-                v.active = false;
-                continue;
+            let streamed = src.stream_channels();
+            let (tap, frames) = match (streamed, src.channel(0)) {
+                (0, Some(l)) => {
+                    let r = src.channel(1).unwrap_or(l);
+                    (Tap::Memory(l, r), l.len().min(r.len()))
+                }
+                (0, None) => {
+                    v.active = false;
+                    continue;
+                }
+                (n, _) => (Tap::Disk(src, n >= 2), src.stream_frames()),
             };
-            let r = src.channel(1).unwrap_or(l);
-            let frames = l.len().min(r.len());
             let end = if z.end > 0 { (z.end as usize).min(frames) } else { frames } as f64;
             // A loop inside the part that plays, long enough to step through.
             let (ls, le) = (f64::from(z.loop_start), f64::from(z.loop_end).min(end));
@@ -753,19 +767,28 @@ impl Multisampler {
             let xfade = f64::from(z.xfade).min(ls).min(le - ls);
             let part = self.part_gain.get(usize::from(v.part)).copied().unwrap_or(1.0);
             let step = (v.step * self.bend).clamp(0.0, MAX_STEP);
+            win.len = 0;
+            lead_win.len = 0;
+            if streamed > 0 && v.pos + READ_AHEAD as f64 / 2.0 > v.asked {
+                // What it plays next is asked for well before it gets there.
+                src.want(v.pos as usize, READ_AHEAD);
+                v.asked = v.pos + READ_AHEAD as f64;
+            }
             for n in 0..left.len() {
                 let g = v.env.next(&self.rates) * v.gain * part;
                 if v.env.stage == Stage::Idle || v.pos >= end {
                     v.active = false;
                     break;
                 }
-                let (mut a, mut b) = (hermite(l, v.pos), hermite(r, v.pos));
+                // Frames the rest of this block reads from here on.
+                let span = ((left.len() - n) as f64 * step) as usize + 4;
+                let (mut a, mut b) = tap.at(win, v.pos, span);
                 // Nearing the loop's end, what leads into its start fades in over what leaves.
                 if looped && xfade >= 1.0 && v.pos > le - xfade {
                     let t = ((v.pos - (le - xfade)) / xfade) as f32;
-                    let lead = v.pos - (le - ls);
-                    a = a * (1.0 - t) + hermite(l, lead) * t;
-                    b = b * (1.0 - t) + hermite(r, lead) * t;
+                    let (la, lb) = tap.at(lead_win, v.pos - (le - ls), span);
+                    a = a * (1.0 - t) + la * t;
+                    b = b * (1.0 - t) + lb * t;
                 }
                 let (a, b) = (a * g, b * g);
                 match right.as_deref_mut().and_then(|r| r.get_mut(n)) {
@@ -784,7 +807,62 @@ impl Multisampler {
                 v.pos += step;
                 if looped && v.pos >= le {
                     v.pos -= le - ls;
+                    v.asked = 0.0;
                 }
+            }
+        }
+    }
+}
+
+/// Frames of a sample played from disk that a voice asks for ahead of where it plays.
+const READ_AHEAD: usize = 1 << 16;
+/// Frames a [`Window`] holds at most.
+const WINDOW: usize = 4096;
+
+/// A stretch of a sample played from disk, copied out for one voice to read.
+struct Window {
+    l: Vec<f32>,
+    r: Vec<f32>,
+    start: usize,
+    len: usize,
+}
+
+impl Window {
+    fn new() -> Self {
+        Self { l: vec![0.0; WINDOW], r: vec![0.0; WINDOW], start: 0, len: 0 }
+    }
+}
+
+/// Where a voice reads its sample: in memory, or from disk through a [`Window`].
+enum Tap<'a> {
+    Memory(&'a [f32], &'a [f32]),
+    /// The source, and whether it has a second channel.
+    Disk(&'a dyn SampleSource, bool),
+}
+
+impl Tap<'_> {
+    /// Both channels at `pos`. A window that does not hold `pos` is filled from there with the
+    /// `span` frames the voice reads next (what is not loaded yet plays as silence).
+    #[inline]
+    fn at(&self, w: &mut Window, pos: f64, span: usize) -> (f32, f32) {
+        match self {
+            Tap::Memory(l, r) => (hermite(l, pos), hermite(r, pos)),
+            Tap::Disk(src, stereo) => {
+                let i = pos as usize;
+                let inside = w.len > 0 && i >= w.start.saturating_add(usize::from(w.start > 0)) && i.saturating_add(2) < w.start + w.len;
+                if !inside {
+                    w.start = i.saturating_sub(1);
+                    w.len = span.saturating_add(4).clamp(8, WINDOW);
+                    if let Some(l) = w.l.get_mut(..w.len) {
+                        src.read(0, w.start, l);
+                    }
+                    if let (true, Some(r)) = (*stereo, w.r.get_mut(..w.len)) {
+                        src.read(1, w.start, r);
+                    }
+                }
+                let at = pos - w.start as f64;
+                let l = hermite(w.l.get(..w.len).unwrap_or_default(), at);
+                if *stereo { (l, hermite(w.r.get(..w.len).unwrap_or_default(), at)) } else { (l, l) }
             }
         }
     }
@@ -968,6 +1046,69 @@ mod tests {
             left -= n;
         }
         out
+    }
+
+    /// A sample played from disk: no `channel`, read a stretch at a time.
+    struct Streamed(SampleBuffer);
+
+    impl SampleSource for Streamed {
+        fn sample_rate(&self) -> f32 {
+            self.0.sample_rate
+        }
+        fn num_channels(&self) -> usize {
+            0
+        }
+        fn channel(&self, _ch: usize) -> Option<&[f32]> {
+            None
+        }
+        fn stream_channels(&self) -> usize {
+            self.0.channels.len()
+        }
+        fn stream_frames(&self) -> usize {
+            self.0.channels.first().map_or(0, Vec::len)
+        }
+        fn read(&self, ch: usize, start: usize, out: &mut [f32]) -> bool {
+            self.0.read(ch, start, out)
+        }
+    }
+
+    #[test]
+    fn a_sample_played_from_disk_sounds_as_one_in_memory() {
+        // Two channels that differ, a loop with a crossfade, and a key off the recorded note.
+        let len = 30_000usize;
+        let tone = |hz: f32| -> Vec<f32> {
+            (0..len).map(|i| 0.4 * (std::f32::consts::TAU * hz * i as f32 / SR).sin() * (1.0 - i as f32 / len as f32)).collect()
+        };
+        let buf = SampleBuffer { sample_rate: SR, channels: vec![tone(220.0), tone(331.0)] };
+        let zone = ZoneSpec {
+            index: 0,
+            lokey: 0,
+            hikey: 127,
+            root: 60,
+            lovel: 1,
+            hivel: 127,
+            loop_start: 9_000,
+            loop_end: 21_000,
+            xfade: 3_000,
+            ..ZoneSpec::default()
+        };
+        let play = |source: Arc<dyn SampleSource>| {
+            let mut s = Multisampler::new();
+            s.prepare(SR, 512, 2);
+            assert!(s.set_asset(&zone.key(), Some(source)));
+            s.note_on(0, 67, 100);
+            let mut out = run(&mut s, 40_000);
+            s.note_off(0, 67);
+            let tail = run(&mut s, 4_000);
+            out[0].extend(tail[0].iter());
+            out[1].extend(tail[1].iter());
+            out
+        };
+        let memory = play(Arc::new(buf.clone()));
+        let disk = play(Arc::new(Streamed(buf)));
+        assert!(peak(&memory[0]) > 0.05 && peak(&memory[1]) > 0.05);
+        assert_eq!(memory[0], disk[0]);
+        assert_eq!(memory[1], disk[1]);
     }
 
     fn peak(x: &[f32]) -> f32 {

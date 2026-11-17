@@ -934,6 +934,7 @@ fn attach_regions(
     dir: &Path,
     mut library: Option<&mut Library>,
     what: &str,
+    written: &mut Vec<PathBuf>,
 ) -> Result<(usize, usize, usize, usize, Vec<String>)> {
     let packed = library.is_some();
     let place = |sample: &str| if packed { PathBuf::from(archive_path(&dir.to_string_lossy(), sample)) } else { dir.join(sample) };
@@ -942,7 +943,7 @@ fn attach_regions(
         .filter(|r| r.captured)
         .map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: place(&r.sample), packed })
         .collect();
-    let (mut samples, mut notes, mut layers, mut skipped) = attach(e, id, t, &captured, true, what, library.as_deref_mut())?;
+    let (mut samples, mut notes, mut layers, mut skipped) = attach(e, id, t, &captured, true, what, library.as_deref_mut(), written)?;
     let zones: Vec<&Region> = regions.iter().filter(|r| !r.captured).collect();
     let mut parts: Vec<String> = Vec::new();
     for r in &zones {
@@ -965,25 +966,7 @@ fn attach_regions(
         let (src, file_rate) = match decoded.get(&file) {
             Some(found) => *found,
             None => {
-                let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
-                let ext = file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-                let bytes = match library.as_deref_mut() {
-                    Some(lib) => lib.read(&file.to_string_lossy(), MAX_PACKED_SAMPLE_BYTES).map_err(EngineError::Io)?,
-                    None => crate::io::read_file(&file)?,
-                };
-                let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
-                if buf.frames() == 0 || buf.num_channels() == 0 {
-                    return Err(EngineError::Io(format!("{name}: no audio")));
-                }
-                let file_rate = buf.sample_rate.max(1);
-                let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES)
-                    .ok_or_else(|| EngineError::Io(format!("{name}: too long for one note (two minutes at most)")))?;
-                total = total.saturating_add(buf.frames().saturating_mul(buf.num_channels()));
-                if total > crate::io::MAX_IMPORT_SAMPLES {
-                    return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
-                }
-                let from = (!packed).then(|| file.to_string_lossy().into_owned());
-                let src = crate::io::add_source(e.session_mut(), &name, buf, from.as_deref(), format.format);
+                let (src, file_rate) = add_sample(e, &file, packed, library.as_deref_mut(), what, &mut total, written)?;
                 decoded.insert(file.clone(), (src, file_rate));
                 (src, file_rate)
             }
@@ -1026,6 +1009,71 @@ fn attach_regions(
     Ok((samples, notes, layers, skipped, parts))
 }
 
+/// Adds the sample at `file` (with `packed`, an entry of `library`) to the session as a source
+/// and returns it with the file's own sample rate. A WAV at the session's rate is played from
+/// where it is, nothing of it decoded now; any other file is decoded (and brought to the
+/// session's rate), then written out as a WAV to play from ([`crate::spill`]) when the session
+/// has somewhere to write, its file added to `written`. `kept` counts what stays in memory.
+fn add_sample(
+    e: &mut Engine,
+    file: &Path,
+    packed: bool,
+    library: Option<&mut Library>,
+    what: &str,
+    kept: &mut usize,
+    written: &mut Vec<PathBuf>,
+) -> Result<(soundcraft_model::SourceId, u32)> {
+    let rate = e.session().sample_rate.hz();
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
+    let too_long = || EngineError::Io(format!("{name}: too long for one note (two minutes at most)"));
+    if !packed
+        && let Some(f) = crate::io::streamable(file, rate)
+        && f.frames().saturating_mul(f.channels()) >= crate::spill::MIN_SAMPLES
+    {
+        if f.frames().saturating_mul(f.channels()) > MAX_SAMPLE_VALUES {
+            return Err(too_long());
+        }
+        let audio = crate::io::streamed_audio(f, None, file, rate);
+        let s = e.session_mut();
+        let src = crate::io::insert_source(s, &name, audio, Some(&file.to_string_lossy()), FileFormat::Wav);
+        if let Some(x) = s.sources.last_mut() {
+            x.unsaved = false;
+        }
+        return Ok((src, rate));
+    }
+    let ext = file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
+    let bytes = match library.filter(|_| packed) {
+        Some(lib) => lib.read(&file.to_string_lossy(), MAX_PACKED_SAMPLE_BYTES).map_err(EngineError::Io)?,
+        None => crate::io::read_file(file)?,
+    };
+    let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+    if buf.frames() == 0 || buf.num_channels() == 0 {
+        return Err(EngineError::Io(format!("{name}: no audio")));
+    }
+    let file_rate = buf.sample_rate.max(1);
+    let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES).ok_or_else(too_long)?;
+    let size = buf.frames().saturating_mul(buf.num_channels());
+    // A sample out of an archive has no file of its own: it is saved with the session.
+    let from = (!packed).then(|| file.to_string_lossy().into_owned());
+    let src = crate::io::add_source(e.session_mut(), &name, buf, from.as_deref(), format.format);
+    written.extend(crate::spill::spill_sources(e, "sample", Some(&[src])));
+    if e.session().pool.get(src).is_some_and(|a| a.in_memory().is_some()) {
+        *kept = kept.saturating_add(size);
+        if *kept > crate::io::MAX_IMPORT_SAMPLES {
+            return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
+        }
+    }
+    Ok((src, file_rate))
+}
+
+/// Removes the files a load that failed wrote for its samples (the session goes back to what
+/// it was, so nothing names them).
+fn discard(written: &[PathBuf]) {
+    for f in written {
+        let _ = crate::io::remove_path(f);
+    }
+}
+
 /// A sample to put in a Pantry: the note it was recorded at, its velocity, its take (from 1) and
 /// its file.
 struct Wanted {
@@ -1053,6 +1101,7 @@ fn attach(
     replace: bool,
     what: &str,
     mut library: Option<&mut Library>,
+    written: &mut Vec<PathBuf>,
 ) -> Result<(usize, usize, usize, usize)> {
     let held: Vec<String> = match multisampler_mut(e, t) {
         Some(ins) if replace => {
@@ -1085,28 +1134,9 @@ fn attach(
             _ => skipped += 1,
         }
     }
-    let rate = e.session().sample_rate.hz();
     let mut total = 0usize;
     for (key, w) in &placed {
-        let name = w.file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
-        let ext = w.file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-        let bytes = match library.as_deref_mut().filter(|_| w.packed) {
-            Some(lib) => lib.read(&w.file.to_string_lossy(), MAX_PACKED_SAMPLE_BYTES).map_err(EngineError::Io)?,
-            None => crate::io::read_file(&w.file)?,
-        };
-        let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
-        if buf.frames() == 0 || buf.num_channels() == 0 {
-            return Err(EngineError::Io(format!("{name}: no audio")));
-        }
-        let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES)
-            .ok_or_else(|| EngineError::Io(format!("{name}: too long for one note (two minutes at most)")))?;
-        total = total.saturating_add(buf.frames().saturating_mul(buf.num_channels()));
-        if total > crate::io::MAX_IMPORT_SAMPLES {
-            return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
-        }
-        // A sample out of an archive has no file of its own: it is saved with the session.
-        let from = (!w.packed).then(|| w.file.to_string_lossy().into_owned());
-        let src = crate::io::add_source(e.session_mut(), &name, buf, from.as_deref(), format.format);
+        let (src, _) = add_sample(e, &w.file, w.packed, library.as_deref_mut().filter(|_| w.packed), what, &mut total, written)?;
         let ins = multisampler_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
         ins.samples.insert(key.clone(), src);
     }
@@ -1177,7 +1207,9 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
     if regions.is_empty() {
         return Err(none());
     }
-    let (samples, notes, layers, skipped, parts) = attach_regions(e, id, t, &regions, &levels, &inside, library.as_mut(), &shown)?;
+    let mut written = Vec::new();
+    let attached = attach_regions(e, id, t, &regions, &levels, &inside, library.as_mut(), &shown, &mut written);
+    let (samples, notes, layers, skipped, parts) = attached.inspect_err(|_| discard(&written))?;
     // A file Pantry saved brings the instrument's settings with it.
     let saved: Option<BTreeMap<String, f64>> =
         text.lines().find_map(|l| l.trim().strip_prefix(PARAMS_LINE)).and_then(|j| serde_json::from_str(j).ok());
@@ -1282,7 +1314,9 @@ fn import(e: &mut Engine, p: &Value) -> Result<Value> {
     if wanted.is_empty() {
         return Err(bad(id, "no sample there says its note and velocity in its name (as `Piano C3 v95.wav` or `060_C3_v095_rr1.wav`)"));
     }
-    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, bool_or(p, "replace", false), "the samples", None)?;
+    let mut written = Vec::new();
+    let attached = attach(e, id, t, &wanted, bool_or(p, "replace", false), "the samples", None, &mut written);
+    let (samples, notes, layers, skipped) = attached.inspect_err(|_| discard(&written))?;
     Ok(json!({"track": t.0, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "unnamed": unnamed}))
 }
 
@@ -1524,6 +1558,75 @@ mod tests {
         assert_eq!(keys(&e), Some(1));
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(keys(&e), Some(4));
+    }
+
+    #[test]
+    fn loaded_samples_play_from_disk_not_from_memory() {
+        if !soundcraft_model::disk::streaming_enabled() {
+            return;
+        }
+        let d = dir("stream");
+        let long = |path: &Path, rate: u32| {
+            let x: Vec<f32> = (0..rate as usize * 2).map(|i| 0.5 * (i as f32 * 0.05).sin()).collect();
+            let buf = AudioBuffer { sample_rate: rate, channels: vec![x] };
+            let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, ..Default::default() };
+            std::fs::write(path, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        };
+        let mut e = Engine { unsaved_audio_root: Some(d.join("unsaved")), ..Default::default() };
+        let rate = e.session().sample_rate.hz();
+        let other = if rate == 44_100 { 48_000 } else { 44_100 };
+        long(&d.join("native.wav"), rate);
+        long(&d.join("other.wav"), other);
+        tone_wav(&d.join("short.wav"), rate);
+        let sfz = d.join("Stream.sfz");
+        std::fs::write(&sfz, "<region> sample=native.wav key=48\n<region> sample=other.wav key=50\n<region> sample=short.wav key=52\n").unwrap();
+        let t = track(&mut e, MULTISAMPLER);
+        e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
+        let s = e.session();
+        let ins = s.track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        let of = |root: u8| {
+            let key = ins.samples.keys().find(|k| ZoneSpec::parse(k).is_some_and(|z| z.root == root)).unwrap();
+            let id = ins.samples[key];
+            (s.source(id).unwrap().clone(), std::sync::Arc::clone(s.pool.get(id).unwrap()))
+        };
+        // A WAV at the session's rate plays from where it is.
+        let (src, audio) = of(48);
+        assert_eq!(Path::new(&src.path), d.join("native.wav"));
+        assert!(audio.in_memory().is_none() && audio.has_head() && !src.unsaved);
+        assert_eq!(audio.frames(), rate as usize * 2);
+        // One at another rate is brought to the session's and written out to play from.
+        let (src, audio) = of(50);
+        assert!(Path::new(&src.path).starts_with(d.join("unsaved")), "{}", src.path);
+        assert!(audio.in_memory().is_none() && audio.has_head());
+        assert_eq!(audio.frames(), rate as usize * 2);
+        let mut head = vec![0.0f32; 64];
+        assert!(audio.read_ready(0, 0, &mut head));
+        assert!(head.iter().fold(0.0f32, |m, v| m.max(v.abs())) > 0.2);
+        // A short one is not worth a file: it stays in memory.
+        assert!(of(52).1.in_memory().is_some());
+        // An offline render plays them as it plays any sample: capturing this Pantry's notes
+        // (the three it holds, off disk and out of memory) gives three that sound.
+        let v = e
+            .execute(
+                "track.capture_multisample",
+                &json!({"track": t.0, "low": 48, "high": 52, "step": 2, "layers": 1, "hold": 0.3, "tail": 0.3, "release": false, "pedal": false}),
+            )
+            .unwrap();
+        assert_eq!((v["samples"].as_u64(), v["silent"].as_u64()), (Some(3), Some(0)));
+        // A load that fails leaves no files behind.
+        let before = std::fs::read_dir(d.join("unsaved"))
+            .unwrap()
+            .flatten()
+            .flat_map(|x| std::fs::read_dir(x.path().join("Audio Files")).unwrap().flatten())
+            .count();
+        std::fs::write(&sfz, "<region> sample=other.wav key=50\n<region> sample=missing.wav key=52\n").unwrap();
+        assert!(e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).is_err());
+        let after = std::fs::read_dir(d.join("unsaved"))
+            .unwrap()
+            .flatten()
+            .flat_map(|x| std::fs::read_dir(x.path().join("Audio Files")).unwrap().flatten())
+            .count();
+        assert_eq!(before, after);
     }
 
     #[test]

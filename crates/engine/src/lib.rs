@@ -649,6 +649,8 @@ impl Engine {
         self.refresh_vocal_fingerprints();
         // Audio this step made goes to disk now, so neither the session nor its history holds it.
         spill::spill(self, label);
+        // A Pantry plays its samples from disk: each one's first frames are kept in memory.
+        spill::preload_heads(&self.doc);
         self.undo.push(HistoryEntry { label: label.to_string(), doc: before });
         self.redo.clear();
         self.merge_redo = None;

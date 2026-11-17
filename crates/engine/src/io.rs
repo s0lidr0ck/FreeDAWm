@@ -214,7 +214,7 @@ pub fn add_source_audio(s: &mut Session, name: &str, audio: Arc<SourceAudio>, fo
     insert_source(s, name, audio, None, format)
 }
 
-fn insert_source(s: &mut Session, name: &str, audio: Arc<SourceAudio>, path: Option<&str>, format: FileFormat) -> SourceId {
+pub(crate) fn insert_source(s: &mut Session, name: &str, audio: Arc<SourceAudio>, path: Option<&str>, format: FileFormat) -> SourceId {
     let sr = s.sample_rate.hz();
     let id = SourceId(s.alloc());
     let stem = Path::new(name).file_stem().and_then(|x| x.to_str()).unwrap_or(name).to_string();
@@ -1262,13 +1262,12 @@ pub fn save_session(e: &mut Engine, path: &str) -> Result<usize> {
 }
 
 /// Every saved source still decoded in memory (imported or made before the first save) is
-/// swapped for its file in the project, in the session and its undo history. Sampler samples and
-/// short sources stay in memory.
+/// swapped for its file in the project, in the session and its undo history. The samples of an
+/// instrument that reads them whole and short sources stay in memory.
 fn stream_saved(e: &mut Engine, file: &Path) {
     let s = e.session();
     let rate = s.sample_rate.hz();
-    let sampled: std::collections::HashSet<SourceId> =
-        s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).flat_map(|i| i.sources()).collect();
+    let sampled = crate::spill::sampled(s);
     let mut swaps: Vec<(Arc<SourceAudio>, Arc<SourceAudio>)> = Vec::new();
     for src in s.sources.iter().filter(|src| !src.unsaved && !sampled.contains(&src.id)) {
         let Some(audio) = s.pool.get(src.id) else { continue };
@@ -1288,6 +1287,7 @@ fn stream_saved(e: &mut Engine, file: &Path) {
         }
     }
     e.swap_audio(&swaps);
+    crate::spill::preload_heads(e.session());
 }
 
 /// Write a copy of the session (and any audio it needs) without touching the open document —
@@ -1778,13 +1778,11 @@ pub(crate) fn load_session_file_reporting(
         }));
     }
     let total = files.len();
-    // Files a sample-playing instrument plays are decoded into memory (it reads them whole);
-    // every other native WAV at the session rate plays from disk: only its header is read now.
-    let sampled: std::collections::HashSet<usize> = s
-        .tracks
-        .iter()
-        .flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref()))
-        .flat_map(|i| i.sources())
+    // Files an instrument that reads its samples whole plays (Lift, Juke) are decoded into
+    // memory; every other native WAV at the session rate plays from disk (Pantry's samples too):
+    // only its header is read now.
+    let sampled: std::collections::HashSet<usize> = crate::spill::sampled(&s)
+        .into_iter()
         .filter_map(|id| s.sources.iter().position(|src| src.id == id))
         .filter_map(|k| by_source.get(k).and_then(|r| r.as_ref().ok()).copied())
         .collect();
@@ -1844,6 +1842,7 @@ pub(crate) fn load_session_file_reporting(
     missing.extend(relink_videos(&mut s, links));
     missing.extend(crate::cmd::module_asset::load_session_assets(&mut s, Some(links)));
     missing.extend(s.clean_missing_note());
+    crate::spill::preload_heads(&s);
     s.folder = Some(dir);
     Ok((s, missing))
 }
