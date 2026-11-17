@@ -3122,7 +3122,8 @@ fn process_strip(
     }
     // Record with inserts: while it records, the input goes through the strip whether it is
     // heard or not (`silent_print`: not heard, so the strip's output is silence).
-    let hears = t.mixer.hears_input(live.monitor_only, live.auto_input);
+    let input_only = t.mixer.record_arm && t.mixer.input_monitor == soundcraft_model::InputMonitor::Auto && s.edit.flag(INPUT_ONLY_MONITORING);
+    let hears = input_only || t.mixer.hears_input(live.monitor_only, live.auto_input);
     let prints = !strip.print.is_empty() && frozen.is_none() && t.mixer.record_arm && live.auto_input && !live.monitor_only;
     let silent_print = prints && !hears;
     let hears = hears || prints;
@@ -4178,6 +4179,11 @@ mod click {
         soundcraft_dsp::midi_to_hz(note.clamp(0.0, 127.0))
     }
 }
+
+/// The flag of Options › Recording › Input Only Monitoring (Pro Tools' global mode): every
+/// record-armed track on Auto hears its input during playback too, not only when stopped or
+/// recording. A track set to On or Off keeps its own setting.
+pub const INPUT_ONLY_MONITORING: &str = "options.input_only_monitoring";
 
 /// The automatic edge fades' length when Options › Automatic Edge Fades has none set, ms.
 pub const AUTO_FADE_MS: f64 = 1.0;
@@ -10114,6 +10120,30 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    /// Options › Recording › Input Only Monitoring: an armed track on Auto hears its input in
+    /// playback too; unarmed, or set to Off, it plays its clips as before.
+    #[test]
+    fn input_only_monitoring_hears_armed_tracks_in_playback() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.input = vec![vec![0.25; 512]];
+        let mut out = vec![vec![0.0; 512]; 2];
+        let (clip, input) = (0.5 * std::f32::consts::FRAC_1_SQRT_2, 0.25 * std::f32::consts::FRAC_1_SQRT_2);
+        s.track_mut(t).unwrap().mixer.record_arm = true;
+        eng.render(&s, 0, 512, &mut out);
+        assert!((out[0][100] - clip).abs() < 1e-3, "auto input: the clip plays in playback");
+        s.edit.set_flag(INPUT_ONLY_MONITORING, true);
+        eng.render(&s, 512, 512, &mut out);
+        assert!((out[0][100] - input).abs() < 1e-3, "input only: {}", out[0][100]);
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Off;
+        eng.render(&s, 1024, 512, &mut out);
+        assert!((out[0][100] - clip).abs() < 1e-3, "Off keeps its own setting");
+        let tr = s.track_mut(t).unwrap();
+        (tr.mixer.input_monitor, tr.mixer.record_arm) = (soundcraft_model::InputMonitor::Auto, false);
+        eng.render(&s, 1536, 512, &mut out);
+        assert!((out[0][100] - clip).abs() < 1e-3, "unarmed: clips");
     }
 
     #[test]

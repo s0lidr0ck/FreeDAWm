@@ -108,7 +108,7 @@ what a user can do, apart from punch out on the fly.
 |---|:-:|:-:|:-:|:-:|---|
 | Automatic input monitoring (input when stopped or recording, track on playback) | ● | ● | ● | ● | **Works**, punch-aware |
 | Per-track input monitor switch | ● | ● | ● | ● | **Works**: Auto / On / Off |
-| Global input-only mode | ● | ◐ | ◐ | ● | **Partial**: a command sets every armed track to On |
+| Global input-only mode | ● | ◐ | ◐ | ● | **Works**: Options › Recording › Input Only Monitoring: every armed track on Auto hears its input in playback too, as in Pro Tools' Input Only mode; a track set to On or Off keeps its setting. Track › Set Record Tracks to Input Only still sets each armed track to On |
 | Monitor through the track's inserts | ● | ● | ● | ● | **Works** |
 | Low-latency mode that bypasses slow plug-ins | ● | ● | ● | ● | **Works**: only inserts with latency, only on live paths, crossfaded |
 | Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything |
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |

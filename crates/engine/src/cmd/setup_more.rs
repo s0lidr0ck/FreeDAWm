@@ -37,6 +37,8 @@ pub fn specs() -> Vec<CommandSpec> {
         option!("options.momentary_solo", "Momentary Solo", "options.momentary_solo"),
         // Selecting tracks arms them and disarms the others (`mix::arm_follows_selection`).
         option!("options.arm_follows_selection", "Arm Follows Selection", "options.arm_follows_selection"),
+        // Every armed track on Auto hears its input in playback too (`soundcraft_mix::INPUT_ONLY_MONITORING`).
+        option!("options.input_only_monitoring", "Input Only Monitoring", "options.input_only_monitoring"),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",
