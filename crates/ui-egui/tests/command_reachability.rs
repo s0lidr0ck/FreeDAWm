@@ -11,8 +11,6 @@ use std::path::Path;
 /// Known gaps: commands with no menu, shortcut or literal reference in the UI source today.
 /// Give each one a UI path and remove it from this list; don't add to it.
 const KNOWN_UNREACHED: &[&str] = &[
-    "edit.paste_clip_effects",
-    "edit.paste_clip_gain",
     "event.midi_note",
     "markers.next",
     "markers.previous",
@@ -91,8 +89,11 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
 ];
 
 /// Position-based aliases of the channel-chain commands: the UI acts by module id, so an alias is
-/// reached when the command it stands for is.
+/// reached when the command it stands for is. Paste Clip Gain and Paste Clip Effects are what Edit ›
+/// Paste does after Copy Special › Clip Gain or Clip Effects.
 const ALIASES: &[(&str, &str)] = &[
+    ("edit.paste_clip_gain", "edit.paste"),
+    ("edit.paste_clip_effects", "edit.paste"),
     ("mix.insert", "mix.module_add"),
     ("mix.insert_remove", "mix.module_remove"),
     ("mix.insert_move", "mix.module_move"),

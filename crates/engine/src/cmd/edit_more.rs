@@ -358,7 +358,7 @@ pub(super) fn copy_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"points": n, "length": r.len()}))
 }
 
-fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "edit.paste_clip_gain";
     let tracks = tracks_required(e, id, p)?;
     let at = position_param(e, id, p, "at")?.unwrap_or(e.session().edit.selection.start);
@@ -420,7 +420,7 @@ fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -
     Ok(json!({"clips": ids.len(), "copied": e.clipboard.clip_effects.len(), "removed": removed}))
 }
 
-fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     if ids.is_empty() {
         return Err(bad("edit.paste_clip_effects", "select a clip"));
@@ -1045,6 +1045,21 @@ mod tests {
         e.execute("edit.paste_clip_gain", &json!({"at": 2000})).unwrap();
         let c = e.session().track(t).unwrap().clips()[1].clone();
         assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");
+    }
+
+    /// Edit › Paste after Copy Special › Clip Gain pastes the gain (it used to be refused: "the
+    /// clipboard is empty"), as one undo step.
+    #[test]
+    fn plain_paste_takes_copied_clip_gain() {
+        let (mut e, t, ids) = session_with_clips(&[(0, 1000), (2000, 1000)]);
+        e.execute("clip.gain", &json!({"clip": ids[0].0, "db": -6.0})).unwrap();
+        e.execute("edit.copy_clip_gain", &json!({"tracks": [t.0], "start": 0, "end": 1000})).unwrap();
+        assert!((crate::find_command("edit.paste").unwrap().enabled)(&e).is_ok());
+        let steps = e.undo_history().len();
+        e.execute("edit.paste", &json!({"tracks": [t.0], "at": 2000})).unwrap();
+        let c = e.session().track(t).unwrap().clips()[1].clone();
+        assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");
+        assert_eq!(e.undo_history().len(), steps + 1);
     }
 
     #[test]

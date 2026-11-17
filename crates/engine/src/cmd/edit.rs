@@ -14,7 +14,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.restore_last_selection", "Restore Last Selection", ["Edit"], Some("Cmd+Alt+Z"), "{}", has_last_selection, restore_selection),
         cmd!("edit.cut", "Cut", ["Edit"], Some("Cmd+X"), "{tracks?, start?, end?}", has_range, |e, p| cut_copy(e, p, true, "edit.cut")),
         cmd!(noundo "edit.copy", "Copy", ["Edit"], Some("Cmd+C"), "{tracks?, start?, end?}", has_range, |e, p| cut_copy(e, p, false, "edit.copy")),
-        cmd!("edit.paste", "Paste", ["Edit"], Some("Cmd+V"), "{tracks?, at?}", has_clipboard, paste),
+        cmd!(
+            "edit.paste",
+            "Paste",
+            ["Edit"],
+            Some("Cmd+V"),
+            "{tracks?, at?, clips?} — pastes what was cut or copied: clips and automation; after Copy Special › Clip Gain the gain curve onto the clips under the paste range (as edit.paste_clip_gain), after Copy Special › Clip Effects the settings onto the selected clips (as edit.paste_clip_effects)",
+            has_anything_to_paste,
+            paste
+        ),
         cmd!("edit.clear", "Clear", ["Edit"], Some("Cmd+B"), "{tracks?, start?, end?}", has_range, clear),
         cmd!("edit.cut_clip_gain", "Clip Gain", ["Edit", "Cut Special"], Some("Cmd+Ctrl+X"), "{}", has_range, |e, p| {
             super::edit_more::copy_clip_gain(e, p)?;
@@ -538,7 +546,24 @@ fn clipboard_here(e: &mut Engine, id: &str) -> Result<crate::Clipboard> {
     Ok(cb)
 }
 
+/// Paste's clipboard: clips and automation, or what Copy Special › Clip Gain / Clip Effects put
+/// there.
+fn has_anything_to_paste(e: &Engine) -> std::result::Result<(), String> {
+    let cb = &e.clipboard;
+    if cb.tracks.is_empty() && cb.clip_gain.is_empty() && cb.clip_effects.is_empty() { Err("the clipboard is empty".into()) } else { Ok(()) }
+}
+
 fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
+    // Copy Special › Clip Gain and Clip Effects fill a clipboard of their own: Paste puts it back
+    // where it belongs (one step, labelled Paste).
+    if e.clipboard.tracks.is_empty() {
+        if !e.clipboard.clip_gain.is_empty() {
+            return super::edit_more::paste_clip_gain(e, p);
+        }
+        if !e.clipboard.clip_effects.is_empty() {
+            return super::edit_more::paste_clip_effects(e, p);
+        }
+    }
     let tracks = tracks_required(e, "edit.paste", p)?;
     let given = position_param(e, "edit.paste", p, "at")?;
     let cb = clipboard_here(e, "edit.paste")?;
