@@ -1971,7 +1971,19 @@ pub struct CompEngineDsp {
     blk_lane_gr: [f32; NUM_LANES],
     /// Rust: play what the detectors hear (Listen).
     listen: bool,
+    /// Rust: look-ahead in samples (0: none, the C++ path untouched). The audio is delayed by
+    /// this much and the detectors measure the undelayed signal, feed-forward, as a key.
+    la: usize,
+    /// The look-ahead delay lines (left, right) and their write position.
+    la_buf: [[f32; LA_MAX]; 2],
+    la_pos: usize,
+    /// Multiband with look-ahead: the undelayed signal split into the same bands for the
+    /// detectors.
+    la_xover: [Crossover; 2],
 }
+
+/// The longest look-ahead in samples (10 ms at 384 kHz fits).
+pub const LA_MAX: usize = 4096;
 
 impl Default for CompEngineDsp {
     fn default() -> Self {
@@ -2032,6 +2044,10 @@ impl CompEngineDsp {
             blk_out_pk: 0.0,
             blk_lane_gr: [0.0; NUM_LANES],
             listen: false,
+            la: 0,
+            la_buf: [[0.0; LA_MAX]; 2],
+            la_pos: 0,
+            la_xover: [Crossover::default(); 2],
         }
     }
 
@@ -2173,10 +2189,12 @@ impl CompEngineDsp {
             l.prepare(sample_rate);
         }
 
-        for x in &mut self.xover {
+        for x in self.xover.iter_mut().chain(self.la_xover.iter_mut()) {
             *x = Crossover::default();
         }
         self.update_crossover();
+        self.la_buf = [[0.0; LA_MAX]; 2];
+        self.la_pos = 0;
 
         self.ctl = 0;
         self.meter_count = 0;
@@ -2254,22 +2272,48 @@ impl CompEngineDsp {
             self.dry_s += self.smooth * (dry_t - self.dry_s);
             self.byp_s += self.smooth * (byp_t - self.byp_s);
 
-            let x0 = channels[0][n];
-            let x1 = if stereo { channels[1][n] } else { x0 };
+            let mut x0 = channels[0][n];
+            let mut x1 = if stereo { channels[1][n] } else { x0 };
 
             // channel mode: work on left/right, or on mid/side (optionally leaving one of the two untouched)
             let ms_on = self.ms_on;
+
+            // Look-ahead (Rust): the detectors get the signal as it comes, the audio comes later.
+            let mut ahead = None;
+            if self.la > 0 {
+                let w = self.la_pos;
+                let r = (w + LA_MAX - self.la) % LA_MAX;
+                self.la_buf[0][w] = x0;
+                self.la_buf[1][w] = x1;
+                self.la_pos = (w + 1) % LA_MAX;
+                if key.is_none() {
+                    let (k0, k1) = if x0.is_finite() && x1.is_finite() { (x0, x1) } else { (0.0, 0.0) };
+                    ahead = Some(if ms_on { (0.5 * (k0 + k1), 0.5 * (k0 - k1)) } else { (k0, k1) });
+                }
+                x0 = self.la_buf[0][r];
+                x1 = self.la_buf[1][r];
+            }
+
             let p0 = if ms_on { 0.5 * (x0 + x1) } else { x0 };
             let p1 = if ms_on { 0.5 * (x0 - x1) } else { x1 };
 
             let pwr = x0 * x0 + x1 * x1;
 
-            let keyed = key.map(|k| {
-                let k0 = k[0][n];
-                let k1 = k.get(1).map_or(k0, |b| b[n]);
-                let (k0, k1) = if k0.is_finite() && k1.is_finite() { (k0, k1) } else { (0.0, 0.0) };
-                if ms_on { (0.5 * (k0 + k1), 0.5 * (k0 - k1)) } else { (k0, k1) }
-            });
+            let keyed = key
+                .map(|k| {
+                    let k0 = k[0][n];
+                    let k1 = k.get(1).map_or(k0, |b| b[n]);
+                    let (k0, k1) = if k0.is_finite() && k1.is_finite() { (k0, k1) } else { (0.0, 0.0) };
+                    if ms_on { (0.5 * (k0 + k1), 0.5 * (k0 - k1)) } else { (k0, k1) }
+                })
+                .or(ahead);
+            // In Multiband each band's detector hears its own band of the coming signal.
+            let mut ahead0 = [0.0f32; 3];
+            let mut ahead1 = [0.0f32; 3];
+            if let (Some((a0, a1)), true) = (ahead, self.multiband) {
+                self.la_xover[0].split(a0, &mut ahead0);
+                self.la_xover[1].split(a1, &mut ahead1);
+            }
 
             // ---- the parallel sum. Every lane sees the same input; none sees another's output.
             let mut s0 = 0.0f32;
@@ -2296,9 +2340,12 @@ impl CompEngineDsp {
                         continue;
                     }
                     let lp = if first { pwr } else { (if ms_on { 2.0 } else { 1.0 }) * (c0 * c0 + c1 * c1) };
+                    let first_lane = first;
                     first = false;
 
-                    let (w0, w1) = self.lanes[i].process_sample(c0, c1, self.ch_mode, lp, keyed);
+                    // with look-ahead only the first lane hears ahead; the others measure what they are given
+                    let k = if ahead.is_some() && !first_lane { None } else { keyed };
+                    let (w0, w1) = self.lanes[i].process_sample(c0, c1, self.ch_mode, lp, k);
                     let g = self.level_gain(i);
                     c0 = g * w0;
                     c1 = g * w1;
@@ -2328,7 +2375,8 @@ impl CompEngineDsp {
                 }
 
                 let lane_pwr = if self.multiband { band0[i] * band0[i] + band1[i] * band1[i] } else { pwr };
-                let (w0, w1) = self.lanes[i].process_sample(band0[i], band1[i], self.ch_mode, lane_pwr, keyed);
+                let k = if ahead.is_some() && self.multiband { Some((ahead0[i], ahead1[i])) } else { keyed };
+                let (w0, w1) = self.lanes[i].process_sample(band0[i], band1[i], self.ch_mode, lane_pwr, k);
 
                 // Lane A at unity multiplies by exactly 1.0f.
                 let g = self.level_gain(i);
@@ -2410,6 +2458,25 @@ impl CompEngineDsp {
         self.listen = on;
     }
 
+    /// Look-ahead (Rust addition), in milliseconds (0 to 10): the audio is delayed by this much
+    /// and every lane's detector measures the coming signal, feed-forward, as it would a key (in
+    /// Multiband each band its own band; in Serial the first lane). A chosen key is measured as
+    /// it comes, so it leads the delayed audio too. 0 leaves the C++ path untouched.
+    pub fn set_lookahead_ms(&mut self, ms: f32) {
+        let ms = if ms.is_finite() { ms.clamp(0.0, 10.0) } else { 0.0 };
+        let n = ((ms * 0.001 * self.fs).round() as usize).min(LA_MAX - 1);
+        if n != self.la {
+            self.la = n;
+            self.la_buf = [[0.0; LA_MAX]; 2];
+            self.la_pos = 0;
+        }
+    }
+
+    /// The look-ahead delay in samples (the plugin's latency).
+    pub fn lookahead_samples(&self) -> usize {
+        self.la
+    }
+
     fn level_gain(&self, i: usize) -> f32 {
         gain_of(self.level[i])
     }
@@ -2422,7 +2489,7 @@ impl CompEngineDsp {
         let lp2 = butter(self.x_hi, self.fs, false);
         let hp2 = butter(self.x_hi, self.fs, true);
         let apc = allpass(self.x_hi, self.fs);
-        for x in &mut self.xover {
+        for x in self.xover.iter_mut().chain(self.la_xover.iter_mut()) {
             x.lo1a.set_coefs(&lp1);
             x.lo1b.set_coefs(&lp1);
             x.hi1a.set_coefs(&hp1);

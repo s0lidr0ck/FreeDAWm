@@ -61,7 +61,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no look-ahead on Comp (upward compression dropped by the owner) |
+| A. Dynamics | Ten modelled compressor styles with a key input and look-ahead, multiband, true-peak limiter, transient shaper, two gates | Small (upward compression dropped by the owner) |
 | B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no simple channel EQ in the menu (linear-phase CleanQ and a graphic EQ dropped by the owner) |
 | C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets, a bass amp, a bass enhancer | Small (pedalboard dropped by the owner) |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses** (the owner is sourcing them); no reverb that spreads a source across surround speakers |
@@ -85,7 +85,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Compressor with knee, mix, sidechain filter, gain-reduction meter | ● | ● | ● | ● | **Works** (Comp) |
 | Modelled characters (FET, opto, VCA, vari-mu) | ● | ● | ● | ● | **Works**: ten styles, three variants each |
 | Key input from another track | ● | ● | ● | ● | **Works**: Comp, Lull, Rez and Shale take a key; Comp's Listen plays what its detector hears |
-| Look-ahead | ● | ● | ● | ● | **Missing** on Comp (the hidden stock compressor has it) |
+| Look-ahead | ● | ● | ● | ● | **Works** on Comp: Look-ahead 0–10 ms (the header's Ahead pill steps Off, 1, 2, 5, 10 ms): the audio is delayed and reported as latency, the detectors hear the signal as it comes (feed-forward, as from a key; in Multiband each band its own band, in Serial the first lane). Off by default: the C++ path untouched. Test: comp `look_ahead_catches_a_burst_before_it_is_heard` |
 | Auto make-up gain | ◐ | ● | ● | ● | **Works** |
 | Mid/side and stereo link amount | ◐ | ● | ● | ● | **Works** |
 | Multiband compressor | ● | ● | ● | ● | **Works**: three bands inside Comp; crossovers are not linear-phase |
@@ -371,3 +371,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Keel (bass amp) and Heft (bass enhancer) added; preset housekeeping and editor basics done |
 | 2026-11-16 | minor | Keel: silence in gives silence out (the tube stage's idle point is where it settles, not its exact DC solution) |
 | 2026-11-17 | minor | Round three reconciled: controller mapping already built (section 6); the new effects, the bundled impulse responses, the mastering assistant, the hidden stock EQ and channel strip and the browser build marked not planned here, with the owner's reasons |
+| 2026-11-17 | minor | Comp gets a look-ahead |

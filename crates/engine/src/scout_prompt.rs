@@ -20,8 +20,8 @@ use std::fmt::Write as _;
 /// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ, and from
 /// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
 /// sixteen parameters and their lines), and from 51 500 for Keel and Heft (1 100: their sixteen
-/// parameters and their lines).
-pub const MAX_CHARS: usize = 52_600;
+/// parameters and their lines), and from 52 600 for Lo-Fi, listed again, and Comp's Look-ahead (500).
+pub const MAX_CHARS: usize = 53_100;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -116,6 +116,9 @@ pub fn purpose(id: &str) -> &'static str {
         "signal_generator" => "Utility: test tones and noise (replaces the input).",
         "dither" => "Utility: TPDF dither to 16, 20 or 24 bits, optional noise shaping; last on a master.",
         "channel_tool" => "Utility: swap, mono, one side, M/S encode/decode, per-channel polarity, gain, DC filter.",
+        "lofi" => {
+            "Utility: bit depth (1-24 bits) and sample-rate reduction (down to 500 Hz), with noise and a wet/dry mix: lo-fi and crushed sounds."
+        }
         "spectrum" => "Meter: FFT spectrum (sum, L, R, mid, side) with slope and peak hold; sound untouched.",
         "loudness" => "Meter: BS.1770 loudness (momentary, short-term, integrated, range, true peak) against a target.",
         "phase_meter" => "Meter: stereo correlation (lowest held), balance and goniometer; sound untouched.",

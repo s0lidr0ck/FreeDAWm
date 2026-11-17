@@ -39,6 +39,10 @@
 //! - **Link all channels** (`surLink`): on a track wider than stereo, every channel's detector
 //!   hears the loudest channel, so a surround mix is reduced as one (the per-channel host builds
 //!   that key; see `per_channel`). Off by default: each channel on its own, as before.
+//! - **Look-ahead** (`lookahead`, 0 to 10 ms): the audio is delayed by that much and reported as
+//!   latency, and the detectors measure the signal as it comes (feed-forward, as from a key; in
+//!   Multiband each band its own band, in Serial the first lane), so a fast attack catches a
+//!   transient's start. Off (0) by default: the C++ path untouched.
 
 pub mod comp_engine_dsp;
 mod presets;
@@ -88,6 +92,13 @@ fn hpf_text(v: f32) -> String {
 fn level_text(v: f32) -> String {
     if v <= 0.0 { "Off".to_string() } else { format!("{:+.1} dB", knob_to_lane_db(v)) }
 }
+fn lookahead_text(v: f32) -> String {
+    if v <= 0.0 { "Off".into() } else { format!("{:.1} ms", v * LOOKAHEAD_MS) }
+}
+
+/// Look-ahead at the knob's top, in milliseconds.
+const LOOKAHEAD_MS: f32 = 10.0;
+
 fn hz_text(hz: f32) -> String {
     if hz >= 1000.0 { format!("{:.2} kHz", hz / 1000.0) } else { format!("{:.0} Hz", hz.round()) }
 }
@@ -99,7 +110,7 @@ fn xover_hi_text(v: f32) -> String {
 }
 
 /// Parameters in the C++ order (`Parameters.h`), ids, names and defaults verbatim.
-pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS + 2] = [
+pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS + 3] = [
     fs_choice("style", "A Style", 0.0, "Lane A", STYLES),
     knob01("amount", "A Amount", 0.4, "Lane A", pct_text),
     knob01("ratio", "A Ratio", 0.4, "Lane A", pct_text),
@@ -156,10 +167,13 @@ pub static COMP_PARAMS: [ParamInfo; NUM_PARAMS + 2] = [
     // FreeDAWm's own, after the C++ order (see the module notes)
     fs_toggle("listen", "Listen", 0.0, "Global"),
     fs_toggle("surLink", "Link All Channels", 0.0, "Global"),
+    knob01("lookahead", "Look-ahead", 0.0, "Global", lookahead_text),
 ];
 
 /// The index of [`COMP_PARAMS`]' Listen.
 const P_LISTEN: usize = NUM_PARAMS;
+/// The index of [`COMP_PARAMS`]' Look-ahead.
+const P_LOOKAHEAD: usize = NUM_PARAMS + 2;
 
 pub static COMP_INFO: PluginInfo = PluginInfo {
     id: "fs_comp",
@@ -242,6 +256,7 @@ impl Comp {
             self.dsp.set_parameter(i, self.p.v(i));
         }
         self.dsp.set_listen(self.p.v(P_LISTEN) > 0.5);
+        self.dsp.set_lookahead_ms(self.p.v(P_LOOKAHEAD) * LOOKAHEAD_MS);
     }
 }
 
@@ -257,6 +272,8 @@ impl Plugin for Comp {
                     self.dsp.set_parameter(idx, self.p.v(idx));
                 } else if idx == P_LISTEN {
                     self.dsp.set_listen(self.p.v(idx) > 0.5);
+                } else if idx == P_LOOKAHEAD {
+                    self.dsp.set_lookahead_ms(self.p.v(idx) * LOOKAHEAD_MS);
                 }
                 true
             }
@@ -298,6 +315,10 @@ impl Plugin for Comp {
 
     fn analysis(&self) -> Option<Arc<Analysis>> {
         Some(self.analysis.clone())
+    }
+
+    fn latency(&self) -> usize {
+        self.dsp.lookahead_samples()
     }
 
     fn gain_reduction_db(&self) -> f32 {
@@ -458,7 +479,8 @@ mod tests {
                 "xoverLo",
                 "xoverHi",
                 "listen",
-                "surLink"
+                "surLink",
+                "lookahead"
             ]
         );
         let defaults: Vec<f32> = COMP_PARAMS.iter().map(|p| p.default).collect();
@@ -467,7 +489,7 @@ mod tests {
         want.extend(lane);
         want.push(2.0);
         want.extend(lane);
-        want.extend([1.0, 1.0, 0.0, 0.467, 0.42, 0.0, 0.0]);
+        want.extend([1.0, 1.0, 0.0, 0.467, 0.42, 0.0, 0.0, 0.0]);
         assert_eq!(defaults, want);
         for p in &COMP_PARAMS {
             let g = p.group;
@@ -835,5 +857,41 @@ mod tests {
         let mut io = vec![input.clone(), input.clone()];
         run_keyed(&mut s, &mut io, Some(&[vec![0.0; len], vec![0.0; len]]));
         assert!(corr(&io[0][24_000..], &input[24_000..]) > 0.9);
+    }
+
+    /// The parity list's look-ahead: Comp delays its audio by the look-ahead, reports it as
+    /// latency, and turns a sudden burst down before it is heard instead of after.
+    #[test]
+    fn look_ahead_catches_a_burst_before_it_is_heard() {
+        let rate = 48_000.0;
+        let burst_at = 24_000;
+        let len = 36_000;
+        let input: Vec<f32> = (0..len).map(|i| if i < burst_at { 0.001 * (i as f32 * 0.05).sin() } else { 0.9 * (i as f32 * 0.05).sin() }).collect();
+        let render = |la: f32| {
+            let mut s = Comp::new();
+            s.prepare(rate, 512, 2);
+            s.set_param("style", 0.0);
+            s.set_param("amount", 0.9);
+            s.set_param("ratio", 0.9);
+            s.set_param("attack", 0.0);
+            s.set_param("lookahead", la);
+            let mut io = vec![input.clone(), input.clone()];
+            run(&mut s, &mut io, 512);
+            (io, s.latency())
+        };
+        let (plain, lat0) = render(0.0);
+        let (ahead, lat) = render(0.5);
+        assert_eq!(lat0, 0);
+        assert_eq!(lat, 240, "5 ms at 48 kHz");
+        // the quiet part comes out as it went in, 240 samples later
+        for n in 1000..2000 {
+            assert!((ahead[0][n + lat] - input[n]).abs() < 1e-4, "{n}");
+        }
+        let peak = |x: &[f32]| x.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+        // the first millisecond of the burst as heard
+        let first_plain = peak(&plain[0][burst_at..burst_at + 48]);
+        let first_ahead = peak(&ahead[0][burst_at + lat..burst_at + lat + 48]);
+        assert!(first_ahead < 0.7 * first_plain, "look-ahead {first_ahead} vs none {first_plain}");
+        assert!(ahead.iter().flatten().all(|v| v.is_finite()));
     }
 }
