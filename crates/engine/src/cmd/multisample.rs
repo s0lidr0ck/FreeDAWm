@@ -17,7 +17,7 @@ use crate::cmd;
 use serde_json::json;
 use soundcraft_audio_io::{AudioBuffer, FileFormat};
 use soundcraft_dsp::plugins::multisampler::{LAYERS, NOTES, ROBINS, sample_key};
-use soundcraft_midi::{Note, Sequence};
+use soundcraft_midi::{Note, Sequence, note_name};
 use soundcraft_model::{ChannelFormat, Clip, Insert, Route, TrackKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -68,12 +68,6 @@ fn pantry_insert() -> Insert {
         }
     }
     ins
-}
-
-/// A note's name as the app shows it (60 is C3).
-fn note_name(note: u8) -> String {
-    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    format!("{}{}", NAMES.get(usize::from(note % 12)).copied().unwrap_or("?"), i32::from(note / 12) - 2)
 }
 
 /// A whole number parameter within `lo..=hi` (`default` when absent).

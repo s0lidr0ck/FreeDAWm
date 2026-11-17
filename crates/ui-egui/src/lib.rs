@@ -1185,7 +1185,10 @@ impl SoundApp {
         {
             return r;
         }
-        if id.starts_with("session.save") || id.starts_with("file.bounce") || matches!(id, "track.freeze" | "track.commit" | "track.bounce") {
+        if id.starts_with("session.save")
+            || id.starts_with("file.bounce")
+            || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.capture_multisample")
+        {
             // Third-party plugins keep state the session can't see: store it first.
             self.capture_plugin_states();
         }
@@ -1253,6 +1256,9 @@ impl SoundApp {
                 }
                 if id == "track.freeze" || id == "track.unfreeze" {
                     self.ui.status = freeze_status(&self.engine, &v);
+                }
+                if id == "track.capture_multisample" {
+                    self.ui.status = dialogs::capture_status(&v);
                 }
                 self.note_placed(id, &params);
                 if id == "track.clear_clip_indicators" {

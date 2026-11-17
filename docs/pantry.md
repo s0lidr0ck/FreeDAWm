@@ -1,7 +1,7 @@
 # Pantry: the multisampler, and capturing instruments into it
 
-> **Status:** the instrument, SFZ loading and capture are built as commands; no window or menu
-> entry yet · **Written:** 2026-11-17 · **Owner decisions (2026-11-17):** a separate instrument
+> **Status:** the instrument, SFZ loading and capture are built; capture is on the Track menu
+> with a settings dialog; no window of the instrument's own yet · **Written:** 2026-11-17 · **Owner decisions (2026-11-17):** a separate instrument
 > from Lift; the name Pantry; twelve velocity layers by default; velocity layers that blend;
 > capture done inside the app, each note rendered on its own, with the settings below
 
@@ -35,8 +35,8 @@ of its own.
 
 ## Capture
 
-`track.capture_multisample` plays the track's instrument a note at a time through the track's
-modules (pre-fader, offline, the way Freeze renders) and makes a new instrument track whose
+**Track › Capture to Pantry…** (`track.capture_multisample`) plays the track's instrument a note
+at a time through the track's modules (pre-fader, offline, the way Freeze renders) and makes a new instrument track whose
 Pantry plays the result. The source track is not changed.
 
 | Setting | Default | |
@@ -71,9 +71,9 @@ controls shape the sound. `tools/sampling/sampling.py split` writes files it rea
 
 ## Not built yet
 
-- A window of its own (the keyboard map, the layers of a note) and menu entries; the commands
-  run from the control channel and Scout. Capture's settings need a dialog, and a long capture a
-  progress bar: it runs as one blocking command today.
+- A window of its own (the keyboard map, the layers of a note), and a menu entry for loading an
+  SFZ file (`mix.multisample_load` runs from the control channel and Scout).
+- A progress bar for capture: it runs as one blocking command, and the app waits.
 - Capturing only down to a chosen module (Freeze's "up to here").
 - Third-party instruments as capture sources are untested: capture renders through instances of
   its own, as an engine-side Freeze does.
