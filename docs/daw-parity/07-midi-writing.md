@@ -141,7 +141,7 @@ The gaps are of four kinds:
 | Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band and Cleanup; shown above the editor |
 | Chords detected from MIDI or audio | ◐ | ● | ● | ● | **Works** (Detect Chords) |
 | Clips follow the chord track when it changes | ○ | ● | ● | ● | **Works** per clip, opt in (More › Follow Chord Lane, `clip.follow_chords`): the clip keeps the chords it was written against; when the chord lane or the band key changes, its chord tones go to the nearest tone of the new chord and other notes move as the root does, in the same undo step. Destructive (the notes are rewritten); the Band is unchanged |
-| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Partial**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key); no chord pads (design below, not built) |
+| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Works**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key). Event › More MIDI › Chord Pads… opens eight pads from the key on the Key ruler at the playhead (its seven triads, I ii iii IV V vi vii° in major, and V7), an octave setting; holding a pad plays its chord on the Musical Typing input, so armed or monitored instrument tracks hear it and a take records it. Pads are not yet played from a MIDI keyboard's keys |
 | Wrong notes corrected against key and chords, switchable | ○ | ○ | ○ | ○ | **Works** (MIDI Cleanup, non-destructive) |
 
 ## F. Drums and patterns
@@ -591,3 +591,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Notes edited directly on a MIDI track showing Notes |
 | 2026-11-17 | minor | Tempo from a MIDI performance |
 | 2026-11-17 | minor | MIDI files previewed from the browser |
+| 2026-11-17 | minor | Chord Pads |

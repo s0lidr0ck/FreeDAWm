@@ -103,6 +103,11 @@ pub fn set_sustain(app: &mut SoundApp, down: bool) {
     }
 }
 
+/// Sends a live message on the Musical Typing port (Chord Pads use it too).
+pub fn send_live(app: &SoundApp, msg: [u8; 3]) {
+    send(app, msg);
+}
+
 /// Sends a live message on the Musical Typing port (nothing where there is no MIDI hub).
 fn send(app: &SoundApp, msg: [u8; 3]) {
     if let Some(h) = &app.midi_hub {

@@ -13,6 +13,7 @@ pub mod browser;
 pub mod chain_view;
 pub mod chamber_plan;
 pub mod channel_width;
+pub mod chord_pads;
 pub mod cleanq_ceiling;
 pub mod control;
 pub mod control_room;
@@ -1059,6 +1060,8 @@ pub struct SoundApp {
     pub net: Option<net_ui::NetState>,
     /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
+    /// Chord Pads' window and the pad held.
+    pub pads: chord_pads::PadState,
     /// Event › More MIDI › Step Input: its window and the chord being played.
     pub step: step_input::StepInput,
     /// Input capture, opened on first record.
@@ -1308,6 +1311,7 @@ impl SoundApp {
             #[cfg(not(target_arch = "wasm32"))]
             net: None,
             typing: musical_typing::TypingState::default(),
+            pads: chord_pads::PadState::default(),
             step: step_input::StepInput::default(),
             recorder: None,
             record_start: 0,

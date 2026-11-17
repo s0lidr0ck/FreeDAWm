@@ -19,6 +19,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     metadata(app, ctx);
     event_list(app, ctx);
     midi_keyboard(app, ctx);
+    crate::chord_pads::window(app, ctx);
     workspace(app, ctx);
     configurations(app, ctx);
     playback_engine(app, ctx);

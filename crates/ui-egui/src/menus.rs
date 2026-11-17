@@ -63,6 +63,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.metadata", "Metadata Inspector", "Window > Metadata Inspector", None),
     ("window.event_list", "MIDI Event List", "Window > MIDI Event List", Some("Alt+=")),
     ("window.midi_keyboard", "Musical Typing", "Window > Musical Typing", Some("Shift+K")),
+    ("window.chord_pads", "Chord Pads", "", None),
     // Ctrl+Shift+K is Export Clips as Files (Cmd+Shift+K) off macOS, so computer keys take Cmd+Alt+K.
     ("ui.musical_typing", "Computer Keys Play Notes", "", Some("Cmd+Alt+K")),
     ("window.workspace", "Workspace", "Window > New Workspace > Default", Some("Alt+I")),
@@ -925,6 +926,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.score") => app.ui.show_score,
         Some("window.event_list") => app.ui.show_event_list,
         Some("window.midi_keyboard") => app.ui.show_midi_keyboard,
+        Some("window.chord_pads") => app.pads.open,
         Some("window.workspace") => app.ui.show_workspace,
         Some("window.preferences") => app.ui.show_preferences,
         Some("window.ear_profile") => app.ui.show_ear_profile,
@@ -1453,6 +1455,13 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.task_manager" => toggle(&mut app.ui.show_task_manager),
         "window.metadata" => toggle(&mut app.ui.show_metadata),
         "window.event_list" => toggle(&mut app.ui.show_event_list),
+        "window.chord_pads" => {
+            app.pads.open = !app.pads.open;
+            if !app.pads.open {
+                crate::chord_pads::release(app);
+            }
+            json!({"value": app.pads.open})
+        }
         // Musical Typing opens ready to play: the computer keys on with the window, off with it.
         "window.midi_keyboard" => {
             let open = !app.ui.show_midi_keyboard;
