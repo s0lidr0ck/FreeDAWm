@@ -73,7 +73,7 @@ The gaps are of four kinds:
 | Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Works**: a click on a piano key selects that pitch's notes (Shift adds, a drag along the keys adds each key's); Invert Selection, Select Same Pitch and Select by Rule… (pitch, velocity, length and beat-of-the-bar ranges, in the MIDI Operations window) in the editor's More menu |
 | Split a note, join notes | ● | ● | ● | ● | **Works** |
 | Mute notes | ● | ● | ● | ● | **Works**: Mute Notes / Unmute Notes in the editor's More menu (`midi.notes_set` with `muted`); a muted note is drawn faint, does not play and is left out of MIDI and DAWproject export; sessions saved before load unmuted, and unmuted notes save as before |
-| Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
+| Hear a note on click and while dragging it | ● | ● | ● | ● | **Works**: on click, draw and drop, and while a note is dragged to another pitch (each new pitch sounds as a held piano key does, stopping when it is let go); with Audition on |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
 | Edit several clips or tracks at once | ● | ● | ● | ● | **Works**: with several MIDI clips selected, the roll spans them all, the others' notes in their track's colour. A marquee, Shift-click, Select All and Ctrl+A select notes in any of them; moving, copying, resizing, nudging, deleting and Quantize (and the MIDI Operations on the selection) act on the selected notes of every clip as one undo step; the Pencil draws into the selected clip under it. A plain click on another clip's note makes it the one the velocity and controller lanes and the note bar show (the Clip menu too); those lanes edit that clip only. Scripts run the per-clip commands |
@@ -86,11 +86,11 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Grid from whole notes to 64ths, triplets | ● | ● | ● | ● | **Works** |
-| Dotted values, other tuplets | ● | ● | ● | ● | **Partial**: dotted only by following the main window's grid; no quintuplets and the like |
-| Grid that adapts to zoom | ○ | ● | ● | ● | **Missing** |
-| Snap to the grid, or keep the offset from it | ● | ● | ● | ● | **Partial**: edges snap to lines, bodies keep their offset; no switch |
+| Dotted values, other tuplets | ● | ● | ● | ● | **Works**: the editor's Grid menu takes each value straight, triplet, dotted, quintuplet (5:4) or septuplet (7:4) (`ui.midi_editor` grid ids `1/8d`, `1/16q`, `1/8s`); the lines are counted from each bar |
+| Grid that adapts to zoom | ○ | ● | ● | ● | **Works**: Grid › Adapt to Zoom snaps to the finest straight value (1/64 to 1/1) whose lines stay 14 points apart, following each zoom (`auto`) |
+| Snap to the grid, or keep the offset from it | ● | ● | ● | ● | **Works**: edges snap to lines; a moved note keeps its offset from the grid, or with More › Snap Moves to the Grid its start lands on a line (Alt: free either way) |
 | New note takes the last note's length and velocity | ● | ● | ● | ● | **Works** |
-| Zoom, scroll, zoom to the notes | ● | ● | ● | ● | **Partial**: fit shows the clip, not the notes |
+| Zoom, scroll, zoom to the notes | ● | ● | ● | ● | **Works**: Fit shows the clip; Notes zooms to the selected notes (or every note), in time and in pitch (time only on a folded roll) |
 | Keys: nudge, transpose by semitone and octave | ● | ● | ● | ● | **Works** |
 | Keys: lengthen and shorten | ● | ● | ● | ● | **Works**: Alt+Right and Alt+Left, a grid step |
 
@@ -435,3 +435,7 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | The release velocity shown and set in the note bar |
 | 2026-11-17 | minor | Notes split out by channel too (the pitch split was already built) |
 | 2026-11-17 | minor | Instrument parameters take automation lanes, and their moves are written in Touch, Latch and Write |
+| 2026-11-17 | minor | The editor's grid takes dotted, quintuplet and septuplet values, and one that adapts to the zoom |
+| 2026-11-17 | minor | Snap Moves to the Grid: a moved note's start lands on a line instead of keeping its offset |
+| 2026-11-17 | minor | A note dragged to another pitch sounds there during the drag |
+| 2026-11-17 | minor | Zoom to the notes: the selected notes (or every note) fill the roll |

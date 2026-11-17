@@ -26,7 +26,8 @@ const MAX_LINES: usize = 20_000;
 /// How long a held piano key sounds at most, in seconds.
 pub const KEY_HOLD_S: f64 = 8.0;
 
-/// The editor's own grid: the Edit window's, a note value (straight or triplet), or off.
+/// The editor's own grid: the Edit window's, a note value (straight, triplet, dotted or a
+/// quintuplet or septuplet), one that follows the zoom, or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MidiGrid {
     /// Follows the Edit window's grid.
@@ -36,8 +37,31 @@ pub enum MidiGrid {
         value: NoteValue,
         triplet: bool,
     },
+    /// Half again as long as `value`.
+    Dotted {
+        value: NoteValue,
+    },
+    /// `n` notes in the time of four of `value` (5: quintuplets, 7: septuplets).
+    Tuplet {
+        value: NoteValue,
+        n: u8,
+    },
+    /// Follows the zoom: the ticks of the finest straight value whose lines stay
+    /// [`ADAPTIVE_MIN_PX`] apart, set as the roll is laid out ([`adaptive_ticks`]).
+    Adaptive(i64),
     /// No snapping: drags move by the tick.
     Off,
+}
+
+/// The closest an adaptive grid's lines come, in points.
+pub const ADAPTIVE_MIN_PX: f32 = 14.0;
+
+/// The adaptive grid's step at `px_per_tick`: the finest of 1/64 … 1/1 whose lines are at
+/// least [`ADAPTIVE_MIN_PX`] apart (a whole note when even that is closer).
+pub fn adaptive_ticks(px_per_tick: f32) -> i64 {
+    let mut values = NoteValue::ALL.map(|v| v.ticks());
+    values.sort_unstable();
+    values.into_iter().find(|t| *t as f32 * px_per_tick >= ADAPTIVE_MIN_PX).unwrap_or(TICKS_PER_QUARTER * 4)
 }
 
 /// "1/1" … "1/64".
@@ -76,6 +100,9 @@ impl MidiGrid {
         match self {
             MidiGrid::Edit => edit_grid_ticks(edit),
             MidiGrid::Note { value, triplet } => (if triplet { value.ticks() * 2 / 3 } else { value.ticks() }).max(1),
+            MidiGrid::Dotted { value } => (value.ticks() * 3 / 2).max(1),
+            MidiGrid::Tuplet { value, n } => (value.ticks() * 4 / i64::from(n.max(1))).max(1),
+            MidiGrid::Adaptive(t) => t.max(1),
             MidiGrid::Off => 1,
         }
     }
@@ -99,6 +126,9 @@ impl MidiGrid {
                 _ => "Edit 1/16".into(),
             },
             MidiGrid::Note { value, triplet } => format!("{}{}", value_name(value), if triplet { "T" } else { "" }),
+            MidiGrid::Dotted { value } => format!("{}.", value_name(value)),
+            MidiGrid::Tuplet { value, n } => format!("{}:{n}", value_name(value)),
+            MidiGrid::Adaptive(t) => format!("Auto {}", tick_name(t)),
             MidiGrid::Off => "Off".into(),
         }
     }
@@ -109,6 +139,10 @@ impl MidiGrid {
             MidiGrid::Edit => "edit".into(),
             MidiGrid::Off => "off".into(),
             MidiGrid::Note { value, triplet } => format!("{}{}", value_name(value), if triplet { "t" } else { "" }),
+            MidiGrid::Dotted { value } => format!("{}d", value_name(value)),
+            MidiGrid::Tuplet { value, n: 7 } => format!("{}s", value_name(value)),
+            MidiGrid::Tuplet { value, .. } => format!("{}q", value_name(value)),
+            MidiGrid::Adaptive(_) => "auto".into(),
         }
     }
 
@@ -117,13 +151,21 @@ impl MidiGrid {
         match s.as_str() {
             "edit" => return Some(MidiGrid::Edit),
             "off" | "none" => return Some(MidiGrid::Off),
+            "auto" | "adaptive" => return Some(MidiGrid::Adaptive(SIXTEENTH)),
             _ => {}
         }
-        let (body, triplet) = match s.strip_suffix('t') {
-            Some(b) => (b, true),
-            None => (s.as_str(), false),
+        let (body, kind) = match s.char_indices().last() {
+            Some((i, c @ ('t' | 'd' | 'q' | 's'))) => (&s[..i], c),
+            _ => (s.as_str(), ' '),
         };
-        NoteValue::ALL.into_iter().find(|v| value_name(*v) == body).map(|value| MidiGrid::Note { value, triplet })
+        let value = NoteValue::ALL.into_iter().find(|v| value_name(*v) == body)?;
+        Some(match kind {
+            't' => MidiGrid::Note { value, triplet: true },
+            'd' => MidiGrid::Dotted { value },
+            'q' => MidiGrid::Tuplet { value, n: 5 },
+            's' => MidiGrid::Tuplet { value, n: 7 },
+            _ => MidiGrid::Note { value, triplet: false },
+        })
     }
 }
 
@@ -681,6 +723,12 @@ pub fn dragging(app: &SoundApp) -> bool {
 /// soloed) until [`release_key`], at most [`KEY_HOLD_S`].
 pub fn press_key(app: &mut SoundApp, cid: ClipId, pitch: u8) {
     app.midi.piano_key = Some(pitch);
+    sound_pitch(app, cid, pitch);
+}
+
+/// `pitch` sounds on the clip's track as a held piano key does (up to [`KEY_HOLD_S`]), until the
+/// audition is stopped.
+pub fn sound_pitch(app: &mut SoundApp, cid: ClipId, pitch: u8) {
     if app.engine.transport.recording || (app.is_playing() && app.midi.auditioning.is_none()) {
         return;
     }
@@ -888,7 +936,35 @@ pub fn lit_key(painter: &egui::Painter, key: Rect, pitch: i32) {
     );
 }
 
-/// The Grid menu: the Edit window's grid, 1/1 … 1/64, triplets, Off.
+/// A grid's kind as [`MidiGrid::id`] ends: ' ' straight, 't', 'd', 'q' or 's'.
+fn grid_kind(g: MidiGrid) -> char {
+    match g {
+        MidiGrid::Note { triplet: true, .. } => 't',
+        MidiGrid::Dotted { .. } => 'd',
+        MidiGrid::Tuplet { n: 7, .. } => 's',
+        MidiGrid::Tuplet { .. } => 'q',
+        _ => ' ',
+    }
+}
+
+/// `value` as a grid of `kind` (see [`grid_kind`]).
+fn with_kind(value: NoteValue, kind: char) -> MidiGrid {
+    match kind {
+        't' => MidiGrid::Note { value, triplet: true },
+        'd' => MidiGrid::Dotted { value },
+        'q' => MidiGrid::Tuplet { value, n: 5 },
+        's' => MidiGrid::Tuplet { value, n: 7 },
+        _ => MidiGrid::Note { value, triplet: false },
+    }
+}
+
+/// "1/16" for a straight value's ticks, else the ticks.
+fn tick_name(t: i64) -> String {
+    NoteValue::ALL.into_iter().find(|v| v.ticks() == t).map_or_else(|| format!("{t} ticks"), |v| value_name(v).to_string())
+}
+
+/// The Grid menu: the Edit window's grid, one that adapts to the zoom, 1/1 … 1/64 straight,
+/// triplet, dotted, quintuplet or septuplet, Off.
 pub fn grid_menu(app: &mut SoundApp, ui: &mut Ui) {
     let edit = app.engine.session().edit.grid;
     let cur = app.midi.grid;
@@ -896,24 +972,32 @@ pub fn grid_menu(app: &mut SoundApp, ui: &mut Ui) {
         app.midi.grid = MidiGrid::Edit;
         ui.close();
     }
+    let adaptive = matches!(cur, MidiGrid::Adaptive(_));
+    if ui.radio(adaptive, "Adapt to Zoom").on_hover_text("The finest note value whose lines stay apart at the zoom").clicked() {
+        app.midi.grid = MidiGrid::Adaptive(cur.ticks(edit));
+        ui.close();
+    }
     ui.separator();
-    let triplet = matches!(cur, MidiGrid::Note { triplet: true, .. });
+    // The value, then its kind: straight, triplet, dotted, quintuplet, septuplet.
+    let kind = grid_kind(cur);
+    let value_of = |g: MidiGrid| match g {
+        MidiGrid::Note { value, .. } | MidiGrid::Dotted { value } | MidiGrid::Tuplet { value, .. } => value,
+        _ => NoteValue::Eighth,
+    };
     for value in NoteValue::ALL {
-        let g = MidiGrid::Note { value, triplet };
+        let g = with_kind(value, kind);
         if ui.radio(cur == g, value_name(value)).clicked() {
             app.midi.grid = g;
             ui.close();
         }
     }
     ui.separator();
-    let mut tri = triplet;
-    if ui.checkbox(&mut tri, "Triplets").changed() {
-        let value = match cur {
-            MidiGrid::Note { value, .. } => value,
-            _ => NoteValue::Eighth,
-        };
-        app.midi.grid = MidiGrid::Note { value, triplet: tri };
+    for (k, name) in [(' ', "Straight"), ('t', "Triplets"), ('d', "Dotted"), ('q', "Quintuplets (5:4)"), ('s', "Septuplets (7:4)")] {
+        if ui.radio(kind == k && matches!(cur, MidiGrid::Note { .. } | MidiGrid::Dotted { .. } | MidiGrid::Tuplet { .. }), name).clicked() {
+            app.midi.grid = with_kind(value_of(cur), k);
+        }
     }
+    ui.separator();
     if ui.radio(cur == MidiGrid::Off, "Off").clicked() {
         app.midi.grid = MidiGrid::Off;
         ui.close();
@@ -1052,9 +1136,22 @@ mod tests {
             MidiGrid::Off,
             MidiGrid::Note { value: NoteValue::Sixteenth, triplet: false },
             MidiGrid::Note { value: NoteValue::Eighth, triplet: true },
+            MidiGrid::Dotted { value: NoteValue::Quarter },
+            MidiGrid::Tuplet { value: NoteValue::Sixteenth, n: 5 },
+            MidiGrid::Tuplet { value: NoteValue::Eighth, n: 7 },
         ] {
             assert_eq!(MidiGrid::parse(&g.id()), Some(g));
         }
+        assert_eq!(MidiGrid::parse("auto"), Some(MidiGrid::Adaptive(240)));
+        // Dotted quarter, quintuplet 16ths (five in a quarter), septuplet 8ths (seven in a half).
+        assert_eq!(MidiGrid::Dotted { value: NoteValue::Quarter }.ticks(GridValue::default()), 1440);
+        assert_eq!(MidiGrid::Tuplet { value: NoteValue::Sixteenth, n: 5 }.ticks(GridValue::default()), 192);
+        assert_eq!(MidiGrid::Tuplet { value: NoteValue::Eighth, n: 7 }.ticks(GridValue::default()), 274);
+        // The adaptive step: lines at least 14 points apart.
+        assert_eq!(adaptive_ticks(0.1), 240);
+        assert_eq!(adaptive_ticks(0.01), 1920);
+        assert_eq!(adaptive_ticks(1.0), 60);
+        assert_eq!(adaptive_ticks(1e-6), 3840);
         assert_eq!(MidiGrid::Note { value: NoteValue::Eighth, triplet: true }.ticks(GridValue::default()), 320); // 960 PPQ: eighth triplet = 1/3 beat
         assert_eq!(MidiGrid::Off.ticks(GridValue::default()), 1);
         assert_eq!(MidiGrid::Off.step(GridValue::default()), 240);

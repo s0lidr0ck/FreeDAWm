@@ -138,6 +138,28 @@ pub fn zoom_about_span(v: MidiView, factor: f32, x: f32, width: f32, (lo, hi): (
     clamp_left(MidiView { zoom, left: if zoom.is_some() { left } else { lo as f64 }, ..v }, width, (lo, hi))
 }
 
+/// `v` fitted to `notes`: their time from the first start to the last end (with a little room
+/// either side) across `width`, and, with `rows`, their pitches from the highest to the lowest
+/// (a row's room above and below) down `height`. Unchanged with no notes.
+pub fn fit_notes(v: MidiView, notes: &[&soundcraft_midi::Note], width: f32, height: f32, span: (i64, i64), rows: bool) -> MidiView {
+    let (Some(t0), Some(t1)) = (notes.iter().map(|n| n.start).min(), notes.iter().map(|n| n.end()).max()) else { return v };
+    let len = t1.saturating_sub(t0).max(soundcraft_time::TICKS_PER_QUARTER / 4);
+    let pad = len / 16;
+    let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
+    let z = (width / (len + 2 * pad).max(1) as f32).clamp(fit, MAX_PX_PER_TICK.max(fit));
+    let zoom = (z > fit * 1.0001).then_some(z);
+    let mut out = clamp_left(MidiView { zoom, left: t0.saturating_sub(pad) as f64, ..v }, width, span);
+    if rows {
+        let hi = notes.iter().map(|n| i32::from(n.pitch)).max().unwrap_or(60);
+        let lo = notes.iter().map(|n| i32::from(n.pitch)).min().unwrap_or(60);
+        let (min_h, max_h) = ROW_H_RANGE;
+        let row_h = (height / (hi - lo + 3).max(1) as f32).clamp(min_h, max_h);
+        // The highest note's row one row below the top.
+        out = MidiView { row_h, scroll: ((127 - hi - 1).max(0) as f32 * row_h).max(0.0), ..out };
+    }
+    out
+}
+
 /// `v` with its left edge inside the span `lo..hi`.
 fn clamp_left(v: MidiView, width: f32, (lo, hi): (i64, i64)) -> MidiView {
     let Some(z) = v.zoom else { return MidiView { left: lo as f64, ..v } };
@@ -160,6 +182,8 @@ pub fn row_zoom(v: MidiView, factor: f32, y: f32) -> MidiView {
 enum ViewOp {
     Rows(f32),
     Fit,
+    /// Fit the selected notes (or every note in the clip's window), in time and pitch.
+    Notes,
     /// A zoom factor: that many times the Edit window's zoom.
     Factor(f32),
 }
@@ -252,6 +276,8 @@ pub struct MidiEditorState {
     pub fold_seen: u128,
     /// Drawn and dragged notes land on the scale.
     pub keep_scale: bool,
+    /// A moved note's start lands on a grid line (off: it keeps its offset from the grid).
+    pub snap_moves: bool,
     /// The Pencil stamps this chord (`None`: one note).
     pub chord: Option<crate::midi_edit_tools::Chord>,
     /// Of several selected MIDI clips, the one being edited (the others' notes show in their
@@ -281,6 +307,8 @@ pub struct MidiEditorState {
     pub ghost_tracks: Option<Vec<soundcraft_model::TrackId>>,
     /// The piano key held down: its note sounds until it is let go.
     pub piano_key: Option<u8>,
+    /// The pitch a note dragged to another pitch sounds at, while it is dragged.
+    pub drag_heard: Option<u8>,
     /// The hover details shown this frame (a note's or a ghost's).
     pub hover: Option<String>,
     /// A zoom factor `ui.midi_editor` asked for (0: Fit), applied when the roll is laid out.
@@ -319,6 +347,7 @@ impl Default for MidiEditorState {
             drum_all_rows: false,
             fold_seen: 0,
             keep_scale: false,
+            snap_moves: false,
             chord: None,
             active: None,
             others: Vec::new(),
@@ -332,6 +361,7 @@ impl Default for MidiEditorState {
             ghosts: true,
             ghost_tracks: None,
             piano_key: None,
+            drag_heard: None,
             hover: None,
             pending_zoom: None,
             zoom_factor: None,
@@ -716,6 +746,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         {
             app.midi.fold_scale = fold;
         }
+        let mut snap_moves = app.midi.snap_moves;
+        if ui
+            .checkbox(&mut snap_moves, "Snap Moves to the Grid")
+            .on_hover_text("A moved note's start lands on a grid line; off, it keeps its distance from the grid")
+            .changed()
+        {
+            app.midi.snap_moves = snap_moves;
+        }
         let mut keep = app.midi.keep_scale;
         if ui
             .add_enabled(keyed, egui::Checkbox::new(&mut keep, "Keep to Scale"))
@@ -874,8 +912,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if tb.small_button("Fit").on_hover_text("Fit the whole clip (F over the notes)").clicked() {
         view_op = Some(ViewOp::Fit);
     }
+    if tb.small_button("Notes").on_hover_text("Zoom to the selected notes, or to every note").clicked() {
+        view_op = Some(ViewOp::Notes);
+    }
     match app.midi.pending_zoom.take() {
         Some(f) if f > 0.0 => view_op = Some(ViewOp::Factor(f)),
+        Some(f) if f < 0.0 => view_op = Some(ViewOp::Notes),
         Some(_) => view_op = Some(ViewOp::Fit),
         None => {}
     }
@@ -1031,6 +1073,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     match view_op {
         Some(ViewOp::Rows(f)) => view = row_zoom(view, f, roll.height() / 2.0),
         Some(ViewOp::Fit) => view = MidiView { zoom: None, left: span.0 as f64, ..view },
+        Some(ViewOp::Notes) => {
+            let picked: Vec<&soundcraft_midi::Note> = if app.midi.clip == Some(cid) && !app.midi.selected.is_empty() {
+                app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).collect()
+            } else {
+                sequence.notes.iter().filter(|n| n.start >= 0 && n.start < len_ticks).collect()
+            };
+            // Folded rows are not semitones: only the time is fitted then.
+            let folded = app.midi.drawn.is_some_and(|g| g.fold != 0);
+            view = fit_notes(view, &picked, width, roll.height(), span, !folded);
+        }
         Some(ViewOp::Factor(f)) => {
             // About the middle of the roll.
             let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
@@ -1075,6 +1127,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     app.midi.views.insert(cid, view);
     app.midi.drawn = Some(geo);
     app.midi.scroll = geo.scroll;
+    // An adaptive grid follows the zoom (from the next frame's snapping and lines).
+    if let tools::MidiGrid::Adaptive(t) = app.midi.grid {
+        let a = tools::adaptive_ticks(px_per_tick);
+        if a != t {
+            app.midi.grid = tools::MidiGrid::Adaptive(a);
+        }
+    }
     let row_h = geo.row_h;
     let rows = (roll.height() / row_h).floor() as i32;
     let x_of = |tick: i64| geo.x_of(tick);
@@ -1086,6 +1145,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let scale = clip_key.map(|(k, sc)| soundcraft_engine::vocal::key_set(k, sc));
     // Keep to Scale: a pitch drawn or dragged to goes to the nearest one in the scale.
     let keep_scale = app.midi.keep_scale;
+    let snap_moves = app.midi.snap_moves;
     let to_scale = |p: i32| match scale.filter(|_| keep_scale) {
         Some(set) => tools::nearest_in(set, p),
         None => p,
@@ -1436,14 +1496,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.draw = None;
         }
     }
+    let mut hear: Option<u8> = None;
     if resp.dragged()
         && let (Some(d), Some(p)) = (&mut app.midi.drag, resp.interact_pointer_pos())
     {
         let n = d.grabbed;
         match d.edge {
-            // A moved note keeps its offset from the grid; an edge lands on a grid line.
+            // A moved note keeps its offset from the grid (with Snap Moves, its start lands on a
+            // line); an edge lands on a grid line.
             Edge::Move => {
-                d.dx_ticks = snap_rel(f64::from((p.x - d.start.x) / px_per_tick));
+                let raw = f64::from((p.x - d.start.x) / px_per_tick);
+                d.dx_ticks = if snap_moves && !alt { snap(n.start as f64 + raw).saturating_sub(n.start) } else { snap_rel(raw) };
                 // Folded, a row is not a semitone: the grabbed note goes to the row's pitch.
                 d.dy_semi = if geo.fold == 0 { -((p.y - d.start.y) / row_h).round() as i64 } else { i64::from(pitch_at(p.y) - i32::from(n.pitch)) };
                 if scale.is_some() && keep_scale {
@@ -1454,10 +1517,24 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             Edge::Start => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.start),
             Edge::End => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.end()),
         }
+        if d.edge == Edge::Move && d.dy_semi != 0 {
+            hear = u8::try_from(i64::from(n.pitch).saturating_add(d.dy_semi)).ok().filter(|p| *p <= 127);
+        }
+    }
+    // While a note is dragged to another pitch, that pitch sounds (as a held piano key does).
+    if let Some(h) = hear
+        && app.midi.audition
+        && app.midi.drag_heard != Some(h)
+    {
+        app.midi.drag_heard = Some(h);
+        tools::sound_pitch(app, cid, h);
     }
     if resp.drag_stopped()
         && let Some(d) = app.midi.drag.take()
     {
+        if app.midi.drag_heard.take().is_some() && app.midi.auditioning.is_some() {
+            app.stop_play();
+        }
         if d.from.is_none() && !app.midi.selected.contains(&d.index) {
             app.midi.selected.push(d.index);
         }
