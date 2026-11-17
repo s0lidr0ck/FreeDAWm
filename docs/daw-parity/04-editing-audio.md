@@ -228,7 +228,7 @@ why they score ◐ for "built-in".
 | Freeze, commit | ● | ● | ● | ● | **Works** (see G for the commit bug) |
 | Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
 | Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing |
-| Lock a whole track | ◐ | ● | ● | ● | **Missing** |
+| Lock a whole track | ◐ | ● | ● | ● | **Works**: Lock Track in the track's menu; a command that would add, change or remove a clip on any of its playlists, or record-arm it, is refused and undone (Insert and Cut Time still move it) |
 | Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
 | Tempo changes, ramps and curves; meter changes | ● | ● | ● | ● | **Works** |
@@ -396,3 +396,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Selection commands: extend to the session start or end, select clips on a track, following, by name, colour or mute; nudge one edge of the selection |
 | 2026-11-17 | minor | Nudge the audio inside a clip |
 | 2026-11-17 | minor | Tap tempo |
+| 2026-11-17 | minor | Lock a whole track |

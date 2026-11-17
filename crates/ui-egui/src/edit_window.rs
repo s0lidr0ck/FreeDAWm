@@ -2072,11 +2072,12 @@ pub fn inactive_label(inactive: bool) -> &'static str {
 /// `window` when it holds the track, else on the track alone.
 pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, window: crate::MainWindow) {
     let tid = id.0;
-    let items: [(&str, &str); 9] = [
+    let items: [(&str, &str); 10] = [
         ("Rename...", "ui.rename_track"),
         ("Duplicate...", "track.duplicate"),
         ("Make Inactive", "track.make_inactive"),
         ("Hide", "track.hide"),
+        ("Lock Track", "track.lock"),
         ("Delete", "track.delete"),
         ("Split into Mono", "track.split_into_mono"),
         ("Commit...", "track.commit"),
@@ -2088,12 +2089,19 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         if selected.contains(&id) { selected.iter().map(|track| track.0).collect() } else { vec![tid] }
     };
     let inactive = app.engine.session().track(id).is_some_and(|t| t.inactive);
+    let locked = app.engine.session().track(id).is_some_and(|t| t.edit_locked);
     for (label, cmd) in items {
         // Make Inactive reads Make Active on an inactive track, and sets that state on the selection.
-        let label = if cmd == "track.make_inactive" { inactive_label(inactive) } else { label };
+        let label = match cmd {
+            "track.make_inactive" => inactive_label(inactive),
+            "track.lock" if locked => "Unlock Track",
+            _ => label,
+        };
         if ui.button(label).clicked() {
             if cmd == "track.make_inactive" {
                 let _ = app.run(cmd, json!({"tracks": selection, "inactive": !inactive}));
+            } else if cmd == "track.lock" {
+                let _ = app.run(cmd, json!({"tracks": selection, "value": !locked}));
             } else if cmd == "ui.rename_track" {
                 let name = app.engine.session().track(id).map(|t| t.name.clone()).unwrap_or_default();
                 app.dialogs.open_rename_track(id, &name);

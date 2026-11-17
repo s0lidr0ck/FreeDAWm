@@ -357,7 +357,7 @@ pub fn shift_from(s: &mut Session, track: TrackId, from: Samples, by: Samples) {
 }
 
 /// Commands an edit-locked clip never blocks: undo and redo, and the lock itself.
-const LOCK_EXEMPT: [&str; 3] = ["edit.undo", "edit.redo", "clip.edit_lock"];
+const LOCK_EXEMPT: [&str; 4] = ["edit.undo", "edit.redo", "clip.edit_lock", "track.lock"];
 
 /// Commands that move whole stretches of the timeline: an edit-locked clip may move with them, as
 /// long as nothing else about it changes.
@@ -386,13 +386,26 @@ pub fn locked_edit_refused(id: &str, before: &Session, after: &Session) -> Optio
         // A deleted track takes its clips with it; so does a deleted playlist.
         let Some(nt) = after.track(t.id) else { continue };
         let playlist_gone = nt.playlists.len() < t.playlists.len();
-        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked) {
+        // A locked track (Track › Lock Track) locks every clip on it, and takes no new ones.
+        let track_locked = t.edit_locked && nt.edit_locked;
+        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked || track_locked) {
             let refused = match nt.playlists.iter().flat_map(|p| &p.clips).find(|c| c.id == old.id) {
                 None => !playlist_gone,
-                Some(new) => new.edit_locked && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start)),
+                Some(new) => {
+                    (new.edit_locked || track_locked) && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start))
+                }
             };
+            if refused && !old.edit_locked {
+                return Some(format!("`{}` is locked; unlock the track to change its clips", t.name));
+            }
             if refused {
                 return Some(format!("clip `{}` on `{}` is edit-locked; unlock it to change it", old.name, t.name));
+            }
+        }
+        if track_locked {
+            let had = |id: ClipId| t.playlists.iter().flat_map(|p| &p.clips).any(|c| c.id == id);
+            if nt.playlists.iter().flat_map(|p| &p.clips).any(|c| !had(c.id)) || (nt.mixer.record_arm && !t.mixer.record_arm) {
+                return Some(format!("`{}` is locked; unlock the track to change its clips or record on it", t.name));
             }
         }
     }

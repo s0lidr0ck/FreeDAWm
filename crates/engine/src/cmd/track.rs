@@ -115,6 +115,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             view
         ),
+        cmd!(
+            "track.lock",
+            "Lock Track",
+            [],
+            None,
+            "{tracks?, value?: bool} (toggles when omitted) — a locked track's clips cannot be added, changed or removed, and it cannot be record-armed",
+            has_selection,
+            |e, p| flag(e, p, "track.lock", |t, v| t.edit_locked = v, |t| t.edit_locked)
+        ),
         cmd!("track.hide", "Hide Track", [], None, "{tracks?, hidden?: bool}", has_selection, |e, p| flag(
             e,
             p,

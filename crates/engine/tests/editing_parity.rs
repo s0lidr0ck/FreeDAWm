@@ -861,3 +861,27 @@ fn redo_history_lists_the_undone_steps_next_first() {
     e.redo();
     assert_eq!(e.redo_history(), vec![labels[n - 1].clone()]);
 }
+
+#[test]
+fn a_locked_track_refuses_edits_to_its_clips_and_takes_none_new() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1000, 0), (2000, 1000, 2000)]);
+    let (u, d) = track(&mut e, &[(5000, 1000, 0)]);
+    run(&mut e, "track.lock", json!({"tracks": [t.0]}));
+    let before = clips(&e, t);
+    run(&mut e, "edit.select", json!({"clips": [c[0].0]}));
+    assert!(e.execute("edit.clear", &json!({})).is_err(), "delete refused");
+    assert!(e.execute("edit.move_clips", &json!({"clips": [c[1].0], "by": 100})).is_err(), "move refused");
+    assert!(e.execute("edit.move_clips", &json!({"clips": [d[0].0], "track": t.0})).is_err(), "nothing lands on it");
+    assert!(e.execute("mix.record_arm", &json!({"tracks": [t.0], "value": true})).is_err(), "no recording onto it");
+    assert_eq!(clips(&e, t), before);
+    // Other tracks edit as before; Insert Time still moves the locked clips.
+    run(&mut e, "edit.move_clips", json!({"clips": [d[0].0], "by": 100}));
+    assert_eq!(clips(&e, u), vec![(5100, 1000, 0)]);
+    run(&mut e, "event.insert_time", json!({"start": 1500, "length": 500}));
+    assert_eq!(clips(&e, t), vec![(0, 1000, 0), (2500, 1000, 2000)]);
+    run(&mut e, "track.lock", json!({"tracks": [t.0]}));
+    run(&mut e, "edit.select", json!({"clips": [c[0].0]}));
+    run(&mut e, "edit.clear", json!({}));
+    assert_eq!(clips(&e, t).len(), 1, "unlocked, it edits again");
+}
