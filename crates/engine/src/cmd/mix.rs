@@ -3,7 +3,9 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::{AutoParam, AutomationMode, InputMonitor, MAX_MODULES, ModuleId, SEND_SLOTS, SendSlot, Session, Track, TrackId};
+use soundcraft_model::{
+    AutoParam, AutomationLane, AutomationMode, InputMonitor, MAX_MODULES, ModuleId, SEND_SLOTS, SendSlot, Session, Track, TrackId,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -68,17 +70,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             input_monitor
         ),
-        cmd!("mix.phase_invert", "Phase Invert", [], None, "{tracks?, value?: bool}", has_selection, |e, p| toggle(
-            e,
-            p,
+        cmd!(
             "mix.phase_invert",
-            |s, t, v| {
-                if let Some(tr) = s.track_mut(t) {
-                    tr.mixer.phase_invert = v
-                }
-            },
-            |tr| tr.mixer.phase_invert
-        )),
+            "Phase Invert",
+            [],
+            None,
+            "{tracks?, value?: bool, channel?: 0-based channel (that channel alone; omitted: every channel)}",
+            has_selection,
+            phase_invert
+        ),
         cmd!("mix.trim", "Input Trim", [], None, "{tracks?, db}", has_selection, |e, p| {
             let tracks = tracks_required(e, "mix.trim", p)?;
             let db = (p.get("db").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("mix.trim", "`db` (number) required"))? as f32)
@@ -244,7 +244,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy to Send...",
             ["Edit", "Automation"],
             Some("Cmd+Alt+H"),
-            "{tracks?, send: slot}",
+            "{tracks?, send?: slot (default A), what?: [volume, pan, mute] (default volume)} — over the edit selection when there is one (replacing what was there), else the whole lane; with no automation the value itself",
             has_selection,
             copy_to_send
         ),
@@ -1028,30 +1028,138 @@ fn clip_gain_to_vol(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// `mix.phase_invert`: every channel's polarity, or with `channel` that channel's alone (a track
+/// whose every channel was inverted keeps the others inverted).
+fn phase_invert(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.phase_invert";
+    let Some(ch) = p.get("channel").filter(|v| !v.is_null()) else {
+        return toggle(
+            e,
+            p,
+            id,
+            |s, t, v| {
+                if let Some(tr) = s.track_mut(t) {
+                    tr.mixer.phase_invert = v;
+                    tr.mixer.phase_invert_channels = 0;
+                }
+            },
+            |tr| tr.mixer.phase_invert,
+        );
+    };
+    let ch = ch.as_u64().and_then(|c| usize::try_from(c).ok()).ok_or_else(|| bad(id, "`channel` must be a channel number from 0"))?;
+    let tracks = tracks_required(e, id, p)?;
+    let s = e.session_mut();
+    let mut now = None;
+    for t in tracks {
+        let Some(tr) = s.track_mut(t) else { continue };
+        let n = tr.channels().min(16);
+        if ch >= n {
+            return Err(bad(id, format!("`{}` has {n} channel(s); `channel` is 0..{}", tr.name, n.saturating_sub(1))));
+        }
+        let v = match p.get("value").and_then(Value::as_bool) {
+            Some(v) => v,
+            None => *now.get_or_insert(!tr.mixer.inverts(ch)),
+        };
+        let mut mask = if tr.mixer.phase_invert { ((1u32 << n) - 1) as u16 } else { tr.mixer.phase_invert_channels };
+        if v {
+            mask |= 1 << ch;
+        } else {
+            mask &= !(1 << ch);
+        }
+        tr.mixer.phase_invert = false;
+        tr.mixer.phase_invert_channels = mask;
+        now = Some(v);
+    }
+    Ok(json!({"value": now, "channel": ch}))
+}
+
+/// What Copy to Send copies (`what`), with the send lane each one lands in.
+const COPY_TO_SEND: [&str; 3] = ["volume", "pan", "mute"];
+
+/// `automation.copy_to_send`: the track's volume (and, when asked, pan and mute), as automation
+/// where it has a lane and as the send's own value where it has none, into one send. Over the
+/// edit selection when there is one (what was there is replaced, the curve either side kept),
+/// else the whole lane.
 fn copy_to_send(e: &mut Engine, p: &Value) -> Result<Value> {
-    let tracks = tracks_required(e, "automation.copy_to_send", p)?;
+    const C: &str = "automation.copy_to_send";
+    let tracks = tracks_required(e, C, p)?;
     // No `send` means Send A (the menu item passes none); a given one must be valid.
     let slot = match p.get("send") {
         None | Some(Value::Null) => 0,
-        Some(_) => slot_of(p, "send", SEND_SLOTS).ok_or_else(|| {
-            bad("automation.copy_to_send", format!("`send` must be 0..{} or a..{}", SEND_SLOTS - 1, (b'a' + SEND_SLOTS as u8 - 1) as char))
-        })?,
+        Some(_) => slot_of(p, "send", SEND_SLOTS)
+            .ok_or_else(|| bad(C, format!("`send` must be 0..{} or a..{}", SEND_SLOTS - 1, (b'a' + SEND_SLOTS as u8 - 1) as char)))?,
     } as u8;
+    let what: Vec<String> = match p.get("what") {
+        None | Some(Value::Null) => vec!["volume".into()],
+        Some(Value::String(w)) => vec![w.clone()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(_) => return Err(bad(C, "`what` is a list of volume, pan, mute")),
+    };
+    if let Some(w) = what.iter().find(|w| !COPY_TO_SEND.contains(&w.as_str())) {
+        return Err(bad(C, format!("cannot copy `{w}` (volume, pan or mute)")));
+    }
     let s = e.session_mut();
+    let sel = s.edit.selection;
+    let range = (!sel.is_empty()).then_some((sel.start.max(0), sel.end));
+    let mut copied = 0usize;
     for t in &tracks {
-        if let Some(tr) = s.track_mut(*t) {
-            let pts = tr.lane(&AutoParam::Volume).map(|l| l.points.clone()).unwrap_or_default();
-            let v = tr.mixer.volume_db;
-            let lane = tr.lane_mut(&AutoParam::SendLevel(slot));
-            if pts.is_empty() {
-                lane.set_point(0, v);
+        let Some(tr) = s.track_mut(*t) else { continue };
+        if tr.mixer.sends.get(usize::from(slot)).is_none_or(Option::is_none) {
+            continue;
+        }
+        for w in &what {
+            // The source as a lane (points, possibly none) and its static value.
+            let (src, value, dst) = match w.as_str() {
+                "volume" => (
+                    tr.lane(&AutoParam::Volume).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Volume)),
+                    tr.mixer.volume_db,
+                    AutoParam::SendLevel(slot),
+                ),
+                "mute" => (
+                    tr.lane(&AutoParam::Mute).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Mute)),
+                    if tr.mixer.mute { 1.0 } else { 0.0 },
+                    AutoParam::SendMute(slot),
+                ),
+                _ => {
+                    // A stereo track's two pans meet in the middle for a send's one.
+                    let n = tr.mixer.pan.len().clamp(1, 2);
+                    let lanes: Vec<_> = (0..n)
+                        .map(|i| tr.lane(&AutoParam::Pan(i as u8)).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Pan(i as u8))))
+                        .collect();
+                    let stat: Vec<f32> = (0..n).map(|i| tr.mixer.pan.get(i).copied().unwrap_or(0.0)).collect();
+                    let mut lane = AutomationLane::new(AutoParam::SendPan(slot));
+                    let mut at: Vec<i64> = lanes.iter().flat_map(|l| l.points.iter().map(|p| p.at)).collect();
+                    at.sort_unstable();
+                    at.dedup();
+                    for a in at {
+                        let v = lanes.iter().zip(&stat).map(|(l, d)| l.value_at(a, *d)).sum::<f32>() / n as f32;
+                        lane.set_point(a, v);
+                    }
+                    (lane, stat.iter().sum::<f32>() / n as f32, AutoParam::SendPan(slot))
+                }
+            };
+            if let Some(Some(send)) = tr.mixer.sends.get_mut(usize::from(slot))
+                && range.is_none()
+            {
+                match dst {
+                    AutoParam::SendLevel(_) => send.level_db = value,
+                    AutoParam::SendMute(_) => send.mute = value >= 0.5,
+                    _ => send.pan = value,
+                }
             }
-            for pt in pts {
-                lane.set_point(pt.at, pt.value);
+            let lane = tr.lane_mut(&dst);
+            match range {
+                Some((a, b)) if src.points.is_empty() => lane.write_range(a, b, value, value),
+                Some((a, b)) => lane.paste_slice(a, b - a, &src.slice(a, b)),
+                None => lane.points = src.points.clone(),
             }
+            copied += 1;
         }
     }
-    Ok(json!({}))
+    if copied == 0 {
+        return Err(bad(C, format!("no selected track has a send {}", (b'A' + slot) as char)));
+    }
+    Ok(json!({"send": slot, "copied": copied}))
 }
 
 #[cfg(test)]
@@ -1219,6 +1327,8 @@ mod tests {
     #[test]
     fn copy_to_send_rejects_an_invalid_send_slot() {
         let mut e = crate::demo::demo_engine();
+        // Copy to Send needs the send.
+        e.execute("mix.send", &json!({"track": "Kick", "slot": 0, "bus": "Verb"})).unwrap();
         let history = e.undo_history().len();
         let lanes = |e: &Engine| e.session().tracks.iter().filter(|t| t.lane(&AutoParam::SendLevel(0)).is_some_and(|l| !l.points.is_empty())).count();
         let before = lanes(&e);
@@ -1228,12 +1338,58 @@ mod tests {
             assert_eq!(e.undo_history().len(), history, "{bad_params} pushed an undo step");
             assert_eq!(lanes(&e), before, "{bad_params} edited Send A");
         }
-        // No `send` (the menu item's call) still means Send A.
+        // No `send` (the menu item's call) still means Send A: the Kick has no volume lane, so
+        // its fader level becomes the send's.
+        e.session_mut().tracks.iter_mut().find(|t| t.name == "Kick").unwrap().mixer.volume_db = -7.0;
         e.execute("automation.copy_to_send", &json!({"track": "Kick"})).unwrap();
-        assert_eq!(lanes(&e), before + 1);
+        let send_db = |e: &Engine| e.session().tracks.iter().find(|t| t.name == "Kick").unwrap().mixer.sends[0].as_ref().unwrap().level_db;
+        assert_eq!(send_db(&e), -7.0);
+        assert_eq!(lanes(&e), before);
         // A valid slot still copies.
+        e.session_mut().tracks.iter_mut().find(|t| t.name == "Kick").unwrap().mixer.volume_db = -5.0;
         e.execute("automation.copy_to_send", &json!({"track": "Kick", "send": "a"})).unwrap();
-        assert_eq!(lanes(&e), before + 1);
+        assert_eq!(send_db(&e), -5.0);
+    }
+
+    /// Copy to Send copies over the selection only (the send's curve either side kept), pan and
+    /// mute too when asked, and the values themselves where there is no automation.
+    #[test]
+    fn copy_to_send_takes_the_selection_and_pan_and_mute() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Gtr", "format": "mono"})).unwrap();
+        e.execute("mix.send", &json!({"track": "Gtr", "slot": 0, "bus": "Verb", "level_db": -9.0})).unwrap();
+        let t = e.session().tracks[0].id;
+        {
+            let tr = e.session_mut().track_mut(t).unwrap();
+            tr.mixer.pan = vec![0.5];
+            tr.mixer.mute = true;
+            let v = tr.lane_mut(&AutoParam::Volume);
+            v.set_point(0, -20.0);
+            v.set_point(10_000, 0.0);
+        }
+        // The whole lane without a selection; pan and mute as values (no lanes).
+        e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": 0, "what": ["volume", "pan", "mute"]})).unwrap();
+        let tr = e.session().track(t).unwrap();
+        let send = tr.mixer.sends[0].as_ref().unwrap();
+        assert_eq!((send.level_db, send.pan, send.mute), (tr.mixer.volume_db, 0.5, true));
+        let lane = tr.lane(&AutoParam::SendLevel(0)).unwrap();
+        assert_eq!(lane.points.iter().map(|p| (p.at, p.value)).collect::<Vec<_>>(), vec![(0, -20.0), (10_000, 0.0)]);
+        // Over a selection: replaced inside it, the send's own curve kept outside.
+        {
+            let s = e.session_mut().track_mut(t).unwrap().lane_mut(&AutoParam::SendLevel(0));
+            s.points.clear();
+            s.set_point(0, -6.0);
+            s.set_point(20_000, -6.0);
+        }
+        e.session_mut().edit.selection = soundcraft_time::Range::new(2_000, 6_000);
+        e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": "a"})).unwrap();
+        let lane = e.session().track(t).unwrap().lane(&AutoParam::SendLevel(0)).unwrap().clone();
+        assert_eq!(lane.value_at(1_000, 0.0), -6.0, "before the selection");
+        assert_eq!(lane.value_at(15_000, 0.0), -6.0, "after the selection");
+        let v = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().value_at(4_000, 0.0);
+        assert!((lane.value_at(4_000, 0.0) - v).abs() < 0.01, "inside: {} vs {v}", lane.value_at(4_000, 0.0));
+        // A track without that send is refused.
+        assert!(e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": "b"})).is_err());
     }
 
     #[test]

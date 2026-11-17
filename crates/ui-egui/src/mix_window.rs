@@ -343,6 +343,36 @@ pub(crate) fn route_popup(app: &mut SoundApp, resp: &egui::Response, id: TrackId
     egui::Popup::menu(resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| route_menu(app, ui, id, input));
 }
 
+/// The strip's polarity (Ø) button: lit when any channel is inverted; a click inverts every
+/// channel (or puts them all back), a right-click on a wider track picks single channels.
+fn polarity_button(app: &mut SoundApp, ui: &mut Ui, track: &soundcraft_model::Track, r: Rect, frozen: bool) {
+    let id = track.id;
+    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r));
+    if frozen {
+        c.disable();
+    }
+    let any = track.mixer.inverts_any();
+    let resp = c
+        .add_sized(r.size(), egui::Button::new(egui::RichText::new("Ø").font(bold(10.0))).selected(any))
+        .on_hover_text("Polarity: invert every channel (mix.phase_invert); right-click to invert single channels");
+    if resp.clicked() {
+        let _ = app.run("mix.phase_invert", json!({"tracks": [id.0], "value": !any}));
+    }
+    let n = track.channels().min(16);
+    if n > 1 {
+        let fmt = track.format;
+        let inverted: Vec<bool> = (0..n).map(|ch| track.mixer.inverts(ch)).collect();
+        resp.context_menu(|ui| {
+            for (ch, on) in inverted.iter().enumerate() {
+                let mut v = *on;
+                if ui.checkbox(&mut v, format!("Invert {}", fmt.channel_label(ch))).changed() {
+                    let _ = app.run("mix.phase_invert", json!({"tracks": [id.0], "channel": ch, "value": v}));
+                }
+            }
+        });
+    }
+}
+
 /// Draws track `id`'s strip and returns its rect.
 fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>, chain_h: f32, pitch_row: f32) -> Rect {
     let t = Tokens::current();
@@ -376,7 +406,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         inset(ui.painter(), sec, t.strip_section);
         section_label(ui, sec, "PREAMP", narrow);
         if has_input {
-            let kr = Rect::from_min_size(pos2(x0 + 6.0, sec.min.y + 15.0), vec2(inner_w - 12.0, 16.0));
+            // The polarity button beside the trim: every channel; a right-click picks channels.
+            let pr = Rect::from_min_size(pos2(x0 + inner_w - 24.0, sec.min.y + 15.0), vec2(18.0, 16.0));
+            polarity_button(app, ui, track, pr, frozen);
+            let kr = Rect::from_min_size(pos2(x0 + 6.0, sec.min.y + 15.0), vec2(inner_w - 34.0, 16.0));
             let mut db = track.mixer.trim_db;
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(kr));
             if frozen {

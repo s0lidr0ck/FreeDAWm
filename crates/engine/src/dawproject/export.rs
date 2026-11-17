@@ -360,7 +360,7 @@ impl Ex<'_> {
             let n = format!("{}: input trim ({:+.1} dB) is not carried", t.name, t.mixer.trim_db);
             self.note(n);
         }
-        if t.mixer.phase_invert {
+        if t.mixer.inverts_any() {
             let n = format!("{}: phase invert is not carried", t.name);
             self.note(n);
         }

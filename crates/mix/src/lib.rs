@@ -3298,10 +3298,13 @@ fn process_strip(
     if !tail_ran {
         strip.live_tail = 0;
     }
-    let trim = db_to_gain(t.mixer.trim_db) * if t.mixer.phase_invert { -1.0 } else { 1.0 };
-    if (trim - 1.0).abs() > f32::EPSILON && frozen.is_none() {
-        for c in strip.buf.iter_mut() {
-            c.iter_mut().take(frames).for_each(|x| *x *= trim);
+    let trim = db_to_gain(t.mixer.trim_db);
+    if ((trim - 1.0).abs() > f32::EPSILON || t.mixer.inverts_any()) && frozen.is_none() {
+        for (ch, c) in strip.buf.iter_mut().enumerate() {
+            let g = if t.mixer.inverts(ch) { -trim } else { trim };
+            if (g - 1.0).abs() > f32::EPSILON {
+                c.iter_mut().take(frames).for_each(|x| *x *= g);
+            }
         }
     }
     // The track's own delay (Pro Tools' and Cubase's channel delay): before the inserts, left out

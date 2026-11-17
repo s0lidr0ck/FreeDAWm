@@ -285,6 +285,7 @@ fn sounds_differ(a: &Track, b: &Track) -> bool {
         || a.mixer.input != b.mixer.input
         || a.mixer.trim_db != b.mixer.trim_db
         || a.mixer.phase_invert != b.mixer.phase_invert
+        || a.mixer.phase_invert_channels != b.mixer.phase_invert_channels
         || a.format != b.format
         || a.kind != b.kind
         || a.elastic != b.elastic

@@ -865,6 +865,10 @@ fn is_zero(v: &f32) -> bool {
     *v == 0.0
 }
 
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
+}
+
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
 }
@@ -1109,8 +1113,13 @@ pub struct Mixer {
     /// inserts make of the input (after them, before the fader), not the input as it came in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub record_inserts: bool,
+    /// Every channel's polarity inverted.
     #[serde(default)]
     pub phase_invert: bool,
+    /// Single channels' polarity inverted, bit `c` for channel `c` (with `phase_invert` off;
+    /// see [`Mixer::inverts`]).
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub phase_invert_channels: u16,
     pub input: Route,
     pub output: Route,
     /// The channel chain, in signal order (dense, at most [`MAX_MODULES`]). `null` entries
@@ -1164,6 +1173,7 @@ impl Mixer {
             input_monitor: InputMonitor::Auto,
             record_inserts: false,
             phase_invert: false,
+            phase_invert_channels: 0,
             input: Route::None,
             output: Route::Main,
             inserts: Vec::new(),
@@ -1178,6 +1188,17 @@ impl Mixer {
             balance: 0.0,
             delay: 0,
         }
+    }
+
+    /// Whether channel `ch`'s polarity is inverted: every channel's when `phase_invert`, else
+    /// the channels `phase_invert_channels` names.
+    pub fn inverts(&self, ch: usize) -> bool {
+        self.phase_invert || (ch < 16 && self.phase_invert_channels & (1 << ch) != 0)
+    }
+
+    /// Whether any channel's polarity is inverted.
+    pub fn inverts_any(&self) -> bool {
+        self.phase_invert || self.phase_invert_channels != 0
     }
 
     /// Whether the strip hears its hardware input now: On always, Off never, Auto when armed
