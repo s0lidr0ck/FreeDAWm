@@ -95,6 +95,10 @@ pub fn parts(ins: &Insert) -> Vec<(usize, String)> {
     for z in ins.samples.keys().filter_map(|k| ZoneSpec::parse(k)) {
         out.entry(z.part).or_insert(z.part_name);
     }
+    // A captured instrument with release samples or pedal noises: its notes are the first part.
+    if !out.is_empty() && ins.samples.keys().any(|k| parse_sample_key(k).is_some()) {
+        out.entry(0).or_insert_with(|| "Notes".to_string());
+    }
     out.into_iter().map(|(i, name)| (i, if name.is_empty() { format!("Part {}", i + 1) } else { name })).collect()
 }
 
@@ -546,6 +550,11 @@ mod tests {
             ins.samples.insert(key.into(), soundcraft_model::SourceId(1));
         }
         assert!(parts(&ins).is_empty());
+        // With a release sample captured beside them, the notes are a part too.
+        let release = ZoneSpec { part: 1, part_name: "Release".into(), ..ZoneSpec::default() };
+        ins.samples.insert(release.key(), soundcraft_model::SourceId(2));
+        assert_eq!(parts(&ins), [(0, "Notes".to_string()), (1, "Release".to_string())]);
+        ins.samples.remove(&release.key());
         assert_eq!(
             super::cells(&ins),
             (

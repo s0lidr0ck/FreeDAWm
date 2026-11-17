@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Capture to Pantry",
             [],
             None,
-            "{track?, low?: 21, high?: 108 (MIDI notes), step?: 3 (semitones between captured notes, 1-12), layers?: 12 (evenly spaced velocities up to 127, 1-16) or velocities?: [1-127…], robins?: 1 (strikes of each, 1-4), hold?: 8 (seconds the lowest note is held), hold_high?: 3 (the highest; the ones between shorten evenly), tail?: 4 (seconds left to ring after each), silence?: -72 (dBFS a note has died away at), mono?: false, name?} -> {track, samples, notes, layers, seconds, silent, ringing}: plays the track's instrument a note at a time through its modules (pre-fader, offline) and makes a new instrument track whose Pantry plays the captured notes; `silent` notes made no sound and are left out, `ringing` ones were still sounding when the next began",
+            "{track?, low?: 21, high?: 108 (MIDI notes), step?: 3 (semitones between captured notes, 1-12), layers?: 12 (evenly spaced velocities up to 127, 1-16) or velocities?: [1-127…], robins?: 1 (strikes of each, 1-4), hold?: 8 (seconds the lowest note is held), hold_high?: 3 (the highest; the ones between shorten evenly), tail?: 4 (seconds left to ring after each), silence?: -72 (dBFS a note has died away at), release?: false (also capture what sounds when a key comes up, as release samples), pedal?: false (also capture the sustain pedal's own noises), mono?: false, name?} -> {track, samples, notes, layers, release, pedal, seconds, silent, ringing}: plays the track's instrument a note at a time through its modules (pre-fader, offline) and makes a new instrument track whose Pantry plays the captured notes; `silent` notes made no sound and are left out, `ringing` ones were still sounding when the next began",
             has_selection,
             capture
         ),
@@ -128,11 +128,47 @@ fn peak_in(audio: &[Vec<f32>], a: usize, b: usize) -> f32 {
 pub struct Captured {
     /// The command's parameters: the capture is for the command run with these.
     params: Value,
-    /// Each sample's key, source name and audio.
+    /// Each note sample's key, source name and audio.
     samples: Vec<(String, String, AudioBuffer)>,
+    /// The release samples and pedal noises: each one's zone (its index is set when it goes into
+    /// the session), source name and audio.
+    zones: Vec<(ZoneSpec, String, AudioBuffer)>,
     silent: usize,
     ringing: usize,
 }
+
+/// What a stretch of a capture's render holds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Strike {
+    /// A note, held: its velocity and take.
+    Note {
+        velocity: u8,
+        robin: usize,
+    },
+    /// What sounds after a short note's key comes up, for the velocities `lovel..=hivel`.
+    Release {
+        velocity: u8,
+        lovel: u8,
+        hivel: u8,
+    },
+    PedalDown,
+    PedalUp,
+}
+
+/// A strike in a render: the frame its event is at (a key or the pedal going down), and the
+/// frame the sound to keep starts at (the same, or for a release the key coming up).
+#[derive(Debug, Clone, Copy)]
+struct Cut {
+    kind: Strike,
+    on: usize,
+    start: usize,
+}
+
+/// How long a note is held before the release that is captured, and the parts capture makes.
+const CAPTURE_RELEASE_HOLD_SECS: f64 = 0.3;
+const CAPTURE_PEDAL_SECS: f64 = 2.0;
+const RELEASE_PART: usize = 1;
+const PEDAL_PART: usize = 2;
 
 /// `track.capture_multisample` a slice at a time, so a host can keep drawing behind a progress
 /// window: [`CaptureJob::step`] until it returns true, [`CaptureJob::finish`], then the command
@@ -157,9 +193,12 @@ pub struct CaptureJob {
     quiet_at: f32,
     mono: bool,
     lag: Samples,
-    /// The note being rendered (an index into `notes`), its render and its strikes' starts.
+    /// Whether to capture what sounds when keys come up, and the pedal's own noises.
+    release: bool,
+    pedal: bool,
+    /// The render in hand (an index into `notes`; one past them, the pedal's), and its strikes.
     at: usize,
-    render: Option<(soundcraft_mix::TrackRender, Vec<(u8, usize, usize)>)>,
+    render: Option<(soundcraft_mix::TrackRender, Vec<Cut>)>,
     total: usize,
     out: Captured,
 }
@@ -225,6 +264,8 @@ impl CaptureJob {
             quiet_at: 10f32.powf(silence as f32 / 20.0),
             mono: bool_or(p, "mono", false),
             lag: soundcraft_mix::midi_lag(&s, tr),
+            release: bool_or(p, "release", false),
+            pedal: bool_or(p, "pedal", false),
             at: 0,
             render: None,
             total: 0,
@@ -237,40 +278,73 @@ impl CaptureJob {
         (self.id, &self.params)
     }
 
-    /// Notes rendered so far, and how many there are.
+    /// Renders done so far, and how many there are (a note each, and one for the pedal).
     pub fn counts(&self) -> (usize, usize) {
-        (self.at.min(self.notes.len()), self.notes.len())
+        let all = self.notes.len() + usize::from(self.pedal);
+        (self.at.min(all), all)
     }
 
-    /// The note being rendered, by name (`None` once all are done).
+    /// What is being rendered: a note by name, or the pedal (`None` once all are done).
     pub fn note(&self) -> Option<String> {
-        self.notes.get(self.at).map(|n| note_name(*n))
+        match self.notes.get(self.at) {
+            Some(n) => Some(note_name(*n)),
+            None => (self.pedal && self.at == self.notes.len()).then(|| "Pedal".to_string()),
+        }
     }
 
     /// How far along, from 0 to 1.
     pub fn progress(&self) -> f32 {
         let within = self.render.as_ref().map_or(0.0, |(r, _)| r.progress());
-        ((self.at as f32 + within) / self.notes.len().max(1) as f32).clamp(0.0, 1.0)
+        ((self.at as f32 + within) / self.counts().1.max(1) as f32).clamp(0.0, 1.0)
     }
 
-    /// Starts the render of note `self.at`: half a second of silence, then its strikes.
-    fn begin(&mut self) -> Result<()> {
-        let Some(&note) = self.notes.get(self.at) else { return Ok(()) };
+    /// The frame an event at `at` sounds at, and its tick.
+    fn event(&self, at: Samples) -> (i64, usize) {
         let sr = self.scratch.sample_rate;
-        let along = if self.high > self.low { (i64::from(note) - self.low) as f64 / (self.high - self.low) as f64 } else { 0.0 };
-        let held = self.hold + (self.hold_high - self.hold) * along;
-        let (hold_len, slot) = (sr.samples(held).max(1), sr.samples(held + self.tail).max(1));
+        let tick = self.scratch.tempo.samples_to_ticks(at, sr);
+        (tick, usize::try_from(self.scratch.tempo.tick_to_samples(tick, sr).saturating_add(self.lag).max(0)).unwrap_or(0))
+    }
+
+    /// Starts the render in hand: half a second of silence, then a note's strikes (held ones,
+    /// then short ones for their releases), or the pedal going down and up.
+    fn begin(&mut self) -> Result<()> {
+        let sr = self.scratch.sample_rate;
         let mut seq = Sequence::default();
-        let mut starts = Vec::with_capacity(self.velocities.len() * self.robins);
+        let mut cuts = Vec::new();
         let mut at = sr.samples(CAPTURE_LEAD_SECS);
-        for &velocity in &self.velocities {
-            for robin in 1..=self.robins {
-                let on = self.scratch.tempo.samples_to_ticks(at, sr);
-                let off = self.scratch.tempo.samples_to_ticks(at.saturating_add(hold_len), sr);
+        if let Some(&note) = self.notes.get(self.at) {
+            let along = if self.high > self.low { (i64::from(note) - self.low) as f64 / (self.high - self.low) as f64 } else { 0.0 };
+            let held = self.hold + (self.hold_high - self.hold) * along;
+            let (hold_len, slot) = (sr.samples(held).max(1), sr.samples(held + self.tail).max(1));
+            let mut strike = |job: &Self, at: Samples, len: Samples, velocity: u8| {
+                let ((on, sounds), (off, lets_go)) = (job.event(at), job.event(at.saturating_add(len)));
                 seq.notes.push(Note { pitch: note, velocity, release_velocity: 64, channel: 0, start: on, length: off.saturating_sub(on).max(1) });
-                let sounds = self.scratch.tempo.tick_to_samples(on, sr).saturating_add(self.lag);
-                starts.push((velocity, robin, usize::try_from(sounds.max(0)).unwrap_or(0)));
-                at = at.saturating_add(slot);
+                (sounds, lets_go)
+            };
+            for &velocity in &self.velocities {
+                for robin in 1..=self.robins {
+                    let (on, _) = strike(self, at, hold_len, velocity);
+                    cuts.push(Cut { kind: Strike::Note { velocity, robin }, on, start: on });
+                    at = at.saturating_add(slot);
+                }
+            }
+            if self.release {
+                // A soft and a hard release when there are layers to tell apart, else one.
+                let top = self.velocities.last().copied().unwrap_or(127);
+                let soft = self.velocities.get(self.velocities.len().saturating_sub(1) / 2).copied().filter(|v| *v < top);
+                let short = sr.samples(CAPTURE_RELEASE_HOLD_SECS).max(1);
+                for (velocity, lovel, hivel) in soft.map(|v| (v, 1, v)).into_iter().chain([(top, soft.map_or(1, |v| v + 1), 127)]) {
+                    let (on, start) = strike(self, at, short, velocity);
+                    cuts.push(Cut { kind: Strike::Release { velocity, lovel, hivel }, on, start });
+                    at = at.saturating_add(short).saturating_add(sr.samples(self.tail).max(1));
+                }
+            }
+        } else {
+            for (kind, value) in [(Strike::PedalDown, 127), (Strike::PedalUp, 0)] {
+                let (tick, on) = self.event(at);
+                seq.ctrls.push(soundcraft_midi::CtrlEvent { tick, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(64), value });
+                cuts.push(Cut { kind, on, start: on });
+                at = at.saturating_add(sr.samples(CAPTURE_PEDAL_SECS));
             }
         }
         seq.sort();
@@ -279,24 +353,32 @@ impl CaptureJob {
             Some(pl) => pl.clips = vec![clip],
             None => return Err(bad(self.id, "the track has no playlist to play from")),
         }
-        self.render = Some((soundcraft_mix::TrackRender::frozen(&self.scratch, self.track, at, None, None), starts));
+        self.render = Some((soundcraft_mix::TrackRender::frozen(&self.scratch, self.track, at, None, None), cuts));
         Ok(())
     }
 
-    /// Cuts the strikes of the note just rendered out of `audio`.
-    fn cut(&mut self, audio: &[Vec<f32>], starts: &[(u8, usize, usize)]) -> Result<()> {
-        let Some(&note) = self.notes.get(self.at) else { return Ok(()) };
+    /// The keys a captured note plays: the nearest one's, the lower of two as near.
+    fn keys_of(&self, note: u8) -> (u8, u8) {
+        let at = self.notes.iter().position(|n| *n == note).unwrap_or(0);
+        let lo = if at == 0 { 0 } else { self.notes.get(at - 1).map_or(0, |p| ((u16::from(*p) + u16::from(note)) / 2 + 1) as u8) };
+        (lo, self.notes.get(at + 1).map_or(127, |n| ((u16::from(note) + u16::from(*n)) / 2) as u8))
+    }
+
+    /// Cuts the strikes of the render just done out of `audio`.
+    fn cut(&mut self, audio: &[Vec<f32>], cuts: &[Cut]) -> Result<()> {
+        let note = self.notes.get(self.at).copied();
         let sr = self.scratch.sample_rate;
         let frames = |secs: f64| usize::try_from(sr.samples(secs).max(0)).unwrap_or(0);
         let rendered = audio.iter().map(Vec::len).min().unwrap_or(0);
         // What counts as died away: the level asked for, or just above the chain's own noise.
         let quiet = self.quiet_at.max(peak_in(audio, 0, frames(CAPTURE_LEAD_SECS)) * 1.5);
         let block = frames(0.005).max(1);
-        for (i, &(velocity, robin, start)) in starts.iter().enumerate() {
-            let last_strike = i + 1 == starts.len();
-            let limit = starts.get(i + 1).map_or(rendered, |next| next.2.min(rendered));
+        for (i, cut) in cuts.iter().enumerate() {
+            let (start, last_strike) = (cut.start, i + 1 == cuts.len());
+            let limit = cuts.get(i + 1).map_or(rendered, |next| next.on.min(rendered));
             if start >= limit || peak_in(audio, start, limit) <= quiet {
-                self.out.silent += 1;
+                // A note that made no sound is told of; no release or pedal noise is no fault.
+                self.out.silent += usize::from(matches!(cut.kind, Strike::Note { .. }));
                 continue;
             }
             let mut loud = start;
@@ -308,7 +390,7 @@ impl CaptureJob {
                 }
                 k = to;
             }
-            if loud >= limit && !last_strike {
+            if loud >= limit && !last_strike && matches!(cut.kind, Strike::Note { .. }) {
                 self.out.ringing += 1;
             }
             let end = loud.saturating_add(frames(CAPTURE_AFTER_SECS)).min(limit);
@@ -330,9 +412,44 @@ impl CaptureJob {
             if self.total > crate::io::MAX_IMPORT_SAMPLES {
                 return Err(bad(self.id, "too much audio to hold in memory: capture fewer notes or layers, shorter, or in mono"));
             }
-            let file =
-                format!("{} {} v{velocity}{}", self.name, note_name(note), if self.robins > 1 { format!(" rr{robin}") } else { String::new() });
-            self.out.samples.push((sample_key(note, velocity, robin), file, AudioBuffer { sample_rate: sr.hz(), channels }));
+            let buf = AudioBuffer { sample_rate: sr.hz(), channels };
+            let name = &self.name;
+            match (cut.kind, note) {
+                (Strike::Note { velocity, robin }, Some(note)) => {
+                    let file =
+                        format!("{name} {} v{velocity}{}", note_name(note), if self.robins > 1 { format!(" rr{robin}") } else { String::new() });
+                    self.out.samples.push((sample_key(note, velocity, robin), file, buf));
+                }
+                (Strike::Release { velocity, lovel, hivel }, Some(note)) => {
+                    let (lokey, hikey) = self.keys_of(note);
+                    let zone = ZoneSpec {
+                        part: RELEASE_PART,
+                        part_name: "Release".into(),
+                        lokey,
+                        hikey,
+                        root: note,
+                        lovel,
+                        hivel,
+                        trigger: ON_KEY_UP,
+                        ref_vel: velocity,
+                        ..ZoneSpec::default()
+                    };
+                    self.out.zones.push((zone, format!("{name} {} release v{velocity}", note_name(note)), buf));
+                }
+                (Strike::PedalDown | Strike::PedalUp, _) => {
+                    let down = cut.kind == Strike::PedalDown;
+                    let zone = ZoneSpec {
+                        part: PEDAL_PART,
+                        part_name: "Pedal".into(),
+                        trigger: if down { ON_PEDAL_DOWN } else { ON_PEDAL_UP },
+                        keytrack: false,
+                        veltrack: 0.0,
+                        ..ZoneSpec::default()
+                    };
+                    self.out.zones.push((zone, format!("{name} pedal {}", if down { "down" } else { "up" }), buf));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -341,20 +458,20 @@ impl CaptureJob {
     /// done; an error ends the job.
     pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<bool> {
         loop {
-            if self.at >= self.notes.len() {
+            if self.at >= self.counts().1 {
                 return Ok(true);
             }
             if self.render.is_none() {
                 self.begin()?;
             }
             let done = self.render.as_mut().is_none_or(|(r, _)| r.step());
-            if done && let Some((render, starts)) = self.render.take() {
+            if done && let Some((render, cuts)) = self.render.take() {
                 let (audio, _) = render.finish();
-                self.cut(&audio, &starts)?;
+                self.cut(&audio, &cuts)?;
                 self.at += 1;
             }
             if !more() {
-                return Ok(self.at >= self.notes.len());
+                return Ok(self.at >= self.counts().1);
             }
         }
     }
@@ -385,14 +502,20 @@ fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
         None => format!("{} Pantry", e.session().track(t).map_or("", |tr| tr.name.as_str())),
     };
     let sr = e.session().sample_rate;
-    let seconds = sr.seconds(Samples::try_from(made.samples.iter().map(|(_, _, b)| b.frames()).sum::<usize>()).unwrap_or(Samples::MAX));
+    let frames = made.samples.iter().map(|(_, _, b)| b.frames()).chain(made.zones.iter().map(|(_, _, b)| b.frames())).sum::<usize>();
+    let seconds = sr.seconds(Samples::try_from(frames).unwrap_or(Samples::MAX));
     let notes: BTreeSet<&str> = made.samples.iter().filter_map(|(k, _, _)| k.split('.').next()).collect();
     let layers: BTreeSet<&str> = made.samples.iter().filter_map(|(k, _, _)| k.split('.').nth(1)).collect();
     let (count, notes, layers) = (made.samples.len(), notes.len(), layers.len());
+    let releases = made.zones.iter().filter(|(z, _, _)| z.trigger == ON_KEY_UP).count();
+    let pedal = made.zones.len() - releases;
     let mut ins = pantry_insert();
     let session = e.session_mut();
     for (key, file, buf) in made.samples {
         ins.samples.insert(key, crate::io::add_source(session, &file, buf, None, FileFormat::Wav));
+    }
+    for (index, (zone, file, buf)) in made.zones.into_iter().enumerate().take(ZONES) {
+        ins.samples.insert(ZoneSpec { index, ..zone }.key(), crate::io::add_source(session, &file, buf, None, FileFormat::Wav));
     }
     let track = session.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some(&name));
     if let Some(tr) = session.track_mut(track) {
@@ -400,9 +523,17 @@ fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
         tr.mixer.input = Route::Midi(soundcraft_model::MidiIn::all());
     }
     session.edit.selected_tracks = vec![track];
-    Ok(
-        json!({"track": track, "samples": count, "notes": notes, "layers": layers, "seconds": seconds, "silent": made.silent, "ringing": made.ringing}),
-    )
+    Ok(json!({
+        "track": track,
+        "samples": count,
+        "notes": notes,
+        "layers": layers,
+        "release": releases,
+        "pedal": pedal,
+        "seconds": seconds,
+        "silent": made.silent,
+        "ringing": made.ringing,
+    }))
 }
 
 /// A sample of an instrument file, and where it plays.
@@ -1776,7 +1907,40 @@ mod tests {
         let made = e
             .execute("track.capture_multisample", &json!({"track": other.0, "low": 46, "high": 46, "layers": 1, "hold": 0.05, "tail": 0.1}))
             .unwrap();
-        assert_eq!((made["samples"].as_u64(), made["silent"].as_u64()), (Some(1), Some(0)));
+        assert_eq!(
+            (made["samples"].as_u64(), made["silent"].as_u64(), made["release"].as_u64(), made["pedal"].as_u64()),
+            (Some(1), Some(0), Some(0), Some(0))
+        );
+        // Captured with its releases and its pedal: what sounds when a key comes up (a soft and
+        // a hard one for each note) and when the pedal goes down (this one is silent coming up).
+        for (param, value) in [("part1_level", PART_OFF_DB), ("release", 5.0)] {
+            e.execute("mix.instrument_param", &json!({"track": other.0, "param": param, "value": value})).unwrap();
+        }
+        let params = json!({"track": other.0, "low": 44, "high": 48, "step": 4, "layers": 2, "hold": 0.05, "tail": 0.3, "release": true, "pedal": true, "name": "Again"});
+        let made = e.execute("track.capture_multisample", &params).unwrap();
+        assert_eq!(
+            (made["samples"].as_u64(), made["release"].as_u64(), made["pedal"].as_u64(), made["silent"].as_u64()),
+            (Some(4), Some(4), Some(1), Some(0))
+        );
+        let z = zones(&e, TrackId(made["track"].as_u64().unwrap()));
+        assert_eq!(
+            z.iter().map(|z| (z.part, z.part_name.as_str(), z.trigger, z.lokey, z.hikey, z.root, z.lovel, z.hivel, z.ref_vel)).collect::<Vec<_>>(),
+            [
+                (1, "Release", ON_KEY_UP, 0, 46, 44, 1, 64, 64),
+                (1, "Release", ON_KEY_UP, 0, 46, 44, 65, 127, 127),
+                (1, "Release", ON_KEY_UP, 47, 127, 48, 1, 64, 64),
+                (1, "Release", ON_KEY_UP, 47, 127, 48, 65, 127, 127),
+                (2, "Pedal", ON_PEDAL_DOWN, 0, 127, 60, 1, 127, 127),
+            ]
+        );
+        assert!(!z[4].keytrack && z[4].veltrack == 0.0);
+        // A job says when it is on the pedal.
+        let mut job = CaptureJob::new(&e, &params).unwrap();
+        assert_eq!(job.counts(), (0, 3));
+        while job.counts().0 < 2 {
+            job.step(|| false).unwrap();
+        }
+        assert_eq!(job.note().as_deref(), Some("Pedal"));
     }
 
     #[test]

@@ -1473,6 +1473,9 @@ pub struct CapturePantry {
     pub tail: f64,
     pub silence: f64,
     pub mono: bool,
+    /// Also capture what sounds when a key comes up, and the sustain pedal's own noises.
+    pub release: bool,
+    pub pedal: bool,
 }
 
 impl CapturePantry {
@@ -1491,6 +1494,8 @@ impl CapturePantry {
             tail: 4.0,
             silence: -72.0,
             mono: false,
+            release: true,
+            pedal: true,
         }
     }
 
@@ -1503,7 +1508,10 @@ impl CapturePantry {
         let notes = if self.low <= self.high { u32::from(self.high - self.low) / u32::from(self.step.max(1)) + 1 } else { 0 };
         let strikes = u32::from(self.layers) * u32::from(self.robins);
         let each = (self.hold + self.hold_high) / 2.0 + self.tail;
-        (notes, notes * strikes, f64::from(notes) * (0.5 + f64::from(strikes) * each))
+        // Two short strikes a note for its releases (one when there is one layer); 4 s for the pedal.
+        let releases = if self.release { notes * if self.layers > 1 { 2 } else { 1 } } else { 0 };
+        let more = f64::from(releases) * (0.3 + self.tail) + if self.pedal { 4.5 } else { 0.0 };
+        (notes, notes * strikes + releases + if self.pedal { 2 } else { 0 }, f64::from(notes) * (0.5 + f64::from(strikes) * each) + more)
     }
 
     pub fn params(&self) -> Value {
@@ -1520,6 +1528,8 @@ impl CapturePantry {
             "tail": self.tail,
             "silence": self.silence,
             "mono": self.mono,
+            "release": self.release,
+            "pedal": self.pedal,
         })
     }
 }
@@ -1560,13 +1570,20 @@ fn capture_fields(ui: &mut egui::Ui, c: &mut CapturePantry) {
         ui.label("Silence level");
         ui.add(egui::DragValue::new(&mut c.silence).range(-120.0..=-20.0).speed(0.5).suffix(" dB"));
         ui.end_row();
+        ui.label("Also capture");
+        ui.horizontal(|ui| {
+            crate::widgets::checkbox(ui, &mut c.release, "Release samples")
+                .on_hover_text("What sounds when a key comes up, played back when you let a note go");
+            crate::widgets::checkbox(ui, &mut c.pedal, "Pedal noises").on_hover_text("What the sustain pedal itself sounds like going down and up");
+        });
+        ui.end_row();
         ui.label("");
         crate::widgets::checkbox(ui, &mut c.mono, "Mono");
         ui.end_row();
     });
     let (notes, samples, secs) = c.size();
     let secs = secs.round() as u64;
-    ui.label(format!("{notes} notes, {samples} samples: up to {}:{:02} of audio to render.", secs / 60, secs % 60));
+    ui.label(format!("{notes} notes, up to {samples} samples: up to {}:{:02} of audio to render.", secs / 60, secs % 60));
 }
 
 /// The status line after `track.capture_multisample` returned `v`.
@@ -1574,6 +1591,12 @@ pub fn capture_status(v: &Value) -> String {
     let n = |k: &str| v[k].as_u64().unwrap_or(0);
     let plural = |n: u64| if n == 1 { "" } else { "s" };
     let mut s = format!("Captured {} sample{} of {} note{}", n("samples"), plural(n("samples")), n("notes"), plural(n("notes")));
+    if n("release") > 0 {
+        s.push_str(&format!(", {} release sample{}", n("release"), plural(n("release"))));
+    }
+    if n("pedal") > 0 {
+        s.push_str(&format!(", {} pedal noise{}", n("pedal"), plural(n("pedal"))));
+    }
     if n("silent") > 0 {
         s.push_str(&format!("; {} made no sound", n("silent")));
     }
@@ -1747,8 +1770,10 @@ mod tests {
         assert_eq!((c.track, c.name.as_str(), c.layers, c.ready()), (TrackId(t), "Piano Pantry", 12, true));
         // 30 notes of 12 strikes, each 5.5 s held on average and 4 s of tail, after half a second.
         let (notes, samples, secs) = c.size();
-        assert_eq!((notes, samples), (30, 360));
-        assert!((secs - 30.0 * (0.5 + 12.0 * 9.5)).abs() < 1.0e-6);
+        assert_eq!((notes, samples), (30, 360 + 60 + 2));
+        assert!((secs - (30.0 * (0.5 + 12.0 * 9.5) + 60.0 * 4.3 + 4.5)).abs() < 1.0e-6);
+        (c.release, c.pedal) = (false, false);
+        assert_eq!((c.size().1, (c.size().2 - 30.0 * (0.5 + 12.0 * 9.5)).abs() < 1.0e-6), (360, true));
         // What it sends is what the command takes: a short capture runs.
         (c.low, c.high, c.layers, c.hold, c.hold_high, c.tail) = (60, 60, 2, 0.1, 0.1, 0.3);
         let v = e.execute("track.capture_multisample", &c.params()).unwrap();

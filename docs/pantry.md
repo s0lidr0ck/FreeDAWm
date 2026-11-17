@@ -17,20 +17,28 @@ of its own.
 
 ## The instrument
 
-- **Samples** are session sources (`Insert::samples`), saved in `Audio Files/` with the session,
-  keyed `n{note}.v{velocity}.r{robin}`: the note the sample was recorded at (0–127), the velocity
-  it was played with (1–127) and its round-robin take (1–4). A note holds up to 16 velocity
-  layers.
-- **Keys.** A key plays the nearest recorded note (the lower of two equally near), pitched to
-  the key.
-- **Velocity.** A layer covers the velocities from just above the layer below it up to its own.
-  **Velocity Curve** turns a softer hit than the layer was recorded at down (the level falls as
-  the velocity ratio to that power; 0 plays every hit as recorded). **Layer Blend** mixes in the
-  layer below over the bottom of each layer's range, at equal power, so the tone changes
-  gradually: at 100% every hit between two layers is a mix of both, at 0% the layers switch.
-- **Round-robins.** Each hit of a recorded note plays its next take.
+- **Zones.** Every sample is a zone: the keys and velocities it answers, the note it was recorded
+  at, its level and tuning, where in the file it starts and ends, an optional loop (with a
+  crossfade), and what sets it off: a key going down, a key coming up (release samples), or the
+  sustain pedal going down or up (pedal noises).
+- **Parts.** A zone belongs to one of eight parts (a piano's notes, its release samples, its
+  pedal noises, a pad under it), each with its own level knob; turned all the way down, a part
+  is off. Zones of different parts that answer a note sound together. Within a part, zones in a
+  sequence (round-robins) take turns.
+- **Samples** are session sources (`Insert::samples`), saved in `Audio Files/` with the session.
+  A library's zone is keyed by its whole description (`ZoneSpec::key`). A captured sample has a
+  shorter key, `n{note}.v{velocity}.r{robin}` (the note it was recorded at, the velocity it was
+  played with, its take 1–4), and the instrument works its zone out: a key plays the nearest
+  recorded note (the lower of two equally near), a layer covers the velocities from just above
+  the layer below it up to its own, and a note holds up to 16 layers.
+- **Velocity.** A zone plays as recorded at its reference velocity (a captured sample's own; 127
+  for a library's) and **Velocity Curve** turns it down below that (the level falls as the
+  velocity ratio to that power; 0 plays every hit as recorded), as far as the zone tracks
+  velocity. **Layer Blend** mixes in the layer just below, of the same part, over the bottom of
+  each layer's range, at equal power: at 100% every hit between two layers is a mix of both, at
+  0% the layers switch.
 - **Notes** have an amp ADSR. The sustain pedal holds released notes; pitch bend is ±2
-  semitones. 96 voices (a blended hit uses two).
+  semitones. 128 voices (a blended hit, or a note of two parts, uses two).
 - Level, Pan, Transpose and Fine Tune.
 
 ## The window
@@ -62,6 +70,8 @@ Pantry plays the result. The source track is not changed.
 | `hold_high` | 3 | seconds the highest is held; the notes between shorten evenly |
 | `tail` | 4 | seconds left to ring after each release, before the next strike |
 | `silence` | -72 | the level (dBFS) a note has died away at |
+| `release` | false (on in the dialog) | also captures what sounds when a key comes up |
+| `pedal` | false (on in the dialog) | also captures the sustain pedal's own noises |
 | `mono` | false | keeps one channel (half the memory) |
 | `name` | the track's, with "Pantry" | the new track's name |
 
@@ -75,6 +85,14 @@ cut from its note-on to where it last rose above the silence level, plus a short
 made no sound are left out and counted (`silent`); notes still sounding when the next strike
 began are counted too (`ringing`: give them a longer `tail`). Levels are kept as rendered, so the
 layers keep their balance.
+
+With `release`, each note is also struck briefly (a soft and a hard strike when there are layers
+to tell apart) and what sounds from the moment its key comes up is kept as a release sample: a
+zone of a **Release** part that plays when a note is let go, over that note's keys. With `pedal`,
+one more render presses and lifts the sustain pedal with no key down; whatever the instrument
+sounds each way is kept in a **Pedal** part. An instrument that makes neither sound gets
+neither part. The notes are then the **Notes** part, and each part has its level knob: a release
+sample plays over the note's own fading tail, so its level is the one to set by ear.
 
 ## Where an instrument is kept
 
@@ -97,22 +115,50 @@ a trailing number and all), as Save writes them, or as `tools/sampling/sampling.
 to what the Pantry holds; files whose names give no note and velocity are left out and counted.
 Sample files and folders dropped on Pantry's window, or on its track, import the same way.
 
-## Loading an SFZ file
+## Loading other libraries
 
-`mix.multisample_load` reads an SFZ file's mapping into the track's Pantry: the `sample`,
-`pitch_keycenter` (or `key`), `hivel` and `seq_position` of each key-down region, with
-`default_path` and the values inherited from `<global>`, `<master>` and `<group>`. A second
-region for a place already taken becomes that layer's next take. Nothing else of the file is read
-(no envelopes, filters, key ranges, release samples, `#include` or `#define`): Pantry's own
-controls shape the sound. `tools/sampling/sampling.py split` writes files it reads whole.
+`mix.multisample_load` (**Load…**, or the file dropped on Pantry) reads an instrument made for
+another sampler into the track's Pantry, in place of what it holds. Each of its samples becomes
+a zone as its file describes it: keys, velocities, the note it was recorded at, level, tuning,
+start and end, loop, round-robin turn, and whether a key going down, a key coming up or the
+sustain pedal sets it off. Its groups become parts. Since a library's levels follow the velocity
+from full scale and its layers switch as it was made to, a load sets Velocity Curve to 2 and
+Layer Blend to 0; raise Layer Blend to mix its layers. Not read: interfaces, effects, filters,
+envelopes, and anything driven by a controller other than the sustain pedal.
+
+- **SFZ** (`.sfz`): `sample`, `lokey`/`hikey`/`key`, `pitch_keycenter`, `lovel`/`hivel`,
+  `seq_position`, `volume`, `tune`, `transpose`, `offset`, `end`, `loop_mode` with
+  `loop_start`/`loop_end`, `pitch_keytrack`, `amp_veltrack`, `trigger` (attack, release) and
+  `on_locc64`/`on_hicc64` (the pedal), with `default_path`, `<global>`, `<master>` and `<group>`
+  inherited, `#include` (anywhere on a line, eight deep) and `#define`d variables. A part is a
+  `master_label`, else Notes, Release or Pedal by what sets the zone off. Of an instrument with
+  keyswitched versions (`sw_last`), the one it starts on (`sw_default`, else the first) is
+  loaded. Checked against the Salamander Grand Piano V3 file.
+- **Decent Sampler preset** (`.dspreset`): each `<sample>`'s `path`, `rootNote`,
+  `loNote`/`hiNote`, `loVel`/`hiVel`, `seqPosition`, `start`, `end`, `loopEnabled` with
+  `loopStart`/`loopEnd`/`loopCrossfade`, `pitchKeyTrack`, `ampVelTrack`, `trigger` and
+  `onLoCC64`/`onHiCC64`, a value it lacks taken from its `<group>`, then from `<groups>`;
+  `volume` and `tuning` add up down that chain. A part is a group's first tag (else its name),
+  and starts at the level of the control bound to that tag's volume (so a preset's Notes, RT,
+  Pedal and Texture faders arrive as Pantry's part knobs, a part at zero switched off). The file
+  is read leniently, as Decent Sampler does (an attribute given twice keeps its first value).
+- **Decent Sampler library** (`.dslibrary`, a zip archive): one of its presets (`preset`; its
+  first by name otherwise), the samples read out of the archive. They have no files of their own
+  afterwards, so they are saved with the session, or with **Save…** to the Library.
+
+**Save…** keeps all of it: a library's zones are written out in full, with their parts.
+
+Known gaps: per-group envelopes are not read (a pad's slow attack and release come from Pantry's
+one envelope); a library bigger than memory does not fit (every sample is held in memory, as
+32-bit float: a 16-layer piano is around 2 GB).
 
 ## Not built yet
 
+- Playing from disk: every sample is held in memory.
+- An envelope per part (a pad's slow attack and release); choosing a library's preset in the
+  Load dialog.
+- Editing on the shelves: moving, replacing or removing a single sample, a zone's level.
 - Menu entries for loading and saving outside Pantry's window.
-- Editing on the shelves: moving, replacing or removing a single sample, per-layer levels.
 - Capturing only down to a chosen module (Freeze's "up to here").
 - Third-party instruments as capture sources are untested: capture renders through instances of
   its own, as an engine-side Freeze does.
-- Playing from disk: every sample is held in memory.
-- Decent Sampler (`.dspreset`) loading, release samples, pedal-down samples, loops for sustained
-  instruments.
