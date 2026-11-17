@@ -1320,9 +1320,25 @@ impl IBStreamTrait for MemoryStream {
 /// the MIDI channel, 0–15.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NoteEvent {
-    On { time: u32, channel: u8, key: u8, velocity: f32 },
-    Off { time: u32, channel: u8, key: u8 },
-    Pressure { time: u32, channel: u8, key: u8, pressure: f32 },
+    On {
+        time: u32,
+        channel: u8,
+        key: u8,
+        velocity: f32,
+    },
+    /// `velocity`: the release velocity, 0–1 (0 when the message had none).
+    Off {
+        time: u32,
+        channel: u8,
+        key: u8,
+        velocity: f32,
+    },
+    Pressure {
+        time: u32,
+        channel: u8,
+        key: u8,
+        pressure: f32,
+    },
 }
 
 impl NoteEvent {
@@ -1349,10 +1365,10 @@ impl NoteEvent {
                 e.__field0.noteOn =
                     sv::NoteOnEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), tuning: 0.0, velocity, length: 0, noteId: -1 };
             }
-            NoteEvent::Off { channel, key, .. } => {
+            NoteEvent::Off { channel, key, velocity, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOffEvent as u16;
                 e.__field0.noteOff =
-                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity: 0.0, noteId: -1, tuning: 0.0 };
+                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity, noteId: -1, tuning: 0.0 };
             }
             NoteEvent::Pressure { channel, key, pressure, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kPolyPressureEvent as u16;
@@ -3161,12 +3177,13 @@ mod tests {
     #[test]
     fn note_events_carry_their_channel() {
         let on = NoteEvent::On { time: 0, channel: 9, key: 36, velocity: 1.0 }.to_raw(0);
-        let off = NoteEvent::Off { time: 0, channel: 15, key: 36 }.to_raw(0);
+        let off = NoteEvent::Off { time: 0, channel: 15, key: 36, velocity: 0.5 }.to_raw(0);
         let pressure = NoteEvent::Pressure { time: 0, channel: 3, key: 36, pressure: 0.5 }.to_raw(0);
         // SAFETY: each union field read is the one its event type wrote.
         unsafe {
             assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch), (9, 36));
             assert_eq!(off.__field0.noteOff.channel, 15);
+            assert_eq!(off.__field0.noteOff.velocity, 0.5, "the release velocity");
             assert_eq!(pressure.__field0.polyPressure.channel, 3);
         }
     }

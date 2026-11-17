@@ -238,14 +238,14 @@ impl Vst3Plugin {
         }
     }
 
-    /// A note-off on MIDI channel `ch` (0–15).
-    fn key_off(&mut self, offset: usize, ch: u8, note: u8) {
+    /// A note-off on MIDI channel `ch` (0–15) with its release velocity (0–127; 0: none).
+    fn key_off(&mut self, offset: usize, ch: u8, note: u8, release: u8) {
         if note > 127 || !self.event_input {
             return;
         }
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
-        self.push_note(NoteEvent::Off { time, channel: ch, key: note });
+        self.push_note(NoteEvent::Off { time, channel: ch, key: note, velocity: f32::from(release.min(127)) / 127.0 });
         if let Some(h) = self.held.get_mut(note as usize) {
             *h &= !(1 << ch);
         }
@@ -447,7 +447,7 @@ impl Plugin for Vst3Plugin {
     }
 
     fn note_off(&mut self, offset: usize, note: u8) {
-        self.key_off(offset, 0, note);
+        self.key_off(offset, 0, note, 0);
     }
 
     /// Controllers, pressure, pitch bend and program change on the message's own channel: each
@@ -487,7 +487,9 @@ impl Plugin for Vst3Plugin {
         let ch = status & 0x0F;
         match status & 0xF0 {
             0x90 if d2 > 0 => self.key_on(offset, ch, d1, d2),
-            0x80 | 0x90 => self.key_off(offset, ch, d1),
+            // A note-off carries its release velocity; a note-on at velocity 0 has none.
+            0x80 => self.key_off(offset, ch, d1, d2),
+            0x90 => self.key_off(offset, ch, d1, 0),
             _ => self.midi(offset, msg),
         }
     }
@@ -497,7 +499,7 @@ impl Plugin for Vst3Plugin {
             let mask = self.held.get(k as usize).copied().unwrap_or(0);
             for ch in 0..16u8 {
                 if mask & (1 << ch) != 0 {
-                    self.key_off(0, ch, k);
+                    self.key_off(0, ch, k, 0);
                 }
             }
         }
