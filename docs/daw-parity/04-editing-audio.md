@@ -1,6 +1,6 @@
 # Four-DAW parity, section 4: editing audio on the timeline
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -156,7 +156,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Batch fades over many clips | ● | ● | ● | ● | **Works**: the fade dialog's batch option fades both ends of every clip inside the selection, at a length in ms |
 | Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
 | Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Missing**: the fade lengths silently differ |
-| Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback (1 ms default); not applied when consolidating or exporting |
+| Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback and in bounces and exports, which render through the same strip (1 ms default); not applied when consolidating |
 | Delete fades in a selection | ● | ● | ● | ● | **Works**: only the fades and crossfades in the selection go (bug 9, fixed) |
 
 ## G. Consolidate and offline processing
@@ -194,7 +194,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). On release the new warp is heard at once through the real-time stretcher while its render is made in the background (not while dragging) |
 | Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Works** offline: the track's algorithm sets how the stretch splices (Rhythmic short and tight, Monophonic searching wide, Polyphonic general, X-Form long and smooth); varispeed plays in real time through the band-limited resampler (section 1). Not real-time |
-| Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
+| Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**: the Beat Detective window has a Sensitivity slider (its Separate uses it too); `edit.separate_at_transients` takes `sensitivity` |
 | Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
 | Quantize multitrack drums keeping phase | ● | ● | ● | ● | **Works** as Straighten, to a steady tempo only |
 | Slice, conform and smooth (Beat Detective style) | ● | ◐ | ◐ | ● | **Partial**: detect and separate; no conform, no gap filling |
@@ -210,8 +210,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Built-in note-level pitch editor | ◐ | ◐ | ● | ● | **Works**: pitch, drift, vibrato, formant, per-note gain; monophonic sources |
 | Pitch editor on a stretched clip | ● | ● | ● | ● | **Missing**: a stretched clip plays untuned |
-| Automatic pitch correction in real time | ○ | ○ | ● | ● | **Partial**: offline per clip (centre and snap to key) |
-| ARA 2 for third-party editors | ● | ● | ● | ● | **Missing** |
+| Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
+| ARA 2 for third-party editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
 | Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Missing** |
 | Stem separation | ◐ | ● | ● | ● | **Works** (desktop, downloaded model) |
@@ -389,3 +389,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Stretches and warp-marker moves are heard at once through the real-time stretcher while the render is made |
 | 2026-11-16 | minor | A reversed clip's waveform is drawn reversed |
 | 2026-11-16 | minor | Clip transpose gets a high-quality background render |
+| 2026-11-17 | minor | Round three reconciliation: transient sensitivity and edge fades in exports were already built; ARA 2 and real-time pitch correction not planned here |
