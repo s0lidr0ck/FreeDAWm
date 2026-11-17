@@ -232,7 +232,7 @@ why they score ◐ for "built-in".
 | Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
 | Tempo changes, ramps and curves; meter changes | ● | ● | ● | ● | **Works** |
-| Tap tempo | ● | ● | ● | ● | **Missing** |
+| Tap tempo | ● | ● | ● | ● | **Works**: the Tempo Operations window's Tap button; from the second tap the tempo in effect at the insertion point takes the average of the last eight taps (a pause of 2 s starts over), one undo step per run of taps |
 | Identify a beat to set the tempo from a selection | ● | ◐ | ● | ● | **Works**: the tempo after the selection resumes where it ends (bug 8, fixed) |
 | Video stays in sync through edits; snap to frames | ● | ● | ● | ● | **Works** |
 
@@ -395,3 +395,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | The Undo History lists undone steps and redoes to one by clicking |
 | 2026-11-17 | minor | Selection commands: extend to the session start or end, select clips on a track, following, by name, colour or mute; nudge one edge of the selection |
 | 2026-11-17 | minor | Nudge the audio inside a clip |
+| 2026-11-17 | minor | Tap tempo |

@@ -89,6 +89,7 @@ mod setup_more;
 mod surround;
 mod tab;
 pub mod tempo;
+pub mod tap_tempo;
 mod track;
 mod track_more;
 pub mod transport;
@@ -224,6 +225,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(strip_shape::specs());
         v.extend(mix_snapshot::specs());
         v.extend(clip_slip::specs());
+        v.extend(tap_tempo::specs());
         v.extend(select_more::specs());
         v.extend(transport::specs());
         v.extend(tab::specs());

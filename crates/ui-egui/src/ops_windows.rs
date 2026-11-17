@@ -14,6 +14,9 @@ pub struct OpsState {
     pub beat_set_tempo: bool,
     pub beat_result: String,
     pub tempo_curve: String,
+    /// Tap Tempo's taps (seconds of egui time); not saved.
+    #[serde(skip)]
+    pub tap_times: Vec<f64>,
     pub tempo_start: f64,
     pub tempo_end: f64,
     pub time_op: String,
@@ -72,6 +75,7 @@ impl Default for OpsState {
             beat_set_tempo: false,
             beat_result: String::new(),
             tempo_curve: "linear".into(),
+            tap_times: Vec::new(),
             tempo_start: 100.0,
             tempo_end: 120.0,
             time_op: "insert".into(),
@@ -362,6 +366,16 @@ fn tempo_ops(app: &mut SoundApp, ctx: &egui::Context) {
             )
             .small(),
         );
+        ui.horizontal(|ui| {
+            // Each tap after the first sets the tempo in effect at the insertion point; one undo step per run of taps.
+            if ui.button("Tap").on_hover_text("Tap Tempo: click in time; a pause of 2 s starts over").clicked() {
+                let now = ui.input(|i| i.time);
+                tap_tempo(app, now);
+            }
+            if let Some(bpm) = soundcraft_engine::cmd::tap_tempo::tapped_bpm(&app.ops.tap_times) {
+                ui.label(format!("{bpm:.1} bpm tapped"));
+            }
+        });
         if ui.button(egui::RichText::new("Apply").strong()).clicked() {
             let (id, p) = tempo_ops_apply(&app.ops.tempo_curve, app.ops.tempo_start, app.ops.tempo_end);
             let r = app.run(id, p);
@@ -369,6 +383,29 @@ fn tempo_ops(app: &mut SoundApp, ctx: &egui::Context) {
         }
     });
     app.ui.show_tempo_ops = open;
+}
+
+/// One Tap Tempo tap at `now` seconds: kept with the taps since the last pause, and from the
+/// second tap on the tempo they beat is set (`event.tap_tempo`), the run's taps merged into one undo step.
+pub fn tap_tempo(app: &mut SoundApp, now: f64) {
+    use soundcraft_engine::cmd::tap_tempo::{TAP_KEEP, TAP_RESET_SECONDS};
+    let taps = &mut app.ops.tap_times;
+    if taps.last().is_none_or(|t| now - t >= TAP_RESET_SECONDS || now <= *t) {
+        taps.clear();
+    }
+    taps.push(now);
+    if taps.len() > TAP_KEEP {
+        taps.remove(0);
+    }
+    if taps.len() >= 2 {
+        let key = format!("tap_tempo:{}", taps.first().copied().unwrap_or(0.0));
+        let r = app.engine.execute_merged("event.tap_tempo", &json!({"taps": taps.clone()}), &key);
+        if let Ok(v) = r
+            && let Some(bpm) = v["bpm"].as_f64()
+        {
+            app.ops.tempo_start = bpm;
+        }
+    }
 }
 
 fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
