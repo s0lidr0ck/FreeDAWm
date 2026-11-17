@@ -902,6 +902,12 @@ fn heal(e: &mut Engine, p: &Value) -> Result<Value> {
 fn trim_to_selection(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "edit.trim_to_selection", p)?;
     let r = range_param(e, "edit.trim_to_selection", p)?;
+    if shuffle(e.session()) {
+        return shuffle_trims(e, &tracks, |c| {
+            let i = c.range().intersect(&r).filter(|i| *i != c.range())?;
+            Some(((i.start > c.start).then_some(i.start), (i.end < c.end()).then_some(i.end)))
+        });
+    }
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| ops::trim_to(s, *t, r)).sum();
     Ok(json!({"trimmed": n}))
@@ -910,8 +916,47 @@ fn trim_to_selection(e: &mut Engine, p: &Value) -> Result<Value> {
 fn trim_edge(e: &mut Engine, p: &Value, start: bool) -> Result<Value> {
     let tracks = tracks_required(e, "edit.trim", p)?;
     let at = position_param(e, "edit.trim", p, "at")?.unwrap_or(e.session().edit.selection.start);
+    if shuffle(e.session()) {
+        return shuffle_trims(e, &tracks, |c| (at > c.start && at < c.end()).then_some(if start { (Some(at), None) } else { (None, Some(at)) }));
+    }
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| if start { ops::trim_start_to(s, *t, at) } else { ops::trim_end_to(s, *t, at) }).sum();
+    Ok(json!({"trimmed": n}))
+}
+
+/// Shuffle's trims: each clip on `tracks` that `edges` gives a new start and/or end is trimmed as
+/// the Trim tool trims in Shuffle: its start stays put, and the clips after it (and their
+/// automation) move by the change in length.
+fn shuffle_trims(
+    e: &mut Engine,
+    tracks: &[soundcraft_model::TrackId],
+    edges: impl Fn(&soundcraft_model::Clip) -> Option<(Option<Samples>, Option<Samples>)>,
+) -> Result<Value> {
+    let s = e.session_mut();
+    let mut n = 0;
+    for t in tracks {
+        // Later clips move as each one is trimmed, so the edges are worked out one clip at a time, last first.
+        let mut todo: Vec<(soundcraft_model::ClipId, Samples)> =
+            s.track(*t).map(|tr| tr.clips().iter().map(|c| (c.id, c.start)).collect()).unwrap_or_default();
+        todo.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+        for (id, _) in todo {
+            let Some((start, end)) = s.find_clip(id).and_then(|(_, c)| edges(c)) else { continue };
+            // A start trim in Shuffle keeps the clip where it is, so an end given in the old
+            // timeline is that far after the clip's start.
+            let cs = s.find_clip(id).map_or(0, |(_, c)| c.start);
+            let end = match (start, end) {
+                (Some(a), Some(b)) => Some(cs.saturating_add(b.saturating_sub(a))),
+                (_, b) => b,
+            };
+            if start.is_some() {
+                let _ = ops::trim_clip(s, id, start, None, true);
+            }
+            if end.is_some() {
+                let _ = ops::trim_clip(s, id, None, end, true);
+            }
+            n += 1;
+        }
+    }
     Ok(json!({"trimmed": n}))
 }
 
@@ -1573,6 +1618,22 @@ mod tests {
         let (mut e, t, ids) = trim_session(&[(0, 10_000, 0), (20_000, 10_000, 20_000), (40_000, 5_000, 0)]);
         e.execute("edit.trim_to_file_boundaries", &json!({"clips": [ids[1].0]})).unwrap();
         assert_eq!(bounds(&e, t), vec![(0, 10_000, 0), (10_000, 40_000, 10_000), (40_000, 45_000, 0)]);
+    }
+
+    #[test]
+    fn shuffle_trims_from_the_menu_keep_the_clip_start_and_close_up_what_follows() {
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 20_000), (30_000, 5_000, 0)]);
+        e.execute("edit.mode", &json!({"mode": "shuffle"})).unwrap();
+        e.execute("edit.trim_to_selection", &json!({"tracks": [t.0], "start": 2_000, "end": 8_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 6_000, 2_000), (6_000, 16_000, 20_000), (26_000, 31_000, 0)]);
+        e.execute("edit.trim_end_to_insertion", &json!({"tracks": [t.0], "at": 4_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 4_000, 2_000), (4_000, 14_000, 20_000), (24_000, 29_000, 0)]);
+        e.execute("edit.trim_start_to_insertion", &json!({"tracks": [t.0], "at": 9_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 4_000, 2_000), (4_000, 9_000, 25_000), (19_000, 24_000, 0)]);
+        // In Slip they trim in place, as before.
+        e.execute("edit.mode", &json!({"mode": "slip"})).unwrap();
+        e.execute("edit.trim_end_to_insertion", &json!({"tracks": [t.0], "at": 2_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 2_000, 2_000), (4_000, 9_000, 25_000), (19_000, 24_000, 0)]);
     }
 
     #[test]

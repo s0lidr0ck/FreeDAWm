@@ -77,7 +77,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Slip (free) editing | ● | ● | ● | ● | **Works** |
-| Shuffle / ripple editing | ● | ● | ● | ● | **Partial**: drag, trim, cut, paste, duplicate honour it; nudge, the A/S trims and Trim to Selection do not |
+| Shuffle / ripple editing | ● | ● | ● | ● | **Partial**: drag, trim, cut, paste, duplicate, Trim to Selection and the A/S trims (Start / End to Insertion) honour it, the clip keeping its start and what follows closing up; a nudge still moves the clips alone, without rippling |
 | Shuffle lock | ● | — | — | — | **Works** |
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
 | Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
@@ -403,3 +403,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Memory locations that recall the view |
 | 2026-11-17 | minor | The selection's start, end and length can be typed |
 | 2026-11-17 | minor | Markers on a track |
+| 2026-11-17 | minor | Trim to Selection and the A/S trims follow Shuffle |
