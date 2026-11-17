@@ -108,7 +108,7 @@ Varispeed is the only whole-project speed control among the four.
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
 | No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
 | Realtime-safe audio thread | ● | ● | ● | ● | **Works**: plug-ins (built-in and hosted), Clip Effects modules and a new track's strip (its audio buffers, delay-compensation and key lines, MIDI rings) and a new bus's buffers are made on the UI thread by `BuiltinPrep` and handed over with the session; when the engine's tables of strips, meters and busses would grow, larger empty ones come along; a removed track's strip and outgrown tables go back to be freed off the audio thread (`RetiredStrips`). Fixed on the way: a strip's pre-fader and output buffers were made with only the last channel reserved, so the others grew while rendering. Lines are reserved for a mix delay up to a quarter second; a larger one still grows them in the render's sync, as before. The small lists `sync` rebuilds each time the session's structure changes are still made there |
-| Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only; designed below (Changing the session rate), not built |
+| Change the session sample rate later | ◐ | ● | ● | ● | **Works** (2026-11-17, to the design below): Setup › Session › Sample Rate › Convert (`session.set_sample_rate`) resamples every source to new audio (the old files stay for Undo) and moves every position stored in samples to the same time (`model::rate_change`), one undo step; the player rebuilds its engine at the new rate. A test fails on an integer field of the demo session that is neither scaled nor listed. Left: the conversion runs in the command (no progress window), and the completeness test sees only what the demo session holds |
 | Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Works**: Window › Control Room (section 3, E) |
 | Runs in a browser | ○ | ○ | ○ | ○ | **Works**, single-threaded |
 
@@ -244,7 +244,7 @@ redo, a save renders what is still live). The app's worker (`ui-egui/src/stretch
 app turns deferral on (not the web build, which has no threads, nor the CLI). Left: grain
 alignment (point 4); hearing a warp marker while it is dragged (it is heard from the release).
 
-**Changing the session rate: the design (round three, not built).** A command
+**Changing the session rate: the design (round three, built 2026-11-17 but for the progress window).** A command
 (`session.set_sample_rate {rate}`, Setup › Session) converts the open session in one undo step.
 (1) *Sources*: every pool source is resampled with the import's high-quality sinc
 (`audio_io::Resampler`) on a worker with the open-progress window, written to the project's
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: the session's sample rate can be changed later |
 | 2026-11-17 | minor | Round three: a design for playing files at their own rate (mixed rates) |
 | 2026-11-17 | minor | Round three: designs for busses on the worker pool, reverse playback through the mixer and the large playback buffer; the processing stack row points at section 4 |
 | 2026-11-17 | minor | Round three: a new track's strip and a new bus's buffers are made off the audio thread |

@@ -23,6 +23,7 @@ mod mixer;
 mod modulator;
 pub mod monitor;
 mod notes;
+pub mod rate_change;
 mod scout;
 mod session;
 mod sheet;

@@ -331,6 +331,9 @@ pub enum Dialog {
         bit_depth: String,
         /// What takes are recorded as: `wav` (BWF) or `aiff` (`setup.record_format`).
         file_type: String,
+        /// The rate to convert the session to (`session.set_sample_rate`); the session's own
+        /// until another is picked.
+        rate: u32,
     },
     ScoreSetup {
         title: String,
@@ -640,7 +643,12 @@ impl Dialogs {
                     soundcraft_model::BitDepthSetting::Float32 => "32f",
                 };
                 let file_type = if s.record_file_type == soundcraft_model::RecordFileType::Aiff { "aiff" } else { "wav" };
-                Dialog::Session { frame_rate: s.frame_rate.label().into(), bit_depth: bit_depth.into(), file_type: file_type.into() }
+                Dialog::Session {
+                    frame_rate: s.frame_rate.label().into(),
+                    bit_depth: bit_depth.into(),
+                    file_type: file_type.into(),
+                    rate: s.sample_rate.hz(),
+                }
             }
             "file.score_setup" => {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
@@ -1374,7 +1382,25 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), params));
                     }
                 }
-                Dialog::Session { frame_rate, bit_depth, file_type } => {
+                Dialog::Session { frame_rate, bit_depth, file_type, rate } => {
+                    // The rate: converting the session (its audio and every position) is its own
+                    // step, one undo step.
+                    let now = app.engine.session().sample_rate.hz();
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_label("Sample Rate").selected_text(format!("{rate} Hz")).show_ui(ui, |ui| {
+                            for r in soundcraft_time::SampleRate::COMMON {
+                                ui.selectable_value(rate, r, format!("{r} Hz"));
+                            }
+                        });
+                        if *rate != now
+                            && ui
+                                .button(format!("Convert to {rate} Hz"))
+                                .on_hover_text("Resamples every audio file to new files and moves every position to the same time (one undo step)")
+                                .clicked()
+                        {
+                            action = Some(("session.set_sample_rate".into(), json!({"rate": *rate})));
+                        }
+                    });
                     egui::ComboBox::from_label("Timecode Rate").selected_text(frame_rate.as_str()).show_ui(ui, |ui| {
                         for r in soundcraft_time::FrameRate::ALL {
                             ui.selectable_value(frame_rate, r.label().to_string(), r.label());

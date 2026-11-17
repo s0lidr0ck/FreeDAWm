@@ -44,6 +44,7 @@ pub mod pan_law;
 mod record_format;
 mod record_print;
 pub mod select_more;
+mod session_rate;
 pub mod strip_shape;
 pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
@@ -236,6 +237,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());
+        v.extend(session_rate::specs());
         v.extend(event::specs());
         v.extend(mix::specs());
         v.extend(mix_view::specs());
