@@ -381,6 +381,13 @@ pub struct Session {
     /// copy is placed by dragging one onto a track (`clip.place_captured`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured: Vec<crate::Clip>,
+    /// Alternative arrangements (scratch pads): each names the playlist every track plays in it
+    /// and keeps its own markers. Empty until the first is made (Edit › Arrangements).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrangements: Vec<Arrangement>,
+    /// The arrangement the session plays now (by name), once there are any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<String>,
     pub groups: Vec<Group>,
     pub edit: EditState,
     pub next_id: u64,
@@ -442,6 +449,17 @@ pub struct Session {
     pub pitch_renders: crate::PitchRenders,
 }
 
+/// An alternative arrangement of the session ([`Session::arrangements`]): the playlist each track
+/// plays in it, by name, and its markers.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Arrangement {
+    pub name: String,
+    #[serde(default)]
+    pub playlists: Vec<(TrackId, String)>,
+    #[serde(default)]
+    pub markers: Vec<MemoryLocation>,
+}
+
 impl Default for Session {
     fn default() -> Self {
         Session::new("Untitled", SampleRate::HZ_48000)
@@ -471,6 +489,8 @@ impl Session {
             inputs: Vec::new(),
             markers: Vec::new(),
             captured: Vec::new(),
+            arrangements: Vec::new(),
+            arrangement: None,
             groups: Vec::new(),
             edit: EditState::default(),
             next_id: 1,

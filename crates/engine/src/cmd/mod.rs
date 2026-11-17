@@ -12,6 +12,7 @@ pub use auto_write::{
     KEEP_PASS_POINTS, MAX_RETURN_MS, RETURN_MS, RETURN_SECONDS, TOUCH_HOLD_SECONDS, WRITE_ON_STOP, WRITE_ON_STOP_KEY, WRITE_TYPES,
     write_disabled_flag,
 };
+mod arrangement;
 mod audiosuite;
 mod sample_edit;
 pub use sample_edit::MAX_DRAWN as MAX_DRAWN_SAMPLES;
@@ -276,6 +277,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_more::specs());
         v.extend(warp::specs());
         v.extend(clip_list::specs());
+        v.extend(arrangement::specs());
         v.extend(sample_edit::specs());
         v.extend(event_more::specs());
         v.extend(tempo::specs());

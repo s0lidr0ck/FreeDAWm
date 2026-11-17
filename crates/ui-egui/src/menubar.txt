@@ -392,6 +392,7 @@ Track > Designate as Target Playlist
 Track > Show Target Playlist
 Track > Toggle Recent Playlist
 Track > ---
+Track > More > Arrangements
 Track > More > Show Only Takes Matching Selection = @comp.matching_takes
 Track > More > ---
 Track > More > Write MIDI Real-Time Properties = Track > Write MIDI Real-Time Properties

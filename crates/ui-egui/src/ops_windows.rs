@@ -158,6 +158,7 @@ fn result_line(ui: &mut egui::Ui, r: &Result<Value, String>) {
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     beat_detective(app, ctx);
     process_history(app, ctx);
+    arrangements(app, ctx);
     tempo_ops(app, ctx);
     time_ops(app, ctx);
     midi_ops(app, ctx);
@@ -402,6 +403,53 @@ fn midi_offsets(app: &mut SoundApp, ctx: &egui::Context) {
         });
     });
     app.ui.show_midi_offsets = open;
+}
+
+/// Track › Arrangements: the session's alternative arrangements (each its own playlists and
+/// markers), switched with one click; New keeps this one and starts another from it.
+fn arrangements(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_arrangements;
+    if !open {
+        return;
+    }
+    let (names, active) = {
+        let s = app.engine.session();
+        (s.arrangements.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), s.arrangement.clone())
+    };
+    egui::Window::new("Arrangements").open(&mut open).default_size(vec2(300.0, 200.0)).show(ctx, |ui| {
+        if names.is_empty() {
+            ui.label("One arrangement. New keeps it as \"Main\" and starts another: every track gets a copy of its playlist.");
+        }
+        let mut action: Option<(&str, Value)> = None;
+        for n in &names {
+            ui.horizontal(|ui| {
+                let on = active.as_deref() == Some(n.as_str());
+                if ui.selectable_label(on, n).on_hover_text("Play this arrangement").clicked() && !on {
+                    action = Some(("arrangement.switch", json!({"name": n})));
+                }
+                if ui.add_enabled(!on, egui::Button::new("Delete").small()).on_hover_text("Forget it; its playlists stay on the tracks").clicked() {
+                    action = Some(("arrangement.delete", json!({"name": n})));
+                }
+            });
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            let key = egui::Id::new("arrangement_new_name");
+            let mut name: String = ui.ctx().memory(|m| m.data.get_temp(key)).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Name").desired_width(140.0));
+            if ui.button("New Arrangement").clicked() {
+                action = Some(("arrangement.new", if name.trim().is_empty() { json!({}) } else { json!({"name": name.trim()}) }));
+                name.clear();
+            }
+            ui.ctx().memory_mut(|m| m.data.insert_temp(key, name));
+        });
+        if let Some((cmd, p)) = action
+            && let Err(e) = app.run(cmd, p)
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_arrangements = open;
 }
 
 /// Process › Process History: the selected audio clip's processes, oldest first, each bypassed,
