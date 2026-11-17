@@ -134,6 +134,13 @@ impl Curve {
         self
     }
 
+    /// The same filter `db` quieter as a whole (never louder: a negative or non-finite `db` is 0).
+    pub fn turned_down(mut self, db: f32) -> Curve {
+        let db = if db.is_finite() { db.clamp(0.0, 80.0) } else { 0.0 };
+        self.gain *= 10f32.powf(-db / 20.0);
+        self
+    }
+
     /// The filter's gain at `hz`, in dB.
     pub fn magnitude_db(&self, hz: f32, rate: f32) -> f32 {
         let shape: f32 = self.sections.iter().take(self.len).map(|s| s.magnitude_db(hz, rate)).sum();
