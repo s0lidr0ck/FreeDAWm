@@ -38,8 +38,9 @@ pub struct Followed {
 }
 
 /// Moves the clips of tick-timebase tracks in `after` that sit where they sat in `before` from
-/// their ticks in `before`'s tempo map to the same ticks in `after`'s (audio as the module says).
-pub fn follow_tempo(before: &Session, after: &mut Session) -> Followed {
+/// their ticks in `before`'s tempo map to the same ticks in `after`'s (audio as the module says);
+/// the MIDI clips in `pinned` (placed by the command itself) stay.
+pub fn follow_tempo(before: &Session, after: &mut Session, pinned: &[ClipId]) -> Followed {
     let mut out = Followed::default();
     if before.tempo == after.tempo || before.sample_rate != after.sample_rate {
         return out;
@@ -85,7 +86,7 @@ pub fn follow_tempo(before: &Session, after: &mut Session) -> Followed {
                     }
                     continue;
                 }
-                if !matches!(c.content, ClipContent::Midi { .. }) {
+                if !matches!(c.content, ClipContent::Midi { .. }) || pinned.contains(&c.id) {
                     continue;
                 }
                 // Only a clip the command left in place: one it moved or trimmed is where it put it.

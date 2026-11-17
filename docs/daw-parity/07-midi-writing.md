@@ -209,7 +209,7 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Tempo track: points, ramps, curves; meter changes | ● | ● | ● | ● | **Works** |
 | Tempo taken from a selection | ● | ● | ● | ● | **Works** (Identify Beat) |
-| Tempo taken from a MIDI performance | ◐ | ◐ | ● | ● | **Missing** (design below, not built) |
+| Tempo taken from a MIDI performance | ◐ | ◐ | ● | ● | **Works**: Event › More MIDI › Tempo from MIDI Performance (`event.tempo_from_midi`, the selected MIDI clip): the clip's note onsets are tracked as beats (an onset curve, a period from its autocorrelation between 60 and 200 bpm, dynamic programming for steady beats near onsets, each beat moved onto its strongest onset) and a tempo point written at each so they land on the quarter-note grid; the beat or two before the first is stretched to meet it. The clip keeps its samples (its notes are given new ticks), so the performance sounds as played; other clips on tick tracks follow the new tempo. One undo step. Tested on a performance drifting from 100 to 110 bpm (each beat's tempo within 1 bpm). Audio performances: Detect Tempo |
 | Insert and cut time across the song | ● | ● | ● | ● | **Works**: clips, automation, markers, tempo, meter, key and the Band's chord and section lanes move (bug 14, fixed) |
 | Arranger sections to reorder the song | ○ | ● | ● | ● | **Works**: a block on the Sections ruler (the Band's song lane) is a handle on the song: its right-click menu Copies with the Song (right after it), Moves with the Song (before another section or to the end) and Removes with the Song (`arrange.copy`, `arrange.move`, `arrange.remove`). Every track's clips (the playlist shown) and automation, the Band's chords and the block go with it; later material makes room or closes up as with Insert and Cut Time; one undo step. A section that changes tempo or meter inside is refused, and a copy goes only where the same tempo and meter are in force (the material is copied in samples). Markers, key changes and take layers other than the one shown are not copied (c8cfbb1) |
 | Track alternatives for MIDI | ● | ● | ● | ● | **Works** (playlists) |
@@ -589,3 +589,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Subtractive Synth: filter types, LFO, sub and noise, key tracking, mono and legato |
 | 2026-11-17 | minor | 14-bit controllers and RPN/NRPN parameters as one lane value |
 | 2026-11-17 | minor | Notes edited directly on a MIDI track showing Notes |
+| 2026-11-17 | minor | Tempo from a MIDI performance |

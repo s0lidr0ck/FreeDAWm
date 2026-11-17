@@ -266,6 +266,9 @@ pub struct Engine {
     /// The undo label the running command asks for instead of its spec's (one command whose
     /// kinds read differently in Edit › Undo, as `vocal.step`'s Centre Note / Flatten Drift).
     pub(crate) step_label: Option<&'static str>,
+    /// MIDI clips the running command placed in time itself (Tempo from MIDI keeps a performance
+    /// at its samples): a tempo change does not move them.
+    pub(crate) tempo_pinned: Vec<soundcraft_model::ClipId>,
     /// Messages for the UI status line / agents.
     pub messages: Vec<String>,
     /// Silent sidechains found when the session was last loaded, for the next command's result.
@@ -362,6 +365,7 @@ impl Engine {
             merge_redo: None,
             merge_hold: None,
             step_label: None,
+            tempo_pinned: Vec::new(),
             messages: Vec::new(),
             sidechain_notes: Vec::new(),
             loads: 0,
@@ -833,6 +837,7 @@ impl Engine {
         let dirty = self.dirty;
         let loads = self.loads;
         self.step_label = None;
+        self.tempo_pinned.clear();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         // Whatever the command did not use is of no use to the next.
         self.prepared.clear();
@@ -860,7 +865,7 @@ impl Engine {
                     && !matches!(id, "edit.undo" | "edit.redo")
                     && before.tempo != self.doc.tempo
                 {
-                    let followed = tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc));
+                    let followed = tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc), &self.tempo_pinned);
                     // Pitch-preserving Elastic clips render to their new length, from their
                     // original material (a clip that cannot keeps its place and its old length).
                     for (clip, ratio) in followed.renders {

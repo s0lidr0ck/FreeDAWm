@@ -472,6 +472,7 @@ Event > More MIDI > Undo Last Pass = @ui.midi_undo_pass [desktop]
 Event > More MIDI > Erase Held Notes = @ui.midi_erase_held [desktop]
 Event > More MIDI > Restore Performance = Event > MIDI Operations > Restore Performance...
 Event > More MIDI > Flatten Performance = Event > MIDI Operations > Flatten Performance...
+Event > More MIDI > Tempo from MIDI Performance = @event.tempo_from_midi
 Event > More MIDI > ---
 Event > More MIDI > MIDI Track Offsets = Event > MIDI Track Offsets
 Event > More MIDI > MIDI Real-Time Properties = Event > MIDI Real-Time Properties

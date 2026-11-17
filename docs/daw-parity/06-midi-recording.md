@@ -101,7 +101,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Follows the tempo map, including ramps | ● | ● | ● | ● | **Works** |
 | Resolution | 960 | 960+ | 960 | 480+ | 960 ticks per quarter note |
 | Per-track playback offset also applied to what is recorded | ● | ● | ● | ● | **Works**: a take on a track with a MIDI Track Offset is placed that much earlier, so it plays back where it was played |
-| Play freely with no click, then fit the tempo to the performance | ◐ | ◐ | ● | ● | **Section 7's**: the MIDI-writing follow-up has it as *Tempo taken from a MIDI performance* ([section 7](07-midi-writing.md), J: an `event.tempo_from_midi` that writes the tempo map from a clip's note onsets; designed there, not built yet); not built twice. Audio takes have Detect Tempo |
+| Play freely with no click, then fit the tempo to the performance | ◐ | ◐ | ● | ● | **Works** for MIDI: Event › More MIDI › Tempo from MIDI Performance writes a tempo map from a clip played without the click, its notes staying where they were played ([section 7](07-midi-writing.md#j-tempo-and-arrangement)) |
 
 ## D. What is kept
 
