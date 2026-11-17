@@ -154,7 +154,7 @@ what a user can do, apart from punch out on the fly.
 | Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Missing** (MIDI has Retrospective Record). Left: while tracks are armed, the output callback keeps the last few seconds of their inputs in a second lock-free ring; at Record the writer drains it into the take first and the clip starts at the Record point with those seconds as a handle before it |
 | A lost device or a full disk keeps the take | ● | ● | ● | ● | **Works** |
 | Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Works**: Options › Recording › Lock Record: while recording, the first Stop (Space, the button, a controller) is refused with a message and a second within 2 s stops; Discard Take and Restart Take are not locked |
-| Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Options › Recording › Feedback Protection, on by default: a monitored hardware input held at -3 dBFS or above for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. Not yet tried against real feedback through speakers |
+| Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Options › Recording › Feedback Protection, on by default: a monitored hardware input that clips (every block peaking at -0.1 dBFS or above) for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. A loud sustained source just under clipping is never silenced. Not yet tried against real feedback through speakers |
 
 ## I. Remote recording
 

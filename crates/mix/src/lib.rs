@@ -4326,12 +4326,14 @@ mod click {
     }
 }
 
-/// Feedback protection (as in Logic Pro): a monitored hardware input that stays at or above
-/// [`FEEDBACK_LEVEL`] for this long, every block, is taken for feedback through the speakers
-/// and silenced on its track until its monitoring is turned off and on again. The take records on.
+/// Feedback protection (as in Logic Pro): a monitored hardware input that clips (every block
+/// peaks at or above [`FEEDBACK_LEVEL`]) for this long is taken for feedback through the
+/// speakers and silenced on its track until its monitoring is turned off and on again. The take
+/// records on. Only clipping trips it, so a loud sustained source (an organ, a distorted guitar
+/// held at -1 dBFS) is never silenced.
 pub const FEEDBACK_SECONDS: f32 = 1.0;
-/// The block peak (linear, about -3 dBFS) feedback protection counts as hot.
-pub const FEEDBACK_LEVEL: f32 = 0.7;
+/// The block peak feedback protection counts as clipping: -0.1 dBFS (linear 0.98855).
+pub const FEEDBACK_LEVEL: f32 = 0.988_55;
 /// The flag that turns feedback protection off (it is on unless this is set).
 pub const NO_FEEDBACK_PROTECTION: &str = "options.no_feedback_protection";
 
@@ -10374,9 +10376,9 @@ mod tests {
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
     }
 
-    /// Feedback protection: a monitored input held near full scale for a second is silenced on
-    /// its track (and reported) until its monitoring is turned off and on; a loud but varying
-    /// input is not, and with the protection off nothing is.
+    /// Feedback protection: a monitored input clipping for a second is silenced on its track
+    /// (and reported) until its monitoring is turned off and on; a loud but varying input is
+    /// not, nor is one held loud just under clipping, and with the protection off nothing is.
     #[test]
     fn feedback_protection_silences_a_howling_input() {
         let (mut s, t) = session_with_dc(0.0, 4800);
@@ -10391,12 +10393,14 @@ mod tests {
                 eng.render(s, (b * 512) as i64, 512, out);
             }
         };
-        run(&mut eng, &s, 200, -0.9, &mut out);
-        assert!(out[0][100] > 0.1 && !eng.meters[&t].feedback, "a loud, varying input plays");
+        run(&mut eng, &s, 200, -1.0, &mut out);
+        assert!(out[0][100] > 0.1 && !eng.meters[&t].feedback, "a clipping but varying input plays");
+        run(&mut eng, &s, 300, 0.95, &mut out);
+        assert!(out[0][100] > 0.1 && !eng.meters[&t].feedback, "held at -0.45 dBFS, not clipping: plays");
         run(&mut eng, &s, 1, 0.1, &mut out);
-        run(&mut eng, &s, 90, 0.9, &mut out);
+        run(&mut eng, &s, 90, 1.0, &mut out);
         assert!(out[0][100] > 0.1, "under a second: still heard");
-        run(&mut eng, &s, 10, 0.9, &mut out);
+        run(&mut eng, &s, 10, 1.0, &mut out);
         assert!(out[0][100].abs() < 1e-6 && eng.meters[&t].feedback, "a second held: silenced");
         run(&mut eng, &s, 5, 0.1, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stays silent once it is quiet");
@@ -10406,7 +10410,7 @@ mod tests {
         run(&mut eng, &s, 1, 0.1, &mut out);
         assert!(out[0][100] > 0.01 && !eng.meters[&t].feedback, "monitoring off and on: heard again");
         s.edit.set_flag(NO_FEEDBACK_PROTECTION, true);
-        run(&mut eng, &s, 200, 0.9, &mut out);
+        run(&mut eng, &s, 200, 1.0, &mut out);
         assert!(out[0][100] > 0.1, "protection off");
     }
 
