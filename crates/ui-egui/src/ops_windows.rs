@@ -38,6 +38,8 @@ pub struct OpsState {
     pub rtp_quantize: String,
     pub rtp_q_strength: f64,
     pub transpose: i64,
+    /// Transpose by steps of the key (on the Key ruler) instead of semitones.
+    pub transpose_in_key: bool,
     pub velocity_add: i64,
     /// Change Duration: "legato", "set", "add" or "scale", and its value (ticks, or percent to scale).
     pub dur_mode: String,
@@ -94,6 +96,7 @@ impl Default for OpsState {
             rtp_quantize: "off".into(),
             rtp_q_strength: 100.0,
             transpose: 12,
+            transpose_in_key: false,
             velocity_add: 10,
             dur_mode: "legato".into(),
             dur_value: 0.0,
@@ -492,6 +495,7 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
             }
             ("event.quantize", p)
         }
+        "transpose" if o.transpose_in_key => ("event.transpose", json!({"steps": o.transpose})),
         "transpose" => ("event.transpose", json!({"semitones": o.transpose})),
         "change velocity" => ("event.change_velocity", json!({"add": o.velocity_add})),
         "change duration" => {
@@ -587,7 +591,10 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
             "transpose" => {
-                ui.add(egui::Slider::new(&mut app.ops.transpose, -48..=48).text("Semitones"));
+                let unit = if app.ops.transpose_in_key { "Scale steps" } else { "Semitones" };
+                ui.add(egui::Slider::new(&mut app.ops.transpose, -48..=48).text(unit));
+                ui.checkbox(&mut app.ops.transpose_in_key, "In the key")
+                    .on_hover_text("Move by steps of the key on the Key ruler (else the band's key): C up two in C major is E");
             }
             "change velocity" => {
                 ui.add(egui::Slider::new(&mut app.ops.velocity_add, -127..=127).text("Add"));

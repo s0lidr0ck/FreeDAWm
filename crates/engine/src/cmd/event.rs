@@ -39,9 +39,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Transpose...",
             ["Event", "MIDI Operations"],
             Some("Alt+T"),
-            "{semitones, clips?, indices?}",
+            "{semitones? | steps? (scale steps in the key on the Key ruler at each clip's start, else the band's key; a note out of the key keeps its distance from the key's tone below it), clips?, indices?}",
             has_selection,
             |e, p| {
+                if p.get("steps").is_some() {
+                    return transpose_in_key(e, p);
+                }
                 let st = i64_or(p, "semitones", 0).clamp(-127, 127) as i32;
                 midi_op(e, p, move |n, _| {
                     soundcraft_midi::ops::transpose_within(n, st);
@@ -423,6 +426,55 @@ impl ClipTime<'_> {
 /// Runs `f` on the notes of the clips picked, or with `indices` on those notes of the one clip
 /// named (the MIDI Editor's selection) -> {notes, indices?: where the picked notes are after the
 /// re-sort}.
+/// `pitch` moved `steps` tones of the scale `set` up (or down): a note out of the scale keeps its
+/// distance from the scale's tone below it. `None` past the keyboard.
+pub(crate) fn scale_step(set: soundcraft_vocal::PitchClassSet, pitch: u8, steps: i32) -> Option<u8> {
+    let in_set = |q: i32| set.contains(q.rem_euclid(12) as u8);
+    let p = i32::from(pitch);
+    // The scale's tone at or below the note (a scale with no tones moves nothing).
+    let base = (0..12).map(|d| p - d).find(|q| in_set(*q))?;
+    let mut q = base;
+    for _ in 0..steps.unsigned_abs() {
+        q += steps.signum();
+        while !in_set(q) {
+            q += steps.signum();
+        }
+    }
+    u8::try_from(q + (p - base)).ok().filter(|x| *x <= 127)
+}
+
+/// `event.transpose` by `steps` of the key at each clip's start: the largest move toward `steps`
+/// every picked note can make, so a chord keeps its shape at the keyboard's ends.
+fn transpose_in_key(e: &mut Engine, p: &Value) -> Result<Value> {
+    let steps = i64_or(p, "steps", 0).clamp(-75, 75) as i32;
+    let ids = clip_ids_param(e, p);
+    let mut out = json!({"notes": 0});
+    let mut notes = 0;
+    for id in ids {
+        let Some(start) = e.session().find_clip(id).map(|(_, c)| c.start) else { continue };
+        let (k, sc) = crate::vocal::key_pc_at(e.session(), start);
+        let set = crate::vocal::key_set(k, sc);
+        let mut q = p.clone();
+        q["clips"] = json!([id.0]);
+        out = midi_op(e, &q, move |n, _| {
+            let mut s = steps;
+            while s != 0 && n.iter().any(|x| scale_step(set, x.pitch, s).is_none()) {
+                s -= s.signum();
+            }
+            for x in n.iter_mut() {
+                if let Some(to) = scale_step(set, x.pitch, s) {
+                    x.pitch = to;
+                }
+            }
+        })?;
+        notes += out.get("notes").and_then(Value::as_u64).unwrap_or(0);
+    }
+    if let Some(o) = out.as_object_mut() {
+        o.insert("notes".into(), json!(notes));
+    }
+    Ok(out)
+}
+
 pub(super) fn midi_op(e: &mut Engine, p: &Value, f: impl Fn(&mut [soundcraft_midi::Note], &ClipTime)) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let only: Option<Vec<usize>> = match p.get("indices") {
@@ -816,6 +868,33 @@ mod tests {
     use serde_json::json;
 
     /// Change Velocity…'s ramp: the earliest note gets `from`, the latest `to`, in each clip.
+    #[test]
+    fn transpose_in_key_moves_by_scale_steps() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        e.session_mut().key_signatures.push((0, "G major".into()));
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0})).unwrap()["clip"].as_u64().unwrap();
+        for (i, pitch) in [60, 64, 65, 66].into_iter().enumerate() {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": i * 480})).unwrap();
+        }
+        let pitches = |e: &mut crate::Engine| -> Vec<u64> {
+            let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+            n["notes"].as_array().unwrap().iter().map(|x| x["pitch"].as_u64().unwrap()).collect()
+        };
+        // Up a step of G major: C-D, E-F#, F (out of the key, a semitone over E) a semitone over F#, F#-G.
+        e.execute("event.transpose", &json!({"clips": [clip], "steps": 1})).unwrap();
+        assert_eq!(pitches(&mut e), vec![62, 66, 67, 67]);
+        // Down two, on the first note only.
+        e.execute("event.transpose", &json!({"clips": [clip], "steps": -2, "indices": [0]})).unwrap();
+        assert_eq!(pitches(&mut e)[0], 59);
+        // Never past the keyboard: the whole chord stops where its top note must.
+        let set = crate::vocal::key_set(7, 0);
+        assert_eq!(super::scale_step(set, 127, 1), None);
+        assert_eq!(super::scale_step(set, 60, 7), Some(72));
+        assert_eq!(super::scale_step(set, 60, -7), Some(48));
+    }
+
     #[test]
     fn change_velocity_ramps_from_to() {
         use soundcraft_model::{ChannelFormat, TrackKind};

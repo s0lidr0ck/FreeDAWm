@@ -123,7 +123,7 @@ The gaps are of four kinds:
 | Restore the original performance | ● | ● | ● | ● | **Works** with playback quantize (turn it off), after applying it (Apply to Notes, Write to Notes), for takes recorded with input quantize and after an explicit flatten; kept in place through trims and splits (bug 12, fixed). A destructive Quantize is undone with Undo |
 | Humanise timing | ● | ● | ● | ● | **Works**: timing and velocity, seeded, in the MIDI Operations window |
 | Transpose | ● | ● | ● | ● | **Works** by semitones |
-| Transpose within the key | ● | ● | ● | ● | **Missing** |
+| Transpose within the key | ● | ● | ● | ● | **Works**: MIDI Operations › Transpose › In the Key moves the notes by steps of the key on the Key ruler at each clip's start (else the band's key); a note out of the key keeps its distance from the key's tone below it, and a chord stops as a whole at the keyboard's ends (`event.transpose` `steps`) |
 | Snap notes to the scale or the chord | ◐ | ● | ● | ● | **Works**, following the key ruler |
 | Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Works**: legato, set, add and scale length (bug 7, fixed) and Fix Overlaps in the MIDI Operations window, on the selected notes |
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
@@ -431,3 +431,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Round three reconciled: bouncing a selection in place and a bounce's tail already worked; sampled instruments, a MIDI phrase library, AU editors and dragging a clip out are not planned here; pad outputs and MIDI effects on clips left to section 6 |
 | 2026-11-17 | minor | Change Velocity… limits, randomises and compresses or expands |
 | 2026-11-17 | minor | Notes entered and edited in the score (click, keys, step entry), spelled in the key |
+| 2026-11-17 | minor | Transpose within the key, by steps of the key on the Key ruler |
