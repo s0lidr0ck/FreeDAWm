@@ -604,7 +604,7 @@ fn save_prefs(ui: &UiState) {
 
 fn services() -> Services {
     let mut services = Services {
-        pick_open: Some(Box::new(|purpose: &str, _exts: &[&str]| {
+        pick_open: Some(Box::new(|purpose: &str, exts: &[&str]| {
             let d = rfd::FileDialog::new();
             let d = match purpose {
                 "session.open" => d.add_filter("FreeDAWm Session", &soundcraft_engine::model::SESSION_EXTENSIONS),
@@ -612,6 +612,9 @@ fn services() -> Services {
                 "file.import_dawproject" => d.add_filter("DAWproject", &["dawproject"]),
                 "scout.profile_import" => d.add_filter("Sound Profile", &["json"]),
                 "track.load_preset" | "track.load_chain" => d.add_filter("Preset", &["json"]),
+                "mix.multisample_load" => d.add_filter("Instrument (SFZ, Decent Sampler)", &["sfz", "dspreset", "dslibrary"]),
+                // The files the caller asked for, when it named them.
+                _ if !exts.is_empty() => d.add_filter("Files", exts),
                 _ => d.add_filter(
                     "Audio",
                     &[

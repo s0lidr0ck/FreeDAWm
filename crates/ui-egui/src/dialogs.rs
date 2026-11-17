@@ -809,10 +809,10 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     }
                     ui.horizontal(|ui| {
                         ui.label("File");
-                        ui.add(egui::TextEdit::singleline(path).desired_width(360.0).hint_text("an instrument (.sfz) anywhere"));
+                        ui.add(egui::TextEdit::singleline(path).desired_width(360.0).hint_text("an instrument (.sfz, .dspreset, .dslibrary) anywhere"));
                         if let Some(pick) = &app.services.pick_open
                             && ui.button("Browse…").clicked()
-                            && let Some(p) = pick("mix.multisample_load", &["sfz"])
+                            && let Some(p) = pick("mix.multisample_load", &["sfz", "dspreset", "dslibrary"])
                         {
                             *path = p;
                         }
