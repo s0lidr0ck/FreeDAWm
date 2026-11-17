@@ -546,6 +546,7 @@ Options > Record Mode > Replace
 Options > Record Mode > Keep Takes as Lanes
 Options > Record Mode > New Playlist per Take
 Options > Recording > Arm Follows Selection = @options.arm_follows_selection
+Options > Recording > Lock Record = @options.record_lock
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Monitoring > Ear Correction = @monitor.ear

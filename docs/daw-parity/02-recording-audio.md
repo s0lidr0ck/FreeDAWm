@@ -153,7 +153,7 @@ what a user can do, apart from punch out on the fly.
 | Remaining record time or disk space | ● | ◐ | ◐ | ● | **Missing** |
 | Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Missing** |
 | A lost device or a full disk keeps the take | ● | ● | ● | ● | **Works** |
-| Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Missing** |
+| Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Works**: Options › Recording › Lock Record: while recording, the first Stop (Space, the button, a controller) is refused with a message and a second within 2 s stops; Discard Take and Restart Take are not locked |
 | Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Missing** (issue #42) |
 
 ## I. Remote recording
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |

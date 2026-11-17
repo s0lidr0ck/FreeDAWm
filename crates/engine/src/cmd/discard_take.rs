@@ -6,8 +6,13 @@ use super::*;
 use crate::{TransportRequest, cmd};
 use serde_json::json;
 
+/// The flag of Options › Recording › Lock Record: while a take records, a Stop is refused once
+/// (the app says so) and a second Stop soon after stops it, so a stray key does not end a take.
+pub const RECORD_LOCK: &str = "options.record_lock";
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(noundo "options.record_lock", "Lock Record", ["Options"], None, "{value?: bool} (toggles when omitted) — while recording, Stop must be pressed twice", always, |e, p| super::more_util::toggle_flag(e, p, RECORD_LOCK)),
         cmd!(
             noundo "transport.discard_take",
             "Discard Take",

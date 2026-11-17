@@ -907,6 +907,9 @@ pub enum Gesture {
     },
 }
 
+/// How long after a refused Stop a second one stops a locked take (seconds).
+pub const RECORD_LOCK_SECONDS: f64 = 2.0;
+
 /// The selected automation breakpoints of one lane (times), kept by the UI: clicked, rubber-banded
 /// or inside the edit selection. Delete removes them; dragging one moves them all.
 #[derive(Debug, Clone, PartialEq)]
@@ -1110,6 +1113,9 @@ pub struct SoundApp {
     sim: Option<(Samples, Option<Samples>, Option<Range>)>,
     /// When Record last found nothing to record on, and why: the Record buttons show it for a moment.
     record_hint: Option<(f64, &'static str)>,
+    /// Options › Recording › Lock Record: when a Stop was refused while a locked take records (a
+    /// second Stop within [`RECORD_LOCK_SECONDS`] stops it).
+    record_lock_stop: Option<f64>,
     /// The record offset key a loopback measurement out there was started with.
     measuring: Option<String>,
     /// The latencies of the take recording now, snapshotted at its first frame.
@@ -1303,6 +1309,7 @@ impl SoundApp {
             docking_context: None,
             sim: None,
             record_hint: None,
+            record_lock_stop: None,
             measuring: None,
             take_reported: None,
             quit_requested: false,
@@ -2524,6 +2531,24 @@ impl SoundApp {
 
     /// Discard Take: stop, and throw the take away. Nothing is placed, the take files go, and
     /// the MIDI heard is dropped.
+    /// Options › Recording › Lock Record: whether this Stop is refused because a locked take is
+    /// recording. The first Stop only says so; a second within [`RECORD_LOCK_SECONDS`] stops.
+    /// Discard Take and Restart Take are deliberate and are not locked.
+    fn record_locked(&mut self) -> bool {
+        if !self.engine.transport.recording || !self.engine.session().edit.flag(soundcraft_engine::cmd::RECORD_LOCK) {
+            self.record_lock_stop = None;
+            return false;
+        }
+        let now = self.last_frame.unwrap_or_default();
+        if self.record_lock_stop.is_some_and(|at| now - at <= RECORD_LOCK_SECONDS) {
+            self.record_lock_stop = None;
+            return false;
+        }
+        self.record_lock_stop = Some(now);
+        self.ui.status = "Recording is locked: press Stop again to stop (Options › Recording › Lock Record)".into();
+        true
+    }
+
     fn discard_recording(&mut self) {
         if !self.engine.transport.recording {
             return;
@@ -2738,13 +2763,17 @@ impl SoundApp {
                     }
                 }
                 TransportRequest::Stop => {
-                    self.paused = None;
-                    self.stop_play();
+                    if !self.record_locked() {
+                        self.paused = None;
+                        self.stop_play();
+                    }
                 }
                 TransportRequest::Pause => self.pause(),
                 TransportRequest::TogglePlay => {
                     if self.is_playing() {
-                        self.stop_play();
+                        if !self.record_locked() {
+                            self.stop_play();
+                        }
                     } else {
                         self.play_from_selection();
                     }
@@ -2753,7 +2782,9 @@ impl SoundApp {
                     if self.engine.transport.recording && self.is_playing() && self.engine.session().edit.quickpunch {
                         self.quick_punch();
                     } else if self.engine.transport.recording {
-                        self.stop_play();
+                        if !self.record_locked() {
+                            self.stop_play();
+                        }
                     } else {
                         self.start_recording(countoff);
                     }
@@ -3798,5 +3829,26 @@ mod tests {
         app.handle_transport(1.0 / 60.0);
         assert!(!app.engine.transport.recording);
         assert_eq!(app.ui.status, "Cannot record: Recording needs full speed: at half speed the take would lose input. Stop, then record.");
+    }
+
+    /// Options › Recording › Lock Record: the first Stop during a take is refused and says so,
+    /// a second one soon after stops; without the lock one Stop stops.
+    #[test]
+    fn a_locked_take_stops_on_the_second_stop() {
+        use serde_json::json;
+        let mut app = super::SoundApp::new(soundcraft_engine::Engine::default(), None, super::Services::default());
+        app.engine.transport.recording = true;
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(!app.engine.transport.recording, "unlocked: one Stop stops");
+        app.run("options.record_lock", json!({"value": true})).unwrap();
+        app.engine.transport.recording = true;
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(app.engine.transport.recording, "locked: the first Stop is refused");
+        assert!(app.ui.status.contains("locked"), "{}", app.ui.status);
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(!app.engine.transport.recording, "a second Stop stops");
     }
 }
