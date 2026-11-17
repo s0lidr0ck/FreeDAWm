@@ -163,8 +163,8 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Event list of every kind of event, typed values, insert, filter | ● | ○ | ● | ● | **Works**: notes, CC, pitch bend, aftertouch, poly pressure and program changes in time order; position (written when the drag or typing ends), channel, note or number, velocity or value and length typed; an Insert row for each kind at the insertion point; filters by kind and channel. No SysEx (the model keeps none) |
-| Score view | ● | ● | ● | ● | **Partial**: a read-only grand staff |
-| Enter and edit notes in the score | ● | ● | ● | ● | **Missing**; designed (below, not built) |
+| Score view | ● | ● | ● | ● | **Works**: a grand staff with heads by length, stems and flags, ledger lines, bar lines from the meter map, flats in a flat key (sharps otherwise); notes entered and edited there (next row). No key signature, beams, ties or rests drawn |
+| Enter and edit notes in the score | ● | ● | ● | ● | **Works** as designed below: a value row (whole to 32nd, dotted, triplet, ♯ ♭ ♮ for the next note); a click on empty staff adds a note of that value snapped to the value's bar-counted grid, its pitch the line's or space's note in the key on the Key ruler (an F in G major is F♯); a click on a head selects it (Shift adds; the piano roll's selection); over the staff, Delete removes, Up and Down move a step of the key (Alt: a semitone), 1–6 choose the value and set the selected notes' length, A–G enter the nearest such note at the cursor and move it on, R rests. Each is one undo step through the piano roll's commands. No vertical drag of a head, and step entry from a MIDI keyboard is not wired |
 | Print the score | ● | ● | ● | ● | **Works** |
 | Lyrics, layout, parts | ◐ | ◐ | ● | ● | **Missing** |
 | MusicXML export and import | ● | ● | ● | ● | **Partial**: export only, to 16ths, with no key signature |
@@ -274,7 +274,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways; muted notes are left out of an export (the format cannot mark a note muted, so they would come back sounding; owner's decision), and the export report says so |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
 
-### Design: entering notes in the score (not built)
+### Design: entering notes in the score (built)
 
 The score (`ui-egui/src/score_editor.rs`, about 170 lines) only draws: heads placed at
 `start × px_per_tick` on a grand staff, pitch from `diatonic`, sharps only. Entry needs no new
@@ -430,3 +430,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | A design for entering notes in the score (not built) |
 | 2026-11-17 | minor | Round three reconciled: bouncing a selection in place and a bounce's tail already worked; sampled instruments, a MIDI phrase library, AU editors and dragging a clip out are not planned here; pad outputs and MIDI effects on clips left to section 6 |
 | 2026-11-17 | minor | Change Velocity… limits, randomises and compresses or expands |
+| 2026-11-17 | minor | Notes entered and edited in the score (click, keys, step entry), spelled in the key |

@@ -1048,6 +1048,8 @@ pub struct SoundApp {
     /// What keeps the Edit and Mix windows in step (`window_sync`).
     pub window_sync: window_sync::WindowSync,
     pub midi: midi_editor::MidiEditorState,
+    /// The Score Editor's note value, accidental and step-entry cursor.
+    pub score: score_editor::ScoreState,
     /// The Vocal Editor's selection, scroll and panel state.
     pub vocal: vocal_editor::VocalEditorState,
     /// While a Vocal Editor preview plays: the track the player hears soloed (it is handed a
@@ -1263,6 +1265,7 @@ impl SoundApp {
             edit_layout: edit_window::EditLayout::default(),
             window_sync: window_sync::WindowSync::default(),
             midi: midi_editor::MidiEditorState::default(),
+            score: score_editor::ScoreState::default(),
             vocal: vocal_editor::VocalEditorState::default(),
             preview_solo: None,
             audition_session: None,

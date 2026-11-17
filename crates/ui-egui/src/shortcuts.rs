@@ -250,6 +250,10 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         if crate::vocal_editor::owns_key(app, ctx, key, mods) {
             continue;
         }
+        // The Score Editor's staff under the pointer takes its entry keys (letters, values, arrows).
+        if crate::score_editor::owns_key(app, ctx, key, mods) {
+            continue;
+        }
         // The MIDI Editor under the pointer takes F (Fit).
         if crate::midi_editor::owns_key(app, ctx, key, mods) {
             continue;

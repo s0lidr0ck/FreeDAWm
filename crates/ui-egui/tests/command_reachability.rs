@@ -40,7 +40,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("automation.write_range", "Glide to Current was mis-aliased to it: needs a param and value"),
     ("event.renumber_bars", "a no-op (bars start at 1)"),
     ("event.retrospective_record", "no live MIDI capture buffer feeds it"),
-    ("midi.note_add", "for agents: the MIDI editor adds notes with midi.notes_add, Musical Typing's step mode with event.step_input"),
     ("options.auto_spot_clips", "stored flag nothing reads"),
     ("options.calibration_mode", "stored flag nothing reads"),
     ("options.destructive_punch", "stored flag nothing reads"),
