@@ -1223,6 +1223,14 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         if ui.add(egui::Button::selectable(ins.post_fader, "Post-Fader")).on_hover_text("Run after the fader and mute").clicked() {
             run_pick(app, ui, "mix.module_post_fader", json!({"track": id.0, "module": ins.id.0}));
         }
+        // Multi-Mono: one mono instance per channel, linked (Pro Tools' multi-mono plug-ins).
+        if ui
+            .add(egui::Button::selectable(ins.multi_mono, "Multi-Mono"))
+            .on_hover_text("One mono instance per channel, all with these settings")
+            .clicked()
+        {
+            run_pick(app, ui, "mix.module_multi_mono", json!({"track": id.0, "module": ins.id.0}));
+        }
         // Wet/dry: the module's output blended with its input (any effect in parallel).
         let mut pct = (ins.mix * 100.0).round();
         let r =

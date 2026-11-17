@@ -85,7 +85,7 @@ K-system scales, and the master a loudness meter.
 | Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
-| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** (not reached in round three): designed below (Design: multi-mono processing): one mono instance per channel in a slot, linked by default, each channel its own lanes when unlinked; about 6–10 h |
+| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Partial** (2026-11-17): "Multi-Mono" on a chain module's right-click menu (`mix.module_multi_mono`, `Insert::multi_mono`) runs one mono instance per channel of a wider track, built-in or hosted, all linked to the module's parameters, automation and stored state (the instances are made with the module's, off the audio thread, by the stereo-only wrapper `PerChannel` with a first instance of one channel). Left: unlinked mode with a parameter set and lanes per channel, and a channel picker in the plug-in window (about 4–6 h) |
 | Hardware inserts with latency measurement | ● | ● | ● | ● | **Works** in code (2026-11-17, to the design below): Utilities › Hardware Insert (`hw_insert`) sends the track out of an output path and takes it back from an input path, compensated by its round trip; Ping in its drawer measures that round trip on its own paths (`setup.measure_latency` with `insert`) and stores it. Offline it passes through, its latency kept (a real-time bounce prints the gear). Tested with a loopback in code; hearing gear through it and checking the ping lines it up need an interface with a cable or outboard unit from output to input. Not measured, it compensates nothing (the design's fallback to the device estimate is not built) |
 
 ## D. Sends and routing
@@ -279,7 +279,7 @@ one a mix engineer would not forgive.
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12 (**done**); a listen bus for
 AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**done**), 5–8; hardware
-inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10; write-on-stop and
+inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10 (**linked done**); write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
 ### Design: automation inside a clip (round three, built 2026-11-17 but for the clip-lane drawing)
@@ -333,7 +333,7 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   to the offline bounce. What needs hardware: outboard gear on a hardware insert or send.
 - **Size.** 4–6 h.
 
-### Design: multi-mono processing (round three, not built)
+### Design: multi-mono processing (round three, linked mode built 2026-11-17)
 
 - **A slot of instances.** An insert whose plug-in is mono-only on a wider track (or any insert
   with "Multi-mono" chosen) holds one mono instance per channel: `PluginSlot::plugin` becomes the
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | linked multi-mono processing |
 | 2026-11-17 | minor | automation inside clips (moved in and out of the track's lanes; the clip-lane drawing is left) |
 | 2026-11-17 | minor | hardware inserts with a ping for their round trip |
 | 2026-11-17 | minor | real-time bounce (Bounce Mix › In real time) |

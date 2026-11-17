@@ -53,6 +53,15 @@ pub fn specs() -> Vec<CommandSpec> {
             module_post_fader
         ),
         cmd!(
+            "mix.module_multi_mono",
+            "Multi-Mono",
+            [],
+            None,
+            "{track?, module: id, value?: bool} — on a track of more than one channel the module runs one mono instance per channel, linked (every one takes its parameters and automation); toggles when omitted → {multi_mono}",
+            has_selection,
+            module_multi_mono
+        ),
+        cmd!(
             "mix.module_mix",
             "Insert Wet/Dry Mix",
             [],
@@ -443,6 +452,18 @@ fn module_post_fader(e: &mut Engine, p: &Value) -> Result<Value> {
     let ins = find_mut(e, C, t, id)?;
     ins.post_fader = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.post_fader);
     Ok(json!({"post_fader": ins.post_fader}))
+}
+
+fn module_multi_mono(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_multi_mono";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    if e.session().track(t).and_then(|tr| tr.mixer.module(id)).is_none() {
+        return Err(bad(C, "only a chain module runs multi-mono"));
+    }
+    let ins = find_mut(e, C, t, id)?;
+    ins.multi_mono = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.multi_mono);
+    Ok(json!({"multi_mono": ins.multi_mono}))
 }
 
 fn module_mix(e: &mut Engine, p: &Value) -> Result<Value> {

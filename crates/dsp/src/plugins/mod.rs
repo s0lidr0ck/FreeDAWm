@@ -110,6 +110,12 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
     Some(if timed::takes(id) { Box::new(timed::Timed::new(p)) } else { p })
 }
 
+/// `first` run multi-mono: one mono instance per channel of the track, each made by `make` from
+/// the first's id and taking its parameters and stored state (linked).
+pub fn multi_mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Box<dyn Plugin> {
+    Box::new(per_channel::PerChannel::mono(first, make))
+}
+
 /// One instance of a plugin by id, never wrapped.
 fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {

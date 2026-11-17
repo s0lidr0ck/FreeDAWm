@@ -45,6 +45,8 @@ pub(crate) struct PerChannel {
     link_key: Vec<Vec<f32>>,
     /// The LFE channels ([`Plugin::set_lfe_channels`]): kept out of the link.
     lfe: u64,
+    /// The channels the first instance takes: two, or one for multi-mono ([`PerChannel::mono`]).
+    first_width: usize,
 }
 
 /// The parameter that links detection across every channel.
@@ -52,7 +54,13 @@ const SUR_LINK: &str = "surLink";
 
 impl PerChannel {
     pub(crate) fn new(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
-        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0 }
+        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0, first_width: 2 }
+    }
+
+    /// Multi-mono: one mono instance per channel, the first included, every one taking the
+    /// first's parameters (linked).
+    pub(crate) fn mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
+        PerChannel { first_width: 1, ..PerChannel::new(first, make) }
     }
 
     fn all(&mut self) -> impl Iterator<Item = &mut Box<dyn Plugin>> {
@@ -66,8 +74,8 @@ impl Plugin for PerChannel {
     }
 
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
-        self.first.prepare(sample_rate, max_block, channels.min(2));
-        let want = channels.saturating_sub(2);
+        self.first.prepare(sample_rate, max_block, channels.min(self.first_width));
+        let want = channels.saturating_sub(self.first_width);
         self.rest.truncate(want);
         let info = self.first.info();
         while self.rest.len() < want {
@@ -137,12 +145,13 @@ impl Plugin for PerChannel {
             }
         }
         let key = if linked { Some(self.link_key.as_slice()) } else { key };
-        let n = io.len().min(2);
+        let fw = self.first_width;
+        let n = io.len().min(fw);
         let (head, tail) = io.split_at_mut(n);
         self.first.process_with_sidechain(head, frames, key);
         for (i, (p, c)) in self.rest.iter_mut().zip(tail.iter_mut()).enumerate() {
             // the LFE is not turned down by the others' link: it keys from itself
-            let k = if linked && is_lfe(i + 2) { None } else { key };
+            let k = if linked && is_lfe(i + fw) { None } else { key };
             p.process_with_sidechain(std::slice::from_mut(c), frames, k);
         }
     }
@@ -178,7 +187,7 @@ impl Plugin for PerChannel {
 
     fn set_lfe_channels(&mut self, mask: u64) {
         self.lfe = mask;
-        self.first.set_lfe_channels(mask & 0b11);
+        self.first.set_lfe_channels(mask & if self.first_width == 1 { 0b1 } else { 0b11 });
     }
 
     fn set_param_automated(&mut self, id: &str, automated: bool) {

@@ -149,6 +149,16 @@ pub struct PreparedInstance {
     pub plugin: Box<dyn Plugin>,
 }
 
+/// A multi-mono insert's instance key: the strip's channel count with this bit set (see
+/// [`instance_ch`]). [`create_instance_for`] makes such an instance one mono instance per channel.
+pub const MULTI_MONO: usize = 1 << 20;
+
+/// The channel count an instance for `ins` on a strip of `ch` channels is made, matched and
+/// handed over by: `ch`, with [`MULTI_MONO`] set for a multi-mono insert on a wider strip.
+pub fn instance_ch(ins: &soundcraft_model::Insert, ch: usize) -> usize {
+    if ins.multi_mono && ch > 1 { ch | MULTI_MONO } else { ch }
+}
+
 /// Every third-party plugin slot (inserts and instruments) of a session, with the channel count
 /// [`MixEngine::sync`] prepares it for. Inactive and master tracks are included (they have strips).
 pub fn instance_specs(s: &Session) -> Vec<InstanceSpec> {
@@ -161,7 +171,7 @@ pub fn instance_specs(s: &Session) -> Vec<InstanceSpec> {
                 track: t.id,
                 slot: SlotKey::Module(ins.id),
                 id: ins.plugin.clone(),
-                ch,
+                ch: instance_ch(ins, ch),
                 state: ins.state_bytes(),
                 state_load: ins.state_load,
             });
@@ -199,6 +209,11 @@ pub fn create_instance(id: &str, state: Option<&[u8]>, sample_rate: f32, max_blo
 /// plugin is told before it is prepared ([`Plugin::set_offline`]).
 pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max_block: usize, ch: usize, offline: bool) -> Option<NewInstance> {
     let mut plugin = create_plugin(id)?;
+    let multi = ch & MULTI_MONO != 0;
+    let ch = ch & !MULTI_MONO;
+    if multi {
+        plugin = soundcraft_dsp::plugins::multi_mono(plugin, create_plugin);
+    }
     plugin.set_offline(offline);
     let refused_state = state.is_some_and(|st| !plugin.load_state(st));
     if refused_state {
@@ -2004,9 +2019,10 @@ impl MixEngine {
                 // hosted module (a new `state_load`) makes its instance anew from the state; the
                 // realtime host loads it into its instance in place.
                 let reload = |p: &PluginSlot| !cx.external && p.state_load != ins.state_load;
-                if slot.as_ref().is_none_or(|p| p.id != ins.plugin || p.ch != ch || reload(p)) || cx.waiting(t.id, key) {
+                let ich = instance_ch(ins, ch);
+                if slot.as_ref().is_none_or(|p| p.id != ins.plugin || p.ch != ich || reload(p)) || cx.waiting(t.id, key) {
                     cx.retire(t.id, key, slot.take());
-                    slot = cx.make(t.id, key, ins, ch);
+                    slot = cx.make(t.id, key, ins, ich);
                 }
                 chain.push(slot);
             }
@@ -6757,7 +6773,7 @@ impl MixEngine {
         let again = |id: &str, ch: usize, plugin: &mut Box<dyn Plugin>| {
             if is_third_party(id) {
                 plugin.set_offline(offline);
-                plugin.prepare(sr, mb, ch);
+                plugin.prepare(sr, mb, ch & !MULTI_MONO);
             } else if id == soundcraft_dsp::plugins::mend::ID {
                 plugin.set_offline(offline);
             }
@@ -8017,6 +8033,41 @@ mod tests {
         assert_eq!(first(&s), Some(0));
         s.track_mut(st).unwrap().mixer.delay = 100;
         assert_eq!(first(&s), Some(100));
+    }
+
+    /// Multi-mono: a stereo compressor links its channels' detection, so a loud left turns the
+    /// quiet right down too; run multi-mono, each channel has an instance of its own and the
+    /// right is left alone. On identical channels the two are the same.
+    #[test]
+    fn a_multi_mono_insert_runs_one_instance_per_channel() {
+        let render = |left: f32, right: f32, multi: bool| {
+            let mut s = Session::default();
+            s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+            let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+            let n = 48_000;
+            let wave = |a: f32| (0..n).map(|i| a * (i as f32 * 0.05).sin()).collect::<Vec<f32>>();
+            let buf = AudioBuffer { sample_rate: 48_000, channels: vec![wave(left), wave(right)] };
+            s.pool.insert(SourceId(901), Arc::new(SourceAudio::new(buf)));
+            let id = s.new_clip_id();
+            let tr = s.track_mut(t).unwrap();
+            tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "w", SourceId(901), 0, 0, n as i64));
+            let mut ins = Insert::new("compressor");
+            ins.multi_mono = multi;
+            for (k, v) in [("threshold", -30.0), ("ratio", 10.0), ("attack", 0.1)] {
+                ins.params.insert(k.into(), v);
+            }
+            tr.mixer.add_module(ins, None).unwrap();
+            render_range(&s, Range::new(0, n as i64), 512)
+        };
+        let peak = |c: &[f32]| c[24_000..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let linked = render(0.9, 0.05, false);
+        let multi = render(0.9, 0.05, true);
+        assert!(peak(&multi[1]) > peak(&linked[1]) * 1.5, "the quiet right is left alone: {} vs {}", peak(&multi[1]), peak(&linked[1]));
+        let (a, b) = (render(0.5, 0.5, false), render(0.5, 0.5, true));
+        for c in 0..2 {
+            let worst = a[c].iter().zip(&b[c]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+            assert!(worst < 1e-4, "channel {c}: {worst}");
+        }
     }
 
     /// A clip's own automation is heard while it plays, in a render as in playback: here its pan

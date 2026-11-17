@@ -810,6 +810,11 @@ pub struct Insert {
     /// track.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub post_fader: bool,
+    /// Multi-mono: on a track of more than one channel the module runs one mono instance per
+    /// channel, all taking its parameters and automation (linked), as Pro Tools' multi-mono
+    /// plug-ins. Its stored state is the first instance's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_mono: bool,
     /// The insert's wet/dry mix, 0 (its input only) to 1 (its output only, the default): the
     /// mixer blends the module's output with its input, delayed by its latency, so any effect
     /// can be used in parallel. Clamped by the mixer.
@@ -1075,6 +1080,7 @@ impl Insert {
             kit_fx: Vec::new(),
             link_group: None,
             post_fader: false,
+            multi_mono: false,
             mix: 1.0,
             state_load: 0,
             foreign: None,
