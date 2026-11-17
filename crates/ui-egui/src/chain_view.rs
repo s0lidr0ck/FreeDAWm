@@ -42,6 +42,20 @@ const LEVELS_SLIM: f32 = 5.0;
 const PLUS_H: f32 = 18.0;
 const MAX_KNOBS: usize = 4;
 
+/// The processor share module `module` of track `track` took in the last block, as a line for
+/// a tooltip (`"\n2.4 % of a processor core"`); empty when nothing was measured (stopped, the
+/// web build, a module that did not run).
+pub(crate) fn module_load(app: &SoundApp, track: soundcraft_model::TrackId, module: soundcraft_model::ModuleId) -> String {
+    let snap = app.preview_meters.clone().or_else(|| app.player.as_ref().filter(|_| app.meters_live()).map(|p| p.meters()));
+    let load = snap.as_ref().and_then(|s| s.tracks.get(&track)).and_then(|m| m.modules.iter().find(|x| x.module == module)).map_or(0.0, |m| m.load);
+    load_text(load)
+}
+
+/// [`module_load`]'s line for a measured share (`0.024` → 2.4 %).
+pub(crate) fn load_text(load: f32) -> String {
+    if load.is_finite() && load > 0.0 { format!("\n{:.1} % of a processor core", load * 100.0) } else { String::new() }
+}
+
 /// The module meter as the graphs read it.
 pub fn live_values(m: &ModuleMeter) -> LiveValues {
     let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
@@ -597,6 +611,10 @@ fn tile(app: &mut SoundApp, ui: &mut Ui, track: &Track, index: usize, ins: &Inse
     let head = Rect::from_min_size(r.min + vec2(PAD, PAD), vec2(r.width() - 2.0 * PAD, HEAD));
     let resp = ui.interact(head, ui.id().with("head"), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{name} module")));
+    let resp = match meter.map(|m| load_text(m.load)).filter(|l| !l.is_empty()) {
+        Some(l) => resp.on_hover_text(format!("{name}{l}")),
+        None => resp,
+    };
     let led_c = pos2(head.min.x + 4.0, head.center().y);
     let led_r = Rect::from_center_size(led_c, vec2(12.0, 14.0));
     let led = if frozen {
@@ -1187,7 +1205,8 @@ mod tests {
 
     #[test]
     fn live_values_drop_non_finite_readings() {
-        let m = ModuleMeter { module: ModuleId(1), in_peak: f32::NAN, out_peak: 0.5, gr_db: f32::INFINITY, readouts: [0.0; 8], failed: false };
+        let m =
+            ModuleMeter { module: ModuleId(1), in_peak: f32::NAN, out_peak: 0.5, gr_db: f32::INFINITY, readouts: [0.0; 8], failed: false, load: 0.0 };
         let l = live_values(&m);
         assert_eq!((l.in_peak, l.out_peak, l.gr_db), (0.0, 0.5, 0.0));
     }

@@ -256,7 +256,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
 | Console channel strip | ● | ● | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden, and Channel Strip is the two together (it still loads from old sessions) |
-| Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Missing** |
+| Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Works**: each module's share of a processor core in the last block (`ModuleMeter::load`), shown on hovering its chain tile or its insert slot; none on the web build. Test: `module_meters` `a_running_module_reports_its_processor_load` |
 | Works in the browser build | — | — | — | — | **Partial**: Mend passes audio through; no user presets. The rest is not planned here: the owner has stopped work on the browser build |
 
 ## Bugs found on the way
@@ -377,3 +377,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Copy Settings and Paste Settings in every drawer and plug-in window |
 | 2026-11-17 | minor | Plug-in windows can follow the selected track |
 | 2026-11-17 | minor | A wet/dry mix on every insert slot |
+| 2026-11-17 | minor | Each module shows its processor load |

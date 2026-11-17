@@ -258,12 +258,43 @@ pub struct ModuleMeter {
     pub readouts: [f32; 8],
     /// The instance was taken out of the signal path for putting out NaN or infinity.
     pub failed: bool,
+    /// The share of the block's own duration the module took to process it (0.02: 2 % of one
+    /// processor core); 0 when it did not run, and always on the web build (no clock there).
+    pub load: f32,
 }
 
 impl Default for ModuleMeter {
     fn default() -> Self {
-        ModuleMeter { module: ModuleId::default(), in_peak: 0.0, out_peak: 0.0, gr_db: 0.0, readouts: [f32::NAN; 8], failed: false }
+        ModuleMeter { module: ModuleId::default(), in_peak: 0.0, out_peak: 0.0, gr_db: 0.0, readouts: [f32::NAN; 8], failed: false, load: 0.0 }
     }
+}
+
+/// The clock [`ModuleMeter::load`] is measured with (none on the web build).
+#[cfg(not(target_arch = "wasm32"))]
+type LoadClock = std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+type LoadClock = ();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_clock() -> Option<LoadClock> {
+    Some(std::time::Instant::now())
+}
+#[cfg(target_arch = "wasm32")]
+fn load_clock() -> Option<LoadClock> {
+    None
+}
+
+/// [`ModuleMeter::load`] of a module that started at `t0` and processed `frames` at `rate`.
+fn load_since(t0: Option<LoadClock>, frames: usize, rate: f64) -> f32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    let spent = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
+    #[cfg(target_arch = "wasm32")]
+    let spent = {
+        let _ = t0;
+        0.0
+    };
+    let block = frames as f64 / rate.max(1.0);
+    if block > 0.0 { (spent / block) as f32 } else { 0.0 }
 }
 
 /// Fills `out` with the plugin's readouts: NaN where it wrote nothing (or wrote infinity).
@@ -2382,7 +2413,9 @@ impl MixEngine {
                                 continue;
                             }
                             slot.plugin.set_transport(&transport);
+                            let t0 = load_clock();
                             slot.plugin.process(&mut strip.buf, frames);
+                            meter.load = load_since(t0, frames, s.sample_rate.as_f64());
                             if run == LlmRun::Fade {
                                 llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, xf);
                             }
@@ -2444,7 +2477,9 @@ impl MixEngine {
                             fits &= room;
                             if run != LlmRun::Skip {
                                 slot.plugin.set_transport(&transport);
+                                let t0 = load_clock();
                                 slot.plugin.process(&mut strip.buf, frames);
+                                meter.load = load_since(t0, frames, s.sample_rate.as_f64());
                                 if run == LlmRun::Fade {
                                     llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, xf);
                                 }
@@ -3475,6 +3510,7 @@ fn process_strip(
                 }
                 if run != LlmRun::Skip {
                     slot.plugin.set_transport(&transport);
+                    let t0 = load_clock();
                     match strip.keys.iter_mut().find(|k| k.module == ins.id).filter(|_| ins.sidechain.is_some()) {
                         Some(key) => {
                             // Line the key up with this module's main input: the earlier one waits.
@@ -3495,6 +3531,7 @@ fn process_strip(
                         }
                         None => slot.plugin.process(&mut strip.buf, frames),
                     }
+                    meter.load = load_since(t0, frames, s.sample_rate.as_f64());
                     if run == LlmRun::Fade {
                         llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, live.xf);
                     }

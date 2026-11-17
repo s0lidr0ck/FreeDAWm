@@ -1207,7 +1207,9 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         }
     }
     let cmd = if ui.ctx().os().is_mac() { "⌘" } else { "Ctrl+" };
-    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more"));
+    // What the module costs, read only while the pointer is on it.
+    let load = if resp.hovered() { crate::chain_view::module_load(app, id, ins.id) } else { String::new() };
+    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more{load}"));
     resp.context_menu(|ui| {
         ui.set_min_width(170.0);
         if ui.add(egui::Button::selectable(ins.bypass, "Bypass")).clicked() {
