@@ -19,6 +19,9 @@
 //! The gain plugin registers a 20 ms host timer (`clap.timer-support`) at `init` when the host
 //! offers one; its read-only param 15 "Ticks" counts the `on_timer` calls.
 //!
+//! With `SOUNDCRAFT_CLAP_FIXTURE_ABORT=<plugin id>` in its environment, making that plugin aborts
+//! the process (the hosts' crash tests).
+//!
 //! The gain plugin also implements `clap.state` (gain and mode as two little-endian f64s) and a
 //! floating-only `clap.gui` without a real window: showing it "edits" the gain to 0.25 in the GUI,
 //! reported as an output parameter event by the next `process`.
@@ -755,6 +758,11 @@ unsafe extern "C" fn factory_desc(_f: *const clap_plugin_factory, i: u32) -> *co
 
 unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     let id = unsafe { CStr::from_ptr(id) };
+    // A plug-in that crashes as it is made, for the hosts' crash tests: the process aborts when
+    // `SOUNDCRAFT_CLAP_FIXTURE_ABORT` names the id being made.
+    if std::env::var_os("SOUNDCRAFT_CLAP_FIXTURE_ABORT").is_some_and(|v| v.as_encoded_bytes() == id.to_bytes()) {
+        std::process::abort();
+    }
     let keyed = id == c"org.soundcraft.test.keyed";
     let (desc, synth, wide) = if keyed {
         (&KEYED_DESC as *const _, false, None)

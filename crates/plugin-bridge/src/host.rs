@@ -30,6 +30,113 @@ pub fn helper_exe() -> Result<PathBuf, String> {
     if helper.is_file() { Ok(helper) } else { Err(format!("{name} is missing: it must sit next to the app")) }
 }
 
+/// The helper with its pipes, ready to start.
+fn helper_command(exe: &Path) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: no console window flashes up from the GUI app.
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
+
+/// Why a helper could not describe a plug-in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescribeError {
+    /// The helper could not be started.
+    Start(String),
+    /// It ended without answering: the plug-in crashed it.
+    Crashed,
+    /// It did not answer within [`HANG_SECONDS`] and was stopped.
+    Hung,
+    /// It answered that the plug-in could not be made.
+    Refused(String),
+}
+
+/// Starts helper `exe` to describe plug-in `id` (its bundle's folder `dir` handed over), with
+/// `env` added to its environment (tests), and stops it again.
+#[doc(hidden)]
+pub fn describe_with(exe: &Path, id: &str, dir: Option<&Path>, env: &[(&str, &str)]) -> Result<Info, DescribeError> {
+    let mut cmd = helper_command(exe);
+    cmd.envs(env.iter().copied());
+    let mut child = cmd.spawn().map_err(|e| DescribeError::Start(format!("cannot start {}: {e}", exe.display())))?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(DescribeError::Start("the plug-in's process has no pipe".into()));
+    };
+    let (tx, rx) = channel();
+    let reader = std::thread::Builder::new().name("plug-in description".into()).spawn(move || {
+        let mut line = String::new();
+        if BufReader::new(stdout).read_line(&mut line).is_ok_and(|n| n > 0) {
+            let _ = tx.send(line);
+        }
+    });
+    let req = Request::Describe { id: id.into(), dir: dir.map(|d| d.to_string_lossy().into_owned()) };
+    let sent = serde_json::to_string(&req).map(|mut l| {
+        l.push('\n');
+        stdin.write_all(l.as_bytes()).and_then(|()| stdin.flush())
+    });
+    let answer = match (reader, sent) {
+        (Ok(_), Ok(Ok(()))) => match rx.recv_timeout(ANSWER_WITHIN) {
+            Ok(line) => {
+                serde_json::from_str::<Reply>(&line).map_err(|e| DescribeError::Refused(format!("the plug-in's process answered nonsense: {e}")))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DescribeError::Hung),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(DescribeError::Crashed),
+        },
+        (Err(e), _) => Err(DescribeError::Start(e.to_string())),
+        // The pipe closed before the request went: it ended at once.
+        (Ok(_), _) => Err(DescribeError::Crashed),
+    };
+    let _ = stdin.write_all(b"{\"op\":\"quit\"}\n");
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let reply = answer?;
+    match (reply.ok, reply.info) {
+        (true, Some(info)) => Ok(info),
+        _ => Err(DescribeError::Refused(reply.error.unwrap_or_else(|| "no description".into()))),
+    }
+}
+
+/// [`crate::plugin_info`] once the bridge is known to be on and `id` a `clap:` id.
+pub(crate) fn describe(id: &str) -> Option<Option<&'static PluginInfo>> {
+    static FAILED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+    if let Some(info) = known_info(id) {
+        return Some(Some(info));
+    }
+    if FAILED.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|f| f.contains(id)) {
+        return Some(None);
+    }
+    // No helper: plug-ins stay in the app's process ([`crate::create`] does the same).
+    let exe = helper_exe().ok()?;
+    let dir = bundle_dir(id);
+    match describe_with(&exe, id, dir.as_deref(), &[]) {
+        Ok(info) => Some(Some(leaked_info(id, &info))),
+        Err(e) => {
+            let name = soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map_or_else(|| id.to_string(), |d| d.name);
+            match e {
+                DescribeError::Crashed => crate::report(format!("{name} crashed while it was being loaded in its own process: it is not offered")),
+                DescribeError::Hung => {
+                    crate::report(format!("{name} stopped answering while it was being loaded in its own process: it is not offered"))
+                }
+                DescribeError::Start(e) | DescribeError::Refused(e) => log::warn!("{name}: {e}"),
+            }
+            FAILED.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(Default::default).insert(id.to_string());
+            Some(None)
+        }
+    }
+}
+
+/// The folder of a `clap:` plug-in's bundle, as the scan cache knows it.
+fn bundle_dir(id: &str) -> Option<PathBuf> {
+    soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).and_then(|d| d.path.parent().map(Path::to_path_buf))
+}
+
 /// What the audio thread, the pipe's reader and the watchdog share.
 struct Status {
     /// The helper is gone (crashed, hung and stopped, or closed): the plug-in is silenced.
@@ -64,7 +171,8 @@ impl Control {
         sent.map_err(|e| format!("the plug-in's process is gone: {e}"))?;
         let reply = match replies.recv_timeout(ANSWER_WITHIN) {
             Ok(r) => r,
-            Err(_) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err("the plug-in's process ended (it crashed)".into()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.status.hung.store(true, Ordering::Release);
                 self.kill();
                 return Err("the plug-in's process stopped answering".into());
@@ -111,23 +219,18 @@ impl BridgedPlugin {
     /// bundle's folder handed over), prepared for 48 kHz stereo with 1024-frame blocks until
     /// [`Plugin::prepare`] says otherwise.
     pub fn spawn(id: &str) -> Result<BridgedPlugin, String> {
-        let dir =
-            soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).and_then(|d| d.path.parent().map(Path::to_path_buf));
-        BridgedPlugin::spawn_with(&helper_exe()?, id, dir.as_deref())
+        BridgedPlugin::spawn_from(&helper_exe()?, id)
+    }
+
+    /// [`BridgedPlugin::spawn`] with the helper `exe`.
+    pub fn spawn_from(exe: &Path, id: &str) -> Result<BridgedPlugin, String> {
+        BridgedPlugin::spawn_with(exe, id, bundle_dir(id).as_deref())
     }
 
     /// [`BridgedPlugin::spawn`] with the helper `exe` and the folder `dir` of the plug-in's
     /// bundle (tests; `id` may then be a built-in plug-in's).
     pub fn spawn_with(exe: &Path, id: &str, dir: Option<&Path>) -> Result<BridgedPlugin, String> {
-        let mut cmd = Command::new(exe);
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // CREATE_NO_WINDOW: no console window flashes up from the GUI app.
-            cmd.creation_flags(0x0800_0000);
-        }
-        let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+        let mut child = helper_command(exe).spawn().map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
             let _ = child.wait();
@@ -268,8 +371,14 @@ fn placeholder_info() -> &'static PluginInfo {
 
 /// The plug-in's description as the helper gave it, leaked once per plug-in type and kept
 /// (`PluginInfo` is `'static`, as `soundcraft-clap-host`'s are).
+static KNOWN: Mutex<Option<HashMap<String, &'static PluginInfo>>> = Mutex::new(None);
+
+/// The description already read for plug-in `id`, if any.
+fn known_info(id: &str) -> Option<&'static PluginInfo> {
+    KNOWN.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|k| k.get(id).copied())
+}
+
 fn leaked_info(id: &str, i: &Info) -> &'static PluginInfo {
-    static KNOWN: Mutex<Option<HashMap<String, &'static PluginInfo>>> = Mutex::new(None);
     let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
     let known = known.get_or_insert_with(HashMap::new);
     if let Some(info) = known.get(id) {
@@ -296,7 +405,7 @@ fn leaked_info(id: &str, i: &Info) -> &'static PluginInfo {
         id: s(id),
         name: s(&i.name),
         short_name: s(&i.short_name),
-        category: if i.instrument { Category::Instrument } else { Category::Other },
+        category: i.category.unwrap_or(if i.instrument { Category::Instrument } else { Category::Other }),
         params: Box::leak(params.into_boxed_slice()),
         is_instrument: i.instrument,
         audiosuite: false,

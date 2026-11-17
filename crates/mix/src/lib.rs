@@ -6557,6 +6557,13 @@ pub fn take_plugin_crash_reports() -> Vec<String> {
 /// helper, Restart and the descriptions read there.
 pub use soundcraft_plugin_bridge as plugin_bridge;
 
+/// A `clap:` plug-in's description: read in a helper process while plug-ins run in their own
+/// process (so a plug-in that crashes as it loads cannot take the app down; one that did is
+/// described as nothing), else in this process as before.
+pub fn clap_plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
+    soundcraft_plugin_bridge::plugin_info(id).unwrap_or_else(|| soundcraft_clap_host::plugin_info(id))
+}
+
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
 /// A factory tests install ahead of the built-in and hosted ones ([`set_test_plugin_factory`]).
 type TestFactory = fn(&str) -> Option<Box<dyn Plugin>>;
@@ -6576,11 +6583,14 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     {
         return Some(p);
     }
+    // A CLAP plug-in in a process of its own when that is turned on (Preferences › Mixing): one
+    // the helper could not make is not then made here, where its crash would take the app down.
+    if let Some(bridged) = soundcraft_plugin_bridge::create(id) {
+        return bridged;
+    }
     external_midi::create(id)
         .or_else(|| track_midi::create(id))
         .or_else(|| soundcraft_dsp::create(id))
-        // In a process of its own when that is opted into (`FREEDAWM_PLUGIN_PROCESS=1`).
-        .or_else(|| soundcraft_plugin_bridge::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
         .or_else(|| soundcraft_au_host::create(id))

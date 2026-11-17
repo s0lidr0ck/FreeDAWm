@@ -80,16 +80,12 @@ fn failed(e: impl Into<String>) -> Reply {
 
 fn handle(served: &mut Option<Served>, req: Request) -> Reply {
     match req {
+        Request::Describe { id, dir } => match open(&id, dir) {
+            Ok(p) => Reply { ok: true, info: Some(info_of(&*p)), ..Reply::default() },
+            Err(e) => failed(e),
+        },
         Request::Open { id, dir, prepare } => {
-            if let Some(d) = dir.filter(|_| soundcraft_clap_host::parse_id(&id).is_some()) {
-                soundcraft_clap_host::add_search_dir(std::path::Path::new(&d));
-            }
-            let plugin = match soundcraft_clap_host::parse_id(&id) {
-                Some(_) => soundcraft_clap_host::instantiate(&id).map_err(|e| e.to_string()),
-                // Built-in plug-ins: the tests' stand-ins.
-                None => soundcraft_dsp::create(&id).ok_or_else(|| format!("no plug-in `{id}`")),
-            };
-            let plugin = match plugin {
+            let plugin = match open(&id, dir) {
                 Ok(p) => p,
                 Err(e) => return failed(e),
             };
@@ -117,6 +113,19 @@ fn handle(served: &mut Option<Served>, req: Request) -> Reply {
             if took { Reply { ok: true, ..Reply::default() } } else { failed("the plug-in did not take the state") }
         }
         Request::Quit => Reply { ok: true, ..Reply::default() },
+    }
+}
+
+/// Makes plug-in `id`: a `clap:` one (the bundles in `dir` made known first), or for tests a
+/// built-in one.
+fn open(id: &str, dir: Option<String>) -> Result<Box<dyn Plugin>, String> {
+    if let Some(d) = dir.filter(|_| soundcraft_clap_host::parse_id(id).is_some()) {
+        soundcraft_clap_host::add_search_dir(std::path::Path::new(&d));
+    }
+    match soundcraft_clap_host::parse_id(id) {
+        Some(_) => soundcraft_clap_host::instantiate(id).map_err(|e| e.to_string()),
+        // Built-in plug-ins: the tests' stand-ins.
+        None => soundcraft_dsp::create(id).ok_or_else(|| format!("no plug-in `{id}`")),
     }
 }
 
@@ -150,7 +159,7 @@ fn info_of(p: &dyn Plugin) -> Info {
             group: q.group.into(),
         })
         .collect();
-    Info { name: i.name.into(), short_name: i.short_name.into(), instrument: i.is_instrument, params }
+    Info { name: i.name.into(), short_name: i.short_name.into(), instrument: i.is_instrument, params, category: Some(i.category) }
 }
 
 /// The unit a [`Param`] names (`None` for one it does not know).

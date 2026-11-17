@@ -321,15 +321,16 @@ same pass as the items above; these are the starting points.
   opens; `FREEDAWM_PLUGIN_PROCESS=1` or `0` overrides it for a run, and the window says so, and
   says when the helper is missing); the helper is built with the workspace and every package
   build (Linux, Flatpak, macOS, FreeBSD, Windows MSI and zip) carries and signs it next to the
-  app (a test reads the scripts). *Differs from the design:* the
+  app (a test reads the scripts). With the option on, a CLAP plug-in's description (name,
+  parameters, group) is read in a helper of its own too, so one that crashes or hangs as it
+  loads only costs that helper: it is not offered, the status line says so once, and it is never
+  then loaded in the app's own process (nor is one the helper could not make for an insert). *Differs from the design:* the
   unsafe code is the crate's own private `shm` module (the mapping and its view as atomics); the
   helper waits by spinning, yielding, then 200 µs sleeps (no futex or named event). *Not built
   yet:* a per-insert choice, the insert
   saying "crashed" (the status line says it), Restart, the editor window, the plug-in's own
   presets, latency, tail and parameter changes the plug-in makes itself, the transport for the
-  plug-in (tempo, position), VST3 and AU. The app still
-  reads a CLAP plug-in's description in its own process when it lists or shows it (`clap-host`'s
-  `plugin_info`), so a plug-in that crashes while being described can still take the app down.
+  plug-in (tempo, position), VST3 and AU. The scan itself already ran in `freedawm-scan`.
   The design as written: Behind an
   option (Setup › Plug-ins › Run plug-ins in their own process, off by default; per insert too),
   CLAP first, VST3 and AU after on the same bridge.
@@ -384,6 +385,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Plug-ins in their own process: a CLAP plug-in's description is read in a helper too, and one that crashed there is never loaded in the app |
 | 2026-11-17 | minor | Plug-ins in their own process: a Preferences option (off by default, the variable overrides it) and the helper in every package |
 | 2026-11-17 | minor | Rows reconciled with the code: control room, mixer snapshots, handles, QuickPunch, Capture MIDI, clips following chords, warp markers and Mackie/HUI built elsewhere; launcher, mastering page, rack and macros, browser build, EUCON, ARA, hardware DSP, cloud, loop library and vocal synthesis not planned here, with the reason |
 | 2026-11-17 | minor | Plug-ins in their own process, first step: CLAP, opt-in, a crash silences the plug-in; browser recording dropped by the owner |

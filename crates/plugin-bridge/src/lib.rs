@@ -40,7 +40,7 @@ mod shm;
 #[cfg(not(target_arch = "wasm32"))]
 pub use helper::serve;
 #[cfg(not(target_arch = "wasm32"))]
-pub use host::BridgedPlugin;
+pub use host::{BridgedPlugin, DescribeError, describe_with};
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,17 +89,50 @@ pub fn helper_path() -> Result<std::path::PathBuf, String> {
     Err("plug-ins in their own process need the desktop app".into())
 }
 
-/// A `clap:` plug-in in its own process, when that is [`enabled`] and the helper starts; `None`
-/// otherwise (the caller then creates it as before).
-pub fn create(id: &str) -> Option<Box<dyn soundcraft_dsp::Plugin>> {
+/// A `clap:` plug-in in its own process, when that is [`enabled`]. `None` when it is not for the
+/// bridge (turned off, not a `clap:` id, or no helper next to the app): the caller then creates it
+/// as before. `Some(None)` when the helper could not make it (it crashed, hung or the plug-in
+/// refused, said once): the caller must not then load it in its own process, where the same crash
+/// would take the app down.
+pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
     if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
         return None;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    match BridgedPlugin::spawn(id) {
-        Ok(p) => return Some(Box::new(p)),
-        Err(e) => log::warn!("{id}: not run in its own process: {e}"),
+    {
+        let exe = match host::helper_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                log::warn!("{id}: not run in its own process: {e}");
+                return None;
+            }
+        };
+        match BridgedPlugin::spawn_from(&exe, id) {
+            Ok(p) => Some(Some(Box::new(p))),
+            Err(e) => {
+                report(format!("{id} could not be loaded in its own process: {e}"));
+                Some(None)
+            }
+        }
     }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+/// The description of a `clap:` plug-in, read in a helper of its own when plug-ins run in their
+/// own process ([`enabled`]), so a plug-in that crashes or hangs while being described cannot
+/// take the app down. `None` when it is not for the bridge (turned off, not a `clap:` id, or no
+/// helper): the caller reads the description as before. `Some(None)` when the helper could not
+/// describe it (it crashed, hung or the plug-in refused; a crash or hang is said once, see
+/// [`take_crash_reports`]); that answer is kept for the rest of the run. Blocks for as long as the
+/// helper takes, at most [`HANG_SECONDS`]; later calls answer from memory.
+pub fn plugin_info(id: &str) -> Option<Option<&'static soundcraft_dsp::PluginInfo>> {
+    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    return host::describe(id);
+    #[cfg(target_arch = "wasm32")]
     None
 }
 
@@ -139,6 +172,12 @@ pub mod proto {
         LoadState {
             state: String,
         },
+        /// Load plug-in `id` only to describe it (the reply's `info`), then let it go: a
+        /// plug-in that crashes while being described costs the helper, not the app.
+        Describe {
+            id: String,
+            dir: Option<String>,
+        },
         Quit,
     }
 
@@ -175,6 +214,9 @@ pub mod proto {
         pub short_name: String,
         pub instrument: bool,
         pub params: Vec<Param>,
+        /// Its group in the insert menu (absent: Instrument or Other).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub category: Option<soundcraft_dsp::Category>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,6 +265,12 @@ mod tests {
         assert_eq!(override_of(Some(" 0 ")), Some(false));
         assert_eq!(override_of(Some("yes")), None, "only 1 and 0 override");
         assert_eq!(override_of(Some("")), None);
+    }
+
+    #[test]
+    fn descriptions_are_read_in_process_while_the_bridge_is_off() {
+        assert_eq!(plugin_info("clap:org.soundcraft.test.gain"), None);
+        assert_eq!(plugin_info("eq_7band"), None);
     }
 
     #[test]

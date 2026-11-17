@@ -36,7 +36,7 @@ pub fn plugin_info(id: &str) -> Option<&'static PluginInfo> {
     soundcraft_mix::external_midi::plugin_info(id)
         .or_else(|| soundcraft_mix::track_midi::plugin_info(id))
         .or_else(|| soundcraft_dsp::plugin_info(id))
-        .or_else(|| soundcraft_clap_host::plugin_info(id))
+        .or_else(|| soundcraft_mix::clap_plugin_info(id))
         .or_else(|| soundcraft_vst3_host::plugin_info(id))
         .or_else(|| soundcraft_au_host::plugin_info(id))
 }

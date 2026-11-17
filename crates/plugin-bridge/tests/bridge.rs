@@ -150,6 +150,26 @@ fn clap_fixture() -> &'static Path {
 }
 
 #[test]
+fn a_clap_plug_in_is_described_in_a_helper_and_a_crash_there_is_only_the_helpers() {
+    use soundcraft_plugin_bridge::{DescribeError, describe_with};
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let info = describe_with(exe(), GAIN, Some(clap_fixture()), &[]).unwrap();
+    assert_eq!(info.name, "Fixture Gain");
+    assert_eq!(info.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["7", "3"]);
+    assert!(!info.instrument);
+    // The plug-in aborts its process as it is made: this test process goes on and is told so.
+    let started = Instant::now();
+    let crashed = describe_with(exe(), GAIN, Some(clap_fixture()), &[("SOUNDCRAFT_CLAP_FIXTURE_ABORT", "org.soundcraft.test.gain")]);
+    assert_eq!(crashed.err(), Some(DescribeError::Crashed));
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    // One the helper cannot make is refused with the reason, not reported as a crash.
+    let refused = describe_with(exe(), "clap:org.soundcraft.test.none", Some(clap_fixture()), &[]);
+    assert!(matches!(refused, Err(DescribeError::Refused(_))), "{refused:?}");
+    let missing = describe_with(Path::new("/no/such/helper"), GAIN, None, &[]);
+    assert!(matches!(missing, Err(DescribeError::Start(_))), "{missing:?}");
+}
+
+#[test]
 fn a_clap_plug_in_runs_in_its_own_process() {
     // Loaded only in the helper: this process never loads the plug-in's binary.
     let mut p = BridgedPlugin::spawn_with(exe(), "clap:org.soundcraft.test.gain", Some(clap_fixture())).unwrap();
