@@ -97,6 +97,11 @@
         <File Id="SoundcraftScanExe" Source="$(var.BinDir)\freedawm-scan.exe" KeyPath="yes" />
       </Component>
 
+      <!-- The helper that runs a hosted plug-in in its own process (Preferences › Mixing), next to the app. -->
+      <Component Id="SoundcraftPluginHost" Guid="B6E1F4A2-3C7D-4E58-9A10-5D2C8F7E3B41">
+        <File Id="SoundcraftPluginHostExe" Source="$(var.BinDir)\freedawm-plugin-host.exe" KeyPath="yes" />
+      </Component>
+
       <!-- The DLLs package.ps1 stages next to the programs: DirectML (ONNX Runtime's GPU
            backend) and the app-local Visual C++ runtime. -->
       <Files Include="$(var.BinDir)\*.dll" />

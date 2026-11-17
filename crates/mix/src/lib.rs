@@ -6553,6 +6553,10 @@ pub fn take_plugin_crash_reports() -> Vec<String> {
     soundcraft_plugin_bridge::take_crash_reports()
 }
 
+/// Hosted plug-ins in their own process: the app's setting (`plugin_bridge::set_enabled`), the
+/// helper, Restart and the descriptions read there.
+pub use soundcraft_plugin_bridge as plugin_bridge;
+
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
 /// A factory tests install ahead of the built-in and hosted ones ([`set_test_plugin_factory`]).
 type TestFactory = fn(&str) -> Option<Box<dyn Plugin>>;

@@ -425,6 +425,11 @@ pub struct UiState {
     /// the session is saved (on by default); off, the project refers to the original file.
     #[serde(default = "default_true")]
     pub copy_imported_audio: bool,
+    /// Preferences › Mixing: hosted CLAP plug-ins loaded from now on run in their own process
+    /// (`ui.plugin_process`; off by default; `FREEDAWM_PLUGIN_PROCESS` overrides it). The app
+    /// hands it to the bridge when it loads `ui.json` and when the command changes it.
+    #[serde(default)]
+    pub plugin_process: bool,
     /// The monitor stage (`monitor_ui`): the master fader's EAR key and its hearing profile.
     /// This computer's, never a session's.
     pub monitor_ear: bool,
@@ -640,6 +645,7 @@ impl Default for UiState {
             meter_hold_secs: preferences::DEFAULT_HOLD,
             meter_scale: String::new(),
             copy_imported_audio: true,
+            plugin_process: false,
             monitor_ear: false,
             monitor_ear_profile: String::new(),
             monitor_sim: false,

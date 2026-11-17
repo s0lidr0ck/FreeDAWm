@@ -15,12 +15,12 @@
 //! - **A crash** (the helper exits, or falls behind for [`HANG_SECONDS`] straight) silences that
 //!   plug-in, an effect passing its input through, and is reported once
 //!   ([`take_crash_reports`], and the log); the session and the app carry on.
-//! - **Opt-in:** [`enabled`] (`FREEDAWM_PLUGIN_PROCESS=1`) is off by default; [`create`] answers
-//!   only then, and only for `clap:` ids.
+//! - **Opt-in:** [`enabled`] (the app's setting, [`set_enabled`]; `FREEDAWM_PLUGIN_PROCESS=1` or
+//!   `0` overrides it) is off by default; [`create`] answers only then, and only for `clap:` ids.
 //!
 //! Not in this step: the editor window, presets of the plug-in's own, latency or parameter
 //! changes the plug-in makes itself, the transport (tempo, position) for the plug-in, a restart,
-//! VST3 and AU, and a setting in the app.
+//! VST3 and AU.
 //!
 //! This is an isolated `unsafe` helper crate (craftrules never-crash): `unsafe` is denied
 //! crate-wide and allowed only in the private `shm` module (mapping the shared file and viewing it
@@ -43,6 +43,7 @@ pub use helper::serve;
 pub use host::BridgedPlugin;
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The helper's program name (without the platform's extension).
 pub const HELPER_NAME: &str = "freedawm-plugin-host";
@@ -50,10 +51,42 @@ pub const HELPER_NAME: &str = "freedawm-plugin-host";
 /// A helper behind for this long without a break counts as hung: its plug-in is given up.
 pub const HANG_SECONDS: u64 = 5;
 
-/// Whether hosted CLAP plug-ins run in their own process: `FREEDAWM_PLUGIN_PROCESS=1` (off by
-/// default; nothing changes for existing sessions otherwise).
+/// The app's setting (Setup › Preferences › Mixing › Run CLAP plug-ins in their own process).
+static SETTING: AtomicBool = AtomicBool::new(false);
+
+/// Sets this computer's choice (the app's Preferences); [`enabled`] follows it unless
+/// `FREEDAWM_PLUGIN_PROCESS` overrides it. Plug-ins already loaded stay where they are.
+pub fn set_enabled(on: bool) {
+    SETTING.store(on, Ordering::Relaxed);
+}
+
+/// What `FREEDAWM_PLUGIN_PROCESS` forces, if it is set: `1` on, `0` off (anything else is
+/// ignored, and the setting decides).
+pub fn env_override() -> Option<bool> {
+    override_of(std::env::var("FREEDAWM_PLUGIN_PROCESS").ok().as_deref())
+}
+
+fn override_of(v: Option<&str>) -> Option<bool> {
+    match v.map(str::trim) {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether hosted CLAP plug-ins loaded from now on run in their own process: the app's setting
+/// ([`set_enabled`], off by default, so nothing changes for existing sessions), unless
+/// `FREEDAWM_PLUGIN_PROCESS` overrides it ([`env_override`]).
 pub fn enabled() -> bool {
-    std::env::var_os("FREEDAWM_PLUGIN_PROCESS").is_some_and(|v| v == "1")
+    env_override().unwrap_or_else(|| SETTING.load(Ordering::Relaxed))
+}
+
+/// The helper program the app would start, or why there is none (none in the browser).
+pub fn helper_path() -> Result<std::path::PathBuf, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return host::helper_exe();
+    #[cfg(target_arch = "wasm32")]
+    Err("plug-ins in their own process need the desktop app".into())
 }
 
 /// A `clap:` plug-in in its own process, when that is [`enabled`] and the helper starts; `None`
@@ -181,6 +214,15 @@ mod tests {
         assert!(!enabled());
         assert!(create("clap:org.soundcraft.test.gain").is_none());
         assert!(create("eq_7band").is_none());
+    }
+
+    #[test]
+    fn the_variable_overrides_the_setting_with_1_or_0_only() {
+        assert_eq!(override_of(None), None);
+        assert_eq!(override_of(Some("1")), Some(true));
+        assert_eq!(override_of(Some(" 0 ")), Some(false));
+        assert_eq!(override_of(Some("yes")), None, "only 1 and 0 override");
+        assert_eq!(override_of(Some("")), None);
     }
 
     #[test]

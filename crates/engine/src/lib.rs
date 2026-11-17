@@ -91,6 +91,12 @@ pub fn set_plugin_scan_cache_dir(dir: Option<std::path::PathBuf>) {
     soundcraft_vst3_host::set_scan_cache_dir(dir);
 }
 
+/// This computer's choice (Preferences › Mixing) to run hosted CLAP plug-ins loaded from now on
+/// in their own process; `FREEDAWM_PLUGIN_PROCESS=1` or `0` overrides it. Off by default.
+pub fn set_plugin_process(on: bool) {
+    soundcraft_mix::plugin_bridge::set_enabled(on);
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
     #[error("unknown command `{0}`")]

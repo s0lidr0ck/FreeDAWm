@@ -75,6 +75,29 @@ fn its_controls_run_the_menu_commands() {
 }
 
 #[test]
+fn plug_ins_in_their_own_process_is_this_computers_setting_off_by_default() {
+    let mut a = app();
+    assert!(!a.ui.plugin_process, "off by default");
+    assert!(!soundcraft_mix::plugin_bridge::enabled());
+    a.run("window.preferences", json!({"tab": "mixing"})).unwrap();
+    let mut h = harness(a);
+    h.get_by_label("Run CLAP plug-ins in their own process").click();
+    steps(&mut h);
+    assert!(h.state().ui.plugin_process);
+    assert!(soundcraft_mix::plugin_bridge::enabled(), "plug-ins loaded from now on are bridged");
+    // Saved with this computer's settings, and older settings files get it off.
+    let saved = serde_json::to_value(&h.state().ui).unwrap();
+    assert_eq!(saved["plugin_process"].as_bool(), Some(true));
+    let mut old = saved.clone();
+    old.as_object_mut().unwrap().remove("plugin_process");
+    assert!(!serde_json::from_value::<soundcraft_ui_egui::UiState>(old).unwrap().plugin_process);
+    let r = h.state_mut().run("ui.plugin_process", json!({"value": false})).unwrap();
+    assert_eq!((r["value"].as_bool(), r["in_effect"].as_bool()), (Some(false), Some(false)));
+    steps(&mut h);
+    assert!(!soundcraft_mix::plugin_bridge::enabled());
+}
+
+#[test]
 fn meter_ballistics_are_set_and_kept_in_range() {
     let mut app = app();
     let r = app.run("ui.meter_ballistics", json!({})).unwrap();

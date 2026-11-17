@@ -715,6 +715,8 @@ fn main() -> eframe::Result {
     // No settings saved yet: the first start, which opens the tour once.
     let first_run = prefs_enabled() && prefs_path().is_some_and(|p| !p.exists());
     let mut prefs = load_prefs().unwrap_or_default();
+    // Before any session's plug-ins are made: where hosted CLAP plug-ins run (Preferences › Mixing).
+    soundcraft_engine::set_plugin_process(prefs.plugin_process);
     if first_run {
         prefs.tour_step = Some(0);
     }

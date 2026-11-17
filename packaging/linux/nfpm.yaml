@@ -77,6 +77,9 @@ contents:
   - src: ${STAGE}/usr/bin/freedawm-scan
     dst: /usr/bin/freedawm-scan
     file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/bin/freedawm-plugin-host
+    dst: /usr/bin/freedawm-plugin-host
+    file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

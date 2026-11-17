@@ -86,6 +86,14 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, Stri
             app.engine.copy_imported_audio = on;
             Ok(json!({"value": on}))
         }
+        // Hosted CLAP plug-ins loaded from now on run in their own process (this computer's).
+        "ui.plugin_process" => {
+            let on = p.get("value").and_then(Value::as_bool).unwrap_or(!app.ui.plugin_process);
+            app.ui.plugin_process = on;
+            soundcraft_mix::plugin_bridge::set_enabled(on);
+            let bridge = soundcraft_mix::plugin_bridge::enabled();
+            Ok(json!({"value": on, "in_effect": bridge, "override": soundcraft_mix::plugin_bridge::env_override()}))
+        }
         _ => return None,
     })
 }
@@ -285,12 +293,40 @@ fn mixing(app: &mut SoundApp, ui: &mut Ui) {
     ui.add_enabled_ui(wide, |ui| {
         flag(app, ui, "Slim plugin editors", "ui.mix.slim_editors", slim, "The VST editors' slim layout, at the drawer's width")
     });
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_process(app, ui);
     heading(ui, "EDIT AND MIX WINDOWS (WINDOW › SYNC)");
     let sync = app.ui.sync;
     flag(app, ui, "Sync selection", "window.sync_selection", sync.selection, "");
     flag(app, ui, "Scroll to the selected track", "window.sync_scroll", sync.scroll, "");
     flag(app, ui, "Follow folder collapse", "window.sync_folders", sync.folders, "");
     flag(app, ui, "Sync track visibility", "window.sync_visibility", sync.visibility, "");
+}
+
+/// Preferences › Mixing › Run CLAP plug-ins in their own process, with what overrides it and
+/// whether the helper is there.
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_process(app: &mut SoundApp, ui: &mut Ui) {
+    use soundcraft_mix::plugin_bridge as bridge;
+    let on = app.ui.plugin_process;
+    flag(
+        app,
+        ui,
+        "Run CLAP plug-ins in their own process",
+        "ui.plugin_process",
+        on,
+        "A CLAP plug-in that crashes or hangs then silences only itself (an effect passes its input through) instead of taking FreeDAWm down. Each such plug-in adds one block of latency, which delay compensation lines up. Applies to plug-ins loaded from now on (and when a session is opened); not yet their own editor windows.",
+    );
+    let dim = Tokens::current().text_dim;
+    if let Some(forced) = bridge::env_override() {
+        let says = if forced { "on" } else { "off" };
+        ui.label(egui::RichText::new(format!("FREEDAWM_PLUGIN_PROCESS turns it {says} for this run.")).font(regular(11.0)).color(dim));
+    }
+    if bridge::enabled()
+        && let Err(e) = bridge::helper_path()
+    {
+        ui.label(egui::RichText::new(format!("Plug-ins stay in FreeDAWm's process: {e}.")).font(regular(11.0)).color(dim));
+    }
 }
 
 fn metering(app: &mut SoundApp, ui: &mut Ui) {

@@ -119,12 +119,15 @@ impl BridgedPlugin {
     /// [`BridgedPlugin::spawn`] with the helper `exe` and the folder `dir` of the plug-in's
     /// bundle (tests; `id` may then be a built-in plug-in's).
     pub fn spawn_with(exe: &Path, id: &str, dir: Option<&Path>) -> Result<BridgedPlugin, String> {
-        let mut child = Command::new(exe)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+        let mut cmd = Command::new(exe);
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: no console window flashes up from the GUI app.
+            cmd.creation_flags(0x0800_0000);
+        }
+        let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
             let _ = child.wait();

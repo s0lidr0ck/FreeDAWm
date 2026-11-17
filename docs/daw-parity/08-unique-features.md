@@ -178,7 +178,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Browser build | **Not planned here** (the owner: no further work) | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
-| Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
+| Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in runs inside the app and can bring it down, unless it is a CLAP plug-in and Preferences › Mixing › Run CLAP plug-ins in their own process is on (off by default; see the design notes) |
 
 ## Things that promise more than they do
 
@@ -230,7 +230,8 @@ workflow (specialist; revisit if users ask); vocal synthesis.
 sessions kept between visits (12–18): sessions kept **done** (270aee2), recording **dropped by the owner**
 (the browser build will not be used; design kept below); talkback and encrypted local links for remote recording
 (10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
-and the scan helper is a start; **first step built** (3b77990): CLAP, opt-in, see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+and the scan helper is a start; **first steps built** (3b77990, and round three): CLAP, a
+Preferences option off by default, the helper shipped in every package; see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
 
 **Designs for the larger items** (some since built, as each says). Each was judged too big to finish well in the
 same pass as the items above; these are the starting points.
@@ -314,13 +315,19 @@ same pass as the items above; these are the starting points.
   hostile headers refused); the real helper serving a built-in plug-in and the CLAP test plug-in
   (output equal to the input times its gain, one block late; latency its own plus one block); the
   helper killed mid-render: every block still returns at once, the plug-in passes audio through,
-  the crash is reported by name, later requests fail at once. *Differs from the design:* the
+  the crash is reported by name, later requests fail at once. *Second step (round three):*
+  Setup › Preferences › Mixing › Run CLAP plug-ins in their own process (`ui.plugin_process`,
+  this computer's, off by default; it applies to plug-ins loaded from then on and when a session
+  opens; `FREEDAWM_PLUGIN_PROCESS=1` or `0` overrides it for a run, and the window says so, and
+  says when the helper is missing); the helper is built with the workspace and every package
+  build (Linux, Flatpak, macOS, FreeBSD, Windows MSI and zip) carries and signs it next to the
+  app (a test reads the scripts). *Differs from the design:* the
   unsafe code is the crate's own private `shm` module (the mapping and its view as atomics); the
   helper waits by spinning, yielding, then 200 µs sleeps (no futex or named event). *Not built
-  yet:* the Setup option and per-insert choice (an environment variable for now), the insert
+  yet:* a per-insert choice, the insert
   saying "crashed" (the status line says it), Restart, the editor window, the plug-in's own
   presets, latency, tail and parameter changes the plug-in makes itself, the transport for the
-  plug-in (tempo, position), VST3 and AU, and packaging the helper next to the app. The app still
+  plug-in (tempo, position), VST3 and AU. The app still
   reads a CLAP plug-in's description in its own process when it lists or shows it (`clap-host`'s
   `plugin_info`), so a plug-in that crashes while being described can still take the app down.
   The design as written: Behind an
@@ -377,6 +384,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Plug-ins in their own process: a Preferences option (off by default, the variable overrides it) and the helper in every package |
 | 2026-11-17 | minor | Rows reconciled with the code: control room, mixer snapshots, handles, QuickPunch, Capture MIDI, clips following chords, warp markers and Mackie/HUI built elsewhere; launcher, mastering page, rack and macros, browser build, EUCON, ARA, hardware DSP, cloud, loop library and vocal synthesis not planned here, with the reason |
 | 2026-11-17 | minor | Plug-ins in their own process, first step: CLAP, opt-in, a crash silences the plug-in; browser recording dropped by the owner |
 | 2026-11-16 | minor | Take PCs over the encrypted link only is on by default (owner); a saved choice is kept |

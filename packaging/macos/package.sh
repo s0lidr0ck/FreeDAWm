@@ -58,12 +58,12 @@ echo "==> FreeDAWm $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $N
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan -p soundcraft-plugin-bridge "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in freedawm freedawm-cli freedawm-scan; do
+for bin in freedawm freedawm-cli freedawm-scan freedawm-plugin-host; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -104,6 +104,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK/bin/freedawm" "$APP/Contents/MacOS/FreeDAWm"
 # The plugin scanner helper sits next to the app executable, where the app looks for it.
 cp "$WORK/bin/freedawm-scan" "$APP/Contents/MacOS/freedawm-scan"
+# So does the helper that runs a hosted plug-in in its own process (Preferences › Mixing).
+cp "$WORK/bin/freedawm-plugin-host" "$APP/Contents/MacOS/freedawm-plugin-host"
 cp "$ROOT/assets/app-icon/freedawm.icns" "$APP/Contents/Resources/FreeDAWm.icns"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${FREEDAWM_BUILD_SHA:-unknown}/g" \
@@ -118,6 +120,7 @@ xattr -cr "$APP"
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/freedawm-scan"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/freedawm-plugin-host"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/FreeDAWm"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"

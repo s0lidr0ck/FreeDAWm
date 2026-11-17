@@ -60,17 +60,17 @@ pub fn run(_args: &[String]) -> Result<(), String> {
     // The app scans plugins only through this helper (in its own processes), found next to it:
     // cargo puts both in the same `release` folder.
     let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["build", "--release", "-p", "soundcraft-scan"])
+        .args(["build", "--release", "-p", "soundcraft-scan", "-p", "soundcraft-plugin-bridge"])
         .current_dir(&root)
         .status()
         .map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err("cargo build --release -p soundcraft-scan failed".into());
+        return Err("cargo build --release -p soundcraft-scan -p soundcraft-plugin-bridge failed".into());
     }
     let target = std::env::var("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|_| root.join("target"));
     let release = target.join("release");
     let exe = |name: &str| release.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    for (name, what) in [("freedawm", "the app"), ("freedawm-scan", "the plugin scanner")] {
+    for (name, what) in [("freedawm", "the app"), ("freedawm-scan", "the plugin scanner"), ("freedawm-plugin-host", "the plug-in process helper")] {
         if !exe(name).is_file() {
             return Err(format!("{what} was not built at {}", exe(name).display()));
         }
