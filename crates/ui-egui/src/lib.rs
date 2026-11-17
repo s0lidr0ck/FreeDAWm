@@ -61,6 +61,7 @@ mod midi_fx_menu;
 pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;
+pub mod midi_sync_in;
 pub mod mix_find;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,6 +128,7 @@ pub mod vocal_mixer;
 pub mod vocal_style;
 pub mod vocal_track;
 pub mod vocal_worker;
+mod wait_note;
 pub mod waveform;
 pub mod widgets;
 pub mod window_sync;
@@ -806,6 +808,9 @@ pub struct MeterDisplay {
     pub plugin_failures: u32,
     /// Feedback protection silenced the track's monitored input (`StripMeter::feedback`).
     pub feedback: bool,
+    /// MIDI activity: the loudest note-on velocity its instrument was given lately (0 to 1),
+    /// falling back over about half a second (`StripMeter::midi_velocity`).
+    pub midi: f32,
 }
 
 /// An in-progress mouse gesture in the Edit window.
@@ -1012,6 +1017,11 @@ pub struct SoundApp {
     /// What was played on the MIDI inputs during the playback under way (or the last one), not
     /// recorded: Event › More MIDI › Capture MIDI makes a take of it (`midi_devices::capture`).
     pub(crate) midi_capture: Vec<soundcraft_playback::midi_in::RecordedMidi>,
+    /// Wait for Note: Record was pressed and the take starts at the first note played (the
+    /// length of `midi_capture` when it was last looked at; see `wait_note`).
+    pub(crate) wait_note: Option<usize>,
+    /// MIDI clock and timecode in, MMC out (`midi_sync_in`).
+    pub(crate) sync: midi_sync_in::SyncState,
     /// The last local MIDI take as recorded (events as heard, and where they go), for a remote
     /// recorder to send to the booth (`net_ui`).
     pub(crate) last_midi_take: Option<(soundcraft_engine::midi_record::MidiTake, Vec<soundcraft_engine::midi_record::RecordedEvent>)>,
@@ -1275,6 +1285,8 @@ impl SoundApp {
             learn_menu: None,
             learn_switches: std::collections::HashMap::new(),
             midi_rec: Vec::new(),
+            wait_note: None,
+            sync: midi_sync_in::SyncState::default(),
             midi_loop_preview: None,
             midi_rec_lost_at: 0,
             midi_capture: Vec::new(),
@@ -1806,6 +1818,7 @@ impl SoundApp {
     }
 
     pub(crate) fn stop_play(&mut self) {
+        wait_note::cancel(self);
         let counting = self.countoff_status().is_some();
         self.countoff = None;
         if let Some(p) = &self.player {
@@ -2890,7 +2903,7 @@ impl SoundApp {
                         if !self.record_locked() {
                             self.stop_play();
                         }
-                    } else {
+                    } else if !wait_note::cancel(self) && !wait_note::begin(self) {
                         self.start_recording(countoff);
                     }
                 }
@@ -2987,6 +3000,7 @@ impl SoundApp {
             for (id, m) in &snap.tracks {
                 let d = self.meters.entry(*id).or_default();
                 feed_meter(d, m.peak, m.mean_square(), m.gain_reduction_db, dt, ballistics);
+                d.midi = (d.midi - dt * 2.0).max(f32::from(m.midi_velocity) / 127.0).clamp(0.0, 1.0);
                 if m.feedback != d.feedback {
                     d.feedback = m.feedback;
                     if m.feedback {
@@ -3108,6 +3122,7 @@ impl SoundApp {
             midi_devices::preview_loop(self);
         } else {
             midi_devices::collect_capture(self);
+            wait_note::tick(self);
         }
         self.poll_measure();
         if self.measuring.is_some() {
@@ -3124,6 +3139,7 @@ impl SoundApp {
         midi_devices::tick(self);
         surfaces::tick(self);
         midi_learn::tick(self);
+        midi_sync_in::tick(self);
         scout::poll(self, ctx);
         // The band's Library can change without an edit (a reload): it is checked too.
         let band_lib = self.engine.band_library();

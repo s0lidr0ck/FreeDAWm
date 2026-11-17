@@ -11,6 +11,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", "", None),
     ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
     ("ui.midi_undo_pass", "Undo Last Pass", "Event > More MIDI > Undo Last Pass", None),
+    ("ui.midi_erase_held", "Erase Held Notes", "Event > More MIDI > Erase Held Notes", None),
     ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
@@ -802,6 +803,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("options.momentary_solo", "options.momentary_solo"),
     ("options.arm_follows_selection", soundcraft_engine::cmd::ARM_FOLLOWS_SELECTION),
     ("options.record_lock", soundcraft_engine::cmd::RECORD_LOCK),
+    ("options.wait_for_note", "options.wait_for_note"),
     ("options.input_only_monitoring", soundcraft_mix::INPUT_ONLY_MONITORING),
     ("options.dynamic_transport", "options.dynamic_transport"),
     ("options.suspend_on_silence", "options.suspend_on_silence"),
@@ -1214,6 +1216,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.midi_undo_pass" {
         return Some(crate::midi_devices::undo_last_pass(app));
+    }
+    if id == "ui.midi_erase_held" {
+        return Some(crate::midi_devices::erase_held_notes(app));
     }
     if id == "ui.quantize_audio" {
         app.dialogs.open = Some(crate::dialogs::Dialog::QuantizeAudio { strength: 100.0, swing: 0.0 });

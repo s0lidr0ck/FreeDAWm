@@ -266,6 +266,39 @@ pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, St
     Ok(serde_json::json!({"pass": pass}))
 }
 
+/// Event › More MIDI › Erase Held Notes (while loop recording MIDI): the keys held now are taken
+/// out of the take so far, every note of theirs in the finished passes and the one under way
+/// (the held keys too: they are not recorded), and what plays follows. Keys are told apart by
+/// channel and pitch. The take spilled for crash recovery still has them.
+pub(crate) fn erase_held_notes(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    if !app.engine.transport.recording || app.midi_loop_preview.is_none() {
+        return Err("Erase Held Notes works while loop recording MIDI: hold the keys whose notes should go.".into());
+    }
+    collect(app);
+    let is_on = |m: [u8; 3]| m[0] & 0xF0 == 0x90 && m[2] > 0;
+    let is_note = |m: [u8; 3]| matches!(m[0] & 0xF0, 0x80 | 0x90);
+    let key = |m: [u8; 3]| (m[0] & 0x0F, m[1] & 0x7F);
+    let mut held: Vec<(u8, u8)> = Vec::new();
+    for e in &app.midi_rec {
+        if is_on(e.msg) {
+            if !held.contains(&key(e.msg)) {
+                held.push(key(e.msg));
+            }
+        } else if is_note(e.msg) {
+            held.retain(|k| *k != key(e.msg));
+        }
+    }
+    if held.is_empty() {
+        return Err("No key is held: hold the keys whose notes should go, then Erase Held Notes.".into());
+    }
+    app.midi_rec.retain(|e| !(is_note(e.msg) && held.contains(&key(e.msg))));
+    let upto = app.midi_loop_preview.as_ref().map_or(0, soundcraft_engine::midi_record::LoopPreview::shown);
+    show_passes(app, upto);
+    let names: Vec<String> = held.iter().map(|(_, p)| soundcraft_midi::note_name(*p)).collect();
+    app.ui.status = format!("Erased {} from the take", names.join(", "));
+    Ok(serde_json::json!({"erased": held.iter().map(|(c, p)| serde_json::json!({"channel": c + 1, "pitch": p})).collect::<Vec<_>>()}))
+}
+
 /// The take as recorded so far (to `end`), with the plan's start, loop and punch.
 fn take_for(app: &SoundApp, plan: &soundcraft_engine::io::Recording, end: soundcraft_time::Samples) -> soundcraft_engine::midi_record::MidiTake {
     soundcraft_engine::midi_record::MidiTake {
@@ -405,14 +438,18 @@ fn sync_destination(s: &soundcraft_model::Session) -> Option<String> {
 /// the port they go to (`setup.midi_beat_clock`).
 fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::midi_out::OutPortInfo]) {
     let s = app.engine.session();
-    let (mut clock, mut mtc) = (s.edit.flag("midi.beat_clock"), s.edit.flag("midi.beat_clock.mtc"));
+    let (mut clock, mut mtc, mut mmc) = (s.edit.flag("midi.beat_clock"), s.edit.flag("midi.beat_clock.mtc"), s.edit.flag("midi.mmc_out"));
     let dest = sync_destination(s).unwrap_or_default();
+    let (mode, source) = crate::midi_sync_in::sync_in_mode(s);
+    let (mode, source) = (mode.to_string(), source.unwrap_or_default().to_string());
     ui.horizontal_wrapped(|ui| {
         ui.label("Sync out:");
         let mut changed = false;
         changed |=
             ui.checkbox(&mut clock, "MIDI clock").on_hover_text("24 clocks a quarter note with Start, Stop, Continue and Song Position").changed();
         changed |= ui.checkbox(&mut mtc, "MIDI timecode").on_hover_text("MTC quarter frames at the session's frame rate").changed();
+        changed |=
+            ui.checkbox(&mut mmc, "MMC").on_hover_text("MIDI Machine Control: Play, Stop, Record and Locate as the transport does them").changed();
         let mut to = dest.clone();
         egui::ComboBox::from_id_salt("midi-sync-dest").selected_text(if to.is_empty() { "Choose a port".to_string() } else { to.clone() }).show_ui(
             ui,
@@ -423,7 +460,7 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
             },
         );
         if changed || to != dest {
-            let mut p = json!({"enabled": clock, "mtc": mtc});
+            let mut p = json!({"enabled": clock, "mtc": mtc, "mmc": mmc});
             if !to.is_empty() {
                 p["destination"] = json!(to);
             }
@@ -431,9 +468,44 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
                 app.ui.status = e;
             }
             // Chosen for sync: the port is enabled, as one chosen for a track is.
-            if (clock || mtc) && !to.is_empty() && app.ui.midi_outputs.get(&to) == Some(&false) {
+            if (clock || mtc || mmc) && !to.is_empty() && app.ui.midi_outputs.get(&to) == Some(&false) {
                 set_output_enabled(app, &to, true);
             }
+        }
+    });
+    // Following another device's clock or timecode.
+    let inputs: Vec<String> = app.midi_inputs.as_ref().map(|m| m.ports().into_iter().map(|p| p.name).collect()).unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Sync in:");
+        let (mut m, mut src) = (mode.clone(), source.clone());
+        egui::ComboBox::from_id_salt("midi-sync-in")
+            .selected_text(match m.as_str() {
+                "clock" => "MIDI clock",
+                "mtc" => "MIDI timecode",
+                _ => "Off",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut m, "off".to_string(), "Off");
+                ui.selectable_value(&mut m, "clock".to_string(), "MIDI clock")
+                    .on_hover_text("Start, Stop, Continue and Song Position run the transport");
+                ui.selectable_value(&mut m, "mtc".to_string(), "MIDI timecode").on_hover_text("The transport chases the timecode coming in");
+            });
+        egui::ComboBox::from_id_salt("midi-sync-in-port").selected_text(if src.is_empty() { "Any input".to_string() } else { src.clone() }).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut src, String::new(), "Any input");
+                for n in &inputs {
+                    ui.selectable_value(&mut src, n.clone(), n);
+                }
+            },
+        );
+        if let Some(bpm) = app.sync.follower.tempo().filter(|_| m == "clock") {
+            ui.label(format!("{bpm:.1} bpm"));
+        }
+        if (m != mode || src != source)
+            && let Err(e) = app.run("setup.midi_beat_clock", json!({"sync_in": m, "source": src}))
+        {
+            app.ui.status = e;
         }
     });
 }
@@ -1091,6 +1163,56 @@ pub(crate) mod tests {
         assert!(app.run("ui.midi_undo_pass", json!({})).is_err(), "not while stopped");
         app.run("edit.undo", json!({})).unwrap();
         assert!(pitches(&app).is_empty());
+    }
+
+    #[test]
+    fn held_keys_are_erased_from_every_pass_while_loop_recording() {
+        use soundcraft_playback::midi_in::{RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        assert!(app.run("ui.midi_erase_held", json!({})).is_err(), "not while stopped");
+        start_take(&mut app);
+        app.engine.transport.recording = true;
+        let plan = soundcraft_engine::io::Recording {
+            start: 0,
+            pass: Some(96_000),
+            punch: None,
+            rate: 0,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: Some(0),
+            punches: Vec::new(),
+        };
+        app.take_plan = Some(plan.clone());
+        let ev = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };
+        // Kick and hat in pass 1, the hat again in pass 2, then the hat key held down in pass 3.
+        app.midi_rec = vec![
+            ev(1_000, [0x90, 36, 100], 0),
+            ev(2_000, [0x80, 36, 0], 0),
+            ev(10_000, [0x90, 42, 100], 0),
+            ev(11_000, [0x80, 42, 0], 0),
+            ev(20_000, [0x90, 42, 90], 1),
+            ev(21_000, [0x80, 42, 0], 1),
+            ev(50_000, [0x90, 42, 80], 2),
+        ];
+        show_passes(&mut app, 2);
+        let pitches = |app: &SoundApp| -> Vec<u8> {
+            let tr = app.engine.session().track(TrackId(t)).unwrap();
+            tr.clips().iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| n.pitch)).collect()
+        };
+        assert_eq!(pitches(&app), vec![36, 42, 42]);
+        let r = app.run("ui.midi_erase_held", json!({})).unwrap();
+        assert_eq!(r["erased"][0]["pitch"], 42);
+        assert_eq!(pitches(&app), vec![36], "the held key's notes are gone from what plays");
+        // Let go: its note-off has no note; nothing comes back at Stop.
+        app.midi_rec.push(ev(60_000, [0x80, 42, 0], 2));
+        assert!(app.run("ui.midi_erase_held", json!({})).is_err(), "nothing held now");
+        lift_preview(&mut app);
+        app.engine.transport.recording = false;
+        finish_take(&mut app, &plan, 250_000);
+        assert_eq!(pitches(&app), vec![36]);
     }
 
     #[test]

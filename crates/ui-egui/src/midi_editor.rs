@@ -1247,6 +1247,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let ghost_notes = midi_ghosts::shown(app, &s, cid);
     let ghost_rects = midi_ghosts::rects(&ghost_notes, &x_of, &y_of, row_h);
     midi_ghosts::draw(&notes_p, &ghost_notes, &ghost_rects);
+    // The take the track is recording, drawn as it is played (it becomes a clip at Stop).
+    if let Some(tr) = s.track(track) {
+        let rec = Tokens::current().rec;
+        for (st, ln, p) in crate::live_midi::take_in_ticks(app, &s, tr, base_tick) {
+            let r = note_rect(st, ln, i32::from(p));
+            if r.intersects(roll) {
+                notes_p.rect(r, 2.0, rec.gamma_multiply(0.75), Stroke::new(1.0, rec), StrokeKind::Inside);
+            }
+        }
+    }
     let sibling_notes = midi_ghosts::siblings(&s, cid);
     let sibling_rects = midi_ghosts::rects(&sibling_notes, &x_of, &y_of, row_h);
     let others = app.midi.others.clone();

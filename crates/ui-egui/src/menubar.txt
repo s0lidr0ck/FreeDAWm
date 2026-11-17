@@ -469,6 +469,7 @@ Event > More MIDI > Input Quantize = Event > MIDI Operations > Input Quantize...
 Event > More MIDI > Step Input... = @window.step_input
 Event > More MIDI > Capture MIDI = @ui.capture_midi [desktop]
 Event > More MIDI > Undo Last Pass = @ui.midi_undo_pass [desktop]
+Event > More MIDI > Erase Held Notes = @ui.midi_erase_held [desktop]
 Event > More MIDI > Restore Performance = Event > MIDI Operations > Restore Performance...
 Event > More MIDI > Flatten Performance = Event > MIDI Operations > Flatten Performance...
 Event > More MIDI > ---
@@ -556,6 +557,7 @@ Options > Record Mode > Keep Takes as Lanes
 Options > Record Mode > New Playlist per Take
 Options > Recording > Arm Follows Selection = @options.arm_follows_selection
 Options > Recording > Lock Record = @options.record_lock
+Options > Recording > Wait for Note = @options.wait_for_note
 Options > Recording > Input Only Monitoring = @options.input_only_monitoring
 Options > Recording > Feedback Protection = @options.feedback_protection
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll

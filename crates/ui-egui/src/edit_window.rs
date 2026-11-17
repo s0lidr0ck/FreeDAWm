@@ -1565,6 +1565,23 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
     #[cfg(not(target_arch = "wasm32"))]
     let md = crate::net_ui::with_remote_level(app, track, md);
     header_meter(ui, Rect::from_min_max(pos2(head.max.x - 8.0, head.min.y + 1.0), pos2(head.max.x, head.max.y - 1.5)), &md, track.channels() >= 2);
+    if track.kind.is_midi() {
+        midi_meter(ui, Rect::from_min_max(pos2(head.max.x - 12.0, head.min.y + 1.0), pos2(head.max.x - 9.0, head.max.y - 1.5)), md.midi);
+    }
+}
+
+/// An instrument or MIDI track's MIDI activity beside its level meter: a bar as high as the
+/// velocity of the notes its instrument is given (clips, live input, routed tracks).
+fn midi_meter(ui: &Ui, r: Rect, velocity: f32) {
+    let t = Tokens::current();
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, Color32::BLACK);
+    let inner = r.shrink(0.5);
+    let col = t.accent;
+    p.rect_filled(inner, 0.0, col.gamma_multiply(0.15));
+    if velocity > 0.01 {
+        p.rect_filled(inner.with_min_y(inner.max.y - inner.height() * velocity.clamp(0.0, 1.0)), 0.0, col);
+    }
 }
 
 /// A small menu arrow, pointing down, or right for a closed folder.

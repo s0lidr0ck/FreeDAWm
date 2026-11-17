@@ -104,6 +104,21 @@ fn lit(app: &SoundApp, port: Option<&str>) -> bool {
     names.iter().filter(|(_, n)| port.is_none_or(|p| p == n)).any(|(slot, _)| recent(*slot))
 }
 
+/// The notes of `track`'s live take as the MIDI editor draws them: (start, length) in ticks from
+/// `base_tick` (the edited clip's start) and the pitch; a key still held reaches the playhead.
+pub fn take_in_ticks(app: &SoundApp, s: &Session, track: &Track, base_tick: i64) -> Vec<(i64, i64, u8)> {
+    let Some(take) = live_take(app, track) else { return Vec::new() };
+    let sr = s.sample_rate;
+    let tick = |at: Samples| s.tempo.samples_to_ticks(at, sr).saturating_sub(base_tick);
+    take.notes
+        .iter()
+        .map(|n| {
+            let a = tick(n.from);
+            (a, tick(n.to.unwrap_or(take.end).max(n.from)).saturating_sub(a).max(1), n.pitch)
+        })
+        .collect()
+}
+
 /// Draws `track`'s live MIDI take over its lane.
 pub fn draw(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track, tl: Rect, lane: Rect) {
     let Some(take) = live_take(app, track) else { return };
@@ -172,6 +187,24 @@ mod tests {
         let later = live_take(&app, &track).unwrap();
         assert_eq!(later.end, 96_000, "it grows with the playhead");
         assert_eq!(later.notes, vec![LiveNote { pitch: 60, from: 50_000, to: Some(70_000) }, LiveNote { pitch: 64, from: 80_000, to: None }]);
+    }
+
+    #[test]
+    fn the_editor_gets_the_take_in_ticks_from_the_clips_start() {
+        let mut app = armed_piano();
+        let track = app.engine.session().tracks[0].clone();
+        app.engine.transport.recording = true;
+        app.engine.transport.playing = true;
+        app.record_start = 0;
+        // 120 bpm at 48 kHz: a quarter (960 ticks) is 24,000 samples.
+        app.engine.transport.position = 72_000;
+        let slot = soundcraft_playback::midi_in::TYPING_SLOT as u8;
+        app.midi_rec.push(RecordedMidi { at: 24_000, port: slot, msg: [0x90, 60, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 36_000, port: slot, msg: [0x80, 60, 0], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 48_000, port: slot, msg: [0x90, 64, 100], pass: 0 });
+        let s = app.engine.session().clone();
+        // The clip being edited starts on beat 2 (tick 960).
+        assert_eq!(take_in_ticks(&app, &s, &track, 960), vec![(0, 480, 60), (960, 960, 64)], "the held key reaches the playhead");
     }
 
     #[test]

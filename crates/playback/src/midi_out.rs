@@ -59,6 +59,8 @@ pub struct OutPortInfo {
 struct Sender {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// Whole messages from the UI thread, sent as they come (MIDI Machine Control out).
+    now: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
 impl Drop for Sender {
@@ -140,6 +142,12 @@ impl MidiOutputs {
         }
     }
 
+    /// Sends `bytes` (one whole message, SysEx too) to the port named `name` at once, from the UI
+    /// thread, not timed with the audio (MIDI Machine Control out); false when it is not open.
+    pub fn send_now(&self, name: &str, bytes: &[u8]) -> bool {
+        self.ports.iter().find(|p| p.info.name == name).and_then(|p| p.sender.as_ref()).is_some_and(|s| s.now.send(bytes.to_vec()).is_ok())
+    }
+
     /// Rescans when the last scan is 2 s old (or there was none).
     pub fn tick(&mut self, now: Instant) {
         if self.last_scan.is_none_or(|t| now.saturating_duration_since(t) >= crate::midi_in::RESCAN_EVERY) {
@@ -204,17 +212,19 @@ impl MidiOutputs {
         let slot = self.hub.open(name).ok_or_else(|| "too many MIDI output ports open".to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
         let (hub, flag) = (self.hub, Arc::clone(&stop));
-        let thread = std::thread::Builder::new().name(format!("MIDI out {name}")).spawn(move || run_sender(hub, slot, conn, &flag)).map_err(|e| {
-            hub.close(slot);
-            e.to_string()
-        })?;
-        Ok(Sender { stop, thread: Some(thread) })
+        let (now, rx) = std::sync::mpsc::channel();
+        let thread =
+            std::thread::Builder::new().name(format!("MIDI out {name}")).spawn(move || run_sender(hub, slot, conn, &flag, &rx)).map_err(|e| {
+                hub.close(slot);
+                e.to_string()
+            })?;
+        Ok(Sender { stop, thread: Some(thread), now })
     }
 }
 
 /// A sender thread: sends what is queued for `slot` when it is due, until told to stop; then
 /// lets go of every note it left on and gives the slot back.
-fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, stop: &AtomicBool) {
+fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, stop: &AtomicBool, now_rx: &std::sync::mpsc::Receiver<Vec<u8>>) {
     let mut pending: Vec<(u64, [u8; 3])> = Vec::with_capacity(external_midi::OUT_RING);
     let mut held = [[0u64; 2]; 16];
     let send = |conn: &mut Box<dyn MidiSend>, held: &mut [[u64; 2]; 16], m: [u8; 3]| {
@@ -248,6 +258,9 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
         }
         // Stable: messages due together keep the order they were played in.
         pending.sort_by_key(|e| e.0);
+        while let Ok(bytes) = now_rx.try_recv() {
+            conn.send(&bytes);
+        }
         let now = hub.now_us();
         let due = pending.partition_point(|e| e.0 <= now);
         for (_, m) in pending.drain(..due) {
@@ -480,6 +493,20 @@ mod tests {
         assert_eq!(sent.len(), 5 + 32);
         assert!(!hub.send(key, 0, [0x90, 1, 1]), "the slot is free again");
         assert_eq!(outs.choices().get("Out Test Synth"), Some(&false));
+    }
+
+    #[test]
+    fn a_whole_message_goes_out_at_once_from_the_ui() {
+        let fake = FakeOutBackend::with_ports(&["Out Test Deck"]);
+        let mut outs = MidiOutputs::new(fake.boxed(), BTreeMap::new());
+        outs.rescan();
+        let play = [0xF0, 0x7F, 0x7F, 0x06, 0x02, 0xF7];
+        assert!(!outs.send_now("Out Test Deck", &play), "not open");
+        outs.set_enabled("Out Test Deck", true);
+        assert!(outs.send_now("Out Test Deck", &play));
+        wait_for(|| !fake.sent("Out Test Deck").is_empty());
+        assert_eq!(fake.sent("Out Test Deck"), vec![play.to_vec()]);
+        outs.set_enabled("Out Test Deck", false);
     }
 
     #[test]

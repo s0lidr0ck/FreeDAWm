@@ -37,6 +37,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |e, p| toggle_flag(e, p, crate::auto_arm::FLAG)
         ),
+        cmd!(
+            noundo "options.wait_for_note",
+            "Wait for Note",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — Record with the transport stopped waits, and the take starts at the first note played on an armed MIDI or instrument track's input",
+            always,
+            |e, p| toggle_flag(e, p, "options.wait_for_note")
+        ),
         option!("options.auto_spot_clips", "Auto-Spot Clips", "options.auto_spot_clips"),
         option!("options.keyboard_lock", "Edit/Tool Mode Keyboard Lock", "options.edit_tool_mode_keyboard_lock"),
         option!("options.calibration_mode", "Calibration Mode", "options.calibration_mode"),
@@ -117,7 +126,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let devices: Vec<String> = text(&s.edit, "midi.studio.devices").map(|t| t.split('|').map(str::to_string).collect()).unwrap_or_default();
             Ok(json!({"devices": devices}))
         }),
-        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), offset?: samples (later; negative earlier), destination?: output port name} — sync out to that port (`soundcraft_mix::midi_sync`)", always, |e, p| {
+        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), mmc?: bool (MIDI Machine Control out), offset?: samples (later; negative earlier), destination?: output port name, sync_in?: off|clock|mtc (follow MIDI clock or timecode coming in), source?: input port name ('' for any)} — sync out to that port (`soundcraft_mix::midi_sync`) and in from that one", always, |e, p| {
             let s = e.session_mut();
             if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock", v);
@@ -125,11 +134,23 @@ pub fn specs() -> Vec<CommandSpec> {
             if let Some(v) = p.get("mtc").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock.mtc", v);
             }
+            if let Some(v) = p.get("mmc").and_then(Value::as_bool) {
+                s.edit.set_flag("midi.mmc_out", v);
+            }
+            if let Some(m) = str_param(p, "sync_in") {
+                if !matches!(m, "off" | "clock" | "mtc") {
+                    return Err(bad("setup.midi_beat_clock", format!("unknown sync_in `{m}`: off, clock or mtc")));
+                }
+                set_text(&mut s.edit, "midi.sync_in", Some(m));
+            }
+            if let Some(src) = p.get("source").and_then(Value::as_str) {
+                set_text(&mut s.edit, "midi.sync_in.source", Some(src));
+            }
             store_value(&mut s.edit, p, "offset", "midi.beat_clock.offset", -1e7, 1e7);
             if let Some(d) = str_param(p, "destination") {
                 set_text(&mut s.edit, "midi.beat_clock.destination", Some(d));
             }
-            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
+            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "mmc": s.edit.flag("midi.mmc_out"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination"), "sync_in": text(&s.edit, "midi.sync_in").unwrap_or_else(|| "off".into()), "source": text(&s.edit, "midi.sync_in.source")}))
         }),
         cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...], thin?: bool} — filtered kinds are not recorded; `thin` keeps only the controller points that shape a move (the rest become ramps)", always, midi_filter),
         cmd!(noundo "setup.midi_input_devices", "MIDI Input Devices...", ["Setup", "MIDI"], None, "{enable?: [names], disable?: [names]}", always, midi_inputs),

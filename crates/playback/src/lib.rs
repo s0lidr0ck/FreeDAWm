@@ -40,6 +40,7 @@ pub mod pw;
 pub mod record;
 mod resample;
 pub mod stream;
+pub mod sync_in;
 
 pub use devices::AudioConfig;
 pub use measure::{Latency, estimate};

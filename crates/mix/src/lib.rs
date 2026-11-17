@@ -239,6 +239,9 @@ pub struct StripMeter {
     pub instrument: [f32; 8],
     /// Feedback protection silenced this strip's monitored input (see [`FEEDBACK_SECONDS`]).
     pub feedback: bool,
+    /// The loudest note-on velocity its instrument was given (clips, live input, routed MIDI
+    /// tracks, the Band), 0 when none: the track's MIDI activity meter. Held like the peaks.
+    pub midi_velocity: u8,
 }
 
 /// Live values of one chain module for the last block. A module with no instance (missing, not
@@ -340,6 +343,12 @@ impl StripMeter {
         self.llm_bypassed = o.llm_bypassed;
         self.instrument = o.instrument;
         self.feedback = o.feedback;
+        self.midi_velocity = o.midi_velocity;
+    }
+
+    /// The block's MIDI activity: with `hold` the loudest since the reader last took it.
+    fn hear_midi(&mut self, velocity: u8, hold: bool) {
+        self.midi_velocity = if hold { self.midi_velocity.max(velocity) } else { velocity };
     }
 
     /// Measures one block. With `hold`, the peaks and gain reduction are the maxima of this block
@@ -404,6 +413,7 @@ impl StripMeter {
         self.llm_bypassed = o.llm_bypassed;
         self.instrument = o.instrument;
         self.feedback = o.feedback;
+        self.midi_velocity = self.midi_velocity.max(o.midi_velocity);
     }
 
     /// Forgets the peaks and gain reduction (after a reader took them), keeping the storage.
@@ -413,6 +423,7 @@ impl StripMeter {
         self.energy = [0.0; 2];
         self.frames = 0;
         self.gain_reduction_db = 0.0;
+        self.midi_velocity = 0;
     }
 }
 
@@ -494,6 +505,18 @@ struct PluginSlot {
     wet_to: f32,
     /// Frames in a row both its input and its output were silent (Suspend Plug-ins on Silence).
     quiet: usize,
+    /// The loudest note-on velocity handed to it since the strip last read it (the track's MIDI
+    /// activity meter, `StripMeter::midi_velocity`).
+    heard: u8,
+}
+
+impl PluginSlot {
+    /// Notes a message on its way in for the MIDI activity meter.
+    fn hear(&mut self, msg: [u8; 3]) {
+        if msg[0] & 0xF0 == 0x90 {
+            self.heard = self.heard.max(msg[2] & 0x7F);
+        }
+    }
 }
 
 struct Strip {
@@ -595,6 +618,8 @@ struct Strip {
     inst_outs: inst_outs::InstOuts,
     /// The instrument's readouts of the last block it rendered (NaN without one).
     inst_readouts: [f32; 8],
+    /// The loudest note-on velocity its instrument was given in the last block (0: none).
+    midi_vel: u8,
     /// This strip's Scout PRE/POST taps while a capture runs (see [`scout`]).
     scout: Option<Box<scout::StripTaps>>,
     /// Where the strip's output goes, resolved in `sync` (no name lookups while rendering).
@@ -794,6 +819,7 @@ impl Strip {
             released: Vec::new(),
             inst_outs: inst_outs::InstOuts::default(),
             inst_readouts: [f32::NAN; 8],
+            midi_vel: 0,
             scout: None,
             dest: Dest::None,
             in_span: None,
@@ -1163,6 +1189,7 @@ impl SlotCtx<'_> {
             wet: 1.0,
             wet_to: 1.0,
             quiet: 0,
+            heard: 0,
         })
     }
 }
@@ -2681,6 +2708,7 @@ impl MixEngine {
                 m.modules.clone_from(&strip.mods);
                 m.analysis.clone_from(&strip.analysis);
                 m.instrument = strip.inst_readouts;
+                m.hear_midi(strip.midi_vel, self.meters_held);
             }
         }
         self.llm = scope;
@@ -2843,6 +2871,7 @@ impl MixEngine {
         m.modules.clone_from(&strip.mods);
         m.analysis.clone_from(&strip.analysis);
         m.instrument = strip.inst_readouts;
+        m.hear_midi(strip.midi_vel, self.meters_held);
         let src_fmt = strip_format(t, strip.buf.len());
         let law = self.pan_law;
         // Automation is read where the audio in the buffer is on the timeline (see `apos` in
@@ -3579,6 +3608,7 @@ fn process_strip(
                     strip.failures.record(SlotKey::Instrument);
                 }
                 read_readouts(&*inst.plugin, &mut strip.inst_readouts);
+                strip.midi_vel = std::mem::take(&mut inst.heard);
                 // A let-go release runs until it has been silent a while (a quiet gap in it is not
                 // its end); one that outlasts its time is faded out over this block and cut
                 // (nothing is left frozen in the instrument). What the inserts, sends and auxes
@@ -5209,6 +5239,7 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             if (on >= pos && on < end) || chased {
                 let offset = usize::try_from(on - pos).unwrap_or(0);
                 let retrigger = sounding_across(n0, n.pitch, ch, on);
+                inst.hear([0x90, n.pitch, n.velocity]);
                 if chans {
                     if retrigger {
                         inst.plugin.midi_raw(offset, [0x80 | ch, n.pitch & 0x7F, 0]);
@@ -5306,6 +5337,7 @@ fn deliver_live_midi(midi: &LiveMidi, f: MidiFilter, inst: &mut PluginSlot, held
             && let Some(msg) = f.transform.apply(e.msg)
         {
             held.track(e.port, msg);
+            inst.hear(msg);
             inst.plugin.midi_raw(e.offset as usize, msg);
         }
     }
@@ -5313,6 +5345,7 @@ fn deliver_live_midi(midi: &LiveMidi, f: MidiFilter, inst: &mut PluginSlot, held
 
 fn deliver_module_midi(events: &StripMidi, inst: &mut PluginSlot, held: &mut Vec<(u8, u8, u8)>) {
     for e in events.events() {
+        inst.hear(e.msg);
         inst.plugin.midi_raw(e.offset as usize, e.msg);
         let key = (e.src, e.msg[0] & 0x0F, e.msg[1] & 0x7F);
         match e.msg[0] & 0xF0 {
@@ -7350,6 +7383,7 @@ mod tests {
             wet: 1.0,
             wet_to: 1.0,
             quiet: 0,
+            heard: 0,
         };
         (slot, ins, tr)
     }
@@ -7469,6 +7503,7 @@ mod tests {
             wet: 1.0,
             wet_to: 1.0,
             quiet: 0,
+            heard: 0,
         };
         apply_params(&mut slot, &ins, &tr, Some(ins.id), 0);
         assert_eq!(slot.plugin.param("outGain"), Some(0.25));
@@ -7564,6 +7599,7 @@ mod tests {
             wet: 1.0,
             wet_to: 1.0,
             quiet: 0,
+            heard: 0,
         };
         run_blocks(&mut slot, &ins, &tr);
         assert_eq!(slot.plugin.param("depth"), Some(0.9));
@@ -9563,6 +9599,29 @@ mod tests {
         render_block(&mut eng, &s, 0);
         render_block(&mut eng, &s, 0);
         assert!(take_heard(&heard).iter().all(|h| h.2[0] & 0xF0 != 0x80), "no second note-off");
+    }
+
+    #[test]
+    fn the_strip_meter_shows_the_velocity_its_instrument_was_given() {
+        let (s, mut eng, _heard) = armed_with_clip_note();
+        eng.monitor_only = true;
+        play_live(&mut eng, true, &[(1, 0, [0x91, 60, 77])]);
+        render_block(&mut eng, &s, 4096);
+        let id = s.tracks[0].id;
+        assert_eq!(eng.meters.get(&id).map(|m| m.midi_velocity), Some(77), "a played key");
+        eng.live_midi.clear();
+        render_block(&mut eng, &s, 4096);
+        assert_eq!(eng.meters.get(&id).map(|m| m.midi_velocity), Some(0), "nothing new in the next block");
+        // The clip's note (velocity 100) as playback starts on it; held for a slow reader.
+        eng.monitor_only = false;
+        eng.meters_held = true;
+        render_block(&mut eng, &s, 0);
+        render_block(&mut eng, &s, 512);
+        assert_eq!(eng.meters.get(&id).map(|m| m.midi_velocity), Some(100), "a clip's note, held");
+        let mut m = StripMeter::default();
+        m.merge_from(eng.meters.get(&id).unwrap());
+        m.clear_peaks();
+        assert_eq!(m.midi_velocity, 0, "taken by the reader");
     }
 
     #[test]

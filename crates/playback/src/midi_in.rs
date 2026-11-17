@@ -211,6 +211,26 @@ pub struct MidiHub {
     /// Claimed and learnt messages, and MIDI Machine Control, for the UI thread (several ports'
     /// driver threads push: a multi-producer ring).
     control: soundcraft_mix::external_midi::OutRing,
+    /// MIDI clock and timecode in: the sync messages the ports get, for the UI thread
+    /// ([`MidiHub::take_sync`]), while [`MidiHub::set_sync_in`] is on.
+    sync: soundcraft_mix::external_midi::OutRing,
+    sync_on: AtomicBool,
+}
+
+/// A sync message handed to the UI thread by [`MidiHub::take_sync`]: the port slot, when it came
+/// (µs on the hub's clock) and its bytes (`bytes[..len]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncMsg {
+    pub slot: u8,
+    pub at: u64,
+    pub bytes: [u8; 10],
+    pub len: usize,
+}
+
+impl SyncMsg {
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or(&[])
+    }
 }
 
 /// One message handed to the UI thread by [`MidiHub::take_control`].
@@ -259,6 +279,8 @@ impl MidiHub {
             claims: (0..MAX_MIDI_PORTS * CLAIM_BITS / 64).map(|_| AtomicU64::new(0)).collect(),
             learning: AtomicBool::new(false),
             control: soundcraft_mix::external_midi::OutRing::new(1024),
+            sync: soundcraft_mix::external_midi::OutRing::new(1024),
+            sync_on: AtomicBool::new(false),
         })
     }
 
@@ -309,6 +331,32 @@ impl MidiHub {
     }
 
     /// MIDI Thru: record-armed instrument and MIDI tracks play their live input.
+    /// MIDI clock and timecode in on or off: on, the ports' sync messages are kept for
+    /// [`MidiHub::take_sync`].
+    pub fn set_sync_in(&self, on: bool) {
+        self.sync_on.store(on, Ordering::Relaxed);
+    }
+
+    /// UI thread: the sync messages since the last call, oldest first.
+    pub fn take_sync(&self, out: &mut Vec<SyncMsg>) {
+        while let Some((a, b)) = self.sync.pop() {
+            let p = b.to_le_bytes();
+            let (slot, at) = ((a & 0xFF) as u8, a >> 8);
+            let msg = if p[0] == 0xF0 {
+                // A full frame, packed as F0 hr mn sc fr.
+                SyncMsg { slot, at, bytes: [0xF0, 0x7F, 0x7F, 0x01, 0x01, p[1], p[2], p[3], p[4], 0xF7], len: 10 }
+            } else {
+                let len = match p[0] {
+                    0xF2 => 3,
+                    0xF1 => 2,
+                    _ => 1,
+                };
+                SyncMsg { slot, at, bytes: [p[0], p[1], p[2], 0, 0, 0, 0, 0, 0, 0], len }
+            };
+            out.push(msg);
+        }
+    }
+
     pub fn set_thru(&self, on: bool) {
         self.thru.store(on, Ordering::Relaxed);
     }
@@ -557,6 +605,17 @@ impl PortSink {
     pub fn send_at(&self, stamp: u64, bytes: &[u8]) {
         let late = self.hub.offsets.get(self.slot).map_or(0, |o| o.load(Ordering::Relaxed));
         let stamp = stamp.saturating_sub(u64::from(late)).max(1);
+        // MIDI clock and timecode in, for the UI thread (`sync_in`).
+        if crate::sync_in::is_sync(bytes) {
+            if self.hub.sync_on.load(Ordering::Relaxed) {
+                let p = match bytes {
+                    [0xF0, _, _, _, _, hr, mn, sc, fr, ..] => [0xF0, *hr, *mn, *sc, *fr, 0, 0, 0],
+                    _ => [bytes.first().copied().unwrap_or(0), bytes.get(1).copied().unwrap_or(0), bytes.get(2).copied().unwrap_or(0), 0, 0, 0, 0, 0],
+                };
+                self.hub.sync.push((stamp << 8) | (self.slot as u64 & 0xFF), u64::from_le_bytes(p));
+            }
+            return;
+        }
         // MIDI Machine Control: the transport, for the UI thread.
         if let [0xF0, 0x7F, device, 0x06, command, ..] = bytes {
             let (a, b) = ((self.slot as u64 & 0xFF) | (1 << 9), u64::from_le_bytes([*device, *command, 0, 0, 0, 0, 0, 0]));
@@ -878,7 +937,7 @@ mod system {
     fn client() -> Result<midir::MidiInput, String> {
         let mut m = midir::MidiInput::new("FreeDAWm").map_err(|e| e.to_string())?;
         // SysEx comes through (MIDI Machine Control); the clock and active sensing do not.
-        m.ignore(midir::Ignore::TimeAndActiveSense);
+        m.ignore(midir::Ignore::ActiveSense);
         Ok(m)
     }
 
@@ -889,7 +948,7 @@ mod system {
     pub fn open_raw(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
         let mut m = midir::MidiInput::new("FreeDAWm surface").map_err(|e| e.to_string())?;
         // SysEx too (handshakes), but not the clock and active sensing.
-        m.ignore(midir::Ignore::TimeAndActiveSense);
+        m.ignore(midir::Ignore::ActiveSense);
         let port = m.ports().into_iter().find(|p| m.port_name(p).ok().as_deref() == Some(name)).ok_or_else(|| "not found".to_string())?;
         let conn = m
             .connect(
@@ -1091,6 +1150,34 @@ impl MidiBackend for FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_messages_reach_the_ui_only_while_sync_in_is_on() {
+        let hub = MidiHub::new();
+        let sink = PortSink { hub: Arc::clone(&hub), slot: 2 };
+        sink.send_at(100, &[0xFA]);
+        let mut got = Vec::new();
+        hub.take_sync(&mut got);
+        assert!(got.is_empty(), "off: dropped");
+        hub.set_sync_in(true);
+        sink.send_at(200, &[0xF8]);
+        sink.send_at(300, &[0xF2, 4, 1]);
+        sink.send_at(400, &[0xF1, 0x23]);
+        sink.send_at(500, &[0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 2, 3, 4, 0xF7]);
+        hub.take_sync(&mut got);
+        let seen: Vec<(u8, u64, Vec<u8>)> = got.iter().map(|m| (m.slot, m.at, m.bytes().to_vec())).collect();
+        assert_eq!(
+            seen,
+            vec![
+                (2, 200, vec![0xF8]),
+                (2, 300, vec![0xF2, 4, 1]),
+                (2, 400, vec![0xF1, 0x23]),
+                (2, 500, vec![0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 2, 3, 4, 0xF7])
+            ]
+        );
+        // Never played or recorded.
+        assert!(hub.rings[2].pop().is_none());
+    }
 
     #[test]
     fn a_claimed_control_is_handed_over_instead_of_played_and_mmc_too() {
