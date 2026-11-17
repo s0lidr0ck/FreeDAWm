@@ -74,6 +74,7 @@ mod band_lanes;
 pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
 pub mod external_midi;
+pub mod hw_insert;
 mod inst_outs;
 pub mod track_midi;
 use delay_line::DelayLine;
@@ -656,6 +657,9 @@ struct Strip {
     /// before the fader (sized in `sync`; empty otherwise). It is what the track's take records
     /// ([`MixEngine::record_tap`]).
     print: Vec<Vec<f32>>,
+    /// Each Hardware Insert module's send this block: the module, the output path it plays on
+    /// and its channels (sized in `sync`); `used` when the module ran live this block.
+    hw_sends: Vec<HwSend>,
     /// How many chain modules (from the top) the frozen render held last block: a module that
     /// comes back to life (thawed, or a freeze point moved up) starts clean.
     frozen_mods: usize,
@@ -836,6 +840,7 @@ impl Strip {
             llm_dry: Vec::new(),
             bus_in: Vec::new(),
             print: Vec::new(),
+            hw_sends: Vec::new(),
             frozen_mods: 0,
             frozen_inst: false,
             live_tail: 0,
@@ -2068,6 +2073,7 @@ impl MixEngine {
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
                 strip.llm_dry = vec![vec![0.0; mb]; n];
             }
+            sync_hw_sends(strip, t, ch, mb);
             let n = if sidechain::reads_bus(t) { ch } else { 0 };
             if strip.bus_in.len() != n || strip.bus_in.iter().any(|b| b.len() != mb) {
                 strip.bus_in = vec![vec![0.0; mb]; n];
@@ -2364,6 +2370,7 @@ impl MixEngine {
             ports_gone: self.ports_gone,
             looping: self.looping,
             feedback_frames: self.feedback_frames(s),
+            hw_inserts: !self.offline,
         };
         // In levels (`order` sorts them): a strip keyed by another renders after it, each level in
         // parallel. Without sidechains there is one level.
@@ -2528,6 +2535,7 @@ impl MixEngine {
                 ports_gone: self.ports_gone,
                 looping: self.looping,
                 feedback_frames: self.feedback_frames(s),
+                hw_inserts: !self.offline,
             };
             // An aux reads busses that already carry the tracks' compensation delay. An aux
             // without a bus input hears nothing but its own modules; it is compensated as if its
@@ -2735,6 +2743,20 @@ impl MixEngine {
             if !h.is_empty() {
                 fits &= l.set(lmax_m, h.len(), xf);
                 l.process(h, frames);
+            }
+        }
+        // Hardware Inserts' sends go straight out (they are the strip's own round trip, not
+        // the mix's output: no wait for the master's inserts).
+        for st in self.strips.values_mut() {
+            for hs in st.hw_sends.iter_mut() {
+                if !std::mem::take(&mut hs.used) {
+                    continue;
+                }
+                if let Some(out) = self.hw.get_mut(hs.out).filter(|_| hs.out > 0) {
+                    for (o, b) in out.iter_mut().zip(&hs.buf) {
+                        o.iter_mut().zip(b).take(frames).for_each(|(o, x)| *o += *x);
+                    }
+                }
             }
         }
         self.cue_stage(s, frames);
@@ -3283,6 +3305,14 @@ const ROUTED_MIDI: usize = 128;
 /// Source → trim → inserts → (pre-fader copy) → mute/fader for one strip. Independent of other
 /// strips except that aux inputs read `busses`, so non-aux strips can run in parallel.
 /// Live input routed to monitored tracks.
+/// A Hardware Insert's send from a strip ([`hw_insert`]).
+struct HwSend {
+    module: ModuleId,
+    out: usize,
+    buf: Vec<Vec<f32>>,
+    used: bool,
+}
+
 struct LiveInput<'a> {
     input: &'a [Vec<f32>],
     monitor_only: bool,
@@ -3304,6 +3334,19 @@ struct LiveInput<'a> {
     looping: Option<Range>,
     /// Feedback protection: frames of hot input that silence a monitored input; 0 when it is off.
     feedback_frames: usize,
+    /// Hardware Inserts play through the device (a live engine), else pass through.
+    hw_inserts: bool,
+}
+
+/// One send per Hardware Insert module on `t`, `ch` channels of `mb` (off the audio thread's
+/// render: in `sync`, as the strip's other buffers).
+fn sync_hw_sends(strip: &mut Strip, t: &Track, ch: usize, mb: usize) {
+    let mods = || t.mixer.inserts.iter().filter(|i| i.plugin == hw_insert::ID);
+    let same = strip.hw_sends.len() == mods().count()
+        && strip.hw_sends.iter().zip(mods()).all(|(h, i)| h.module == i.id && h.buf.len() == ch && h.buf.iter().all(|b| b.len() == mb));
+    if !same {
+        strip.hw_sends = mods().map(|i| HwSend { module: i.id, out: 0, buf: vec![vec![0.0; mb]; ch], used: false }).collect();
+    }
 }
 
 fn process_strip(
@@ -3784,6 +3827,17 @@ fn process_strip(
                             strip.key_regrow |= !key.delay.set(wait_key, ch, live.xf);
                             key.delay.process(&mut key.buf, frames);
                             slot.plugin.process_with_sidechain(&mut strip.buf, frames, Some(&key.buf));
+                        }
+                        None if live.hw_inserts && ins.plugin == hw_insert::ID => {
+                            // Out of the device and back in (see `hw_insert`).
+                            let out = slot.plugin.param("out").map_or(0, |v| v.max(0.0) as usize);
+                            let path = slot.plugin.param("in").and_then(|v| s.inputs.get(v.max(0.0) as usize));
+                            let (first, width) = path.map_or((usize::MAX, 0), |p| (usize::from(p.first_channel), p.width()));
+                            if let Some(hs) = strip.hw_sends.iter_mut().find(|h| h.module == ins.id) {
+                                hs.out = out;
+                                hs.used = true;
+                                hw_insert::swap_live(&mut strip.buf, &mut hs.buf, live.input, first, width, frames);
+                            }
                         }
                         None => slot.plugin.process(&mut strip.buf, frames),
                     }
@@ -7161,6 +7215,7 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     }
     external_midi::create(id)
         .or_else(|| track_midi::create(id))
+        .or_else(|| hw_insert::create(id))
         .or_else(|| soundcraft_dsp::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
@@ -7878,6 +7933,45 @@ mod tests {
         assert_eq!(first(&s), Some(0));
         s.track_mut(st).unwrap().mixer.delay = 100;
         assert_eq!(first(&s), Some(100));
+    }
+
+    /// A Hardware Insert live: the strip's audio goes out of its output path, and what comes back
+    /// on its input path (here, a loopback in code: the device input is the send of the block
+    /// before, a 512-sample round trip) is what the strip plays on; its latency is the round trip
+    /// it was given, compensated like a plug-in's. Offline it passes through that much later.
+    #[test]
+    fn a_hardware_insert_plays_through_the_device_and_reports_its_round_trip() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.outputs.push(soundcraft_model::OutputPath { name: "To Comp".into(), format: ChannelFormat::Mono, first_channel: 2 });
+        s.inputs.push(soundcraft_model::InputPath { name: "From Comp".into(), format: ChannelFormat::Mono, first_channel: 3 });
+        let mut ins = Insert::new(hw_insert::ID);
+        ins.params.insert("out".into(), 1.0);
+        ins.params.insert("in".into(), (s.inputs.len() - 1) as f32);
+        ins.params.insert("latency".into(), 512.0);
+        s.track_mut(t).unwrap().mixer.add_module(ins.clone(), None).unwrap();
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut out = vec![vec![0.0; 512]; 2];
+        // Four device input channels; the loopback cable runs from output path 1 to input 3.
+        let mut sent = vec![0.0f32; 512];
+        let mut heard = Vec::new();
+        for b in 0..4 {
+            let mut input = vec![vec![0.0; 512]; 4];
+            input[3].copy_from_slice(&sent);
+            eng.input = input;
+            eng.render(&s, b * 512, 512, &mut out);
+            sent.copy_from_slice(&eng.hw[1][0]);
+            heard.push(out[0][100]);
+        }
+        assert!(sent.iter().all(|x| (x - 0.5).abs() < 1e-6), "the send carries the strip's audio");
+        assert_eq!(heard[0], 0.0, "the first block's return is the silence sent before it");
+        assert!(heard[2] > 0.3, "then the return is heard: {heard:?}");
+        assert_eq!(eng.track_latency, 512, "the round trip is compensated");
+        // Offline: no gear, the input passes through, the round trip later.
+        let rendered = render_range(&s, Range::new(0, 2048), 512);
+        let mut plain = s.clone();
+        plain.track_mut(t).unwrap().mixer.inserts.clear();
+        let want = render_range(&plain, Range::new(0, 2048), 512);
+        assert_eq!(rendered[0], want[0], "offline it is the dry mix, aligned");
     }
 
     /// A send reaches a hardware output as well as a bus; its pan can follow the main pan; and

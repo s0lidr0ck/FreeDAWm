@@ -86,7 +86,7 @@ K-system scales, and the master a loudness meter.
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** (not reached in round three): designed below (Design: multi-mono processing): one mono instance per channel in a slot, linked by default, each channel its own lanes when unlinked; about 6–10 h |
-| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** (not reached in round three): designed below (Design: hardware inserts with a latency ping). The ping exists: `Player::measure_latency` takes any output and input channel and `measure::detect` finds the onset, tested in code; the insert module that sends to a hardware output and returns from an input, compensated by the measured round trip, is not built; hearing it needs an interface with a cable or outboard unit from output to input; about 6–10 h |
+| Hardware inserts with latency measurement | ● | ● | ● | ● | **Works** in code (2026-11-17, to the design below): Utilities › Hardware Insert (`hw_insert`) sends the track out of an output path and takes it back from an input path, compensated by its round trip; Ping in its drawer measures that round trip on its own paths (`setup.measure_latency` with `insert`) and stores it. Offline it passes through, its latency kept (a real-time bounce prints the gear). Tested with a loopback in code; hearing gear through it and checking the ping lines it up need an interface with a cable or outboard unit from output to input. Not measured, it compensates nothing (the design's fallback to the device estimate is not built) |
 
 ## D. Sends and routing
 
@@ -279,7 +279,7 @@ one a mix engineer would not forgive.
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12 (**done**); a listen bus for
 AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**done**), 5–8; hardware
-inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
+inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
 ### Design: automation inside a clip (round three, not built)
@@ -352,7 +352,7 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   material; unlinked with different gains, each channel takes its own.
 - **Size.** 6–10 h.
 
-### Design: hardware inserts with a latency ping (round three, not built)
+### Design: hardware inserts with a latency ping (round three, built 2026-11-17)
 
 - **The module.** A built-in insert "Hardware Insert" (`hw_insert`) with an output pair and an
   input pair (Setup › I/O names). The mixer special-cases it in the chain: it writes its input
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | hardware inserts with a ping for their round trip |
 | 2026-11-17 | minor | real-time bounce (Bounce Mix › In real time) |
 | 2026-11-17 | minor | designs for automation inside a clip, real-time bounce, multi-mono processing and hardware inserts |
 | 2026-11-17 | minor | several outputs from one track (additional outputs) |

@@ -135,6 +135,7 @@ impl SoundApp {
     /// Abandons the measurement out there (Cancel, or its window closing); the value there was
     /// stays.
     pub fn cancel_measure(&mut self) {
+        self.measuring_insert = None;
         if self.measuring.take().is_some() {
             if let Some(p) = &self.player {
                 p.cancel_measure();
@@ -156,6 +157,21 @@ impl SoundApp {
     /// the status says it; an error (no click came back, interrupted, timed out) goes to the
     /// status and the value there was stays.
     pub fn finish_measure(&mut self, r: Result<i64, String>) {
+        // A Hardware Insert's Ping: the round trip is that insert's latency.
+        if let Some((track, module)) = self.measuring_insert.take() {
+            self.measuring = None;
+            match r {
+                Ok(n) => {
+                    let v = json!({"track": track.0, "module": module.0, "param": "latency", "value": n.max(1)});
+                    self.ui.status = match self.run("mix.module_param", v) {
+                        Ok(_) => format!("Hardware Insert round trip: {n} samples"),
+                        Err(e) => e,
+                    };
+                }
+                Err(e) => self.ui.status = e,
+            }
+            return;
+        }
         let key = self.measuring.take().unwrap_or_else(|| self.record_offset_key());
         match r {
             Ok(n) => {
@@ -221,6 +237,12 @@ pub(crate) fn measure_command(app: &mut SoundApp, p: &Value) -> Result<Value, St
     let Some(player) = &app.player else { return Err("no audio device".into()) };
     player.measure_latency(output, input)?;
     app.measuring = Some(key);
+    // A Hardware Insert's Ping: `insert: {track, module}` stores the result as its round trip.
+    app.measuring_insert = p.get("insert").and_then(|i| {
+        let t = i.get("track").and_then(Value::as_u64)?;
+        let m = i.get("module").and_then(Value::as_u64).and_then(|m| u32::try_from(m).ok())?;
+        Some((soundcraft_model::TrackId(t), soundcraft_model::ModuleId(m)))
+    });
     app.ui.status = "Measuring the round trip…".into();
     Ok(json!({"started": true}))
 }
@@ -231,4 +253,30 @@ pub(crate) fn measure_cancel_command(app: &mut SoundApp) -> Value {
     let running = app.measuring();
     app.cancel_measure();
     json!({"cancelled": running})
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Services, SoundApp};
+    use serde_json::json;
+
+    /// A Hardware Insert's Ping: the loopback measurement's result is stored as the insert's round
+    /// trip (its latency), not as the record offset.
+    #[test]
+    fn a_hardware_insert_ping_stores_its_round_trip_on_the_insert() {
+        let mut e = soundcraft_engine::Engine::default();
+        e.execute("track.new", &json!({"format": "stereo"})).unwrap();
+        let t = e.session().tracks[0].id;
+        let v = e.execute("mix.module_add", &json!({"track": t.0, "plugin": soundcraft_mix::hw_insert::ID})).unwrap();
+        let m = soundcraft_model::ModuleId(v["module"].as_u64().unwrap() as u32);
+        let mut app = SoundApp::new(e, None, Services::default());
+        let before = app.record_offset().measured;
+        app.measuring_insert = Some((t, m));
+        app.finish_measure(Ok(1234));
+        let ins = app.engine.session().track(t).unwrap().mixer.module(m).unwrap().clone();
+        assert_eq!(ins.params.get("latency").copied(), Some(1234.0));
+        assert_eq!(app.record_offset().measured, before, "the record offset is untouched");
+        assert!(app.ui.status.contains("1234 samples"), "{}", app.ui.status);
+        assert!(crate::mix_window::picker_groups(false).iter().any(|(g, l)| g == "Utilities" && l.iter().any(|p| p.id == "hw_insert")));
+    }
 }

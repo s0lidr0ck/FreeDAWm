@@ -34,6 +34,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "keel" => "Bass Amp",
         "heft" => "Bass Enhancer",
         "vault" => "Convolution Reverb",
+        "hw_insert" => "Outboard Gear in the Chain",
         "mend" => "Vocal Cleaner",
         "imprint" => "Impulse Response Capture",
         "subtractive_synth" => "Analog-Style Synth",

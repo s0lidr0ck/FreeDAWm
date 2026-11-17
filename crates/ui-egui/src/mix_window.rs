@@ -1303,7 +1303,12 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
             Category::Instrument => "Built-in".to_string(),
             c => format!("{c:?}"),
         };
-        out.push((name, listed().filter(|p| !p.with_engines() && group_of(p) == c).collect()));
+        let mut list: Vec<&'static soundcraft_dsp::PluginInfo> = listed().filter(|p| !p.with_engines() && group_of(p) == c).collect();
+        // Outboard gear in the chain: a utility of the mixer's own.
+        if c == Category::Other && !instruments {
+            list.push(&soundcraft_mix::hw_insert::INFO);
+        }
+        out.push((name, list));
     }
     out
 }
@@ -1770,6 +1775,7 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
 pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
     soundcraft_mix::external_midi::plugin_info(id)
         .or_else(|| soundcraft_mix::track_midi::plugin_info(id))
+        .or_else(|| soundcraft_mix::hw_insert::plugin_info(id))
         .or_else(|| soundcraft_dsp::plugin_info(id))
         .or_else(|| soundcraft_mix::hosted_plugin_info(id))
         .or_else(|| soundcraft_au_host::plugin_info(id))
@@ -2551,7 +2557,8 @@ mod tests {
                 || soundcraft_dsp::LISTED_UTILITIES.contains(&p.id)));
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
-        assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
+        // (and the mixer's own Hardware Insert)
+        assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count() + 1);
         assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither || p.id == "lofi"));
         // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);

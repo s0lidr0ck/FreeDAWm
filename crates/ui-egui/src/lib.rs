@@ -34,6 +34,7 @@ pub mod fs_presets;
 pub mod hardware_credit;
 pub mod hearing_ui;
 pub mod hit_picker;
+mod hw_insert_ui;
 pub mod icons;
 mod imprint_ui;
 pub mod juke_fx;
@@ -1182,6 +1183,9 @@ pub struct SoundApp {
     disk_free: Option<(f64, Option<u64>)>,
     /// The record offset key a loopback measurement out there was started with.
     measuring: Option<String>,
+    /// The Hardware Insert a measurement out there is for (its Ping): the result is its round
+    /// trip, not the record offset's.
+    pub(crate) measuring_insert: Option<(TrackId, soundcraft_model::ModuleId)>,
     /// The latencies of the take recording now, snapshotted at its first frame.
     take_reported: Option<soundcraft_playback::Latency>,
     pub quit_requested: bool,
@@ -1384,6 +1388,7 @@ impl SoundApp {
             record_lock_stop: None,
             disk_free: None,
             measuring: None,
+            measuring_insert: None,
             take_reported: None,
             quit_requested: false,
             arrange_request: false,
