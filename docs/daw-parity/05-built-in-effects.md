@@ -1,6 +1,6 @@
 # Four-DAW parity, section 5: built-in effects
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (bug fixes and tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Hardware named below (1176, LA-2A, Pultec and so on) belongs
@@ -64,14 +64,14 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | A. Dynamics | Ten modelled compressor styles with a key input, multiband, true-peak limiter, transient shaper, two gates | Small: no look-ahead on Comp (upward compression dropped by the owner) |
 | B. EQ and filters | 24-band dynamic EQ with mid/side, five modelled vintage EQs, match EQ, nine circuit filters | Small: no simple channel EQ in the menu (linear-phase CleanQ and a graphic EQ dropped by the owner) |
 | C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets, a bass amp, a bass enhancer | Small (pedalboard dropped by the owner) |
-| D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses**, nothing beyond stereo |
+| D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses** (the owner is sourcing them); no reverb that spreads a source across surround speakers |
 | E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small: rotary speaker, auto-pan, ring modulator and frequency shifter dropped by the owner |
 | F. Pitch and voice | Octaver, doubler, whammy; machine-learning de-noise and de-reverb on an insert | Small: real-time pitch correction and a vocoder dropped by the owner |
 | G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | Medium: no glitch or multi-effect; no mastering assistant (beat repeat and a gater dropped by the owner) |
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 955 factory presets, a searchable browser, chain and track presets, one save path, rename, a default per effect, A/B everywhere | Small |
 | J. Editors | Custom editors for 26 effects, live graphs on mixer tiles, sizes 75–200 %, typed values, pinned windows | Small: no follow-the-selected-track |
-| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no controller mapping, no racks or macros |
+| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no racks or macros, no modulators |
 
 Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
 you can key from another track (now Comp); effects that process every channel of a surround
@@ -104,11 +104,11 @@ Loudness Meter and Phase Meter). All three are in place.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Parametric EQ, eight or more bands, steep cuts | ● | ● | ● | ● | **Works** (CleanQ: 24 bands, cuts to 96 dB/oct) |
-| Simple channel EQ that opens instantly | ● | ● | ● | ● | **Missing** from the menu (EQ 1-Band and 7-Band are hidden) |
+| Simple channel EQ that opens instantly | ● | ● | ● | ● | **Not planned here**: the owner keeps the hidden stock EQs hidden (EQ 1-Band and 7-Band still load from old sessions); CleanQ is the menu's EQ |
 | Dynamic bands | ◐ | ● | ○ | ● | **Works** |
 | Mid/side or left/right per band | ◐ | ● | ◐ | ● | **Works** |
 | Spectrum behind the curve | ● | ● | ● | ● | **Works** |
-| Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only; a linear-phase CleanQ was dropped by the owner |
+| Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only; the rest, a linear-phase CleanQ, was dropped by the owner |
 | Correct bell shapes near the top of the range at 44.1/48 kHz | ● | ● | ● | ● | **Works**: matched to the analog shape (within about 2 dB) |
 | Tilt band | ○ | ○ | ◐ | ◐ | **Missing** |
 | Match EQ | ○ | ○ | ● | ◐ | **Works** (CopyQ: up to four weighted profiles) |
@@ -117,7 +117,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Automatic balance EQ | ○ | ○ | ○ | ○ | **Works** (Manners) |
 | Resonant filter with envelope, LFO and step modulation | ● | ● | ● | ● | **Works** (Filter: nine circuits, 16 steps) |
 | Wah | ● | ● | ● | ● | **Works** |
-| Formant / vowel filter | ◐ | ○ | ◐ | ◐ | **Missing** |
+| Formant / vowel filter | ◐ | ○ | ◐ | ◐ | **Not planned here**: a new effect, and the owner builds only Keel and Heft of the new effects in this section |
 
 ## C. Saturation, distortion and amps
 
@@ -146,12 +146,12 @@ Loudness Meter and Phase Meter). All three are in place.
 | Shimmer | ○ | ○ | ◐ | ● | **Works** |
 | Gated / non-linear | ● | ◐ | ● | ◐ | **Dropped by the owner** |
 | Convolution with your own impulse responses | ● | ● | ● | ● | **Works** (Vault): zero latency, true stereo, up to 10 s |
-| Bundled impulse-response library | ● | ● | ● | ● | **Missing**: one generated hall |
+| Bundled impulse-response library | ● | ● | ● | ● | **Not planned here**: the owner is sourcing the impulse responses; until then one generated hall |
 | Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only |
 | Capture your own impulse responses | ○ | ● | ● | ○ | **Works** (Imprint) |
 | Pre-delay synced to tempo | ◐ | ● | ● | ● | **Works** in Reverb; not in Vault or ChamberMade |
 | Freeze, ducking, modulation, damping | ◐ | ◐ | ● | ● | **Works** in Reverb; the duck follows the reverb's own input only |
-| Surround or immersive reverb | ● | ◐ | ● | ● | **Missing** |
+| Surround or immersive reverb | ● | ◐ | ● | ● | **Partial**: on a surround track Reverb, ChamberMade and Vault reverberate every channel (the front pair in stereo, each other channel through its own instance, bug 2); a reverb that spreads one source across the speakers is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
 
 ## E. Delay and modulation
 
@@ -161,7 +161,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Tape and bucket-brigade models | ● | ● | ● | ● | **Works**: six voicings |
 | Multi-tap and rhythm patterns | ● | ● | ● | ● | **Works** |
 | Reverse, freeze, pitch in the loop, ducking | ◐ | ◐ | ● | ● | **Works** |
-| Granular delay | ○ | ○ | ◐ | ◐ | **Missing** |
+| Granular delay | ○ | ○ | ◐ | ◐ | **Not planned here**: a new effect, and the owner builds only Keel and Heft of the new effects in this section |
 | Long synced delays at high sample rates | ● | ● | ● | ● | **Works** up to 10.9 s at every rate |
 | Chorus, ensemble, flanger, phaser | ● | ● | ● | ● | **Works** (Mod: fourteen modelled circuits) |
 | Tremolo, vibrato | ● | ● | ● | ● | **Works** |
@@ -176,24 +176,24 @@ Loudness Meter and Phase Meter). All three are in place.
 |---|:-:|:-:|:-:|:-:|---|
 | Real-time pitch shifter | ● | ◐ | ● | ● | **Works** (Pitch); no formant preservation, and its delay is not compensated (bug 5) |
 | Octaver, doubler, harmony at fixed intervals | ● | ◐ | ● | ● | **Works** |
-| Harmony that follows a key | ○ | ○ | ◐ | ◐ | **Missing** |
+| Harmony that follows a key | ○ | ○ | ◐ | ◐ | **Not planned here**: needs pitch tracking in Pitch, close to the real-time pitch correction the owner dropped; the owner builds only Keel and Heft of the new effects in this section |
 | Real-time automatic pitch correction | ○ | ○ | ● | ● | **Dropped by the owner**; the vocal editor is offline (section 4) |
 | Vocoder | ◐ | ● | ● | ● | **Dropped by the owner** |
 | De-noise on an insert | ○ | ○ | ○ | ◐ | **Works** (Mend Live): about 50 ms delay, 44.1 and 48 kHz only |
 | De-reverb on an insert | ○ | ○ | ○ | ○ | **Works** (Mend Studio): about 2.9 s delay, so for mixing, not tracking |
-| De-click, de-hum | ○ | ○ | ○ | ○ | **Missing** |
-| Stem separation as a live insert | ○ | ○ | ○ | ○ | **Missing**; offline only, as in the four |
+| De-click, de-hum | ○ | ○ | ○ | ○ | **Not planned here**: none of the four has them on an insert; a new effect, and the owner builds only Keel and Heft of the new effects in this section |
+| Stem separation as a live insert | ○ | ○ | ○ | ○ | **Not planned here**: offline only, as in the four (the models need seconds of audio at a time; section 4 has it as a clip process) |
 
 ## G. Creative effects and mastering
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Beat repeat / stutter | ◐ | ◐ | ● | ● | **Dropped by the owner** |
-| Gater or drawn volume shaper | ◐ | ● | ● | ● | **Partial**: Swale repeats one attack-hold-release shape per beat; a gater or drawn shaper was dropped by the owner |
-| Step-sequenced multi-effect | ○ | ◐ | ● | ● | **Partial**: the Filter's 16-step cutoff only |
-| Glitch, granular or spectral effects | ◐ | ○ | ● | ◐ | **Missing** |
-| Lo-fi and vinyl | ● | ◐ | ● | ● | **Partial**: cassette and 12-bit sampler models; no vinyl |
-| Mastering assistant | ○ | ○ | ● | ○ | **Missing** |
+| Gater or drawn volume shaper | ◐ | ● | ● | ● | **Partial**: Swale repeats one attack-hold-release shape per beat; the rest, a gater or drawn shaper, was dropped by the owner |
+| Step-sequenced multi-effect | ○ | ◐ | ● | ● | **Partial**: the Filter's 16-step cutoff only; a multi-effect is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
+| Glitch, granular or spectral effects | ◐ | ○ | ● | ◐ | **Not planned here**: new effects (beat repeat dropped by the owner), and the owner builds only Keel and Heft of the new effects in this section |
+| Lo-fi and vinyl | ● | ◐ | ● | ● | **Partial**: cassette and 12-bit sampler models; a vinyl model is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
+| Mastering assistant | ○ | ○ | ● | ○ | **Not planned here**: the owner has tabled the mastering page; LevelUp does loudness to a target |
 | Loudness match against reference tracks | ○ | ◐ | ◐ | ◐ | **Works** (LevelUp: four references, platform preview) |
 
 ## H. Utility and metering
@@ -208,7 +208,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Spectrum analyser plug-in | ◐ | ● | ● | ● | **Works** (Spectrum: sum, left, right, mid, side or both sides; slope, speed, peak hold) |
 | Loudness and true-peak meter plug-in | ◐ | ● | ● | ● | **Works** (Loudness Meter: the bounce's BS.1770 meter, with loudness range and a short-term history) |
 | Phase / correlation meter plug-in | ● | ● | ● | ● | **Works** (Phase Meter: correlation with its lowest held, balance, Lissajous or polar scope) |
-| Phase alignment between microphones | ◐ | ◐ | ◐ | ◐ | **Partial**: inside Shale, for drums |
+| Phase alignment between microphones | ◐ | ◐ | ◐ | ◐ | **Partial**: inside Shale, for drums; a utility of its own is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
 | Tuner | ● | ● | ● | ● | **Works** (Tuner: A4 415–466 Hz, mute while tuning) |
 
 ## I. Presets
@@ -252,12 +252,12 @@ Loudness Meter and Phase Meter). All three are in place.
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
 | Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Partial**: missing on eight engines; no mix on the insert slot |
 | Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels), leaving the LFE out |
-| Map a hardware controller to a parameter | ● | ● | ● | ● | **Missing** (section 3) |
+| Map a hardware controller to a parameter | ● | ● | ● | ● | **Works** (built in section 6, K): right-click a plug-in knob on the chain › Learn MIDI Controller; Setup › MIDI Mappings lists them. Learning from a plug-in's own window or the drawer's knobs is section 6's leftover |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
-| Console channel strip | ● | ● | ○ | ● | **Missing** from the menu (Channel Strip is hidden) |
+| Console channel strip | ● | ● | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden, and Channel Strip is the two together (it still loads from old sessions) |
 | Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Missing** |
-| Works in the browser build | — | — | — | — | **Partial**: Mend passes audio through; no user presets |
+| Works in the browser build | — | — | — | — | **Partial**: Mend passes audio through; no user presets. The rest is not planned here: the owner has stopped work on the browser build |
 
 ## Bugs found on the way
 
@@ -370,3 +370,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Comp's Link All Channels leaves the LFE out, told by the mixer from the track's channel format; the meters and Dither listed under Utilities in the insert menu |
 | 2026-11-16 | minor | Keel (bass amp) and Heft (bass enhancer) added; preset housekeeping and editor basics done |
 | 2026-11-16 | minor | Keel: silence in gives silence out (the tube stage's idle point is where it settles, not its exact DC solution) |
+| 2026-11-17 | minor | Round three reconciled: controller mapping already built (section 6); the new effects, the bundled impulse responses, the mastering assistant, the hidden stock EQ and channel strip and the browser build marked not planned here, with the owner's reasons |
