@@ -461,11 +461,15 @@ pub enum MeterScale {
     K20,
     K14,
     K12,
+    /// A peak programme meter as EBU Tech 3205 times its fall: 24 dB in 2.8 s, whatever the
+    /// release preference; numbered from its alignment level, −18 dBFS. Its rise follows the
+    /// sample peak (no 10 ms integration).
+    Ppm,
 }
 
 impl MeterScale {
     /// Every scale: (id, label).
-    pub const ALL: [(MeterScale, &'static str, &'static str); 7] = [
+    pub const ALL: [(MeterScale, &'static str, &'static str); 8] = [
         (MeterScale::Peak, "peak", "Peak (dBFS)"),
         (MeterScale::Rms, "rms", "RMS (dBFS)"),
         (MeterScale::PeakRms, "peak_rms", "Peak + RMS"),
@@ -473,6 +477,7 @@ impl MeterScale {
         (MeterScale::K20, "k20", "K-20"),
         (MeterScale::K14, "k14", "K-14"),
         (MeterScale::K12, "k12", "K-12"),
+        (MeterScale::Ppm, "ppm", "PPM (EBU, 0 = −18 dBFS)"),
     ];
 
     pub fn from_id(id: &str) -> Option<MeterScale> {
@@ -489,14 +494,19 @@ impl MeterScale {
 
     /// The bar follows the RMS level, not the peak.
     pub fn rms_bar(self) -> bool {
-        !matches!(self, MeterScale::Peak | MeterScale::PeakRms)
+        !matches!(self, MeterScale::Peak | MeterScale::PeakRms | MeterScale::Ppm)
+    }
+
+    /// The fall the scale has itself, dB a second, over the release preference (a PPM's).
+    pub fn own_release_db_s(self) -> Option<f32> {
+        (self == MeterScale::Ppm).then_some(24.0 / 2.8)
     }
 
     /// Where the scale's 0 sits, dBFS (`None`: numbered in dBFS).
     pub fn reference_db(self) -> Option<f32> {
         match self {
             MeterScale::Peak | MeterScale::Rms | MeterScale::PeakRms => None,
-            MeterScale::Vu => Some(-18.0),
+            MeterScale::Vu | MeterScale::Ppm => Some(-18.0),
             MeterScale::K20 => Some(-20.0),
             MeterScale::K14 => Some(-14.0),
             MeterScale::K12 => Some(-12.0),

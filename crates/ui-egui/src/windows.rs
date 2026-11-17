@@ -94,20 +94,21 @@ fn mix_snapshots(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// Window › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport
-/// rolls: momentary (400 ms), short-term (3 s), integrated and the highest true peak since the
-/// last reset.
+/// rolls: momentary (400 ms), short-term (3 s), integrated, the loudness range and the highest
+/// true peak since the last reset.
 fn loudness(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_loudness;
     let reading = app.meter_snapshot.main.loudness;
     let has_output = app.player.is_some();
     let mut reset = false;
     let fmt = |v: f32, floor: f32| if v.is_finite() && v > floor { format!("{v:.1}") } else { "-".into() };
-    win(ctx, &mut open, "Loudness Meter", vec2(240.0, 170.0), |ui| {
-        let rows: [(&str, f32, f32, &str); 5] = match reading {
+    win(ctx, &mut open, "Loudness Meter", vec2(240.0, 190.0), |ui| {
+        let rows: [(&str, f32, f32, &str); 6] = match reading {
             Some(r) => [
                 ("Momentary", r.momentary, -70.0, "LUFS"),
                 ("Short-term", r.short_term, -70.0, "LUFS"),
                 ("Integrated", r.integrated, -70.0, "LUFS"),
+                ("Loudness range", r.range_lu, -1.0, "LU"),
                 ("Max momentary", r.max_momentary, -70.0, "LUFS"),
                 ("True peak", r.true_peak_db, -100.0, "dBTP"),
             ],
@@ -115,6 +116,7 @@ fn loudness(app: &mut SoundApp, ctx: &egui::Context) {
                 ("Momentary", f32::NAN, 0.0, "LUFS"),
                 ("Short-term", f32::NAN, 0.0, "LUFS"),
                 ("Integrated", f32::NAN, 0.0, "LUFS"),
+                ("Loudness range", f32::NAN, 0.0, "LU"),
                 ("Max momentary", f32::NAN, 0.0, "LUFS"),
                 ("True peak", f32::NAN, 0.0, "dBTP"),
             ],

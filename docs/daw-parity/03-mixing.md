@@ -36,7 +36,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated, hosted plug-ins' sample-accurate; faders follow | **Large**: built-in plug-ins block-rate |
-| G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
+| G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K/PPM scales, a master loudness meter with loudness range | Small |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no real-time bounce, AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots, find and spill | Small |
@@ -170,9 +170,9 @@ K-system scales, and the master a loudness meter.
 | Peak meters that catch every peak | ● | ● | ● | ● | **Works**: each screen update shows the loudest block since the last one |
 | Peak hold and clip lights | ● | ● | ● | ● | **Works**; one bar per channel on surround tracks |
 | Pre-fader metering | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering; track strips only (the master meter stays post-fader) |
-| RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Works**: Preferences › Metering › Scale: peak, RMS (300 ms), peak with RMS inside, VU (0 VU = −18 dBFS), K-20, K-14, K-12, numbered from their reference; release and peak hold beside it; saved with this computer's settings. No PPM ballistics |
+| RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Works**: Preferences › Metering › Scale: peak, RMS (300 ms), peak with RMS inside, VU (0 VU = −18 dBFS), K-20, K-14, K-12, numbered from their reference; release and peak hold beside it; saved with this computer's settings. PPM (EBU, 0 = −18 dBFS) falls 24 dB in 2.8 s as EBU Tech 3205 times it; its rise follows the sample peak (no 10 ms integration) |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
-| Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, maximum momentary and true peak, with Reset; no loudness range |
+| Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, loudness range (EBU Tech 3342, from the short-term value every 100 ms), maximum momentary and true peak, with Reset |
 | Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Works**: the Spectrum and Phase Meter plug-ins (Utilities in the insert menu), as well as inside the Sprawl and CleanQ modules and Scout |
 | Output meter free of the click | ● | ● | ● | ● | **Works** |
 | Meters while stopped | ● | ● | ● | ● | **Partial**: only for armed or monitored tracks |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | a PPM scale and the loudness range |
 | 2026-11-17 | minor | hosted plug-ins' automation is sample-accurate: timed parameter changes through a new, default-off plug-in method |
 | 2026-11-17 | minor | plug-in bypass is automatable |
 | 2026-11-17 | minor | linked and mirrored pans; the surround panner's centre % and LFE level get controls |

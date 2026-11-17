@@ -68,6 +68,34 @@ fn a_bypass_lane_switches_a_module() {
     assert!(!s.track(t).unwrap().mixer.module(m).unwrap().bypass, "the switch itself is left alone");
 }
 
+/// The master's loudness meter reads a loudness range: a quiet half and a half 20 dB louder
+/// spread over most of 20 LU; a steady tone spreads over almost none.
+#[test]
+fn the_loudness_meter_reads_a_loudness_range() {
+    let lra = |levels: &[f32]| {
+        let mut s = session();
+        let secs = 8;
+        let n = 48_000 * secs;
+        let tone: Vec<f32> = (0..n * levels.len()).map(|i| (i as f32 * 0.0573).sin() * levels[i / n]).collect();
+        let src = SourceId(7999);
+        s.pool.insert(src, Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![tone.clone()] })));
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("T"));
+        let clip = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(clip, "T", src, 0, 0, tone.len() as i64));
+        let mut eng = MixEngine::new(48_000.0, 1024);
+        eng.set_loudness_metering(true);
+        let mut buf = vec![vec![0.0f32; 1024]; 2];
+        for b in 0..tone.len() / 1024 {
+            eng.render(&s, (b * 1024) as i64, 1024, &mut buf);
+        }
+        eng.main_meter.loudness.unwrap().range_lu
+    };
+    let steady = lra(&[0.3, 0.3]);
+    let stepped = lra(&[0.03, 0.3]);
+    assert!(steady < 1.0, "a steady tone: {steady} LU");
+    assert!(stepped > 14.0 && stepped < 21.0, "two levels 20 dB apart: {stepped} LU");
+}
+
 /// Polarity on one channel of a stereo track inverts that side only; the whole-track switch
 /// inverts both.
 #[test]

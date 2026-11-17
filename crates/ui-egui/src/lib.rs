@@ -3136,8 +3136,9 @@ const RMS_TAU: f32 = 0.065;
 /// One display frame of a strip's meter: `peak` and `ms` (mean square over the blocks since the
 /// last poll; NaN when the engine gave none) per channel, `dt` seconds since the last frame.
 fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], ms: [f32; 2], gr: f32, dt: f32, b: preferences::Ballistics) {
-    // Instant attack; release and peak hold from Preferences › Metering (26 dB/s, 2 s).
-    let fall = 10f32.powf(-b.release_db_s * dt / 20.0);
+    // Instant attack; release and peak hold from Preferences › Metering (26 dB/s, 2 s), or the
+    // scale's own fall (a PPM's).
+    let fall = 10f32.powf(-b.scale.own_release_db_s().unwrap_or(b.release_db_s) * dt / 20.0);
     let k = if dt.is_finite() && dt > 0.0 { 1.0 - (-dt / RMS_TAU).exp() } else { 0.0 };
     for c in 0..2 {
         let target = ms.get(c).copied().filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
@@ -3265,6 +3266,11 @@ mod tests {
         assert!((d.level[0] - want).abs() < 0.02 * want, "{} vs {want}", d.level[0]);
         assert_eq!((d.hold[0], d.peak), (0.5, 0.5));
         assert!(!d.clip);
+        // A PPM falls 24 dB in 2.8 s whatever the release preference, from the peak.
+        let ppm = run(Ballistics { release_db_s: 96.0, hold_secs: 0.0, scale: crate::widgets::MeterScale::Ppm }, 2.8);
+        let fell = 20.0 * (0.5 / ppm.level[0]).log10();
+        assert!((fell - 24.0).abs() < 0.6, "fell {fell} dB");
+        assert_eq!(crate::widgets::MeterScale::from_id("ppm"), Some(crate::widgets::MeterScale::Ppm));
     }
 
     #[test]

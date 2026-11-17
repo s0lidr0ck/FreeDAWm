@@ -392,6 +392,8 @@ pub struct LoudnessReading {
     pub max_momentary: f32,
     /// Highest true peak (4× oversampled) since the reset, dBTP.
     pub true_peak_db: f32,
+    /// Loudness range (EBU Tech 3342) of the short-term values since the reset, LU.
+    pub range_lu: f32,
 }
 
 /// A bus: its format and one buffer per channel.
@@ -803,6 +805,9 @@ pub struct MixEngine {
     /// The master loudness meter ([`MixEngine::set_loudness_metering`]): made in `sync` for the
     /// main mix's format, fed while the transport rolls, read into `main_meter.loudness`.
     loudness: Option<soundcraft_dsp::meter::LoudnessMeter>,
+    /// The loudness range of the short-term values, one every 100 ms, and the frames since the
+    /// last one: made with `loudness`.
+    lra: Option<(soundcraft_dsp::meter::LoudnessRange, usize)>,
     loudness_on: bool,
     /// The main format the loudness meter was made for.
     loudness_fmt: Option<(ChannelFormat, u32)>,
@@ -1095,6 +1100,7 @@ impl MixEngine {
             meters: HashMap::new(),
             main_meter: StripMeter::default(),
             loudness: None,
+            lra: None,
             loudness_on: false,
             loudness_fmt: None,
             meters_held: false,
@@ -1243,6 +1249,7 @@ impl MixEngine {
         self.loudness_on = on;
         if !on {
             self.loudness = None;
+            self.lra = None;
             self.loudness_fmt = None;
             self.main_meter.loudness = None;
         }
@@ -1253,6 +1260,10 @@ impl MixEngine {
     pub fn reset_loudness(&mut self) {
         if let Some(l) = &mut self.loudness {
             l.reset();
+        }
+        if let Some((r, n)) = &mut self.lra {
+            r.reset();
+            *n = 0;
         }
         // The next block reads the fresh meter.
         self.main_meter.loudness = None;
@@ -1635,6 +1646,9 @@ impl MixEngine {
                 m.set_channel_weight(c, w);
             }
             self.loudness = Some(m);
+            if self.lra.is_none() {
+                self.lra = Some((soundcraft_dsp::meter::LoudnessRange::new(), 0));
+            }
             self.loudness_fmt = Some(want);
         }
         self.hw.resize_with(s.outputs.len(), Vec::new);
@@ -2457,6 +2471,15 @@ impl MixEngine {
         if let Some(l) = &mut self.loudness {
             if !self.monitor_only {
                 l.process(&self.main, frames);
+                // The short-term loudness every 100 ms feeds the loudness range.
+                if let Some((r, n)) = &mut self.lra {
+                    let step = ((self.sample_rate / 10.0) as usize).max(1);
+                    *n += frames;
+                    while *n >= step {
+                        *n -= step;
+                        r.add(l.short_term_lufs());
+                    }
+                }
             }
             self.main_meter.loudness = Some(LoudnessReading {
                 momentary: l.momentary_lufs(),
@@ -2464,6 +2487,7 @@ impl MixEngine {
                 integrated: l.integrated_lufs(),
                 max_momentary: l.max_momentary_lufs(),
                 true_peak_db: l.true_peak_db(),
+                range_lu: self.lra.as_ref().map_or(0.0, |(r, _)| r.range_lu()),
             });
         }
         // Metronome: summed after the master fader, so it reaches the speakers without passing
