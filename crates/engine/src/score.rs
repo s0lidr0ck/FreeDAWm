@@ -3,7 +3,8 @@
 //!
 //! Notes are quantized to sixteenths. Each part is a single voice: notes that start together form
 //! a chord, overlapping notes are cut at the next onset, and anything crossing a bar line is split
-//! and tied.
+//! and tied. A clip's lyrics are sung under the notes they fall on (a word goes to the note that
+//! starts nearest it, within an eighth).
 
 use soundcraft_model::{ClipContent, Session, TrackId, TrackKind};
 use soundcraft_time::TICKS_PER_QUARTER;
@@ -99,6 +100,8 @@ pub struct Item {
     pub units: u32,
     pub tie_start: bool,
     pub tie_stop: bool,
+    /// The word sung on this note (its first item only).
+    pub lyric: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,12 +115,13 @@ pub struct Part {
 /// Lay out the MIDI (and instrument) tracks `tracks` (all of them when empty).
 pub fn layout(s: &Session, tracks: &[TrackId]) -> Vec<Part> {
     let sr = s.sample_rate;
-    let mut raw: Vec<(String, Vec<(i64, i64, u8)>)> = Vec::new();
+    let mut raw: Vec<(String, Vec<(i64, i64, u8)>, Vec<(i64, String)>)> = Vec::new();
     for t in &s.tracks {
         if !matches!(t.kind, TrackKind::Midi | TrackKind::Instrument) || (!tracks.is_empty() && !tracks.contains(&t.id)) {
             continue;
         }
         let mut notes = Vec::new();
+        let mut words = Vec::new();
         for c in t.clips() {
             let ClipContent::Midi { sequence } = &c.content else { continue };
             if c.muted {
@@ -134,15 +138,22 @@ pub fn layout(s: &Session, tracks: &[TrackId]) -> Vec<Part> {
                 let b = quantize(st.saturating_add(n.length).min(end)).max(a + 1);
                 notes.push((a, b, n.pitch));
             }
+            // The clip's words inside its window, from its start in samples.
+            for w in c.lyrics.iter().flat_map(|l| &l.words) {
+                let at = c.start.saturating_add(w.start);
+                if at >= c.start && at < c.end() && !w.text.trim().is_empty() {
+                    words.push((quantize(s.tempo.samples_to_ticks(at, sr)), w.text.trim().to_string()));
+                }
+            }
         }
-        raw.push((t.name.clone(), notes));
+        raw.push((t.name.clone(), notes, words));
     }
-    let last = raw.iter().flat_map(|(_, n)| n.iter().map(|x| x.1)).max().unwrap_or(0);
+    let last = raw.iter().flat_map(|(_, n, _)| n.iter().map(|x| x.1)).max().unwrap_or(0);
     let bars = measure_grid(s, last);
     raw.into_iter()
-        .map(|(name, notes)| {
+        .map(|(name, notes, words)| {
             let avg = if notes.is_empty() { 60.0 } else { notes.iter().map(|n| f64::from(n.2)).sum::<f64>() / notes.len() as f64 };
-            Part { name, bass: avg < 57.0, measures: fill(&bars, &notes) }
+            Part { name, bass: avg < 57.0, measures: fill_sung(&bars, &notes, &words) }
         })
         .collect()
 }
@@ -196,7 +207,13 @@ fn split_units(mut units: i64) -> Vec<u32> {
     out
 }
 
+#[cfg(test)]
 fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
+    fill_sung(bars, notes, &[])
+}
+
+/// The measures of `notes`, with `words` ((unit, text)) on the notes starting nearest them.
+fn fill_sung(bars: &[Bar], notes: &[(i64, i64, u8)], words: &[(i64, String)]) -> Vec<Measure> {
     // Onsets → chords, each held until its longest note ends or the next onset.
     let mut onsets: std::collections::BTreeMap<i64, (i64, Vec<u8>)> = std::collections::BTreeMap::new();
     for (a, b, p) in notes {
@@ -213,12 +230,26 @@ fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
         ps.sort_unstable();
         spans.push((a, end, ps));
     }
+    // Each word on the onset nearest it (within an eighth); two on one note are joined.
+    let mut sung: Vec<Option<String>> = vec![None; spans.len()];
+    for (u, text) in words {
+        let i = spans.partition_point(|(a, _, _)| a < u);
+        let near = [i.checked_sub(1), Some(i)].into_iter().flatten().filter(|k| *k < spans.len()).min_by_key(|k| (spans[*k].0 - u).abs());
+        if let Some(k) = near.filter(|k| (spans[*k].0 - u).abs() <= 2)
+            && let Some(slot) = sung.get_mut(k)
+        {
+            *slot = Some(match slot.take() {
+                Some(w) => format!("{w} {text}"),
+                None => text.clone(),
+            });
+        }
+    }
     let mut measures = Vec::new();
     for (ms, ml, num, den, fifths, minor) in bars {
         let me = ms + ml;
         let mut items = Vec::new();
         let mut cursor = *ms;
-        let emit = |from: i64, to: i64, pitches: &[u8], tied_in: bool, tied_out: bool, items: &mut Vec<Item>| {
+        let emit = |from: i64, to: i64, pitches: &[u8], tied_in: bool, tied_out: bool, lyric: Option<&String>, items: &mut Vec<Item>| {
             let parts = split_units(to - from);
             let n = parts.len();
             for (k, u) in parts.into_iter().enumerate() {
@@ -228,23 +259,24 @@ fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
                     units: u,
                     tie_stop: !rest && (tied_in || k > 0),
                     tie_start: !rest && (tied_out || k + 1 < n),
+                    lyric: if k == 0 && !tied_in && !rest { lyric.cloned() } else { None },
                 });
             }
         };
-        for (a, b, ps) in spans.iter().filter(|(a, b, _)| *b > *ms && *a < me) {
+        for (si, (a, b, ps)) in spans.iter().enumerate().filter(|(_, (a, b, _))| *b > *ms && *a < me) {
             let from = (*a).max(*ms).max(cursor);
             let to = (*b).min(me);
             if to <= from {
                 continue;
             }
             if from > cursor {
-                emit(cursor, from, &[], false, false, &mut items);
+                emit(cursor, from, &[], false, false, None, &mut items);
             }
-            emit(from, to, ps, *a < *ms, *b > me, &mut items);
+            emit(from, to, ps, *a < *ms, *b > me, sung.get(si).and_then(Option::as_ref), &mut items);
             cursor = to;
         }
         if cursor < me {
-            emit(cursor, me, &[], false, false, &mut items);
+            emit(cursor, me, &[], false, false, None, &mut items);
         }
         measures.push(Measure { numerator: *num, denominator: *den, fifths: *fifths, minor: *minor, items });
     }
@@ -377,6 +409,11 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                         }
                         x.push_str("</notations>");
                     }
+                    if k == 0
+                        && let Some(w) = &it.lyric
+                    {
+                        let _ = write!(x, "<lyric number=\"1\"><syllabic>single</syllabic><text>{}</text></lyric>", xml_escape(w));
+                    }
                     x.push_str("</note>\n");
                 }
             }
@@ -470,6 +507,14 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
                             let _ = writeln!(o, "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1.3\"/>", x + 7.0, y0 + 1.5 * SP);
                         }
                         continue;
+                    }
+                    if let Some(w) = &it.lyric {
+                        let _ = writeln!(
+                            o,
+                            "<text x=\"{x:.1}\" y=\"{:.1}\" font-size=\"10\" text-anchor=\"middle\">{}</text>",
+                            bottom + 4.5 * SP,
+                            xml_escape(w)
+                        );
                     }
                     let steps: Vec<i32> = it.pitches.iter().map(|p2| staff_step(*p2, p.bass)).collect();
                     let filled = it.units < 8;
@@ -617,8 +662,8 @@ mod tests {
                 fifths: -1,
                 minor: false,
                 items: vec![
-                    Item { pitches: vec![70], units: 8, tie_start: false, tie_stop: false },
-                    Item { pitches: vec![71], units: 8, tie_start: false, tie_stop: false },
+                    Item { pitches: vec![70], units: 8, tie_start: false, tie_stop: false, lyric: None },
+                    Item { pitches: vec![71], units: 8, tie_start: false, tie_stop: false, lyric: None },
                 ],
             }],
         };
@@ -653,6 +698,49 @@ mod tests {
         let m1 = x.split("<measure number=\"2\">").next().unwrap_or_default();
         assert!(m1.contains("<step>A</step><alter>1</alter>") && m1.contains("<accidental>sharp</accidental>"));
         assert_eq!(x.matches("<accidental>").count(), 1, "the Bb after the change carries none");
+    }
+
+    /// Parity section 7: a clip's words are sung under the notes they fall on, in the MusicXML
+    /// export (`lyric`) and the printed score.
+    #[test]
+    fn lyrics_go_under_their_notes() {
+        let bars = vec![(0, 16, 4, 4, 0, false)];
+        // "Hel" on the first note, "lo" a 16th late for the second (still nearest it), nothing
+        // on the third; "far" too far from any note.
+        let words = vec![(0, "Hel".to_string()), (5, "lo".to_string()), (14, "far".to_string())];
+        let m = fill_sung(&bars, &[(0, 4, 60), (4, 8, 62), (8, 10, 64)], &words);
+        let sung: Vec<Option<&str>> = m[0].items.iter().map(|i| i.lyric.as_deref()).collect();
+        assert_eq!(sung, vec![Some("Hel"), Some("lo"), None, None]);
+        let part = Part { name: "Voice".into(), bass: false, measures: m };
+        let setup = ScoreSetup { title: "T".into(), composer: String::new(), bars_per_system: 4, show_track_names: true, fifths: 0, minor: false };
+        let x = musicxml(std::slice::from_ref(&part), &setup);
+        assert_eq!(x.matches("<lyric ").count(), 2);
+        assert!(x.contains("<lyric number=\"1\"><syllabic>single</syllabic><text>Hel</text></lyric>"));
+        assert!(svg(&[part], &setup).contains(">lo</text>"));
+        // Through a session: a MIDI clip's lyric lines.
+        let mut s = Session::default();
+        let t = s.add_track(soundcraft_model::TrackKind::Instrument, soundcraft_model::ChannelFormat::Stereo, Some("Voice"));
+        let mut seq = soundcraft_midi::Sequence::default();
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 67,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 960,
+        });
+        let id = s.new_clip_id();
+        let mut clip = soundcraft_model::Clip::midi(id, "v", 0, 96_000, seq);
+        clip.lyrics = vec![soundcraft_model::LyricLine {
+            start: 0,
+            end: 10,
+            words: vec![soundcraft_model::LyricWord { start: 0, end: 10, text: "Sing".into() }],
+        }];
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(clip);
+        let parts = layout(&s, &[]);
+        assert_eq!(parts[0].measures[0].items[0].lyric.as_deref(), Some("Sing"));
     }
 
     #[test]
