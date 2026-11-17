@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add MIDI Effect",
             [],
             None,
-            "{tracks?, kind: arpeggiator | chord | scale | note_repeat, at?: index} — a MIDI effect ahead of the instrument of each instrument or MIDI track, last in its list or at `at` (at most 4) → {midi_fx}",
+            "{tracks?, clips?, kind: arpeggiator | chord | scale | note_repeat, at?: index} — a MIDI effect ahead of the instrument of each instrument or MIDI track (or, with `clips`, on those MIDI clips' notes only), last in its list or at `at` (at most 4) → {midi_fx}",
             has_selection,
             add
         ),
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set MIDI Effect",
             [],
             None,
-            "{tracks?, index, bypass?, rate?: 0..6 (1/4 1/8 1/8T 1/16 1/16T 1/32 1/32T), pattern?: 0..4 (up down up/down as-played random), octaves?: 1..4, gate?: 5..100 (%), latch?, chord?: 0..11, root?: 0..11, scale?: 0..11, drop?, kind?, to?: index (move it there)} — a MIDI effect's settings → {midi_fx}",
+            "{tracks?, clips?, index, bypass?, rate?: 0..6 (1/4 1/8 1/8T 1/16 1/16T 1/32 1/32T), pattern?: 0..4 (up down up/down as-played random), octaves?: 1..4, gate?: 5..100 (%), latch?, chord?: 0..11, root?: 0..11, scale?: 0..11, drop?, kind?, to?: index (move it there)} — a MIDI effect's settings → {midi_fx}",
             has_selection,
             set
         ),
@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove MIDI Effect",
             [],
             None,
-            "{tracks?, index?: (default: all)} — takes a MIDI effect (or all) off the tracks → {midi_fx}",
+            "{tracks?, clips?, index?: (default: all)} — takes a MIDI effect (or all) off the tracks (or the clips) → {midi_fx}",
             has_selection,
             remove
         ),
@@ -191,22 +191,63 @@ fn midi_tracks(e: &Engine, c: &str, p: &Value) -> Result<Vec<TrackId>> {
     Ok(tracks)
 }
 
-fn list_of(e: &Engine, t: Option<&TrackId>) -> Value {
-    json!(t.and_then(|t| e.session().track(*t)).map(|t| t.midi_fx.clone()).unwrap_or_default())
+/// Whose MIDI effects a command changes: tracks' (the default), or with `clips` those MIDI
+/// clips' own.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Track(TrackId),
+    Clip(ClipId),
+}
+
+/// The lists a command changes: `clips` (MIDI clips) when given, else `tracks` (instrument and
+/// MIDI tracks).
+fn targets(e: &Engine, c: &str, p: &Value) -> Result<Vec<Target>> {
+    if p.get("clips").is_some() {
+        let ids = super::clip_ids_param(e, p);
+        if ids.is_empty() {
+            return Err(bad(c, "`clips`: which MIDI clips"));
+        }
+        for id in &ids {
+            let clip = e.session().find_clip(*id).map(|x| x.1).ok_or_else(|| bad(c, format!("no clip {}", id.0)))?;
+            if clip.midi_playing().is_none() {
+                return Err(bad(c, format!("`{}` is not a MIDI clip: MIDI effects go on MIDI clips", clip.name)));
+            }
+        }
+        return Ok(ids.into_iter().map(Target::Clip).collect());
+    }
+    Ok(midi_tracks(e, c, p)?.into_iter().map(Target::Track).collect())
+}
+
+fn list(e: &Engine, t: Target) -> Option<(&str, &Vec<MidiFx>)> {
+    match t {
+        Target::Track(id) => e.session().track(id).map(|t| (t.name.as_str(), &t.midi_fx)),
+        Target::Clip(id) => e.session().find_clip(id).map(|(_, c)| (c.name.as_str(), &c.midi_fx)),
+    }
+}
+
+fn list_mut(e: &mut Engine, t: Target) -> Option<&mut Vec<MidiFx>> {
+    match t {
+        Target::Track(id) => e.session_mut().track_mut(id).map(|t| &mut t.midi_fx),
+        Target::Clip(id) => e.session_mut().find_clip_mut(id).map(|c| &mut c.midi_fx),
+    }
+}
+
+fn list_of(e: &Engine, t: Option<&Target>) -> Value {
+    json!(t.and_then(|t| list(e, *t)).map(|(_, l)| l.clone()).unwrap_or_default())
 }
 
 fn add(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.midi_fx_add";
-    let tracks = midi_tracks(e, C, p)?;
+    let tracks = targets(e, C, p)?;
     let kind = str_param(p, "kind").and_then(MidiFxKind::from_key).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale or note_repeat"))?;
-    if let Some(t) = tracks.iter().filter_map(|t| e.session().track(*t)).find(|t| t.midi_fx.len() >= MAX_MIDI_FX) {
-        return Err(bad(C, format!("`{}` already has {MAX_MIDI_FX} MIDI effects", t.name)));
+    if let Some((name, _)) = tracks.iter().filter_map(|t| list(e, *t)).find(|(_, l)| l.len() >= MAX_MIDI_FX) {
+        return Err(bad(C, format!("`{name}` already has {MAX_MIDI_FX} MIDI effects")));
     }
     let at = p.get("at").and_then(Value::as_u64);
     for t in &tracks {
-        if let Some(tr) = e.session_mut().track_mut(*t) {
-            let i = at.map_or(tr.midi_fx.len(), |a| usize::try_from(a).unwrap_or(usize::MAX).min(tr.midi_fx.len()));
-            tr.midi_fx.insert(i, MidiFx::new(kind));
+        if let Some(l) = list_mut(e, *t) {
+            let i = at.map_or(l.len(), |a| usize::try_from(a).unwrap_or(usize::MAX).min(l.len()));
+            l.insert(i, MidiFx::new(kind));
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))
@@ -214,11 +255,11 @@ fn add(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn set(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.midi_fx_set";
-    let tracks = midi_tracks(e, C, p)?;
+    let tracks = targets(e, C, p)?;
     let index =
         p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "`index`: which MIDI effect (0 first)"))?;
-    if let Some(t) = tracks.iter().filter_map(|t| e.session().track(*t)).find(|t| index >= t.midi_fx.len()) {
-        return Err(bad(C, format!("`{}` has {} MIDI effect(s); no index {index}", t.name, t.midi_fx.len())));
+    if let Some((name, l)) = tracks.iter().filter_map(|t| list(e, *t)).find(|(_, l)| index >= l.len()) {
+        return Err(bad(C, format!("`{name}` has {} MIDI effect(s); no index {index}", l.len())));
     }
     let int = |key: &str, lo: i64, hi: i64| -> Result<Option<u8>> {
         match p.get(key) {
@@ -252,8 +293,8 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     let to = p.get("to").and_then(Value::as_u64).map(|x| usize::try_from(x).unwrap_or(usize::MAX));
     for t in &tracks {
-        let Some(tr) = e.session_mut().track_mut(*t) else { continue };
-        let Some(f) = tr.midi_fx.get_mut(index) else { continue };
+        let Some(l) = list_mut(e, *t) else { continue };
+        let Some(f) = l.get_mut(index) else { continue };
         let set = |dst: &mut u8, v: Option<u8>| {
             if let Some(v) = v {
                 *dst = v;
@@ -271,9 +312,9 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
         f.drop = drop.unwrap_or(f.drop);
         f.kind = kind.unwrap_or(f.kind);
         if let Some(to) = to {
-            let fx = tr.midi_fx.remove(index);
-            let to = to.min(tr.midi_fx.len());
-            tr.midi_fx.insert(to, fx);
+            let fx = l.remove(index);
+            let to = to.min(l.len());
+            l.insert(to, fx);
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))
@@ -281,16 +322,16 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn remove(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.midi_fx_remove";
-    let tracks = midi_tracks(e, C, p)?;
+    let tracks = targets(e, C, p)?;
     let index = p.get("index").and_then(Value::as_u64).map(|i| usize::try_from(i).unwrap_or(usize::MAX));
     for t in &tracks {
-        let Some(tr) = e.session_mut().track_mut(*t) else { continue };
+        let Some(l) = list_mut(e, *t) else { continue };
         match index {
-            Some(i) if i < tr.midi_fx.len() => {
-                tr.midi_fx.remove(i);
+            Some(i) if i < l.len() => {
+                l.remove(i);
             }
             Some(_) => {}
-            None => tr.midi_fx.clear(),
+            None => l.clear(),
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))

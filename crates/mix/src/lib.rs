@@ -5175,7 +5175,7 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             rtp("delay", 0.0).clamp(-1e7, 1e7) as i64,
         )
     };
-    let any_printed = t.clips().iter().any(|c| c.midi_fx_printed);
+    let any_printed = t.clips().iter().any(|c| c.midi_fx_printed || c.midi_fx_render.0.is_some());
     for clip in t.clips() {
         if clip.muted {
             continue;
@@ -5184,6 +5184,15 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         // A clip that holds its MIDI effects' output plays past them.
         if any_printed {
             midi_fx::set_direct(&mut *inst.plugin, clip.midi_fx_printed);
+        }
+        // A clip with MIDI effects of its own plays what they made of it (rendered off the audio
+        // thread), straight to the instrument.
+        if let Some(r) = clip.midi_fx_render.0.as_deref() {
+            if clip.start < end && clip.end() >= pos {
+                midi_fx::set_direct(&mut *inst.plugin, true);
+                play_fx_render(&r.events, plays_channels(clip), pos, end, inst, held, &mut alive);
+            }
+            continue;
         }
         // The clip's own transpose and velocity offset, with the track's.
         let (dv, dp) = (dv + i64::from(clip.midi_velocity), dp + i64::from(clip.midi_transpose));
@@ -5377,6 +5386,61 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             }
         }
         held.retain(|p| sounds(*p));
+    }
+}
+
+/// A clip's rendered MIDI effects' events (timeline samples, in order) for the block `pos..end`:
+/// each in the block sent (on its channel when the clip `chans`, else as the clip's notes go),
+/// and the pitches sounding in the block marked in `alive`. No allocation.
+fn play_fx_render(
+    events: &[(Samples, [u8; 3])],
+    chans: bool,
+    pos: Samples,
+    end: Samples,
+    inst: &mut PluginSlot,
+    held: &mut Vec<u8>,
+    alive: &mut [bool; 128],
+) {
+    let is_on = |m: [u8; 3]| m[0] & 0xF0 == 0x90 && m[2] > 0;
+    let is_off = |m: [u8; 3]| m[0] & 0xF0 == 0x80 || (m[0] & 0xF0 == 0x90 && m[2] == 0);
+    // What sounds as the block starts: every pitch whose last event before it was an on.
+    let mut sounding = [false; 128];
+    let first = events.partition_point(|e| e.0 < pos);
+    for &(_, m) in events.get(..first).unwrap_or(&[]) {
+        if let Some(s) = sounding.get_mut(usize::from(m[1] & 0x7F)) {
+            if is_on(m) {
+                *s = true;
+            } else if is_off(m) {
+                *s = false;
+            }
+        }
+    }
+    for (a, s) in alive.iter_mut().zip(sounding) {
+        *a |= s;
+    }
+    for &(at, m) in events.get(first..).unwrap_or(&[]).iter().take_while(|e| e.0 < end) {
+        let offset = usize::try_from(at - pos).unwrap_or(0);
+        let pitch = m[1] & 0x7F;
+        if is_on(m) {
+            inst.hear(m);
+            if let Some(a) = alive.get_mut(usize::from(pitch)) {
+                *a = true;
+            }
+            if !held.contains(&pitch) && held.len() < 128 {
+                held.push(pitch);
+            }
+        } else if is_off(m) {
+            held.retain(|p| *p != pitch);
+        }
+        if chans {
+            inst.plugin.midi_raw(offset, m);
+        } else if is_on(m) {
+            inst.plugin.note_on(offset, pitch, m[2]);
+        } else if is_off(m) {
+            inst.plugin.note_off(offset, pitch);
+        } else {
+            inst.plugin.midi(offset, [m[0] & 0xF0, m[1], m[2]]);
+        }
     }
 }
 
@@ -9040,6 +9104,34 @@ mod tests {
         eng.set_external_instances(true);
         eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Instrument, id: "clap:test.tape".into(), ch: 2, plugin: Box::new(tape) }]);
         (s, eng, heard)
+    }
+
+    /// A clip with MIDI effects of its own plays their render, not its notes: each event at its
+    /// sample, and a note the render holds over a block is not let go at the block's start.
+    #[test]
+    fn a_clip_with_its_own_effects_plays_their_render() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 9600,
+        });
+        let mut clip = Clip::midi(ClipId(1), "m", 0, 48_000, seq);
+        clip.midi_fx = vec![soundcraft_model::MidiFx::new(soundcraft_model::MidiFxKind::Arpeggiator)];
+        let events = vec![(100, [0x90, 72, 90]), (600, [0x80, 72, 0]), (700, [0x90, 76, 80])];
+        clip.midi_fx_render.0 = Some(Arc::new(soundcraft_model::FxRender { key: 1, events }));
+        let (s, mut eng, heard) = taped_clip(clip);
+        for b in 0..3 {
+            render_block(&mut eng, &s, b * 512);
+        }
+        let notes: Vec<(usize, [u8; 3])> =
+            heard.lock().unwrap().iter().filter(|x| matches!(x.2[0] & 0xF0, 0x80 | 0x90)).map(|x| (x.1, x.2)).collect();
+        assert_eq!(notes, vec![(100, [0x90, 72, 90]), (88, [0x80, 72, 0]), (188, [0x90, 76, 80])], "the render, not the clip's own note 60");
     }
 
     /// An instrument that reports a look-ahead.

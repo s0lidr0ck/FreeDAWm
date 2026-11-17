@@ -37,7 +37,7 @@ pub use automation::{
     letter_slot,
 };
 pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
-pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MAX_TRANSPOSE_CENTS, MidiCleanup, PatternClip, ProcessStep};
+pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, FxRender, MAX_TRANSPOSE_CENTS, MidiCleanup, MidiFxRender, PatternClip, ProcessStep};
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use live_stretch::{LiveStretch, PitchRender, PitchRenders, StretchKind};

@@ -14,6 +14,7 @@ pub mod catalog;
 pub mod catalog_more;
 pub mod chord_follow;
 pub mod clip_group_file;
+pub mod clip_midi_fx;
 pub mod cmd;
 pub mod dawproject;
 pub mod decode_cache;
@@ -490,6 +491,7 @@ impl Engine {
         crate::midi_cleanup::refresh(&mut s);
         // So are the notes' playback indexes (after the previews they index).
         crate::note_index::refresh(&mut s);
+        crate::clip_midi_fx::refresh(&mut s);
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
@@ -783,6 +785,9 @@ impl Engine {
     /// Re-derives every MIDI clip's playback index made from other notes (`note_index`); a scan
     /// first, so a session whose indexes are current is not copied.
     pub(crate) fn refresh_note_index(&mut self) {
+        if crate::clip_midi_fx::any_stale(&self.doc) {
+            crate::clip_midi_fx::refresh(Arc::make_mut(&mut self.doc));
+        }
         if crate::note_index::any_stale(&self.doc) {
             crate::note_index::refresh(Arc::make_mut(&mut self.doc));
         }

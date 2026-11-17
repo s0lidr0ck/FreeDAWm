@@ -305,6 +305,14 @@ pub struct Clip {
     /// Record Effects' Output): it plays straight to the instrument, past the effects.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub midi_fx_printed: bool,
+    /// A MIDI clip's own MIDI effects (an arpeggiator, a chord, a scale, note repeat), run on
+    /// its notes only; what they make goes straight to the instrument, past the track's effects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_fx: Vec<crate::MidiFx>,
+    /// What the clip's own MIDI effects make of it, as the mix plays it (derived, never saved;
+    /// made by the engine off the audio thread).
+    #[serde(skip)]
+    pub midi_fx_render: MidiFxRender,
     /// A MIDI clip's own transpose in semitones, applied as it plays (with its track's).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub midi_transpose: i8,
@@ -431,6 +439,8 @@ impl Clip {
             play_quantize: None,
             follow_chords: None,
             midi_fx_printed: false,
+            midi_fx: Vec::new(),
+            midi_fx_render: MidiFxRender::default(),
             midi_transpose: 0,
             midi_velocity: 0,
             midi_index: soundcraft_midi::NoteIndexSlot(None),
@@ -796,6 +806,24 @@ impl Clip {
         self.effects.sort_by(|a, b| a.0.cmp(&b.0));
         self.effects.dedup_by(|a, b| a.0 == b.0);
         self.effects.truncate(MAX_CLIP_EFFECTS);
+    }
+}
+
+/// What a clip's own MIDI effects make of it: the events in timeline samples, in order, and a
+/// fingerprint of everything they were made from (the clip, its notes and effects, the tempo).
+#[derive(Debug, Clone, Default)]
+pub struct FxRender {
+    pub key: u64,
+    pub events: Vec<(Samples, [u8; 3])>,
+}
+
+/// Where a clip keeps [`FxRender`]: derived data, left out of comparisons (two are always equal).
+#[derive(Debug, Clone, Default)]
+pub struct MidiFxRender(pub Option<std::sync::Arc<FxRender>>);
+
+impl PartialEq for MidiFxRender {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
 

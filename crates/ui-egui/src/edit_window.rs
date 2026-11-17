@@ -4488,6 +4488,7 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
         });
     });
     clean_menu(app, ui, c);
+    crate::midi_fx_menu::clip_menu(app, ui, c);
     if app.engine.session().find_clip(c).is_some_and(|(_, x)| x.is_audio()) {
         ui.separator();
         if ui.button("Tune Vocal…").on_hover_text("Open the Vocal Editor on this clip").clicked() {
