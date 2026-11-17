@@ -36,7 +36,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
-| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups | Small: no typed selection numbers |
+| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups, typed selection numbers | Small |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
@@ -100,7 +100,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Rubber-band selection of clips | ◐ | ● | ● | ● | **Works**: a Grabber drag from empty space selects the clips the box touches across tracks (Shift adds) |
 | Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Works**: Edit › Selection › Select All Clips on Track, Select All Following (from the insertion, the selected tracks or every track), Select Clips with Same Name, with Same Color, Select Muted Clips |
 | Extend selection to session start or end | ● | ● | ● | ● | **Works**: Edit › Selection › Extend Edit to Session Start / End (the end of the last clip) |
-| Type the selection's start, end and length | ● | ● | ● | ● | **Missing**: the numbers are display only |
+| Type the selection's start, end and length | ● | ● | ● | ● | **Works**: a click on Start, End or Length in the counters opens a field that takes the value in the main counter's format (a length counts from the start: bars, beats and ticks in its meter) |
 | Tab to clip boundaries, Tab to Transient | ● | ● | ● | ● | **Works** |
 | Link timeline and edit selection | ● | — | — | — | **Works** |
 | Link track and edit selection | ● | ◐ | ● | ● | **Flag only** |
@@ -401,3 +401,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Trim clips to close gaps |
 | 2026-11-17 | minor | Consolidate keeps the automatic edge fades, as playback does |
 | 2026-11-17 | minor | Memory locations that recall the view |
+| 2026-11-17 | minor | The selection's start, end and length can be typed |

@@ -188,6 +188,27 @@ fn snap_to_grid_snaps_the_edit_cursor_while_slip_moves_stay_free() {
 }
 
 #[test]
+fn the_selection_start_end_and_length_can_be_typed() {
+    let (mut app, ctx, _, _) = app("slip", "selector", &[]);
+    app.engine.execute("view.main_counter", &json!({"format": "bars_beats"})).unwrap();
+    let sel = |app: &SoundApp| app.engine.session().edit.selection;
+    for (field, text) in [("start", "3|1|000"), ("length", "1|2|000")] {
+        app.dialogs.open_selection_field(field, "");
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![Event::Text(text.into())]);
+        frame(&ctx, &mut app, key(Key::Enter));
+        assert!(app.dialogs.open.is_none(), "{field}");
+    }
+    // Bar 3 at 120 bpm in 4/4 is 4 s in; a bar and two beats is 3 s.
+    assert_eq!((sel(&app).start, sel(&app).end), (SEC * 4, SEC * 7));
+    app.dialogs.open_selection_field("end", "");
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![Event::Text("6|1|000".into())]);
+    frame(&ctx, &mut app, key(Key::Enter));
+    assert_eq!((sel(&app).start, sel(&app).end), (SEC * 4, SEC * 10));
+}
+
+#[test]
 fn f6_with_f7_or_f7_with_f8_chooses_the_smart_tool() {
     let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
     let tool = |app: &SoundApp| app.engine.session().edit.tool;

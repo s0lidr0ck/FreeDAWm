@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             repeat_to_fill
         ),
         cmd!(noundo "edit.select_all", "Select All", ["Edit"], Some("Cmd+A"), "{}", always, select_all),
-        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups)}", always, select),
+        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, length?: samples | text in the main counter's format (the end moves to start + length), clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups)}", always, select),
         cmd!(noundo "edit.select_none", "Deselect All", [], None, "{}", always, |e, _| {
             let s = e.session_mut();
             s.edit.selected_tracks.clear();
@@ -622,7 +622,22 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
     match (st, en) {
         (Some(a), Some(b)) => ed.selection = soundcraft_time::Range::new(a.max(0), b.max(0)),
         (Some(a), None) => ed.selection = soundcraft_time::Range::point(a.max(0)),
+        (None, Some(b)) if p.get("length").is_none() => ed.selection = soundcraft_time::Range::new(ed.selection.start.min(b.max(0)), b.max(0)),
         _ => {}
+    }
+    // A typed length runs from the selection's start.
+    if let Some(v) = p.get("length") {
+        let start = ed.selection.start;
+        let len = match (v.as_i64(), v.as_str()) {
+            (Some(n), _) => n,
+            (None, Some(text)) => soundcraft_time::parse_length(text, start, s.edit.main_counter, s.sample_rate, &s.tempo, s.frame_rate)
+                .map_err(|err| bad("edit.select", err.to_string()))?,
+            _ => -1,
+        };
+        if len < 0 {
+            return Err(bad("edit.select", "`length` is a number of samples or a length in the main counter's format"));
+        }
+        ed.selection = soundcraft_time::Range::new(start, start.saturating_add(len.min(MAX_POSITION)));
     }
     if let Some(mut c) = clips {
         // A clip in a clip group brings the whole group (unless `exact`), so it selects, moves,

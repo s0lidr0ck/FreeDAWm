@@ -135,12 +135,56 @@ pub fn parse_position(
     }
 }
 
+/// Parse a length typed in `fmt` (as [`format_length`] shows one) for a span starting at
+/// `start`: bars|beats|ticks count from there in its meter; timecode, feet+frames, minutes:seconds
+/// and samples are durations (no session start offset). The length in samples, never negative.
+pub fn parse_length(text: &str, start: Samples, fmt: TimeFormat, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Result<Samples, TimeError> {
+    let t = text.trim();
+    let err = || TimeError::Parse(t.to_string(), fmt.label());
+    let len = match fmt {
+        TimeFormat::BarsBeats => {
+            let parts: Vec<i64> =
+                t.split(['|', '.', ' ']).filter(|p| !p.is_empty()).map(|p| p.parse::<i64>()).collect::<Result<_, _>>().map_err(|_| err())?;
+            if parts.is_empty() || parts.len() > 3 || parts.iter().any(|p| *p < 0) {
+                return Err(err());
+            }
+            let t0 = map.samples_to_ticks(start, sr);
+            let m = map.meter_at_tick(t0);
+            let get = |i: usize| parts.get(i).copied().unwrap_or(0);
+            let d = get(0).saturating_mul(m.ticks_per_bar()).saturating_add(get(1).saturating_mul(m.ticks_per_beat())).saturating_add(get(2));
+            map.tick_to_samples(t0.saturating_add(d), sr).saturating_sub(start)
+        }
+        TimeFormat::Timecode => Timecode::parse(t)?.to_samples(rate, sr),
+        TimeFormat::FeetFrames => parse_position(t, fmt, sr, map, rate, 0, 0)?,
+        TimeFormat::MinSecs | TimeFormat::Samples => parse_position(t, fmt, sr, map, rate, 0, 0)?,
+    };
+    if len < 0 { Err(err()) } else { Ok(len) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ctx() -> (SampleRate, TempoMap, FrameRate) {
         (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps30)
+    }
+
+    #[test]
+    fn typed_lengths_read_back_what_format_length_shows() {
+        let (sr, map, rate) = ctx();
+        let start = map.samples_at_bar_beat(BarBeat { bar: 3, beat: 2, tick: 0 }, sr);
+        for (len, fmt) in [
+            (48_000 * 3, TimeFormat::BarsBeats),
+            (48_000 * 7 / 2, TimeFormat::MinSecs),
+            (12_345, TimeFormat::Samples),
+            (48_000 * 2, TimeFormat::Timecode),
+        ] {
+            let shown = format_length(start, len, fmt, sr, &map, rate);
+            assert_eq!(parse_length(&shown, start, fmt, sr, &map, rate).unwrap(), len, "{shown} in {fmt:?}");
+        }
+        assert_eq!(parse_length("0|2|000", start, TimeFormat::BarsBeats, sr, &map, rate).unwrap(), 48_000, "two beats at 120");
+        assert!(parse_length("-5", 0, TimeFormat::Samples, sr, &map, rate).is_err());
+        assert!(parse_length("x", 0, TimeFormat::BarsBeats, sr, &map, rate).is_err());
     }
 
     #[test]

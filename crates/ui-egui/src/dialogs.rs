@@ -114,6 +114,12 @@ pub enum Dialog {
         id: ClipId,
         name: String,
     },
+    /// The edit selection's Start, End or Length typed in the main counter's format (`field`
+    /// is the `edit.select` key: start, end or length).
+    SelectionField {
+        field: String,
+        text: String,
+    },
     /// Clip Notes…: the clip's free text.
     ClipNotes {
         id: ClipId,
@@ -299,6 +305,7 @@ impl Dialogs {
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
             Dialog::ClipNotes { .. } => "clip_notes",
+            Dialog::SelectionField { .. } => "selection_field",
             Dialog::RenameMarker { .. } => "rename_marker",
             Dialog::PointValue { .. } => "point_value",
             Dialog::ClearClips { .. } => "clear_clips",
@@ -328,6 +335,11 @@ impl Dialogs {
 
     pub fn open_rename_clip(&mut self, id: ClipId, name: &str) {
         self.open = Some(Dialog::RenameClip { id, name: name.to_string() });
+    }
+
+    /// Type the edit selection's `field` (start, end or length), starting from `text` as shown.
+    pub fn open_selection_field(&mut self, field: &str, text: &str) {
+        self.open = Some(Dialog::SelectionField { field: field.to_string(), text: text.to_string() });
     }
 
     pub fn open_clip_notes(&mut self, id: ClipId, text: &str) {
@@ -723,6 +735,9 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
         Dialog::ClipNotes { .. } => "Clip Notes",
+        Dialog::SelectionField { field, .. } if field == "end" => "Selection End",
+        Dialog::SelectionField { field, .. } if field == "length" => "Selection Length",
+        Dialog::SelectionField { .. } => "Selection Start",
         Dialog::RenameMarker { .. } => "Rename Marker",
         Dialog::PointValue { .. } => "Set Point Value",
         Dialog::ClearClips { .. } => "Clear",
@@ -977,6 +992,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("clip.rename".into(), json!({"clip": id.0, "name": name})));
+                    }
+                }
+                Dialog::SelectionField { field, text } => {
+                    name_field(ui, text);
+                    ui.label(egui::RichText::new("In the main counter's format").small());
+                    if buttons(ui, "OK", enter) {
+                        action = Some(("edit.select".into(), json!({field.as_str(): text})));
                     }
                 }
                 Dialog::ClipNotes { id, text } => {

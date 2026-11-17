@@ -311,6 +311,12 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
         let y = r.min.y + 10.0 + i as f32 * 13.0;
         ui.painter().text(pos2(r.min.x + 214.0, y), Align2::RIGHT_CENTER, *label, regular(11.0), t.counter_label);
         ui.painter().text(pos2(r.max.x - 8.0, y), Align2::RIGHT_CENTER, val, mono(11.0), t.counter_text);
+        // A click types the value (edit.select's start, end or length).
+        let row = Rect::from_min_max(pos2(r.min.x + 160.0, y - 6.0), pos2(r.max.x - 4.0, y + 6.0));
+        let field = label.to_lowercase();
+        if ui.interact(row, ui.id().with(("sel_field", i)), Sense::click()).on_hover_text(format!("Type the selection's {field}")).clicked() {
+            app.dialogs.open_selection_field(&field, val);
+        }
     }
     // Sub counter row.
     let y = r.max.y - 11.0;
@@ -799,8 +805,12 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
     for (label, value) in fields {
         let lw = ui.painter().layout_no_wrap(label.to_string(), regular(10.0), t.counter_label).size().x;
         let vw = ui.painter().layout_no_wrap(value.clone(), mono(11.0), t.counter_text).size().x;
-        let (r, resp) = ui.allocate_exact_size(vec2(lw + vw + 18.0, 26.0), Sense::hover());
+        let (r, resp) = ui.allocate_exact_size(vec2(lw + vw + 18.0, 26.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Selection {label} {value}")));
+        // A click types the value (edit.select's start, end or length).
+        if resp.on_hover_text(format!("Type the selection's {}", label.to_lowercase())).clicked() {
+            app.dialogs.open_selection_field(&label.to_lowercase(), &value);
+        }
         ui.painter().rect(r, CornerRadius::same(3), t.counter_bg, Stroke::new(1.0, t.counter_border), StrokeKind::Inside);
         ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, label, regular(10.0), t.counter_label);
         ui.painter().text(pos2(r.max.x - 6.0, r.center().y), Align2::RIGHT_CENTER, value, mono(11.0), t.counter_text);
