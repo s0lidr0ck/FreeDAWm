@@ -914,3 +914,15 @@ fn a_view_location_recalls_the_zoom_heights_and_shown_tracks() {
     run(&mut e, "markers.recall", json!({"number": m}));
     assert_eq!(e.session().edit.zoom.samples_per_px, 4000.0);
 }
+
+#[test]
+fn a_marker_can_sit_on_a_track() {
+    let mut e = engine("slip");
+    let a = new_track(&mut e);
+    let n = run(&mut e, "markers.add", json!({"at": 4800, "track": a.0, "name": "breath"}))["number"].clone();
+    let track_of = |e: &Engine| e.session().markers.iter().find(|m| m.name == "breath").and_then(|m| m.track);
+    assert_eq!(track_of(&e), Some(a));
+    run(&mut e, "markers.edit", json!({"number": n, "track": null}));
+    assert_eq!(track_of(&e), None);
+    assert!(e.execute("markers.add", &json!({"track": 999_999})).is_err(), "no such track");
+}

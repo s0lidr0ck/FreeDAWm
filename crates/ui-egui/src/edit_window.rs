@@ -2063,6 +2063,22 @@ fn freeze_targets(s: &Session, selection: &[u64], thaw: bool) -> (Vec<u64>, Vec<
     (tracks, skipped)
 }
 
+/// The markers placed on track `id`'s lane: a line down the lane and the name at its top.
+fn draw_track_markers(app: &SoundApp, ui: &Ui, id: TrackId, tl: Rect, lane: Rect) {
+    let s = app.engine.session();
+    let painter = ui.painter().with_clip_rect(lane.intersect(tl));
+    for m in s.markers.iter().filter(|m| m.track == Some(id)) {
+        let x = x_of(s, tl, m.start);
+        if x < tl.min.x - 1.0 || x > tl.max.x + 1.0 {
+            continue;
+        }
+        let col = m.color.map_or(Color32::from_rgb(250, 200, 60), |[r, g, b]| Color32::from_rgb(r, g, b));
+        painter.line_segment([pos2(x, lane.min.y), pos2(x, lane.max.y)], Stroke::new(1.5, col));
+        painter.text(pos2(x + 3.0, lane.min.y + 2.0), Align2::LEFT_TOP, &m.name, regular(10.0), col);
+        painter.rect_filled(Rect::from_min_size(pos2(x - 3.0, lane.min.y), vec2(6.0, 6.0)), 1.0, col);
+    }
+}
+
 /// The track menu's Active/Inactive item for a track that is `inactive` now.
 pub fn inactive_label(inactive: bool) -> &'static str {
     if inactive { "Make Active" } else { "Make Inactive" }
@@ -3067,11 +3083,14 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             let param = shown.clone()?;
             breakpoint_at(s, tl, lane, track, &param, p).map(|at| (param, at))
         });
+        let at = resp.interact_pointer_pos().map(|p| sample_at(s, tl, p.x).max(0));
         ui.ctx().data_mut(|d| {
             d.insert_temp(menu_clip_id, clip);
             d.insert_temp(menu_point_id, point);
+            d.insert_temp(id.with("menu_at"), at);
         });
     }
+    let menu_at = ui.ctx().data(|d| d.get_temp::<Option<Samples>>(id.with("menu_at"))).flatten();
     // The clip may have been removed or moved since the right-click; only use it if it still exists.
     let menu_clip = ui.ctx().data(|d| d.get_temp::<Option<ClipId>>(menu_clip_id)).flatten().filter(|c| track.clips().iter().any(|x| x.id == *c));
     let menu_point = ui
@@ -3088,8 +3107,18 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             }
             ui.menu_button("Show Lane Below", |ui| crate::auto_lanes::add_lane_menu(app, ui, track, Some(p)));
         }
-        (None, None) => clip_context_menu(app, ui, menu_clip),
+        (None, None) => {
+            clip_context_menu(app, ui, menu_clip);
+            // A marker on this track's lane, where the menu was opened.
+            if let Some(at) = menu_at
+                && ui.button("Add Track Marker Here").clicked()
+            {
+                let _ = app.run("markers.add", json!({"at": at, "track": track.id.0}));
+                ui.close();
+            }
+        }
     });
+    draw_track_markers(app, ui, track.id, tl, lane);
     if sub.is_some() {
         // Nothing is dropped on an automation lane.
     } else {

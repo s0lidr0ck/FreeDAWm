@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Memory Location",
             [],
             Some("Enter"),
-            "{name?, at?, start?, end?, kind?: marker|selection|none, ruler?: 1..5, view?: bool (keeps the zoom, scroll, track heights and shown tracks to recall; default on for kind none)}",
+            "{name?, at?, start?, end?, kind?: marker|selection|none, ruler?: 1..5, view?: bool (keeps the zoom, scroll, track heights and shown tracks to recall; default on for kind none), track?: id|name (a marker on that track's lane in the Edit window)}",
             always,
             add_marker
         ),
@@ -117,7 +117,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             delete_marker
         ),
-        cmd!("markers.edit", "Edit Memory Location", [], None, "{number | id, name?, comments?, at?, color?: [r,g,b] | null}", always, edit_marker),
+        cmd!(
+            "markers.edit",
+            "Edit Memory Location",
+            [],
+            None,
+            "{number | id, name?, comments?, at?, color?: [r,g,b] | null, track?: id|name | null (null: back to the rulers)}",
+            always,
+            edit_marker
+        ),
         cmd!(noundo "markers.recall", "Recall Memory Location", [], Some("Period + n + Period"), "{number}", always, recall_marker),
         cmd!(noundo "markers.next", "Go to Next Marker", [], None, "{}", always, |e, _| step_marker(e, 1)),
         cmd!(noundo "markers.previous", "Go to Previous Marker", [], None, "{}", always, |e, _| step_marker(e, -1)),
@@ -707,11 +715,14 @@ fn add_marker(e: &mut Engine, p: &Value) -> Result<Value> {
         n += 1;
     }
     let name = str_param(p, "name").map_or_else(|| format!("Marker {n}"), str::to_string);
+    let track = track_param(e, "markers.add", p, "track")?;
+    let s = e.session_mut();
     let view = bool_or(p, "view", kind == MarkerKind::None).then(|| location_view(s));
     let id = s.add_marker(&name, kind, a.max(0), b.max(a).max(0));
     if let Some(m) = s.markers.iter_mut().find(|m| m.id == id) {
         m.ruler = i64_or(p, "ruler", 1).clamp(1, 5) as u8;
         m.view = view;
+        m.track = track;
     }
     let number = s.marker(id).map_or(0, |m| m.number);
     Ok(json!({"id": id, "number": number}))
@@ -785,6 +796,11 @@ fn delete_marker(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn edit_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let i = marker_index(e, p, "markers.edit")?;
+    let track = match p.get("track") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(_) => Some(track_param(e, "markers.edit", p, "track")?),
+    };
     let at = position_param(e, "markers.edit", p, "at")?;
     let color = match p.get("color") {
         None => None,
@@ -802,6 +818,9 @@ fn edit_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let Some(m) = s.markers.get_mut(i) else { return Err(bad("markers.edit", "gone")) };
     if let Some(c) = color {
         m.color = c;
+    }
+    if let Some(t) = track {
+        m.track = t;
     }
     // `name` is the documented new name; when it was the selector it already matches, so this is a no-op.
     if let Some(n) = str_param(p, "rename").or_else(|| str_param(p, "name")) {

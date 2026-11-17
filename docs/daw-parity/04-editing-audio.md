@@ -109,7 +109,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
 | Markers on several rulers, a marker list | ● | ● | ● | ● | **Works** |
 | A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Works**: Memory Locations' + View keeps the zoom, scroll, track heights and which tracks are shown, and recalling it puts them back without moving the playhead; any marker made with `view` recalls them too |
-| Markers attached to a track | ● | ○ | ○ | ◐ | **Flag only**: the field exists, nothing sets it |
+| Markers attached to a track | ● | ○ | ○ | ◐ | **Works**: Add Track Marker Here in a track lane's menu puts a marker on that track, drawn down its lane with its name; `markers.add`/`markers.edit` take `track` (null moves it back to the rulers) |
 | Session overview strip | ● | ● | ◐ | ● | **Works** |
 
 ## D. Cut, copy, trim and overlaps
@@ -402,3 +402,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Consolidate keeps the automatic edge fades, as playback does |
 | 2026-11-17 | minor | Memory locations that recall the view |
 | 2026-11-17 | minor | The selection's start, end and length can be typed |
+| 2026-11-17 | minor | Markers on a track |
