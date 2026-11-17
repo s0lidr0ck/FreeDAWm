@@ -172,9 +172,32 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
                     (Tool::Pencil, "pencil"),
                 ] {
                     let smart_member = cur == Tool::Smart && matches!(tool, Tool::Trim | Tool::Selector | Tool::Grabber);
-                    let tip = format!("{}{}", tool.label(), tool.fkey().map(|k| format!(" ({k})")).unwrap_or_default());
-                    if icon_button(ui, vec2(36.0, 26.0), icon, cur == tool || smart_member, &tip).clicked() {
+                    let mut tip = format!("{}{}", tool.label(), tool.fkey().map(|k| format!(" ({k})")).unwrap_or_default());
+                    let shape = soundcraft_engine::cmd::current_pencil_shape(app.engine.session());
+                    if tool == Tool::Pencil {
+                        tip.push_str(&format!(" · automation shape: {} (right-click to change)", shape.id()));
+                    }
+                    let resp = icon_button(ui, vec2(36.0, 26.0), icon, cur == tool || smart_member, &tip);
+                    if resp.clicked() {
                         let _ = app.run("edit.tool", json!({"tool": tool.id()}));
+                    }
+                    if tool == Tool::Pencil {
+                        resp.context_menu(|ui| {
+                            ui.label("Pencil shape on automation");
+                            for s in soundcraft_model::PencilShape::ALL {
+                                let label = match s {
+                                    soundcraft_model::PencilShape::Free => "Free Hand",
+                                    soundcraft_model::PencilShape::Line => "Line",
+                                    soundcraft_model::PencilShape::Triangle => "Triangle",
+                                    soundcraft_model::PencilShape::Square => "Square",
+                                    soundcraft_model::PencilShape::Random => "Random",
+                                };
+                                if ui.radio(shape == s, label).clicked() {
+                                    let _ = app.run("automation.pencil_shape", json!({"shape": s.id()}));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 }
             });

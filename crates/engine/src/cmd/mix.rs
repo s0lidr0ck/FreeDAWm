@@ -777,6 +777,10 @@ pub(crate) fn resolve_auto_param(track: &Track, s: &str) -> Option<AutoParam> {
 /// `None` when the plugin is known and has no such parameter (or two that differ only in case);
 /// `param` as given when the plugin is not known here (a hosted plugin not installed).
 pub(crate) fn canonical_param(plugin: &str, param: &str) -> Option<String> {
+    // The mixer's own lanes on a module (bypass, wet/dry mix) are no plugin's parameter.
+    if param == soundcraft_model::BYPASS_PARAM || param == soundcraft_model::MIX_PARAM {
+        return Some(param.to_string());
+    }
     let Some(info) = crate::cmd::clap::plugin_info(plugin) else { return Some(param.to_string()) };
     if info.param(param).is_some() {
         return Some(param.to_string());
@@ -894,9 +898,11 @@ pub(crate) fn current_value(tr: &soundcraft_model::Track, param: &AutoParam) -> 
         AutoParam::Trim => 0.0,
         AutoParam::Width => tr.mixer.width,
         AutoParam::Balance => tr.mixer.balance,
+        AutoParam::Surround(i) => tr.mixer.surround.unwrap_or_default().axis(*i),
         AutoParam::Plugin { module, param } if param == soundcraft_model::BYPASS_PARAM => {
             tr.module_or_instrument(*module).map_or(0.0, |i| f32::from(u8::from(i.bypass)))
         }
+        AutoParam::Plugin { module, param } if param == soundcraft_model::MIX_PARAM => tr.module_or_instrument(*module).map_or(1.0, |i| i.mix),
         AutoParam::Plugin { module, param } => tr.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }

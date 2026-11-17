@@ -38,6 +38,12 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
                     }
                 }
             }
+            // The surround panner's position, on a track that has one.
+            if track.mixer.surround.is_some() || (0..4).any(|i| has_data(track, &AutoParam::Surround(i))) {
+                for (i, label) in ["surround left-right", "surround front-back", "surround height", "surround divergence"].into_iter().enumerate() {
+                    v.push(top(AutoParam::Surround(u8::try_from(i).unwrap_or(0)), label));
+                }
+            }
         }
         if track.kind != TrackKind::Master {
             v.push(top(AutoParam::Mute, "mute"));
@@ -69,6 +75,9 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
     for ins in instrument.iter().chain(&track.mixer.inserts) {
         let Some(info) = crate::mix_window::plugin_info(&ins.plugin) else { continue };
         v.push(Choice { group: Some(info.name.to_string()), param: AutoParam::bypass(ins.id), label: "Bypass".into() });
+        if ins.id != soundcraft_model::INSTRUMENT_MODULE {
+            v.push(Choice { group: Some(info.name.to_string()), param: AutoParam::wet_mix(ins.id), label: "Mix".into() });
+        }
         for p in crate::edit_window::lane_params(track, ins, info) {
             let name = crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name);
             v.push(Choice {

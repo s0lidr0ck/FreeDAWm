@@ -5,7 +5,7 @@ use super::mix::{current_value, lane_params};
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::{AutoParam, AutomationPoint};
+use soundcraft_model::{AutoParam, AutomationPoint, PencilShape};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -52,11 +52,38 @@ pub fn specs() -> Vec<CommandSpec> {
             "Draw Automation",
             [],
             None,
-            "{track?, param, points: [[at, value]…], tolerance?: 0.1} — a Pencil pass: replaces the lane inside the series' span (anchors keep the curve outside it), thinned",
+            "{track?, param, points: [[at, value]…], tolerance?: 0.1, shape?: free|line|triangle|square|random, period?: samples} — a Pencil pass: replaces the lane inside the series' span (anchors keep the curve outside it), thinned. With a shape other than free, the first and last points are the press and the pointer and the shape repeats every period (the grid's step at the press unless given)",
             has_selection,
             draw
         ),
+        cmd!(
+            noundo "automation.pencil_shape",
+            "Pencil Shape",
+            [],
+            None,
+            "{shape: free|line|triangle|square|random} — what the Pencil draws on an automation lane (Shift at the press still draws a line) → {shape}",
+            always,
+            pencil_shape
+        ),
     ]
+}
+
+/// The `s.edit` value holding the Pencil's shape (an index into [`PencilShape::ALL`]).
+pub const PENCIL_SHAPE: &str = "automation.pencil_shape";
+
+/// The Pencil's shape on automation lanes (`automation.pencil_shape`).
+pub fn current_pencil_shape(s: &soundcraft_model::Session) -> PencilShape {
+    let i = s.edit.value(PENCIL_SHAPE, 0.0);
+    PencilShape::ALL.get(if i.is_finite() && i >= 0.0 { i as usize } else { 0 }).copied().unwrap_or_default()
+}
+
+fn pencil_shape(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "automation.pencil_shape";
+    let shape =
+        str_param(p, "shape").and_then(PencilShape::parse).ok_or_else(|| bad(C, "`shape` (free, line, triangle, square or random) required"))?;
+    let i = PencilShape::ALL.iter().position(|x| *x == shape).unwrap_or(0);
+    e.session_mut().edit.values.insert(PENCIL_SHAPE.into(), i as f64);
+    Ok(json!({"shape": shape.id()}))
 }
 
 /// The lanes `track`/`tracks` + `param` name, as (track, param) pairs.
@@ -110,8 +137,21 @@ fn series_param(p: &Value, cmd: &str) -> Result<Vec<(Samples, f32)>> {
 
 fn draw(e: &mut Engine, p: &Value) -> Result<Value> {
     let lanes = lanes(e, p, "automation.draw")?;
-    let series = series_param(p, "automation.draw")?;
-    let tol = f32_or(p, "tolerance", 0.1).clamp(0.0, 100.0);
+    let mut series = series_param(p, "automation.draw")?;
+    let mut tol = f32_or(p, "tolerance", 0.1).clamp(0.0, 100.0);
+    let shape = match str_param(p, "shape") {
+        Some(x) => PencilShape::parse(x).ok_or_else(|| bad("automation.draw", format!("unknown shape `{x}`")))?,
+        None => PencilShape::Free,
+    };
+    if shape != PencilShape::Free
+        && let (Some(&from), Some(&to)) = (series.first(), series.last())
+    {
+        let s = e.session();
+        let period = p.get("period").and_then(Value::as_i64).unwrap_or_else(|| s.edit.grid.step_samples(from.0.min(to.0), &s.grid_ctx()));
+        // Seeded by where it starts: drawing the same again gives the same steps.
+        series = shape.points(from, to, period, from.0.unsigned_abs());
+        tol = 0.0;
+    }
     let s = e.session_mut();
     let mut n = 0;
     for (t, param) in &lanes {
@@ -332,6 +372,32 @@ mod tests {
         e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": 500, "value": -6.0})).unwrap();
         e.execute("automation.thin", &json!({"track": t.0, "tolerance": 1.0})).unwrap();
         assert_eq!(e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().points.len(), 3);
+    }
+
+    /// The Pencil's shape is a setting; a shaped draw expands the press and the pointer into the
+    /// shape at the given period (or the grid's step), in one undo step.
+    #[test]
+    fn pencil_shapes_draw_between_the_press_and_the_pointer() {
+        let (mut e, t) = volume_lane(&[(0, 0.0), (100_000, 0.0)]);
+        assert_eq!(super::current_pencil_shape(e.session()), PencilShape::Free);
+        e.execute("automation.pencil_shape", &json!({"shape": "square"})).unwrap();
+        assert_eq!(super::current_pencil_shape(e.session()), PencilShape::Square);
+        assert!(e.execute("automation.pencil_shape", &json!({"shape": "blob"})).is_err());
+        e.execute(
+            "automation.draw",
+            &json!({"track": t.0, "param": "volume", "points": [[1000, -12.0], [5000, 0.0]], "shape": "square", "period": 2000}),
+        )
+        .unwrap();
+        let lane = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        for (at, want) in [(1500, -12.0), (2500, 0.0), (3500, -12.0), (4500, 0.0)] {
+            assert!((lane.value_at(at, 0.0) - want).abs() < 1e-4, "{at}: {}", lane.value_at(at, 0.0));
+        }
+        assert_eq!(e.undo_label(), Some("Draw Automation"));
+        // Without a period: the grid's step.
+        e.execute("automation.draw", &json!({"track": t.0, "param": "volume", "points": [[0, -6.0], [96_000, 0.0]], "shape": "triangle"})).unwrap();
+        let n = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().points.len();
+        assert!(n > 4, "corners at the grid's half steps: {n}");
+        assert!(e.execute("automation.draw", &json!({"track": t.0, "param": "volume", "points": [[0, 0.0]], "shape": "zig"})).is_err());
     }
 
     #[test]

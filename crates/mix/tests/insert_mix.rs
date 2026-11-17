@@ -110,3 +110,28 @@ fn a_latent_insert_at_half_mix_does_not_comb() {
     let rest = &out[BLOCK * 4..];
     assert!(rest.iter().all(|v| v.abs() < 1e-5), "{}", rest.iter().map(|v| v.abs()).fold(0.0, f32::max));
 }
+
+/// The mix's lane (`plugin:m<id>:@mix`) drives it as it plays, read where the module's input is;
+/// the stored mix is left alone. A silencing Gain laned from full wet to dry halfway lets the
+/// input through from there.
+#[test]
+fn the_mix_lane_moves_the_blend() {
+    let sig = noise(LEN);
+    let mut s = session();
+    let a = playback(&mut s, "A", &sig);
+    let mut g = Insert::new("gain");
+    g.params.insert("gain".into(), -200.0);
+    let m = s.track_mut(a).unwrap().mixer.add_module(g, None).unwrap();
+    let mut lane = soundcraft_model::AutomationLane::new(soundcraft_model::AutoParam::wet_mix(m));
+    lane.set_point(0, 1.0);
+    lane.set_point((BLOCK * 100) as i64, 1.0);
+    lane.set_point((BLOCK * 100 + 1) as i64, 0.0);
+    s.track_mut(a).unwrap().automation.push(lane);
+    let mut eng = engine(&s, BLOCK);
+    let mut out = Vec::new();
+    render(&mut eng, &s, 0..140, &mut out);
+    assert!(out[BLOCK * 80..BLOCK * 100].iter().all(|v| v.abs() < 1e-6), "full wet by the lane");
+    let n0 = (BLOCK * 110..BLOCK * 140).max_by(|x, y| sig[*x].abs().total_cmp(&sig[*y].abs())).unwrap();
+    assert!(out[n0].abs() > 0.5 * sig[n0].abs(), "dry by the lane: {} for {}", out[n0], sig[n0]);
+    assert_eq!(s.track(a).unwrap().mixer.module(m).unwrap().mix, 1.0, "the stored mix is left alone");
+}

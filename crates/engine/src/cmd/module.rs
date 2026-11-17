@@ -452,7 +452,10 @@ fn module_mix(e: &mut Engine, p: &Value) -> Result<Value> {
     let v = p.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(C, "`value` (0 to 1) required"))?;
     let ins = find_mut(e, C, t, id)?;
     ins.mix = (v as f32).clamp(0.0, 1.0);
-    Ok(json!({"mix": ins.mix}))
+    let mix = ins.mix;
+    // Written while a pass runs, as any control moved.
+    e.automation_changed(t, AutoParam::wet_mix(id));
+    Ok(json!({"mix": mix}))
 }
 
 fn module_param(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -826,6 +829,25 @@ mod tests {
         assert!(e.session().tracks.iter().all(|tr| tr.automation.iter().all(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. }))));
         e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:ratio"), "at": 0, "value": 2.0})).unwrap();
         e.execute("track.view", &json!({"track": t, "view": format!("plugin:m{a}:ratio")})).unwrap();
+    }
+
+    /// A module's bypass and wet/dry mix lanes are made by the automation commands (they are no
+    /// plugin parameter, yet the module's own); any other `@` id is refused.
+    #[test]
+    fn bypass_and_mix_lanes_are_made() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let a = e.execute("mix.module_add", &json!({"track": t, "plugin": "compressor"})).unwrap()["module"].as_u64().unwrap();
+        for p in ["@bypass", "@mix"] {
+            e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:{p}"), "at": 0, "value": 0.5})).unwrap();
+        }
+        let tr = &e.session().tracks[0];
+        let id = soundcraft_model::ModuleId(a as u32);
+        let mix = soundcraft_model::AutoParam::wet_mix(id);
+        assert!(tr.lane(&soundcraft_model::AutoParam::bypass(id)).is_some() && tr.lane(&mix).is_some());
+        assert_eq!(super::super::mix::current_value(tr, &mix), 1.0, "a new insert is fully wet");
+        assert!(e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:@nothing"), "at": 0, "value": 0.5})).is_err());
     }
 
     #[test]

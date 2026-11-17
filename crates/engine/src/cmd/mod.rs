@@ -14,6 +14,7 @@ pub use auto_write::{
 };
 mod audiosuite;
 mod automation_edit;
+pub use automation_edit::current_pencil_shape;
 mod band;
 pub mod chord_lane;
 mod clap;

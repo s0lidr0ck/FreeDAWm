@@ -61,6 +61,7 @@ fn surround_pan(e: &mut Engine, p: &Value) -> Result<Value> {
     let clear = bool_or(p, "clear", false);
     let s = e.session_mut();
     let mut out = Vec::new();
+    let mut moved = Vec::new();
     for t in tracks {
         let Some(tr) = s.track_mut(t) else { continue };
         if matches!(tr.kind, TrackKind::Master | TrackKind::Vca) {
@@ -68,6 +69,15 @@ fn surround_pan(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         tr.mixer.surround = if clear { None } else { Some(apply_fields(current(&tr.mixer), p)) };
         out.push(json!({"track": t, "surround": tr.mixer.surround}));
+        moved.push(t);
+    }
+    // Written while a pass runs, as any control moved: each axis named.
+    for t in moved {
+        for (i, axis) in soundcraft_model::SURROUND_AXES.iter().enumerate() {
+            if p.get(*axis).is_some() {
+                e.automation_changed(t, soundcraft_model::AutoParam::Surround(u8::try_from(i).unwrap_or(0)));
+            }
+        }
     }
     Ok(json!({"tracks": out}))
 }

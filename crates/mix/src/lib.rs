@@ -2749,7 +2749,7 @@ impl MixEngine {
             };
             let (dst_buf, dst_fmt) = dst;
             let apos = back(if snd.pre_fader { strip.pre_at } else { strip.post_at });
-            let surround = snd.surround.as_ref().or(if snd.follow_main_pan { t.mixer.surround.as_ref() } else { None });
+            let follows = snd.surround.is_none() && snd.follow_main_pan;
             // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
             // block size (playback or bounce) sends the same.
             let mut start = 0;
@@ -2772,6 +2772,9 @@ impl MixEngine {
                     let p = send_pan(t, i, snd.pan, at);
                     if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) }
                 };
+                // A send following the main pan follows its surround lanes too.
+                let main_sp = if follows { surround_at(t, at) } else { None };
+                let surround = snd.surround.as_ref().or(main_sp.as_ref());
                 let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
                 apply_matrix_span(src, span, dst_buf, &m, gain);
             }
@@ -2820,7 +2823,8 @@ impl MixEngine {
         let mut start = 0;
         while start < frames {
             let (at, end) = pan_segment(t, apos, start, frames);
-            let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: t.mixer.surround.as_ref() };
+            let sp = surround_at(t, at);
+            let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: sp.as_ref() };
             let mut m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
             if src.len() == 2 {
                 shape_stereo(&mut m, shape_at(t, AutoParam::Width, t.mixer.width, at), shape_at(t, AutoParam::Balance, t.mixer.balance, at));
@@ -5633,7 +5637,13 @@ fn note_insert_latency(t: &Track, strip: &mut Strip, pos: Samples) {
 
 fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track, module: Option<soundcraft_model::ModuleId>, pos: Samples) {
     apply_prepared(slot, ins);
-    slot.wet_to = if ins.mix.is_finite() { ins.mix.clamp(0.0, 1.0) } else { 1.0 };
+    let mix = if ins.mix.is_finite() { ins.mix } else { 1.0 };
+    // Its lane, when one plays (read where the module's input is, as its parameters are).
+    let mix = match module.and_then(|m| plugin_lane(t, m, soundcraft_model::MIX_PARAM)) {
+        Some(l) => l.value_at(pos, mix),
+        None => mix,
+    };
+    slot.wet_to = if mix.is_finite() { mix.clamp(0.0, 1.0) } else { 1.0 };
     // Automation lanes are keyed by module id (the instrument's is `INSTRUMENT_MODULE`); `None`
     // reads no lanes.
     let Some(module) = module else {
@@ -5813,6 +5823,23 @@ fn pan_at(t: &Track, idx: usize, pos: Samples) -> f32 {
     base
 }
 
+/// The track's surround panner at `pos`: its x, y, z and divergence lanes where automation is
+/// read and they have points, else as set. `None` without a surround panner (lanes alone do not
+/// make one). No allocation.
+fn surround_at(t: &Track, pos: Samples) -> Option<SurroundPan> {
+    let mut sp = t.mixer.surround?;
+    if t.mixer.automation_mode.reads() {
+        for l in &t.automation {
+            if let AutoParam::Surround(i) = l.param
+                && !l.points.is_empty()
+            {
+                sp.set_axis(i, l.value_at(pos, sp.axis(i)));
+            }
+        }
+    }
+    Some(sp)
+}
+
 /// Pan automation is read on a grid of [`PAN_STEP`] timeline samples rather than once per block,
 /// so playback (callback-sized blocks) and bounces (1024-frame blocks) pan identically.
 const PAN_STEP: Samples = 64;
@@ -5821,7 +5848,9 @@ const PAN_STEP: Samples = 64;
 /// of the frames that share it. Without pan automation the whole block shares one pan.
 fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
     let automated = t.mixer.automation_mode.reads()
-        && t.automation.iter().any(|l| matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance) && !l.points.is_empty());
+        && t.automation
+            .iter()
+            .any(|l| matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_)) && !l.points.is_empty());
     if !automated {
         return (pos, frames);
     }
@@ -10894,6 +10923,30 @@ mod tests {
         let mut two = vec![vec![1.0; 512]; 2];
         eng.render(&s, 512, 512, &mut two);
         assert!(two[0][10].abs() < 1e-6);
+    }
+
+    /// The surround panner's x and y lanes move the source as it plays (on the pan's grid), the
+    /// stored position left alone; with automation Off the stored position plays.
+    #[test]
+    fn surround_lanes_move_the_source() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.outputs[0].format = ChannelFormat::Surround51;
+        let tr = s.track_mut(t).unwrap();
+        tr.mixer.surround = Some(SurroundPan::default());
+        for (i, v) in [(0u8, 1.0f32), (1, -1.0)] {
+            let mut lane = soundcraft_model::AutomationLane::new(AutoParam::Surround(i));
+            lane.set_point(0, tr.mixer.surround.unwrap().axis(i));
+            lane.set_point(2047, tr.mixer.surround.unwrap().axis(i));
+            lane.set_point(2048, v);
+            tr.automation.push(lane);
+        }
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[2][100] - 0.5).abs() < 1e-4, "front centre first: {}", out[2][100]);
+        assert!((out[5][3000] - 0.5).abs() < 1e-4 && out[2][3000].abs() < 1e-4, "then rear right: {}", out[5][3000]);
+        assert_eq!(s.track(t).unwrap().mixer.surround.unwrap().x, 0.0, "the stored position is left alone");
+        s.track_mut(t).unwrap().mixer.automation_mode = soundcraft_model::AutomationMode::Off;
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[2][3000] - 0.5).abs() < 1e-4, "automation off: as set");
     }
 
     #[test]

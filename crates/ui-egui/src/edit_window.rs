@@ -1172,6 +1172,8 @@ fn static_value(track: &Track, p: &AutoParam) -> f32 {
         AutoParam::Trim => 0.0,
         AutoParam::Width => track.mixer.width,
         AutoParam::Balance => track.mixer.balance,
+        AutoParam::Surround(i) => track.mixer.surround.unwrap_or_default().axis(*i),
+        AutoParam::Plugin { module, param } if param == soundcraft_model::MIX_PARAM => track.module_or_instrument(*module).map_or(1.0, |i| i.mix),
         AutoParam::Plugin { module, param } => track.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
@@ -3099,6 +3101,7 @@ pub fn auto_value_text(param: &AutoParam, v: f32) -> String {
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim if v <= -144.0 + 1e-3 => "-inf dB".into(),
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim => format!("{v:+.1} dB"),
         AutoParam::Width => format!("{:.0}%", v.clamp(-1.0, 1.0) * 100.0),
+        AutoParam::Surround(_) => format!("{v:.2}"),
         AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => {
             let n = (v.clamp(-1.0, 1.0) * 100.0).round() as i32;
             match n {
@@ -3140,6 +3143,10 @@ pub fn parse_auto_value(param: &AutoParam, text: &str) -> Option<f32> {
             "on" | "unmuted" | "off" | "0" | "no" => Some(0.0),
             _ => None,
         },
+        AutoParam::Surround(_) => {
+            let (lo, hi, _) = param.range();
+            num(&t).map(|v| v.clamp(lo, hi))
+        }
         AutoParam::Plugin { .. } => num(&t),
     }
 }
@@ -3961,7 +3968,9 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 let lane = lane_rect_for(t, param, rect(*row), tl);
                 let param = param.clone();
                 let value = auto_value(lane, lane_range(t, &param), p.y);
-                if *line && !points.is_empty() {
+                // A shape (Pencil Shape) is drawn from the press and the pointer on release.
+                let shaped = soundcraft_engine::cmd::current_pencil_shape(&s) != soundcraft_model::PencilShape::Free;
+                if (*line || shaped) && !points.is_empty() {
                     // A straight line: the press and the pointer.
                     points.truncate(1);
                     points.push((at, value));
@@ -4072,14 +4081,16 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, .. }) => trim_clip(app, clip, to, false),
         Some(Gesture::MidiClip { track, from, to }) => new_midi_clip(app, s, track, from, to),
-        Some(Gesture::Pencil { track, param, points, .. }) => {
+        Some(Gesture::Pencil { track, param, points, line }) => {
             // One "Draw Automation" step that replaces what was under the drag (no sawtooth).
             if let Some(param) = param.filter(|_| s.track(track).is_some())
                 && !points.is_empty()
             {
                 let pid = automation_id(&param);
                 let series: Vec<(Samples, f32)> = points;
-                let _ = app.run("automation.draw", json!({"track": track.0, "param": pid, "points": series}));
+                // Shift at the press draws a line whatever the shape.
+                let shape = if line { soundcraft_model::PencilShape::Line } else { soundcraft_engine::cmd::current_pencil_shape(s) };
+                let _ = app.run("automation.draw", json!({"track": track.0, "param": pid, "points": series, "shape": shape.id()}));
             }
         }
         Some(Gesture::ZoomBox { start }) => {

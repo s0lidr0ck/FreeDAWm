@@ -65,6 +65,10 @@ pub enum AutoParam {
     Width,
     /// A stereo track's balance on its main output, -1..1.
     Balance,
+    /// The surround panner's position on the track's main output: 0 x (-1 left..1 right), 1 y
+    /// (-1 back..1 front), 2 z (0 ear level..1 overhead), 3 divergence (0 point..1 everywhere)
+    /// ([`SurroundPan`](crate::SurroundPan)).
+    Surround(u8),
     /// A chain module (by stable id) + parameter id.
     Plugin {
         module: ModuleId,
@@ -85,7 +89,9 @@ impl AutoParam {
             AutoParam::Trim => "trim".into(),
             AutoParam::Width => "width".into(),
             AutoParam::Balance => "balance".into(),
+            AutoParam::Surround(i) => format!("surround {}", SURROUND_AXES.get(usize::from(*i)).copied().unwrap_or("x")),
             AutoParam::Plugin { module, param } if param == BYPASS_PARAM => format!("module {} bypass", module.0),
+            AutoParam::Plugin { module, param } if param == MIX_PARAM => format!("module {} mix", module.0),
             AutoParam::Plugin { module, param } => format!("module {} {param}", module.0),
         }
     }
@@ -102,6 +108,7 @@ impl AutoParam {
             AutoParam::Trim => "trim".into(),
             AutoParam::Width => "width".into(),
             AutoParam::Balance => "balance".into(),
+            AutoParam::Surround(i) => format!("surround_{}", SURROUND_AXES.get(usize::from(*i)).copied().unwrap_or("x")),
             AutoParam::Plugin { module, param } => format!("plugin:m{}:{param}", module.0),
         }
     }
@@ -121,6 +128,9 @@ impl AutoParam {
             "width" => return Some(AutoParam::Width),
             "balance" => return Some(AutoParam::Balance),
             _ => {}
+        }
+        if let Some(axis) = s.strip_prefix("surround_") {
+            return SURROUND_AXES.iter().position(|a| *a == axis).and_then(|i| u8::try_from(i).ok()).map(AutoParam::Surround);
         }
         if let Some(rest) = s.strip_prefix("send_") {
             let mut it = rest.splitn(2, '_');
@@ -146,6 +156,9 @@ impl AutoParam {
             AutoParam::Volume | AutoParam::SendLevel(_) => (-144.0, 12.0, 0.0),
             AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => (-1.0, 1.0, 0.0),
             AutoParam::Width => (-1.0, 1.0, 1.0),
+            AutoParam::Surround(0) => (-1.0, 1.0, 0.0),
+            AutoParam::Surround(1) => (-1.0, 1.0, 1.0),
+            AutoParam::Surround(_) => (0.0, 1.0, 0.0),
             AutoParam::Mute | AutoParam::SendMute(_) => (0.0, 1.0, 0.0),
             AutoParam::Trim => (-144.0, 24.0, 0.0),
             AutoParam::Plugin { .. } => (f32::MIN, f32::MAX, 0.0),
@@ -157,6 +170,13 @@ impl AutoParam {
 /// plugin parameter is named so (the `@` keeps it apart from every plugin's own ids).
 pub const BYPASS_PARAM: &str = "@bypass";
 
+/// The surround panner's automatable axes, by [`AutoParam::Surround`] index (`surround_x`…).
+pub const SURROUND_AXES: [&str; 4] = ["x", "y", "z", "divergence"];
+
+/// The parameter id of a module's wet/dry mix lane (`plugin:m3:@mix`): 0 dry to 1 wet, as
+/// [`Insert::mix`](crate::Insert::mix).
+pub const MIX_PARAM: &str = "@mix";
+
 impl AutoParam {
     /// A module's bypass lane.
     pub fn bypass(module: ModuleId) -> AutoParam {
@@ -166,6 +186,16 @@ impl AutoParam {
     /// Whether this is a module's bypass lane.
     pub fn is_bypass(&self) -> bool {
         matches!(self, AutoParam::Plugin { param, .. } if param == BYPASS_PARAM)
+    }
+
+    /// A module's wet/dry mix lane.
+    pub fn wet_mix(module: ModuleId) -> AutoParam {
+        AutoParam::Plugin { module, param: MIX_PARAM.into() }
+    }
+
+    /// Whether this is a module's wet/dry mix lane.
+    pub fn is_wet_mix(&self) -> bool {
+        matches!(self, AutoParam::Plugin { param, .. } if param == MIX_PARAM)
     }
 }
 
@@ -475,9 +505,117 @@ impl AutomationLane {
     }
 }
 
+/// What a Pencil drag on an automation lane draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PencilShape {
+    /// The pointer's path.
+    #[default]
+    Free,
+    /// A straight line from the press to the pointer.
+    Line,
+    /// Up and down between the press's value and the pointer's, a corner every half period.
+    Triangle,
+    /// The press's value and the pointer's in turn, each held for half a period.
+    Square,
+    /// A value between the press's and the pointer's, held for each period.
+    Random,
+}
+
+impl PencilShape {
+    pub const ALL: [PencilShape; 5] = [PencilShape::Free, PencilShape::Line, PencilShape::Triangle, PencilShape::Square, PencilShape::Random];
+
+    /// Its id (`edit.pencil_shape`).
+    pub fn id(self) -> &'static str {
+        match self {
+            PencilShape::Free => "free",
+            PencilShape::Line => "line",
+            PencilShape::Triangle => "triangle",
+            PencilShape::Square => "square",
+            PencilShape::Random => "random",
+        }
+    }
+
+    /// Reads an id, in any case.
+    pub fn parse(s: &str) -> Option<PencilShape> {
+        PencilShape::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(s.trim()))
+    }
+
+    /// The points the shape draws from `from` (the press: time, value) to `to` (the pointer),
+    /// repeating every `period` samples (the grid's step; at least 2). `seed` picks the random
+    /// values (the same seed, the same steps). Free and Line give the two ends; a drag going left
+    /// draws the same over the range it covers. At most 4096 periods are drawn.
+    pub fn points(self, from: (Samples, f32), to: (Samples, f32), period: Samples, seed: u64) -> Vec<(Samples, f32)> {
+        let ((t0, v0), (t1, v1)) = if to.0 < from.0 { (to, from) } else { (from, to) };
+        // Each shape goes between the press's value and the pointer's, whichever way it was drawn.
+        let (lo, hi) = (from.1, to.1);
+        let period = period.max(2);
+        let half = period / 2;
+        if matches!(self, PencilShape::Free | PencilShape::Line) || t1 <= t0 {
+            return vec![(t0, v0), (t1, v1)];
+        }
+        let mut out = Vec::new();
+        let mut rng = seed ^ 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut k: i64 = 0;
+        loop {
+            let step = if self == PencilShape::Random { period } else { half };
+            let at = t0.saturating_add(k.saturating_mul(step));
+            if at >= t1 || k > 8192 {
+                break;
+            }
+            let end = at.saturating_add(step).min(t1);
+            match self {
+                PencilShape::Triangle => {
+                    let (a, b) = if k % 2 == 0 { (lo, hi) } else { (hi, lo) };
+                    out.push((at, a));
+                    if end == t1 {
+                        let f = (t1 - at) as f32 / step.max(1) as f32;
+                        out.push((t1, a + (b - a) * f));
+                    }
+                }
+                _ => {
+                    let v = match self {
+                        PencilShape::Square if k % 2 == 0 => lo,
+                        PencilShape::Square => hi,
+                        _ => lo + (hi - lo) * next(),
+                    };
+                    out.push((at, v));
+                    out.push((end.saturating_sub(1).max(at), v));
+                }
+            }
+            k += 1;
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pencil_shapes_go_between_the_press_and_the_pointer() {
+        let tri = PencilShape::Triangle.points((1000, 0.0), (5000, 1.0), 1000, 1);
+        assert_eq!(&tri[..5], &[(1000, 0.0), (1500, 1.0), (2000, 0.0), (2500, 1.0), (3000, 0.0)]);
+        assert_eq!(tri.last(), Some(&(5000, 0.0)), "it ends where the pointer let go: {tri:?}");
+        let sq = PencilShape::Square.points((0, -6.0), (2000, 0.0), 1000, 1);
+        assert_eq!(sq, vec![(0, -6.0), (499, -6.0), (500, 0.0), (999, 0.0), (1000, -6.0), (1499, -6.0), (1500, 0.0), (1999, 0.0)]);
+        let r = PencilShape::Random.points((0, 0.2), (10_000, 0.8), 1000, 7);
+        assert_eq!(r.len(), 20, "a held value per period");
+        assert!(r.iter().all(|(_, v)| (0.2..=0.8).contains(v)), "{r:?}");
+        assert!(r.windows(2).any(|w| w[0].1 != w[1].1), "it moves");
+        assert_eq!(r, PencilShape::Random.points((0, 0.2), (10_000, 0.8), 1000, 7), "the same seed, the same steps");
+        // Drawn leftwards: the same span; Line is the two ends.
+        assert_eq!(PencilShape::Line.points((900, 1.0), (100, 0.0), 10, 0), vec![(100, 0.0), (900, 1.0)]);
+        assert_eq!(PencilShape::Triangle.points((900, 1.0), (100, 0.0), 400, 0).first(), Some(&(100, 1.0)));
+        assert!(PencilShape::Square.points((0, 0.0), (i64::MAX, 1.0), 2, 0).len() <= 2 * 8194, "bounded");
+        assert_eq!(PencilShape::parse("TRIANGLE"), Some(PencilShape::Triangle));
+    }
 
     #[test]
     fn interpolation_and_steps() {

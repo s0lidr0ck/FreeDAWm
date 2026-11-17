@@ -397,6 +397,30 @@ impl Default for SurroundPan {
 }
 
 impl SurroundPan {
+    /// The axis an [`AutoParam::Surround`](crate::AutoParam::Surround) lane moves: 0 x, 1 y,
+    /// 2 z, 3 divergence (anything else reads x).
+    pub fn axis(&self, i: u8) -> f32 {
+        match i {
+            1 => self.y,
+            2 => self.z,
+            3 => self.divergence,
+            _ => self.x,
+        }
+    }
+
+    /// Sets [`SurroundPan::axis`] `i` to `v`, kept in its range (a non-finite value is ignored).
+    pub fn set_axis(&mut self, i: u8, v: f32) {
+        if !v.is_finite() {
+            return;
+        }
+        match i {
+            1 => self.y = v.clamp(-1.0, 1.0),
+            2 => self.z = v.clamp(0.0, 1.0),
+            3 => self.divergence = v.clamp(0.0, 1.0),
+            _ => self.x = v.clamp(-1.0, 1.0),
+        }
+    }
+
     /// Puck at the stereo pan position (front edge).
     pub fn from_stereo(pan: f32) -> Self {
         SurroundPan { x: finite_or(pan, 0.0).clamp(-1.0, 1.0), ..SurroundPan::default() }
