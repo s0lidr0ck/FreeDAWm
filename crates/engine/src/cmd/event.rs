@@ -262,7 +262,7 @@ fn meter(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"meter": format!("{num}/{den}")}))
 }
 
-fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "event.insert_time", p)?;
     if r.is_empty() {
         return Err(bad("event.insert_time", "give `start` and `length` or `end`"));
@@ -332,7 +332,7 @@ fn on_every_playlist(s: &mut soundcraft_model::Session, t: soundcraft_model::Tra
     }
 }
 
-fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "event.cut_time", p)?;
     if r.is_empty() {
         return Err(bad("event.cut_time", "selection is empty"));

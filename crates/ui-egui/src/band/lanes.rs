@@ -20,7 +20,7 @@ use crate::theme::{Tokens, bold, regular};
 use egui::{Align2, Color32, CursorIcon, Id, Painter, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use soundcraft_band::chord_theory::{name_for, note_name};
-use soundcraft_model::Session;
+use soundcraft_model::{SectionBlock, Session};
 use soundcraft_time::Samples;
 
 /// The height of both lanes.
@@ -387,6 +387,35 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
     }
     if ui.button("Delete").clicked() {
         pick = Some(Pick::Run("band.section.remove", json!({"block": b.id})));
+    }
+    // The arranger: the section as a handle on the whole song.
+    ui.separator();
+    if ui.button("Copy with the Song").on_hover_text("Copies the section and every track's clips and automation in it right after it").clicked() {
+        pick = Some(Pick::Run("arrange.copy", json!({"block": b.id})));
+    }
+    ui.menu_button("Move with the Song", |ui| {
+        let s = app.engine.session();
+        let at = |t: i64| s.tempo.tick_to_samples(t, s.sample_rate);
+        let mut others: Vec<SectionBlock> = s.band.sections.iter().filter(|o| o.id != b.id).cloned().collect();
+        others.sort_by_key(|o| o.start_tick);
+        for o in &others {
+            let bar = s.tempo.bar_beat_at_tick(o.start_tick).bar;
+            if ui.button(format!("Before {} (bar {bar})", o.section)).clicked() {
+                pick = Some(Pick::Run("arrange.move", json!({"block": b.id, "to": at(o.start_tick)})));
+            }
+        }
+        if let Some(last) = others.iter().map(|o| o.start_tick.saturating_add(o.length_ticks)).max()
+            && ui.button("To the End").clicked()
+        {
+            pick = Some(Pick::Run("arrange.move", json!({"block": b.id, "to": at(last)})));
+        }
+    });
+    if ui
+        .button("Remove with the Song")
+        .on_hover_text("Cuts the section's time from the song: its clips and automation go and what follows closes up")
+        .clicked()
+    {
+        pick = Some(Pick::Run("arrange.remove", json!({"block": b.id})));
     }
     let Some(pick) = pick else { return };
     ui.close();
