@@ -163,6 +163,8 @@ pub enum TransportRequest {
     ScoutStop,
     /// `transport.discard_take`: stop, and throw the take being recorded away (its files too).
     DiscardTake,
+    /// `transport.restart_take`: discard the take being recorded and record again from the start.
+    RestartTake,
 }
 
 /// Snapshot of the transport reported back by the host (playback position etc.).

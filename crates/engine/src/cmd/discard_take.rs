@@ -1,23 +1,40 @@
 //! `transport.discard_take`: stop recording and throw the take away (Pro Tools' Command-Period
 //! while recording): no clip is placed and its files are deleted. Nothing to undo.
+//! `transport.restart_take` does the same and records again at once.
 
 use super::*;
 use crate::{TransportRequest, cmd};
 use serde_json::json;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(
-        noundo "transport.discard_take",
-        "Discard Take",
-        [],
-        Some("Cmd+Alt+."),
-        "{} (while recording) → {}: stops and throws the take away, its files with it",
-        recording,
-        |e, _| {
-            e.transport_requests.push(TransportRequest::DiscardTake);
-            Ok(json!({}))
-        }
-    )]
+    vec![
+        cmd!(
+            noundo "transport.discard_take",
+            "Discard Take",
+            [],
+            Some("Cmd+Alt+."),
+            "{} (while recording) → {}: stops and throws the take away, its files with it",
+            recording,
+            |e, _| {
+                e.transport_requests.push(TransportRequest::DiscardTake);
+                Ok(json!({}))
+            }
+        ),
+        // Cubase's Restart and Logic's discard-and-record again: one step for "that was no good,
+        // again". The new take starts as Record would start it (count-off and pre-roll included).
+        cmd!(
+            noundo "transport.restart_take",
+            "Restart Take",
+            [],
+            Some("Cmd+Alt+Space"),
+            "{} (while recording) → {}: throws the take away, its files with it, and records again from the start",
+            recording,
+            |e, _| {
+                e.transport_requests.push(TransportRequest::RestartTake);
+                Ok(json!({}))
+            }
+        ),
+    ]
 }
 
 fn recording(e: &Engine) -> std::result::Result<(), String> {
@@ -37,5 +54,14 @@ mod tests {
         e.execute("transport.discard_take", &json!({})).unwrap();
         assert_eq!(e.transport_requests, [TransportRequest::DiscardTake]);
         assert!(!e.can_undo(), "nothing to undo");
+    }
+
+    #[test]
+    fn restart_take_asks_the_host_only_while_recording() {
+        let mut e = Engine::default();
+        assert!(e.execute("transport.restart_take", &json!({})).is_err());
+        e.transport.recording = true;
+        e.execute("transport.restart_take", &json!({})).unwrap();
+        assert_eq!(e.transport_requests, [TransportRequest::RestartTake]);
     }
 }

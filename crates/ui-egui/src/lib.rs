@@ -2814,6 +2814,15 @@ impl SoundApp {
                 TransportRequest::ScoutStart { capture, strips, start, end } => scout::start(self, capture, &strips, start, end),
                 TransportRequest::ScoutStop => scout::stop(self),
                 TransportRequest::DiscardTake => self.discard_recording(),
+                TransportRequest::RestartTake => {
+                    if self.engine.transport.recording {
+                        self.discard_recording();
+                        self.start_recording(true);
+                        if self.engine.transport.recording {
+                            self.ui.status = "Take discarded; recording again".into();
+                        }
+                    }
+                }
             }
         }
         self.shuttle_back_frame();

@@ -71,7 +71,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Start recording while playing | ● | ● | ● | ● | **Works**, gapless; inside a playing loop the take splits into its passes |
 | Discard the take in progress | ● | ◐ | ● | ● | **Works**: `transport.discard_take` (Cmd+Alt+.) stops and deletes the take's files; nothing is placed |
 | Undo a take | ● | ● | ● | ● | **Works**: the file goes when no undo step, session file or autosave names it any more (on save or close) |
-| Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Missing** |
+| Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Works**: Restart Take (Cmd+Alt+Space, `transport.restart_take`) throws the take and its files away and records again as Record would, count-off and pre-roll included |
 | Recording at another speed | ● | ○ | ● | ○ | **Missing**: refused (half-speed record is a Pro Tools and Logic feature) |
 
 ## C. Punching
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |
