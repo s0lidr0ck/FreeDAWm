@@ -86,6 +86,19 @@ fn state(app: &SoundApp, label: &str) -> Result<(), String> {
     why
 }
 
+/// A command clicked in a menu that fails says why in the status line: a UI-layer command's error
+/// used to be dropped (only engine errors set the status), and engine errors read as the reason
+/// alone, without "bad parameters for `…`".
+#[test]
+fn a_failing_menu_command_says_why_in_the_status_line() {
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    menus::invoke_menu(&mut app, "ui.capture_midi", "Event > More MIDI > Capture MIDI");
+    assert!(app.ui.status.starts_with("Nothing was played to capture"), "{}", app.ui.status);
+    assert_eq!(menus::readable_error("bad parameters for `edit.space_clips`: select two or more clips"), "Select two or more clips");
+    assert_eq!(menus::readable_error("`edit.cut` is not available: make an edit selection first"), "Make an edit selection first");
+    assert_eq!(menus::readable_error("APPDATA is not set"), "APPDATA is not set");
+}
+
 /// The twelve UI-layer items the audit found always greyed out: clickable where they can act,
 /// greyed out with a reason where they need something first.
 #[test]

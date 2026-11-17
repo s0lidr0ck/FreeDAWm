@@ -739,10 +739,12 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
             || i == "view.mix_slim"
             || i.starts_with("monitor.")
             || i.starts_with("hearing_test.")
-            || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "ui.mix.wide_editors" | "presets.import_firestation") =>
+            || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "ui.mix.wide_editors") =>
         {
             Ok(())
         }
+        // FireStation's own folder, where this platform keeps it; greyed out with where it looked.
+        "presets.import_firestation" => crate::fs_presets::available(app),
         // The ML jobs need an audio track or clip to run on; Generate MIDI from Text and Generate
         // Song need no source, only no job running.
         "ui.ml.text_midi" | "ui.ml.song" => when(ml_idle(app), "Wait for the running ML job"),
@@ -1217,7 +1219,24 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         return;
     }
     let params = params_for(path, id);
-    let _ = crate::dialogs::run_or_ask(app, id, params);
+    // A command clicked in a menu always answers in the status line when it fails: engine errors
+    // set it already, a UI-layer command's error only comes back here.
+    if let Err(e) = crate::dialogs::run_or_ask(app, id, params) {
+        app.ui.status = readable_error(&e);
+    }
+}
+
+/// An error as the status line shows it: the engine's "bad parameters for `edit.space_clips`:
+/// select two or more clips" reads "Select two or more clips".
+pub fn readable_error(e: &str) -> String {
+    let why = e
+        .strip_prefix("bad parameters for `")
+        .or_else(|| e.strip_prefix('`').filter(|r| r.contains("` is not available: ")))
+        .and_then(|r| r.split_once("`: ").map(|(_, w)| w).or_else(|| r.split_once("` is not available: ").map(|(_, w)| w)))
+        .unwrap_or(e)
+        .trim();
+    let mut c = why.chars();
+    c.next().map_or_else(|| e.to_string(), |f| f.to_uppercase().chain(c).collect())
 }
 
 /// Keyboard shortcut for a dialog command, or one that would close a modified session: open its
