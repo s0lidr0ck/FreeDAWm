@@ -2229,6 +2229,11 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             }
             freeze_submenu(app, ui, id, &selection);
         }
+        if cmd == "track.move_to_new_folder"
+            && ui.button("Move to New Basic Folder").on_hover_text("A folder that only organises: no bus, the tracks keep their outputs").clicked()
+        {
+            let _ = app.run(cmd, json!({"tracks": selection, "routing": false}));
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     ml_menu(app, ui, json!({"track": tid}));

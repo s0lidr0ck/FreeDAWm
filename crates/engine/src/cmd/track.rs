@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move to New Folder...",
             ["Track"],
             Some("Cmd+Alt+Shift+N"),
-            "{tracks?, name?}",
+            "{tracks?, name?, routing?: true} — `routing: false` makes a basic folder: it only organises (no bus, no audio path; its members keep their outputs)",
             has_selection,
             move_to_folder
         ),
@@ -613,6 +613,7 @@ fn unique_folder_bus_name(s: &Session, base: &str, own: Option<soundcraft_model:
 fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.move_to_new_folder", p)?;
     let name = str_param(p, "name").map(str::to_string);
+    let routing = bool_or(p, "routing", true);
     let s = e.session_mut();
     let first_idx = tracks.iter().filter_map(|t| s.track_index(*t)).min().unwrap_or(0);
     let fid = s.add_track(TrackKind::Folder, ChannelFormat::Stereo, Some(name.as_deref().unwrap_or("Folder")));
@@ -620,6 +621,21 @@ fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(i) = s.track_index(fid) {
         let f = s.tracks.remove(i);
         s.tracks.insert(first_idx.min(s.tracks.len()), f);
+    }
+    if !routing {
+        // A basic folder: it holds its members (show, hide, collapse, select, spill) and passes
+        // no audio; nothing is rerouted, so the mix is unchanged.
+        if let Some(f) = s.track_mut(fid) {
+            f.mixer.input = Route::None;
+            f.mixer.output = Route::None;
+        }
+        for t in &tracks {
+            if let Some(tr) = s.track_mut(*t) {
+                tr.folder = Some(fid);
+            }
+        }
+        place_under(s, fid, &tracks);
+        return Ok(json!({"folder": fid, "bus": null}));
     }
     // A routing folder sums its members through its own bus.
     let fname = s.track(fid).map(|x| x.name.clone()).unwrap_or_else(|| "Folder".into());
@@ -1576,6 +1592,29 @@ mod tests {
         assert_eq!(folder.mixer.input, snare.mixer.output);
         assert_eq!(s.track_index(folder.id).unwrap() + 1, s.track_index(kick.id).unwrap());
         assert_eq!(s.track_index(kick.id).unwrap() + 1, s.track_index(snare.id).unwrap());
+    }
+
+    /// A basic folder holds its members without touching their routing: no bus is made, their
+    /// outputs stay, and tracks moved in or out later keep theirs too.
+    #[test]
+    fn a_basic_folder_only_organises() {
+        let mut e = crate::demo::demo_engine();
+        let busses = e.session().busses.len();
+        let outs = |e: &Engine| e.session().tracks.iter().map(|t| (t.id, t.mixer.output.clone())).collect::<Vec<_>>();
+        let before = outs(&e);
+        let r = e.execute("track.move_to_new_folder", &json!({"tracks": ["Kick", "Snare"], "name": "Drums", "routing": false})).unwrap();
+        assert!(r["bus"].is_null());
+        let folder = TrackId(r["folder"].as_u64().unwrap());
+        assert_eq!(e.session().busses.len(), busses, "no bus");
+        let f = e.session().track(folder).unwrap();
+        assert_eq!((f.mixer.input.clone(), f.mixer.output.clone()), (Route::None, Route::None), "no audio path");
+        assert!(before.iter().all(|(t, o)| e.session().track(*t).is_none_or(|tr| tr.mixer.output == *o)), "outputs kept");
+        let kick = e.session().track_by_name("Kick").unwrap().id;
+        assert_eq!(e.session().track(kick).unwrap().folder, Some(folder));
+        let other = e.session().tracks.iter().find(|t| t.kind == TrackKind::Audio && t.folder.is_none()).unwrap().id;
+        e.execute("track.move_to_folder", &json!({"tracks": [other.0], "folder": folder.0})).unwrap();
+        e.execute("track.remove_from_folder", &json!({"tracks": [kick.0]})).unwrap();
+        assert!(before.iter().all(|(t, o)| e.session().track(*t).is_none_or(|tr| tr.mixer.output == *o)), "still kept");
     }
 
     #[test]
