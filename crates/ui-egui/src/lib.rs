@@ -2679,6 +2679,8 @@ impl SoundApp {
         self.autosaved_rev = 0;
         // A remote recorder sends these to the booth (`net_ui`).
         self.last_audio_take = (!takes.is_empty()).then(|| (plan.clone(), takes.clone()));
+        // Audio, modules' MIDI and MIDI placed below are one undo step.
+        let depth = self.engine.undo_depth();
         let mut ids = soundcraft_engine::io::place_recording(&mut self.engine, &plan, takes);
         // Armed tracks playing modules' MIDI: their take is what the mix gave them over the pass
         // (within the punch range), printed now from the session as it stands.
@@ -2687,6 +2689,7 @@ impl SoundApp {
         }
         // Armed tracks on hardware MIDI input: what they heard, as clips.
         ids.extend(midi_devices::finish_take(self, &plan, end));
+        self.engine.join_undo_since(depth, "Record");
         self.ui.status =
             if plan.pass.is_some() { format!("Loop-recorded {} take(s)", ids.len() / tracks) } else { format!("Recorded {} clip(s)", ids.len()) };
         if let Some(p) = problem {

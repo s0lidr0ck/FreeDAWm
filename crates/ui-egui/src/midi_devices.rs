@@ -438,6 +438,53 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
     });
 }
 
+/// The output menu's Instrument Outputs part (an instrument with outputs besides its main one,
+/// Juke's Out 2-8): each output on a track of its own (`mix.new_output_track`), or back on the
+/// main output (`mix.instrument_output`).
+fn instrument_outputs_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let s = app.engine.session();
+    let Some(track) = s.track(id) else { return };
+    let names = track.instrument.as_ref().map(soundcraft_engine::cmd::instrument::output_names).unwrap_or_default();
+    if names.is_empty() {
+        return;
+    }
+    let taken: Vec<(u8, String)> = track
+        .instrument_outs
+        .iter()
+        .map(|o| (o.output, s.busses.iter().find(|b| b.id == o.bus).map(|b| b.name.clone()).unwrap_or_default()))
+        .collect();
+    let mut ask: Option<(&'static str, serde_json::Value)> = None;
+    ui.menu_button("Instrument Outputs", |ui| {
+        for (i, name) in names.iter().enumerate() {
+            let Ok(k) = u8::try_from(i) else { continue };
+            match taken.iter().find(|t| t.0 == k) {
+                Some((_, bus)) => {
+                    ui.menu_button(format!("{name} › {bus}"), |ui| {
+                        if ui.button("Back on the Main Output").clicked() {
+                            ask = Some(("mix.instrument_output", json!({"track": id.0, "output": i, "bus": null})));
+                            ui.close();
+                        }
+                    });
+                }
+                None => {
+                    if ui.button(format!("New Track for {name}")).on_hover_text("A bus and an aux track that plays this output").clicked() {
+                        ask = Some(("mix.new_output_track", json!({"track": id.0, "output": i})));
+                        ui.close();
+                    }
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new("A pad or part set to an output nobody takes plays on the main output").small().color(Tokens::current().text_dim),
+        );
+    });
+    if let Some((cmd, p)) = ask
+        && let Err(e) = app.run(cmd, p)
+    {
+        app.ui.status = e;
+    }
+}
+
 /// The output menu's MIDI section (instrument and MIDI tracks): send what the track plays to a
 /// hardware MIDI output port (its instrument becomes External MIDI), and the channel.
 pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
@@ -473,6 +520,7 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
     }
     to_track_menu(app, ui, id);
+    instrument_outputs_menu(app, ui, id);
     let Some(port) = current else { return };
     ui.menu_button(if channel == 0 { "MIDI Channel: as played".to_string() } else { format!("MIDI Channel: {channel}") }, |ui| {
         for ch in 0..=16u8 {
@@ -775,6 +823,24 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
+        let mut thin = app.engine.session().edit.flag(soundcraft_engine::midi_record::THIN_FLAG);
+        if ui
+            .checkbox(&mut thin, "Thin controllers")
+            .on_hover_text("Takes keep only the controller, pitch bend and pressure points that shape a move; the ones between become ramps")
+            .changed()
+            && let Err(e) = app.run("setup.midi_input_filter", json!({"thin": thin}))
+        {
+            app.ui.status = e;
+        }
+        let mut auto = app.engine.session().edit.flag(soundcraft_engine::auto_arm::FLAG);
+        if ui
+            .checkbox(&mut auto, "Auto-arm the selected MIDI track")
+            .on_hover_text("Selecting an instrument or MIDI track arms it, so it is heard and ready to record; the one it armed before is disarmed")
+            .changed()
+            && let Err(e) = app.run("options.midi_auto_arm", json!({"value": auto}))
+        {
+            app.ui.status = e;
+        }
         ui.checkbox(&mut app.ui.midi_thru, "MIDI Thru")
             .on_hover_text("Record-enabled instrument and MIDI tracks play what comes in (input-monitored tracks always do)");
         ui.horizontal(|ui| {

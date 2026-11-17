@@ -1,7 +1,8 @@
 //! The MIDI Effects submenu of an instrument or MIDI track's input menu: the track's MIDI effects
 //! ahead of its instrument (arpeggiator, chord, scale, note repeat), each with its settings, a
 //! bypass, a move up or down and a remove, and Add for a new one (`track.midi_fx_add`,
-//! `track.midi_fx_set`, `track.midi_fx_remove`; a drag is one undo step).
+//! `track.midi_fx_set`, `track.midi_fx_remove`; a drag is one undo step), and Record Effects'
+//! Output (`track.midi_fx_record`): takes keep what the effects made rather than the keys.
 
 use crate::SoundApp;
 use crate::theme::Tokens;
@@ -110,6 +111,7 @@ pub(crate) fn menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         return;
     }
     let list = track.midi_fx.clone();
+    let mut print = track.midi_fx_record;
     let title = if list.is_empty() { "MIDI Effects".to_string() } else { format!("MIDI Effects ({})", list.len()) };
     let mut asks: Vec<Ask> = Vec::new();
     ui.menu_button(title, |ui| {
@@ -127,8 +129,15 @@ pub(crate) fn menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
                 }
             });
         }
+        if ui
+            .checkbox(&mut print, "Record Effects' Output")
+            .on_hover_text("A take keeps what the effects made (and plays past them); off, the keys as played")
+            .changed()
+        {
+            asks.push(("track.midi_fx_record", json!({"tracks": [id.0], "value": print}), None));
+        }
         ui.label(
-            egui::RichText::new("In list order, on clips, live input and routed MIDI, before the instrument; a take keeps the keys as played")
+            egui::RichText::new("In list order, on clips, live input and routed MIDI, before the instrument; a take keeps the keys as played unless Record Effects' Output is on")
                 .small()
                 .color(Tokens::current().text_dim),
         );

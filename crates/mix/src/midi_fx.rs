@@ -506,6 +506,10 @@ pub struct MidiFxHost {
     /// raw: let go when the list changes.
     out: [u8; 2048],
     out_raw: [u64; 32],
+    /// Events given while [`MidiFxHost::set_direct`] is on (a clip that already holds the
+    /// effects' output): they skip the effects and join their output by offset.
+    passthru: EvBuf,
+    direct: bool,
     transport: Transport,
     sr: f32,
 }
@@ -556,6 +560,8 @@ impl MidiFxHost {
             keys_raw: [0; 32],
             out: [0; 2048],
             out_raw: [0; 32],
+            passthru: EvBuf::default(),
+            direct: false,
             transport: Transport::default(),
             sr,
         })
@@ -620,9 +626,24 @@ impl MidiFxHost {
         self.out = [0; 2048];
     }
 
+    /// While on, the events given go past the effects to the instrument (in offset order with
+    /// what the effects make): the mix turns it on around a clip printed through them
+    /// (`Clip::midi_fx_printed`). No allocation.
+    pub fn set_direct(&mut self, on: bool) {
+        self.direct = on;
+    }
+
     /// An event at the input: kept for the block's effects, or straight to the instrument when no
     /// effect is on.
     fn take(&mut self, e: Ev) {
+        if self.direct {
+            if self.active() {
+                self.passthru.push(e);
+            } else {
+                self.emit(e);
+            }
+            return;
+        }
         let i = slot(e.msg);
         if is_on(e.msg) {
             if let Some(k) = self.keys.get_mut(i) {
@@ -698,16 +719,37 @@ impl MidiFxHost {
         let last = if in_a { 0 } else { 1 };
         let len = self.bufs.get(last).map_or(0, |b| b.len);
         let cap = u32::try_from(frames.saturating_sub(1)).unwrap_or(u32::MAX);
-        for i in 0..len {
-            let Some(mut e) = self.bufs.get(last).and_then(|b| b.ev.get(i)).copied() else { break };
+        // What went past the effects joins their output in offset order (each list is in order).
+        self.passthru.sort();
+        let (mut i, mut j) = (0, 0);
+        loop {
+            let a = self.bufs.get(last).filter(|_| i < len).and_then(|b| b.ev.get(i)).copied();
+            let p = self.passthru.events().get(j).copied();
+            let mut e = match (a, p) {
+                (Some(a), Some(p)) if p.offset < a.offset.min(cap) => {
+                    j += 1;
+                    p
+                }
+                (Some(a), _) => {
+                    i += 1;
+                    a
+                }
+                (None, Some(p)) => {
+                    j += 1;
+                    p
+                }
+                (None, None) => break,
+            };
             e.offset = e.offset.min(cap);
             self.emit(e);
         }
+        self.passthru.clear();
     }
 
     /// Forgets every key and note (the instrument is told separately).
     fn clear(&mut self) {
         self.input.clear();
+        self.passthru.clear();
         for s in self.stages.iter_mut() {
             s.clear();
         }
@@ -789,6 +831,15 @@ impl Plugin for MidiFxHost {
     fn midi_out(&mut self, out: &mut MidiOut) {
         self.inner.midi_out(out);
     }
+    fn extra_outputs(&self) -> &'static [&'static str] {
+        self.inner.extra_outputs()
+    }
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.inner.set_outputs_taken(mask);
+    }
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        self.inner.read_output(index, out, frames)
+    }
     fn set_sample(&mut self, sample: Option<Arc<dyn SampleSource>>) -> bool {
         self.inner.set_sample(sample)
     }
@@ -850,6 +901,119 @@ pub(crate) fn sync(plugin: &mut Box<dyn Plugin>, fx: &[MidiFx], sr: f32) {
     if let Some(host) = plugin.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>()) {
         host.configure(fx);
     }
+}
+
+/// Turns [`MidiFxHost::set_direct`] on or off on `plugin` when it is one (an instrument with
+/// MIDI effects); nothing otherwise. No allocation.
+pub(crate) fn set_direct(plugin: &mut dyn Plugin, on: bool) {
+    if let Some(host) = plugin.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>()) {
+        host.set_direct(on);
+    }
+}
+
+/// Collects what a [`MidiFxHost`] gives its instrument, for [`print`].
+struct Sink {
+    got: Vec<(u32, [u8; 3])>,
+}
+
+impl Plugin for Sink {
+    fn info(&self) -> &'static PluginInfo {
+        &crate::track_midi::INFO
+    }
+    fn prepare(&mut self, _sample_rate: f32, _max_block: usize, _channels: usize) {}
+    fn reset(&mut self) {}
+    fn set_param(&mut self, _id: &str, _value: f32) -> bool {
+        false
+    }
+    fn param(&self, _id: &str) -> Option<f32> {
+        None
+    }
+    fn process(&mut self, _io: &mut [Vec<f32>], _frames: usize) {}
+    fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
+        self.midi_raw(offset, [0x90, note & 0x7F, velocity]);
+    }
+    fn note_off(&mut self, offset: usize, note: u8) {
+        self.midi_raw(offset, [0x80, note & 0x7F, 0]);
+    }
+    fn midi(&mut self, offset: usize, msg: [u8; 3]) {
+        self.midi_raw(offset, msg);
+    }
+    fn midi_raw(&mut self, offset: usize, msg: [u8; 3]) {
+        self.got.push((u32::try_from(offset).unwrap_or(u32::MAX), msg));
+    }
+    fn host_wrapper(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// Offline block for [`print`].
+const PRINT_BLOCK: usize = 256;
+
+/// What `fx` make of `events` (timeline samples, MIDI 1.0 channel messages in time order) over
+/// `range`, as the mix would give the instrument while the transport plays through it: the
+/// arpeggiator and note repeat on the song's grid from the session's tempo map. Channels are
+/// kept. Notes still on at the range's end are let go there. The Random pattern rolls afresh, so
+/// it need not repeat what was heard. Allocates: off the audio thread (a take is placed with it).
+pub fn print(s: &soundcraft_model::Session, fx: &[MidiFx], range: soundcraft_time::Range, events: &[(i64, [u8; 3])]) -> Vec<(i64, [u8; 3])> {
+    let mut out = Vec::new();
+    if range.is_empty() {
+        return out;
+    }
+    let sr = s.sample_rate.as_f64() as f32;
+    let mut host = MidiFxHost::new(Box::new(Sink { got: Vec::new() }), sr);
+    host.configure(fx);
+    let mut io: Vec<Vec<f32>> = Vec::new();
+    let mut next = events.iter().filter(|(at, _)| *at >= range.start && *at < range.end).peekable();
+    let mut pos = range.start;
+    while pos < range.end {
+        let n = usize::try_from(range.end.saturating_sub(pos)).unwrap_or(PRINT_BLOCK).min(PRINT_BLOCK);
+        let end = pos.saturating_add(n as i64);
+        host.set_transport(&crate::transport_at(s, pos, true, true));
+        while let Some((at, msg)) = next.next_if(|(at, _)| *at < end) {
+            host.midi_raw(usize::try_from(at.saturating_sub(pos)).unwrap_or(0), *msg);
+        }
+        host.process(&mut io, n);
+        if let Some(sink) = host.inner.host_wrapper().and_then(|a| a.downcast_mut::<Sink>()) {
+            for (o, m) in sink.got.drain(..) {
+                out.push((pos.saturating_add(i64::from(o)), m));
+            }
+        }
+        pos = end;
+    }
+    // Whatever is still on ends with the range.
+    host.release_out();
+    if let Some(sink) = host.inner.host_wrapper().and_then(|a| a.downcast_mut::<Sink>()) {
+        out.extend(sink.got.drain(..).map(|(_, m)| (range.end, m)));
+    }
+    out
+}
+
+/// The events a MIDI clip's `seq` gives (notes and controllers on their channels) when it starts
+/// at `start`, in time order, as `(sample, message)`: what [`print`] takes. Notes before tick 0
+/// (hidden by a trim) and muted notes are left out; each note ends by `end`.
+pub fn sequence_events(s: &soundcraft_model::Session, start: i64, end: i64, seq: &soundcraft_midi::Sequence) -> Vec<(i64, [u8; 3])> {
+    let sr = s.sample_rate;
+    let base = s.tempo.samples_to_ticks(start, sr);
+    let at = |tick: i64| s.tempo.tick_to_samples(base.saturating_add(tick), sr).max(start);
+    let mut out: Vec<(i64, u8, [u8; 3])> = Vec::new();
+    for c in seq.ctrls.iter().filter(|c| c.tick >= 0) {
+        let mut m = crate::ctrl_message(c.kind, c.value, 0);
+        m[0] |= c.channel & 0x0F;
+        out.push((at(c.tick), 0, m));
+    }
+    for n in seq.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
+        let ch = n.channel & 0x0F;
+        let on = at(n.start);
+        if on >= end {
+            continue;
+        }
+        let off = at(n.start.saturating_add(n.length)).min(end).max(on);
+        out.push((on, 1, [0x90 | ch, n.pitch & 0x7F, n.velocity.clamp(1, 127)]));
+        out.push((off, 0, [0x80 | ch, n.pitch & 0x7F, n.release_velocity & 0x7F]));
+    }
+    // At one time: note-offs and controllers before note-ons.
+    out.sort_by_key(|e| (e.0, e.1));
+    out.into_iter().map(|(t, _, m)| (t, m)).collect()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod amp_irs;
+pub mod auto_arm;
 pub mod autosave;
 pub mod band_print;
 pub mod brand;
@@ -600,6 +601,24 @@ impl Engine {
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|h| h.label.as_str())
     }
+    /// How many steps Undo can take back now: give it to [`Engine::join_undo_since`] later.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// The undo steps pushed since the history was `depth` deep become one step, `label`: what
+    /// one action did through several commands (a recording pass that placed audio, printed
+    /// modules' MIDI and placed MIDI) undoes at once. Nothing when fewer than two were pushed.
+    pub fn join_undo_since(&mut self, depth: usize, label: &str) {
+        if self.undo.len() < depth.saturating_add(2) {
+            return;
+        }
+        self.undo.truncate(depth.saturating_add(1));
+        if let Some(h) = self.undo.get_mut(depth) {
+            h.label = label.to_string();
+        }
+    }
+
     pub fn undo_history(&self) -> Vec<String> {
         self.undo.iter().map(|h| h.label.clone()).collect()
     }
@@ -842,6 +861,15 @@ impl Engine {
                 {
                     midi_shared::follow(id, &before, Arc::make_mut(&mut self.doc));
                 }
+                // Auto-Arm Selected MIDI Track: a selection that moved arms the selected MIDI track.
+                if self.loads == loads
+                    && !self.transport.recording
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && before.edit.selected_tracks != self.doc.edit.selected_tracks
+                    && self.doc.edit.flag(auto_arm::FLAG)
+                {
+                    auto_arm::follow_selection(Arc::make_mut(&mut self.doc));
+                }
                 // A frozen track's frozen parts and edit-locked clips are not edited: the command
                 // is undone.
                 if !Arc::ptr_eq(&before, &self.doc)
@@ -1072,6 +1100,27 @@ mod merge_tests {
         assert_eq!(e.undo_history().len(), 1);
         e.undo();
         assert_eq!(e.session().track(t).unwrap().mixer.volume_db, 0.0);
+    }
+
+    /// A recording pass that placed audio and MIDI is one Record step.
+    #[test]
+    fn steps_since_a_depth_join_into_one() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(soundcraft_model::TrackKind::Audio, soundcraft_model::ChannelFormat::Mono, None);
+        e.execute("mix.volume", &json!({"track": t.0, "db": -1.0})).unwrap();
+        let depth = e.undo_depth();
+        e.join_undo_since(depth, "Record");
+        assert_eq!(e.undo_history().len(), 1, "nothing pushed: nothing joined");
+        e.execute("mix.volume", &json!({"track": t.0, "db": -2.0})).unwrap();
+        e.join_undo_since(depth, "Record");
+        assert_eq!(e.undo_history().len(), 2, "one step alone stays as it is");
+        e.execute("mix.mute", &json!({"track": t.0})).unwrap();
+        e.join_undo_since(depth, "Record");
+        assert_eq!(e.undo_history().len(), 2);
+        assert_eq!(e.undo_label(), Some("Record"));
+        e.undo();
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.mixer.volume_db, tr.mixer.mute), (-1.0, false), "both taken back at once");
     }
 
     #[test]

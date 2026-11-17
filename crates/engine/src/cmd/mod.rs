@@ -49,7 +49,7 @@ pub mod clip_shared;
 pub mod clip_slip;
 pub mod groove;
 mod health;
-mod instrument;
+pub mod instrument;
 pub mod juke;
 mod looping;
 mod lyric_alt;

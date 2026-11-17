@@ -291,7 +291,12 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
         if !renders(tu) {
             continue;
         }
-        let feeds = |b: &Route| tu.mixer.output == *b || tu.mixer.sends.iter().flatten().any(|x| x.target == *b);
+        // (An instrument's extra outputs feed their busses too.)
+        let feeds = |b: &Route| {
+            tu.mixer.output == *b
+                || tu.mixer.sends.iter().flatten().any(|x| x.target == *b)
+                || tu.instrument_outs.iter().any(|o| *b == Route::Bus(o.bus))
+        };
         for (v, tv) in s.tracks.iter().enumerate() {
             if v != u
                 && renders(tv)

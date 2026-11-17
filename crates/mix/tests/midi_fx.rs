@@ -149,3 +149,23 @@ fn a_midi_tracks_arpeggio_plays_the_instrument_it_is_routed_to() {
         assert!((at - k as i64 * eighth).abs() <= 1, "step {k} at {at}, not {}", k as i64 * eighth);
     }
 }
+
+/// A clip that holds its effects' output (recorded with Record Effects' Output) plays past them;
+/// the same clip not marked so plays through them.
+#[test]
+fn a_printed_clip_plays_past_the_effects() {
+    let mut s = Session::default();
+    let t = synth(&mut s);
+    s.track_mut(t).unwrap().midi_fx = vec![MidiFx::new(MidiFxKind::Chord)];
+    clip(&mut s, t, 60, 1_920);
+    s.track_mut(t).unwrap().playlist_mut().unwrap().clips[0].midi_fx_printed = true;
+    let (inst, log) = tape(t);
+    let mut eng = engine(vec![inst]);
+    render(&mut eng, &s, 0..4);
+    assert_eq!(ons(&log), vec![(0, 60)], "the printed note alone, not its chord");
+    s.track_mut(t).unwrap().playlist_mut().unwrap().clips[0].midi_fx_printed = false;
+    let (inst, log) = tape(t);
+    let mut eng = engine(vec![inst]);
+    render(&mut eng, &s, 0..4);
+    assert_eq!(ons(&log), vec![(0, 60), (0, 64), (0, 67)]);
+}

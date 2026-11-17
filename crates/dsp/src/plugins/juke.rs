@@ -40,7 +40,7 @@ pub const LAYERS: usize = 4;
 /// Round-robin variations per layer.
 pub const ROBINS: usize = 4;
 /// Parameters per pad (see [`PadParam`]).
-const K: usize = 38;
+const K: usize = 39;
 const VOICES: usize = 64;
 /// Hits waiting for their delay (humanise, flams, ratchets, swing): room for a dense fill of
 /// ratchets on many pads at once, so none is dropped (it was 64).
@@ -63,6 +63,12 @@ pub const VOICE_NAMES: [&str; 10] = ["Kick", "Snare", "Clap", "Tom", "Closed hat
 const FILTERS: [&str; 4] = ["Off", "Low-pass", "High-pass", "Band-pass"];
 const CHOKES: [&str; 9] = ["Off", "1", "2", "3", "4", "5", "6", "7", "8"];
 const MODES: [&str; 2] = ["One-shot", "Gate"];
+/// Juke's stereo outputs besides the main one: a pad set to one plays there instead of the main
+/// output (after its level and pan; its sends still go to bus A and B) while a mixer channel
+/// takes it.
+pub const EXTRA_OUTPUTS: [&str; 7] = ["Out 2", "Out 3", "Out 4", "Out 5", "Out 6", "Out 7", "Out 8"];
+/// A pad's output: the main one or one of [`EXTRA_OUTPUTS`].
+const OUTPUTS: [&str; 8] = ["Main", "Out 2", "Out 3", "Out 4", "Out 5", "Out 6", "Out 7", "Out 8"];
 const STACKS: [&str; 17] = [
     "None", "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Pad 5", "Pad 6", "Pad 7", "Pad 8", "Pad 9", "Pad 10", "Pad 11", "Pad 12", "Pad 13", "Pad 14",
     "Pad 15", "Pad 16",
@@ -110,6 +116,7 @@ enum PadParam {
     HumPitch,
     HumFilter,
     HumTiming,
+    Output,
 }
 
 // Kit-wide parameters, after the pads.
@@ -191,6 +198,7 @@ macro_rules! juke_table {
                 lin(concat!("p", $n, "_hum_pitch"), concat!("Pad ", $n, " Humanize Pitch"), 0.0, 50.0, 0.0, Unit::Cents),
                 lin(concat!("p", $n, "_hum_filter"), concat!("Pad ", $n, " Humanize Filter"), 0.0, 100.0, 0.0, Unit::Percent),
                 lin(concat!("p", $n, "_hum_timing"), concat!("Pad ", $n, " Humanize Timing"), 0.0, 20.0, 0.0, Unit::Ms),
+                choice(concat!("p", $n, "_output"), concat!("Pad ", $n, " Output"), &OUTPUTS, 0),
             )*
             lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
             lin("humanize", "Humanize", 0.0, 100.0, 0.0, Unit::Percent),
@@ -422,6 +430,14 @@ pub struct Juke {
     fx: [Option<Box<dyn Plugin>>; FX_SLOTS],
     /// Stereo work buffers, one block long: the pads' dry mix, bus A and bus B.
     work: [Vec<Vec<f32>>; 3],
+    /// The extra outputs the host takes (bit per [`EXTRA_OUTPUTS`] entry).
+    taken: u32,
+    /// Each pad's output this block: 0 the main, `n` extra output `n - 1` (taken).
+    pad_out: [u8; PADS],
+    /// Each extra output's frame being rendered, and the block just rendered (stereo, a
+    /// block long).
+    ext_frame: [(f32, f32); EXTRA_OUTPUTS.len()],
+    ext: [Vec<Vec<f32>>; EXTRA_OUTPUTS.len()],
 }
 
 /// Levels a readout slot carries (3 × 8 bits, exact in an `f32`).
@@ -506,6 +522,10 @@ impl Juke {
             bus_peak: [0.0; 2],
             fx: std::array::from_fn(|_| None),
             work: std::array::from_fn(|_| vec![vec![0.0; DEFAULT_BLOCK]; 2]),
+            taken: 0,
+            pad_out: [0; PADS],
+            ext_frame: [(0.0, 0.0); EXTRA_OUTPUTS.len()],
+            ext: std::array::from_fn(|_| vec![vec![0.0; DEFAULT_BLOCK]; 2]),
         };
         j.update();
         j
@@ -859,8 +879,16 @@ impl Juke {
             if let Some(pk) = self.pad_peak.get_mut(v.pad) {
                 *pk = pk.max(ol.abs()).max(or.abs());
             }
-            l += ol;
-            r += or;
+            match self.pad_out.get(v.pad).copied().unwrap_or(0).checked_sub(1).and_then(|o| self.ext_frame.get_mut(usize::from(o))) {
+                Some(e) => {
+                    e.0 += ol;
+                    e.1 += or;
+                }
+                None => {
+                    l += ol;
+                    r += or;
+                }
+            }
             al += ol * v.send_a;
             ar += or * v.send_a;
             bl += ol * v.send_b;
@@ -1064,7 +1092,7 @@ impl Plugin for Juke {
         self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
         self.declick = [0.0; 6];
         let block = max_block.clamp(1, 1 << 16);
-        for w in &mut self.work {
+        for w in self.work.iter_mut().chain(self.ext.iter_mut()) {
             for c in w.iter_mut() {
                 c.resize(block, 0.0);
             }
@@ -1104,6 +1132,16 @@ impl Plugin for Juke {
         self.events.clear();
         self.pad_peak = [0.0; PADS];
         self.bus_peak = [0.0; 2];
+        for pad in 0..PADS {
+            let o = self.pc(pad, PadParam::Output);
+            let on = o > 0 && self.taken & (1u32 << (o - 1)) != 0;
+            if let Some(x) = self.pad_out.get_mut(pad) {
+                *x = if on { u8::try_from(o).unwrap_or(0) } else { 0 };
+            }
+        }
+        for c in self.ext.iter_mut().flatten() {
+            c.iter_mut().for_each(|x| *x = 0.0);
+        }
         let block = self.work.iter().flat_map(|w| w.iter().map(Vec::len)).min().unwrap_or(0);
         if block == 0 {
             return;
@@ -1126,7 +1164,16 @@ impl Plugin for Juke {
                     self.apply(kind);
                     next += 1;
                 }
+                self.ext_frame = [(0.0, 0.0); EXTRA_OUTPUTS.len()];
                 let (l, r, al, ar, bl, br) = self.render();
+                for (e, (x, y)) in self.ext.iter_mut().zip(self.ext_frame) {
+                    if let [el, er, ..] = e.as_mut_slice()
+                        && let (Some(a), Some(b)) = (el.get_mut(n), er.get_mut(n))
+                    {
+                        *a = if x.is_finite() { x } else { 0.0 };
+                        *b = if y.is_finite() { y } else { 0.0 };
+                    }
+                }
                 for (w, (x, y)) in self.work.iter_mut().zip([(l, r), (al, ar), (bl, br)]) {
                     if let [wl, wr, ..] = w.as_mut_slice()
                         && let (Some(a), Some(b)) = (wl.get_mut(k), wr.get_mut(k))
@@ -1192,6 +1239,24 @@ impl Plugin for Juke {
         for &(_, kind) in evs.iter().take(count).skip(next) {
             self.apply(kind);
         }
+    }
+
+    fn extra_outputs(&self) -> &'static [&'static str] {
+        &EXTRA_OUTPUTS
+    }
+
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.taken = mask;
+    }
+
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        let Some(src) = self.ext.get(index) else { return false };
+        for (o, c) in out.iter_mut().zip(src.iter()) {
+            for (d, s) in o.iter_mut().zip(c.iter().chain(std::iter::repeat(&0.0))).take(frames) {
+                *d = *s;
+            }
+        }
+        true
     }
 
     fn set_transport(&mut self, transport: &crate::Transport) {
@@ -1652,6 +1717,35 @@ mod tests {
         assert!(j.set_child(FX_SLOTS - 1, None).is_some());
         assert!(j.set_child(FX_SLOTS, Some(gain(0.0))).is_some(), "no such slot: the child comes back");
         assert!(j.child_mut(0).is_none());
+    }
+
+    /// A pad set to an output plays there while the host takes it, and on the main output while
+    /// it does not; the other pads stay on the main output.
+    #[test]
+    fn a_pad_plays_on_its_own_output_when_it_is_taken() {
+        let mut j = juke();
+        assert_eq!(j.extra_outputs().len(), 7);
+        // Pad 1 (kick, note 36) to Out 3; pad 2 (note 38) stays on the main output.
+        set(&mut j, "p1_output", 2.0);
+        let hits = |j: &mut Juke, note: u8| {
+            j.note_on(0, note, 120);
+            let mut io = vec![vec![0.0; 512]; 2];
+            j.process(&mut io, 512);
+            let mut out = vec![vec![0.0; 512]; 2];
+            assert!(j.read_output(1, &mut out, 512));
+            j.all_notes_off();
+            j.reset();
+            (peak(&io[0]), peak(&out[0]))
+        };
+        let (main, out3) = hits(&mut j, 36);
+        assert!(main > 0.01 && out3 == 0.0, "not taken: on the main output ({main}, {out3})");
+        j.set_outputs_taken(0b10);
+        let (main, out3) = hits(&mut j, 36);
+        assert!(main == 0.0 && out3 > 0.01, "taken: on Out 3 alone ({main}, {out3})");
+        let (main, out3) = hits(&mut j, 38);
+        assert!(main > 0.01 && out3 == 0.0, "another pad stays on the main output");
+        let mut out = vec![vec![0.0; 4]; 2];
+        assert!(!j.read_output(7, &mut out, 4), "no eighth extra output");
     }
 
     #[test]

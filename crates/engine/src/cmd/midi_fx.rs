@@ -38,7 +38,32 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             remove
         ),
+        cmd!(
+            "track.midi_fx_record",
+            "Record Effects' Output",
+            [],
+            None,
+            "{tracks?, value?: bool (default: toggle the first)} — takes on these tracks keep what their MIDI effects make of the keys (the clip then plays past the effects) instead of the keys as played → {value}",
+            has_selection,
+            record
+        ),
     ]
+}
+
+fn record(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.midi_fx_record";
+    let tracks = midi_tracks(e, C, p)?;
+    let now = tracks.first().and_then(|t| e.session().track(*t)).is_some_and(|t| t.midi_fx_record);
+    let value = match p.get("value") {
+        None | Some(Value::Null) => !now,
+        Some(v) => v.as_bool().ok_or_else(|| bad(C, "`value` is true or false"))?,
+    };
+    for t in &tracks {
+        if let Some(tr) = e.session_mut().track_mut(*t) {
+            tr.midi_fx_record = value;
+        }
+    }
+    Ok(json!({"value": value}))
 }
 
 /// The tracks, each an instrument or MIDI track.

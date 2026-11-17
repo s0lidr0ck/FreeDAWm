@@ -68,7 +68,7 @@ pub use sheet::{
 pub use snapshot::{MAX_SNAPSHOTS, MixSnapshot, SNAPSHOT_SECTIONS, SnapshotStrip};
 pub use solo::SoloScope;
 pub use source::{AssetData, AssetPool, SampleCursor, Source, SourceAudio, SourcePool, VideoSource};
-pub use track::{FrozenAudio, Playlist, TRACK_COLORS, Track, TrackHeight, TrackKind};
+pub use track::{FrozenAudio, InstrumentOut, Playlist, TRACK_COLORS, Track, TrackHeight, TrackKind};
 
 pub use vocal::*;
 

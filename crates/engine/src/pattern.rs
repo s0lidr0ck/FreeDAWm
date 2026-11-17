@@ -67,6 +67,53 @@ pub fn phase_for(s: &Session, clip: &Clip, pc: &PatternClip) -> i64 {
     pc.phase.saturating_add(delta)
 }
 
+/// Recording over a pattern clip with MIDI Merge on: the take's notes become steps of the clip's
+/// pattern instead of replacing the clip. A pattern clip (not muted) on `track` must cover the
+/// whole of `range`. Each note-on lands on the nearest step of the pattern's grid (its phase
+/// kept), on the lane that plays its note (a new lane, as long as the longest, when none does and
+/// there is room), at its velocity; a step already on stays as it was (overdub). A lane loops over
+/// its own length, so a note past it lands where the lane plays it. Returns the clip, `None` when
+/// there is no such clip (the take is merged as usual). The clip's notes are expanded again by
+/// [`refresh`] with the undo step.
+pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: soundcraft_time::Range, take: &Sequence) -> Option<ClipId> {
+    use soundcraft_midi::pattern::{Lane, MAX_LANES, Step};
+    let clip = s.track(track)?.clips().iter().find(|c| !c.muted && c.pattern.is_some() && c.start <= range.start && c.end() >= range.end)?.clone();
+    let pc = clip.pattern.as_ref()?;
+    let phase = phase_for(s, &clip, pc);
+    let (clip_tick, _, ticks_per_bar) = clip_ticks(s, clip.start, clip.end());
+    let grid = ticks_per_bar as f64 / f64::from(pc.pattern.steps_per_bar.max(1));
+    if !(grid.is_finite() && grid > 0.0) {
+        return None;
+    }
+    let take_tick = s.tempo.samples_to_ticks(range.start, s.sample_rate);
+    let mut pattern = pc.pattern.clone();
+    let width = pattern.lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16);
+    for n in take.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
+        let at = take_tick.saturating_add(n.start).saturating_sub(clip_tick).saturating_add(phase);
+        let k = (at as f64 / grid).round() as i64;
+        let lane = match pattern.lanes.iter().position(|l| l.note == n.pitch) {
+            Some(i) => i,
+            None if pattern.lanes.len() < MAX_LANES => {
+                pattern.lanes.push(Lane::new(n.pitch, width));
+                pattern.lanes.len() - 1
+            }
+            None => continue,
+        };
+        let Some(l) = pattern.lanes.get_mut(lane) else { continue };
+        let len = i64::try_from(l.steps.len()).unwrap_or(1).max(1);
+        if let Some(step) = usize::try_from(k.rem_euclid(len)).ok().and_then(|i| l.steps.get_mut(i))
+            && !step.on
+        {
+            *step = Step::hit(n.velocity.clamp(1, 127));
+        }
+    }
+    let c = s.find_clip_mut(clip.id)?;
+    if let Some(pc) = c.pattern.as_mut() {
+        pc.pattern = pattern;
+    }
+    Some(clip.id)
+}
+
 /// The notes `pc` expands to in `clip` at `phase`.
 pub fn expansion(s: &Session, clip: &Clip, pc: &PatternClip, phase: i64) -> Sequence {
     let (_, length, ticks_per_bar) = clip_ticks(s, clip.start, clip.end());

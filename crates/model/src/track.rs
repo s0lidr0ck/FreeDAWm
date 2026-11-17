@@ -297,6 +297,15 @@ pub struct Track {
     /// [`crate::MAX_MODULATORS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modulators: Vec<crate::Modulator>,
+    /// The input menu's MIDI Effects › Record Effects' Output: a take on this track keeps what
+    /// its MIDI effects made of the keys (the clip then plays past them, `Clip::midi_fx_printed`)
+    /// instead of the keys as played (off, the default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_fx_record: bool,
+    /// The instrument's extra outputs taken by mixer channels (`Plugin::extra_outputs`): each
+    /// plays into a bus, which an aux reads (the track's output menu › New Track for Output).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instrument_outs: Vec<InstrumentOut>,
     /// Track › Lock Track: no command may add, change or remove a clip on any of its playlists
     /// (Insert and Cut Time still move them); recording into it is refused too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -364,6 +373,8 @@ impl Track {
             record_layer: None,
             midi_fx: Vec::new(),
             modulators: Vec::new(),
+            midi_fx_record: false,
+            instrument_outs: Vec::new(),
             edit_locked: false,
         }
     }
@@ -452,6 +463,14 @@ impl Track {
             Some(f) => f.upto.and_then(|m| self.mixer.inserts.iter().position(|i| i.id == m)).map_or(n, |p| p.saturating_add(1)),
         }
     }
+}
+
+/// One of an instrument's extra outputs ([`Track::instrument_outs`]) and the bus it plays into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InstrumentOut {
+    /// Which extra output (0: the instrument's first after its main one).
+    pub output: u8,
+    pub bus: crate::BusId,
 }
 
 #[cfg(test)]

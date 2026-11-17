@@ -434,6 +434,22 @@ pub trait Plugin: Send {
     /// `set_param`). A plugin that derives parameters itself (FireStation Dist's Link) leaves a
     /// laned one alone: the lane wins. Must not allocate.
     fn set_param_automated(&mut self, _id: &str, _automated: bool) {}
+    /// Instruments: the names of the stereo outputs it has besides its main one (Juke's
+    /// "Out 2" to "Out 8"), each one a mixer channel can take (`Track::instrument_outs`). Empty
+    /// by default. Read off the audio thread.
+    fn extra_outputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// Which of [`Plugin::extra_outputs`] the host takes (bit `n`: output `n`). A plugin sends
+    /// to an output only while it is taken, and to its main output otherwise, so nothing goes
+    /// silent for want of a channel. Must not allocate. The default ignores it.
+    fn set_outputs_taken(&mut self, _mask: u32) {}
+    /// After `process`: extra output `index` of the block just rendered into `out` (its first
+    /// two channels, `frames` long); `false` (and `out` untouched) when the plugin has no such
+    /// output. Must not allocate.
+    fn read_output(&mut self, _index: usize, _out: &mut [Vec<f32>], _frames: usize) -> bool {
+        false
+    }
     /// Instruments: note events at sample offsets within the next block.
     fn note_on(&mut self, _offset: usize, _note: u8, _velocity: u8) {}
     fn note_off(&mut self, _offset: usize, _note: u8) {}

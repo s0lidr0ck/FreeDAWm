@@ -279,3 +279,79 @@ fn a_flood_is_dropped_and_counted_and_zero_frames_are_safe() {
     blocks(&mut p, 3, 0);
     blocks(&mut p, 3, 1);
 }
+
+#[test]
+fn direct_events_go_past_the_effects_in_offset_order() {
+    let (mut p, log) = host(&[MidiFx::new(Chord)]);
+    p.note_on(10, 60, 100);
+    set_direct(&mut *p, true);
+    p.note_on(5, 72, 90);
+    p.note_on(30, 74, 90);
+    set_direct(&mut *p, false);
+    blocks(&mut p, 1, 512);
+    // C's chord from the effect; the printed notes once each, as they were, in time order.
+    assert_eq!(take(&log), vec![(5, 0x90, 72), (10, 0x90, 60), (10, 0x90, 64), (10, 0x90, 67), (30, 0x90, 74)]);
+    // They are counted as the host's notes: a change of the list lets go of them too.
+    sync(&mut p, &[MidiFx::new(Scale)], SR);
+    let offs: Vec<u8> = take(&log).iter().filter(|e| e.1 == 0x80).map(|e| e.2).collect();
+    assert!(offs.contains(&72) && offs.contains(&74) && offs.contains(&67), "{offs:?}");
+}
+
+#[test]
+fn print_gives_what_the_effects_make_of_a_take() {
+    let s = soundcraft_model::Session::default();
+    let range = soundcraft_time::Range::new(0, 48_000);
+    // One key, channel 3, held for a quarter of a second, through a chord.
+    let keys = [(1_000i64, [0x92, 60, 100]), (13_000, [0x82, 60, 0])];
+    let out = print(&s, &[MidiFx::new(Chord)], range, &keys);
+    let ons: Vec<(i64, u8)> = out.iter().filter(|e| e.1[0] == 0x92).map(|e| (e.0, e.1[1])).collect();
+    assert_eq!(ons, vec![(1_000, 60), (1_000, 64), (1_000, 67)], "the shape on the key's channel, where it was played");
+    let offs: Vec<(i64, u8)> = out.iter().filter(|e| e.1[0] == 0x82).map(|e| (e.0, e.1[1])).collect();
+    assert_eq!(offs.len(), 3);
+    assert!(offs.iter().all(|e| e.0 == 13_000));
+    // An arpeggiator steps on the song's grid: 1/16 at 120 bpm is 6000 samples at 48 kHz.
+    let arp = fx(Arpeggiator, |f| f.rate = 3);
+    let keys = [(0i64, [0x90, 60, 100]), (0, [0x90, 64, 100]), (24_000, [0x80, 60, 0]), (24_000, [0x80, 64, 0])];
+    let out = print(&s, &[arp], range, &keys);
+    let ons: Vec<i64> = out.iter().filter(|e| e.1[0] & 0xF0 == 0x90 && e.1[2] > 0).map(|e| e.0).collect();
+    // (Within a sample of the grid: the step is found from the position in quarters.)
+    assert_eq!(ons.len(), 5, "{out:?}");
+    assert!(ons.iter().enumerate().all(|(k, at)| (at - k as i64 * 6_000).abs() <= 1), "{out:?}");
+    // A latched arpeggio still on at the end is let go there.
+    let latched = fx(Arpeggiator, |f| {
+        f.rate = 3;
+        f.latch = true;
+    });
+    let out = print(&s, &[latched], soundcraft_time::Range::new(0, 7_000), &keys);
+    let last = out.last().copied().unwrap();
+    assert_eq!((last.0, last.1[0] & 0xF0), (7_000, 0x80), "{out:?}");
+}
+
+#[test]
+fn sequence_events_play_a_clip_on_its_channels() {
+    let s = soundcraft_model::Session::default();
+    let mut seq = soundcraft_midi::Sequence::default();
+    seq.notes.push(soundcraft_midi::Note {
+        pitch: 60,
+        velocity: 90,
+        release_velocity: 30,
+        channel: 2,
+        start: 0,
+        length: 960,
+        muted: false,
+        probability: 100,
+    });
+    seq.notes.push(soundcraft_midi::Note {
+        pitch: 62,
+        velocity: 90,
+        release_velocity: 64,
+        channel: 0,
+        start: -10,
+        length: 960,
+        muted: false,
+        probability: 100,
+    });
+    let ev = sequence_events(&s, 48_000, 96_000, &seq);
+    // A quarter at 120 bpm is 24 000 samples; the note before the clip's start is left out.
+    assert_eq!(ev, vec![(48_000, [0x92, 60, 90]), (72_000, [0x82, 60, 30])]);
+}

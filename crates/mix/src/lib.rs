@@ -74,6 +74,7 @@ mod band_lanes;
 pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
 pub mod external_midi;
+mod inst_outs;
 pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
@@ -590,6 +591,8 @@ struct Strip {
     /// Assets the chain's plugins let go of while rendering (`Plugin::take_released_asset`), for
     /// the host to drop off the audio thread (capacity reserved in `sync`).
     released: Vec<Arc<dyn SampleSource>>,
+    /// The instrument's extra outputs on mixer channels (`inst_outs`).
+    inst_outs: inst_outs::InstOuts,
     /// The instrument's readouts of the last block it rendered (NaN without one).
     inst_readouts: [f32; 8],
     /// This strip's Scout PRE/POST taps while a capture runs (see [`scout`]).
@@ -789,6 +792,7 @@ impl Strip {
             pre_key: false,
             key_regrow: false,
             released: Vec::new(),
+            inst_outs: inst_outs::InstOuts::default(),
             inst_readouts: [f32::NAN; 8],
             scout: None,
             dest: Dest::None,
@@ -1813,6 +1817,7 @@ impl MixEngine {
                     .filter_map(|(j, (si, _))| Some((u8::try_from(ROUTED_MIDI + j).ok()?, si, sidechain::INSTRUMENT_OUT))),
             );
             strip.routed_src.reserve(strip.midi_src.len());
+            strip.inst_outs.sync(t, self.max_block);
             strip.module_in.reserve(sources.len());
             strip.pre_key = false;
             let mut old_keys = std::mem::take(&mut strip.keys);
@@ -2008,6 +2013,7 @@ impl MixEngine {
                 k.delay.reserve(cap(&k.delay), ch);
                 k.main_delay.reserve(cap(&k.main_delay), ch);
             }
+            st.inst_outs.reserve(cap);
             if t.mixer.sends.iter().flatten().any(|x| x.pre_fader) || st.align_pre.active() {
                 st.align_pre.reserve(cap(&st.align_pre), ch);
             }
@@ -2306,6 +2312,11 @@ impl MixEngine {
                     Dest::None => false,
                 };
             fits &= st.out_extra.set(if waits { lmax_a } else { 0 }, ch, xf);
+            // The instrument's extra outputs wait for the inserts after it, and on a bus an aux
+            // returns onto, for the aux returns too.
+            let inst_lat = st.instrument.as_ref().map_or(0, |i| i.plugin.latency());
+            let (fed, llm) = (&self.aux_fed, st.llm);
+            fits &= st.inst_outs.align(|b| lmax.saturating_sub(inst_lat) + if !llm && fed.contains(&b) { lmax_a } else { 0 }, xf, frames);
         }
         for (i, st) in work.iter_mut() {
             if let Some(t) = s.tracks.get(*i) {
@@ -2367,6 +2378,8 @@ impl MixEngine {
                 // would otherwise wait for the key that waits for them.
                 let lmax = if pdc && !st.llm { lmax_t.saturating_add(lmax_a) } else { 0 };
                 fits &= align_late(t, &mut st, lmax, xf, frames);
+                let inst_lat = st.instrument.as_ref().map_or(0, |i| i.plugin.latency());
+                fits &= st.inst_outs.align(|_| lmax.saturating_sub(inst_lat), xf, frames);
                 self.route_strip(s, t, &mut st, pos, frames);
                 self.listen_strip(t, &st, pos, frames);
                 self.strips.insert(t.id, st);
@@ -2750,6 +2763,14 @@ impl MixEngine {
                 };
                 let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
                 apply_matrix_span(src, span, dst_buf, &m, gain);
+            }
+        }
+        // The instrument's extra outputs, each into its bus (a silent strip plays none).
+        if strip.inst_outs.fresh && !strip.silent {
+            for o in &strip.inst_outs.outs {
+                if let Some(d) = self.busses.get_mut(&o.bus) {
+                    inst_outs::add_into(&o.buf, &mut d.buf, frames);
+                }
             }
         }
         let dest = strip.dest;
@@ -3395,6 +3416,7 @@ fn process_strip(
                         }
                     }
                 }
+                strip.inst_outs.before(&mut *inst.plugin);
                 if strip.buf.len() >= 2 {
                     inst.plugin.process(&mut strip.buf, frames);
                 } else if let Some(c0) = strip.buf.first_mut() {
@@ -3408,6 +3430,7 @@ fn process_strip(
                         *x = 0.5 * (*x + *y);
                     }
                 }
+                strip.inst_outs.after(&mut *inst.plugin, frames);
                 if inst.emits {
                     inst.plugin.midi_out(&mut inst.midi);
                 }
@@ -4899,11 +4922,16 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             rtp("delay", 0.0).clamp(-1e7, 1e7) as i64,
         )
     };
+    let any_printed = t.clips().iter().any(|c| c.midi_fx_printed);
     for clip in t.clips() {
         if clip.muted {
             continue;
         }
         let Some(sequence) = clip.midi_playing() else { continue };
+        // A clip that holds its MIDI effects' output plays past them.
+        if any_printed {
+            midi_fx::set_direct(&mut *inst.plugin, clip.midi_fx_printed);
+        }
         // The clip's own transpose and velocity offset, with the track's.
         let (dv, dp) = (dv + i64::from(clip.midi_velocity), dp + i64::from(clip.midi_transpose));
         // Through the clip's end: a note-off clamped to it lands there, and when that is a block
@@ -5056,6 +5084,9 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             ctrls(inst);
         }
     }
+    if any_printed {
+        midi_fx::set_direct(&mut *inst.plugin, false);
+    }
     let sounds = |p: u8| alive.get(usize::from(p & 0x7F)).copied().unwrap_or(false);
     if held.iter().any(|p| !sounds(*p)) {
         let printed = printed();
@@ -5195,7 +5226,7 @@ fn send_ramp(
 
 /// A controller event as a MIDI 1.0 message on channel 1 (where the notes go), with `transpose`
 /// applied to a poly-pressure key.
-fn ctrl_message(kind: CtrlKind, value: i32, transpose: i64) -> [u8; 3] {
+pub(crate) fn ctrl_message(kind: CtrlKind, value: i32, transpose: i64) -> [u8; 3] {
     let v7 = value.clamp(0, 127) as u8;
     match kind {
         CtrlKind::Cc(n) => [0xB0, n & 0x7F, v7],
@@ -5728,7 +5759,7 @@ fn keys_hash(ins: &soundcraft_model::Insert) -> u64 {
     h
 }
 
-fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
+pub(crate) fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
     let sr = s.sample_rate;
     let ticks = Some(s.tempo.samples_to_ticks_f(pos, sr)).filter(|t| t.is_finite()).unwrap_or(0.0);
     let tick = ticks.floor() as i64;

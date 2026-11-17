@@ -2019,8 +2019,22 @@ fn side_column(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, col
             break;
         }
         text(&p, pos2(r.min.x, y + 11.0), Align2::LEFT_CENTER, label, regular(10.5), LABEL);
-        let end = if ms.is_some() { r.max.x - 64.0 } else { r.max.x };
+        // The choke group shares its row with the pad's output (Main, or Out 2-8 on a mixer
+        // channel of its own: the track's output menu › Instrument Outputs).
+        let end = if ms.is_some() { r.max.x - 64.0 } else { r.center().x - 4.0 };
         choice_combo(ui, Rect::from_min_max(pos2(r.min.x + 56.0, y), pos2(end, y + 22.0)), tid, pad, ins, &pad_param(pad, name), out);
+        if ms.is_none() {
+            text(&p, pos2(r.center().x, y + 11.0), Align2::LEFT_CENTER, "Out", regular(10.5), LABEL);
+            choice_combo(
+                ui,
+                Rect::from_min_max(pos2(r.center().x + 28.0, y), pos2(r.max.x, y + 22.0)),
+                tid,
+                pad,
+                ins,
+                &pad_param(pad, "output"),
+                out,
+            );
+        }
         if let Some(ms) = ms {
             let id = pad_param(pad, ms);
             let mut v = value(ins, &id);

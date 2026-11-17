@@ -28,6 +28,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "options.marker_target_follows_first_selected_track"
         ),
         option!("options.midi_thru", "MIDI Thru", "options.midi_thru"),
+        cmd!(
+            noundo "options.midi_auto_arm",
+            "Auto-Arm Selected MIDI Track",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — selecting one instrument or MIDI track that listens to MIDI input arms it (heard and ready to record), disarming the one it armed before",
+            always,
+            |e, p| toggle_flag(e, p, crate::auto_arm::FLAG)
+        ),
         option!("options.auto_spot_clips", "Auto-Spot Clips", "options.auto_spot_clips"),
         option!("options.keyboard_lock", "Edit/Tool Mode Keyboard Lock", "options.edit_tool_mode_keyboard_lock"),
         option!("options.calibration_mode", "Calibration Mode", "options.calibration_mode"),
@@ -122,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
         }),
-        cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...]} — filtered kinds are not recorded", always, midi_filter),
+        cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...], thin?: bool} — filtered kinds are not recorded; `thin` keeps only the controller points that shape a move (the rest become ramps)", always, midi_filter),
         cmd!(noundo "setup.midi_input_devices", "MIDI Input Devices...", ["Setup", "MIDI"], None, "{enable?: [names], disable?: [names]}", always, midi_inputs),
         cmd!(noundo "setup.transcription_settings", "Transcription Settings...", ["Setup"], None, "{enabled?: bool, language?: 'en'}", always, |e, p| {
             let s = e.session_mut();
@@ -542,8 +551,11 @@ fn midi_filter(e: &mut Engine, p: &Value) -> Result<Value> {
     for k in kinds(p, "allow") {
         s.edit.set_flag(&format!("midi.filter.{k}"), false);
     }
+    if let Some(on) = p.get("thin").and_then(Value::as_bool) {
+        s.edit.set_flag(crate::midi_record::THIN_FLAG, on);
+    }
     let filtered: Vec<&str> = MIDI_FILTER_KINDS.iter().copied().filter(|k| s.edit.flag(&format!("midi.filter.{k}"))).collect();
-    Ok(json!({"filtered": filtered}))
+    Ok(json!({"filtered": filtered, "thin": s.edit.flag(crate::midi_record::THIN_FLAG)}))
 }
 
 fn device_key(name: &str) -> String {

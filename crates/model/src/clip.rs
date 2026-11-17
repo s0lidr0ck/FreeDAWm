@@ -297,6 +297,10 @@ pub struct Clip {
     /// from its start). `None`: it does not follow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_chords: Option<Vec<soundcraft_midi::ops::FollowChord>>,
+    /// A MIDI clip that already holds its track's MIDI effects' output (a take recorded with
+    /// Record Effects' Output): it plays straight to the instrument, past the effects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_fx_printed: bool,
     /// A MIDI clip's own transpose in semitones, applied as it plays (with its track's).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub midi_transpose: i8,
@@ -395,6 +399,7 @@ impl Clip {
             effects_bypass: false,
             play_quantize: None,
             follow_chords: None,
+            midi_fx_printed: false,
             midi_transpose: 0,
             midi_velocity: 0,
             midi_index: soundcraft_midi::NoteIndexSlot(None),
