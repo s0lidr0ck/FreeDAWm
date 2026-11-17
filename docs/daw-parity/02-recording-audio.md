@@ -128,8 +128,8 @@ what a user can do, apart from punch out on the fly.
 | Manual record offset | ◐ | ● | ● | ● | **Works**, ±96,000 samples |
 | Measure the round trip with a loopback | ○ | ○ | ◐ | ○ | **Works**, stored per interface, buffer and rate |
 | Placement independent of plug-in delay and of low-latency mode | ● | ● | ● | ● | **Works**, tested |
-| Input and output on different devices | ● | ● | ● | ◐ | **Works**: drift-corrected, by linear interpolation without a filter |
-| Device rate differs from the session rate | n/a | ● | ● | n/a | **Partial**: playback goes through section 1's band-limited resampler; the input feed (what is monitored and recorded) still converts by linear interpolation, which aliases |
+| Input and output on different devices | ● | ● | ● | ◐ | **Works**: drift-corrected; at one nominal rate (clock drift alone) by linear interpolation, at different rates through the band-limited resampler (next row) |
+| Device rate differs from the session rate | n/a | ● | ● | n/a | **Works**: playback goes through section 1's band-limited resampler, and an input device at another rate is read into the session rate through the same 32-tap windowed sinc (cut-off below the lower Nyquist), so what is monitored and recorded does not alias; the latency placement is unchanged (`a_faster_input_is_read_band_limited`) |
 
 ## G. Capture and files
 
@@ -203,7 +203,7 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 
 **3. What most have (≈ 25–40 h).** Arming follows selection, 2–3 (**done**); audio pre-record buffer
 (Studio Pro, Cubase, and Pro Tools in QuickPunch), 5–8; remaining record time, 2–3 (**done**); band-limited
-conversion on the input feed (shared with section 1's resampler), 4–6; control of the interface's
+conversion on the input feed (shared with section 1's resampler), 4–6 (**done**); control of the interface's
 direct monitoring with ASIO, 6–10, hardware needed (not planned here); record-safe and record lock, 2–4
 (**done**); talkback, 4–6 (**done**).
 

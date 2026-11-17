@@ -103,6 +103,29 @@ impl Kernel {
         }
     }
 
+    /// A kernel tabulated once for `step` (the input feed's fixed rate ratio), read with
+    /// [`Kernel::weights`].
+    pub(crate) fn for_step(step: f64) -> Box<Kernel> {
+        let mut k = Box::new(Kernel { step: f64::NAN, table: [[0.0; TAPS]; PHASES + 1] });
+        k.build(if step.is_finite() && step > 0.0 { step } else { 1.0 });
+        k
+    }
+
+    /// The weights for a read `frac` (0..1) past tap `HALF - 1`, from the table as built (never
+    /// rebuilt: no work beyond the interpolation).
+    pub(crate) fn weights(&self, frac: f64) -> [f32; TAPS] {
+        let pos = if frac.is_finite() { frac.clamp(0.0, 1.0) * PHASES as f64 } else { 0.0 };
+        let i = (pos.floor() as usize).min(PHASES - 1);
+        let f = (pos - i as f64) as f32;
+        let mut w = [0.0f32; TAPS];
+        if let (Some(a), Some(b)) = (self.table.get(i), self.table.get(i + 1)) {
+            for ((o, x), y) in w.iter_mut().zip(a).zip(b) {
+                *o = x + (y - x) * f;
+            }
+        }
+        w
+    }
+
     /// The kernel for a read at `read` (frames into the block, -1 or more) stepping `step`: the
     /// index of its first tap relative to the block, and the weights. The point actually read
     /// is `read - HALF`.
