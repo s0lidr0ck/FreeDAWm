@@ -1767,6 +1767,12 @@ pub enum VelocityMode {
     Add,
     Scale,
     Ramp,
+    /// Clamp into `min..=max`.
+    Limit,
+    /// ± `random`, at random.
+    Randomise,
+    /// `compress` percent of each velocity's distance from their average.
+    Compress,
 }
 
 /// The Change Velocity… dialog's fields.
@@ -1779,22 +1785,32 @@ pub struct VelocityDialog {
     pub scale: f64,
     pub from: i64,
     pub to: i64,
+    pub min: i64,
+    pub max: i64,
+    pub random: i64,
+    /// Percent: under 100 compresses towards the average, over 100 expands.
+    pub compress: f64,
 }
 
 impl Default for VelocityDialog {
     fn default() -> Self {
-        VelocityDialog { mode: VelocityMode::Set, set: 100, add: 10, scale: 100.0, from: 40, to: 110 }
+        VelocityDialog { mode: VelocityMode::Set, set: 100, add: 10, scale: 100.0, from: 40, to: 110, min: 30, max: 110, random: 10, compress: 50.0 }
     }
 }
 
 impl VelocityDialog {
-    /// The change as command parameters (`set`, `add`, `scale` or `from`/`to`).
+    /// The change as command parameters (`set`, `add`, `scale`, `from`/`to`, `min`/`max`,
+    /// `random` or `compress`).
     pub fn params(&self) -> Value {
         match self.mode {
             VelocityMode::Set => json!({"set": self.set.clamp(1, 127)}),
             VelocityMode::Add => json!({"add": self.add.clamp(-127, 127)}),
             VelocityMode::Scale => json!({"scale": (self.scale / 100.0).clamp(0.0, 10.0)}),
             VelocityMode::Ramp => json!({"from": self.from.clamp(1, 127), "to": self.to.clamp(1, 127)}),
+            VelocityMode::Limit => json!({"min": self.min.clamp(1, 127), "max": self.max.clamp(1, 127)}),
+            // A new seed each time, so applying it twice does not repeat the same offsets.
+            VelocityMode::Randomise => json!({"random": self.random.clamp(0, 127), "seed": random_seed()}),
+            VelocityMode::Compress => json!({"compress": self.compress.clamp(0.0, 1000.0)}),
         }
     }
 }
@@ -1819,6 +1835,29 @@ fn velocity_fields(ui: &mut egui::Ui, d: &mut VelocityDialog) {
         ui.label("to");
         ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=127));
     });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Limit, "Limit to");
+        let on = d.mode == VelocityMode::Limit;
+        ui.add_enabled(on, egui::DragValue::new(&mut d.min).range(1..=127));
+        ui.label("to");
+        ui.add_enabled(on, egui::DragValue::new(&mut d.max).range(1..=127));
+    });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Randomise, "Randomise ±");
+        ui.add_enabled(d.mode == VelocityMode::Randomise, egui::DragValue::new(&mut d.random).range(0..=127));
+    });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Compress, "Compress to")
+            .on_hover_text("Each velocity's distance from the notes' average, in percent: under 100 evens them out, over 100 spreads them");
+        ui.add_enabled(d.mode == VelocityMode::Compress, egui::DragValue::new(&mut d.compress).range(0.0..=1000.0).suffix(" %"));
+    });
+}
+
+/// A seed for Randomise that differs each time it is applied (a counter stepped by an odd
+/// constant; never zero).
+fn random_seed() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x2545_F491_4F6C_DD1D);
+    NEXT.fetch_add(0x9E37_79B9_7F4A_7C15, std::sync::atomic::Ordering::Relaxed) | 1
 }
 
 /// What Change Velocity… runs: on the notes selected in the MIDI Editor when it shows them,

@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Velocity...",
             ["Event", "MIDI Operations"],
             None,
-            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max?, clips?, indices?}",
+            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max? (a limit)|random? (± that much; seed?)|compress? (percent of each velocity's distance from center?, by default the notes' average), clips?, indices?}",
             has_selection,
             velocity
         ),
@@ -550,22 +550,39 @@ fn quantize(e: &mut Engine, p: &Value) -> Result<Value> {
     })
 }
 
-fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
-    let op = if let Some(v) = p.get("set").and_then(Value::as_u64) {
-        VelocityOp::Set(v.min(127) as u8)
-    } else if let Some(v) = p.get("add").and_then(Value::as_i64) {
-        VelocityOp::Add(v.clamp(-127, 127) as i32)
-    } else if let Some(v) = p.get("scale").and_then(Value::as_f64) {
+/// The velocity change `p` asks for (`event.change_velocity`, `midi.notes_velocity`): `set`,
+/// `add`, `scale` (a factor), `from` and `to` (a ramp), `min` and/or `max` (a limit), `random` (±
+/// that much, seeded by `seed`), or `compress` (percent of each velocity's distance from `center`,
+/// by default the notes' average: under 100 compresses, over 100 expands); and the seed.
+pub(crate) fn velocity_op(p: &Value) -> Option<(VelocityOp, u64)> {
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let vel = |v: f64| v.round().clamp(1.0, 127.0) as u8;
+    let op = if let Some(v) = num("set") {
+        VelocityOp::Set(vel(v))
+    } else if let Some(v) = num("add") {
+        VelocityOp::Add(v.round().clamp(-127.0, 127.0) as i32)
+    } else if let Some(v) = num("scale") {
         VelocityOp::Scale((v as f32).clamp(0.0, 10.0))
-    } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
-        VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 }
-    } else if p.get("min").is_some() || p.get("max").is_some() {
-        VelocityOp::Limit { min: i64_or(p, "min", 1).clamp(1, 127) as u8, max: i64_or(p, "max", 127).clamp(1, 127) as u8 }
+    } else if let (Some(a), Some(b)) = (num("from"), num("to")) {
+        VelocityOp::Ramp { from: vel(a), to: vel(b) }
+    } else if num("min").is_some() || num("max").is_some() {
+        VelocityOp::Limit { min: vel(num("min").unwrap_or(1.0)), max: vel(num("max").unwrap_or(127.0)) }
+    } else if let Some(v) = num("random") {
+        VelocityOp::Humanize(v.round().clamp(0.0, 127.0) as u8)
     } else {
-        // Nothing to do is said, not done silently.
-        return Err(bad("event.change_velocity", "give set, add, scale, from and to, or min and max"));
+        let v = num("compress")?;
+        VelocityOp::Compress { center: num("center").map(vel), factor: (v / 100.0).clamp(0.0, 10.0) as f32 }
     };
-    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity(n, op))
+    let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(soundcraft_midi::ops::DEFAULT_SEED);
+    Some((op, seed))
+}
+
+fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
+    // Nothing to do is said, not done silently.
+    let Some((op, seed)) = velocity_op(p) else {
+        return Err(bad("event.change_velocity", "give set, add, scale, from and to, min or max, random, or compress"));
+    };
+    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity_with_seed(n, op, seed))
 }
 
 fn duration(e: &mut Engine, p: &Value) -> Result<Value> {

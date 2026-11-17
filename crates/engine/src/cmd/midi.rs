@@ -3,7 +3,6 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_midi::ops::VelocityOp;
 use soundcraft_midi::{Note, Sequence};
 use soundcraft_model::{Clip, ClipContent, ClipId};
 use soundcraft_time::TICKS_PER_QUARTER;
@@ -91,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Note Velocity",
             [],
             None,
-            "{clip, indices?: [n] (default every note), set? | add? | scale? | from?, to? (a ramp over the notes' starts) | values?: [v] (one per index)} -> {changed}",
+            "{clip, indices?: [n] (default every note), set? | add? | scale? | from?, to? (a ramp over the notes' starts) | min?, max? | random? | compress?, center? (as event.change_velocity) | values?: [v] (one per index)} -> {changed}",
             always,
             notes_velocity
         ),
@@ -424,17 +423,7 @@ fn notes_copy(e: &mut Engine, p: &Value) -> Result<Value> {
 fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "midi.notes_velocity";
     let id = clip_id(p, C)?;
-    let op = if let Some(v) = p.get("set").and_then(Value::as_i64) {
-        Some(VelocityOp::Set(v.clamp(1, 127) as u8))
-    } else if let Some(v) = p.get("add").and_then(Value::as_i64) {
-        Some(VelocityOp::Add(v.clamp(-127, 127) as i32))
-    } else if let Some(v) = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite()) {
-        Some(VelocityOp::Scale((v as f32).clamp(0.0, 10.0)))
-    } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
-        Some(VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 })
-    } else {
-        None
-    };
+    let op = super::event::velocity_op(p);
     // `values` pairs with `indices` as given (order kept), so it is read from them directly.
     let values: Option<Vec<(usize, i64)>> = match p.get("values") {
         None => None,
@@ -448,7 +437,7 @@ fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     };
     if op.is_none() && values.is_none() {
-        return Err(bad(C, "give set, add, scale, from and to, or values"));
+        return Err(bad(C, "give set, add, scale, from and to, min or max, random, compress, or values"));
     }
     let seq = seq_mut(e, id, C)?;
     let mut changed = 0;
@@ -459,11 +448,11 @@ fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
                 changed += 1;
             }
         }
-    } else if let Some(op) = op {
+    } else if let Some((op, seed)) = op {
         // The op works on a slice: gather the picked notes, change them, put them back.
         let at = picked(p, seq.notes.len());
         let mut work: Vec<Note> = at.iter().filter_map(|i| seq.notes.get(*i).copied()).collect();
-        soundcraft_midi::ops::change_velocity(&mut work, op);
+        soundcraft_midi::ops::change_velocity_with_seed(&mut work, op, seed);
         for (i, n) in at.iter().zip(work) {
             if let Some(slot) = seq.notes.get_mut(*i) {
                 slot.velocity = n.velocity;

@@ -427,6 +427,13 @@ pub enum VelocityOp {
     },
     /// Random offset of up to ± the amount.
     Humanize(u8),
+    /// Each velocity's distance from `center` (the notes' average when `None`) times `factor`:
+    /// below 1 compresses the dynamics towards it, above 1 expands them (non-finite factors leave
+    /// velocities unchanged).
+    Compress {
+        center: Option<u8>,
+        factor: f32,
+    },
 }
 
 fn clamp_vel(v: i64) -> u8 {
@@ -467,6 +474,18 @@ pub fn change_velocity_with_seed(notes: &mut [Note], op: VelocityOp, seed: u64) 
             for n in notes.iter_mut() {
                 let d = round_i64(rng.next_signed() * f64::from(amount));
                 n.velocity = clamp_vel(i64::from(n.velocity) + d);
+            }
+        }
+        VelocityOp::Compress { center, factor } => {
+            if !factor.is_finite() || notes.is_empty() {
+                return;
+            }
+            let c = match center {
+                Some(c) => f64::from(c),
+                None => notes.iter().map(|n| f64::from(n.velocity)).sum::<f64>() / notes.len() as f64,
+            };
+            for n in notes.iter_mut() {
+                n.velocity = clamp_vel(round_i64(c + (f64::from(n.velocity) - c) * f64::from(factor)));
             }
         }
     }
