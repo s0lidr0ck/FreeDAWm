@@ -222,7 +222,7 @@ The gaps are of four kinds:
 | Virtual players that follow chords and sections | ○ | ○ | ● | ◐ | **Works**: the Band, six players (drums, bass, keys, organ, guitar, bowed) with feels; printed to editable clips |
 | Audio to MIDI | ● | ● | ● | ● | **Works**: general, piano, drum and vocal models, and a single-line pitch tracker |
 | Drum hits in audio to notes | ◐ | ● | ● | ● | **Works**: through the drum model (kick, snare, hats apart), and Beat Detective › Write MIDI (`event.hits_to_midi`): a note for each hit found in the selection on the selected audio tracks (one pitch, the kick's unless given, and one velocity; hits within 30 ms are one), in a new MIDI clip on a new drum-synth track. Hits are not sorted into drums by sound, and their loudness is not read (58c4add) |
-| Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Missing** (design below, not built) |
+| Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Works**: Event › More MIDI › Write Arpeggio (`event.write_arpeggio`) turns the selected clip's held notes into the notes an arpeggiator plays (rate, pattern, octaves, gate; the track's own MIDI effects when it has some, the clip then playing past them as Record Effects' Output does), by the same effect code run offline on the song's grid. Write Progression (`event.write_progression`) writes a clip of voiced chords on the selected MIDI track over the edit selection (else four bars): the chord lane's chords, or a progression in the key (I–V–vi–IV and six others, or degrees typed so), whole, half, quarter or strummed, each chord moving to the inversion nearest the one before with its root below. Strum: the MIDI Operations' Strum. One undo step each. The menu items run with the defaults; scripts set the rest |
 | MIDI from a text description; a song from a prompt | ○ | ○ | ○ | ○ | **Works** (downloaded models) |
 | Loop library of MIDI phrases, previewed at the song tempo | ◐ | ● | ● | ● | **Not planned here**: needs a library of phrases (content the owner would source) |
 
@@ -592,3 +592,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Tempo from a MIDI performance |
 | 2026-11-17 | minor | MIDI files previewed from the browser |
 | 2026-11-17 | minor | Chord Pads |
+| 2026-11-17 | minor | Write Arpeggio and Write Progression |

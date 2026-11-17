@@ -70,6 +70,7 @@ pub mod midi_learn;
 mod midi_ops;
 pub mod midi_out;
 pub mod midi_wide;
+pub mod midi_writers;
 mod mix;
 pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
@@ -253,6 +254,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(midi_ctrl::specs());
         v.extend(midi_wide::specs());
         v.extend(tempo_fit::specs());
+        v.extend(midi_writers::specs());
         v.extend(groove::specs());
         v.extend(clip_follow::specs());
         v.extend(clip_midi::specs());

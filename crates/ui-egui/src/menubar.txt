@@ -474,6 +474,8 @@ Event > More MIDI > Restore Performance = Event > MIDI Operations > Restore Perf
 Event > More MIDI > Flatten Performance = Event > MIDI Operations > Flatten Performance...
 Event > More MIDI > Tempo from MIDI Performance = @event.tempo_from_midi
 Event > More MIDI > Chord Pads... = @window.chord_pads [desktop]
+Event > More MIDI > Write Arpeggio = @event.write_arpeggio
+Event > More MIDI > Write Progression = @event.write_progression
 Event > More MIDI > ---
 Event > More MIDI > MIDI Track Offsets = Event > MIDI Track Offsets
 Event > More MIDI > MIDI Real-Time Properties = Event > MIDI Real-Time Properties
