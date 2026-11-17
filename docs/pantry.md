@@ -36,7 +36,7 @@ of its own.
 ## The window
 
 Pantry opens in its own window from the track's instrument slot: the wordmark and what is on the
-shelves (samples, notes, layers, seconds, megabytes), **Load SFZ…** and **Clear**
+shelves (samples, notes, layers, seconds, megabytes), **Load…**, **Save…** and **Clear**
 (`mix.multisample_clear`); the **Shelves**, every sample as a block over the keys it plays (left
 to right) and the velocities it answers (bottom to top), brighter the harder it was played, the
 part of a layer that blends with the one below shaded, a dot per take when a layer has several,
@@ -76,6 +76,27 @@ made no sound are left out and counted (`silent`); notes still sounding when the
 began are counted too (`ringing`: give them a longer `tail`). Levels are kept as rendered, so the
 layers keep their balance.
 
+## Where an instrument is kept
+
+A Pantry's samples are sources of its session: captured ones are written to the session's
+`Audio Files/` when it is saved, named for the track, the note and the velocity
+(`Piano Pantry D#1 v95.wav`, on disk `Piano Pantry D_1 v95.wav`), and the mapping is in the
+session file. To keep an instrument for other sessions, save it to the Library.
+
+**Save…** (`mix.multisample_save`) writes the instrument to the Library's `Pantry` folder: an
+`.sfz` file of its name, and beside it a folder of that name with every sample as a 32-bit float
+WAV (`039_Ds1_v095_rr1.wav`: the note's number and name, the velocity, the take). The file maps
+each sample over its keys and velocities, so sfizz, Sforzando and other SFZ players play it; a
+line of it carries Pantry's own settings and each region the velocity its sample was played at
+(`pantry_velocity`), so **Load…** brings the instrument back exactly as it was.
+
+**Load…** lists the Library's instruments, takes any SFZ file, and imports a folder of captured
+samples (`mix.multisample_import`). Import needs no mapping file: each sample goes where its name
+says, read as capture names them (the files of a saved session's `Audio Files/` work as they are,
+a trailing number and all), as Save writes them, or as `tools/sampling/sampling.py` does. It adds
+to what the Pantry holds; files whose names give no note and velocity are left out and counted.
+Sample files and folders dropped on Pantry's window, or on its track, import the same way.
+
 ## Loading an SFZ file
 
 `mix.multisample_load` reads an SFZ file's mapping into the track's Pantry: the `sample`,
@@ -87,7 +108,7 @@ controls shape the sound. `tools/sampling/sampling.py split` writes files it rea
 
 ## Not built yet
 
-- A menu entry for loading an SFZ file outside Pantry's window, and its browser thumbnail.
+- Menu entries for loading and saving outside Pantry's window.
 - Editing on the shelves: moving, replacing or removing a single sample, per-layer levels.
 - Capturing only down to a chosen module (Freeze's "up to here").
 - Third-party instruments as capture sources are untested: capture renders through instances of

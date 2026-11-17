@@ -719,7 +719,7 @@ fn detached_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginVie
         egui::ScrollArea::both().auto_shrink([false, false]).show(&mut inner, |ui| {
             plugin_contents(app, ui, v);
         });
-        if v.sampler {
+        if v.sampler || v.pantry {
             crate::sampler_window::drop_target(app, ui.ctx(), full, tid);
         }
         if own {

@@ -10,17 +10,19 @@
 //! `Audio Files/` with the session; the mix engine hands each to the running instrument. Of an
 //! SFZ file only the mapping is read (`sample`, `pitch_keycenter` or `key`, `hivel`,
 //! `seq_position`, `default_path`, with `<global>`, `<master>` and `<group>` inherited): the
-//! instrument's own parameters shape the sound.
+//! instrument's own parameters shape the sound. `mix.multisample_save` writes a Pantry as such a
+//! file with its samples beside it (and its parameters, which a load restores), and
+//! `mix.multisample_import` takes loose sample files, placed by their names.
 
 use super::*;
 use crate::cmd;
 use serde_json::json;
 use soundcraft_audio_io::{AudioBuffer, FileFormat};
-use soundcraft_dsp::plugins::multisampler::{LAYERS, NOTES, ROBINS, sample_key};
+use soundcraft_dsp::plugins::multisampler::{LAYERS, NOTES, ROBINS, parse_sample_key, sample_key};
 use soundcraft_midi::{Note, Sequence, note_name};
 use soundcraft_model::{ChannelFormat, Clip, Insert, Route, TrackKind};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The Multisampler's plugin id.
 pub const MULTISAMPLER: &str = "multisampler";
@@ -55,6 +57,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{track?, path: an .sfz file} -> {track, name, samples, notes, layers, skipped}: the track's Multisampler plays the file's samples in place of its own (the mapping only: recorded note, velocity layer and round-robin of each key-down region; at most 16 layers a note and 4 round-robins a layer, the rest skipped)",
             has_selection,
             load
+        ),
+        cmd!(
+            "mix.multisample_import",
+            "Import Samples to Multisample",
+            [],
+            None,
+            "{track?, folder?: a folder of audio files, paths?: [audio files], replace?: false} -> {track, samples, notes, layers, skipped, unnamed}: puts samples in the track's Multisampler by their file names, beside what it holds (or in its place with `replace`): the note and velocity each was recorded at as capture names them (`Piano C3 v95.wav`, `Piano D_1 v95 rr2 747.wav`) or as Save to Library does (`060_C3_v095_rr1.wav`); files whose names say neither are counted in `unnamed`, samples that did not fit in `skipped`",
+            has_selection,
+            import
+        ),
+        cmd!(noundo
+            "mix.multisample_save",
+            "Save Multisample",
+            [],
+            None,
+            "{track?, path: where to write the .sfz file, replace?: false} -> {path, name, samples, bytes}: writes the track's Multisampler as an SFZ file, its samples (32-bit float WAV) in a folder of the file's name beside it, and its parameters; mix.multisample_load reads it back as it was, and other SFZ players play it",
+            has_selection,
+            save
         ),
         cmd!(
             "mix.multisample_clear",
@@ -442,7 +462,9 @@ fn parse_sfz(text: &str) -> Vec<Region> {
         if let Some(sample) = sample.filter(|_| key_down) {
             let dir = control.get("default_path").map(|d| d.trim().replace('\\', "/")).unwrap_or_default();
             let note = get("pitch_keycenter").or_else(|| get("key")).and_then(sfz_note).unwrap_or(60);
-            let velocity = get("hivel").and_then(|v| v.trim().parse::<i64>().ok()).map_or(127, |v| v.clamp(1, 127) as u8);
+            // A file Pantry saved says what each sample was played at; else the top of its range.
+            let velocity =
+                get("pantry_velocity").or_else(|| get("hivel")).and_then(|v| v.trim().parse::<i64>().ok()).map_or(127, |v| v.clamp(1, 127) as u8);
             let robin = get("seq_position").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
             out.push(Region { sample: format!("{dir}{sample}"), note, velocity, robin });
         }
@@ -514,6 +536,79 @@ fn multisampler_mut(e: &mut Engine, t: TrackId) -> Option<&mut Insert> {
     e.session_mut().track_mut(t).and_then(|tr| tr.instrument.as_mut()).filter(|i| i.plugin == MULTISAMPLER)
 }
 
+/// A sample to put in a Pantry: the note it was recorded at, its velocity, its take (from 1) and
+/// its file.
+struct Wanted {
+    note: u8,
+    velocity: u8,
+    robin: usize,
+    file: PathBuf,
+}
+
+/// Decodes `wanted` into track `t`'s Pantry (in place of what it holds with `replace`, else
+/// beside it): a note keeps 16 velocities and a layer 4 takes, and a second sample for a taken
+/// place is the layer's next take; what does not fit is skipped. Returns the samples placed, the
+/// notes and most layers the Pantry then holds, and the samples skipped. A missing or broken
+/// file fails the command, which leaves the session as it was.
+fn attach(e: &mut Engine, id: &str, t: TrackId, wanted: &[Wanted], replace: bool, what: &str) -> Result<(usize, usize, usize, usize)> {
+    let held: Vec<String> = match multisampler_mut(e, t) {
+        Some(ins) if replace => {
+            ins.samples.clear();
+            Vec::new()
+        }
+        Some(ins) => ins.samples.keys().cloned().collect(),
+        None => return Err(bad(id, "the track's instrument is not the Multisampler")),
+    };
+    let mut taken: BTreeSet<String> = held.iter().cloned().collect();
+    let mut layers: BTreeMap<u8, BTreeSet<u8>> = BTreeMap::new();
+    for (note, velocity, _) in held.iter().filter_map(|k| parse_sample_key(k)) {
+        layers.entry(note as u8).or_default().insert(velocity);
+    }
+    let mut placed: Vec<(String, &Wanted)> = Vec::new();
+    let mut skipped = 0usize;
+    for w in wanted {
+        let of_note = layers.entry(w.note).or_default();
+        if !of_note.contains(&w.velocity) && of_note.len() >= LAYERS {
+            skipped += 1;
+            continue;
+        }
+        let free = (w.robin.max(1)..=ROBINS).map(|robin| sample_key(w.note, w.velocity, robin)).find(|k| !taken.contains(k));
+        match free {
+            Some(key) if taken.len() < NOTES * LAYERS * ROBINS => {
+                of_note.insert(w.velocity);
+                taken.insert(key.clone());
+                placed.push((key, w));
+            }
+            _ => skipped += 1,
+        }
+    }
+    let rate = e.session().sample_rate.hz();
+    let mut total = 0usize;
+    for (key, w) in &placed {
+        let name = w.file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
+        let ext = w.file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
+        let bytes = crate::io::read_file(&w.file)?;
+        let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
+        if buf.frames() == 0 || buf.num_channels() == 0 {
+            return Err(EngineError::Io(format!("{name}: no audio")));
+        }
+        let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES)
+            .ok_or_else(|| EngineError::Io(format!("{name}: too long for one note (two minutes at most)")))?;
+        total = total.saturating_add(buf.frames().saturating_mul(buf.num_channels()));
+        if total > crate::io::MAX_IMPORT_SAMPLES {
+            return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
+        }
+        let src = crate::io::add_source(e.session_mut(), &name, buf, Some(&w.file.to_string_lossy()), format.format);
+        let ins = multisampler_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
+        ins.samples.insert(key.clone(), src);
+    }
+    let notes = layers.values().filter(|v| !v.is_empty()).count();
+    Ok((placed.len(), notes, layers.values().map(BTreeSet::len).max().unwrap_or(0), skipped))
+}
+
+/// The line of a saved file that carries the instrument's parameters, as JSON after it.
+const PARAMS_LINE: &str = "//pantry-params ";
+
 fn load(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "mix.multisample_load";
     let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
@@ -525,65 +620,185 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
     if bytes.len() > MAX_SFZ_BYTES {
         return Err(EngineError::Io(format!("{}: too large for an SFZ file", path.display())));
     }
-    let regions = parse_sfz(&String::from_utf8_lossy(&bytes));
+    let text = String::from_utf8_lossy(&bytes);
+    let regions = parse_sfz(&text);
     if regions.is_empty() {
         return Err(EngineError::Io(format!("{}: no samples to play (an SFZ file's key-down regions)", path.display())));
     }
     let dir = path.parent().unwrap_or(Path::new("."));
-    // Where each region goes: a note keeps 16 velocities and a layer 4 takes; a second region for
-    // a taken place is the layer's next take.
-    let mut placed: BTreeMap<String, &Region> = BTreeMap::new();
-    let mut layers: BTreeMap<u8, BTreeSet<u8>> = BTreeMap::new();
-    let mut skipped = 0usize;
-    for r in &regions {
-        let of_note = layers.entry(r.note).or_default();
-        if !of_note.contains(&r.velocity) && of_note.len() >= LAYERS {
-            skipped += 1;
-            continue;
-        }
-        let free = (r.robin..=ROBINS).map(|robin| sample_key(r.note, r.velocity, robin)).find(|k| !placed.contains_key(k));
-        match free {
-            Some(key) if placed.len() < NOTES * LAYERS * ROBINS => {
-                of_note.insert(r.velocity);
-                placed.insert(key, r);
+    let wanted: Vec<Wanted> =
+        regions.iter().map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample) }).collect();
+    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, true, &path.display().to_string())?;
+    // A file Pantry saved brings the instrument's settings with it.
+    let saved: Option<BTreeMap<String, f64>> =
+        text.lines().find_map(|l| l.trim().strip_prefix(PARAMS_LINE)).and_then(|j| serde_json::from_str(j).ok());
+    if let (Some(saved), Some(info)) = (saved, soundcraft_dsp::plugin_info(MULTISAMPLER))
+        && let Some(ins) = multisampler_mut(e, t)
+    {
+        for (k, v) in saved {
+            if let Some(param) = info.param(&k) {
+                ins.params.insert(k, param.clamp(v as f32));
             }
-            _ => skipped += 1,
         }
-    }
-    if let Some(ins) = multisampler_mut(e, t) {
-        ins.samples.clear();
-    }
-    // A missing or broken file fails the command, which leaves the session as it was.
-    let rate = e.session().sample_rate.hz();
-    let mut total = 0usize;
-    for (key, r) in &placed {
-        let file = dir.join(&r.sample);
-        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
-        let ext = file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-        let bytes = crate::io::read_file(&file)?;
-        let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
-        if buf.frames() == 0 || buf.num_channels() == 0 {
-            return Err(EngineError::Io(format!("{name}: no audio")));
-        }
-        let buf = crate::io::at_rate(buf, rate, MAX_SAMPLE_VALUES)
-            .ok_or_else(|| EngineError::Io(format!("{name}: too long for one note (two minutes at most)")))?;
-        total = total.saturating_add(buf.frames().saturating_mul(buf.num_channels()));
-        if total > crate::io::MAX_IMPORT_SAMPLES {
-            return Err(EngineError::Io(format!("{}: too much audio to hold in memory", path.display())));
-        }
-        let src = crate::io::add_source(e.session_mut(), &name, buf, Some(&file.to_string_lossy()), format.format);
-        let ins = multisampler_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
-        ins.samples.insert(key.clone(), src);
     }
     let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Multisample");
-    Ok(json!({
-        "track": t.0,
-        "name": name,
-        "samples": placed.len(),
-        "notes": layers.values().filter(|v| !v.is_empty()).count(),
-        "layers": layers.values().map(BTreeSet::len).max().unwrap_or(0),
-        "skipped": skipped,
-    }))
+    Ok(json!({"track": t.0, "name": name, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped}))
+}
+
+/// File extensions a sample is imported from (what the audio decoder reads).
+const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf"];
+/// Most files of a folder looked at for an import (a folder is user-controlled input).
+const MAX_IMPORT_FILES: usize = 20_000;
+
+/// A note by the name the app shows (60 is C3), a sharp written `#` or, as in a file name, `_`.
+fn shown_note(text: &str) -> Option<u8> {
+    let mut chars = text.chars();
+    let class: i64 = match chars.next()?.to_ascii_uppercase() {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+    let rest = chars.as_str();
+    let (class, rest) = match rest.chars().next()? {
+        '#' | '_' => (class + 1, rest.get(1..)?),
+        _ => (class, rest),
+    };
+    let octave: i64 = rest.parse().ok()?;
+    u8::try_from(class.checked_add(octave.checked_add(2)?.checked_mul(12)?)?).ok().filter(|n| *n <= 127)
+}
+
+/// Where a sample goes by its file name (without the extension): the note it was recorded at,
+/// its velocity and its take (from 1). Reads the names capture gives its samples
+/// (`Piano Pantry D#1 v95 rr2`, as a file `Piano Pantry D_1 v95 rr2 747`), the ones Save to
+/// Library and `tools/sampling/sampling.py` write (`039_D#1_v095_rr2`: the leading number is the
+/// note), and anything of either shape: a `v` and a velocity, an optional `rr` and a take, and
+/// before the velocity a note by name, or a MIDI note number first of all.
+pub fn place_from_name(stem: &str) -> Option<(u8, u8, usize)> {
+    let tagged = |t: &str, tag: &str| {
+        t.strip_prefix(tag).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())).and_then(|d| d.parse::<usize>().ok())
+    };
+    let read = |tokens: &[&str]| -> Option<(u8, u8, usize)> {
+        let at = tokens.iter().position(|t| tagged(&t.to_ascii_lowercase(), "v").is_some())?;
+        let velocity = u8::try_from(tagged(&tokens.get(at)?.to_ascii_lowercase(), "v")?).ok().filter(|v| (1..=127).contains(v))?;
+        let robin = tokens.iter().find_map(|t| tagged(&t.to_ascii_lowercase(), "rr")).unwrap_or(1);
+        let numbered =
+            tokens.first().filter(|t| t.len() <= 3 && t.chars().all(|c| c.is_ascii_digit())).and_then(|t| t.parse::<u8>().ok()).filter(|n| *n <= 127);
+        let note = numbered.or_else(|| at.checked_sub(1).and_then(|i| tokens.get(i)).and_then(|t| shown_note(t)))?;
+        (1..=ROBINS).contains(&robin).then_some((note, velocity, robin))
+    };
+    // Words apart by spaces keep a sharp's `_` (`D_1`); a name joined by `_` has the number first.
+    let spaced: Vec<&str> = stem.split_whitespace().collect();
+    read(&spaced).or_else(|| read(&stem.split(['_', ' ']).filter(|t| !t.is_empty()).collect::<Vec<_>>()))
+}
+
+fn import(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.multisample_import";
+    let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    if multisampler_mut(e, t).is_none() {
+        return Err(bad(id, "the track's instrument is not the Multisampler"));
+    }
+    let mut files: Vec<PathBuf> = match p.get("paths") {
+        None => Vec::new(),
+        Some(v) => v
+            .as_array()
+            .and_then(|a| a.iter().map(|x| x.as_str().map(PathBuf::from)).collect::<Option<Vec<_>>>())
+            .ok_or_else(|| bad(id, "`paths` must be a list of files"))?,
+    };
+    if let Some(folder) = str_param(p, "folder") {
+        let mut found: Vec<PathBuf> = crate::io::list_dir(folder).into_iter().take(MAX_IMPORT_FILES).collect();
+        if found.is_empty() {
+            return Err(EngineError::Io(format!("{folder}: no files there")));
+        }
+        found.sort();
+        files.extend(found);
+    }
+    if files.is_empty() {
+        return Err(bad(id, "`folder` or `paths` required"));
+    }
+    let audio = |f: &PathBuf| f.extension().and_then(|x| x.to_str()).is_some_and(|x| AUDIO_EXTS.contains(&x.to_ascii_lowercase().as_str()));
+    let mut unnamed = 0usize;
+    let mut wanted = Vec::new();
+    for file in files.into_iter().filter(audio) {
+        match file.file_stem().and_then(|n| n.to_str()).and_then(place_from_name) {
+            Some((note, velocity, robin)) => wanted.push(Wanted { note, velocity, robin, file }),
+            None => unnamed += 1,
+        }
+    }
+    if wanted.is_empty() {
+        return Err(bad(id, "no sample there says its note and velocity in its name (as `Piano C3 v95.wav` or `060_C3_v095_rr1.wav`)"));
+    }
+    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, bool_or(p, "replace", false), "the samples")?;
+    Ok(json!({"track": t.0, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "unnamed": unnamed}))
+}
+
+fn save(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.multisample_save";
+    let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    let s = e.session_arc();
+    let ins = s
+        .track(t)
+        .and_then(|tr| tr.instrument.as_ref())
+        .filter(|i| i.plugin == MULTISAMPLER)
+        .ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
+    let path = Path::new(str_param(p, "path").ok_or_else(|| bad(id, "`path` required"))?).to_path_buf();
+    let path = if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("sfz")) { path } else { path.with_extension("sfz") };
+    let stem = path.file_stem().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).ok_or_else(|| bad(id, "`path` needs a file name"))?.to_string();
+    if crate::io::path_taken(&path) && !bool_or(p, "replace", false) {
+        return Err(EngineError::Io(format!("{} already exists", path.display())));
+    }
+    // What it holds, by note, then velocity, then take.
+    let mut held: Vec<(u8, u8, usize, soundcraft_model::SourceId)> =
+        ins.samples.iter().filter_map(|(k, src)| parse_sample_key(k).map(|(n, v, r)| (n as u8, v, r + 1, *src))).collect();
+    held.sort();
+    if held.is_empty() {
+        return Err(bad(id, "the Multisampler holds no samples to save"));
+    }
+    let notes: Vec<u8> = held.iter().map(|h| h.0).collect::<BTreeSet<_>>().into_iter().collect();
+    let folder = path.with_extension("");
+    crate::file_access::check_write(&path).map_err(EngineError::Io)?;
+    if !cfg!(target_arch = "wasm32") {
+        crate::io::make_dir(&folder)?;
+    }
+    let params: BTreeMap<&str, f32> = ins.params.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    let release = ins.params.get("release").copied().unwrap_or(250.0) / 1000.0;
+    let mut text = format!(
+        "// {stem}: a Pantry instrument saved by FreeDAWm. Each sample is as it was captured, so\n// velocity does not scale the layers again.\n{PARAMS_LINE}{}\n<control> default_path={stem}/\n<global> amp_veltrack=0 ampeg_release={release:.3}\n",
+        serde_json::to_string(&params).unwrap_or_else(|_| "{}".into())
+    );
+    let options =
+        soundcraft_audio_io::EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, ..Default::default() };
+    let mut bytes = 0usize;
+    for &(note, velocity, robin, src) in &held {
+        let audio = s.pool.get(src).ok_or_else(|| EngineError::Io(format!("{}: a sample's audio is missing", note_name(note))))?;
+        let file = format!("{note:03}_{}_v{velocity:03}_rr{robin}.wav", note_name(note).replace('#', "s"));
+        let wav = soundcraft_audio_io::encode(&audio.buffer(), &options).map_err(|err| EngineError::Io(format!("{file}: {err}")))?;
+        bytes = bytes.saturating_add(wav.len());
+        crate::io::write_file(&folder.join(&file).to_string_lossy(), &wav)?;
+        // The keys nearest the note, and the velocities from just above the layer below.
+        let at = notes.iter().position(|n| *n == note).unwrap_or(0);
+        let lokey = if at == 0 { 0 } else { notes.get(at - 1).map_or(0, |p| (u16::from(*p) + u16::from(note)) / 2 + 1) };
+        let hikey = notes.get(at + 1).map_or(127, |n| (u16::from(note) + u16::from(*n)) / 2);
+        let of_note: Vec<u8> = held.iter().filter(|h| h.0 == note).map(|h| h.1).collect::<BTreeSet<_>>().into_iter().collect();
+        let layer = of_note.iter().position(|v| *v == velocity).unwrap_or(0);
+        let lovel = if layer == 0 { 1 } else { of_note.get(layer - 1).map_or(1, |v| u16::from(*v) + 1) };
+        let hivel = if layer + 1 == of_note.len() { 127 } else { velocity };
+        let takes = held.iter().filter(|h| h.0 == note && h.1 == velocity).count();
+        let seq = if takes > 1 {
+            format!(" seq_length={takes} seq_position={}", held.iter().filter(|h| h.0 == note && h.1 == velocity && h.2 <= robin).count())
+        } else {
+            String::new()
+        };
+        text.push_str(&format!(
+            "<region> sample={file} pitch_keycenter={note} lokey={lokey} hikey={hikey} lovel={lovel} hivel={hivel} pantry_velocity={velocity}{seq}\n"
+        ));
+    }
+    crate::io::write_file(&path.to_string_lossy(), text.as_bytes())?;
+    Ok(json!({"path": path.to_string_lossy(), "name": stem, "samples": held.len(), "bytes": bytes.saturating_add(text.len())}))
 }
 
 #[cfg(test)]
@@ -820,6 +1035,88 @@ mod tests {
         // An empty Pantry makes no sound.
         let empty = track(&mut e, MULTISAMPLER);
         assert!(e.execute("track.capture_multisample", &json!({"track": empty.0, "low": 60, "high": 60, "hold": 0.1, "tail": 0.1})).is_err());
+    }
+
+    #[test]
+    fn samples_say_where_they_go_in_their_names() {
+        // As capture names them, as a saved session's files, and with takes.
+        assert_eq!(place_from_name("Natural Liberty A0 v11 721"), Some((33, 11, 1)));
+        assert_eq!(place_from_name("Natural Liberty D_1 v127 756"), Some((39, 127, 1)));
+        assert_eq!(place_from_name("Piano Pantry D#1 v95 rr2"), Some((39, 95, 2)));
+        assert_eq!(place_from_name("Keys A-1 v64"), Some((21, 64, 1)));
+        assert_eq!(place_from_name("Keys C_-2 v1"), Some((1, 1, 1)));
+        // As Save to Library and the sampling tool write them: the number is the note.
+        assert_eq!(place_from_name("051_Ds1_v095_rr2"), Some((51, 95, 2)));
+        assert_eq!(place_from_name("060_C4_v100_rr1"), Some((60, 100, 1)));
+        assert_eq!(place_from_name("C3_v64"), Some((60, 64, 1)));
+        for bad in
+            ["", "Piano", "Piano C3", "Piano v95", "Piano C3 v0", "Piano C3 v128", "Piano H3 v64", "Piano C3 v64 rr5", "Piano C99 v64", "200_x_v64"]
+        {
+            assert_eq!(place_from_name(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_saved_pantry_loads_back_as_it_was_and_loose_samples_import_by_name() {
+        let d = dir("save");
+        let mut e = Engine::default();
+        let synth = track(&mut e, "subtractive_synth");
+        let made = e
+            .execute(
+                "track.capture_multisample",
+                &json!({"track": synth.0, "low": 48, "high": 51, "step": 3, "velocities": [40, 100], "robins": 2, "hold": 0.2, "tail": 0.4}),
+            )
+            .unwrap();
+        let made = TrackId(made["track"].as_u64().unwrap());
+        e.execute("mix.instrument_param", &json!({"track": made.0, "param": "layer_blend", "value": 80.0})).unwrap();
+        let pantry = |e: &Engine, t: TrackId| e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        let sfz = d.join("Keys.sfz");
+        let v = e.execute("mix.multisample_save", &json!({"track": made.0, "path": d.join("Keys").to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["name"].as_str(), v["path"].as_str()), (Some(8), Some("Keys"), Some(&*sfz.to_string_lossy())));
+        let text = std::fs::read_to_string(&sfz).unwrap();
+        assert!(text.contains(
+            "<region> sample=048_C2_v040_rr1.wav pitch_keycenter=48 lokey=0 hikey=49 lovel=1 hivel=40 pantry_velocity=40 seq_length=2 seq_position=1"
+        ));
+        assert!(text.contains(
+            "sample=051_Ds2_v100_rr2.wav pitch_keycenter=51 lokey=50 hikey=127 lovel=41 hivel=127 pantry_velocity=100 seq_length=2 seq_position=2"
+        ));
+        assert!(d.join("Keys").join("051_Ds2_v100_rr2.wav").is_file());
+        // A second save needs `replace`; nothing was undoable about the first.
+        assert!(e.execute("mix.multisample_save", &json!({"track": made.0, "path": sfz.to_string_lossy()})).is_err());
+        e.execute("mix.multisample_save", &json!({"track": made.0, "path": sfz.to_string_lossy(), "replace": true})).unwrap();
+        // Loaded into another Pantry: the same places, the same audio, the same settings.
+        let other = track(&mut e, MULTISAMPLER);
+        let v = e.execute("mix.multisample_load", &json!({"track": other.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(8), Some(0)));
+        let (a, b) = (pantry(&e, made), pantry(&e, other));
+        assert_eq!(a.samples.keys().collect::<Vec<_>>(), b.samples.keys().collect::<Vec<_>>());
+        assert_eq!(b.params.get("layer_blend"), Some(&80.0));
+        let s = e.session();
+        for (key, src) in &a.samples {
+            let (x, y) = (s.pool.get(*src).unwrap(), s.pool.get(b.samples[key]).unwrap());
+            assert_eq!(x.channel(0), y.channel(0), "{key}");
+        }
+        // The saved samples as loose files: imported by name beside what is there, or in its place.
+        let third = track(&mut e, MULTISAMPLER);
+        std::fs::write(d.join("Keys").join("notes.txt"), "x").unwrap();
+        std::fs::copy(d.join("Keys").join("048_C2_v040_rr1.wav"), d.join("Keys").join("stray.wav")).unwrap();
+        let v = e.execute("mix.multisample_import", &json!({"track": third.0, "folder": d.join("Keys").to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64(), v["unnamed"].as_u64()), (Some(8), Some(2), Some(2), Some(1)));
+        assert_eq!(pantry(&e, third).samples.keys().collect::<Vec<_>>(), a.samples.keys().collect::<Vec<_>>());
+        let one = d.join("Keys").join("Grand F_2 v77 12.wav");
+        std::fs::copy(d.join("Keys").join("048_C2_v040_rr1.wav"), &one).unwrap();
+        let v = e.execute("mix.multisample_import", &json!({"track": third.0, "paths": [one.to_string_lossy()]})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64()), (Some(1), Some(3)));
+        assert!(pantry(&e, third).samples.contains_key("n54.v77.r1"));
+        let v = e.execute("mix.multisample_import", &json!({"track": third.0, "paths": [one.to_string_lossy()], "replace": true})).unwrap();
+        assert_eq!((v["samples"].as_u64(), pantry(&e, third).samples.len()), (Some(1), 1));
+        // Nothing named, nothing given, nothing held.
+        assert!(
+            e.execute("mix.multisample_import", &json!({"track": third.0, "paths": [d.join("Keys").join("stray.wav").to_string_lossy()]})).is_err()
+        );
+        assert!(e.execute("mix.multisample_import", &json!({"track": third.0})).is_err());
+        let empty = track(&mut e, MULTISAMPLER);
+        assert!(e.execute("mix.multisample_save", &json!({"track": empty.0, "path": d.join("Empty").to_string_lossy()})).is_err());
     }
 
     #[test]

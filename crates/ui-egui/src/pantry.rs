@@ -1,7 +1,7 @@
 //! Pantry - Multisampler's editor, in the Juke family's look (see [`crate::lift`]): a walnut
 //! ground, tobacco cards, cream knobs and one amber accent.
 //!
-//! The page: a title bar (the Pantry wordmark, what is on the shelves, Load SFZ… and Clear); the
+//! The page: a title bar (the Pantry wordmark, what is on the shelves, Load…, Save… and Clear); the
 //! shelves (every sample as a block over the keys it plays, left to right, and the velocities it
 //! answers, bottom to top, the part of a layer that blends with the one below shaded; press a
 //! block to hear that key at that velocity on the Musical Typing port); and a side card with the
@@ -107,7 +107,7 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     let layers = shelves.values().map(Vec::len).max().unwrap_or(0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let (name, facts) = if ins.samples.is_empty() {
-        ("Empty".to_string(), "capture a track or load an SFZ file".to_string())
+        ("Empty".to_string(), "capture a track, load one, or drop samples here".to_string())
     } else {
         (
             format!("{} sample{}", ins.samples.len(), plural(ins.samples.len())),
@@ -139,24 +139,51 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
     {
         app.ui.status = e;
     }
-    let can_pick = app.services.pick_open.is_some();
-    let load_r = next(110.0);
-    let load = button(ui, p, load_r, "Load SFZ…", can_pick, "pantry-load").on_disabled_hover_text("Loading a file needs the desktop app");
-    if load.clicked()
-        && let Some(pick) = &app.services.pick_open
-        && let Some(path) = pick("mix.multisample_load", &["sfz"])
-    {
-        match app.run("mix.multisample_load", json!({"track": tid.0, "path": path})) {
-            Ok(v) => {
-                let n = |k: &str| v[k].as_u64().unwrap_or(0);
-                app.ui.status = format!("Loaded {} samples of {} notes", n("samples"), n("notes"));
-                if n("skipped") > 0 {
-                    app.ui.status.push_str(&format!("; {} skipped (16 layers a note, 4 takes a layer)", n("skipped")));
-                }
-            }
-            Err(e) => app.ui.status = e,
-        }
+    let save_r = next(84.0);
+    let can_save = !ins.samples.is_empty() && app.dialogs.dirs.pantry.is_some();
+    let save = button(ui, p, save_r, "Save…", can_save, "pantry-save")
+        .on_hover_text("Keep this instrument in the Library, for any session")
+        .on_disabled_hover_text(if ins.samples.is_empty() { "Nothing on the shelves to save" } else { "The Library needs the desktop app" });
+    if save.clicked() {
+        let name = app.engine.session().track(tid).map_or_else(|| "Pantry".to_string(), |t| t.name.clone());
+        app.dialogs.open = Some(crate::dialogs::Dialog::SavePantry { track: tid, name });
     }
+    let load_r = next(84.0);
+    if button(ui, p, load_r, "Load…", true, "pantry-load")
+        .on_hover_text("An instrument from the Library, an SFZ file, or a folder of captured samples")
+        .clicked()
+    {
+        app.dialogs.open =
+            Some(crate::dialogs::Dialog::LoadPantry { track: tid, path: String::new(), saved: crate::user_files::pantry(&app.dialogs.dirs) });
+    }
+}
+
+/// The status line after a multisample command returned `v` (`None`: not one that reports).
+pub fn status(id: &str, v: &serde_json::Value) -> Option<String> {
+    let n = |k: &str| v[k].as_u64().unwrap_or(0);
+    let plural = |n: u64| if n == 1 { "" } else { "s" };
+    let counted = |verb: &str| format!("{verb} {} sample{} of {} note{}", n("samples"), plural(n("samples")), n("notes"), plural(n("notes")));
+    let mut s = match id {
+        "mix.multisample_load" => counted("Loaded"),
+        "mix.multisample_import" => counted("Imported"),
+        "mix.multisample_save" => {
+            return Some(format!(
+                "Saved {} to the Library: {} sample{}, {:.0} MB",
+                v["name"].as_str().unwrap_or("it"),
+                n("samples"),
+                plural(n("samples")),
+                n("bytes") as f64 / 1.0e6
+            ));
+        }
+        _ => return None,
+    };
+    if n("unnamed") > 0 {
+        s.push_str(&format!("; {} had no note and velocity in the name", n("unnamed")));
+    }
+    if n("skipped") > 0 {
+        s.push_str(&format!("; {} did not fit (16 layers a note, 4 takes a layer)", n("skipped")));
+    }
+    Some(s)
 }
 
 /// A layer's colour: warmer and brighter the harder it was played.
@@ -241,7 +268,7 @@ fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
         p.text(
             map.center() + vec2(0.0, 12.0),
             Align2::CENTER_CENTER,
-            "Select an instrument track and choose Track › Capture to Pantry…, or load an SFZ file",
+            "Capture a track (Track › Capture to Pantry…), load an instrument, or drop captured samples here",
             regular(12.5),
             DIM,
         );
@@ -420,6 +447,59 @@ mod tests {
         assert_eq!(key_spans(&[48, 50]), [(48, 0, 49), (50, 50, 127)]);
         assert_eq!(key_spans(&[60]), [(60, 0, 127)]);
         assert!(key_spans(&[]).is_empty());
+    }
+
+    #[test]
+    fn an_instrument_goes_to_the_library_and_comes_back_in_another_track() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("sc-pantry-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = soundcraft_engine::Engine::default();
+        let new = |e: &mut soundcraft_engine::Engine, plugin: &str| {
+            e.execute("track.new", &json!({"kind": "instrument", "instrument": plugin})).unwrap()["tracks"][0].as_u64().unwrap()
+        };
+        let synth = new(&mut e, "subtractive_synth");
+        let other = new(&mut e, PANTRY);
+        let mut app = SoundApp::new(e, None, crate::Services::default());
+        app.dialogs.dirs = crate::user_files::UserDirs::under(&dir);
+        let made = app
+            .run_sync("track.capture_multisample", json!({"track": synth, "low": 60, "high": 63, "step": 3, "layers": 2, "hold": 0.2, "tail": 0.4}))
+            .unwrap();
+        // What Save… sends: a file in the Library's Pantry folder.
+        let file = app.dialogs.dirs.pantry.clone().unwrap().join("Grand.sfz");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        app.run("mix.multisample_save", json!({"track": made["track"], "path": file.to_string_lossy()})).unwrap();
+        assert!(app.ui.status.starts_with("Saved Grand to the Library: 4 samples"), "{}", app.ui.status);
+        // Load… lists it, and loading it fills the other track's shelves.
+        let saved = crate::user_files::pantry(&app.dialogs.dirs);
+        assert_eq!(saved.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Grand"]);
+        app.run("mix.multisample_load", json!({"track": other, "path": saved[0].path.to_string_lossy()})).unwrap();
+        assert_eq!(app.ui.status, "Loaded 4 samples of 2 notes");
+        let ins = app.engine.session().track(TrackId(other)).and_then(|t| t.instrument.clone()).unwrap();
+        assert_eq!(shelves(&ins).keys().copied().collect::<Vec<_>>(), [60, 63]);
+        // The saved samples as loose files import by their names.
+        app.run("mix.multisample_clear", json!({"track": other})).unwrap();
+        app.run("mix.multisample_import", json!({"track": other, "folder": file.with_extension("").to_string_lossy()})).unwrap();
+        assert_eq!(app.ui.status, "Imported 4 samples of 2 notes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_status_line_says_what_a_command_did() {
+        use serde_json::json;
+        assert_eq!(
+            status("mix.multisample_load", &json!({"samples": 360, "notes": 30, "skipped": 0})).as_deref(),
+            Some("Loaded 360 samples of 30 notes")
+        );
+        assert_eq!(
+            status("mix.multisample_import", &json!({"samples": 1, "notes": 1, "skipped": 2, "unnamed": 3})).as_deref(),
+            Some("Imported 1 sample of 1 note; 3 had no note and velocity in the name; 2 did not fit (16 layers a note, 4 takes a layer)")
+        );
+        assert_eq!(
+            status("mix.multisample_save", &json!({"name": "Grand", "samples": 360, "bytes": 912_000_000})).as_deref(),
+            Some("Saved Grand to the Library: 360 samples, 912 MB")
+        );
+        assert_eq!(status("mix.multisample_clear", &json!({})), None);
     }
 
     #[test]

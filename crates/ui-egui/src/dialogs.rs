@@ -67,6 +67,19 @@ pub enum Dialog {
         name: String,
         chain: bool,
     },
+    /// Pantry › Save…: a name for the instrument in the Library's Pantry folder.
+    SavePantry {
+        track: TrackId,
+        name: String,
+    },
+    /// Pantry › Load…: the Library's instruments (newest first), any SFZ file, or a folder of
+    /// captured samples.
+    LoadPantry {
+        track: TrackId,
+        path: String,
+        /// The Pantry folder as it was when the dialog opened.
+        saved: Vec<crate::user_files::UserFile>,
+    },
     /// Load Track Preset… and Load Plug-in Chain… (`chain`): the Library's presets (newest first)
     /// or any preset file.
     LoadTrackPreset {
@@ -265,6 +278,8 @@ impl Dialogs {
             Dialog::NewSession(_) => "new_session",
             Dialog::SaveTrackPreset { .. } => "save_track_preset",
             Dialog::LoadTrackPreset { .. } => "load_track_preset",
+            Dialog::SavePantry { .. } => "save_pantry",
+            Dialog::LoadPantry { .. } => "load_pantry",
             Dialog::Bounce { .. } => "bounce",
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
@@ -661,6 +676,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::SaveTrackPreset { chain: false, .. } => "Save Track Preset",
         Dialog::LoadTrackPreset { chain: false, .. } => "Load Track Preset",
         Dialog::SaveTrackPreset { chain: true, .. } => "Save Plug-in Chain",
+        Dialog::SavePantry { .. } => "Save to Library",
+        Dialog::LoadPantry { .. } => "Load into Pantry",
         Dialog::LoadTrackPreset { chain: true, .. } => "Load Plug-in Chain",
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
@@ -756,6 +773,64 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         let cmd = if *chain { "track.save_chain" } else { "track.save_preset" };
                         action = Some((cmd.into(), json!({"path": f.to_string_lossy(), "track": track.0})));
+                    }
+                }
+                Dialog::SavePantry { track, name } => {
+                    ui.label("Instrument name");
+                    name_field(ui, name);
+                    let file = app.dialogs.dirs.pantry.clone().map(|d| d.join(format!("{}.sfz", crate::user_files::file_name(name))));
+                    let replaces = file.as_ref().is_some_and(|f| f.exists());
+                    if replaces {
+                        ui.label(format!("“{}” is already in the Library. Do you want to replace it?", crate::user_files::file_name(name)));
+                    } else {
+                        ui.label(egui::RichText::new("Saved as an SFZ file with its samples, in the Library's Pantry folder.").color(Tokens::current().text_dim));
+                    }
+                    if buttons_enabled(ui, if replaces { "Replace" } else { "Save" }, enter && !replaces, file.is_some() && !name.trim().is_empty())
+                        && let Some(f) = file
+                    {
+                        if let Some(parent) = f.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        action = Some(("mix.multisample_save".into(), json!({"track": track.0, "path": f.to_string_lossy(), "replace": replaces})));
+                    }
+                }
+                Dialog::LoadPantry { track, path, saved } => {
+                    if saved.is_empty() {
+                        ui.label(egui::RichText::new("No instruments in the Library yet: Save… keeps one there.").color(Tokens::current().text_dim));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            for f in saved.iter() {
+                                let on = std::path::Path::new(path.as_str()) == f.path;
+                                if ui.selectable_label(on, f.name.as_str()).clicked() {
+                                    *path = f.path.to_string_lossy().into_owned();
+                                }
+                            }
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("File");
+                        ui.add(egui::TextEdit::singleline(path).desired_width(360.0).hint_text("an instrument (.sfz) anywhere"));
+                        if let Some(pick) = &app.services.pick_open
+                            && ui.button("Browse…").clicked()
+                            && let Some(p) = pick("mix.multisample_load", &["sfz"])
+                        {
+                            *path = p;
+                        }
+                    });
+                    // Captured samples need no file of their own: their names say where they go.
+                    if let Some(pick) = &app.services.pick_folder {
+                        ui.horizontal(|ui| {
+                            ui.label("Or captured samples, placed by the note and velocity in their names:");
+                            if ui.button("Import a Folder…").clicked()
+                                && let Some(folder) = pick("mix.multisample_import")
+                            {
+                                action = Some(("mix.multisample_import".into(), json!({"track": track.0, "folder": folder})));
+                            }
+                        });
+                    }
+                    ui.label(egui::RichText::new("Sample files and folders dropped on Pantry's window import the same way.").color(Tokens::current().text_dim));
+                    if buttons_enabled(ui, "Load", enter, !path.trim().is_empty()) {
+                        action = Some(("mix.multisample_load".into(), json!({"track": track.0, "path": path})));
                     }
                 }
                 Dialog::LoadTrackPreset { tracks, chain, path, presets } => {

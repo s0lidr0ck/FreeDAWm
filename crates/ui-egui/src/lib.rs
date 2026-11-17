@@ -1269,6 +1269,9 @@ impl SoundApp {
                 if id == "track.capture_multisample" {
                     self.ui.status = dialogs::capture_status(&v);
                 }
+                if let Some(status) = pantry::status(id, &v) {
+                    self.ui.status = status;
+                }
                 self.note_placed(id, &params);
                 if id == "track.clear_clip_indicators" {
                     self.meters.values_mut().chain([&mut self.main_meter]).for_each(|m| {
