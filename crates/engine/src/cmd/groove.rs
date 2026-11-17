@@ -82,7 +82,7 @@ fn from_clip(e: &mut Engine, p: &Value) -> Result<Value> {
     let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
     let g = groove_from_notes(&name, &sequence.notes, tpb.saturating_mul(bars), slot, bar_start)
         .ok_or_else(|| bad(C, "the clip has no notes near the grid to take a groove from"))?;
-    let out = json!({"name": g.name, "period": g.period, "points": g.points});
+    let out = json!({"name": g.name, "period": g.period, "points": g.points, "accents": g.accents});
     let s = e.session_mut();
     s.grooves.retain(|x| !x.name.eq_ignore_ascii_case(&g.name));
     if s.grooves.len() >= MAX_GROOVES {
@@ -138,7 +138,7 @@ fn apply(e: &mut Engine, ids: &[ClipId]) -> Result<Value> {
         let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
         let mut seq = sequence.clone();
         for n in seq.notes.iter_mut() {
-            n.start = soundcraft_mix::quantized_start(s, base, &q, n.start);
+            soundcraft_mix::quantize_note(s, base, &q, n);
         }
         seq.sort();
         notes += seq.notes.len();
@@ -194,6 +194,44 @@ mod tests {
         assert_eq!(starts(&e, c2), vec![270]);
         assert!(e.execute("event.groove_from_clip", &json!({"clip": c2, "grid": "1/7"})).is_err());
         assert!(e.execute("event.quantize", &json!({"clips": [c2], "groove": "Nope"})).is_err());
+    }
+
+    #[test]
+    fn a_groove_with_accents_plays_and_applies_them() {
+        let (mut e, c) = setup();
+        // The second and fourth notes played soft: the groove keeps it.
+        for (i, v) in [(1, 60), (3, 60)] {
+            e.execute("midi.note_edit", &json!({"clip": c, "index": i, "velocity": v})).unwrap();
+        }
+        let r = e.execute("event.groove_from_clip", &json!({"clip": c, "name": "Soft", "grid": "1/16"})).unwrap();
+        let acc: Vec<i64> = r["accents"].as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect();
+        assert_eq!(&acc[..4], &[20, -20, 20, -20], "{acc:?}");
+        // A clip of even notes playing with it: louder and softer as it plays, the notes as written.
+        let t = e.session().tracks[0].id.0;
+        let c2 = e.execute("midi.new_clip", &json!({"track": t, "start": 96_000, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+        for start in [0, 240] {
+            e.execute("midi.note_add", &json!({"clip": c2, "pitch": 62, "start_ticks": start, "velocity": 90})).unwrap();
+        }
+        e.execute("clip.play_quantize", &json!({"clips": [c2], "grid": "1/16", "groove": "Soft"})).unwrap();
+        let (tid, clip) = e.session().find_clip(ClipId(c2)).map(|(t, c)| (t, c.clone())).unwrap();
+        let q = soundcraft_mix::play_quantize(e.session(), e.session().track(tid).unwrap(), &clip).unwrap();
+        let base = e.session().tempo.samples_to_ticks(clip.start, e.session().sample_rate);
+        let ClipContent::Midi { sequence } = &clip.content else { panic!() };
+        let played: Vec<u8> = sequence
+            .notes
+            .iter()
+            .map(|n| {
+                let mut n = *n;
+                soundcraft_mix::quantize_note(e.session(), base, &q, &mut n);
+                n.velocity
+            })
+            .collect();
+        assert_eq!(played, vec![110, 70]);
+        assert!(sequence.notes.iter().all(|n| n.velocity == 90), "the notes stay as written");
+        // Apply writes the accents into the notes.
+        e.execute("clip.play_quantize", &json!({"clips": [c2], "apply": true})).unwrap();
+        let ClipContent::Midi { sequence } = &e.session().find_clip(ClipId(c2)).unwrap().1.content else { panic!() };
+        assert_eq!(sequence.notes.iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![110, 70]);
     }
 
     #[test]

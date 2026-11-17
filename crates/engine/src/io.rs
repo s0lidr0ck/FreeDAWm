@@ -680,9 +680,14 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
                 let len = s.tempo.samples_to_ticks(c.end(), sr).saturating_sub(base);
                 for n in sequence.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
                     let mut n = *n;
+                    // Playback quantize first (a groove's accent on the written velocity), as the
+                    // mix plays it.
+                    if let Some(q) = pq.as_ref() {
+                        soundcraft_mix::quantize_note(s, base, q, &mut n);
+                    }
                     n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
                     n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
-                    let played = pq.as_ref().map_or(n.start, |q| soundcraft_mix::quantized_start(s, base, q, n.start));
+                    let played = n.start;
                     let start = played.saturating_add(delay);
                     let end = start.saturating_add(((n.length as f64 * dur) as i64).max(1)).min(len);
                     if start >= len || end <= start {

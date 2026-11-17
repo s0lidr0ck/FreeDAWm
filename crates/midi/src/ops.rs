@@ -101,22 +101,24 @@ pub fn quantize_on(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, span: 
         return;
     }
     let swing = unit(opts.swing);
-    quantize_toward(notes, opts, seed, |t| nearest_line_in(t, grid, swing, span(t)));
+    quantize_toward(notes, opts, seed, |t| nearest_line_in(t, grid, swing, span(t)), |_| 0);
 }
 
 /// [`quantize_on`] toward the points of `groove` instead of grid lines (its period counted from
 /// each bar: `bar_start(t)` is the start of the bar holding `t`). The window, ends, length and
-/// random options measure in half of `opts.grid_ticks`, as on a grid.
+/// random options measure in half of `opts.grid_ticks`, as on a grid. A groove with accents
+/// also moves each note's velocity by its point's accent, by the strength.
 pub fn quantize_to_groove(notes: &mut [Note], groove: &Groove, opts: &QuantizeOptions, seed: u64, bar_start: impl Fn(i64) -> i64) {
     if opts.grid_ticks <= 0 {
         return;
     }
-    quantize_toward(notes, opts, seed, |t| groove.nearest(t, bar_start(t)));
+    quantize_toward(notes, opts, seed, |t| groove.nearest(t, bar_start(t)), |t| i64::from(groove.accent(t, bar_start(t))));
 }
 
 /// The quantize loop: each note's start (and end, with `quantize_ends`) moves toward
-/// `target(tick)` by the options' strength, within their window.
-fn quantize_toward(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, target: impl Fn(i64) -> i64) {
+/// `target(tick)` by the options' strength, within their window, and its velocity by
+/// `accent(start)` (by the strength too).
+fn quantize_toward(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, target: impl Fn(i64) -> i64, accent: impl Fn(i64) -> i64) {
     let grid = opts.grid_ticks;
     if grid <= 0 {
         return;
@@ -139,6 +141,10 @@ fn quantize_toward(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, target
         if dist < exclude * half {
             continue;
         }
+        let a = accent(old_start);
+        if a != 0 {
+            n.velocity = accented(n.velocity, a, strength);
+        }
         let mut new_start = old_start.saturating_add(round_i64(d as f64 * strength));
         if random > 0.0 {
             new_start = new_start.saturating_add(round_i64(rng.next_signed() * random * half));
@@ -158,7 +164,8 @@ fn quantize_toward(notes: &mut [Note], opts: &QuantizeOptions, seed: u64, target
 }
 
 /// A groove: where the notes of a repeating span (`period` ticks, counted from each bar line)
-/// fall, as offsets into it. Quantizing to a groove moves each note toward its nearest point.
+/// fall, as offsets into it, and how much louder or softer each point is played. Quantizing to a
+/// groove moves each note toward its nearest point.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Groove {
     pub name: String,
@@ -166,19 +173,31 @@ pub struct Groove {
     pub period: i64,
     /// Offsets into the period, sorted, each in `0..period`.
     pub points: Vec<i64>,
+    /// Velocity accent of each point (with `points`), added to a note quantized or played onto
+    /// it. Empty: timing only (the built-in grooves, and every groove saved before accents).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accents: Vec<i8>,
 }
 
 impl Groove {
     /// A groove from `points` (sorted, deduplicated, kept in `0..period`); `None` without a
     /// positive period or points.
     pub fn new(name: &str, period: i64, points: &[i64]) -> Option<Groove> {
+        let p: Vec<(i64, i8)> = points.iter().map(|x| (*x, 0)).collect();
+        Groove::with_accents(name, period, &p)
+    }
+
+    /// [`Groove::new`] with a velocity accent on each point (the first kept where two points
+    /// fall together); no accents are kept when all are 0.
+    pub fn with_accents(name: &str, period: i64, points: &[(i64, i8)]) -> Option<Groove> {
         if period <= 0 {
             return None;
         }
-        let mut p: Vec<i64> = points.iter().map(|x| x.rem_euclid(period)).collect();
-        p.sort_unstable();
-        p.dedup();
-        (!p.is_empty()).then(|| Groove { name: name.to_string(), period, points: p })
+        let mut p: Vec<(i64, i8)> = points.iter().map(|(x, a)| (x.rem_euclid(period), *a)).collect();
+        p.sort_by_key(|x| x.0);
+        p.dedup_by_key(|x| x.0);
+        let accents: Vec<i8> = if p.iter().any(|x| x.1 != 0) { p.iter().map(|x| x.1).collect() } else { Vec::new() };
+        (!p.is_empty()).then(|| Groove { name: name.to_string(), period, points: p.iter().map(|x| x.0).collect(), accents })
     }
 
     /// The groove point nearest to tick `t`, the period counted from `bar_start` (the start of
@@ -186,25 +205,44 @@ impl Groove {
     pub fn nearest(&self, t: i64, bar_start: i64) -> i64 {
         groove_nearest(&self.points, self.period, t, bar_start)
     }
+
+    /// The accent of the point nearest to `t` (0 without accents). No allocation.
+    pub fn accent(&self, t: i64, bar_start: i64) -> i8 {
+        if self.accents.is_empty() {
+            return 0;
+        }
+        groove_point(&self.points, self.period, t, bar_start).and_then(|(_, i)| self.accents.get(i).copied()).unwrap_or(0)
+    }
+}
+
+/// `velocity` moved by `accent` times `strength` (0..=1), kept in 1..=127.
+fn accented(velocity: u8, accent: i64, strength: f64) -> u8 {
+    i64::from(velocity).saturating_add(round_i64(accent as f64 * strength)).clamp(1, 127) as u8
 }
 
 /// [`Groove::nearest`] on bare points (no allocation: for the audio thread).
 pub fn groove_nearest(points: &[i64], period: i64, t: i64, bar_start: i64) -> i64 {
+    groove_point(points, period, t, bar_start).map_or(t, |(line, _)| line)
+}
+
+/// The groove point nearest to `t` and its index in `points`; `None` without a period or points.
+fn groove_point(points: &[i64], period: i64, t: i64, bar_start: i64) -> Option<(i64, usize)> {
     if period <= 0 || points.is_empty() {
-        return t;
+        return None;
     }
     let rel = t.saturating_sub(bar_start);
     let cycle = bar_start.saturating_add(rel.div_euclid(period).saturating_mul(period));
-    let mut best = t;
+    let mut best = None;
     let mut best_d = u64::MAX;
     // This cycle's points, the last of the cycle before and the first of the next.
-    let before = points.last().map(|p| cycle.saturating_sub(period).saturating_add(*p));
-    let after = points.first().map(|p| cycle.saturating_add(period).saturating_add(*p));
-    for line in points.iter().map(|p| cycle.saturating_add(*p)).chain(before).chain(after) {
+    let last = points.len().saturating_sub(1);
+    let before = points.last().map(|p| (cycle.saturating_sub(period).saturating_add(*p), last));
+    let after = points.first().map(|p| (cycle.saturating_add(period).saturating_add(*p), 0));
+    for (line, i) in points.iter().enumerate().map(|(i, p)| (cycle.saturating_add(*p), i)).chain(before).chain(after) {
         let d = line.abs_diff(t);
         if d < best_d {
             best_d = d;
-            best = line;
+            best = Some((line, i));
         }
     }
     best
@@ -227,7 +265,9 @@ pub fn builtin_grooves() -> Vec<Groove> {
 
 /// A groove taken from notes: the period is cut into `slot`-tick steps, and each step's point is
 /// where the notes near it fall on average (the median offset of those within half a step;
-/// a step no note is near stays straight). `bar_start(t)` is the start of the bar holding `t`.
+/// a step no note is near stays straight), its accent how much louder or softer than the steps'
+/// average they are played (their median velocity; 0 for a step no note is near). `bar_start(t)`
+/// is the start of the bar holding `t`.
 /// `None` when no note is near any step or the sizes are not positive.
 pub fn groove_from_notes(name: &str, notes: &[Note], period: i64, slot: i64, bar_start: impl Fn(i64) -> i64) -> Option<Groove> {
     if period <= 0 || slot <= 0 || slot > period {
@@ -235,6 +275,7 @@ pub fn groove_from_notes(name: &str, notes: &[Note], period: i64, slot: i64, bar
     }
     let steps = (period / slot).clamp(1, 256);
     let mut offsets: Vec<Vec<i64>> = vec![Vec::new(); steps as usize];
+    let mut velocities: Vec<Vec<u8>> = vec![Vec::new(); steps as usize];
     for n in notes.iter().filter(|n| n.start >= 0) {
         let pos = n.start.saturating_sub(bar_start(n.start)).rem_euclid(period);
         let k = ((pos + slot / 2) / slot).rem_euclid(steps);
@@ -244,23 +285,35 @@ pub fn groove_from_notes(name: &str, notes: &[Note], period: i64, slot: i64, bar
             off -= period;
         }
         if off.abs() <= slot / 2
-            && let Some(v) = offsets.get_mut(k as usize)
+            && let (Some(v), Some(w)) = (offsets.get_mut(k as usize), velocities.get_mut(k as usize))
         {
             v.push(off);
+            w.push(n.velocity);
         }
     }
     if offsets.iter().all(Vec::is_empty) {
         return None;
     }
-    let points: Vec<i64> = offsets
+    let medians: Vec<Option<i64>> = velocities
         .iter_mut()
-        .zip(0i64..)
-        .map(|(v, k)| {
-            v.sort_unstable();
-            k * slot + v.get(v.len() / 2).copied().unwrap_or(0)
+        .map(|w| {
+            w.sort_unstable();
+            w.get(w.len() / 2).map(|v| i64::from(*v))
         })
         .collect();
-    Groove::new(name, period, &points)
+    let played: Vec<i64> = medians.iter().flatten().copied().collect();
+    let mean = played.iter().sum::<i64>() / (played.len().max(1) as i64);
+    let points: Vec<(i64, i8)> = offsets
+        .iter_mut()
+        .zip(0i64..)
+        .zip(&medians)
+        .map(|((v, k), m)| {
+            v.sort_unstable();
+            let accent = m.map_or(0, |m| (m - mean).clamp(-64, 63) as i8);
+            (k * slot + v.get(v.len() / 2).copied().unwrap_or(0), accent)
+        })
+        .collect();
+    Groove::with_accents(name, period, &points)
 }
 
 /// Quantize applied as a clip or track plays: the notes stay where they are; each plays from
@@ -289,6 +342,20 @@ impl PlayQuantize {
             None => return t,
         };
         t.saturating_add(round_i64(target.saturating_sub(t) as f64 * unit(self.strength)))
+    }
+
+    /// The velocity a note starting at `t` with `velocity` plays at: its groove point's accent
+    /// added, by the strength (unchanged without a groove with accents). No allocation.
+    pub fn velocity(&self, t: i64, bar: (i64, i64), velocity: u8) -> u8 {
+        match &self.groove {
+            Some(g) if !g.accents.is_empty() => accented(velocity, i64::from(g.accent(t, bar.0)), unit(self.strength)),
+            _ => velocity,
+        }
+    }
+
+    /// Whether a groove with accents changes velocities ([`PlayQuantize::velocity`]).
+    pub fn accents(&self) -> bool {
+        self.groove.as_ref().is_some_and(|g| !g.accents.is_empty())
     }
 }
 

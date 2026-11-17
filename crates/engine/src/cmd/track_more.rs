@@ -422,7 +422,7 @@ fn write_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
                     if let (Some(q), ClipContent::Midi { sequence }) = (q, &mut c2.content) {
                         let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
                         for n in sequence.notes.iter_mut() {
-                            n.start = soundcraft_mix::quantized_start(s, base, &q, n.start);
+                            soundcraft_mix::quantize_note(s, base, &q, n);
                         }
                         (c.id.0, Some(c2))
                     } else {

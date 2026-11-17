@@ -348,3 +348,26 @@ fn a_muted_note_round_trips_and_old_notes_load_unmuted() {
     let old: Note = serde_json::from_str(r#"{"pitch":60,"velocity":100,"release_velocity":64,"channel":0,"start":0,"length":10}"#).unwrap();
     assert!(!old.muted);
 }
+
+#[test]
+fn a_groove_from_notes_keeps_their_accents() {
+    // 8ths over one bar: on-beats played at 110, off-beats at 70 (the average 90).
+    let v: Vec<Note> = (0..8).map(|k| Note { velocity: if k % 2 == 0 { 110 } else { 70 }, ..n(60, k * 480, 60) }).collect();
+    let g = groove_from_notes("accents", &v, 3840, 480, |_| 0).unwrap();
+    assert_eq!(g.accents, vec![20, -20, 20, -20, 20, -20, 20, -20]);
+    assert_eq!((g.accent(10, 0), g.accent(470, 0)), (20, -20), "the nearest point's accent");
+    // Quantizing flat notes to it gives them the accents, by the strength.
+    let mut flat: Vec<Note> = (0..4).map(|k| n(60, k * 480 + 15, 60)).collect();
+    let opts = QuantizeOptions { grid_ticks: 480, strength: 0.5, ..QuantizeOptions::default() };
+    quantize_to_groove(&mut flat, &g, &opts, DEFAULT_SEED, |_| 0);
+    assert_eq!(flat.iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![110, 90, 110, 90]);
+    // Played: the same, the notes left alone.
+    let q = PlayQuantize { grid: 480, strength: 1.0, swing: 0.0, groove: Some(g.clone()) };
+    assert!(q.accents());
+    assert_eq!((q.velocity(15, (0, 3840), 100), q.velocity(495, (0, 3840), 100)), (120, 80));
+    // Timing-only grooves (the built-in ones, older ones) change no velocity, and save as before.
+    let swing = builtin_grooves().into_iter().next().unwrap();
+    assert!(swing.accents.is_empty() && !serde_json::to_string(&swing).unwrap().contains("accents"));
+    let old: Groove = serde_json::from_str(r#"{"name":"x","period":960,"points":[0,600]}"#).unwrap();
+    assert_eq!(old.accent(600, 0), 0);
+}

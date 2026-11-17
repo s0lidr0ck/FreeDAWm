@@ -4622,10 +4622,23 @@ pub fn quantized_start(s: &Session, base: i64, q: &soundcraft_midi::ops::PlayQua
     if start < 0 {
         return start;
     }
+    q.start(start, bar_around(s, base, start)).max(0)
+}
+
+/// The bar holding `start` ticks into a clip starting on tick `base`: its start and the next
+/// bar's, in ticks from the clip's start.
+fn bar_around(s: &Session, base: i64, start: i64) -> (i64, i64) {
     let bar = s.tempo.bar_beat_at_tick(base.saturating_add(start)).bar;
-    let a = s.tempo.bar_start_tick(bar).saturating_sub(base);
-    let b = s.tempo.bar_start_tick(bar.saturating_add(1)).saturating_sub(base);
-    q.start(start, (a, b)).max(0)
+    (s.tempo.bar_start_tick(bar).saturating_sub(base), s.tempo.bar_start_tick(bar.saturating_add(1)).saturating_sub(base))
+}
+
+/// A note as `q` plays it ([`quantized_start`]), its velocity moved by the accent of its groove
+/// point, if the groove has accents. No allocation.
+pub fn quantize_note(s: &Session, base: i64, q: &soundcraft_midi::ops::PlayQuantize, n: &mut soundcraft_midi::Note) {
+    if q.accents() && n.start >= 0 {
+        n.velocity = q.velocity(n.start, bar_around(s, base, n.start), n.velocity);
+    }
+    n.start = quantized_start(s, base, q, n.start);
 }
 
 /// `chase`: playback starts here (a start or a locate) and notes already sounding at `pos`
@@ -4730,7 +4743,7 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         let shaped = |n0: &soundcraft_midi::Note| {
             let mut n = *n0;
             if let Some(q) = &pq {
-                n.start = quantized_start(s, base, q, n.start);
+                quantize_note(s, base, q, &mut n);
             }
             n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
             n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;

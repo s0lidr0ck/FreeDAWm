@@ -939,6 +939,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let sr = s.sample_rate;
     let base_tick = s.tempo.samples_to_ticks(clip.start, sr);
     let len_ticks = (s.tempo.samples_to_ticks(clip.end(), sr) - base_tick).max(1);
+    // Playback quantize on this clip (or its track): the drawing grid takes its swing or groove
+    // (its lines and the snap), and the notes it moves are outlined where they play.
+    let play_q = s.track(track).and_then(|tr| soundcraft_mix::play_quantize(&s, tr, &clip)).map(std::borrow::Cow::into_owned);
+    let swung_grid = drawing_grid(play_q.as_ref(), snap_ticks);
+    let swing_tick = |tk: i64| swung_grid.as_ref().map_or(tk, |g| soundcraft_mix::quantized_start(&s, base_tick, g, tk));
     // Several selected MIDI clips: the roll spans them all (ticks from this clip's start), each
     // other clip at its offset; their notes are selected and edited with this one's.
     let multi = editable.len() > 1 && editable.contains(&cid);
@@ -1136,7 +1141,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             tools::LineKind::Beat => Color32::from_rgb(60, 60, 66),
             tools::LineKind::Grid => Color32::from_rgb(48, 48, 52),
         };
-        let x = x_of(tick);
+        let x = x_of(if kind == tools::LineKind::Grid { swing_tick(tick) } else { tick });
         painter.line_segment([pos2(x, roll.min.y), pos2(x, roll.max.y)], Stroke::new(1.0, color));
     }
     if cleanup {
@@ -1206,6 +1211,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         // A muted note is drawn faint, with its outline.
         let (fill, edge) = if n.muted { (fill.gamma_multiply(0.25), Color32::from_gray(150)) } else { (fill, Color32::BLACK) };
         let r = note_rect(st, ln, p);
+        // Where playback quantize plays it, when that is elsewhere: an outline.
+        if let Some(q) = play_q.as_ref().filter(|_| drag.is_none() && !n.muted) {
+            let played = soundcraft_mix::quantized_start(&s, base_tick, q, n.start);
+            if played != n.start {
+                notes_p.rect(note_rect(played, ln, p), 2.0, Color32::TRANSPARENT, Stroke::new(1.0, fill.gamma_multiply(0.8)), StrokeKind::Inside);
+            }
+        }
         if drums {
             let c = r.center();
             let h = r.width() / 2.0;
@@ -1259,8 +1271,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     // A tick from the clip start on the grid (lines counted from each bar's start); a span of
     // ticks to a whole number of grid steps. Alt held: no snap.
     let free = |tk: f64| tk.round() as i64;
-    let snap =
-        |tk: f64| -> i64 { if alt { free(tk) } else { tools::snap_abs(&s.tempo, base_tick as f64 + tk, snap_ticks).saturating_sub(base_tick) } };
+    let snap = |tk: f64| -> i64 {
+        if alt { free(tk) } else { swing_tick(tools::snap_abs(&s.tempo, base_tick as f64 + tk, snap_ticks).saturating_sub(base_tick)) }
+    };
     let snap_rel = |tk: f64| -> i64 { if alt { free(tk) } else { ((tk / snap_ticks as f64).round() as i64).saturating_mul(snap_ticks) } };
     let floor_grid = |tk: f64| -> i64 {
         if alt {
@@ -2070,6 +2083,17 @@ pub fn run_on_selection(app: &mut SoundApp, cid: ClipId, id: &str, mut params: s
 
 /// Snap to Scale on the selected notes (every note when none is selected). The selection stays
 /// on the same notes: the command returns where they sit after the re-sort.
+/// The editor's drawing grid of `snap` ticks swung as the clip plays (`q`, its playback quantize):
+/// its swing, or its groove's points. `None`: the grid is straight (no swing or groove, or no grid).
+pub fn drawing_grid(q: Option<&soundcraft_midi::ops::PlayQuantize>, snap: i64) -> Option<soundcraft_midi::ops::PlayQuantize> {
+    q.filter(|q| (q.groove.is_some() || q.swing > 0.0) && snap > 1).map(|q| soundcraft_midi::ops::PlayQuantize {
+        grid: snap,
+        strength: 1.0,
+        swing: q.swing,
+        groove: q.groove.clone(),
+    })
+}
+
 pub fn snap_selection(app: &mut SoundApp, cid: ClipId) {
     let mut params = json!({"clip": cid.0});
     let had = !app.midi.selected.is_empty();
@@ -2103,4 +2127,27 @@ fn pattern_notice(app: &mut SoundApp, ui: &mut Ui, body: Rect, track: soundcraft
             let _ = app.run("pattern.to_midi", json!({"clip": cid.0}));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soundcraft_midi::ops::{PlayQuantize, builtin_grooves};
+
+    #[test]
+    fn the_drawing_grid_swings_as_the_clip_plays() {
+        let s = soundcraft_model::Session::default();
+        let at = |g: &PlayQuantize, t: i64| soundcraft_mix::quantized_start(&s, 0, g, t);
+        // Swing: the off-beat 16th moves by a third of the swing's share of a step.
+        let swing = PlayQuantize { grid: 240, strength: 0.5, swing: 0.5, groove: None };
+        let g = drawing_grid(Some(&swing), 240).unwrap();
+        assert_eq!((at(&g, 0), at(&g, 240), at(&g, 480)), (0, 280, 480), "full strength, on the editor's grid");
+        // A groove: the editor's lines go to its points.
+        let groove = builtin_grooves().into_iter().find(|g| g.name == "Swing 8ths 66%").unwrap();
+        let q = PlayQuantize { grid: 480, strength: 1.0, swing: 0.0, groove: Some(groove) };
+        assert_eq!(at(&drawing_grid(Some(&q), 480).unwrap(), 480), 633);
+        // Straight playback quantize, none, or the grid off: a straight grid.
+        assert!(drawing_grid(Some(&PlayQuantize { grid: 240, strength: 1.0, swing: 0.0, groove: None }), 240).is_none());
+        assert!(drawing_grid(None, 240).is_none() && drawing_grid(Some(&swing), 1).is_none());
+    }
 }
