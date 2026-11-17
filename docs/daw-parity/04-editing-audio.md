@@ -227,7 +227,7 @@ why they score ◐ for "built-in".
 | Duplicate a track with a choice of what comes along | ● | ● | ● | ● | **Works**; the copy's clips keep the original's group and loop ids |
 | Freeze, commit | ● | ● | ● | ● | **Works** (see G for the commit bug) |
 | Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
-| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing. Left to the mixing section's follow-up, which has the same row (doc 03); design below |
+| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Partial**: folders that only organise are built (Move to New Basic Folder, [section 3](03-mixing.md)). Left: editing a closed folder as one clip (its lane drawing the members' clips as blocks, a selection on it spreading to the members as an edit group's does; design below) |
 | Lock a whole track | ◐ | ● | ● | ● | **Works**: Lock Track in the track's menu; a command that would add, change or remove a clip on any of its playlists, or record-arm it, is refused and undone (Insert and Cut Time still move it) |
 | Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
