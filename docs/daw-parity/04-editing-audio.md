@@ -209,7 +209,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Built-in note-level pitch editor | ◐ | ◐ | ● | ● | **Works**: pitch, drift, vibrato, formant, per-note gain; monophonic sources |
-| Pitch editor on a stretched clip | ● | ● | ● | ● | **Partial**: the note commands refuse a stretched clip with "tuning can't follow a stretched clip — commit the stretch first" rather than play it untuned (the design's first step). Left: analyse the stretched render (a source of its own) and map note times through the ratio |
+| Pitch editor on a stretched clip | ● | ● | ● | ● | **Partial**: the note commands refuse a clip with a real-time stretch (varispeed, or an Elastic stretch still playing live) with "tuning can't follow a stretched clip — commit the stretch first" rather than play it untuned; a clip whose Elastic render is done is a file of its own and tunes as any clip. Left: tuning in file time and playing the tuned render through the same stretch (design below, refined); not reached in the follow-up because it changes the mixer's real-time stretched path and needs listening to check |
 | Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
 | ARA 2 for third-party editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
@@ -359,7 +359,10 @@ and audio to MIDI for polyphonic and drum material.
 ## Designs (round three)
 
 Short designs for the open rows too large to build in one step. Each names the first tested step.
-None is built yet.
+Built since, in the round-three follow-ups: the arranger (copy, move, remove, repeat), scratch
+pads, the sample editor's first step with the waveform pencil, the spectral view (not spectral
+editing), process history, groove from audio, Beat Detective conform and smoothing, compact,
+and a closed folder's blocks with its selection spreading. The rows say what is left.
 
 - **Arranger track** (K). A session-level `arranger: Vec<Section { id, name, start, end, color }>`
   (non-overlapping, sorted), drawn as a ruler. Commands `arranger.add/rename/delete` and
@@ -399,7 +402,16 @@ None is built yet.
   conform without cutting. "Separate and smooth" (cut at hits, move pieces, fill gaps by trimming
   the previous piece and crossfading) is the classic alternative, built on separate, nudge and
   trim to close gaps.
-- **Pitch editor on a stretched clip** (J). The vocal editor analyses `clip_heard_window`; for a
+- **Pitch editor on a stretched clip** (J; refined in the follow-up). Only a clip with a real-time
+  stretch (`Clip::stretch` not 1: varispeed, or an Elastic stretch still playing live) is refused;
+  an Elastic render is a file of its own and tunes as any clip. Two ways on: (a) tune in file time
+  and play the tuned render through the same stretch (the analysis and `TunedSpans` stay in file
+  positions; the mixer's stretched path, which reads sample by sample through
+  `Clip::material_at`, takes the tuned sample where a span covers that file position; the editor
+  draws note times through `timeline_span`); or (b) offer "Render Stretch and Tune" (commit the
+  stretch, then open the editor). (a) is the parity answer; its first step is the mixer change with
+  a test that a tuned varispeed clip plays its tuned render, then lifting the refusal. Earlier text:
+  The vocal editor analyses `clip_heard_window`; for a
   stretched clip it should analyse the stretched render (the elastic render is a source of its
   own) and map note times through the stretch ratio. First step: refuse with a clear message rather
   than play untuned; then analyse the render.
@@ -507,3 +519,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | round three follow-up: alternative arrangements (scratch pads) |
 | 2026-11-17 | minor | round three follow-up: a spectral track view |
 | 2026-11-17 | minor | round three follow-up: a closed folder edits its members as one |
+| 2026-11-17 | minor | round three follow-up: pitch editor on a stretched clip left Partial, design refined |

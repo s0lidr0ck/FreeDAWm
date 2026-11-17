@@ -30,7 +30,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Arming and inputs | Arming, record safe, arm follows selection; inputs of up to 16 channels, or a bus | Small: tracks cannot join or leave a take under way |
-| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard and restart take, record lock | Small: no recording at another speed |
+| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard and restart take, record lock | Small: no recording at another speed (designed, needs hardware) |
 | C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
 | D. Loop recording and takes | Takes to layers, swipe comping, three record modes, a take soloed in place of the comp | Small: no stacked "layer" record mode |
 | E. Monitoring | Auto / On / Off through the strip, input-only mode, low-latency mode, cue mixes, click on its own output, a tuner | Medium: no dual buffer; no hardware direct monitoring (not planned) |
@@ -72,7 +72,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Discard the take in progress | ● | ◐ | ● | ● | **Works**: `transport.discard_take` (Cmd+Alt+.) stops and deletes the take's files; nothing is placed |
 | Undo a take | ● | ● | ● | ● | **Works**: the file goes when no undo step, session file or autosave names it any more (on save or close) |
 | Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Works**: Restart Take (Cmd+Alt+Space, `transport.restart_take`) throws the take and its files away and records again as Record would, count-off and pre-roll included |
-| Recording at another speed | ● | ○ | ● | ○ | **Missing**: refused (half-speed record is a Pro Tools and Logic feature). Left: Varispeed (section 1) plays at any speed, but the input is then read elastically and a take would lose input; recording needs the input converted into the take at the session rate and the take placed at the session's speed |
+| Recording at another speed | ● | ○ | ● | ○ | **Not planned here** (designed): recording while the session plays at another speed needs the device's input checked against half-speed playback with real hardware and by ear, which this environment cannot do. Design: while Varispeed is on and Record is pressed, the capture keeps writing the input at the device rate, unstretched (it is what the performer played); the take's plan records the speed; at Stop each take is resampled by the speed (offline, the band-limited resampler) so that played back at normal speed it lasts 1/speed as long, and placed from the record point in session time (`Recording::speed`, serde default 1). Monitoring stays the live input. First tested step: the offline placement (a take recorded at 0.5 played back at 1.0 is half as long, starting at the record point), with the refusal lifted only after a hardware check |
 
 ## C. Punching
 
@@ -220,6 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | round three follow-up: recording at another speed designed, not planned here (needs hardware and listening) |
 | 2026-11-17 | minor | round three follow-up: feedback protection trips only at clipping; a track wider than its input is silent past it (bug 10 fixed); an input at another rate is read band-limited; Solo Take auditions a take in place of the comp |
 | 2026-11-17 | minor | round three follow-up: audio pre-record (Options › Recording › Pre-Record) |
 | 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation; what is left written into the open rows; summary and suggested order brought up to date |
