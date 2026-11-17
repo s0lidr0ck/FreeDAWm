@@ -351,7 +351,7 @@ fn muted_notes_are_left_out_of_an_export() {
     let mut a = Session::default();
     let t = a.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
     let id = a.new_clip_id();
-    let seq = Sequence { notes: vec![n(60, 0, false), n(62, 480, true), n(64, 960, false)], ctrls: vec![] };
+    let seq = Sequence { notes: vec![n(60, 0, false), n(62, 480, true), n(64, 960, false)], ctrls: vec![], sysex: Vec::new() };
     soundcraft_engine::edit::place_clip(&mut a, t, Clip::midi(id, "Part", 0, 96_000, seq));
     let (w, done) = dawproject::export::export(&a, std::io::Cursor::new(Vec::new())).unwrap();
     assert!(done.notes.iter().any(|x| x.contains("Muted notes")), "{:?}", done.notes);

@@ -1728,9 +1728,9 @@ mod tests {
         let (mut e, t, at) = keys();
         let s = e.session_mut();
         let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64, shape: Default::default() };
-        let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![] };
-        let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![] };
-        let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc] };
+        let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![], sysex: Vec::new() };
+        let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![], sysex: Vec::new() };
+        let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc], sysex: Vec::new() };
         for (start, end, seq, muted) in [(0, 4, a, false), (6, 8, b, true), (8, 12, c, false)] {
             let id = s.new_clip_id();
             let mut clip = Clip::midi(id, "Keys", at(start), at(end) - at(start), seq);
@@ -1753,9 +1753,9 @@ mod tests {
         let q = soundcraft_time::TICKS_PER_QUARTER;
         let lower = soundcraft_midi::Note { channel: 2, ..note(0, 1, 48) };
         let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127, shape: Default::default() };
-        let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks] };
+        let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks], sysex: Vec::new() };
         // A plain clip whose notes say channel 10: it plays them on channel 1.
-        let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] };
+        let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![], sysex: vec![] };
         for (start, end, seq, chans) in [(0, 4, printed, true), (4, 8, plain, false)] {
             let id = s.new_clip_id();
             let mut clip = Clip::midi(id, "Keys", at(start), at(end) - at(start), seq);
@@ -1784,7 +1784,7 @@ mod tests {
                 "Keys",
                 0,
                 at(4),
-                soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] },
+                soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![], sysex: vec![] },
             ),
         );
         e.execute("edit.select", &json!({"tracks": [t.0], "start": 0, "end": at(4)})).unwrap();

@@ -763,6 +763,7 @@ pub(crate) fn bound_sequence(s: &mut Sequence) {
         n.length = n.length.clamp(1, MAX_POSITION);
     }
     s.ctrls.iter_mut().for_each(|c| bound(&mut c.tick));
+    s.sysex.iter_mut().for_each(|x| bound(&mut x.tick));
 }
 
 fn env_value(env: &[(Samples, f32)], at: Samples) -> f32 {

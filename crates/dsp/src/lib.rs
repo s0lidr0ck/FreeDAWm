@@ -470,6 +470,10 @@ pub trait Plugin: Send {
             _ => self.midi(offset, msg),
         }
     }
+    /// Instruments: a System Exclusive message (`F0` first, `F7` last) at a sample offset
+    /// within the next block. Hosts that can pass one on (External MIDI, CLAP) do; the default
+    /// ignores it. Audio thread: must not allocate (copy it into storage made beforehand).
+    fn sysex(&mut self, _offset: usize, _data: &[u8]) {}
     fn all_notes_off(&mut self) {}
     /// The MIDI the module emitted while processing the block just run (a drum gate's note per
     /// hit): called by the host right after `process` for every chain module whose

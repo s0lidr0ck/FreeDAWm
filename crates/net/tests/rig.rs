@@ -138,7 +138,7 @@ impl SimHost {
     fn play(&mut self, msg: [u8; 3]) {
         self.tick();
         if self.view.recording {
-            self.live.push(RecordedEvent { at: self.view.position, port: "Keys".into(), msg, pass: 0 });
+            self.live.push(RecordedEvent { at: self.view.position, port: "Keys".into(), msg, pass: 0, sysex: Vec::new() });
         }
     }
 }

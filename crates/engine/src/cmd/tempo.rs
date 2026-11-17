@@ -784,7 +784,7 @@ pub(crate) mod tests {
             })
             .collect();
         let cid = s.new_clip_id();
-        crate::edit::place_clip(s, t, Clip::midi(cid, "keys", 0, len, Sequence { notes, ctrls: Vec::new() }));
+        crate::edit::place_clip(s, t, Clip::midi(cid, "keys", 0, len, Sequence { notes, ctrls: Vec::new(), sysex: Vec::new() }));
         let (beats, downbeats) = detected(&mut e);
         let r = e.execute("event.tempo_conform", &json!({"beats": beats, "downbeats": downbeats, "bpm": 105.0})).unwrap();
         assert_eq!(r["midi_clips"], 1);

@@ -821,7 +821,8 @@ mod tests {
             punches: Vec::new(),
             pre: 0,
         };
-        let ev = |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass };
+        let ev =
+            |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass, sysex: Vec::new() };
         let w = Autosaver::new(root.clone());
         // An earlier take's MIDI is not this one's.
         w.midi_take(0);

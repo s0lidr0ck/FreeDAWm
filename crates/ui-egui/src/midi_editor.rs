@@ -1904,7 +1904,7 @@ pub fn audition_session(
         }
     }
     let c = copy.find_clip_mut(cid)?;
-    c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: notes.to_vec(), ctrls: Vec::new() } };
+    c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: notes.to_vec(), ctrls: Vec::new(), sysex: Vec::new() } };
     c.midi_cleanup = None;
     c.muted = false;
     Some((copy, from, to))

@@ -66,7 +66,7 @@ pub(crate) fn tick(app: &mut SoundApp) {
             (*ch == 0 || (e.msg[0] & 0x0F) + 1 == *ch) && port.as_deref().is_none_or(|p| port_name(app, e.port).as_deref() == Some(p))
         })
     });
-    let Some(first) = hit.copied() else {
+    let Some(first) = hit.cloned() else {
         app.wait_note = Some(app.midi_capture.len());
         return;
     };
@@ -93,7 +93,8 @@ mod tests {
         assert!(!begin(&mut app), "off by default: Record records at once");
         app.run("options.wait_for_note", json!({"value": true})).unwrap();
         assert!(begin(&mut app));
-        let ev = |msg: [u8; 3]| RecordedMidi { at: 9_000_000, port: TYPING_SLOT as u8, msg, pass: soundcraft_playback::midi_in::LISTENING };
+        let ev =
+            |msg: [u8; 3]| RecordedMidi { at: 9_000_000, port: TYPING_SLOT as u8, msg, pass: soundcraft_playback::midi_in::LISTENING, sysex: None };
         // A controller is not a note: still waiting.
         app.midi_capture.push(ev([0xB0, 64, 127]));
         tick(&mut app);
@@ -115,7 +116,7 @@ mod tests {
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
         app.run("options.wait_for_note", json!({"value": true})).unwrap();
         assert!(begin(&mut app));
-        app.midi_capture.push(RecordedMidi { at: 1, port: 3, msg: [0x90, 60, 100], pass: 0 });
+        app.midi_capture.push(RecordedMidi { at: 1, port: 3, msg: [0x90, 60, 100], pass: 0, sysex: None });
         tick(&mut app);
         assert!(!app.engine.transport.recording, "a port the track does not listen to");
         assert!(cancel(&mut app));

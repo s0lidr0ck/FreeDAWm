@@ -505,10 +505,13 @@ fn split_format0(smf: &mut soundcraft_midi::Smf) {
         smf.tracks.push(tr);
         return;
     }
+    // SysEx has no channel: it goes with the first.
+    let mut sysex = tr.sequence.sysex.clone();
     for ch in chans {
         let mut sequence = soundcraft_midi::Sequence::default();
         sequence.notes = tr.sequence.notes.iter().filter(|n| n.channel & 0x0F == ch).copied().collect();
         sequence.ctrls = tr.sequence.ctrls.iter().filter(|c| c.channel & 0x0F == ch).cloned().collect();
+        sequence.sysex = std::mem::take(&mut sysex);
         let label = if ch == 9 { "Drums (Ch 10)".to_string() } else { format!("Ch {}", ch + 1) };
         let name = if tr.name.trim().is_empty() { label } else { format!("{} {label}", tr.name.trim()) };
         smf.tracks.push(soundcraft_midi::SmfTrack { name, sequence });
@@ -819,6 +822,13 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
                     }
                     ev.tick = file_tick(moved(tick.saturating_add(base)));
                     seq.ctrls.push(ev);
+                }
+                // SysEx where it plays (none a start trim hid).
+                for x in sequence.sysex.iter().filter(|x| x.tick >= 0) {
+                    let tick = x.tick.saturating_add(delay);
+                    if tick < len {
+                        seq.sysex.push(soundcraft_midi::SysEx { tick: file_tick(moved(tick.saturating_add(base))), data: x.data.clone() });
+                    }
                 }
             }
         }
@@ -5620,11 +5630,15 @@ mod smf_tempo_tests {
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
         let note = |pitch, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 };
         // A muted note (pitch 64) is left out too.
-        let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }], ctrls: Vec::new() };
+        let seq = Sequence {
+            notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }],
+            ctrls: Vec::new(),
+            sysex: Vec::new(),
+        };
         let a = s.new_clip_id();
         crate::edit::place_clip(&mut s, t, Clip::midi(a, "a", 0, 96_000, seq));
         let b = s.new_clip_id();
-        let mut muted = Clip::midi(b, "b", 96_000, 96_000, Sequence { notes: vec![note(70, 0)], ctrls: Vec::new() });
+        let mut muted = Clip::midi(b, "b", 96_000, 96_000, Sequence { notes: vec![note(70, 0)], ctrls: Vec::new(), sysex: Vec::new() });
         muted.muted = true;
         crate::edit::place_clip(&mut s, t, muted);
         s.edit.values.insert(format!("rtp.{}.transpose", t.0), 2.0);
@@ -5655,7 +5669,7 @@ mod smf_tempo_tests {
             })
             .collect();
         let cid = s.new_clip_id();
-        crate::edit::place_clip(&mut s, t, Clip::midi(cid, "keys", 0, 12 * 24_000, Sequence { notes, ctrls: Vec::new() }));
+        crate::edit::place_clip(&mut s, t, Clip::midi(cid, "keys", 0, 12 * 24_000, Sequence { notes, ctrls: Vec::new(), sysex: Vec::new() }));
         let e = Engine::new(s);
         let smf = soundcraft_midi::read_smf(&export_midi(&e, None).unwrap()).unwrap();
         assert!(smf.tempos.len() > 8, "the ramp in steps: {:?}", smf.tempos);

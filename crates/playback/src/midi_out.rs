@@ -15,7 +15,7 @@
 //!   note-off for each held note, then sustain up and All Notes Off on every channel, before the
 //!   port closes.
 
-use soundcraft_mix::external_midi::{self, OutHub, message_len};
+use soundcraft_mix::external_midi::{self, OutHub, OutMsg, message_len};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -225,9 +225,16 @@ impl MidiOutputs {
 /// A sender thread: sends what is queued for `slot` when it is due, until told to stop; then
 /// lets go of every note it left on and gives the slot back.
 fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, stop: &AtomicBool, now_rx: &std::sync::mpsc::Receiver<Vec<u8>>) {
-    let mut pending: Vec<(u64, [u8; 3])> = Vec::with_capacity(external_midi::OUT_RING);
+    let mut pending: Vec<(u64, OutMsg)> = Vec::with_capacity(external_midi::OUT_RING);
     let mut held = [[0u64; 2]; 16];
-    let send = |conn: &mut Box<dyn MidiSend>, held: &mut [[u64; 2]; 16], m: [u8; 3]| {
+    let send = |conn: &mut Box<dyn MidiSend>, held: &mut [[u64; 2]; 16], m: OutMsg| {
+        let m = match m {
+            OutMsg::Short(m) => m,
+            OutMsg::SysEx(bytes) => {
+                conn.send(&bytes);
+                return;
+            }
+        };
         let (ch, pitch) = (usize::from(m[0] & 0x0F), m[1] & 0x7F);
         if let Some(w) = held.get_mut(ch).and_then(|h| h.get_mut(usize::from(pitch / 64))) {
             let bit = 1u64 << (pitch % 64);
@@ -250,7 +257,9 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
         if stopping {
             // What was queued and not yet due is dropped, except the note-offs (a stop's).
             for (_, m) in pending.drain(..) {
-                if m[0] & 0xF0 == 0x80 || (m[0] & 0xF0 == 0x90 && m[2] == 0) {
+                if let OutMsg::Short(s) = m
+                    && (s[0] & 0xF0 == 0x80 || (s[0] & 0xF0 == 0x90 && s[2] == 0))
+                {
                     send(&mut conn, &mut held, m);
                 }
             }
@@ -479,18 +488,23 @@ mod tests {
         assert!(hub.send(key, now, [0x90, 60, 100]));
         assert!(hub.send(key, now, [0xC1, 5, 0]));
         assert!(hub.send(key, now + 1_000, [0x90, 64, 90]));
+        assert!(hub.send_sysex(key, now + 1_500, &[0xF0, 0x43, 0x10, 0xF7]));
         assert!(hub.send(key, now + 60_000_000, [0x90, 67, 90]));
-        wait_for(|| fake.sent("Out Test Synth").len() >= 4);
-        assert_eq!(fake.sent("Out Test Synth"), vec![vec![0x90, 60, 100], vec![0xC1, 5], vec![0x90, 64, 90], vec![0x80, 60, 0]]);
+        wait_for(|| fake.sent("Out Test Synth").len() >= 5);
+        assert_eq!(
+            fake.sent("Out Test Synth"),
+            vec![vec![0x90, 60, 100], vec![0xC1, 5], vec![0x90, 64, 90], vec![0xF0, 0x43, 0x10, 0xF7], vec![0x80, 60, 0]],
+            "a SysEx goes whole, in time order"
+        );
         // Disabled: the held note gets its note-off, every channel sustain up and All Notes Off;
         // the note not yet due never goes.
         outs.set_enabled("Out Test Synth", false);
         assert!(!fake.is_open("Out Test Synth"));
         let sent = fake.sent("Out Test Synth");
-        assert_eq!(sent.get(4), Some(&vec![0x80, 64, 0]));
+        assert_eq!(sent.get(5), Some(&vec![0x80, 64, 0]));
         assert!(sent.contains(&vec![0xBF, 123, 0]) && sent.contains(&vec![0xB0, 64, 0]));
         assert!(!sent.contains(&vec![0x90, 67, 90]));
-        assert_eq!(sent.len(), 5 + 32);
+        assert_eq!(sent.len(), 6 + 32);
         assert!(!hub.send(key, 0, [0x90, 1, 1]), "the slot is free again");
         assert_eq!(outs.choices().get("Out Test Synth"), Some(&false));
     }

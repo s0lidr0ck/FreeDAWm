@@ -69,6 +69,7 @@ fn clip(s: &mut Session, t: TrackId, pitch: u8, len: i64) {
     let seq = Sequence {
         notes: vec![Note { probability: 100, start: 0, length: len, pitch, velocity: 100, release_velocity: 0, channel: 0, muted: false }],
         ctrls: Vec::new(),
+        sysex: Vec::new(),
     };
     s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::midi(id, "notes", 0, SR as i64, seq));
 }

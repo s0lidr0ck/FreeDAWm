@@ -177,13 +177,31 @@ mod tests {
         app.engine.transport.playing = true;
         app.record_start = 48_000;
         app.engine.transport.position = 60_000;
-        app.midi_rec.push(RecordedMidi { at: 50_000, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x90, 60, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi {
+            at: 50_000,
+            port: soundcraft_playback::midi_in::TYPING_SLOT as u8,
+            msg: [0x90, 60, 100],
+            pass: 0,
+            sysex: None,
+        });
         let first = live_take(&app, &track).unwrap();
         assert_eq!((first.start, first.end), (48_000, 60_000));
         assert_eq!(first.notes, vec![LiveNote { pitch: 60, from: 50_000, to: None }]);
         app.engine.transport.position = 96_000;
-        app.midi_rec.push(RecordedMidi { at: 70_000, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x80, 60, 0], pass: 0 });
-        app.midi_rec.push(RecordedMidi { at: 80_000, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x90, 64, 90], pass: 0 });
+        app.midi_rec.push(RecordedMidi {
+            at: 70_000,
+            port: soundcraft_playback::midi_in::TYPING_SLOT as u8,
+            msg: [0x80, 60, 0],
+            pass: 0,
+            sysex: None,
+        });
+        app.midi_rec.push(RecordedMidi {
+            at: 80_000,
+            port: soundcraft_playback::midi_in::TYPING_SLOT as u8,
+            msg: [0x90, 64, 90],
+            pass: 0,
+            sysex: None,
+        });
         let later = live_take(&app, &track).unwrap();
         assert_eq!(later.end, 96_000, "it grows with the playhead");
         assert_eq!(later.notes, vec![LiveNote { pitch: 60, from: 50_000, to: Some(70_000) }, LiveNote { pitch: 64, from: 80_000, to: None }]);
@@ -199,9 +217,9 @@ mod tests {
         // 120 bpm at 48 kHz: a quarter (960 ticks) is 24,000 samples.
         app.engine.transport.position = 72_000;
         let slot = soundcraft_playback::midi_in::TYPING_SLOT as u8;
-        app.midi_rec.push(RecordedMidi { at: 24_000, port: slot, msg: [0x90, 60, 100], pass: 0 });
-        app.midi_rec.push(RecordedMidi { at: 36_000, port: slot, msg: [0x80, 60, 0], pass: 0 });
-        app.midi_rec.push(RecordedMidi { at: 48_000, port: slot, msg: [0x90, 64, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 24_000, port: slot, msg: [0x90, 60, 100], pass: 0, sysex: None });
+        app.midi_rec.push(RecordedMidi { at: 36_000, port: slot, msg: [0x80, 60, 0], pass: 0, sysex: None });
+        app.midi_rec.push(RecordedMidi { at: 48_000, port: slot, msg: [0x90, 64, 100], pass: 0, sysex: None });
         let s = app.engine.session().clone();
         // The clip being edited starts on beat 2 (tick 960).
         assert_eq!(take_in_ticks(&app, &s, &track, 960), vec![(0, 480, 60), (960, 960, 64)], "the held key reaches the playhead");
@@ -214,7 +232,7 @@ mod tests {
         app.engine.execute("track.input", &json!({"tracks": [id], "input": "midi:Digital Piano"})).unwrap();
         let track = app.engine.session().tracks[0].clone();
         app.engine.transport.recording = true;
-        app.midi_rec.push(RecordedMidi { at: 10, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x90, 60, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 10, port: soundcraft_playback::midi_in::TYPING_SLOT as u8, msg: [0x90, 60, 100], pass: 0, sysex: None });
         assert!(live_take(&app, &track).unwrap().notes.is_empty());
     }
 
@@ -226,8 +244,8 @@ mod tests {
         let track = app.engine.session().tracks[0].clone();
         app.engine.transport.recording = true;
         let slot = soundcraft_playback::midi_in::TYPING_SLOT as u8;
-        app.midi_rec.push(RecordedMidi { at: 10, port: slot, msg: [0x90, 60, 100], pass: 0 });
-        app.midi_rec.push(RecordedMidi { at: 20, port: slot, msg: [0x91, 62, 100], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 10, port: slot, msg: [0x90, 60, 100], pass: 0, sysex: None });
+        app.midi_rec.push(RecordedMidi { at: 20, port: slot, msg: [0x91, 62, 100], pass: 0, sysex: None });
         let pitches: Vec<u8> = live_take(&app, &track).unwrap().notes.iter().map(|n| n.pitch).collect();
         assert_eq!(pitches, vec![62]);
     }

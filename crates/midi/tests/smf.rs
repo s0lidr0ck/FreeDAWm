@@ -57,13 +57,14 @@ fn round_trip() {
             CtrlEvent { tick: 50, channel: 2, kind: CtrlKind::ChannelPressure, value: 77, shape: Default::default() },
             CtrlEvent { tick: 60, channel: 2, kind: CtrlKind::PolyPressure(61), value: 12, shape: Default::default() },
         ],
+        sysex: Vec::new(),
     };
     seq.sort();
     let smf = Smf {
         format: 1,
         tracks: vec![
             SmfTrack { name: "Piano".into(), sequence: seq.clone() },
-            SmfTrack { name: "Bass ♪".into(), sequence: Sequence { notes: vec![note(36, 100, 50)], ctrls: vec![] } },
+            SmfTrack { name: "Bass ♪".into(), sequence: Sequence { notes: vec![note(36, 100, 50)], ctrls: vec![], sysex: Vec::new() } },
         ],
         tempos: vec![(0, 120.0), (3840, 90.0)],
         meters: vec![(0, 4, 4), (3840, 6, 8)],
@@ -120,7 +121,10 @@ fn write_rejects_bad_values() {
     let bad_meter = Smf { meters: vec![(0, 4, 3)], ..Default::default() };
     assert!(write_smf(&bad_meter).is_err());
     let huge_gap = Smf {
-        tracks: vec![SmfTrack { name: String::new(), sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ctrls: vec![] } }],
+        tracks: vec![SmfTrack {
+            name: String::new(),
+            sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ctrls: vec![], sysex: Vec::new() },
+        }],
         ..Default::default()
     };
     assert!(write_smf(&huge_gap).is_err());
@@ -326,6 +330,7 @@ proptest! {
         let mut seq = Sequence {
             notes: notes.iter().map(|&(pitch, velocity, channel, start, length)| Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel, start, length }).collect(),
             ctrls: vec![],
+            sysex: Vec::new(),
         };
         seq.remove_duplicates();
         let smf = Smf { format: 1, tracks: vec![SmfTrack { name: "t".into(), sequence: seq.clone() }], ..Default::default() };
@@ -364,4 +369,27 @@ fn lyric_text_falls_back_to_windows_1252() {
     assert_eq!(soundcraft_midi::decode_text("Ã©té ♪".as_bytes()), "Ã©té ♪");
     // Latin-1 / CP1252 bytes: "café", a curly quote and the euro sign.
     assert_eq!(soundcraft_midi::decode_text(&[0x63, 0x61, 0x66, 0xE9, 0x20, 0x93, 0x80]), "café \u{201c}\u{20ac}");
+}
+
+#[test]
+fn sysex_round_trips_and_packets_join() {
+    let mut seq = Sequence { notes: vec![note(60, 0, 480)], ..Default::default() };
+    seq.sysex = vec![
+        SysEx::new(0, &[0xF0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7]).unwrap(),
+        SysEx::new(960, &[0x7E, 0x7F, 0x09, 0x01]).unwrap(),
+    ];
+    let smf = Smf { format: 1, tracks: vec![SmfTrack { name: "Synth".into(), sequence: seq.clone() }], ..Default::default() };
+    let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
+    assert_eq!(back.tracks[0].sequence.sysex, seq.sysex, "kept whole, F0 first and F7 last");
+    assert_eq!(back.tracks[0].sequence.sysex[1].data, vec![0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]);
+    // Sent in two packets (`F0 43 12`, then `F7 00 F7` 10 ticks later): one message at the
+    // first. An `F7` escape on its own is skipped.
+    let body = vec![0x00, 0xF0, 0x02, 0x43, 0x12, 0x0A, 0xF7, 0x02, 0x00, 0xF7, 0x00, 0xF7, 0x01, 0xF8, 0x00, 0xFF, 0x2F, 0x00];
+    let parsed = read_smf(&file(0, 960, &[body])).unwrap();
+    let x = &parsed.tracks[0].sequence.sysex;
+    assert_eq!(x.len(), 1);
+    assert_eq!((x[0].tick, x[0].data.clone()), (0, vec![0xF0, 0x43, 0x12, 0x00, 0xF7]));
+    // Too long, or with a status byte inside: not a message.
+    assert!(SysEx::new(0, &vec![0x01; MAX_SYSEX]).is_none());
+    assert!(SysEx::new(0, &[0xF0, 0x01, 0x90, 0xF7]).is_none());
 }

@@ -1151,10 +1151,15 @@ mod tests {
             length: 240,
         };
         let id = s.new_clip_id();
-        ops::place_clip(&mut s, t, Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![] }));
+        ops::place_clip(
+            &mut s,
+            t,
+            Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![], sysex: Vec::new() }),
+        );
         let mut e = Engine::new(s);
         let pid = ClipId(9_999);
-        let mut printed = Clip::midi(pid, "band", 0, 24_000, soundcraft_midi::Sequence { notes: vec![n(48, 2), n(60, 0)], ctrls: vec![] });
+        let mut printed =
+            Clip::midi(pid, "band", 0, 24_000, soundcraft_midi::Sequence { notes: vec![n(48, 2), n(60, 0)], ctrls: vec![], sysex: Vec::new() });
         printed.midi_channels = true;
         e.clipboard.tracks = vec![vec![printed]];
         e.execute("edit.paste_merge_midi", &json!({"tracks": [t.0], "at": 0})).unwrap();

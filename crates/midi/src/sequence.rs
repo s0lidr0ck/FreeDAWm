@@ -135,6 +135,35 @@ impl CtrlEvent {
     }
 }
 
+/// The most bytes a SysEx message keeps (F0 and F7 included); a longer one is dropped where it
+/// comes in.
+pub const MAX_SYSEX: usize = 1024;
+
+/// A System Exclusive message at a tick: its whole bytes, `F0` first and `F7` last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysEx {
+    pub tick: i64,
+    pub data: Vec<u8>,
+}
+
+impl SysEx {
+    /// A message at `tick` from `bytes` as they come from a port or a file: `F0` added in front
+    /// when missing and `F7` at the end, data bytes kept below 0x80. `None` when empty or longer
+    /// than [`MAX_SYSEX`].
+    pub fn new(tick: i64, bytes: &[u8]) -> Option<SysEx> {
+        let body = bytes.strip_prefix(&[0xF0]).unwrap_or(bytes);
+        let body = body.strip_suffix(&[0xF7]).unwrap_or(body);
+        if body.is_empty() || body.len() + 2 > MAX_SYSEX || body.iter().any(|b| *b >= 0x80) {
+            return None;
+        }
+        let mut data = Vec::with_capacity(body.len() + 2);
+        data.push(0xF0);
+        data.extend_from_slice(body);
+        data.push(0xF7);
+        Some(SysEx { tick, data })
+    }
+}
+
 /// The MIDI content of a region or track.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sequence {
@@ -142,6 +171,10 @@ pub struct Sequence {
     pub notes: Vec<Note>,
     /// Controller events, sorted by tick after [`Sequence::sort`].
     pub ctrls: Vec<CtrlEvent>,
+    /// System Exclusive messages, sorted by tick after [`Sequence::sort`]. Absent in sessions
+    /// saved before SysEx was kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sysex: Vec<SysEx>,
 }
 
 fn kind_key(k: CtrlKind) -> (u8, u8) {
@@ -160,12 +193,13 @@ impl Sequence {
     pub fn sort(&mut self) {
         self.notes.sort_by_key(|a| (a.start, a.pitch, a.channel, a.length, a.velocity));
         self.ctrls.sort_by_key(|c| c.tick);
+        self.sysex.sort_by_key(|x| x.tick);
     }
 
-    /// The last tick covered by any note end or controller event (0 when empty).
+    /// The last tick covered by any note end, controller event or SysEx (0 when empty).
     pub fn end_tick(&self) -> i64 {
         let n = self.notes.iter().map(Note::end).max();
-        let c = self.ctrls.iter().map(|c| c.tick).max();
+        let c = self.ctrls.iter().map(|c| c.tick).chain(self.sysex.iter().map(|x| x.tick)).max();
         match (n, c) {
             (Some(a), Some(b)) => a.max(b),
             (Some(a), None) | (None, Some(a)) => a,
@@ -281,7 +315,8 @@ mod tests {
     #[test]
     fn ramps_write_out_as_thinned_steps() {
         let other = CtrlEvent { kind: CtrlKind::Cc(7), ..ev(50, 3, CtrlShape::Step) };
-        let seq = Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Ramp(0.0)), other, ev(1000, 100, CtrlShape::Step)] };
+        let seq =
+            Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Ramp(0.0)), other, ev(1000, 100, CtrlShape::Step)], sysex: Vec::new() };
         assert_eq!(seq.next_in_lane(0).map(|c| c.tick), Some(1000));
         let out = seq.stepped_ctrls(10);
         let cc1: Vec<(i64, i32)> = out.iter().filter(|c| c.kind == CtrlKind::Cc(1)).map(|c| (c.tick, c.value)).collect();
@@ -293,7 +328,7 @@ mod tests {
         assert_eq!(cc1.iter().find(|c| c.0 == 500).map(|c| c.1), Some(50));
         assert!(out.iter().any(|c| c.kind == CtrlKind::Cc(7)));
         // A step stays one event; a curve that starts fast is above the line halfway.
-        let steps = Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Step), ev(1000, 100, CtrlShape::Step)] };
+        let steps = Sequence { notes: Vec::new(), ctrls: vec![ev(0, 0, CtrlShape::Step), ev(1000, 100, CtrlShape::Step)], sysex: Vec::new() };
         assert_eq!(steps.stepped_ctrls(10).len(), 2);
         assert!(CtrlShape::Ramp(1.0).value(0, 100, 0.5) > 60 && CtrlShape::Ramp(-1.0).value(0, 100, 0.5) < 40);
     }

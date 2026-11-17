@@ -824,6 +824,10 @@ impl Plugin for MidiFxHost {
     fn midi_raw(&mut self, offset: usize, msg: [u8; 3]) {
         self.take(Ev { offset: u32::try_from(offset).unwrap_or(u32::MAX), msg, raw: true });
     }
+    /// SysEx passes the effects by, straight to the instrument.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        self.inner.sysex(offset, data);
+    }
     fn all_notes_off(&mut self) {
         self.clear();
         self.inner.all_notes_off();

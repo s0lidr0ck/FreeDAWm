@@ -6192,6 +6192,7 @@ dependencies = [
  "soundcraft-audio-io",
  "soundcraft-band",
  "soundcraft-dsp",
+ "soundcraft-midi",
  "soundcraft-mix",
  "soundcraft-model",
  "soundcraft-time",

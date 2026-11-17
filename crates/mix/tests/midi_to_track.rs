@@ -65,6 +65,7 @@ fn clip_with(s: &mut Session, t: TrackId, pitch: u8, tick: i64, len: i64, channe
     let seq = Sequence {
         notes: vec![Note { probability: 100, start: tick, length: len, pitch, velocity: 100, release_velocity: 0, channel: 0, muted: false }],
         ctrls: Vec::new(),
+        sysex: Vec::new(),
     };
     let mut c = Clip::midi(id, "notes", 0, SR as i64, seq);
     c.midi_channels = channels;

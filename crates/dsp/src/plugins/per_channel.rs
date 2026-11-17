@@ -201,6 +201,10 @@ impl Plugin for PerChannel {
         self.first.midi_raw(offset, msg);
     }
 
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        self.first.sysex(offset, data);
+    }
+
     fn all_notes_off(&mut self) {
         self.first.all_notes_off();
     }

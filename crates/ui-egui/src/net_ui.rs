@@ -1209,9 +1209,9 @@ pub fn follower_demo(app: &mut SoundApp, state: &str) -> Result<(), String> {
     for i in 0..30i64 {
         let at = 2 * sr + sr * 2 / 5 + i * sr * 2 / 5;
         let pitch = [60u8, 64, 67, 72, 65, 69, 72, 77][i as usize % 8].saturating_sub(if i % 16 < 8 { 0 } else { 5 });
-        app.midi_rec.push(RecordedMidi { at, port, msg: [0x90, pitch, 90], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at, port, msg: [0x90, pitch, 90], pass: 0, sysex: None });
         if i < 29 {
-            app.midi_rec.push(RecordedMidi { at: at + sr / 3, port, msg: [0x80, pitch, 0], pass: 0 });
+            app.midi_rec.push(RecordedMidi { at: at + sr / 3, port, msg: [0x80, pitch, 0], pass: 0, sysex: None });
         }
     }
     Ok(())
@@ -1875,7 +1875,7 @@ mod tests {
         assert_eq!(h.state().ui.status, "Recording with Booth");
         let typing = soundcraft_playback::midi_in::TYPING_SLOT as u8;
         let at = h.state().position();
-        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x90, 60, 100], pass: 0 });
+        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x90, 60, 100], pass: 0, sysex: None });
         for _ in 0..10 {
             h.step();
         }
@@ -1891,7 +1891,7 @@ mod tests {
         let later = crate::live_midi::live_take(h.state(), &track).unwrap();
         assert!(later.end > first.end, "the take grows: {} then {}", first.end, later.end);
         let at = h.state().position();
-        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x80, 60, 0], pass: 0 });
+        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x80, 60, 0], pass: 0, sysex: None });
         // The booth stops (ten seconds in): the piano PC stops, keeps the take as a clip, and sends it.
         booth.view.position = 480_000;
         frames(&mut h, &mut booth, "one frame", &|_| true);

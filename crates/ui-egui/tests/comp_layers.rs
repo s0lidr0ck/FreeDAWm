@@ -240,7 +240,7 @@ fn an_instrument_tracks_midi_takes_show_as_lanes_and_swipe() {
     app.run("track.input", json!({"tracks": [t.0], "input": "midi:all", "channel": 0})).unwrap();
     app.run("mix.record_arm", json!({"tracks": [t.0], "value": true})).unwrap();
     app.run("options.midi_record_mode", json!({"mode": "take_lanes"})).unwrap();
-    let ev = |at: i64, pass: u16, msg: [u8; 3]| RecordedEvent { at, port: "K".into(), msg, pass };
+    let ev = |at: i64, pass: u16, msg: [u8; 3]| RecordedEvent { at, port: "K".into(), msg, pass, sysex: Vec::new() };
     let take = MidiTake { start: 0, end: 2 * LEN, looped: Some(Range::new(0, LEN)), punch: None, latency: 0 };
     let events = [ev(0, 0, [0x90, 60, 100]), ev(LEN / 2, 0, [0x80, 60, 0]), ev(0, 1, [0x90, 72, 100]), ev(LEN / 2, 1, [0x80, 72, 0])];
     record_live_midi(&mut app.engine, &take, &events);

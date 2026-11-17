@@ -1433,15 +1433,15 @@ impl AudioState {
                     h.record_pedals(self.pos.saturating_sub(self.midi_lead).max(floor), self.midi_pass);
                 }
                 h.record_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass, floor);
-            } else if self.playing && !self.mix.live_midi.is_empty() {
+            } else if self.playing && h.heard(&self.mix.live_midi) {
                 // Not recording: kept for Capture MIDI (what was just played).
                 h.capture_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass);
-            } else if let Some(c) = self.countoff.filter(|_| self.recording && !self.mix.live_midi.is_empty()) {
+            } else if let Some(c) = self.countoff.filter(|_| self.recording && h.heard(&self.mix.live_midi)) {
                 // A count-off before a take: what is played is before the record point by what is
                 // left of it (a pickup, which the take keeps if asked: `midi_record`).
                 let left = c.len().saturating_sub(self.countoff_at);
                 h.record_block(&self.mix.live_midi, self.pos.saturating_sub(left).saturating_sub(self.midi_lead), self.midi_now, rate, 0, i64::MIN);
-            } else if !self.playing && !self.mix.live_midi.is_empty() {
+            } else if !self.playing && h.heard(&self.mix.live_midi) {
                 // Stopped: Capture MIDI listens on a clock of its own.
                 h.listen_block(&self.mix.live_midi, rate);
             }
@@ -4531,7 +4531,7 @@ mod tests {
         let mut got = Vec::new();
         hub.take_recorded(&mut got);
         assert_eq!(got.len(), 2, "{got:?}");
-        let (on, off) = (got[0], got[1]);
+        let (on, off) = (got[0].clone(), got[1].clone());
         assert_eq!((on.msg, on.pass, on.port as usize), ([0x90, 60, 110], 0, midi_in::TYPING_SLOT));
         assert!((48_000..=48_256).contains(&on.at), "{}", on.at);
         assert_eq!((off.msg, off.pass), ([0x80, 60, 0], 1));

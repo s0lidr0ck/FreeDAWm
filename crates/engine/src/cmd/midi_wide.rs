@@ -427,7 +427,8 @@ mod tests {
 
     #[test]
     fn a_cc1_and_cc33_pair_reads_as_one_value() {
-        let seq = Sequence { notes: vec![], ctrls: vec![cc(0, 1, 64), cc(0, 33, 5), cc(480, 1, 10), cc(960, 33, 100), cc(960, 7, 90)] };
+        let seq =
+            Sequence { notes: vec![], ctrls: vec![cc(0, 1, 64), cc(0, 33, 5), cc(480, 1, 10), cc(960, 33, 100), cc(960, 7, 90)], sysex: Vec::new() };
         // A new MSB keeps the low bits last sent until a new LSB comes.
         assert_eq!(points_of(&seq, WideLane::Cc14(1), None), vec![(0, 0, 64 * 128 + 5), (480, 0, 10 * 128 + 5), (960, 0, 10 * 128 + 100)]);
         assert_eq!(lanes_of(&seq), vec![WideLane::Cc14(1)], "CC7 has no low partner: it stays a 7-bit lane");
@@ -438,6 +439,7 @@ mod tests {
         let seq = Sequence {
             notes: vec![],
             ctrls: vec![cc(0, 99, 1), cc(0, 98, 2), cc(0, 6, 3), cc(0, 38, 4), cc(240, 6, 9), cc(240, 101, 0), cc(240, 100, 0), cc(480, 6, 2)],
+            sysex: Vec::new(),
         };
         assert_eq!(points_of(&seq, WideLane::Nrpn(130), None), vec![(0, 0, 3 * 128 + 4), (240, 0, 9 * 128)], "MSB 1, LSB 2: parameter 130");
         assert_eq!(points_of(&seq, WideLane::Rpn(0), None), vec![(480, 0, 256)], "a later select moves data entry to RPN 0");

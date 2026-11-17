@@ -5222,6 +5222,19 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                 send_ctrl(inst, offset, m, chans, t.articulations.as_ref());
             }
         }
+        // SysEx in the block goes whole, before the notes on its tick. Not chased: one before
+        // where playback starts is not sent again, nor one a start trim hid.
+        let from = near.start().saturating_sub(delay).saturating_sub(2);
+        for x in sequence.sysex.get(sequence.sysex.partition_point(|x| x.tick < from.max(0))..).unwrap_or(&[]) {
+            let tick = x.tick.saturating_add(delay);
+            if tick > near.end().saturating_add(2) {
+                break;
+            }
+            let at = at_tick(tick);
+            if at >= pos && at < end && at < clip.end() {
+                inst.plugin.sysex(usize::try_from(at - pos).unwrap_or(0), &x.data);
+            }
+        }
         // The controllers that can send something in this block: with the clip's index, those in
         // `near` (less the delay) and ramp points whose ramp can reach into it; every one without.
         let ctrl_range = soundcraft_midi::NoteIndex::ctrl_window(
@@ -9099,6 +9112,7 @@ mod tests {
                 },
             ],
             ctrls: vec![soundcraft_midi::CtrlEvent { tick: 4, channel: 2, kind: CtrlKind::Cc(1), value: 50, shape: Default::default() }],
+            sysex: Vec::new(),
         };
         let (s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
         render_block(&mut eng, &s, 0);

@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{CtrlEvent, CtrlKind, MidiError, Note, PPQ, Sequence};
+use crate::{CtrlEvent, CtrlKind, MAX_SYSEX, MidiError, Note, PPQ, Sequence, SysEx};
 
 /// Maximum number of events (across all tracks) [`read_smf`] will parse.
 pub const MAX_EVENTS: usize = 5_000_000;
@@ -211,7 +211,10 @@ pub fn read_smf(bytes: &[u8]) -> Result<Smf, MidiError> {
         tracks.push(track);
     }
 
-    if format == 1 && tracks.len() > 1 && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty()) {
+    if format == 1
+        && tracks.len() > 1
+        && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty() && t.sequence.sysex.is_empty())
+    {
         tracks.remove(0);
         // Lyrics of the conductor track have no track left to belong to.
         globals.lyrics.retain(|l| l.0 > 0);
@@ -271,6 +274,8 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
     let mut file_tick: u64 = 0;
     let mut tick: i64 = 0;
     let mut running: Option<u8> = None;
+    // A SysEx begun and not yet ended (sent in packets): its tick and bytes so far.
+    let mut sysex: Option<(i64, Vec<u8>)> = None;
 
     while !cur.is_empty() {
         if *budget == 0 {
@@ -334,7 +339,31 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
             0xF0 | 0xF7 => {
                 running = None;
                 let len = cur.vlq()?;
-                cur.bytes(usize::try_from(len).unwrap_or(usize::MAX))?;
+                let data = cur.bytes(usize::try_from(len).unwrap_or(usize::MAX))?;
+                // A SysEx (`F0`), possibly in packets continued by `F7` events; an `F7` with
+                // none begun is an escape (raw bytes) and is skipped.
+                let part = match (status, sysex.as_mut()) {
+                    (0xF0, _) => {
+                        let mut v = vec![0xF0];
+                        v.extend_from_slice(data.get(..data.len().min(MAX_SYSEX)).unwrap_or(&[]));
+                        sysex = Some((tick, v));
+                        true
+                    }
+                    (_, Some((_, v))) => {
+                        if v.len() <= MAX_SYSEX {
+                            v.extend_from_slice(data.get(..data.len().min(MAX_SYSEX)).unwrap_or(&[]));
+                        }
+                        true
+                    }
+                    _ => false,
+                };
+                if part
+                    && data.last() == Some(&0xF7)
+                    && let Some((at, v)) = sysex.take()
+                    && let Some(x) = SysEx::new(at, &v)
+                {
+                    seq.sysex.push(x);
+                }
             }
             0x80..=0xEF => {
                 running = Some(status);
@@ -545,6 +574,14 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
                 }
             };
             ev.push(WEvent { tick: clamp_tick(c.tick), order: 2, bytes });
+        }
+        // SysEx as `F0 <length> <bytes after F0, F7 last>`, with the controllers (before the note-ons) at its tick.
+        for x in &track.sequence.sysex {
+            let body = x.data.strip_prefix(&[0xF0]).unwrap_or(&x.data);
+            let mut bytes = vec![0xF0];
+            push_vlq(&mut bytes, u64::try_from(body.len()).unwrap_or(u64::MAX))?;
+            bytes.extend_from_slice(body);
+            ev.push(WEvent { tick: clamp_tick(x.tick), order: 2, bytes });
         }
         write_track(&mut out, ev)?;
     }

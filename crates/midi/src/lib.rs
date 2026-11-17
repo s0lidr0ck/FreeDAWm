@@ -22,7 +22,7 @@ mod smf;
 pub use index::{NoteIndex, NoteIndexSlot};
 pub use names::{gm_drum_name, gm_program_name, note_name};
 pub use rng::XorShift;
-pub use sequence::{CtrlEvent, CtrlKind, CtrlShape, Note, Sequence};
+pub use sequence::{CtrlEvent, CtrlKind, CtrlShape, MAX_SYSEX, Note, Sequence, SysEx};
 pub use smf::{MAX_EVENTS, MAX_TRACKS, Smf, SmfTrack, decode_text, read_smf, write_smf};
 
 /// Ticks per quarter note used throughout the model.

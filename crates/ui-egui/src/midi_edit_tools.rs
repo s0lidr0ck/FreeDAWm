@@ -921,7 +921,7 @@ pub fn piano_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, keys: Rect, pitch_at
             let pitch = pitch_at(p.y).clamp(0, 127) as u8;
             if app.midi.piano_key != Some(pitch) {
                 let add = app.midi.piano_key.is_some() || ui.input(|i| i.modifiers.shift);
-                let seq = soundcraft_midi::Sequence { notes: clip_notes(app.engine.session(), cid), ctrls: Vec::new() };
+                let seq = soundcraft_midi::Sequence { notes: clip_notes(app.engine.session(), cid), ctrls: Vec::new(), sysex: Vec::new() };
                 app.midi.selected = key_selection(&seq, &app.midi.selected, pitch, add);
                 press_key(app, cid, pitch);
             }

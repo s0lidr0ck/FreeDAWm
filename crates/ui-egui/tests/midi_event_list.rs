@@ -16,6 +16,7 @@ fn rows_hold_every_kind_in_time_order_and_filter() {
     let seq = Sequence {
         notes: vec![n(-10, 0), n(0, 0), n(480, 1)],
         ctrls: vec![c(0, CtrlKind::Program, 0), c(100, CtrlKind::Cc(1), 0), c(200, CtrlKind::PitchBend, 1), c(300, CtrlKind::PolyPressure(60), 0)],
+        sysex: Vec::new(),
     };
     let all = rows(&seq, &EventListState::default());
     assert_eq!(

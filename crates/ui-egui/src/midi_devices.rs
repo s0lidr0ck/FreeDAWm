@@ -209,7 +209,16 @@ pub(crate) fn recorded_events(
 ) -> Vec<soundcraft_engine::midi_record::RecordedEvent> {
     let names = slot_names(app);
     let name = |slot: u8| names.iter().find(|(s, _)| *s == usize::from(slot)).map(|(_, n)| n.clone()).unwrap_or_default();
-    heard.iter().map(|r| soundcraft_engine::midi_record::RecordedEvent { at: r.at, port: name(r.port), msg: r.msg, pass: r.pass }).collect()
+    heard
+        .iter()
+        .map(|r| soundcraft_engine::midi_record::RecordedEvent {
+            at: r.at,
+            port: name(r.port),
+            msg: r.msg,
+            pass: r.pass,
+            sysex: r.sysex.as_deref().map(<[u8]>::to_vec).unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// Loop recording (each frame while recording, after [`collect`]): once the loop has wrapped
@@ -1133,13 +1142,13 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": typed, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [keys, typed], "value": true})).unwrap();
         // Stale events from before the take are dropped when it starts.
-        app.midi_rec.push(RecordedMidi { at: 1, port: 0, msg: [0x90, 1, 1], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 1, port: 0, msg: [0x90, 1, 1], pass: 0, sysex: None });
         start_take(&mut app);
         assert!(app.midi_rec.is_empty());
         app.midi_rec = vec![
-            RecordedMidi { at: 1_000, port: 0, msg: [0x90, 60, 100], pass: 0 },
-            RecordedMidi { at: 9_000, port: 0, msg: [0x80, 60, 0], pass: 0 },
-            RecordedMidi { at: 2_000, port: TYPING_SLOT as u8, msg: [0x90, 72, 100], pass: 0 },
+            RecordedMidi { at: 1_000, port: 0, msg: [0x90, 60, 100], pass: 0, sysex: None },
+            RecordedMidi { at: 9_000, port: 0, msg: [0x80, 60, 0], pass: 0, sysex: None },
+            RecordedMidi { at: 2_000, port: TYPING_SLOT as u8, msg: [0x90, 72, 100], pass: 0, sysex: None },
         ];
         let plan = soundcraft_engine::io::Recording {
             start: 0,
@@ -1170,7 +1179,7 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         assert!(app.run("ui.capture_midi", json!({})).is_err(), "nothing played yet");
         // Played (not recorded) a little into bar 2 at 120 bpm: a bar is 96,000 samples.
-        let note = |at: i64, msg: [u8; 3]| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass: 0 };
+        let note = |at: i64, msg: [u8; 3]| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass: 0, sysex: None };
         app.midi_capture = vec![note(100_000, [0x90, 60, 100]), note(130_000, [0x80, 60, 0])];
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
         let r = app.run("ui.capture_midi", json!({})).unwrap();
@@ -1190,7 +1199,7 @@ pub(crate) mod tests {
         let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
-        let note = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };
+        let note = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass, sysex: None };
         // Played along with the transport earlier, then noodled with it stopped: the noodle is
         // what was played last. On the listening clock: a sustain pedal, then a note a quarter long.
         app.midi_capture = vec![
@@ -1218,7 +1227,7 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
         start_take(&mut app);
-        let note = |at: i64, pitch: u8| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass: 0 };
+        let note = |at: i64, pitch: u8| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass: 0, sysex: None };
         // Punched out at 20,000, in again at 30,000, stopped at 48,000.
         app.midi_rec = vec![note(1_000, 60), note(25_000, 62), note(31_000, 64)];
         let plan = soundcraft_engine::io::Recording {
@@ -1266,7 +1275,7 @@ pub(crate) mod tests {
             pre: 0,
         };
         app.take_plan = Some(plan.clone());
-        let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass };
+        let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass, sysex: None };
         app.midi_rec = vec![note(1_000, 36, 0), note(30_000, 38, 1)];
         let pitches = |app: &SoundApp| -> Vec<u8> {
             let tr = app.engine.session().track(TrackId(t)).unwrap();
@@ -1333,7 +1342,7 @@ pub(crate) mod tests {
             pre: 0,
         };
         app.take_plan = Some(plan.clone());
-        let ev = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };
+        let ev = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass, sysex: None };
         // Kick and hat in pass 1, the hat again in pass 2, then the hat key held down in pass 3.
         app.midi_rec = vec![
             ev(1_000, [0x90, 36, 100], 0),

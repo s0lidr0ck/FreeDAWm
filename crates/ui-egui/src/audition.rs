@@ -283,7 +283,7 @@ mod tests {
         let n =
             |pitch, channel, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel, start, length: 960 };
         let file = |notes| {
-            let t = SmfTrack { name: "T".into(), sequence: Sequence { notes, ctrls: Vec::new() }, ..Default::default() };
+            let t = SmfTrack { name: "T".into(), sequence: Sequence { notes, ctrls: Vec::new(), sysex: Vec::new() } };
             write_smf(&Smf { format: 1, tracks: vec![t], ..Default::default() }).unwrap()
         };
         let bytes = file(vec![n(60, 0, 0), n(64, 0, 1920)]);

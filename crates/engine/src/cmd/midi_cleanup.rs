@@ -197,8 +197,11 @@ mod tests {
         let s = e.session_mut();
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
         let id = s.new_clip_id();
-        let seq =
-            Sequence { notes: vec![note(60, 90, 0, 900), note(64, 90, 0, 900), note(67, 90, 0, 900), note(61, 20, 100, 60)], ctrls: Vec::new() };
+        let seq = Sequence {
+            notes: vec![note(60, 90, 0, 900), note(64, 90, 0, 900), note(67, 90, 0, 900), note(61, 20, 100, 60)],
+            ctrls: Vec::new(),
+            sysex: Vec::new(),
+        };
         let len = s.sample_rate.samples(4.0);
         crate::edit::place_clip(s, t, soundcraft_model::Clip::midi(id, "take", 0, len, seq));
         s.band.key = 0;
@@ -259,7 +262,11 @@ mod tests {
         let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
         let id = s.new_clip_id();
         let pitches = [64, 60, 68, 65, 71, 62];
-        let seq = Sequence { notes: pitches.iter().enumerate().map(|(i, p)| note(*p, 90, i as i64 * 480, 480)).collect(), ctrls: Vec::new() };
+        let seq = Sequence {
+            notes: pitches.iter().enumerate().map(|(i, p)| note(*p, 90, i as i64 * 480, 480)).collect(),
+            ctrls: Vec::new(),
+            sysex: Vec::new(),
+        };
         let len = s.sample_rate.samples(4.0);
         crate::edit::place_clip(s, t, soundcraft_model::Clip::midi(id, "take", 0, len, seq));
         s.band.key = 4;

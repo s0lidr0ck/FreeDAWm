@@ -425,6 +425,18 @@ impl Plugin for ClapPlugin {
         }
     }
 
+    /// To a plug-in whose note port takes MIDI, as `clap_event_midi_sysex`; dropped when the
+    /// block's SysEx room is full.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        if !self.midi_in {
+            return;
+        }
+        let fresh = !self.queue.iter().any(|e| matches!(e, Event::SysEx { .. }));
+        if let Some((at, len)) = self.inst.stage_sysex(data, fresh) {
+            self.push(Event::SysEx { time: u32::try_from(offset).unwrap_or(u32::MAX), at, len });
+        }
+    }
+
     fn all_notes_off(&mut self) {
         for k in 0..128u8 {
             let mask = self.held.get(k as usize).copied().unwrap_or(0);

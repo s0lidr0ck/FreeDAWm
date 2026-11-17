@@ -210,6 +210,10 @@ impl Plugin for Timed {
         self.inner.midi_raw(offset, msg);
     }
 
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        self.inner.sysex(offset, data);
+    }
+
     fn all_notes_off(&mut self) {
         self.inner.all_notes_off();
     }

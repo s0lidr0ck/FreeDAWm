@@ -42,13 +42,16 @@ use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER};
 use crate::Engine;
 
 /// One recorded event: its timeline position as heard, the port it came from (by name), the
-/// message, and its loop pass (0 without a loop).
+/// message, and its loop pass (0 without a loop). A System Exclusive message has its whole bytes
+/// in `sysex` (`F0` first, `F7` last) and `msg` `[0xF0, 0, 0]`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecordedEvent {
     pub at: Samples,
     pub port: String,
     pub msg: [u8; 3],
     pub pass: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sysex: Vec<u8>,
 }
 
 /// Where a MIDI take goes.
@@ -178,15 +181,28 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
         let offset = if offset.is_finite() { offset as Samples } else { 0 };
         // The track's input transform, as its instrument heard it.
         let transform = input.transform;
+        // (Still not before the take's start, as `played_at` keeps it.)
+        let placed_at = |x: &RecordedEvent| {
+            let (at, pass) = played_at(take, x.at, x.pass);
+            let placed = at.saturating_sub(offset);
+            (if pass == 0 && x.at >= take.start { placed.max(take.start) } else { placed }, pass)
+        };
+        // SysEx is kept as it came (the transform and the effects are for channel messages).
+        let sysex: Vec<(Samples, &[u8], u16)> = events
+            .iter()
+            .filter(|x| !x.sysex.is_empty() && input.device.as_ref().is_none_or(|d| *d == x.port))
+            .map(|x| {
+                let (at, pass) = placed_at(x);
+                (at, x.sysex.as_slice(), pass)
+            })
+            .collect();
         let mine: Vec<(Samples, [u8; 3], u16)> = events
             .iter()
             .filter(filter)
+            .filter(|x| x.sysex.is_empty())
             .filter_map(|x| {
                 let msg = transform.apply(x.msg)?;
-                let (at, pass) = played_at(take, x.at, x.pass);
-                // (Still not before the take's start, as `played_at` keeps it.)
-                let placed = at.saturating_sub(offset);
-                let placed = if pass == 0 && x.at >= take.start { placed.max(take.start) } else { placed };
+                let (placed, pass) = placed_at(x);
                 Some((placed, msg, pass))
             })
             .collect();
@@ -224,11 +240,15 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
             if s.edit.flag(THIN_FLAG) {
                 crate::cmd::midi_ctrl::thin_take(&mut seq);
             }
+            let base_tick = s.tempo.samples_to_ticks(range.start, s.sample_rate);
+            seq.sysex.extend(sysex.iter().filter(|x| x.2 == pass && range.contains(x.0)).filter_map(|&(at, bytes, _)| {
+                soundcraft_midi::SysEx::new(s.tempo.samples_to_ticks(at, s.sample_rate).saturating_sub(base_tick), bytes)
+            }));
             // One still down when it ends comes up on its last tick (the clip plays nothing on its
             // end), or it would hold every note after the clip.
             let last = s.tempo.samples_to_ticks(range.end, s.sample_rate).saturating_sub(s.tempo.samples_to_ticks(range.start, s.sample_rate));
             lift_pedals(&mut seq, last);
-            if seq.notes.is_empty() && seq.ctrls.is_empty() {
+            if seq.notes.is_empty() && seq.ctrls.is_empty() && seq.sysex.is_empty() {
                 continue;
             }
             // Merged, the clip holds what was there too: the performance kept is a new clip's.
@@ -467,7 +487,10 @@ fn printed(s: &Session, track: TrackId, range: Range, seq: &Sequence) -> Sequenc
     let fx = s.track(track).map(|t| t.midi_fx.clone()).unwrap_or_default();
     let keys = soundcraft_mix::midi_fx::sequence_events(s, range.start, range.end, seq);
     let list: Vec<(Samples, [u8; 3], bool)> = soundcraft_mix::midi_fx::print(s, &fx, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
-    crate::band_print::events_to_sequence(s, range, &list)
+    // SysEx does not go through the effects: it is kept where it was.
+    let mut out = crate::band_print::events_to_sequence(s, range, &list);
+    out.sysex = seq.sysex.clone();
+    out
 }
 
 /// Merge mode: `take` (a sequence over `range`, its channels kept) joins the unmuted MIDI clips
@@ -511,6 +534,10 @@ fn merge_take(s: &mut Session, track: TrackId, range: Range, take: Sequence, tak
             c.tick += at;
             merged.ctrls.push(c);
         }
+        for mut x in sequence.sysex.into_iter().filter(|x| (0..len).contains(&x.tick)) {
+            x.tick += at;
+            merged.sysex.push(x);
+        }
     }
     let at = tick(range.start).saturating_sub(base);
     merged.notes.extend(take.notes.into_iter().map(|mut n| {
@@ -520,6 +547,10 @@ fn merge_take(s: &mut Session, track: TrackId, range: Range, take: Sequence, tak
     merged.ctrls.extend(take.ctrls.into_iter().map(|mut c| {
         c.tick += at;
         c
+    }));
+    merged.sysex.extend(take.sysex.into_iter().map(|mut x| {
+        x.tick += at;
+        x
     }));
     merged.sort();
     let id = s.new_clip_id();
@@ -690,7 +721,7 @@ mod tests {
     }
 
     fn ev(at: Samples, port: &str, msg: [u8; 3]) -> RecordedEvent {
-        RecordedEvent { at, port: port.into(), msg, pass: 0 }
+        RecordedEvent { at, port: port.into(), msg, pass: 0, sysex: Vec::new() }
     }
 
     fn clip(e: &Engine, id: ClipId) -> Clip {
@@ -698,6 +729,37 @@ mod tests {
     }
 
     const Q: Samples = 24_000;
+
+    /// A SysEx played during a take is kept whole in the clip at its tick, on the track whose
+    /// port it came from (the channel and the input transform do not apply to it); split and
+    /// merged later, it stays where it was.
+    #[test]
+    fn a_take_keeps_its_sysex_and_edits_keep_it_in_place() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:Keys", 2);
+        let other = armed(&mut e, "midi:Pads", 0);
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        let patch = vec![0xF0, 0x43, 0x10, 0x4C, 0x02, 0x01, 0x00, 0x01, 0xF7];
+        let sysex = |at: Samples, port: &str| RecordedEvent { msg: [0xF0, 0, 0], sysex: patch.clone(), ..ev(at, port, [0xF0, 0, 0]) };
+        let events = [sysex(Q, "Keys"), ev(Q, "Keys", [0x91, 60, 100]), ev(2 * Q, "Keys", [0x81, 60, 0]), sysex(3 * Q, "Pads")];
+        let ids = record_live_midi(&mut e, &take, &events);
+        let seq_of = |e: &Engine, id: ClipId| clip(e, id).midi_playing().unwrap().clone();
+        let mine = ids.iter().copied().find(|c| e.session().find_clip(*c).unwrap().0 == t).unwrap();
+        let seq = seq_of(&e, mine);
+        assert_eq!(seq.sysex, vec![soundcraft_midi::SysEx { tick: TICKS_PER_QUARTER, data: patch.clone() }]);
+        assert_eq!(seq.notes.len(), 1);
+        let theirs = ids.iter().copied().find(|c| e.session().find_clip(*c).unwrap().0 == other).unwrap();
+        assert_eq!(seq_of(&e, theirs).sysex.iter().map(|x| x.tick).collect::<Vec<_>>(), vec![3 * TICKS_PER_QUARTER]);
+        // Split after it: the left half keeps it, the right has none.
+        let r = e.execute("edit.separate", &json!({"tracks": [t.0], "at": 2 * Q})).unwrap();
+        let parts: Vec<ClipId> = e.session().track(t).unwrap().clips().iter().map(|c| c.id).collect();
+        assert_eq!(parts.len(), 2, "{r}");
+        let counts: Vec<usize> = parts.iter().map(|c| seq_of(&e, *c).sysex.len()).collect();
+        assert_eq!(counts, vec![1, 0]);
+        // Saved and loaded, it is there.
+        let back: soundcraft_midi::Sequence = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
+        assert_eq!(back, seq);
+    }
 
     /// Recording over a pattern clip with MIDI Merge on writes its steps: a kick near the second
     /// sixteenth and a note no lane plays (a new lane); a step already on keeps its velocity.

@@ -67,6 +67,8 @@ pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>, spli
             }
         }
         ls.ctrls.retain(|c| c.tick < boundary);
+        ls.sysex.retain(|x| x.tick < boundary);
+        rs.sysex.retain(|x| x.tick >= boundary);
         rs.notes.retain(|n| n.start >= boundary);
         let rest = across.into_iter().map(|n| soundcraft_midi::Note { start: boundary, length: n.end() - boundary, ..n });
         let mut notes: Vec<soundcraft_midi::Note> = rest.collect();
@@ -101,6 +103,9 @@ fn shift_sequence(seq: &mut soundcraft_midi::Sequence, delta: i64) {
     }
     for c in &mut seq.ctrls {
         c.tick = c.tick.saturating_sub(delta);
+    }
+    for x in &mut seq.sysex {
+        x.tick = x.tick.saturating_sub(delta);
     }
 }
 
@@ -152,6 +157,7 @@ fn crop_hidden_midi(clip: &mut Clip, t: TimeCtx<'_>) {
         }
         let mut k = keep.into_iter();
         sequence.ctrls.retain(|_| k.next().unwrap_or(true));
+        sequence.sysex.retain(|x| (0..len).contains(&x.tick));
     }
 }
 
@@ -308,6 +314,10 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
             for mut c in sequence.ctrls.into_iter().filter(|c| c.tick < len) {
                 c.tick = c.tick.max(0) + at;
                 merged.ctrls.push(c);
+            }
+            for mut x in sequence.sysex.into_iter().filter(|x| (0..len).contains(&x.tick)) {
+                x.tick += at;
+                merged.sysex.push(x);
             }
         }
     }
@@ -691,6 +701,10 @@ fn join_midi(prev: &mut Clip, next: &Clip, tempo: &TempoMap, sr: SampleRate) {
         a.ctrls.retain(|c| c.tick < prev_len);
         a.notes.extend(b.notes.iter().filter(|n| n.start >= 0).map(|n| soundcraft_midi::Note { start: n.start.saturating_add(offset), ..*n }));
         a.ctrls.extend(b.ctrls.iter().filter(|c| c.tick >= 0).map(|c| soundcraft_midi::CtrlEvent { tick: c.tick.saturating_add(offset), ..*c }));
+        a.sysex.retain(|x| x.tick < prev_len);
+        a.sysex.extend(
+            b.sysex.iter().filter(|x| x.tick >= 0).map(|x| soundcraft_midi::SysEx { tick: x.tick.saturating_add(offset), data: x.data.clone() }),
+        );
         a.sort();
     }
     prev.length = prev.length.saturating_add(next.length);

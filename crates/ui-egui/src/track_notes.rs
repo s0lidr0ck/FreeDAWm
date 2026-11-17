@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn the_pitch_span_keeps_two_rows_round_the_notes() {
-        let seq = Sequence { notes: vec![n(60, 0), n(64, 480), n(20, -480)], ctrls: Vec::new() };
+        let seq = Sequence { notes: vec![n(60, 0), n(64, 480), n(20, -480)], ctrls: Vec::new(), sysex: Vec::new() };
         assert_eq!(pitch_span(&seq), (58, 66), "a hidden note does not widen the span");
         assert_eq!(pitch_span(&Sequence::default()), (48, 72));
     }
