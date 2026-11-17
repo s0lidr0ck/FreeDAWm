@@ -1268,7 +1268,9 @@ pub(crate) fn full_editors(app: &mut SoundApp, ctx: &egui::Context) {
                 // The full layout here, whatever the drawers use.
                 let slim = std::mem::replace(&mut app.ui.slim_editors, false);
                 let top = ui.cursor().min.y;
-                crate::editors::drawer(app, ui, track, module, meters.as_ref().and_then(|m| m.tracks.get(&tid)));
+                // Its controls follow their automation, as in the drawer.
+                let shown = crate::mix_window::shown_params(app, track);
+                crate::editors::drawer(app, ui, &shown, module, meters.as_ref().and_then(|m| m.tracks.get(&tid)));
                 app.ui.slim_editors = slim;
                 if let Some(face) = crate::editor_kit::frame_rect(ui.ctx(), tid, module) {
                     let want = vec2(face.width(), (face.max.y - top).max(64.0) + 2.0);

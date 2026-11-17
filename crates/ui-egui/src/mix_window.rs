@@ -147,8 +147,10 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
                     if let Some(track) = session.track(id) {
                         let meters = snap.as_ref().and_then(|s| s.tracks.get(&id));
                         // A frozen module's drawer is read-only and greyed (the drawer does it, so
-                        // its header menu can still move the freeze point or unfreeze).
-                        crate::module_drawer::drawer(app, ui, track, module, meters);
+                        // its header menu can still move the freeze point or unfreeze). Its
+                        // controls follow their automation as the fader does.
+                        let shown = shown_params(app, track);
+                        crate::module_drawer::drawer(app, ui, &shown, module, meters);
                     }
                 }
             }
@@ -1761,10 +1763,49 @@ fn sends_section_height(s: &soundcraft_model::Session, off: usize) -> f32 {
 /// View > Expanded Sends: under a send's slot, a mini fader with its dB (drag; Shift for fine,
 /// Alt-click for 0 dB, double-click for the Send window), then its pan (drag; double-click
 /// centres), PRE and M. Blank when the slot has no send, so every strip's rows line up.
+/// `track` as its module controls show it: each chain module's laned parameters at what their
+/// lanes play now (while the track reads and the control is not touched), so a knob moves with
+/// its automation as the fader does. A copy only when some value differs.
+pub(crate) fn shown_params<'a>(app: &SoundApp, track: &'a Track) -> std::borrow::Cow<'a, Track> {
+    let mut out = std::borrow::Cow::Borrowed(track);
+    if !track.mixer.automation_mode.reads() {
+        return out;
+    }
+    for lane in track.automation.iter().filter(|l| !l.points.is_empty()) {
+        let soundcraft_model::AutoParam::Plugin { module, param } = &lane.param else { continue };
+        let Some(v) = app.engine.automation_shown(track.id, &lane.param) else { continue };
+        let now = track.mixer.module(*module).and_then(|i| i.params.get(param).copied());
+        if now.is_some_and(|n| (n - v).abs() > f32::EPSILON)
+            && let Some(ins) = out.to_mut().mixer.module_mut(*module)
+            && let Some(x) = ins.params.get_mut(param)
+        {
+            *x = v;
+        }
+    }
+    out
+}
+
+/// A send as its controls show it: its level, pan and mute follow their automation as the
+/// fader does (while the track reads and the control is not touched).
+fn shown_send(app: &SoundApp, id: TrackId, slot: usize, mut send: soundcraft_model::SendSlot) -> soundcraft_model::SendSlot {
+    let Ok(i) = u8::try_from(slot) else { return send };
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendLevel(i)) {
+        send.level_db = v;
+    }
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendPan(i)) {
+        send.pan = v;
+    }
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendMute(i)) {
+        send.mute = v >= 0.5;
+    }
+    send
+}
+
 fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect, wide: bool) {
     let t = Tokens::current();
     let id = track.id;
     let Some(send) = track.mixer.sends.get(slot).cloned().flatten() else { return };
+    let send = shown_send(app, id, slot, send);
     let which = (b'A' + slot as u8) as char;
     let label = |what: &str| format!("{} Send {which} {what}", track.name);
     // Row 1: the fader bar, its level as a fill along the fader taper, the dB over it.
@@ -1854,7 +1895,7 @@ fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r:
 pub(crate) fn send_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect) {
     let t = Tokens::current();
     let id = track.id;
-    let snd = track.mixer.sends.get(slot).cloned().flatten();
+    let snd = track.mixer.sends.get(slot).cloned().flatten().map(|s| shown_send(app, id, slot, s));
     let compact = r.width() < COMPACT_SLOT;
     // As in Pro Tools, only the fader icon opens a send's level; the rest of the slot picks its
     // destination. A short track's square has no icon, so all of it is the level.
@@ -2353,6 +2394,30 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
 #[cfg(test)]
 mod tests {
     use super::{dragged_send_db, editable_readout, parse_db, parse_pan};
+
+    /// A module's knobs and a send's controls show what their lanes play while the track reads.
+    #[test]
+    fn module_knobs_and_sends_follow_their_automation() {
+        use serde_json::json;
+        use soundcraft_model::AutoParam;
+        let mut e = soundcraft_engine::Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "A", "format": "mono"})).unwrap();
+        e.execute("mix.module_add", &json!({"track": "A", "plugin": "fs_cleanq"})).unwrap();
+        e.execute("mix.send", &json!({"track": "A", "slot": 0, "bus": "Verb", "level_db": -10.0})).unwrap();
+        let tr = e.session().tracks[0].clone();
+        let m = tr.mixer.inserts[0].id;
+        for (p, v) in [(AutoParam::Plugin { module: m, param: "outGain".into() }, 0.8), (AutoParam::SendLevel(0), -3.0)] {
+            for at in [0, 10_000] {
+                e.execute("automation.set_point", &json!({"track": tr.id.0, "param": p.id(), "at": at, "value": v})).unwrap();
+            }
+        }
+        let app = crate::SoundApp::new(e, None, crate::Services::default());
+        let tr = app.engine.session().tracks[0].clone();
+        let shown = super::shown_params(&app, &tr);
+        assert_eq!(shown.mixer.module(m).unwrap().params.get("outGain").copied(), Some(0.8));
+        let send = super::shown_send(&app, tr.id, 0, tr.mixer.sends[0].clone().unwrap());
+        assert_eq!(send.level_db, -3.0);
+    }
 
     #[test]
     fn wide_strips_send_slots_read_their_db_and_narrow_ones_do_not() {

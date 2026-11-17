@@ -137,7 +137,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Read, Touch, Latch, Write | ● | ● | ● | ● | **Works**, one undo step per pass |
 | Trim automation | ● | ○ | ● | ● | **Works** for volume |
-| Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Partial**: the Mix window's faders and pan knobs follow their lanes; plug-in controls and send knobs do not |
+| Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Works**: the Mix window's faders, pan knobs and sends (level, pan, mute) and the built-in modules' drawers and full editors follow their lanes while the track reads and the control is not touched; a hosted plug-in's own window shows what the host sends it |
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; hosted CLAP and VST3 plug-ins get a lane that moves inside a block as timed parameter events on the same 64-sample grid (`Plugin::set_param_at`); the built-in plug-ins decline them by default and still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | send controls and built-in module controls follow their automation |
 | 2026-11-17 | minor | a PPM scale and the loudness range |
 | 2026-11-17 | minor | hosted plug-ins' automation is sample-accurate: timed parameter changes through a new, default-off plug-in method |
 | 2026-11-17 | minor | plug-in bypass is automatable |
