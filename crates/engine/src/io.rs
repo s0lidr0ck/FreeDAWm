@@ -735,8 +735,8 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
 /// plugins' stored state, when the first block is rendered.
 pub struct Bounce {
     session: Arc<Session>,
+    /// The main file (the first of `outs`).
     path: PathBuf,
-    part: PathBuf,
     range: Range,
     bus: Option<BusId>,
     fold: Option<ChannelFormat>,
@@ -754,10 +754,71 @@ pub struct Bounce {
     gain: f32,
     peak: f32,
     meter: soundcraft_dsp::meter::LoudnessMeter,
-    enc: Option<soundcraft_audio_io::FileEncoder<Out>>,
+    /// The files written, each from its part file (see [`Export`]).
+    outs: Vec<BounceFile>,
+    /// Summed to one channel before writing ([`FileLayout::Mono`]).
+    mono: bool,
+    /// Converting to the export rate before writing, and what it gave back.
+    resampler: Option<soundcraft_audio_io::Resampler>,
+    mono_buf: Vec<Vec<f32>>,
+    rs_out: Vec<Vec<f32>>,
+    scratch: Vec<f32>,
+    /// Text appended to a WAV as a `LIST`/`INFO` chunk once its audio is written.
+    tags: Option<soundcraft_audio_io::export::Tags>,
+    /// Whether the host adds the finished files to the session ([`Export::import`]).
+    import: bool,
     /// What the first pass measured, and whether the true-peak ceiling held the gain back.
     measured: Option<Measured>,
 }
+
+/// One file a bounce writes: its part file until it is complete, and which channel it takes.
+struct BounceFile {
+    path: PathBuf,
+    part: PathBuf,
+    format: FileFormat,
+    enc: Option<soundcraft_audio_io::FileEncoder<Out>>,
+    /// The one channel this file holds (a split bounce), else every channel.
+    channel: Option<usize>,
+    /// Noise-shaped dither to this file's depth, one per channel it holds (empty: none).
+    shapers: Vec<soundcraft_audio_io::export::NoiseShaper>,
+}
+
+/// How a bounce's files are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileLayout {
+    /// One file holding every channel of the source.
+    #[default]
+    AsMixed,
+    /// One mono file: the channels averaged (a centred mono source keeps its level).
+    Mono,
+    /// One mono file per channel, named after it (`Mix.L.wav`, `Mix.R.wav`).
+    Split,
+}
+
+/// What Bounce Mix does beyond the format: the rate, dither shaping, channel layout, more
+/// formats in the same pass and the text in the files. The default is a plain bounce.
+#[derive(Debug, Clone, Default)]
+pub struct Export {
+    /// Convert to this rate (Hz) as the blocks are written; none keeps the session's.
+    pub sample_rate: Option<u32>,
+    /// Noise-shaped TPDF dither for 16- and 24-bit files instead of the encoder's plain TPDF.
+    pub noise_shaping: bool,
+    pub layout: FileLayout,
+    /// More formats written in the same pass, each beside the main file with its own extension.
+    pub also: Vec<EncodeOptions>,
+    /// A BWF `bext` chunk in a WAV: FreeDAWm as originator, now, and the range's start as its
+    /// time reference.
+    pub bwf: bool,
+    /// Title, artist and so on: ID3v2 in an MP3, `LIST`/`INFO` in a WAV, the description of the
+    /// `bext`.
+    pub tags: Option<soundcraft_audio_io::export::Tags>,
+    /// Add the finished main file (each file of a split bounce) to the session on new tracks
+    /// at the range's start; the host does it ([`Bounce::imports`]).
+    pub import: bool,
+}
+
+/// The highest rate a bounce converts to.
+pub const MAX_EXPORT_RATE: u32 = 384_000;
 
 /// How a bounce sets its level.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -811,10 +872,13 @@ pub struct Measured {
     pub held_by_ceiling: bool,
 }
 
-/// A finished bounce: the size of its file and its levels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A finished bounce: the size of its files and its levels.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bounced {
+    /// Every file's size, together.
     pub bytes: u64,
+    /// Every file written, the main one first.
+    pub files: Vec<PathBuf>,
     pub peak_db: f32,
     pub lufs: f32,
     pub true_peak_db: f32,
@@ -835,15 +899,33 @@ impl Bounce {
         normalize: impl Into<Normalize>,
         fold_stereo: bool,
     ) -> Result<Bounce> {
+        Bounce::export(s, path, r, opts, bus, normalize, fold_stereo, &Export::default())
+    }
+
+    /// [`Bounce::new`] with `export`'s rate, dither shaping, layout, extra formats and text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export(
+        s: Arc<Session>,
+        path: &Path,
+        r: Range,
+        opts: &EncodeOptions,
+        bus: Option<BusId>,
+        normalize: impl Into<Normalize>,
+        fold_stereo: bool,
+        export: &Export,
+    ) -> Result<Bounce> {
+        const C: &str = "file.bounce_mix";
         let normalize = normalize.into();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
-            return Err(EngineError::BadParams("file.bounce_mix".into(), "bounces are limited to 4 hours".into()));
+            return Err(EngineError::BadParams(C.into(), "bounces are limited to 4 hours".into()));
         }
         let (fmt, channels, fold) = bounce_layout(&s, bus, fold_stereo);
-        let name = path.file_name().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
-        let part = path.with_file_name(format!("{name}.part"));
-        crate::file_access::check_write(path).map_err(EngineError::Io)?;
-        crate::file_access::check_write(&part).map_err(EngineError::Io)?;
+        let from = s.sample_rate.hz();
+        let rate = export.sample_rate.unwrap_or(from);
+        if !(8_000..=MAX_EXPORT_RATE).contains(&rate) {
+            return Err(EngineError::BadParams(C.into(), format!("`sample_rate` is 8000 to {MAX_EXPORT_RATE} Hz")));
+        }
+        let file_channels = if export.layout == FileLayout::AsMixed { channels } else { 1 };
         // A bounce into the project's `Bounced Files`, not made yet, makes it (any other missing
         // folder is an error: a mistyped destination is not created).
         if let Some(dir) =
@@ -851,15 +933,81 @@ impl Bounce {
         {
             make_dir(dir)?;
         }
-        let enc = (|| -> std::result::Result<_, soundcraft_audio_io::AudioError> {
-            let enc = soundcraft_audio_io::FileEncoder::new(Out::create(&part)?, opts, channels, s.sample_rate.hz(), Some(fmt.channel_mask()))?;
-            enc.check_room(u64::try_from(r.len()).unwrap_or(0))?;
-            Ok(enc)
-        })()
-        .map_err(|err| {
-            let _ = std::fs::remove_file(&part);
-            EngineError::Io(format!("{}: {err}", path.display()))
-        })?;
+        // Every file: the main format at `path`, each extra one beside it; a split bounce one
+        // per channel of each.
+        let mut plan: Vec<(PathBuf, EncodeOptions, Option<usize>)> = Vec::new();
+        let label_fmt = if fold.is_some() { ChannelFormat::Stereo } else { fmt };
+        for (i, o) in std::iter::once(opts).chain(export.also.iter()).enumerate() {
+            let p = if i == 0 { path.to_path_buf() } else { path.with_extension(soundcraft_audio_io::encode_extension(o.format)) };
+            if i > 0 && plan.iter().any(|(q, ..)| q.extension() == p.extension()) {
+                continue;
+            }
+            if soundcraft_audio_io::is_lossy(o.format) && file_channels > 2 {
+                return Err(EngineError::BadParams(C.into(), "MP3 and Opus hold mono or stereo: fold the bounce down or split it".into()));
+            }
+            let mut o = o.clone();
+            if export.bwf && o.format == FileFormat::Wav {
+                let (date, time) = utc_now();
+                let tags = export.tags.clone().unwrap_or_default();
+                let description = [tags.title.trim(), tags.comment.trim()].iter().filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join(" - ");
+                o.bwf = Some(soundcraft_audio_io::BwfInfo {
+                    description: if description.is_empty() { s.name.clone() } else { description }.chars().take(256).collect(),
+                    originator: "FreeDAWm".into(),
+                    originator_reference: format!("FreeDAWm {}", env!("CARGO_PKG_VERSION")),
+                    origination_date: date,
+                    origination_time: time,
+                    time_reference: u64::try_from(r.start).unwrap_or(0),
+                });
+            }
+            match export.layout {
+                FileLayout::Split => {
+                    for c in 0..channels {
+                        let stem = p.file_stem().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
+                        let ext = p.extension().map_or_else(String::new, |x| format!(".{}", x.to_string_lossy()));
+                        plan.push((p.with_file_name(format!("{stem}.{}{ext}", label_fmt.channel_label(c))), o.clone(), Some(c)));
+                    }
+                }
+                _ => plan.push((p, o, None)),
+            }
+        }
+        let frames = u64::try_from(r.len()).unwrap_or(0).saturating_mul(u64::from(rate)) / u64::from(from.max(1));
+        let mut outs: Vec<BounceFile> = Vec::new();
+        for (p, o, channel) in plan {
+            let name = p.file_name().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
+            let part = p.with_file_name(format!("{name}.part"));
+            let checked = crate::file_access::check_write(&p).and_then(|()| crate::file_access::check_write(&part));
+            let made = checked.map_err(EngineError::Io).and_then(|()| {
+                (|| -> std::result::Result<_, soundcraft_audio_io::AudioError> {
+                    let mut out = Out::create(&part)?;
+                    if o.format == FileFormat::Mp3
+                        && let Some(t) = &export.tags
+                    {
+                        std::io::Write::write_all(&mut out, &t.id3v2())?;
+                    }
+                    let mask = (export.layout == FileLayout::AsMixed).then(|| label_fmt.channel_mask());
+                    let enc = soundcraft_audio_io::FileEncoder::new(out, &shaped_options(&o, export.noise_shaping), file_channels, rate, mask)?;
+                    enc.check_room(frames)?;
+                    Ok(enc)
+                })()
+                .map_err(|err| EngineError::Io(format!("{}: {err}", p.display())))
+            });
+            match made {
+                Ok(enc) => {
+                    let shapers = match (export.noise_shaping, shaped_bits(&o)) {
+                        (true, Some(bits)) => (0..file_channels).map(|c| soundcraft_audio_io::export::NoiseShaper::new(bits, c)).collect(),
+                        _ => Vec::new(),
+                    };
+                    outs.push(BounceFile { path: p, part, format: o.format, enc: Some(enc), channel, shapers });
+                }
+                Err(err) => {
+                    let _ = std::fs::remove_file(&part);
+                    for o in &outs {
+                        let _ = std::fs::remove_file(&o.part);
+                    }
+                    return Err(err);
+                }
+            }
+        }
         let mut meter = soundcraft_dsp::meter::LoudnessMeter::new(s.sample_rate.as_f64() as f32, channels);
         // Weighted by where each channel plays, not guessed from the channel count.
         if fmt.channels() == channels {
@@ -867,10 +1015,10 @@ impl Bounce {
                 meter.set_channel_weight(c, w);
             }
         }
+        let resampler = (rate != from).then(|| soundcraft_audio_io::Resampler::new(from, rate, file_channels));
         Ok(Bounce {
             session: s,
             path: path.to_path_buf(),
-            part,
             range: r,
             bus,
             fold,
@@ -884,9 +1032,46 @@ impl Bounce {
             gain: 1.0,
             peak: 0.0,
             meter,
-            enc: Some(enc),
+            outs,
+            mono: export.layout == FileLayout::Mono,
+            resampler,
+            mono_buf: vec![Vec::new()],
+            rs_out: vec![Vec::new(); file_channels],
+            scratch: Vec::new(),
+            tags: export.tags.clone().filter(|t| !t.is_empty()),
+            import: export.import,
             measured: None,
         })
+    }
+
+    /// Whether the finished files go into the session ([`Export::import`]).
+    pub fn imports(&self) -> bool {
+        self.import
+    }
+
+    /// Every file the bounce writes, the main one first.
+    pub fn files(&self) -> Vec<&Path> {
+        self.outs.iter().map(|o| o.path.as_path()).collect()
+    }
+
+    /// Writes the first `n` frames of the block: summed to mono, converted to the export rate
+    /// and dithered as asked, into every file.
+    fn emit(&mut self, n: usize) -> Result<()> {
+        if self.mono {
+            mono_sum(&self.block, n, &mut self.mono_buf);
+        }
+        let src = if self.mono { &self.mono_buf } else { &self.block };
+        match &mut self.resampler {
+            Some(rs) => {
+                for c in &mut self.rs_out {
+                    c.clear();
+                }
+                rs.process(src, n, &mut self.rs_out);
+                let frames = self.rs_out.first().map_or(0, Vec::len);
+                write_files(&mut self.outs, &self.rs_out, frames, &mut self.scratch)
+            }
+            None => write_files(&mut self.outs, src, n, &mut self.scratch),
+        }
     }
 
     /// The session's band plays into the bounce (tracks whose input is a musician), from `lib`.
@@ -958,10 +1143,8 @@ impl Bounce {
                     self.done += n;
                     self.peak = self.peak.max(soundcraft_dsp::offline::peak(&self.block));
                     self.meter.process(&self.block, n);
-                    if !self.measuring
-                        && let Some(enc) = &mut self.enc
-                    {
-                        enc.write(&self.block, n).map_err(|err| EngineError::Io(format!("{}: {err}", self.path.display())))?;
+                    if !self.measuring {
+                        self.emit(n)?;
                     }
                 }
                 None if self.measuring => {
@@ -994,12 +1177,31 @@ impl Bounce {
     }
 
     fn finish(&mut self) -> Result<Bounced> {
-        let bytes = match self.enc.take() {
-            Some(enc) => enc.finish().map_err(|err| EngineError::Io(format!("{}: {err}", self.path.display())))?.complete(&self.part, &self.path)?,
-            None => 0,
-        };
+        // What the converter still holds (the input ends in silence).
+        if let Some(rs) = &mut self.resampler {
+            for c in &mut self.rs_out {
+                c.clear();
+            }
+            rs.finish(&mut self.rs_out);
+            let frames = self.rs_out.first().map_or(0, Vec::len);
+            write_files(&mut self.outs, &self.rs_out, frames, &mut self.scratch)?;
+        }
+        let info = self.tags.as_ref().map(soundcraft_audio_io::export::Tags::wav_info).unwrap_or_default();
+        let mut bytes = 0u64;
+        let mut files = Vec::new();
+        for o in &mut self.outs {
+            let Some(enc) = o.enc.take() else { continue };
+            let io_err = |err: String| EngineError::Io(format!("{}: {err}", o.path.display()));
+            let mut out = enc.finish().map_err(|err| io_err(err.to_string()))?;
+            if o.format == FileFormat::Wav && !info.is_empty() {
+                append_wav_chunk(&mut out, &info).map_err(|err| io_err(err.to_string()))?;
+            }
+            bytes += out.complete(&o.part, &o.path)?;
+            files.push(o.path.clone());
+        }
         Ok(Bounced {
             bytes,
+            files,
             peak_db: soundcraft_dsp::gain_to_db(self.peak),
             lufs: self.meter.integrated_lufs(),
             true_peak_db: self.meter.true_peak_db(),
@@ -1009,11 +1211,98 @@ impl Bounce {
 }
 
 impl Drop for Bounce {
-    /// Removes the part file unless the bounce completed (which renamed it).
+    /// Removes the part files unless the bounce completed (which renamed them).
     fn drop(&mut self) {
-        drop(self.enc.take());
-        let _ = std::fs::remove_file(&self.part);
+        for o in &mut self.outs {
+            drop(o.enc.take());
+            let _ = std::fs::remove_file(&o.part);
+        }
     }
+}
+
+/// `opts` as the encoder takes it when the bounce shapes its own dither: the encoder adds none.
+fn shaped_options(opts: &EncodeOptions, shaping: bool) -> EncodeOptions {
+    let mut o = opts.clone();
+    if shaping && shaped_bits(opts).is_some() {
+        o.dither = false;
+    }
+    o
+}
+
+/// The integer depth a lossless file is shaped to (none for float and the lossy formats).
+fn shaped_bits(opts: &EncodeOptions) -> Option<u32> {
+    if soundcraft_audio_io::is_lossy(opts.format) {
+        return None;
+    }
+    match opts.bit_depth {
+        soundcraft_audio_io::BitDepth::Int16 => Some(16),
+        soundcraft_audio_io::BitDepth::Int24 => Some(24),
+        _ => None,
+    }
+}
+
+/// The first `n` frames of `block` averaged into one channel (`out[0]`).
+fn mono_sum(block: &[Vec<f32>], n: usize, out: &mut [Vec<f32>]) {
+    let Some(o) = out.first_mut() else { return };
+    o.clear();
+    o.resize(n, 0.0);
+    let k = 1.0 / block.len().max(1) as f32;
+    for ch in block {
+        for (d, x) in o.iter_mut().zip(ch.iter()) {
+            *d += x * k;
+        }
+    }
+}
+
+/// Writes `frames` frames of `src` into every file: all of it, or the one channel a split file
+/// holds, through its dither shapers when it has them.
+fn write_files(outs: &mut [BounceFile], src: &[Vec<f32>], frames: usize, scratch: &mut Vec<f32>) -> Result<()> {
+    if frames == 0 {
+        return Ok(());
+    }
+    for o in outs {
+        let Some(enc) = o.enc.as_mut() else { continue };
+        let chans: &[Vec<f32>] = match o.channel {
+            Some(c) => src.get(c..c + 1).unwrap_or_default(),
+            None => src,
+        };
+        let r = if o.shapers.is_empty() {
+            enc.write(chans, frames)
+        } else {
+            let mut shaped: Vec<Vec<f32>> = Vec::with_capacity(chans.len());
+            for (ch, sh) in chans.iter().zip(o.shapers.iter_mut()) {
+                scratch.clear();
+                scratch.extend(ch.iter().take(frames));
+                scratch.resize(frames, 0.0);
+                sh.process(scratch);
+                shaped.push(scratch.clone());
+            }
+            enc.write(&shaped, frames)
+        };
+        r.map_err(|err| EngineError::Io(format!("{}: {err}", o.path.display())))?;
+    }
+    Ok(())
+}
+
+/// Appends a chunk to a finished RIFF WAV at the end of `out` (word-aligned) and grows the RIFF
+/// size to hold it. An RF64 file (past 4 GiB) is left as it is.
+fn append_wav_chunk(out: &mut Out, chunk: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut end = out.seek(SeekFrom::End(0))?;
+    let grown = end.saturating_add(chunk.len() as u64 + 1);
+    if grown >= u64::from(u32::MAX) {
+        return Ok(());
+    }
+    if end % 2 == 1 {
+        out.write_all(&[0])?;
+        end += 1;
+    }
+    out.write_all(chunk)?;
+    let riff = u32::try_from(end + chunk.len() as u64 - 8).unwrap_or(u32::MAX);
+    out.seek(SeekFrom::Start(4))?;
+    out.write_all(&riff.to_le_bytes())?;
+    out.seek(SeekFrom::End(0))?;
+    Ok(())
 }
 
 /// Where a bounce is written: its part file, or memory in the browser, which has no file system.
@@ -1125,8 +1414,9 @@ pub fn bounce_stems_with(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, 
 /// being written is left unfinished as its `.part`). One file per unmuted audio, instrument or
 /// MIDI track, each its track soloed through the master.
 pub struct StemsJob {
-    /// The stems still to render: the file and the session with its track soloed.
-    todo: std::collections::VecDeque<(PathBuf, Arc<Session>)>,
+    /// The stems still to render: the file, the session (with its track soloed) and the bus a
+    /// bus stem renders.
+    todo: std::collections::VecDeque<(PathBuf, Arc<Session>, Option<BusId>)>,
     total: usize,
     current: Option<Bounce>,
     done: Vec<String>,
@@ -1139,16 +1429,34 @@ pub struct StemsJob {
 impl StemsJob {
     /// Checks the range and makes the folder; renders nothing yet.
     pub fn new(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, fold_stereo: bool) -> Result<StemsJob> {
+        StemsJob::choose(e, dir, r, opts, fold_stereo, None, &[])
+    }
+
+    /// [`StemsJob::new`] for the tracks `tracks` (none: every unmuted audio, instrument or MIDI
+    /// track) and a stem for each bus of `busses` (the bus as it is summed, no solo).
+    pub fn choose(
+        e: &Engine,
+        dir: &str,
+        r: Range,
+        opts: &EncodeOptions,
+        fold_stereo: bool,
+        tracks: Option<&[TrackId]>,
+        busses: &[BusId],
+    ) -> Result<StemsJob> {
         let s = e.session();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
             return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
         }
         make_dir(dir)?;
         let ext = soundcraft_audio_io::encode_extension(opts.format);
-        let todo: std::collections::VecDeque<(PathBuf, Arc<Session>)> = s
+        let chosen = |t: &soundcraft_model::Track| match tracks {
+            Some(ids) => ids.contains(&t.id) && t.kind != TrackKind::Master,
+            None => matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute,
+        };
+        let mut todo: std::collections::VecDeque<(PathBuf, Arc<Session>, Option<BusId>)> = s
             .tracks
             .iter()
-            .filter(|t| matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute)
+            .filter(|t| chosen(t))
             .map(|t| {
                 let mut solo = s.clone();
                 for x in &mut solo.tracks {
@@ -1158,9 +1466,22 @@ impl StemsJob {
                 // session is only a listen, which a bounce ignores, and must not turn this one
                 // into a listen that leaves the whole mix playing.
                 solo.edit.solo_mode = "sip".into();
-                (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo))
+                (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo), None)
             })
             .collect();
+        // A bus stem plays the bus as the mix sums it: nothing soloed, an AFL or PFL listen
+        // ignored as a bounce ignores it.
+        let mut plain = s.clone();
+        plain.edit.solo_mode = "sip".into();
+        let plain = Arc::new(plain);
+        for b in busses {
+            let Some(bus) = s.bus(*b) else { continue };
+            todo.push_back((
+                Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&bus.name))),
+                Arc::clone(&plain),
+                Some(*b),
+            ));
+        }
         Ok(StemsJob {
             total: todo.len(),
             todo,
@@ -1193,9 +1514,9 @@ impl StemsJob {
     pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<Option<Vec<String>>> {
         loop {
             if self.current.is_none() {
-                let Some((path, session)) = self.todo.pop_front() else { return Ok(Some(std::mem::take(&mut self.done))) };
+                let Some((path, session, bus)) = self.todo.pop_front() else { return Ok(Some(std::mem::take(&mut self.done))) };
                 self.current =
-                    Some(Bounce::new(session, &path, self.range, &self.opts, None, Normalize::Off, self.fold)?.with_band(Arc::clone(&self.band)));
+                    Some(Bounce::new(session, &path, self.range, &self.opts, bus, Normalize::Off, self.fold)?.with_band(Arc::clone(&self.band)));
             }
             let Some(b) = self.current.as_mut() else { continue };
             let finished = b.step(&mut more)?.is_some();

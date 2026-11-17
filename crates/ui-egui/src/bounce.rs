@@ -124,6 +124,7 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     }
     let Some(job) = &mut app.bounce else { return };
+    let mut import = None;
     app.ui.status = match job.step(slice()) {
         Ok(None) => {
             ctx.request_repaint();
@@ -131,11 +132,23 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         }
         Ok(Some(done)) => {
             let name = job.path().file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if job.imports() {
+                import = Some((done.files.iter().map(|f| f.to_string_lossy().into_owned()).collect::<Vec<_>>(), job.range().start));
+            }
             done_line(&name, &done)
         }
         Err(e) => e.to_string(),
     };
     app.bounce = None;
+    // Add to Session: the files go onto new tracks at the range's start, as one undo step.
+    if let Some((files, at)) = import {
+        let main_ext = files.first().and_then(|f| std::path::Path::new(f).extension().map(|x| x.to_os_string()));
+        let paths: Vec<&String> =
+            files.iter().filter(|f| std::path::Path::new(f.as_str()).extension().map(|x| x.to_os_string()) == main_ext).collect();
+        if let Err(e) = app.run("file.import_audio", serde_json::json!({"paths": paths, "at": at, "new_tracks": true})) {
+            app.ui.status = e;
+        }
+    }
 }
 
 /// The status line for a finished bounce: its levels, and for a loudness target held back by the

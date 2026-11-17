@@ -49,6 +49,118 @@ impl BounceRange {
     }
 }
 
+/// The Bounce Mix dialog's export options (`file.bounce_mix`'s `sample_rate`, `dither`,
+/// `channels`, `also`, `tags` and `import`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BounceMore {
+    /// Hz; 0 keeps the session's rate.
+    pub sample_rate: u32,
+    /// "tpdf", "shaped" or "off".
+    pub dither: String,
+    /// "as_mixed", "mono" or "split".
+    pub channels: String,
+    /// More formats written in the same pass.
+    pub also: Vec<String>,
+    pub tags: soundcraft_audio_io::export::Tags,
+    /// Add the bounce to the session on new tracks.
+    pub import: bool,
+}
+
+impl Default for BounceMore {
+    fn default() -> Self {
+        BounceMore { sample_rate: 0, dither: "tpdf".into(), channels: "as_mixed".into(), also: Vec::new(), tags: Default::default(), import: false }
+    }
+}
+
+/// The rates the Bounce dialog offers (0: the session's).
+pub const BOUNCE_RATES: [u32; 7] = [0, 44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
+
+impl BounceMore {
+    /// Adds these options to `file.bounce_mix`'s parameters.
+    pub fn apply(&self, params: &mut serde_json::Value) {
+        if self.sample_rate > 0 {
+            params["sample_rate"] = json!(self.sample_rate);
+        }
+        params["dither"] = json!(self.dither);
+        params["channels"] = json!(self.channels);
+        if !self.also.is_empty() {
+            params["also"] = json!(self.also);
+        }
+        if !self.tags.is_empty() {
+            params["tags"] = json!(self.tags);
+        }
+        if self.import {
+            params["import"] = json!(true);
+        }
+    }
+
+    /// The dialog's rows for them.
+    fn show(&mut self, ui: &mut egui::Ui, format: &str, session_rate: u32) {
+        let dim = Tokens::current().text_dim;
+        ui.horizontal(|ui| {
+            let name = |r: u32| if r == 0 { format!("Session ({session_rate} Hz)") } else { format!("{r} Hz") };
+            egui::ComboBox::from_label("Sample Rate").selected_text(name(self.sample_rate)).show_ui(ui, |ui| {
+                for r in BOUNCE_RATES {
+                    ui.selectable_value(&mut self.sample_rate, r, name(r));
+                }
+            });
+            if !matches!(format, "mp3" | "opus") {
+                let dname = |d: &str| match d {
+                    "shaped" => "Noise-shaped",
+                    "off" => "Off",
+                    _ => "TPDF",
+                };
+                egui::ComboBox::from_label("Dither").selected_text(dname(&self.dither)).show_ui(ui, |ui| {
+                    for d in ["tpdf", "shaped", "off"] {
+                        ui.selectable_value(&mut self.dither, d.to_string(), dname(d));
+                    }
+                });
+            }
+        });
+        ui.horizontal(|ui| {
+            let cname = |c: &str| match c {
+                "mono" => "Mono (summed)",
+                "split" => "One file per channel",
+                _ => "As mixed",
+            };
+            egui::ComboBox::from_label("Channels").selected_text(cname(&self.channels)).show_ui(ui, |ui| {
+                for c in ["as_mixed", "mono", "split"] {
+                    ui.selectable_value(&mut self.channels, c.to_string(), cname(c));
+                }
+            });
+            ui.label("Also write");
+            for f in ["wav", "aiff", "flac", "mp3", "opus"] {
+                if f == format {
+                    continue;
+                }
+                let mut on = self.also.iter().any(|a| a == f);
+                if crate::widgets::checkbox(ui, &mut on, f.to_uppercase()).changed() {
+                    self.also.retain(|a| a != f);
+                    if on {
+                        self.also.push(f.to_string());
+                    }
+                }
+            }
+        });
+        egui::CollapsingHeader::new("Tags").id_salt("bounce_tags").show(ui, |ui| {
+            for (label, v) in [
+                ("Title", &mut self.tags.title),
+                ("Artist", &mut self.tags.artist),
+                ("Album", &mut self.tags.album),
+                ("Date", &mut self.tags.date),
+                ("Comment", &mut self.tags.comment),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized([60.0, 18.0], egui::Label::new(label));
+                    ui.add(egui::TextEdit::singleline(v).desired_width(300.0));
+                });
+            }
+            ui.label(egui::RichText::new("Written as ID3 in MP3 files and as INFO and the BWF description in WAV files").small().color(dim));
+        });
+        crate::widgets::checkbox(ui, &mut self.import, "Add to session (new tracks at the range's start)");
+    }
+}
+
 /// What a mix group can link, as `track.group` names it, with the Group dialog's labels.
 pub const GROUP_ATTRIBUTES: [(&str, &str); 7] = [
     ("volume", "Volume"),
@@ -105,6 +217,8 @@ pub enum Dialog {
         source: String,
         /// Seconds rendered past the range, for a reverb or delay to ring out.
         tail: f32,
+        /// The rate, dither, channel layout, extra formats, text and Add to Session.
+        more: BounceMore,
     },
     RenameTrack {
         id: TrackId,
@@ -451,6 +565,7 @@ impl Dialogs {
                     range: BounceRange::default_for(e.session()),
                     source: "main".into(),
                     tail: 0.0,
+                    more: BounceMore::default(),
                 }
             }
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
@@ -868,7 +983,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail, more } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -962,6 +1077,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if loudness.is_none() {
                         crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
                     }
+                    more.show(ui, format, app.engine.session().sample_rate.hz());
                     let chosen = range.range(app.engine.session());
                     if buttons_enabled(ui, "Bounce", enter, chosen.is_some() && refused.is_none())
                         && let Some(r) = chosen
@@ -975,10 +1091,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         if matches!(format.as_str(), "mp3" | "opus") {
                             params["bitrate"] = json!(bitrate);
-                            if width > 2 {
-                                params["fold_down"] = json!("stereo");
-                            }
                         }
+                        // A lossy file (main or extra) of a surround mix is its stereo fold-down.
+                        let lossy = matches!(format.as_str(), "mp3" | "opus") || more.also.iter().any(|f| matches!(f.as_str(), "mp3" | "opus"));
+                        if lossy && width > 2 && more.channels == "as_mixed" {
+                            params["fold_down"] = json!("stereo");
+                        }
+                        more.apply(&mut params);
                         crate::bounce::start(app, &params);
                         keep = false;
                     }
@@ -1068,6 +1187,9 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     {
                         *path = p;
                     }
+                    if cmd == "file.bounce_stems" {
+                        stems_choice(app, ui);
+                    }
                     let file = soundcraft_engine::io::session_file(path);
                     let replaces = soundcraft_engine::io::replaces(&app.engine, cmd, &file);
                     if replaces {
@@ -1078,6 +1200,15 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         v[key.as_str()] = json!(path);
                         if replaces {
                             v["replace"] = json!(true);
+                        }
+                        if cmd == "file.bounce_stems" {
+                            let (selected, busses) = StemsChoice::get(ui.ctx());
+                            if selected {
+                                v["tracks"] = json!(app.engine.target_tracks().iter().map(|t| t.0).collect::<Vec<_>>());
+                            }
+                            if busses {
+                                v["busses"] = json!(true);
+                            }
                         }
                         // Saved templates are listed in File › New from their folder: made on save.
                         if cmd == "session.save_template"
@@ -1631,6 +1762,36 @@ fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
+/// Export › Stems' choice: the selected tracks rather than every unmuted one, and a stem of each
+/// bus as well (`file.bounce_stems`'s `tracks` and `busses`), kept while the app runs.
+struct StemsChoice;
+
+impl StemsChoice {
+    fn id() -> egui::Id {
+        egui::Id::new("stems_choice")
+    }
+
+    fn get(ctx: &egui::Context) -> (bool, bool) {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or((false, false))
+    }
+}
+
+/// The Stems prompt's rows for [`StemsChoice`].
+fn stems_choice(app: &SoundApp, ui: &mut egui::Ui) {
+    let (mut selected, mut busses) = StemsChoice::get(ui.ctx());
+    let n = app.engine.target_tracks().len();
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut selected, false, "Every unmuted track");
+        ui.add_enabled_ui(n > 0, |ui| ui.radio_value(&mut selected, true, format!("Selected tracks ({n})")));
+    });
+    if n == 0 {
+        selected = false;
+    }
+    let has_busses = !app.engine.session().busses.is_empty();
+    ui.add_enabled_ui(has_busses, |ui| crate::widgets::checkbox(ui, &mut busses, "A stem of each bus too"));
+    ui.ctx().data_mut(|d| d.insert_temp(StemsChoice::id(), (selected, busses && has_busses)));
+}
+
 /// The Range rows of the Bounce Mix dialog: Loop, Between markers, Whole session.
 fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRange) {
     let t = Tokens::current();
@@ -1913,6 +2074,31 @@ pub(crate) fn bounce_refusal(format: &str, channels: usize) -> Option<&'static s
 #[cfg(test)]
 mod bounce_options_tests {
     use super::*;
+
+    /// The dialog's export options reach `file.bounce_mix` as its parameters, and a bounce made
+    /// with them is accepted by the command.
+    #[test]
+    fn the_bounce_dialogs_export_options_become_parameters() {
+        let mut p = json!({"path": "x.wav"});
+        BounceMore::default().apply(&mut p);
+        assert_eq!(p, json!({"path": "x.wav", "dither": "tpdf", "channels": "as_mixed"}), "nothing extra by default");
+        let more = BounceMore {
+            sample_rate: 44_100,
+            dither: "shaped".into(),
+            channels: "split".into(),
+            also: vec!["mp3".into()],
+            tags: soundcraft_audio_io::export::Tags { title: "Song".into(), ..Default::default() },
+            import: true,
+        };
+        let mut p = json!({});
+        more.apply(&mut p);
+        assert_eq!(p["sample_rate"], 44_100);
+        assert_eq!((p["dither"].as_str(), p["channels"].as_str()), (Some("shaped"), Some("split")));
+        assert_eq!(p["also"], json!(["mp3"]));
+        assert_eq!(p["tags"]["title"], "Song");
+        assert_eq!(p["import"], true);
+        assert!(BOUNCE_RATES.iter().all(|r| *r == 0 || (8_000..=soundcraft_engine::io::MAX_EXPORT_RATE).contains(r)));
+    }
 
     /// Mix bug 11: the dialog offered FLAC at 32-bit float and beyond 8 channels, which the
     /// writer refuses once the render is done.

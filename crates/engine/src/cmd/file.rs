@@ -85,8 +85,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
-        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30)}", always, bounce),
-        cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo}", has_tracks, |e, p| {
+        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30), sample_rate?: Hz to convert to (8000-384000), dither?: tpdf|shaped|off (true/false), channels?: as_mixed|mono|split (a mono file per channel), also?: [more formats written in the same pass], tags?: {title, artist, album, date, comment} (ID3 in MP3, LIST/INFO and bext in WAV), import?: false (add the bounce to the session on new tracks)} → {path, files, imported, ...}", always, bounce),
+        cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo, tracks?: [track] (default: every unmuted audio, instrument and MIDI track), busses?: true (every bus) | [bus name]: a stem of each bus as summed}", has_tracks, |e, p| {
             let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
         }),
@@ -318,9 +318,14 @@ fn fold_down_param(p: &Value, id: &str) -> Result<bool> {
 fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
     let job = bounce_job(e, p)?;
     let (path, seconds) = (job.path().to_string_lossy().into_owned(), e.session().sample_rate.seconds(job.range().len()));
+    let at = job.range().start;
     let done = job.run()?;
+    let files: Vec<String> = done.files.iter().map(|f| f.to_string_lossy().into_owned()).collect();
+    let imported = if bool_or(p, "import", false) { import_bounce(e, &files, at)? } else { Value::Null };
     Ok(json!({
         "path": path,
+        "files": files,
+        "imported": imported,
         "bytes": done.bytes,
         "seconds": seconds,
         "peak_db": done.peak_db,
@@ -328,6 +333,14 @@ fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
         "true_peak_db": done.true_peak_db,
         "measured": done.measured.map(|m| json!({"lufs": m.lufs, "true_peak_db": m.true_peak_db, "gain_db": m.gain_db, "held_by_ceiling": m.held_by_ceiling})),
     }))
+}
+
+/// Bounce Mix's Add to Session: the main file (every file of a split bounce, as one track each)
+/// imported onto new tracks at the bounced range's start.
+pub fn import_bounce(e: &mut Engine, files: &[String], at: soundcraft_time::Samples) -> Result<Value> {
+    let main_ext = files.first().and_then(|f| std::path::Path::new(f).extension().map(|x| x.to_os_string()));
+    let paths: Vec<&String> = files.iter().filter(|f| std::path::Path::new(f.as_str()).extension().map(|x| x.to_os_string()) == main_ext).collect();
+    e.execute("file.import_audio", &json!({"paths": paths, "at": at, "new_tracks": true}))
 }
 
 /// The format a bounce writes for a format name or extension.
@@ -397,7 +410,23 @@ pub fn stems_job(e: &Engine, p: &Value) -> Result<crate::io::StemsJob> {
         bitrate_kbps: bitrate_param("file.bounce_stems", p, format)?,
     };
     let fold = fold_down_param(p, "file.bounce_stems")?;
-    crate::io::StemsJob::new(e, &dir, r, &opts, fold)
+    let tracks = if p.get("tracks").is_some_and(|v| !v.is_null()) { Some(tracks_param(e, "file.bounce_stems", p)?) } else { None };
+    let busses: Vec<soundcraft_model::BusId> = match p.get("busses") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Vec::new(),
+        Some(Value::Bool(true)) => e.session().busses.iter().map(|b| b.id).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| {
+                let name = v.as_str().unwrap_or_default();
+                e.session().bus_by_name(name).map(|b| b.id).ok_or_else(|| bad("file.bounce_stems", format!("unknown bus `{name}`")))
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => return Err(bad("file.bounce_stems", "`busses` is true or a list of bus names")),
+    };
+    if tracks.as_ref().is_some_and(Vec::is_empty) && busses.is_empty() {
+        return Err(bad("file.bounce_stems", "no tracks or busses to bounce"));
+    }
+    crate::io::StemsJob::choose(e, &dir, r, &opts, fold, tracks.as_deref(), &busses)
 }
 
 /// The longest tail a bounce takes past its range (`file.bounce_mix`'s `tail`), seconds.
@@ -419,17 +448,113 @@ pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
     let r = soundcraft_time::Range::new(r.start, r.end.saturating_add(e.session().sample_rate.samples(tail)));
     let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
     let format = format_param("file.bounce_mix", str_param(p, "format").unwrap_or(ext.as_str()))?;
+    let (dither, noise_shaping) = dither_param(p)?;
     let opts = soundcraft_audio_io::EncodeOptions {
         format,
         bit_depth: bit_depth_param(p),
-        dither: bool_or(p, "dither", true),
+        dither,
         bwf: None,
         bitrate_kbps: bitrate_param("file.bounce_mix", p, format)?,
     };
     let normalize = normalize_param(p)?;
-    let fold = fold_down_param(p, "file.bounce_mix")?;
     let bus = bounce_bus(e, p)?;
-    crate::io::Bounce::new(e.session_arc(), std::path::Path::new(&path), r, &opts, bus, normalize, fold).map(|b| b.with_band(e.band_library()))
+    let layout = layout_param(p)?;
+    // A mono bounce of a surround source averages its stereo fold-down (not the LFE and heights).
+    let fold =
+        fold_down_param(p, "file.bounce_mix")? || (layout == crate::io::FileLayout::Mono && soundcraft_mix::source_channels(e.session(), bus) > 2);
+    let export = crate::io::Export {
+        sample_rate: sample_rate_param(p)?,
+        noise_shaping,
+        layout,
+        also: also_param(p, &opts)?,
+        bwf: true,
+        tags: tags_param(p)?,
+        import: bool_or(p, "import", false),
+    };
+    crate::io::Bounce::export(e.session_arc(), std::path::Path::new(&path), r, &opts, bus, normalize, fold, &export)
+        .map(|b| b.with_band(e.band_library()))
+}
+
+/// `dither`: true or "tpdf" (the default), "shaped" (TPDF with noise shaping), false or "off".
+/// Returns the encoder's dither switch and whether the bounce shapes its own.
+fn dither_param(p: &Value) -> Result<(bool, bool)> {
+    match p.get("dither") {
+        None | Some(Value::Null) => Ok((true, false)),
+        Some(Value::Bool(b)) => Ok((*b, false)),
+        Some(Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "tpdf" | "on" => Ok((true, false)),
+            "shaped" | "noise_shaped" => Ok((true, true)),
+            "off" | "none" => Ok((false, false)),
+            other => Err(bad("file.bounce_mix", format!("unknown dither `{other}` (tpdf, shaped or off)"))),
+        },
+        Some(_) => Err(bad("file.bounce_mix", "`dither` is true, false, \"tpdf\", \"shaped\" or \"off\"")),
+    }
+}
+
+/// `channels`: "mono" (one averaged file), "split" (a mono file per channel) or as mixed.
+fn layout_param(p: &Value) -> Result<crate::io::FileLayout> {
+    match str_param(p, "channels").map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("" | "as_mixed" | "all" | "interleaved") => Ok(crate::io::FileLayout::AsMixed),
+        Some("mono") => Ok(crate::io::FileLayout::Mono),
+        Some("split" | "multiple_mono" | "multi_mono") => Ok(crate::io::FileLayout::Split),
+        Some(other) => Err(bad("file.bounce_mix", format!("unknown `channels` `{other}` (mono, split or as_mixed)"))),
+    }
+}
+
+/// `sample_rate`: the rate the files are written at (converted as they are written).
+fn sample_rate_param(p: &Value) -> Result<Option<u32>> {
+    match p.get("sample_rate") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(|r| u32::try_from(r).ok())
+            .filter(|r| (8_000..=crate::io::MAX_EXPORT_RATE).contains(r))
+            .map(Some)
+            .ok_or_else(|| bad("file.bounce_mix", format!("`sample_rate` is a rate in Hz from 8000 to {}", crate::io::MAX_EXPORT_RATE))),
+    }
+}
+
+/// `also`: more formats written in the same pass, beside the main file (the main file's bit
+/// depth for the lossless ones, the format's default bitrate for MP3 and Opus).
+fn also_param(p: &Value, main: &soundcraft_audio_io::EncodeOptions) -> Result<Vec<soundcraft_audio_io::EncodeOptions>> {
+    let names: Vec<&str> = match p.get("also") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::String(s)) => vec![s.as_str()],
+        Some(Value::Array(a)) => {
+            a.iter().map(|v| v.as_str().ok_or_else(|| bad("file.bounce_mix", "`also` is a list of formats"))).collect::<Result<_>>()?
+        }
+        Some(_) => return Err(bad("file.bounce_mix", "`also` is a list of formats")),
+    };
+    let mut out = Vec::new();
+    for n in names {
+        let format = format_param("file.bounce_mix", n.trim())?;
+        if format == main.format || out.iter().any(|o: &soundcraft_audio_io::EncodeOptions| o.format == format) {
+            continue;
+        }
+        // FLAC holds 16 or 24 bits: a float main file gives a 24-bit FLAC.
+        let bit_depth = match (format, main.bit_depth) {
+            (soundcraft_audio_io::FileFormat::Flac, soundcraft_audio_io::BitDepth::Float32 | soundcraft_audio_io::BitDepth::Int32) => {
+                soundcraft_audio_io::BitDepth::Int24
+            }
+            (_, d) => d,
+        };
+        out.push(soundcraft_audio_io::EncodeOptions { format, bit_depth, dither: main.dither, bwf: None, bitrate_kbps: 0 });
+    }
+    Ok(out)
+}
+
+/// `tags`: {title, artist, album, date, comment}, written as ID3v2 in an MP3 and `LIST`/`INFO`
+/// (and the `bext` description) in a WAV.
+fn tags_param(p: &Value) -> Result<Option<soundcraft_audio_io::export::Tags>> {
+    match p.get("tags") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => {
+            let t: soundcraft_audio_io::export::Tags =
+                serde_json::from_value(v.clone()).map_err(|e| bad("file.bounce_mix", format!("`tags`: {e}")))?;
+            Ok((!t.is_empty()).then_some(t))
+        }
+        Some(_) => Err(bad("file.bounce_mix", "`tags` is {title, artist, album, date, comment}")),
+    }
 }
 
 /// Write the score of the chosen MIDI tracks as MusicXML (or SVG when `svg`).
@@ -480,6 +605,93 @@ mod tests {
         let job = bounce_job(&e, &json!({"path": path, "start": 0, "end": 48_000})).unwrap();
         assert_eq!(job.range().end, 48_000, "no tail unless asked");
         drop(job);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bounce Mix's export options: another rate, mono and one file per channel, more formats in
+    /// the same pass, tags and BWF, noise-shaped dither, and Add to Session.
+    #[test]
+    fn a_bounce_converts_splits_tags_and_comes_back() {
+        let mut e = crate::demo::demo_engine();
+        let dir = std::env::temp_dir().join(format!("sc-bounce-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let probe = |path: &str| {
+            let bytes = std::fs::read(path).unwrap();
+            (soundcraft_audio_io::probe(&bytes, std::path::Path::new(path).extension().and_then(|x| x.to_str())).unwrap(), bytes)
+        };
+        let (start, end) = (48_000, 96_000);
+        // Converted to 44.1 kHz, with an MP3 beside it, tagged, written in one pass.
+        let r = e
+            .execute(
+                "file.bounce_mix",
+                &json!({"path": p("a.wav"), "start": start, "end": end, "sample_rate": 44_100, "also": ["mp3"],
+                    "tags": {"title": "Song", "artist": "Band"}, "dither": "shaped", "bit_depth": 16}),
+            )
+            .unwrap();
+        assert_eq!(r["files"].as_array().unwrap().len(), 2, "{r}");
+        let (info, bytes) = probe(&p("a.wav"));
+        assert_eq!((info.sample_rate, info.channels), (44_100, 2));
+        assert!((info.frames as i64 - 44_100).abs() <= 2, "{} frames", info.frames);
+        let bwf = info.bwf.expect("a bext chunk");
+        assert_eq!(bwf.time_reference, start as u64);
+        assert!(bwf.description.contains("Song"), "{bwf:?}");
+        assert!(bytes.windows(4).any(|w| w == b"INFO") && bytes.windows(4).any(|w| w == b"INAM"), "LIST/INFO tags");
+        let (mp3, mbytes) = probe(&p("a.mp3"));
+        assert!(mbytes.starts_with(b"ID3"), "the MP3 is tagged");
+        assert_eq!(mp3.channels, 2);
+        // Mono, and one file per channel.
+        e.execute("file.bounce_mix", &json!({"path": p("m.wav"), "start": start, "end": end, "channels": "mono"})).unwrap();
+        assert_eq!(probe(&p("m.wav")).0.channels, 1);
+        let r = e.execute("file.bounce_mix", &json!({"path": p("s.wav"), "start": start, "end": end, "channels": "split"})).unwrap();
+        let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+        assert_eq!(files, vec![p("s.L.wav"), p("s.R.wav")]);
+        assert!(files.iter().all(|f| probe(f).0.channels == 1));
+        // A mono bounce is the average of the split sides.
+        let dec = |f: &str| soundcraft_audio_io::decode(&std::fs::read(f).unwrap(), Some("wav")).unwrap().1.channels;
+        let (m, l, rr) = (dec(&p("m.wav")), dec(&files[0]), dec(&files[1]));
+        let worst = m[0].iter().zip(l[0].iter().zip(&rr[0])).map(|(m, (l, r))| (m - (l + r) / 2.0).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "mono is the average: {worst}");
+        // Add to Session: a new track with the bounce at the range's start.
+        let before: Vec<_> = e.session().tracks.iter().map(|t| t.id).collect();
+        let r = e.execute("file.bounce_mix", &json!({"path": p("i.wav"), "start": start, "end": end, "import": true})).unwrap();
+        assert!(!r["imported"].is_null());
+        assert_eq!(e.session().tracks.len(), before.len() + 1);
+        let t = e.session().tracks.iter().find(|t| !before.contains(&t.id)).unwrap();
+        let first = t.playlists.iter().flat_map(|pl| pl.clips.iter()).map(|c| c.start).min();
+        assert_eq!(first, Some(start), "{r}");
+        // Bad options are refused before anything is written.
+        for bad in [json!({"sample_rate": 1}), json!({"channels": "quad"}), json!({"dither": "loud"}), json!({"also": ["xyz"]})] {
+            let mut q = bad.clone();
+            q["path"] = json!(p("bad.wav"));
+            assert!(e.execute("file.bounce_mix", &q).is_err(), "{bad}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stems of chosen tracks and of busses: only those files, a bus stem as the bus sums.
+    #[test]
+    fn stems_take_a_choice_of_tracks_and_busses() {
+        let mut e = crate::demo::demo_engine();
+        let bus = e.session_mut().add_bus("Drums", ChannelFormat::Stereo);
+        let first = e.session().tracks.iter().find(|t| t.kind == soundcraft_model::TrackKind::Audio).unwrap().clone();
+        e.session_mut().track_mut(first.id).unwrap().mixer.output = soundcraft_model::Route::Bus(bus);
+        let dir = std::env::temp_dir().join(format!("sc-stems-choice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = dir.to_string_lossy().into_owned();
+        let files =
+            e.execute("file.bounce_stems", &json!({"dir": d, "start": 0, "end": 48_000, "tracks": [first.id.0], "busses": ["Drums"]})).unwrap();
+        let names: Vec<String> =
+            files.as_array().or_else(|| files["files"].as_array()).unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names[0].ends_with(&format!(" - {}.wav", first.name)) && names[1].ends_with(" - Drums.wav"), "{names:?}");
+        // The bus stem is the track through the bus: as loud as the track's own stem here.
+        let dec = |f: &str| soundcraft_audio_io::decode(&std::fs::read(f).unwrap(), Some("wav")).unwrap().1.channels;
+        let peak = |c: &[Vec<f32>]| c.iter().flatten().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak(&dec(&names[1])) > 0.0, "the bus stem has the track in it");
+        assert!(e.execute("file.bounce_stems", &json!({"dir": d, "busses": ["Nope"]})).is_err());
+        assert!(e.execute("file.bounce_stems", &json!({"dir": d, "tracks": []})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

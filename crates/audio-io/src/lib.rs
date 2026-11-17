@@ -19,6 +19,7 @@
 mod aiff;
 mod buffer;
 mod caf;
+pub mod export;
 mod flac;
 mod mp3;
 mod mp4;
@@ -31,6 +32,7 @@ mod symph;
 mod wav;
 
 pub use mp3::mp3_rate;
+pub use resample::Resampler;
 
 pub use buffer::AudioBuffer;
 use std::io::{Seek, Write};

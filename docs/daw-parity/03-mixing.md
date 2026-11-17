@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated; faders follow | **Large**: plug-in values block-rate |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
-| H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
+| H. Mixdown and export | Offline bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no real-time bounce, AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots | Small: no mixer search or spill |
 
@@ -187,14 +187,14 @@ K-system scales, and the master a loudness meter.
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
 | WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
-| Convert sample rate on export | ● | ● | ● | ● | **Missing** for WAV, AIFF and FLAC |
-| Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Partial**: TPDF, always on, no control in the dialog |
-| Mono, and one file per channel | ● | ● | ● | ● | **Missing** |
+| Convert sample rate on export | ● | ● | ● | ● | **Works**: Sample Rate in the Bounce dialog (`sample_rate`, 8 to 384 kHz), converted as the blocks are written (the windowed-sinc converter the MP3 and Opus writers use), for every format |
+| Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Works**: Dither in the Bounce dialog: TPDF, noise-shaped TPDF (second-order error feedback, the noise moved above the midrange) or off (`dither`), for 16- and 24-bit files |
+| Mono, and one file per channel | ● | ● | ● | ● | **Works**: Channels in the Bounce dialog: as mixed, mono (the channels averaged; a surround source's stereo fold-down) or one mono file per channel named after it, `Mix.L.wav`, `Mix.R.wav` (`channels`) |
 | Normalize on export | ○ | ◐ | ● | ◐ | **Works**: to sample peak (−0.1 dBFS) or to a loudness target in LUFS held under a true-peak ceiling, by rendering twice |
-| Tags and broadcast metadata in the file | ● | ● | ● | ● | **Missing** |
-| Add the bounce back to the session | ● | ● | ● | ● | **Missing** |
-| Several formats in one pass | ● | ◐ | ● | ● | **Missing** |
-| Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Partial**: every unmuted track, always through the master, behind a progress window with Cancel |
+| Tags and broadcast metadata in the file | ● | ● | ● | ● | **Partial**: every bounced WAV carries a BWF `bext` (FreeDAWm, the date, the range's start as its time reference, the title as its description); Tags in the Bounce dialog (title, artist, album, date, comment; `tags`) go into an MP3 as ID3v2 and a WAV as `LIST`/`INFO`. FLAC, AIFF and Opus files are not tagged yet |
+| Add the bounce back to the session | ● | ● | ● | ● | **Works**: Add to Session in the Bounce dialog (`import`): the main file (each file of a split bounce) on new tracks at the range's start, one undo step |
+| Several formats in one pass | ● | ◐ | ● | ● | **Works**: Also write in the Bounce dialog (`also`): more formats from the same render, each beside the main file with its own extension (MP3 and Opus at their default bitrate; a surround mix needs a fold-down or a split for them) |
+| Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Works**: Export › Stems takes every unmuted track or the selected ones, and a stem of each bus as summed (`tracks`, `busses`), behind a progress window with Cancel; a track's stem is it soloed through the master |
 | Commit, freeze, bounce in place | ● | ● | ● | ● | **Works**: commit keeps the format, the pan and the fader automation |
 | AAF or OMF | ● | ● | ● | ● | **Missing** |
 | DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
@@ -272,7 +272,7 @@ one a mix engineer would not forgive.
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU and K scales, and Window › Loudness Meter; PPM and loudness range remain |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
-| Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Source, tail and stems as a background job done**; the rest remains |
+| Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Done** (2026-11-17); tags in FLAC, AIFF and Opus remain |
 | Real-time bounce | 4–6 | |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Done** |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Bounce Mix converts the rate, shapes its dither, writes mono or split files and several formats in one pass, tags its files and adds them to the session; stems of chosen tracks and busses |
 | 2026-11-17 | minor | VST3 plug-ins take a key on their auxiliary input |
 | 2026-11-17 | minor | momentary solo |
 | 2026-11-17 | minor | polarity per channel with a button on the strip; Copy to Send takes the selection, pan and mute |
