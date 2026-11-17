@@ -36,8 +36,29 @@ pub const TOUCH_HOLD_SECONDS: f64 = 0.5;
 const STEP_SECONDS: f64 = 0.02;
 
 /// How long a Touch control let go takes to glide back to the automation it wrote over (Pro
-/// Tools' AutoMatch time).
+/// Tools' AutoMatch time) unless the session sets its own ([`RETURN_MS`]).
 pub const RETURN_SECONDS: f64 = 0.25;
+
+/// The `s.edit` value holding the return time in ms (`automation.return_time`).
+pub const RETURN_MS: &str = "automation.return_ms";
+
+/// The longest return time, ms.
+pub const MAX_RETURN_MS: f64 = 5_000.0;
+
+/// The `s.edit` value holding what the next pass writes when the transport stops
+/// (`automation.write_on_stop`): the index into [`WRITE_ON_STOP`].
+pub const WRITE_ON_STOP_KEY: &str = "automation.write_on_stop";
+
+/// What a pass can write when it stops: the last value written, from the stop back to the
+/// session's start, on to its end, over all of it, or over the edit selection (Pro Tools' Write
+/// to Start / End / All on Stop). Armed for one pass, as Pro Tools arms them.
+pub const WRITE_ON_STOP: [&str; 5] = ["off", "start", "end", "all", "selection"];
+
+/// The return time the session sets, seconds.
+fn return_seconds(s: &soundcraft_model::Session) -> f64 {
+    let ms = s.edit.value(RETURN_MS, RETURN_SECONDS * 1000.0);
+    if ms.is_finite() { ms.clamp(0.0, MAX_RETURN_MS) / 1000.0 } else { RETURN_SECONDS }
+}
 
 /// The merge key of a pass (see [`Engine::hold_merge`]).
 const PASS: &str = "automation_pass";
@@ -117,6 +138,41 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"type": ty, "value": on}))
             }
         ),
+        crate::cmd!(noundo
+            "automation.return_time",
+            "Touch Return Time",
+            [],
+            None,
+            "{ms: 0..5000} — how long a Touch control let go takes to glide back to the automation it wrote over (250 ms unless set) → {ms}",
+            always,
+            |e, p| {
+                let ms = p
+                    .get("ms")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| bad("automation.return_time", "`ms` (number) required"))?
+                    .clamp(0.0, MAX_RETURN_MS);
+                e.session_mut().edit.values.insert(RETURN_MS.into(), ms);
+                Ok(json!({"ms": ms}))
+            }
+        ),
+        crate::cmd!(noundo
+            "automation.write_on_stop",
+            "Write on Stop",
+            [],
+            None,
+            "{to: off|start|end|all|selection} — when the next writing pass stops, each lane it wrote takes its last value from the stop back to the session's start, on to its end, over all of it, or over the edit selection; armed for one pass → {to}",
+            always,
+            |e, p| {
+                let to = str_param(p, "to").map(str::to_ascii_lowercase).unwrap_or_default();
+                let i = WRITE_ON_STOP
+                    .iter()
+                    .position(|w| *w == to)
+                    .ok_or_else(|| bad("automation.write_on_stop", format!("`to` is one of {}", WRITE_ON_STOP.join(", "))))?;
+                e.session_mut().edit.values.insert(WRITE_ON_STOP_KEY.into(), i as f64);
+                Ok(json!({"to": to}))
+            }
+        ),
         crate::cmd!(
             "automation.thin_after_pass",
             "Thin Automation After Pass",
@@ -130,6 +186,28 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"value": !keep}))
             }
         ),
+        crate::cmd!(
+            "automation.show_last_touched",
+            "Show Last Touched",
+            ["Edit", "Automation"],
+            None,
+            "{} — selects the track whose control was moved last and shows that parameter's lane (the main lane when it shows none) → {track, param}",
+            |e| if e.auto_write.last_touched.is_some() { Ok(()) } else { Err("no control has been moved yet".into()) },
+            |e, _| {
+                let (t, p) = e.auto_write.last_touched.clone().ok_or_else(|| bad("automation.show_last_touched", "no control has been moved yet"))?;
+                let id = p.id();
+                let s = e.session_mut();
+                let tr = s.track_mut(t).ok_or_else(|| bad("automation.show_last_touched", "that track is gone"))?;
+                if tr.view != id && !tr.auto_lanes.contains(&id) {
+                    tr.auto_lanes.push(id.clone());
+                }
+                s.edit.selected_tracks = vec![t];
+                Ok(json!({"track": t.0, "param": id}))
+            }
+        ),
+        crate::cmd!(query "automation.last_touched", "Last Touched Control", [], None, "{} → {track, param} | null", always, |e, _| {
+            Ok(e.auto_write.last_touched.as_ref().map_or(Value::Null, |(t, p)| json!({"track": t.0, "param": p.id()})))
+        }),
         crate::cmd!(query "automation.touched", "Touched Automation Controls", [], None, "{} → [{track, param}]", always, |e, _| {
             let pos = e.heard_position();
             let rate = e.session().sample_rate;
@@ -170,6 +248,10 @@ pub struct AutoWriter {
     /// Each lane this pass wrote, as it was before the pass touched it (what a let-go control
     /// glides back to).
     before: Vec<(TrackId, soundcraft_model::AutomationLane)>,
+    /// Where the pass last wrote points (what Write on Stop writes from).
+    last_point: Samples,
+    /// The control moved or held last, written or not (`automation.show_last_touched`).
+    last_touched: Option<(TrackId, AutoParam)>,
 }
 
 impl AutoWriter {
@@ -257,6 +339,7 @@ impl Engine {
     pub fn automation_changed(&mut self, track: TrackId, param: AutoParam) {
         let pos = self.heard_position();
         let w = &mut self.auto_write;
+        w.last_touched = Some((track, param.clone()));
         match w.pulses.iter_mut().find(|x| x.0 == track && x.1 == param) {
             Some(x) => x.2 = pos,
             None => w.pulses.push((track, param, pos)),
@@ -270,6 +353,7 @@ impl Engine {
             let w = &mut self.auto_write;
             w.held.retain(|x| !(x.0 == track && x.1 == param));
             if on {
+                w.last_touched = Some((track, param.clone()));
                 w.held.push((track, param));
             } else {
                 // A let-go control stops writing now, not half a second later.
@@ -407,7 +491,7 @@ impl Engine {
             let let_go: Vec<(TrackId, AutoParam)> =
                 self.auto_write.last_writes.iter().filter(|(t, p)| !writes.iter().any(|(wt, wp, _)| wt == t && wp == p)).cloned().collect();
             for (t, p) in let_go {
-                self.glide_back(t, &p, from, rate.samples(RETURN_SECONDS));
+                self.glide_back(t, &p, from, rate.samples(return_seconds(self.session())));
             }
         }
         self.auto_write.last_writes = writes.iter().map(|(t, p, _)| (*t, p.clone())).collect();
@@ -419,10 +503,14 @@ impl Engine {
             }
             if self.execute_merged("automation.set_point", &point, PASS).is_ok() {
                 n += 1;
+                self.auto_write.last_point = pos;
                 if !self.auto_write.was_written(t, &param) {
                     self.auto_write.written.push((t, param));
                 }
             }
+        }
+        if stopped {
+            self.write_on_stop();
         }
         // Forget pulses that ran out, so the list stays short.
         self.auto_write.pulses.retain(|x| pos >= x.2 && pos.saturating_sub(x.2) <= hold);
@@ -443,6 +531,38 @@ impl Engine {
             self.end_merge();
         }
         n
+    }
+
+    /// Write on Stop, when armed: each lane the pass wrote takes the value it last wrote over the
+    /// armed range (one undo step with the pass), and the arming ends.
+    fn write_on_stop(&mut self) {
+        let i = self.session().edit.value(WRITE_ON_STOP_KEY, 0.0);
+        let to = WRITE_ON_STOP.get(if i.is_finite() && i >= 0.0 { i as usize } else { 0 }).copied().unwrap_or("off");
+        if to == "off" || self.auto_write.written.is_empty() {
+            return;
+        }
+        self.session_mut().edit.values.insert(WRITE_ON_STOP_KEY.into(), 0.0);
+        let at = self.auto_write.last_point;
+        let end = self.session().content_end().max(at.saturating_add(1));
+        let (a, b) = match to {
+            "start" => (0, at),
+            "end" => (at, end),
+            "all" => (0, end),
+            _ => {
+                let sel = self.session().edit.selection;
+                if sel.is_empty() {
+                    return;
+                }
+                (sel.start.max(0), sel.end)
+            }
+        };
+        let written = self.auto_write.written.clone();
+        for (t, param) in written {
+            let Some(tr) = self.session().track(t) else { continue };
+            let v = tr.lane(&param).map_or_else(|| current_value(tr, &param), |l| l.value_at(at, current_value(tr, &param)));
+            let p = json!({"tracks": [t.0], "param": param.id(), "start": a, "end": b, "value": v});
+            let _ = self.execute_merged("automation.write_range", &p, PASS);
+        }
     }
 
     /// Touch let go at `at` (the last point written): the lane ramps from there back to the
@@ -640,6 +760,76 @@ mod tests {
         // Let go, it glides back to the old automation over the return time.
         let back = 3 * q + e.session().sample_rate.samples(super::RETURN_SECONDS);
         assert_eq!(pan, [(0, -1.0), (2 * q, 0.5), (3 * q, 0.5), (back, -1.0), (50 * q, -1.0)]);
+    }
+
+    /// Show Last Touched: the last control moved (a fader, a plug-in knob) gets its lane shown
+    /// and its track selected.
+    #[test]
+    fn show_last_touched_shows_the_lane_moved_last() {
+        let (mut e, t, m, _) = kick("read");
+        assert!(e.execute("automation.show_last_touched", &json!({})).is_err(), "nothing moved yet");
+        e.execute("mix.volume", &json!({"track": t.0, "db": -3.0})).unwrap();
+        e.execute("mix.module_param", &json!({"track": t.0, "module": m.0, "param": "outGain", "value": 0.25})).unwrap();
+        assert_eq!(e.execute("automation.last_touched", &json!({})).unwrap()["param"], outgain(m).id());
+        e.session_mut().edit.selected_tracks.clear();
+        let r = e.execute("automation.show_last_touched", &json!({})).unwrap();
+        assert_eq!(r["param"], outgain(m).id());
+        let tr = e.session().track(t).unwrap();
+        assert!(tr.view == outgain(m).id() || tr.auto_lanes.contains(&outgain(m).id()), "{:?}", tr.auto_lanes);
+        assert_eq!(e.session().edit.selected_tracks, vec![t]);
+    }
+
+    /// The return time is the session's: a longer one glides back later.
+    #[test]
+    fn the_touch_return_time_is_set() {
+        let (mut e, t, _, q) = kick("touch");
+        e.execute("automation.return_time", &json!({"ms": 1000})).unwrap();
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "pan", "at": 0, "value": -1.0})).unwrap();
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "pan", "at": 50 * q, "value": -1.0})).unwrap();
+        play(&mut e, q);
+        e.execute("mix.pan", &json!({"track": t.0, "pan": 0.5})).unwrap();
+        play(&mut e, 2 * q);
+        play(&mut e, 3 * q);
+        play(&mut e, 20 * q);
+        stop(&mut e, 22 * q);
+        let back = 3 * q + e.session().sample_rate.samples(1.0);
+        assert!(points(&e, t, &AutoParam::Pan(0)).contains(&(back, -1.0)), "{:?}", points(&e, t, &AutoParam::Pan(0)));
+        assert!(e.execute("automation.return_time", &json!({"ms": "x"})).is_err());
+        assert_eq!(e.execute("automation.return_time", &json!({"ms": 1e9})).unwrap()["ms"], super::MAX_RETURN_MS);
+    }
+
+    /// Write to End on Stop: the lane a pass wrote keeps its last value to the session's end,
+    /// over what was there; the arming lasts one pass. To Start writes back to 0.
+    #[test]
+    fn write_on_stop_carries_the_last_value() {
+        let (mut e, t, _, q) = kick("touch");
+        let end = e.session().content_end();
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": 0, "value": 0.0})).unwrap();
+        e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": end, "value": 0.0})).unwrap();
+        e.execute("automation.write_on_stop", &json!({"to": "end"})).unwrap();
+        play(&mut e, q);
+        e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+        e.execute("mix.volume", &json!({"tracks": [t.0], "db": -9.0})).unwrap();
+        play(&mut e, 2 * q);
+        play(&mut e, 3 * q);
+        e.automation_ui_held(Vec::new());
+        stop(&mut e, 4 * q);
+        let lane = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        assert_eq!(lane.value_at(end - 1, 0.0), -9.0, "to the end");
+        assert_eq!(lane.value_at(0, 1.0), 0.0, "the start is left alone");
+        assert_eq!(e.session().edit.value(super::WRITE_ON_STOP_KEY, 0.0), 0.0, "one pass only");
+        // To Start.
+        e.execute("automation.write_on_stop", &json!({"to": "start"})).unwrap();
+        play(&mut e, 5 * q);
+        e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+        e.execute("mix.volume", &json!({"tracks": [t.0], "db": -3.0})).unwrap();
+        play(&mut e, 6 * q);
+        play(&mut e, 7 * q);
+        e.automation_ui_held(Vec::new());
+        stop(&mut e, 8 * q);
+        let lane = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        assert_eq!(lane.value_at(0, 1.0), -3.0, "back to the start");
+        assert!(e.execute("automation.write_on_stop", &json!({"to": "sideways"})).is_err());
     }
 
     #[test]

@@ -229,6 +229,36 @@ fn automation(app: &mut SoundApp, ctx: &egui::Context) {
             }
         }
         ui.separator();
+        // Touch's return time, and what the next pass writes when it stops.
+        let s = app.engine.session();
+        let mut ms = s.edit.value(soundcraft_engine::cmd::RETURN_MS, soundcraft_engine::cmd::RETURN_SECONDS * 1000.0);
+        let armed = s.edit.value(soundcraft_engine::cmd::WRITE_ON_STOP_KEY, 0.0) as usize;
+        ui.horizontal(|ui| {
+            ui.label("Touch return");
+            let r = ui.add(egui::DragValue::new(&mut ms).range(0.0..=soundcraft_engine::cmd::MAX_RETURN_MS).speed(5.0).suffix(" ms"));
+            if r.changed() {
+                let _ = app.run("automation.return_time", json!({"ms": ms}));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Write on stop");
+            let label = |i: usize| match soundcraft_engine::cmd::WRITE_ON_STOP.get(i).copied().unwrap_or("off") {
+                "start" => "To start",
+                "end" => "To end",
+                "all" => "To all",
+                "selection" => "To selection",
+                _ => "Off",
+            };
+            egui::ComboBox::from_id_salt("write_on_stop").selected_text(label(armed)).show_ui(ui, |ui| {
+                for (i, to) in soundcraft_engine::cmd::WRITE_ON_STOP.iter().enumerate() {
+                    if ui.selectable_label(i == armed, label(i)).clicked() {
+                        let _ = app.run("automation.write_on_stop", json!({"to": to}));
+                    }
+                }
+            });
+        })
+        .response
+        .on_hover_text("Armed for the next writing pass: when it stops, each lane it wrote keeps its last value over that range");
         if ui.button("Write to Current").clicked() {
             let _ = app.run("automation.write_to_current", json!({}));
         }

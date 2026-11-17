@@ -141,8 +141,8 @@ K-system scales, and the master a loudness meter.
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
-| Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Partial**: Touch glides back over 250 ms; the time is fixed |
-| Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
+| Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Works**: Touch glides back over the return time, 250 ms unless set in the Automation window (`automation.return_time`, 0 to 5 s) |
+| Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Works**: Write on Stop in the Automation window (`automation.write_on_stop`: to start, end, all or the selection), armed for the next pass as Pro Tools arms it: when it stops, each lane it wrote keeps its last value over that range, in the pass's undo step |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
 | Write from a MIDI controller or control surface | ● | ● | ● | ● | **Works**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
@@ -160,7 +160,7 @@ K-system scales, and the master a loudness meter.
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
 | Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
-| Show the parameter last touched | ◐ | ● | ● | ● | **Missing** |
+| Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
 
 ## G. Metering
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | the Touch return time is set in the Automation window; Write on Stop; Show Last Touched |
 | 2026-11-17 | minor | Bounce Mix converts the rate, shapes its dither, writes mono or split files and several formats in one pass, tags its files and adds them to the session; stems of chosen tracks and busses |
 | 2026-11-17 | minor | VST3 plug-ins take a key on their auxiliary input |
 | 2026-11-17 | minor | momentary solo |

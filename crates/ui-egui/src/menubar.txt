@@ -169,6 +169,7 @@ Edit > Automation > Glide Pan Only
 Edit > Automation > ---
 Edit > Automation > Thin
 Edit > Automation > Thin All
+Edit > Automation > Show Last Touched
 Edit > Automation > ---
 Edit > Automation > Convert Volume Automation to Clip Gain
 Edit > Automation > Convert Clip Gain to Volume Automation
