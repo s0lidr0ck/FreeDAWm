@@ -6,6 +6,8 @@ use crate::params::{Params, choice, lin, log, param_plumbing};
 use crate::util::{Smoother, frames_in, ms_to_samples, note_hz, sane_channels, sane_sr, sort_events};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 
+pub mod presets;
+
 pub(crate) const MAX_EVENTS: usize = 512;
 
 #[derive(Debug, Clone, Copy)]

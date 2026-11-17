@@ -243,7 +243,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Drum machine with pads, layers, chokes, per-pad shaping | ● | ● | ● | ● | **Works** (Juke): 16 pads, four velocity layers and round robins, pad synth, sends and bus effects |
 | Drum kits supplied | ● | ● | ● | ● | **Works**: 28 kits made by the pad synth; recorded kits are a separate download |
 | Separate mixer channels per pad | ● | ● | ● | ● | **Missing**; left to [section 6](06-midi-recording.md)'s instruments with several outputs, which is the same feature |
-| Factory presets for instruments | ● | ● | ● | ● | **Missing** for the synth and sampler; Juke has its own |
+| Factory presets for instruments | ● | ● | ● | ● | **Partial**: the Subtractive Synth has 12 factory presets, FreeDAWm's own parameter settings (basses, leads, pads, keys, plucks, a riser), from the Presets menu of its window (`mix.instrument` with their parameters); written without listening, so they are starting points. Juke has its own kits. The sampler has none: its sound is the sample it is given |
 | Custom editors | ● | ● | ● | ● | **Partial**: Juke and the sampler; the synth is a list of sliders |
 | Layer and split several instruments on one track | ◐ | ● | ● | ● | **Missing** |
 
@@ -453,3 +453,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | A global transpose track for MIDI and instrument tracks, on the Key ruler |
 | 2026-11-17 | minor | Groove from an audio clip's hits |
 | 2026-11-17 | minor | Beat Detective writes the hits it finds as MIDI notes |
+| 2026-11-17 | minor | Factory presets for the Subtractive Synth |

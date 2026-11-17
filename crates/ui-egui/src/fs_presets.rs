@@ -111,6 +111,26 @@ pub(crate) fn factory_menu(
     ui.label(egui::RichText::new("User").small().strong());
 }
 
+/// An instrument's factory presets, by group: each sets every parameter of the track's
+/// built-in instrument (`mix.instrument` with the same plugin). Nothing for an instrument
+/// without factory presets.
+pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, info: &PluginInfo) {
+    for (group, list) in factory_groups(info) {
+        ui.menu_button(group, |ui| {
+            for (name, json) in list {
+                if ui.button(*name).clicked() {
+                    if let Some((_, params)) = factory_recall(info, name, json)
+                        && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
+                    {
+                        app.ui.status = e;
+                    }
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
 /// What an import did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ImportCounts {

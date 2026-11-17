@@ -951,6 +951,13 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             }
             ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, module, info, ins));
         }
+        // A built-in instrument's factory presets (the Subtractive Synth's).
+        if instrument
+            && let Some(info) = info
+            && !crate::fs_presets::factory_groups(info).is_empty()
+        {
+            ui.menu_button("Presets ▾", |ui| crate::fs_presets::instrument_factory_menu(app, ui, tid, info));
+        }
         if hosted {
             let open = app.player.as_ref().is_some_and(|p| p.editor_open(tid, key));
             let available = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
