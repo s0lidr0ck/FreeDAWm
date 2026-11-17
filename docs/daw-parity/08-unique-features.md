@@ -1,6 +1,6 @@
 # Four-DAW parity, section 8: what only one of them has
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (tier 4) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (tier 4) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Other product names below (Dolby Atmos, Melodyne, Splice,
@@ -174,7 +174,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
-| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). No recording yet (design below), no hardware MIDI, third-party plug-ins, models or networking |
+| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
@@ -226,10 +226,10 @@ public documentation; DAWproject covers the modern case); a live-show page and f
 workflow (specialist; revisit if users ask); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
-sessions kept between visits (12–18): sessions kept **done** (270aee2), recording not started
-(design below); talkback and encrypted local links for remote recording
+sessions kept between visits (12–18): sessions kept **done** (270aee2), recording **dropped by the owner**
+(the browser build will not be used; design kept below); talkback and encrypted local links for remote recording
 (10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
-and the scan helper is a start; not started, design refined below: begun only after browser recording); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+and the scan helper is a start; **first step built** (3b77990): CLAP, opt-in, see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
 
 **Designs for the larger items** (some since built, as each says). Each was judged too big to finish well in the
 same pass as the items above; these are the starting points.
@@ -252,7 +252,13 @@ same pass as the items above; these are the starting points.
   a browser here: the Rust side builds for wasm and its parts are tested natively
   (`io` tests); the script and the page need a browser (Chrome, Edge, Firefox; Safari before 18
   lacks `createWritable`, and the notice then says the session is not kept).
-- *Recording in the browser build (not started; 10–14 h).* The parts, in order: (1) the page:
+- *Recording in the browser build (dropped by the owner, 2026-11-17: the browser build will not be
+  used).* The in-memory take writer it needed is in (c4c24e1, kept). Tried in headless Chromium
+  before it was dropped, the browser build did not start: `std::time::Instant` panics in a browser
+  and the disk cache makes one when the first session is sent (and its output asked for 32
+  channels where a page has 2, so there was no sound). Both were fixed in a patch kept aside with
+  the recording wiring, which worked there (a take landed and was kept across a reload). The
+  design as written: The parts, in order: (1) the page:
   `getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl:
   false}})` asked on the first Record (the browser asks the person; a refusal or no device is
   said plainly on the Record button and the status line, and Record stays refused, as now), an
@@ -292,7 +298,31 @@ same pass as the items above; these are the starting points.
   talkback alone, on its own clock, and the performer hears it stopped too; the next roll starts
   a new epoch. It is never in the booth's main mix or a bounce, and the performer's take records
   his own inputs, never the stream.
-- *Plug-ins in their own process (16–28 h; not started, design refined 2026-11-16).* Behind an
+- *Plug-ins in their own process (16–28 h; first step built, 3b77990; design refined 2026-11-16).*
+  *Built in the first step:* the crate `plugin-bridge` with `BridgedPlugin` behind the `Plugin`
+  trait; the helper `freedawm-plugin-host` (a binary of that crate; found next to the app or by
+  `FREEDAWM_PLUGIN_HOST`); one shared file per instance mapped with `memmap2` and read only as
+  atomic words; a JSON-lines pipe for open, prepare, state save and load; a block not back in time
+  plays its own input (an effect) or silence (an instrument) in its place, counted, so the latency
+  (one block, reported) never moves; offline renders wait for each block (at most 5 s) with no
+  added latency; a helper that exits, or falls 5 s behind, silences its plug-in (an effect passes
+  its input through, still one block late) and is said once, by name, on the status line and in
+  the log. CLAP only, opt-in by `FREEDAWM_PLUGIN_PROCESS=1` (off by default: nothing changes for
+  existing sessions). Tests: the exchange with two threads standing in for the processes (in
+  order, one block late; a late block passed through and its late output dropped; offline waits;
+  hostile headers refused); the real helper serving a built-in plug-in and the CLAP test plug-in
+  (output equal to the input times its gain, one block late; latency its own plus one block); the
+  helper killed mid-render: every block still returns at once, the plug-in passes audio through,
+  the crash is reported by name, later requests fail at once. *Differs from the design:* the
+  unsafe code is the crate's own private `shm` module (the mapping and its view as atomics); the
+  helper waits by spinning, yielding, then 200 µs sleeps (no futex or named event). *Not built
+  yet:* the Setup option and per-insert choice (an environment variable for now), the insert
+  saying "crashed" (the status line says it), Restart, the editor window, the plug-in's own
+  presets, latency, tail and parameter changes the plug-in makes itself, the transport for the
+  plug-in (tempo, position), VST3 and AU, and packaging the helper next to the app. The app still
+  reads a CLAP plug-in's description in its own process when it lists or shows it (`clap-host`'s
+  `plugin_info`), so a plug-in that crashes while being described can still take the app down.
+  The design as written: Behind an
   option (Setup › Plug-ins › Run plug-ins in their own process, off by default; per insert too),
   CLAP first, VST3 and AU after on the same bridge.
   - *Where it sits.* A new crate `plugin-bridge` with `BridgedPlugin`, which implements
@@ -346,6 +376,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Plug-ins in their own process, first step: CLAP, opt-in, a crash silences the plug-in; browser recording dropped by the owner |
 | 2026-11-16 | minor | Take PCs over the encrypted link only is on by default (owner); a saved choice is kept |
 | 2026-11-16 | minor | Plug-ins in their own process: the design refined (not built) |
 | 2026-11-16 | minor | Browser build: the session kept between visits, with a notice, Export and Clear; a design for recording |
