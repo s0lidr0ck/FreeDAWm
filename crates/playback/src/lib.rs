@@ -4903,7 +4903,9 @@ mod tests {
         let peak = |sh: &Shared| sh.meters.lock().unwrap().main.peak;
 
         // Loaded but off: nothing changes.
-        let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+        // (compared with an offline render sample for sample: no declick ramps)
+        let (st, shared, tx) = playing(&s, 48_000.0, 512);
+        let mut st = exact(st);
         tx.send(Cmd::Monitor(Arc::new(Plan { rate: 48_000.0, ear: Some(ear), sim: Some(sim), ..Plan::default() }))).unwrap();
         let off = callbacks(&mut st, &sizes);
         assert_matches_offline(&off, &s);
@@ -4911,7 +4913,9 @@ mod tests {
 
         // On: the device hears the stage, the meter does not.
         for (ear_on, sim_on) in [(true, false), (false, true), (true, true)] {
-            let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+            // (compared with an offline render sample for sample: no declick ramps)
+            let (st, shared, tx) = playing(&s, 48_000.0, 512);
+            let mut st = exact(st);
             let plan = Arc::new(Plan { rate: 48_000.0, ear: Some(ear), ear_on, sim: Some(sim), sim_on });
             tx.send(Cmd::Monitor(Arc::clone(&plan))).unwrap();
             let on = callbacks(&mut st, &sizes);
