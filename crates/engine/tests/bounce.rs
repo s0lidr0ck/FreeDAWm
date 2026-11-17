@@ -130,7 +130,7 @@ fn a_surround_main_bounces_to_mp3_only_folded_down() {
     let path = dir.join("Mix.mp3");
     let p = serde_json::json!({"path": path.to_string_lossy(), "start": 0, "end": 4800});
     let err = e.execute("file.bounce_mix", &p).unwrap_err().to_string();
-    assert!(err.contains("fold the bounce down to stereo"), "{err}");
+    assert!(err.contains("fold the bounce down or split it"), "{err}");
     assert!(!path.exists());
     let mut p = p;
     p["fold_down"] = "stereo".into();

@@ -6837,7 +6837,12 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
         // Layered clips give way as they do in playback; the automatic edge ramps only as heard.
         let (edges, cover) = if heard {
-            (Edges::of(s, t.clips(), c, range, None), Cover::of(t.clips(), c, range, auto_fade_frames(s)))
+            // An edge on the range's own boundary is the new clip's edge, which playback ramps
+            // again: only edges inside the range are rendered faded.
+            let mut edges = Edges::of(s, t.clips(), c, range, None);
+            edges.start = edges.start.filter(|at| *at > range.start);
+            edges.end = edges.end.filter(|at| *at < range.end);
+            (edges, Cover::of(t.clips(), c, range, auto_fade_frames(s)))
         } else {
             (Edges::default(), Cover::of(t.clips(), c, range, 0))
         };
