@@ -478,7 +478,7 @@ fn app_abs() -> (SoundApp, egui::Context, TrackId, Vec<ClipId>) {
 }
 
 /// Separation grab: a Grabber drag inside a range selection cuts the range out of the clip
-/// and moves only that piece.
+/// and moves only that piece, in one undo step.
 #[test]
 fn a_grabber_drag_inside_a_range_moves_the_range_alone() {
     let (mut app, ctx, t, _) = app("slip", "grabber", &[(0, 6 * SEC)]);
@@ -490,4 +490,7 @@ fn a_grabber_drag_inside_a_range_moves_the_range_alone() {
     let (a, _) = moved.unwrap_or_else(|| panic!("the range's piece moved: {spans:?}"));
     assert!((a - 3 * SEC).abs() < SEC / 20, "by the drag: {spans:?}");
     assert!(spans.iter().any(|&(a, b)| a == 0 && b == SEC), "what was before the range stays: {spans:?}");
+    app.run("edit.undo", json!({})).unwrap();
+    let spans: Vec<(i64, i64)> = app.engine.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect();
+    assert_eq!(spans, vec![(0, 6 * SEC)], "one undo step takes back the separate and the move");
 }

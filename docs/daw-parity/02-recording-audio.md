@@ -100,7 +100,7 @@ what a user can do, apart from punch out on the fly.
 | Loop record on a track without lanes | ● | ● | ● | ● | **Works**: each pass goes to a new playlist that copies the track's playlist, so only the loop differs |
 | Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Works** |
 | Take names and numbers per track | ● | ● | ● | ● | **Works**: `Vox_01`, `Vox_02`… per track, skipping files already there |
-| Audition a take without making it active | ● | ● | ● | ● | **Works**: the S in a take layer's header (or Solo Take in its menu, `comp.audition`) plays that take in place of the comp, its clip effects included, until it is clicked again; the comp is untouched and nothing is saved or undone |
+| Audition a take without making it active | ● | ● | ● | ● | **Works**: the S in a take layer's header (or Solo Take in its menu, `comp.audition`) plays that take in place of the comp, its clip effects included, until it is clicked again or the transport stops; the comp is untouched and nothing is saved or undone |
 
 ## E. Monitoring
 

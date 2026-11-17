@@ -292,4 +292,11 @@ fn the_solo_key_auditions_a_take() {
     let key = h.get_by_label("Solo take Take 3").rect().center();
     click(&mut h, key, Modifiers::NONE);
     assert_eq!(vox(&h).audition_layer, None, "clicked again: let go");
+    click(&mut h, key, Modifiers::NONE);
+    assert_eq!(vox(&h).audition_layer, Some(3));
+    h.state_mut().run("transport.play", json!({})).unwrap();
+    steps(&mut h, 2);
+    h.state_mut().run("transport.stop", json!({})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(vox(&h).audition_layer, None, "the transport stopping lets go too");
 }

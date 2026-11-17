@@ -2915,7 +2915,7 @@ fn crossfade_join_near(s: &Session, tl: Rect, track: &Track, x: f32) -> Option<S
 
 /// Separation grab (Pro Tools' Separation Grabber): a Grabber drag that starts inside a range
 /// selection on one of its tracks, over a clip the range cuts into, separates the clips at the
-/// range's edges (one undo step) and returns the pieces inside it, selected, for the drag to
+/// range's edges (the move on release joins this undo step) and returns the pieces inside it, selected, for the drag to
 /// move. `None` (nothing done) for any other drag.
 fn separation_grab(app: &mut SoundApp, s: &Session, track: TrackId, hit: Option<&Clip>, at: Samples) -> Option<Vec<ClipId>> {
     let r = s.edit.selection;
@@ -2934,6 +2934,7 @@ fn separation_grab(app: &mut SoundApp, s: &Session, track: TrackId, hit: Option<
         .collect();
     let list: Vec<u64> = ids.iter().map(|id| id.0).collect();
     app.run("edit.select", json!({"clips": list, "exact": true})).ok()?;
+    app.join_next_edit = true;
     (!ids.is_empty()).then_some(ids)
 }
 
@@ -4135,7 +4136,17 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
+    // A separation grab's move joins the undo step of the separate that began it.
+    let join = std::mem::take(&mut app.join_next_edit);
     match app.gesture.take() {
+        Some(Gesture::MoveClips { clips, delta, from_track, to_track, copy: false, .. }) if join && s.edit.edit_mode != EditMode::Spot => {
+            let spot = Spot::clips(s, grabbed_first(s, &clips, from_track), (to_track != from_track).then_some(to_track), delta);
+            if let Some((id, params)) = spot.and_then(|sp| sp.command(s))
+                && let Err(e) = app.engine.execute_joined(&id, &params)
+            {
+                app.ui.status = e.to_string();
+            }
+        }
         Some(Gesture::MoveClips { clips, delta, from_track, to_track, copy: false, .. }) => drop_clips(app, clips, delta, from_track, to_track),
         Some(Gesture::MoveClips { clips, delta, to_track, copy: true, keep_time, .. }) => {
             if app.ui.status == "Copy" {
@@ -4147,7 +4158,13 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
             if !keep_time {
                 params["at"] = json!(first.saturating_add(delta).max(0));
             }
-            let _ = app.run("clip.copy_to", params);
+            if join {
+                if let Err(e) = app.engine.execute_joined("clip.copy_to", &params) {
+                    app.ui.status = e.to_string();
+                }
+            } else {
+                let _ = app.run("clip.copy_to", params);
+            }
         }
         Some(Gesture::Crossfade { track, edge, to }) => {
             // Centred on the join, as wide as the drag either way; `edit.fades_create` keeps it

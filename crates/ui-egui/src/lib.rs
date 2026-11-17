@@ -1090,6 +1090,9 @@ pub struct SoundApp {
     /// Reused multichannel snapshot; populated at an adaptive rate by `logic`.
     meter_snapshot: soundcraft_playback::MeterSnapshot,
     pub gesture: Option<Gesture>,
+    /// The edit a drag makes on release joins the undo step before it (a separation grab's
+    /// move joins its separate).
+    pub join_next_edit: bool,
     /// Who a solo leaves playing, as of a session revision: computed once for every strip and
     /// header ([`SoundApp::solo_scope`]).
     solo_cache: Option<(u64, std::sync::Arc<soundcraft_model::SoloScope>)>,
@@ -1314,6 +1317,7 @@ impl SoundApp {
             main_meter: MeterDisplay::default(),
             meter_snapshot: soundcraft_playback::MeterSnapshot::default(),
             gesture: None,
+            join_next_edit: false,
             auto_sel: None,
             point_readout: None,
             solo_cache: None,
@@ -1813,6 +1817,10 @@ impl SoundApp {
         }
         self.sim = None;
         scout::transport_stopped(self);
+        // Solo Take lasts until the transport stops (owner's decision).
+        if self.engine.session().tracks.iter().any(|t| t.audition_layer.is_some()) {
+            self.engine.session_mut().tracks.iter_mut().for_each(|t| t.audition_layer = None);
+        }
         self.engine.transport.playing = false;
         self.engine.transport.recording = false;
         let stop_at = self.engine.transport.position;

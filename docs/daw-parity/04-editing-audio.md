@@ -59,7 +59,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Range selector | ● | ● | ● | ● | **Works** |
 | Object grabber, drag between tracks, modifier to copy | ● | ● | ● | ● | **Works** |
-| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Works**: a Grabber drag that starts inside a range selection over a clip the range cuts into separates the clips at the range's edges on every selected track and drags the pieces inside it (Ctrl copies, Alt keeps the time); the separate and the move are two undo steps |
+| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Works**: a Grabber drag that starts inside a range selection over a clip the range cuts into separates the clips at the range's edges on every selected track and drags the pieces inside it (Ctrl copies, Alt keeps the time), one undo step |
 | Trim tool | ● | ● | ● | ● | **Works**; stops at file ends and neighbours |
 | Stretch by dragging a clip edge | ● | ● | ● | ● | **Works**: Alt held as a trim starts (Trim tool or the Smart Tool's edge) stretches the material to the new edge, by the track's Elastic algorithm (pitch-preserving on a plain track, speed on Varispeed) |
 | Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Works**: Shift held as an end trim starts makes it a loop trim, the clip's material repeating to the new end in real time (no copies) |
