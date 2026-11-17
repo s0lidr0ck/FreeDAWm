@@ -274,6 +274,11 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
         return Err(EngineError::Io(format!("{name}: no audio")));
     }
     let channels = buf.num_channels();
+    let said = soundcraft_audio_io::loop_info::loop_info(bytes, name);
+    // A short file that does not say its tempo has it detected (recorded on the clip for Conform
+    // to Tempo, never stretched on a guess).
+    let short = buf.frames() as f64 <= DETECT_MAX_SECS * f64::from(e.session().sample_rate.hz());
+    let mono = (said.bpm.is_none() && short && e.session().edit.flag(LOOPS_FOLLOW)).then(|| soundcraft_dsp::beat::downmix(&buf.channels));
     let file_rate = info.sample_rate;
     let copy = e.copy_imported_audio;
     let s = e.session_mut();
@@ -302,9 +307,21 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     let cid = s.new_clip_id();
     let stem = s.source(src).map(|x| x.name.clone()).unwrap_or_default();
     crate::edit::place_clip(s, track, Clip::audio(cid, stem, src, 0, at, frames));
-    let matched = match_loop(e, cid, &soundcraft_audio_io::loop_info::loop_info(bytes, name))?;
+    let mut matched = match_loop(e, cid, &said)?;
+    if let Some(mono) = mono {
+        let d = crate::tempo_detect::detect(e.session(), &mono, 0, (70.0, 180.0));
+        if d.bpm.is_finite() && d.bpm > 0.0 && d.beats.len() >= 8 {
+            let bpm = (d.bpm * 10.0).round() / 10.0;
+            e.session_mut().edit.values.insert(format!("clip.bpm.{}", cid.0), bpm);
+            matched = json!({"detected_bpm": bpm});
+        }
+    }
     Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels, "loop": matched}))
 }
+
+/// The longest file whose tempo is detected at import, in seconds (a loop, not a song: longer
+/// ones would hold up the import; Detect Tempo does them).
+pub const DETECT_MAX_SECS: f64 = 30.0;
 
 /// Options › More › Imported Loops Follow Tempo and Key (`import.loops_follow`, on in new
 /// sessions): a file that says its tempo (an `acid` chunk, "120bpm" in its name) is stretched to

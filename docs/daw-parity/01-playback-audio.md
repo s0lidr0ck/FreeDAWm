@@ -156,7 +156,7 @@ Varispeed is the only whole-project speed control among the four.
 | Choice of stretch algorithm | ● | ● | ● | ● | **Works**: polyphonic, rhythmic, monophonic and X-Form each splice differently in the background render, which replaces the one real-time grain stretcher heard while it is made |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
 | Quantize audio to the grid | ● | ● | ● | ● | **Works**: Clip › Quantize Audio… moves clips by their sync points with a strength and swing; Straighten conforms whole tracks (section 4, I) |
-| Tempo detection | ● | ● | ● | ● | **Partial**: a loop's own tempo is read at import (its `acid` chunk or name); tempo is detected from audio by command (Detect Tempo), not at import, as detecting every imported file would hold up the import for long files |
+| Tempo detection | ● | ● | ● | ● | **Works**: at import a loop's own tempo is read (its `acid` chunk or name), and a file of 30 s or less that says none has its tempo detected (70–180 bpm) and recorded on the clip for Conform to Tempo, never stretched on a guess (with Imported Loops Follow Tempo and Key on); longer audio is detected by command (Detect Tempo: constant, follow and smooth) |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving stretch on an Elastic one (section 4, bug 12) |
 | Loops that match tempo when dropped in | ● | ● | ● | ● | **Works**: a file that says its tempo (a WAV `acid` chunk, or "120bpm" in its name; `audio-io/src/loop_info.rs`) is stretched to the session tempo with its pitch kept as it is imported (Options › More › Imported Loops Follow Tempo and Key, on in new sessions; sessions saved before keep importing as they did). Its tempo is recorded on the clip either way, so Conform to Tempo uses it later. Nothing is guessed from audio that says no tempo |
 | Loops that match key | ○ | ◐ | ● | ◐ | **Works**: with the same option, a loop that says its key (the `acid` chunk's root note, or a key word such as "Am" beside a tempo in its name) is transposed in real time (Clip › Real-Time › Transpose) to the session's key at that point, by at most a tritone; a minor loop goes to the relative minor of a major key and the other way. Only when the session sets a key |
@@ -284,6 +284,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: a short import's tempo is detected and recorded |
 | 2026-11-17 | minor | Round three: skip ranges; the open rows say what is left and why; a design for changing the session rate |
 | 2026-11-17 | minor | Round three: audition around an edit, Dynamic Transport's play start and separate loop, automatic device return, suspend plug-ins on silence, loops that follow tempo and key at import, preview in tempo, in sync and on a chosen output |
 | 2026-11-17 | minor | Round three reconciliation: crossfade shapes, audio quantize, conform and the stretch algorithms were already built; ASIO and ARA not planned here |

@@ -1108,9 +1108,30 @@ mod tests {
         let c = e.session().find_clip(cid).unwrap().1.clone();
         assert_eq!((c.length, c.transpose_cents), (96_000, 0));
         assert_eq!(e.session().edit.value(&format!("clip.bpm.{}", cid.0), 0.0), 60.0);
-        // A file that says nothing.
+        // A file that says nothing (and has no beat to find).
+        e.execute("options.loops_follow", &json!({"value": true})).unwrap();
         let v = crate::io::import_audio_bytes(&mut e, "Take 1.wav", &bytes, None, None, 0).unwrap();
-        assert!(v["loop"].is_null());
+        assert!(v["loop"].is_null(), "{v}");
+    }
+
+    /// A short file that says no tempo has it detected at import and recorded on the clip,
+    /// which keeps its length (nothing is stretched on a guess).
+    #[test]
+    fn a_short_import_has_its_tempo_detected_and_recorded() {
+        let sr = 48_000usize;
+        let beat = sr * 60 / 100;
+        let positions: Vec<usize> = (0..16).map(|k| k * beat + 2_000).collect();
+        let clicks = soundcraft_dsp::beat::click_track(17 * beat, &positions, sr as f32, 4);
+        let len = clicks.len() as i64;
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![clicks] };
+        let bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).unwrap();
+        let mut e = Engine::default();
+        let v = crate::io::import_audio_bytes(&mut e, "Take 2.wav", &bytes, None, None, 0).unwrap();
+        let bpm = v["loop"]["detected_bpm"].as_f64().unwrap_or(0.0);
+        assert!((bpm - 100.0).abs() < 1.5, "{v}");
+        let cid = v["clip"].as_u64().unwrap();
+        assert_eq!(e.session().edit.value(&format!("clip.bpm.{cid}"), 0.0), bpm);
+        assert_eq!(e.session().find_clip(soundcraft_model::ClipId(cid)).unwrap().1.length, len);
     }
 
     #[test]
