@@ -335,11 +335,89 @@ Not done: slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; every tier-3 item; ARA 2 hosting.
 
+**Status after round three (2026-11-17).** Built: typed selection numbers, selection commands
+(extend to the session ends, select by track, following, name, colour or mute, nudge one edge),
+slip contents, trim to close gaps, Shuffle for the menu trims, view-recalling locations, track
+markers, clip notes, track lock, tap tempo, Flatten Comp, Strip Silence preview, relink, a
+short-crossfade warning, the Smart Tool chord, redo from the history, the looped clip's waveform,
+warp markers heard while dragged, and Clean Vocal clips' transpose render. Not done: every item
+in the designs below.
+
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
 phase-coherent multitrack straightening in one command, a built-in vocal editor with formant
 control (Pro Tools and Studio Pro need Melodyne), stem separation and de-noise as clip processes,
 and audio to MIDI for polyphonic and drum material.
+
+## Designs (round three)
+
+Short designs for the open rows too large to build in one step. Each names the first tested step.
+None is built yet.
+
+- **Arranger track** (K). A session-level `arranger: Vec<Section { id, name, start, end, color }>`
+  (non-overlapping, sorted), drawn as a ruler. Commands `arranger.add/rename/delete` and
+  `arranger.move {section, to}` / `arranger.copy` / `arranger.repeat {count}`, each built on the
+  Insert/Cut Time machinery of bug 7 (every playlist, take layers, automation, markers, key changes
+  and the tempo and meter map move together): a move is "copy the section's time to the target,
+  then cut the source". First step: the model, the ruler and add/rename/delete; then copy (insert
+  time + paste of everything in the span); then move and repeat.
+- **Folders that only organise; edit a closed folder as one clip** (K). `Track::folder_kind:
+  Routing | Organise`; an organise folder has no bus, its members route as before, and Convert
+  toggles it. Editing a closed folder: its lane draws the members' clips summed as blocks; a
+  selection on it spreads to the members, as an edit group's does (the edit-group spreading of
+  round two is the mechanism). First step: the kind, routing that ignores an organise folder, and the
+  convert command.
+- **Scratch pads / alternative arrangements** (K). A whole-session alternative: `Session::scratch:
+  Vec<Arrangement { name, playlists: per-track active-playlist index, markers }>` switched by a
+  command, built on playlists (each track gets a playlist per arrangement). First step: save and
+  switch, one undo step each.
+- **Audio file / sample editor with a waveform pencil** (L, A). A window on one source: the waveform
+  at sample level (the waveform module already draws sample lines), a selection, and destructive
+  edits that write a new source and point the clips at it (as Process does, handles kept): gain,
+  silence, reverse, cut/copy/paste inside the file, and the pencil redrawing samples between two
+  points (linear in the drawn samples, a short crossfade at both ends). First step: the window,
+  selection and the pencil on a copy of the file, one undo step.
+- **Spectral view** (J). A per-track view `spectral`: an STFT image cached per source in the peak
+  cache's folder (log frequency, colour by dB), drawn in place of the waveform. Spectral editing
+  (Cubase) is a later step: a rectangle selection that attenuates bins and writes a new source.
+- **Process history** (G). `Clip::processes: Vec<ProcessStep { id, params, from_source }>` kept by
+  Process; "Remove" re-renders from `from_source` of the step removed with the later steps
+  re-applied in order (or simply plays the earlier source when it was the last). First step: record
+  the chain and offer removing the last step.
+- **Groove from audio and apply** (I). Transients (the detector Tab to Transient uses) quantized to
+  the grid make a `Groove` like `event.groove_from_clip`'s; applying moves audio by the warp-marker
+  path (markers at hits, moved to the groove). Needs the Beat Detective conform below.
+- **Beat Detective conform and smoothing** (I). Detect hits (exists), add warp markers at them and
+  move each to the grid by a strength (the warp-marker render already stretches between markers):
+  conform without cutting. "Separate and smooth" (cut at hits, move pieces, fill gaps by trimming
+  the previous piece and crossfading) is the classic alternative, built on separate, nudge and
+  trim to close gaps.
+- **Pitch editor on a stretched clip** (J). The vocal editor analyses `clip_heard_window`; for a
+  stretched clip it should analyse the stretched render (the elastic render is a source of its
+  own) and map note times through the stretch ratio. First step: refuse with a clear message rather
+  than play untuned; then analyse the render.
+- **Re-stretch after trimming** (I). Keep the clip's original source and its window in the
+  original's samples (`edit.values` already remembers the original for Remove Warp); a second
+  stretch renders from that window rather than from the first-stretch length.
+- **Real-time stretch algorithms** (I). The live stretcher is one algorithm; the track's Elastic
+  choice picks only the offline render. Make the live grain size and search width follow the
+  track's algorithm (short and tight for rhythmic, wide search for monophonic). Shared with
+  section 1.
+- **Capture into the Clip List and dragging a clip from it** (L, D). `Session::captured: Vec<Clip>`
+  (clips kept in the list, not on a track); `clip.capture` stores the selection's clips there;
+  the Clip List lists them and a drag places a copy, as whole files are placed today.
+- **Compact** (L). For each source, the union of the windows its clips (all playlists and undo
+  history) use plus handles; write a new file of those spans and point the clips at it with new
+  offsets. Needs a confirmation (it is the one destructive file operation) and runs off the UI
+  thread like Commit.
+- **Smaller UI items** (A, B): a Scissors and a Mute tool (two `Tool` variants: click separates or
+  mutes the clip under the pointer, edit-group aware); separation grab (a Grabber drag inside a range
+  selection separates at its edges, then drags the middle); a crossfade made by the Smart Tool at a
+  clip boundary (bottom corner zone over two touching clips → `edit.fades_create` over the drag);
+  an adaptive grid (a grid value `adaptive` choosing the note value whose line spacing is nearest
+  16 px at the zoom); relative-grid trims (the trim tool moving the edge by whole grid steps from
+  where it was); the snap-suspend modifier applied to selecting; nudge in Shuffle rippling what
+  follows; a stretched clip's waveform mapped through its ratio.
 
 ## Sources
 
@@ -411,3 +489,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | A warp marker is heard while it is dragged |
 | 2026-11-17 | minor | Strip Silence previews what it would remove |
 | 2026-11-17 | minor | Relink a missing audio file from the Clip List |
+| 2026-11-17 | minor | Round three: status, and designs for the rows too large for one step |
