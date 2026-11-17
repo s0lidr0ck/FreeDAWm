@@ -44,7 +44,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
-| K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
+| K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | Medium: tempo edits do not move audio, no editing of a closed folder as one clip |
 | L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Small: the sample editor has no cut, copy or paste inside the file |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
@@ -229,7 +229,7 @@ why they score ◐ for "built-in".
 | Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
 | Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Partial**: folders that only organise are built (Move to New Basic Folder, [section 3](03-mixing.md)). Left: editing a closed folder as one clip (its lane drawing the members' clips as blocks, a selection on it spreading to the members as an edit group's does; design below) |
 | Lock a whole track | ◐ | ● | ● | ● | **Works**: Lock Track in the track's menu; a command that would add, change or remove a clip on any of its playlists, or record-arm it, is refused and undone (Insert and Cut Time still move it) |
-| Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
+| Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Works**: the Sections ruler (the Song lane's blocks, each a named section) is the arranger: a block's right-click menu copies it with the song, repeats it once or several times (`arrange.repeat`, up to 16), moves it before another section or to the end, or removes it, and every track's clips (the playlist shown) and automation, the chords and the block go with it, later material making room or closing up; one undo step each (c8cfbb1, repeat added in the follow-up). A section that changes tempo or meter inside is refused, and a copy goes only where the same tempo and meter are in force. Markers, key changes and take layers other than the one shown are not copied |
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
 | Tempo changes, ramps and curves; meter changes | ● | ● | ● | ● | **Works** |
 | Tap tempo | ● | ● | ● | ● | **Works**: the Tempo Operations window's Tap button; from the second tap the tempo in effect at the insertion point takes the average of the last eight taps (a pause of 2 s starts over), one undo step per run of taps |
@@ -503,3 +503,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | round three follow-up: process history (bypass, move, remove a step); Compact |
 | 2026-11-17 | minor | round three follow-up: Beat Detective conform and smoothing; groove from audio applied through it |
 | 2026-11-17 | minor | round three follow-up: waveform pencil at sample zoom; a basic Sample Editor |
+| 2026-11-17 | minor | round three follow-up: the arranger repeats a section; arranger row brought up to date |

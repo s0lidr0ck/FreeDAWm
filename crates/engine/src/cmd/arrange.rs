@@ -26,6 +26,15 @@ pub fn specs() -> Vec<CommandSpec> {
             copy
         ),
         cmd!(
+            "arrange.repeat",
+            "Repeat Section with the Song",
+            [],
+            None,
+            "{block, count?: 1-16 (default 1)} — the section played `count` more times right after itself: each copy makes room and takes every track's clips and automation, the chords and the block",
+            always,
+            repeat
+        ),
+        cmd!(
             "arrange.move",
             "Move Section with the Song",
             [],
@@ -163,6 +172,25 @@ fn copy(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"start": placed.start, "end": placed.end}))
 }
 
+/// Most copies one Repeat makes.
+const MAX_REPEATS: i64 = 16;
+
+fn repeat(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "arrange.repeat";
+    let (b, r) = block_span(e, C, p)?;
+    let count = i64_or(p, "count", 1);
+    if !(1..=MAX_REPEATS).contains(&count) {
+        return Err(bad(C, format!("`count` is 1 to {MAX_REPEATS}")));
+    }
+    // Each copy goes right after the one before; the section itself stays where it is.
+    let mut end = r.end;
+    for k in 1..=count {
+        let to = b.start_tick.saturating_add(b.length_ticks.saturating_mul(k));
+        end = copy_to(e, C, &b, r, to)?.end;
+    }
+    Ok(json!({"start": r.end, "end": end, "copies": count}))
+}
+
 fn move_section(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "arrange.move";
     let (b, r) = block_span(e, C, p)?;
@@ -265,5 +293,21 @@ mod tests {
         assert!(e.execute("arrange.move", &json!({"block": a, "to": 96_000})).is_err());
         e.session_mut().tempo.set_tempo(15_360, 90.0).unwrap();
         assert!(e.execute("arrange.copy", &json!({"block": a, "to": 2_000_000})).is_err());
+    }
+
+    #[test]
+    fn a_section_repeats_with_the_song_in_one_step() {
+        let (mut e, t, a, _) = song();
+        // A three times more: A A A A B.
+        let r = e.execute("arrange.repeat", &json!({"block": a, "count": 3})).unwrap();
+        assert_eq!(r, json!({"start": 192_000, "end": 768_000, "copies": 3}));
+        assert_eq!(layout(&e, t), vec![(0, 60), (192_000, 60), (384_000, 60), (576_000, 60), (768_000, 67)]);
+        assert_eq!(sections(&e), vec![(0, 'A'), (7_680, 'A'), (15_360, 'A'), (23_040, 'A'), (30_720, 'B')]);
+        let vol = &e.session().track(t).unwrap().automation[0].points;
+        assert_eq!(vol.iter().map(|p| p.at).collect::<Vec<_>>(), vec![48_000, 240_000, 432_000, 624_000]);
+        assert!(e.undo());
+        assert_eq!(layout(&e, t), vec![(0, 60), (192_000, 67)], "one undo step");
+        assert!(e.execute("arrange.repeat", &json!({"block": a, "count": 0})).is_err());
+        assert!(e.execute("arrange.repeat", &json!({"block": a, "count": 17})).is_err());
     }
 }

@@ -393,6 +393,14 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
     if ui.button("Copy with the Song").on_hover_text("Copies the section and every track's clips and automation in it right after it").clicked() {
         pick = Some(Pick::Run("arrange.copy", json!({"block": b.id})));
     }
+    ui.menu_button("Repeat with the Song", |ui| {
+        for n in [1, 2, 3, 4, 7] {
+            let label = if n == 1 { "Once more".to_string() } else { format!("{n} more times") };
+            if ui.button(label).on_hover_text("Copies of the section and every track's clips and automation in it, right after it").clicked() {
+                pick = Some(Pick::Run("arrange.repeat", json!({"block": b.id, "count": n})));
+            }
+        }
+    });
     ui.menu_button("Move with the Song", |ui| {
         let s = app.engine.session();
         let at = |t: i64| s.tempo.tick_to_samples(t, s.sample_rate);
