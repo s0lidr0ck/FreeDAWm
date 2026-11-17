@@ -21,6 +21,9 @@ use std::fmt::Write as _;
 /// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
 /// sixteen parameters and their lines), and from 51 500 for Keel and Heft (1 100: their sixteen
 /// parameters and their lines), and from 52 600 for Lo-Fi, listed again, and Comp's Look-ahead (500).
+/// The Subtractive Synth's filter types, LFO, sub, noise, key tracking and voice mode (400) took it
+/// over; a label that only repeats its id's words is now left out instead (2 300 fewer), which
+/// leaves room under the same cap.
 pub const MAX_CHARS: usize = 53_100;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
@@ -216,6 +219,13 @@ fn choice_list(choices: &[&str]) -> String {
     parts.join(", ")
 }
 
+/// A parameter line's label, after its id: ` Label`, or nothing when the label is only the id's
+/// words (`cutoff` and Cutoff, `amp_attack` and Amp Attack), which the prompt's legend says.
+fn label(id: &str, name: &str) -> String {
+    let same = id.len() == name.len() && id.chars().zip(name.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b) || (a == '_' && b == ' '));
+    if same { String::new() } else { format!(" {name}") }
+}
+
 /// The value part of a parameter line: range and default, or the choices.
 fn value_spec(p: &ParamInfo) -> String {
     match p.unit {
@@ -277,7 +287,7 @@ fn module_section(out: &mut String, info: &PluginInfo) {
                     }
                     _ => value_spec(p),
                 };
-                let _ = writeln!(out, "- `{}` {}: {spec}", p.id, p.name);
+                let _ = writeln!(out, "- `{}`{}: {spec}", p.id, label(p.id, p.name));
             }
             many => {
                 let slots: Vec<String> = many.iter().filter_map(|p| shape(p.id).1).collect();
@@ -295,7 +305,7 @@ fn module_section(out: &mut String, info: &PluginInfo) {
                     let head = spec.rsplit_once(" (").map_or(spec.as_str(), |(h, _)| h);
                     format!("{head} (defaults {})", defaults.join(", "))
                 };
-                let _ = writeln!(out, "- `{}` ×{} (# = {range}) {}: {spec}", k.0, many.len(), k.1);
+                let _ = writeln!(out, "- `{}` ×{} (# = {range}){}: {spec}", k.0, many.len(), label(&k.0, &k.1));
             }
         }
     }
@@ -332,7 +342,7 @@ Scout draws EQ guides on the track's Clean Q and lists module suggestions; it re
         let _ = writeln!(out, "- {r}");
     }
     out.push_str(
-        "\n## The modules\n\nParameter lines read: `id` Label: min..max unit (default). `~x..y` is a 0..1 control showing x..y; `a..b = x..y` is raw range a..b showing x..y. A line with `#` stands for one parameter per band or slot (# = the slot numbers shown). \
+        "\n## The modules\n\nParameter lines read: `id` Label: min..max unit (default); a label that is only the id's words (`cutoff` Cutoff) is left out. `~x..y` is a 0..1 control showing x..y; `a..b = x..y` is raw range a..b showing x..y. A line with `#` stands for one parameter per band or slot (# = the slot numbers shown). \
 Choices list index=label (default label).\n\n",
     );
     let mut cats: Vec<Category> = Vec::new();
@@ -407,6 +417,21 @@ mod tests {
     fn repeated_band_parameters_collapse_to_one_line() {
         let text = starting_prompt();
         assert!(text.contains("`b#_gain` ×24 (# = 01–24)"), "{}", text.lines().filter(|l| l.contains("b#_")).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
+    fn a_label_that_only_repeats_its_id_is_left_out() {
+        assert_eq!(label("cutoff", "Cutoff"), "");
+        assert_eq!(label("amp_attack", "Amp Attack"), "");
+        assert_eq!(label("velocity", "Velocity Sens"), " Velocity Sens");
+        assert_eq!(label("b#_gain", "Band # Gain"), " Band # Gain");
+        let text = starting_prompt();
+        assert!(
+            text.contains("- `cutoff`: 20..20000 Hz (2000)"),
+            "{}",
+            text.lines().filter(|l| l.contains("`cutoff`")).collect::<Vec<_>>().join("\n")
+        );
+        assert!(text.contains("- `velocity` Velocity Sens: "));
     }
 
     #[test]
