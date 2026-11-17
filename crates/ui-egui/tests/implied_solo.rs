@@ -76,3 +76,29 @@ fn the_mix_window_shows_implied_solos() {
 fn the_edit_window_shows_implied_solos() {
     check(&harness("window.edit"), "Edit");
 }
+
+/// Options › Solo Mode › Momentary: an S key solos only while the mouse button is held on it,
+/// in both windows; a latched solo elsewhere is left alone.
+#[test]
+fn a_momentary_solo_lasts_while_the_key_is_held() {
+    use egui::{Event, Modifiers, PointerButton};
+    for window in ["window.mix", "window.edit"] {
+        let mut h = harness(window);
+        h.state_mut().run("options.momentary_solo", json!({"value": true})).unwrap();
+        h.step();
+        let pos = h.get_by_label("Snare solo").rect().center();
+        let snare = |h: &Harness<'_, SoundApp>| h.state().engine.session().tracks.iter().find(|t| t.name == "Snare").unwrap().mixer.solo;
+        h.input_mut().events.push(Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.step();
+        assert!(snare(&h), "{window}: held, the Snare is soloed");
+        h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        h.step();
+        assert!(!snare(&h), "{window}: let go, the solo is gone");
+        let kick_bus = h.state().engine.session().tracks.iter().find(|t| t.name == "Kick Bus").unwrap().mixer.solo;
+        assert!(kick_bus, "{window}: the latched solo stays");
+    }
+}

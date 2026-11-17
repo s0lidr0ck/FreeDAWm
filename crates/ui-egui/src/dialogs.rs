@@ -687,6 +687,7 @@ fn default_dir() -> String {
 /// The main window's dialogs: Process, bounce and ML progress, and the open dialog when the
 /// main window opened it.
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+    crate::scope::release_momentary(app, ctx);
     audiosuite_window(app, ctx);
     crate::open_progress::show(app, ctx);
     crate::dawproject_report::show(app, ctx);

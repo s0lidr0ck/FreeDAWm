@@ -1399,7 +1399,8 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
             } else {
                 resp
             };
-            if resp.clicked() {
+            let held = key == HeaderKey::Solo && crate::scope::momentary_solo(app, ui, crate::MainWindow::Edit, id, &resp, ui.input(|i| i.modifiers));
+            if resp.clicked() && !held {
                 // Alt: every track; Alt+Shift: the selected ones; on S, Ctrl solos exclusively.
                 let mods = ui.input(|i| i.modifiers);
                 match key {

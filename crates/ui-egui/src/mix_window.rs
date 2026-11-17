@@ -718,8 +718,9 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             crate::widgets::paint_solo_safe(row.painter(), sresp.rect);
         }
         let sresp = sresp.on_hover_text(crate::scope::solo_hint(mac));
-        if sresp.clicked() {
-            let m = row.input(|i| i.modifiers);
+        let m = row.input(|i| i.modifiers);
+        let held = crate::scope::momentary_solo(app, &row, crate::MainWindow::Mix, id, &sresp, m);
+        if sresp.clicked() && !held {
             crate::scope::solo(app, crate::MainWindow::Mix, id, m, mac);
         }
         sresp.context_menu(|ui| crate::scope::solo_menu(app, ui, id));

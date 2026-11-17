@@ -34,7 +34,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on VST3 or AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
-| E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, relative groups with a choice of attributes, nested VCAs | Small: no momentary solo |
+| E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated; faders follow | **Large**: plug-in values block-rate |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats, with a tail; stems; DAWproject | Medium: no metadata, no sample-rate conversion |
@@ -116,7 +116,7 @@ K-system scales, and the master a loudness meter.
 | Solo safe | ● | ● | ● | ● | **Works** |
 | Exclusive solo | ● | ● | ● | ● | **Works** |
 | AFL / PFL on a listen bus | ● | ● | ○ | ● | **Works**: in the AFL and PFL solo modes (Options › Solo Mode, or the Control Room) a solo mutes nothing; the soloed tracks are summed after the fader and pan (AFL) or before the fader (PFL) into a listen bus that replaces the mix on the monitor path while any is soloed, at its own level; the mix, bounces, stems and cue mixes are untouched (stems ignore an AFL or PFL solo, the owner's decision: each stem is its own track as with no solo) |
-| Momentary solo | ● | ○ | ○ | ○ | **Missing**: the menu entry behaves as latch |
+| Momentary solo | ● | ○ | ○ | ○ | **Works**: Options › Solo Mode › Momentary (Hold to Solo) (`options.momentary_solo`): an S key solos its track (with the click's modifiers' scope) while the mouse button is held on it, in the Mix and Edit windows; letting go anywhere puts it back, and a latched solo elsewhere is left alone |
 
 ## F. Automation
 
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | momentary solo |
 | 2026-11-17 | minor | polarity per channel with a button on the strip; Copy to Send takes the selection, pan and mute |
 | 2026-11-17 | minor | rows reconciled with the code: the stock compressor's key, delay-compensated automation, surface writing, the meter plug-ins, the bounce range and normalising were already built; Atmos objects, binaural and ADM marked not planned here |
 | 2026-11-16 | minor | an ordinary track can be keyed from an aux or bus return (owner decision 5), built from the design |

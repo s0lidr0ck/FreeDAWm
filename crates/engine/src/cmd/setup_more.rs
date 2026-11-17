@@ -33,6 +33,8 @@ pub fn specs() -> Vec<CommandSpec> {
         option!("options.calibration_mode", "Calibration Mode", "options.calibration_mode"),
         option!("options.midi_live_mode", "MIDI Live Mode", "options.midi_live_mode"),
         option!("options.low_latency_monitoring", "Low Latency Monitoring", "options.low_latency_monitoring"),
+        // Momentary solo: an S key clicked with the mouse solos only while it is held.
+        option!("options.momentary_solo", "Momentary Solo", "options.momentary_solo"),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",

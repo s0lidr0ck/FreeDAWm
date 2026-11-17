@@ -566,6 +566,8 @@ Options > Edit Window Scrolling > Continuous
 Options > Edit Window Scrolling > Center Playhead
 Options > Solo Mode > SIP (Solo In Place)
 Options > Solo Mode > X-OR (Cancels Previous Solo)
+Options > Solo Mode > ---
+Options > Solo Mode > Momentary (Hold to Solo) = @options.momentary_solo
 Options > ---
 Options > ## Timing & keys
 Options > Snap > Clip Edges = @edit.snap_to_clips

@@ -130,6 +130,47 @@ pub fn solo(app: &mut SoundApp, window: MainWindow, id: TrackId, m: Modifiers, m
     report(app, r);
 }
 
+/// The flag Options › Solo Mode › Momentary keeps (`options.momentary_solo`).
+pub const MOMENTARY_SOLO: &str = "options.momentary_solo";
+
+/// The tracks a held S key solos in momentary mode (until the mouse button is let go).
+fn held_id() -> egui::Id {
+    egui::Id::new("momentary_solo_held")
+}
+
+/// Momentary solo: when Options › Solo Mode › Momentary is on, the S key `resp` of track `id`
+/// solos its scope (modifiers `m`, as a click) while the mouse button is held on it; letting go
+/// anywhere puts the solos back ([`release_momentary`]). Returns whether it took the key, so the
+/// caller skips its click (a latch).
+pub fn momentary_solo(app: &mut SoundApp, ui: &egui::Ui, window: MainWindow, id: TrackId, resp: &egui::Response, m: Modifiers) -> bool {
+    if !app.engine.session().edit.flag(MOMENTARY_SOLO) {
+        return false;
+    }
+    let held: Vec<u64> = ui.ctx().data(|d| d.get_temp(held_id())).unwrap_or_default();
+    if held.is_empty() && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+        // Only the tracks not soloed already, so letting go leaves a latched solo alone.
+        let tracks: Vec<u64> = tracks(app, window, id, Scope::of(m), mixes)
+            .into_iter()
+            .filter(|t| app.engine.session().track(TrackId(*t)).is_some_and(|x| !x.mixer.solo))
+            .collect();
+        if !tracks.is_empty() {
+            run(app, "mix.solo", json!({"tracks": tracks, "value": true, "exclusive": false}));
+            ui.ctx().data_mut(|d| d.insert_temp(held_id(), tracks));
+        }
+    }
+    true
+}
+
+/// Puts back the solos a held S key made once the mouse button is up (call every frame).
+pub fn release_momentary(app: &mut SoundApp, ctx: &egui::Context) {
+    let held: Vec<u64> = ctx.data(|d| d.get_temp(held_id())).unwrap_or_default();
+    if held.is_empty() || ctx.input(|i| i.pointer.primary_down()) {
+        return;
+    }
+    ctx.data_mut(|d| d.remove::<Vec<u64>>(held_id()));
+    run(app, "mix.solo", json!({"tracks": held, "value": false, "exclusive": false}));
+}
+
 /// The S key's right-click menu: Solo Safe and Exclusive Solo, reachable without modifiers.
 pub fn solo_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
     let Some(track) = app.engine.session().track(id).cloned() else { return };
