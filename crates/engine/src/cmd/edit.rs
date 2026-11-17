@@ -1334,6 +1334,44 @@ mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, Clip, ClipContent, TrackId, TrackKind};
 
+    /// Parity section 7: Heal Separation joins a split MIDI clip back into one (a note across the
+    /// cut plays on again); clips whose settings differ stay apart.
+    #[test]
+    fn heal_joins_split_midi_clips() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        for (pitch, start) in [(60, 0), (64, 1800), (67, 2400)] {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": start, "length_ticks": 480})).unwrap();
+        }
+        let notes = |e: &Engine| -> Vec<(i64, i64, Vec<(u8, i64, i64)>)> {
+            e.session()
+                .track(t)
+                .unwrap()
+                .clips()
+                .iter()
+                .map(|c| match &c.content {
+                    ClipContent::Midi { sequence } => {
+                        (c.start, c.length, sequence.notes.iter().filter(|n| n.start >= 0).map(|n| (n.pitch, n.start, n.length)).collect())
+                    }
+                    _ => (c.start, c.length, Vec::new()),
+                })
+                .collect()
+        };
+        let whole = notes(&e);
+        e.execute("edit.separate", &json!({"tracks": [t.0], "at": 48_000})).unwrap();
+        assert_eq!(notes(&e).len(), 2);
+        // The right half transposed: left apart.
+        let right = e.session().track(t).unwrap().clips()[1].id;
+        e.session_mut().find_clip_mut(right).unwrap().midi_transpose = 2;
+        e.execute("edit.heal", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        assert_eq!(notes(&e).len(), 2);
+        e.session_mut().find_clip_mut(right).unwrap().midi_transpose = 0;
+        let r = e.execute("edit.heal", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        assert_eq!(r["healed"], 1);
+        assert_eq!(notes(&e), whole, "one clip again, the note across the cut whole");
+    }
+
     /// Parity section 7: a MIDI clip copied in one session pastes into the next one opened (the
     /// clipboard belongs to the program, not to the session).
     #[test]

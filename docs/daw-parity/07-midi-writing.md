@@ -179,7 +179,7 @@ The gaps are of four kinds:
 | Split | ● | ● | ● | ● | **Partial**: a note across the cut stays in the left clip and stops at the cut; the right clip gets none of it but starts in the controller state from before the cut (bug 11, fixed) |
 | Trim the end; drag it back out | ● | ● | ● | ● | **Works** |
 | Trim the start; drag it back out | ● | ● | ● | ● | **Works**: what falls before the new start is hidden, its controllers set the starting state, and dragging back returns it (bug 5, fixed) |
-| Join clips | ● | ● | ● | ● | **Partial**: Consolidate works; Heal is for audio only |
+| Join clips | ● | ● | ● | ● | **Works**: Consolidate merges any MIDI clips; Edit › Heal Separation joins neighbouring MIDI clips whose settings match (transpose, velocity, mute, playback quantize and the rest; not shared copies, patterns, clips under Cleanup or with a stored original performance), so a split heals back with the note across the cut whole; what either hid past the join is dropped |
 | Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; Loop and Repeat space MIDI copies on tick tracks in bars (bug 15, fixed) |
 | Loop a clip; copies that change together | ◐ | ● | ● | ● | **Works**: Clip › Duplicate as Shared Copy (`clip.share`) puts a copy after each selected MIDI clip that shares its notes and controllers (marked `=` on the timeline); a note edit in any (the editor, the event list, the MIDI Operations, Reverse, Apply to Notes) is made in all, in the same undo step, and Duplicate or paste of a shared clip shares too. Each copy keeps its own place, length, mute, transpose and velocity. Clip › Make Independent ends it; an edit that changes one copy's notes some other way (a start trim, a split, Consolidate) leaves that copy on its own. Loop still makes independent copies |
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
@@ -441,3 +441,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Zoom to the notes: the selected notes (or every note) fill the roll |
 | 2026-11-17 | minor | Copying MIDI between sessions already worked (the clipboard outlives the session); a test pins it |
 | 2026-11-17 | minor | MusicXML export writes the key signature and spells the notes for it |
+| 2026-11-17 | minor | Heal Separation joins neighbouring MIDI clips with matching settings |

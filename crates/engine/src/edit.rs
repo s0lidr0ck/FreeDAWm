@@ -587,13 +587,29 @@ pub fn trim_end_to(s: &mut Session, track: TrackId, at: Samples) -> usize {
     n
 }
 
-/// Heal separations inside `range`: merge neighbouring audio clips that continue the same file.
+/// Heal separations inside `range`: merge neighbouring audio clips that continue the same file,
+/// and neighbouring MIDI clips with the same settings ([`midi_heals`], [`join_midi`]).
 pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
+    let (tempo, sr) = (s.tempo.clone(), s.sample_rate);
+    // A clip with a stored original performance keeps it for itself (it is not joined).
+    let originals: HashSet<u64> = s.midi_originals.keys().copied().collect();
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     pl.sort();
     let mut out: Vec<Clip> = Vec::with_capacity(pl.clips.len());
     let mut healed = 0;
     for c in pl.clips.drain(..) {
+        if let Some(prev) = out.last_mut()
+            && prev.end() == c.start
+            && c.start >= range.start
+            && c.start <= range.end
+            && midi_heals(prev, &c)
+            && !originals.contains(&prev.id.0)
+            && !originals.contains(&c.id.0)
+        {
+            join_midi(prev, &c, &tempo, sr);
+            healed += 1;
+            continue;
+        }
         if let Some(prev) = out.last_mut()
             && prev.end() == c.start
             && c.start >= range.start
@@ -613,6 +629,48 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
     }
     pl.clips = out;
     healed
+}
+
+/// Whether two MIDI clips, `next` starting where `prev` ends, can be joined into one: every
+/// setting but their place, length, name, colour and notes the same, neither a pattern, a shared
+/// copy or under MIDI Cleanup.
+fn midi_heals(prev: &Clip, next: &Clip) -> bool {
+    let both_midi = matches!((&prev.content, &next.content), (ClipContent::Midi { .. }, ClipContent::Midi { .. }));
+    if !both_midi || [prev, next].iter().any(|c| c.shared.is_some() || c.pattern.is_some() || c.midi_cleanup.is_some()) {
+        return false;
+    }
+    let neutral = |c: &Clip| {
+        let mut c = c.clone();
+        c.id = ClipId(0);
+        c.name.clear();
+        c.start = 0;
+        c.length = 0;
+        c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence::default() };
+        c.midi_index = Default::default();
+        c.sync_point = 0;
+        c.rating = 0;
+        c.color = None;
+        c
+    };
+    neutral(prev) == neutral(next)
+}
+
+/// Joins `next` onto the end of `prev` (MIDI clips, see [`midi_heals`]): its notes and
+/// controllers move to their place in `prev`, which grows to cover both. What either clip hid
+/// (before `next`'s start, past `prev`'s end) is dropped, since it would sound in the joined clip;
+/// a note of `prev` running past its end plays on, as it did before a split.
+fn join_midi(prev: &mut Clip, next: &Clip, tempo: &TempoMap, sr: SampleRate) {
+    let base = tempo.samples_to_ticks(prev.start, sr);
+    let prev_len = tempo.samples_to_ticks(prev.end(), sr).saturating_sub(base);
+    let offset = tempo.samples_to_ticks(next.start, sr).saturating_sub(base);
+    if let (ClipContent::Midi { sequence: a }, ClipContent::Midi { sequence: b }) = (&mut prev.content, &next.content) {
+        a.notes.retain(|n| n.start < prev_len);
+        a.ctrls.retain(|c| c.tick < prev_len);
+        a.notes.extend(b.notes.iter().filter(|n| n.start >= 0).map(|n| soundcraft_midi::Note { start: n.start.saturating_add(offset), ..*n }));
+        a.ctrls.extend(b.ctrls.iter().filter(|c| c.tick >= 0).map(|c| soundcraft_midi::CtrlEvent { tick: c.tick.saturating_add(offset), ..*c }));
+        a.sort();
+    }
+    prev.length = prev.length.saturating_add(next.length);
 }
 
 /// Whether `next`, starting where `prev` ends, is the rest of `prev` and sounds like it: the same
