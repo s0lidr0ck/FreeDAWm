@@ -1599,6 +1599,13 @@ pub fn strip_silence(s: &mut Session, t: TrackId, r: Range, thr: f32, min_len: S
     Ok(keep.len())
 }
 
+/// What Strip Silence would keep of `t` in `r` with these settings, changing nothing (its
+/// preview): the clip spans that stay, in time order.
+pub fn strip_preview(s: &Session, t: TrackId, r: Range, thr: f32, min_len: Samples, pre: Samples, post: Samples) -> Result<Vec<(Samples, Samples)>> {
+    let r = bounded_to_track(s, t, r);
+    non_silent(s, t, r, thr, min_len, pre, post)
+}
+
 /// Most samples (over all channels) Strip Silence renders at once.
 const STRIP_WINDOW_SAMPLES: usize = 1 << 24;
 
@@ -2642,7 +2649,7 @@ fn file_name_of(path: &str) -> String {
 }
 
 /// Decode one audio file's bytes at the session rate (no waveforms yet).
-fn decode_buffer(bytes: &[u8], ext: Option<&str>, rate: u32) -> std::result::Result<AudioBuffer, String> {
+pub(crate) fn decode_buffer(bytes: &[u8], ext: Option<&str>, rate: u32) -> std::result::Result<AudioBuffer, String> {
     let (_, buf) = soundcraft_audio_io::decode(bytes, ext).map_err(|err| err.to_string())?;
     at_rate(buf, rate, MAX_IMPORT_SAMPLES).ok_or_else(|| "too large to load".to_string())
 }
@@ -4884,6 +4891,24 @@ mod strip_tests {
         let r = e.execute("edit.strip_silence", &json!({"track": t.0, "start": 0, "end": far + 96_000})).unwrap();
         assert_eq!(r["clips"], 2);
         assert!(e.session().track(t).unwrap().clips().iter().any(|c| c.start >= far));
+    }
+
+    /// Strip Silence's preview says what would stay, changing nothing; stripping keeps just that.
+    #[test]
+    fn strip_silence_preview_matches_what_strip_keeps() {
+        let (mut e, t) = tones(&[0, 96_000], 48_000);
+        let p = json!({"tracks": [t.0], "start": 0, "end": 144_000, "pad_before_ms": 0, "pad_after_ms": 0});
+        let before = e.session().clone();
+        let steps = e.undo_history().len();
+        let v = e.execute("edit.strip_silence_preview", &p).unwrap();
+        assert_eq!(e.undo_history().len(), steps, "a preview is no step");
+        assert!(*e.session() == before, "and changes nothing");
+        let keep: Vec<(i64, i64)> =
+            v["tracks"][0]["keep"].as_array().unwrap().iter().map(|k| (k[0].as_i64().unwrap(), k[1].as_i64().unwrap())).collect();
+        assert_eq!(keep.len(), 2, "{keep:?}");
+        e.execute("edit.strip_silence", &p).unwrap();
+        let clips: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect();
+        assert_eq!(clips, keep);
     }
 
     /// Consolidate renders the clips as playback hears them: the automatic edge fades ramp a clip

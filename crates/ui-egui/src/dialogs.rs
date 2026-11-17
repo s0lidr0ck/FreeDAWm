@@ -1294,6 +1294,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.add(egui::Slider::new(min_ms, 0.0..=2000.0).text("Min strip duration ms"));
                     ui.add(egui::Slider::new(pre_ms, 0.0..=500.0).text("Clip start pad ms"));
                     ui.add(egui::Slider::new(post_ms, 0.0..=2000.0).text("Clip end pad ms"));
+                    // The preview: what would stay is worked out again as the settings change, and
+                    // the Edit window shades what would go.
+                    let settings = json!({"threshold_db": threshold, "min_length_ms": min_ms, "pad_before_ms": pre_ms, "pad_after_ms": post_ms});
+                    let shown = ui.ctx().data(|d| d.get_temp::<StripPreview>(egui::Id::new(STRIP_PREVIEW)));
+                    let key = settings.to_string();
+                    if shown.as_ref().is_none_or(|p| p.settings != key) {
+                        let preview = strip_preview(app, &settings);
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(STRIP_PREVIEW), preview));
+                    }
+                    ui.label(egui::RichText::new("Shaded in the Edit window: what would be stripped").small());
                     if buttons(ui, "Strip", enter) {
                         action = Some((
                             "edit.strip_silence".into(),
@@ -1666,6 +1676,36 @@ fn new_session_body(app: &mut SoundApp, ui: &mut egui::Ui, n: &mut NewSession, e
 }
 
 /// Cancel/OK row; returns true when OK was pressed (or Enter).
+/// The Strip Silence dialog's preview, kept in egui's temp data while the dialog is open.
+#[derive(Clone, Debug, Default)]
+pub struct StripPreview {
+    /// The settings it was worked out for (as JSON text).
+    pub settings: String,
+    /// The selection it covers, and what would stay on each track.
+    pub range: (i64, i64),
+    pub keep: Vec<(TrackId, Vec<(i64, i64)>)>,
+}
+
+/// The egui temp-data id of [`StripPreview`].
+pub const STRIP_PREVIEW: &str = "strip_silence_preview";
+
+fn strip_preview(app: &mut SoundApp, settings: &serde_json::Value) -> StripPreview {
+    let mut out = StripPreview { settings: settings.to_string(), ..StripPreview::default() };
+    if let Ok(v) = app.engine.execute("edit.strip_silence_preview", settings) {
+        out.range = (v["start"].as_i64().unwrap_or(0), v["end"].as_i64().unwrap_or(0));
+        for t in v["tracks"].as_array().into_iter().flatten() {
+            let keep = t["keep"].as_array().into_iter().flatten().filter_map(|k| Some((k[0].as_i64()?, k[1].as_i64()?))).collect();
+            out.keep.push((TrackId(t["track"].as_u64().unwrap_or(0)), keep));
+        }
+    }
+    out
+}
+
+/// The Strip Silence preview while its dialog is open: the selection and what would stay per track.
+pub fn strip_preview_shown(app: &SoundApp, ctx: &egui::Context) -> Option<StripPreview> {
+    (app.dialogs.open_name() == Some("strip_silence")).then(|| ctx.data(|d| d.get_temp::<StripPreview>(egui::Id::new(STRIP_PREVIEW)))).flatten()
+}
+
 fn buttons(ui: &mut egui::Ui, ok: &str, enter: bool) -> bool {
     buttons_enabled(ui, ok, enter, true)
 }

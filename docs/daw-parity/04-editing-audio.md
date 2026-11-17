@@ -171,7 +171,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too, the clip's own window rendered as it played (a Clean alternate's edges are not faded by the longer render); stretch, pitch and varispeed render the clip only |
 | Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
 | Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
-| Strip silence preview before committing | ● | ● | ● | ● | **Missing** |
+| Strip silence preview before committing | ● | ● | ● | ● | **Works**: while the Strip Silence dialog is open, the Edit window shades what it would remove from the selection, worked out again as the settings change (`edit.strip_silence_preview`) |
 
 ## H. Takes and comping
 
@@ -409,3 +409,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Flatten Comp; deleting one playlist and Repeat to Fill in Shuffle were already covered |
 | 2026-11-17 | minor | Transposed clips with Clean Vocal get the background render too |
 | 2026-11-17 | minor | A warp marker is heard while it is dragged |
+| 2026-11-17 | minor | Strip Silence previews what it would remove |

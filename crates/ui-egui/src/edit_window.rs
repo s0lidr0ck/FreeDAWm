@@ -2102,6 +2102,24 @@ fn freeze_targets(s: &Session, selection: &[u64], thaw: bool) -> (Vec<u64>, Vec<
     (tracks, skipped)
 }
 
+/// While Strip Silence's dialog is open: the parts of the selection on this track it would
+/// remove, shaded.
+fn draw_strip_preview(app: &SoundApp, ui: &Ui, id: TrackId, tl: Rect, lane: Rect) {
+    let Some(p) = crate::dialogs::strip_preview_shown(app, ui.ctx()) else { return };
+    let Some((_, keep)) = p.keep.iter().find(|(t, _)| *t == id) else { return };
+    let s = app.engine.session();
+    let painter = ui.painter().with_clip_rect(lane.intersect(tl));
+    let shade = Color32::from_rgba_unmultiplied(0, 0, 0, 140);
+    let mut from = p.range.0;
+    for &(a, b) in keep.iter().chain(std::iter::once(&(p.range.1, p.range.1))) {
+        if a > from {
+            let r = Rect::from_x_y_ranges(x_of(s, tl, from)..=x_of(s, tl, a), lane.y_range());
+            painter.rect_filled(r, 0.0, shade);
+        }
+        from = from.max(b);
+    }
+}
+
 /// The markers placed on track `id`'s lane: a line down the lane and the name at its top.
 fn draw_track_markers(app: &SoundApp, ui: &Ui, id: TrackId, tl: Rect, lane: Rect) {
     let s = app.engine.session();
@@ -3159,6 +3177,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         }
     });
     draw_track_markers(app, ui, track.id, tl, lane);
+    draw_strip_preview(app, ui, track.id, tl, lane);
     if sub.is_some() {
         // Nothing is dropped on an automation lane.
     } else {

@@ -131,6 +131,15 @@ pub fn specs() -> Vec<CommandSpec> {
             strip_silence
         ),
         cmd!(
+            query "edit.strip_silence_preview",
+            "Strip Silence Preview",
+            [],
+            None,
+            "{threshold_db?, min_length_ms?, pad_before_ms?, pad_after_ms?} — what Strip Silence would keep on each selected track, changing nothing -> {tracks: [{track, keep: [[start, end], …]}], start, end}",
+            has_range,
+            strip_silence_preview
+        ),
+        cmd!(
             "edit.fades_create",
             "Create...",
             ["Edit", "Fades"],
@@ -1073,13 +1082,30 @@ fn copy_to_new_playlist(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"tracks": tracks.len()}))
 }
 
-fn strip_silence(e: &mut Engine, p: &Value) -> Result<Value> {
-    let tracks = tracks_required(e, "edit.strip_silence", p)?;
-    let r = range_param(e, "edit.strip_silence", p)?;
+/// Strip Silence's settings from `p`: threshold (dB), minimum length and the two pads (samples).
+fn strip_settings(e: &Engine, p: &Value) -> (f32, Samples, Samples, Samples) {
     let thr = f32_or(p, "threshold_db", -48.0).clamp(-96.0, 0.0);
     let sr = e.session().sample_rate;
     let ms = |k: &str, d: f64| sr.samples(f64_or(p, k, d).clamp(0.0, 10_000.0) / 1000.0);
-    let (min_len, pre, post) = (ms("min_length_ms", 50.0), ms("pad_before_ms", 5.0), ms("pad_after_ms", 20.0));
+    (thr, ms("min_length_ms", 50.0), ms("pad_before_ms", 5.0), ms("pad_after_ms", 20.0))
+}
+
+fn strip_silence_preview(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "edit.strip_silence_preview", p)?;
+    let r = range_param(e, "edit.strip_silence_preview", p)?;
+    let (thr, min_len, pre, post) = strip_settings(e, p);
+    let mut out = Vec::new();
+    for t in tracks {
+        let keep = crate::io::strip_preview(e.session(), t, r, thr, min_len, pre, post)?;
+        out.push(json!({"track": t.0, "keep": keep}));
+    }
+    Ok(json!({"tracks": out, "start": r.start, "end": r.end}))
+}
+
+fn strip_silence(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "edit.strip_silence", p)?;
+    let r = range_param(e, "edit.strip_silence", p)?;
+    let (thr, min_len, pre, post) = strip_settings(e, p);
     let s = e.session_mut();
     let mut kept = 0;
     for t in &tracks {
