@@ -51,6 +51,7 @@ pub mod clip_shared;
 pub mod clip_slip;
 pub mod groove;
 mod health;
+pub mod hits_midi;
 pub mod instrument;
 pub mod juke;
 mod looping;
@@ -252,6 +253,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_follow::specs());
         v.extend(clip_midi::specs());
         v.extend(arrange::specs());
+        v.extend(hits_midi::specs());
         v.extend(transpose_track::specs());
         v.extend(clip_shared::specs());
         v.extend(midi_cleanup::specs());

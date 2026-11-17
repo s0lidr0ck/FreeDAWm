@@ -415,6 +415,10 @@ fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
                 );
                 app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
             }
+            if ui.button("Write MIDI").on_hover_text("A kick note for each hit, in a new MIDI clip on a new drum-synth track").clicked() {
+                let r = app.run("event.hits_to_midi", json!({"sensitivity": app.ops.beat_sensitivity}));
+                app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
+            }
         });
         ui.separator();
         ui.horizontal(|ui| {

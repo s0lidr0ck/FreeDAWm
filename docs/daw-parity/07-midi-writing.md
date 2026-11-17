@@ -220,7 +220,7 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Virtual players that follow chords and sections | ○ | ○ | ● | ◐ | **Works**: the Band, six players (drums, bass, keys, organ, guitar, bowed) with feels; printed to editable clips |
 | Audio to MIDI | ● | ● | ● | ● | **Works**: general, piano, drum and vocal models, and a single-line pitch tracker |
-| Drum hits in audio to notes | ◐ | ● | ● | ● | **Partial**: through the drum model; Beat Detective writes no notes |
+| Drum hits in audio to notes | ◐ | ● | ● | ● | **Works**: through the drum model (kick, snare, hats apart), and Beat Detective › Write MIDI (`event.hits_to_midi`): a note for each hit found in the selection on the selected audio tracks (one pitch, the kick's unless given, and one velocity; hits within 30 ms are one), in a new MIDI clip on a new drum-synth track. Hits are not sorted into drums by sound, and their loudness is not read |
 | Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Missing** |
 | MIDI from a text description; a song from a prompt | ○ | ○ | ○ | ○ | **Works** (downloaded models) |
 | Loop library of MIDI phrases, previewed at the song tempo | ◐ | ● | ● | ● | **Not planned here**: needs a library of phrases (content the owner would source) |
@@ -452,3 +452,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Lyrics under their notes in the printed score and the MusicXML export |
 | 2026-11-17 | minor | A global transpose track for MIDI and instrument tracks, on the Key ruler |
 | 2026-11-17 | minor | Groove from an audio clip's hits |
+| 2026-11-17 | minor | Beat Detective writes the hits it finds as MIDI notes |
