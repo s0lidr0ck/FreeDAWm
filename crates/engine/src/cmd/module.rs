@@ -53,6 +53,15 @@ pub fn specs() -> Vec<CommandSpec> {
             module_post_fader
         ),
         cmd!(
+            "mix.module_mix",
+            "Insert Wet/Dry Mix",
+            [],
+            None,
+            "{track?, module: id, value: 0..1} — blends the module's output (1, the default) with its input (0), the input delayed by the module's latency → {mix}",
+            has_selection,
+            module_mix
+        ),
+        cmd!(
             "mix.module_param",
             "Set Module Parameter",
             [],
@@ -434,6 +443,16 @@ fn module_post_fader(e: &mut Engine, p: &Value) -> Result<Value> {
     let ins = find_mut(e, C, t, id)?;
     ins.post_fader = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.post_fader);
     Ok(json!({"post_fader": ins.post_fader}))
+}
+
+fn module_mix(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_mix";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    let v = p.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(C, "`value` (0 to 1) required"))?;
+    let ins = find_mut(e, C, t, id)?;
+    ins.mix = (v as f32).clamp(0.0, 1.0);
+    Ok(json!({"mix": ins.mix}))
 }
 
 fn module_param(e: &mut Engine, p: &Value) -> Result<Value> {

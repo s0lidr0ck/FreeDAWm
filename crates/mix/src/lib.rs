@@ -454,6 +454,11 @@ struct PluginSlot {
     emits: bool,
     /// The module's MIDI of the block just run (made with the slot: never grown while rendering).
     midi: MidiOut,
+    /// The insert's wet/dry mix as last heard, and as wanted ([`Insert::mix`]; `wet_blend`).
+    ///
+    /// [`Insert::mix`]: soundcraft_model::Insert::mix
+    wet: f32,
+    wet_to: f32,
 }
 
 struct Strip {
@@ -1077,6 +1082,8 @@ impl SlotCtx<'_> {
             dry: DelayLine::default(),
             emits,
             midi: MidiOut::new(),
+            wet: 1.0,
+            wet_to: 1.0,
         })
     }
 }
@@ -2379,6 +2386,7 @@ impl MixEngine {
                             if run == LlmRun::Fade {
                                 llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, xf);
                             }
+                            wet_blend(slot, &mut strip.buf, &strip.llm_dry, frames);
                             collect_released(slot, &mut strip.released);
                             if contain_failure(slot, &mut strip.buf, frames) {
                                 strip.failures.record(SlotKey::Module(ins.id));
@@ -2440,6 +2448,7 @@ impl MixEngine {
                                 if run == LlmRun::Fade {
                                     llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, xf);
                                 }
+                                wet_blend(slot, &mut strip.buf, &strip.llm_dry, frames);
                                 collect_released(slot, &mut strip.released);
                                 if contain_failure(slot, &mut strip.buf, frames) {
                                     strip.failures.record(SlotKey::Module(ins.id));
@@ -2905,7 +2914,8 @@ fn insert_step(
     let lat = slot.plugin.latency();
     let run = llm_step(slot, bypass || (llm && lat > 0), xf);
     let delayed = lat > 0 || slot.dry.delay() > 0;
-    if run == LlmRun::Run && !delayed {
+    let mixed = slot.wet < 1.0 || slot.wet_to < 1.0;
+    if run == LlmRun::Run && !delayed && !mixed {
         return (run, true);
     }
     copy_dry(buf, dry, frames);
@@ -2943,6 +2953,24 @@ fn llm_blend(slot: &mut PluginSlot, buf: &mut [Vec<f32>], dry: &[Vec<f32>], fram
         }
     }
     slot.llm_pos = slot.llm_pos.saturating_add(frames as i64);
+}
+
+/// An insert's wet/dry mix ([`Insert::mix`](soundcraft_model::Insert::mix)): its output `buf`
+/// blended with its input `dry` (delayed by its latency in `insert_step`, so no comb), the amount
+/// gliding across the block from the last one heard. At full wet nothing is touched.
+fn wet_blend(slot: &mut PluginSlot, buf: &mut [Vec<f32>], dry: &[Vec<f32>], frames: usize) {
+    let (from, to) = (slot.wet, slot.wet_to);
+    if from >= 1.0 && to >= 1.0 {
+        return;
+    }
+    let span = frames.max(1) as f32;
+    for (b, d) in buf.iter_mut().zip(dry) {
+        for (i, (x, y)) in b.iter_mut().zip(d.iter()).take(frames).enumerate() {
+            let w = from + (to - from) * (i + 1) as f32 / span;
+            *x = *y + (*x - *y) * w;
+        }
+    }
+    slot.wet = to;
 }
 
 /// Copies the first `frames` of `buf` into `dry` (sized in `sync`; a missing channel is skipped,
@@ -3470,6 +3498,7 @@ fn process_strip(
                     if run == LlmRun::Fade {
                         llm_blend(slot, &mut strip.buf, &strip.llm_dry, frames, live.xf);
                     }
+                    wet_blend(slot, &mut strip.buf, &strip.llm_dry, frames);
                     if slot.emits {
                         slot.plugin.midi_out(&mut slot.midi);
                     }
@@ -5487,6 +5516,7 @@ fn note_insert_latency(t: &Track, strip: &mut Strip, pos: Samples) {
 
 fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track, module: Option<soundcraft_model::ModuleId>, pos: Samples) {
     apply_prepared(slot, ins);
+    slot.wet_to = if ins.mix.is_finite() { ins.mix.clamp(0.0, 1.0) } else { 1.0 };
     // Automation lanes are keyed by module id (the instrument's is `INSTRUMENT_MODULE`); `None`
     // reads no lanes.
     let Some(module) = module else {
@@ -7025,6 +7055,8 @@ mod tests {
             dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
+            wet: 1.0,
+            wet_to: 1.0,
         };
         (slot, ins, tr)
     }
@@ -7141,6 +7173,8 @@ mod tests {
             dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
+            wet: 1.0,
+            wet_to: 1.0,
         };
         apply_params(&mut slot, &ins, &tr, Some(ins.id), 0);
         assert_eq!(slot.plugin.param("outGain"), Some(0.25));
@@ -7233,6 +7267,8 @@ mod tests {
             dry: DelayLine::default(),
             emits: false,
             midi: MidiOut::new(),
+            wet: 1.0,
+            wet_to: 1.0,
         };
         run_blocks(&mut slot, &ins, &tr);
         assert_eq!(slot.plugin.param("depth"), Some(0.9));

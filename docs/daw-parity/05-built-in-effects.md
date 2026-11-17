@@ -250,7 +250,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Latency reported for delay compensation | ● | ● | ● | ● | **Works**, except Pitch, Sat and Vint (bug 5) |
 | Tails included in bounce and freeze | ● | ● | ● | ● | **Works** (bug 6) |
 | Every parameter automatable | ● | ● | ● | ● | **Works** |
-| Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Partial**: missing on eight engines; no mix on the insert slot |
+| Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Works**: every insert slot has a Mix (the slot's menu, 0–100 % wet, `mix.module_mix`): the module's output blended with its input, the input delayed by the module's latency so there is no comb, a change gliding over one block. Not automatable yet. With a key from a later track (the main input waiting for it) the dry side is not delayed by that wait. Tests: `mix/tests/insert_mix.rs` |
 | Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels), leaving the LFE out |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Works** (built in section 6, K): right-click a plug-in knob on the chain › Learn MIDI Controller; Setup › MIDI Mappings lists them. Learning from a plug-in's own window or the drawer's knobs is section 6's leftover |
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
@@ -376,3 +376,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | CleanQ factory preset Tilt |
 | 2026-11-17 | minor | Copy Settings and Paste Settings in every drawer and plug-in window |
 | 2026-11-17 | minor | Plug-in windows can follow the selected track |
+| 2026-11-17 | minor | A wet/dry mix on every insert slot |

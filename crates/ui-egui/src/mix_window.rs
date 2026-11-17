@@ -1221,6 +1221,19 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         if ui.add(egui::Button::selectable(ins.post_fader, "Post-Fader")).on_hover_text("Run after the fader and mute").clicked() {
             run_pick(app, ui, "mix.module_post_fader", json!({"track": id.0, "module": ins.id.0}));
         }
+        // Wet/dry: the module's output blended with its input (any effect in parallel).
+        let mut pct = (ins.mix * 100.0).round();
+        let r =
+            ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" % wet").text("Mix")).on_hover_text("Blend the module's output with its input");
+        if r.changed() {
+            let key = format!("insert-mix:{}:{}", id.0, ins.id.0);
+            if let Err(e) = app.engine.execute_merged("mix.module_mix", &json!({"track": id.0, "module": ins.id.0, "value": pct / 100.0}), &key) {
+                app.ui.status = e.to_string();
+            }
+        }
+        if r.drag_stopped() || r.lost_focus() {
+            app.engine.end_merge();
+        }
         if edit_list && crate::module_drawer::has_drawer(&ins.plugin) && ui.button("Open in Window").clicked() {
             // The generic window: every parameter as a slider, outside the Mix window.
             crate::chain_view::open_window(app, id, ins.id);

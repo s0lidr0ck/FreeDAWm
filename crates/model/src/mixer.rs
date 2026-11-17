@@ -780,6 +780,11 @@ pub struct Insert {
     /// track.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub post_fader: bool,
+    /// The insert's wet/dry mix, 0 (its input only) to 1 (its output only, the default): the
+    /// mixer blends the module's output with its input, delayed by its latency, so any effect
+    /// can be used in parallel. Clamped by the mixer.
+    #[serde(default = "unity", skip_serializing_if = "is_unity")]
+    pub mix: f32,
     /// Which loading of `state` the running plugin instance should have: a hosted preset loaded
     /// into the module (`mix.module_preset`) changes it, so the instance is created again from
     /// `state`, and undo (which puts the previous value back) does the same with the previous
@@ -1040,6 +1045,7 @@ impl Insert {
             kit_fx: Vec::new(),
             link_group: None,
             post_fader: false,
+            mix: 1.0,
             state_load: 0,
             foreign: None,
         }
