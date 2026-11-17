@@ -1,4 +1,5 @@
-//! The Pencil on an audio clip at sample zoom redraws its samples, in one undo step.
+//! Sample-level views of audio: the Pencil at sample zoom redraws samples (one undo step), the
+//! Sample Editor edits a selection, and the spectral view draws a spectrogram.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
@@ -118,4 +119,43 @@ fn the_sample_editor_silences_a_selection() {
     let buf = h.state().engine.session().pool.get(c.source().unwrap()).unwrap().buffer().into_owned();
     let silent = buf.channels[0].iter().filter(|x| **x == 0.0).count();
     assert!(silent > 1_000 && silent < 48_000, "part of the clip silenced: {silent}");
+}
+
+#[test]
+fn the_spectral_view_finds_a_tone_and_draws() {
+    use soundcraft_ui_egui::spectral::{BANDS, FFT, band_of, column, heat};
+    let rate = 48_000.0;
+    let tone: Vec<f32> = (0..8_192).map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 1_000.0 / rate).sin() * 0.5).collect();
+    let audio = soundcraft_model::SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![tone.clone()] });
+    let mut an = soundcraft_dsp::spectrum::Analyzer::default();
+    let col = column(&mut an, &audio, 4_096, rate);
+    let b = band_of((1_000.0 * FFT as f32 / rate).round() as usize, rate).unwrap();
+    let loudest = col.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap();
+    assert!(loudest.abs_diff(b) <= 1, "1 kHz in band {b}, loudest {loudest}: {col:?}");
+    assert!(col[BANDS - 1] < col[b] / 2, "the top band is quiet");
+    assert_eq!(heat(0), egui::Color32::BLACK);
+
+    // A track in the spectral view draws without trouble.
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let t = TrackId(app.run("track.new", json!({"name": "Tone", "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap());
+    let s = app.engine.session_mut();
+    let src = soundcraft_engine::io::add_source(s, "tone", AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, None, FileFormat::Wav);
+    let id = s.new_clip_id();
+    soundcraft_engine::edit::place_clip(s, t, Clip::audio(id, "tone", src, 0, 0, 8_192));
+    app.run("track.view", json!({"tracks": [t.0], "view": "spectral"})).unwrap();
+    assert!(soundcraft_ui_egui::edit_window::view_options(app.engine.session().track(t).unwrap()).contains(&"spectral"));
+    let mut h = Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    {
+        let z = &mut h.state_mut().engine.session_mut().edit.zoom;
+        (z.scroll, z.samples_per_px) = (0, 8.0);
+    }
+    steps(&mut h, 6);
+    assert_eq!(h.state().engine.session().track(t).unwrap().view, "spectral");
 }

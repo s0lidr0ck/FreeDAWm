@@ -1923,7 +1923,7 @@ pub fn view_options(track: &Track) -> Vec<&'static str> {
     if track.kind.is_midi() {
         opts.extend(["notes", "regions", "blocks"]);
     } else if track.kind == TrackKind::Audio {
-        opts.extend(["waveform", "pitch", "blocks", "clip_gain", "warp", "playlists"]);
+        opts.extend(["waveform", "pitch", "spectral", "blocks", "clip_gain", "warp", "playlists"]);
     } else if track.kind.has_playlist() {
         opts.extend(["waveform", "blocks", "clip_gain", "playlists"]);
     }
@@ -2500,11 +2500,19 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
                         preview = Clip { fade_in, fade_out, ..clip.clone() };
                         &preview
                     };
-                    crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, track.channels(), body_r, wave);
-                    let n = track.channels().min(audio.peaks.len()).max(1);
-                    for k in 1..n {
-                        let y = body_r.min.y + body_r.height() / n as f32 * k as f32;
-                        painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, body.gamma_multiply(0.7)));
+                    if track.view == "spectral" {
+                        let pass = painter.ctx().cumulative_pass_nr();
+                        crate::spectral::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, pass, body_r);
+                        if crate::spectral::pending() {
+                            painter.ctx().request_repaint();
+                        }
+                    } else {
+                        crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, track.channels(), body_r, wave);
+                        let n = track.channels().min(audio.peaks.len()).max(1);
+                        for k in 1..n {
+                            let y = body_r.min.y + body_r.height() / n as f32 * k as f32;
+                            painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, body.gamma_multiply(0.7)));
+                        }
                     }
                 }
             } else if s.live_stretch.contains_key(source) {

@@ -43,7 +43,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Small: bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
-| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
+| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral editing, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | Medium: tempo edits do not move audio, no editing of a closed folder as one clip |
 | L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Small: the sample editor has no cut, copy or paste inside the file |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
@@ -213,7 +213,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
 | ARA 2 for third-party editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
-| Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Missing** |
+| Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Works** for the view: an audio track's view menu offers spectral, which draws each clip as a spectrogram (time across, 30 Hz to the top on a log scale, colour by level over 90 dB) in place of its waveform, following stretch and reverse; the columns are analysed as they come into view and kept in memory, so a long clip fills in over a few frames. Spectral editing (a rectangle that attenuates a band of frequencies and writes a new file, as Cubase does) is not built |
 | Stem separation | ◐ | ● | ● | ● | **Works** (desktop, downloaded model) |
 | De-noise as clip processing | ○ | ○ | ○ | ◐ | **Works** (desktop, downloaded model) |
 
@@ -505,3 +505,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | round three follow-up: waveform pencil at sample zoom; a basic Sample Editor |
 | 2026-11-17 | minor | round three follow-up: the arranger repeats a section; arranger row brought up to date |
 | 2026-11-17 | minor | round three follow-up: alternative arrangements (scratch pads) |
+| 2026-11-17 | minor | round three follow-up: a spectral track view |

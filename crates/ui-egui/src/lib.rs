@@ -107,6 +107,7 @@ pub mod shortcut_editor;
 pub mod shortcuts;
 pub mod sidechain_picker;
 pub mod slider_drag;
+pub mod spectral;
 pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
