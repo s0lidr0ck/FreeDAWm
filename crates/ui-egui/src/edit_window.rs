@@ -3298,7 +3298,19 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             let spot = Spot::source(s, soundcraft_model::SourceId(src.0), track.id, at);
             spot_or_run(app, spot);
         }
-        if resp.dnd_hover_payload::<crate::DragSource>().is_some() {
+        // A clip dropped from the Clip List: a copy there (`clip.copy_to` keeps to tracks of
+        // its kind and the overlap mode).
+        if egui::DragAndDrop::has_payload_of_type::<crate::DragClip>(ui.ctx())
+            && let Some(c) = resp.dnd_release_payload::<crate::DragClip>()
+            && let Some(p) = ui.ctx().pointer_latest_pos()
+        {
+            let s = app.engine.session();
+            let at = drag_snap(s, sample_at(s, tl, p.x).max(0), ui.input(|i| i.modifiers.command));
+            if let Err(e) = app.run("clip.copy_to", json!({"clips": [c.0], "track": track.id.0, "at": at})) {
+                app.ui.status = e;
+            }
+        }
+        if resp.dnd_hover_payload::<crate::DragSource>().is_some() || resp.dnd_hover_payload::<crate::DragClip>().is_some() {
             ui.painter().rect_stroke(lane, 0.0, Stroke::new(2.0, Tokens::current().accent), StrokeKind::Inside);
         }
         // Audio files dropped from outside onto an instrument track load its sampler.

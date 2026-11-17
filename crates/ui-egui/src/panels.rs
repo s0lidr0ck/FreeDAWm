@@ -309,7 +309,7 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
         for (id, name, whole, color, selected) in items {
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), if whole { Sense::click_and_drag() } else { Sense::click() });
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::click_and_drag());
             resp.context_menu(|ui| {
                 if whole {
                     if ui.button("Place on New Track").clicked() {
@@ -352,12 +352,14 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
+            // Whole files and clips drag onto tracks (a clip lands as a copy).
             if whole {
-                // Whole files drag onto tracks.
                 resp.dnd_set_drag_payload(crate::DragSource(id));
-                if resp.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                }
+            } else {
+                resp.dnd_set_drag_payload(crate::DragClip(id));
+            }
+            if resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             }
             if selected {
                 ui.painter().rect_filled(r, 0.0, t.row_selected);

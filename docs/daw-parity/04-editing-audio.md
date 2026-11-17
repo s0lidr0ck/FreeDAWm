@@ -125,7 +125,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Trim clips to close gaps | ◐ | ● | ● | ● | **Works**: Edit › Trim › To Close Gaps runs each selected clip's end on to the next clip's start, as far as its file (or loop) has audio |
 | Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Works**: Options › Overlap › Overwrite (the default), Layer (audio clips stay whole underneath; the newest is on top and heard, the lower one plays again where uncovered, crossing over through the top clip's fades or a 1 ms ramp) or Crossfade (overwrite with a 10 ms crossfade at each join, out of the handles). Moves, pastes, duplicates and recorded takes follow it; MIDI and video clips always overwrite; kept by undo like the Edit mode (`edit.overlap_mode`) |
 | Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Works**: each audio clip has a layer; Send to Back and Bring to Front put it below or above the clips it overlaps, which changes what is heard there; the Edit window draws the top one last and a click picks it |
-| Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**; whole files only, not a clip from the list |
+| Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**: whole files, and clips from the Clip List (a copy lands where dropped, snapped, by `clip.copy_to`, onto a track of its kind) |
 
 ## E. Clip properties
 

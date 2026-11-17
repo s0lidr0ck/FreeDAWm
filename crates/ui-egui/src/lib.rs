@@ -777,6 +777,11 @@ pub fn fit_window_to_screen(ctx: &egui::Context) {
 #[derive(Debug, Clone, Copy)]
 pub struct DragSource(pub u64);
 
+/// Drag-and-drop payload: a clip (its id) dragged from the Clip List; a copy lands where it is
+/// dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct DragClip(pub u64);
+
 /// Ballistic meter display state per strip.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MeterDisplay {
