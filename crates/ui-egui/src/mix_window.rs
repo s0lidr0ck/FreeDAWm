@@ -2354,6 +2354,43 @@ pub fn input_monitor_tip(m: soundcraft_model::InputMonitor) -> &'static str {
     }
 }
 
+/// Additional outputs (Pro Tools'): post-fader copies of the main output, each in a send slot
+/// (`mix.send` `as_output`); listed with a Remove, and offered to any hardware output or bus.
+fn extra_outputs_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, hw: &[(String, bool)]) {
+    let session = app.engine.session_arc();
+    let Some(track) = session.track(id) else { return };
+    if matches!(track.kind, TrackKind::Master | TrackKind::Vca) {
+        return;
+    }
+    ui.separator();
+    for (slot, snd) in track.mixer.sends.iter().enumerate() {
+        let Some(snd) = snd.as_ref().filter(|x| x.output) else { continue };
+        let name = route_name(app, &snd.target);
+        if ui.button(format!("Remove output {name}")).on_hover_text("This additional output (a send slot)").clicked() {
+            let _ = app.run("mix.send_remove", json!({"track": id.0, "slot": slot}));
+            ui.close();
+        }
+    }
+    ui.menu_button("Add Output", |ui| {
+        // (The first choice is the main output itself.)
+        for (name, _) in hw.iter().skip(1) {
+            if ui.button(name).clicked() {
+                let _ = app.run("mix.send", json!({"track": id.0, "output": name, "as_output": true}));
+                ui.close();
+            }
+        }
+        ui.separator();
+        for b in &session.busses {
+            if ui.button(&b.name).clicked() {
+                let _ = app.run("mix.send", json!({"track": id.0, "bus": b.name, "as_output": true}));
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Another output beside the main one: a post-fader copy at the fader's level and pan (it takes a send slot)");
+}
+
 fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
     let key = if input { "input" } else { "output" };
     let cmd = if input { "track.input" } else { "track.output" };
@@ -2388,6 +2425,7 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         crate::band::module_input_menu(app, ui, id);
     } else {
         crate::midi_devices::output_menu(app, ui, id);
+        extra_outputs_menu(app, ui, id, &choices);
     }
     if input && session.track(id).is_some_and(|t| t.kind == TrackKind::Audio) {
         ui.separator();

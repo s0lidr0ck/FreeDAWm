@@ -100,7 +100,7 @@ K-system scales, and the master a loudness meter.
 | Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Options › More › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
 | Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Works**: Edit › Automation › Copy to Send copies the volume, and pan and mute when asked (`automation.copy_to_send` `what`), over the edit selection when there is one (what the send had there is replaced, its curve either side kept), else the whole lane; without automation the values themselves; the Control Room's Add Cue Sends makes a pre-fader send to a cue on every track at its fader level (`monitor.cue_sends`) |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
-| Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** (not reached in round three): extra outputs beside the main one, each a full post-fader copy (Pro Tools' additional outputs); today a post-fader send at 0 dB with Pan Follows Main does the same to a bus or output; about 4–6 h |
+| Several outputs from one track | ● | ○ | ○ | ◐ | **Works**: Add Output in a strip's output selector (`mix.send` `as_output`): another bus or hardware output beside the main one, a post-fader copy at the fader's level with the main pan and its automation, silenced by the track's mute, whatever the slot's own level, pan, mute and lanes; listed there with Remove. It takes one of the ten send slots (Pro Tools' additional outputs do not); it is shown in its send slot like a send |
 | Refuse or warn about a feedback loop | ● | ● | ● | ● | **Works**: refused, for outputs, inputs and sends |
 | Routing folders, nested | ● | ● | ● | ● | **Works** |
 
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | several outputs from one track (additional outputs) |
 | 2026-11-17 | minor | automation Preview and Punch Preview |
 | 2026-11-17 | minor | surround pan lanes; pencil shapes; basic folders; a stop lets the mix ring out with its meters; the wet/dry Mix of an insert is automatable (section 5); what is left stated on every open row |
 | 2026-11-17 | minor | built-in channel processing and AAF/OMF marked not planned here; the Ambisonics rows corrected (3rd-order tracks and encoding, orders above refused) |

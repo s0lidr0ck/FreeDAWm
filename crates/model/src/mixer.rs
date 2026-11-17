@@ -1131,11 +1131,26 @@ pub struct SendSlot {
     /// The send's pan follows the track's main pan (and its automation) instead of its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pan_follows_main: bool,
+    /// An additional output (Pro Tools'): a post-fader copy of the main output into `target`, at
+    /// the fader's level and with the main pan, whatever the send's own level, pan, mute and
+    /// lanes say. It takes a send slot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub output: bool,
 }
 
 impl SendSlot {
     pub fn new(target: Route) -> Self {
-        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None, pan_follows_main: false }
+        SendSlot {
+            target,
+            level_db: -144.0,
+            pan: 0.0,
+            mute: false,
+            pre_fader: false,
+            follow_main_pan: true,
+            surround: None,
+            pan_follows_main: false,
+            output: false,
+        }
     }
 }
 

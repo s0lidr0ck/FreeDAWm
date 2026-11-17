@@ -2890,7 +2890,10 @@ impl MixEngine {
             if strip.silent && !(snd.pre_fader && pre_ignores_mute) {
                 continue;
             }
-            let src = if snd.pre_fader { &strip.pre } else { &strip.buf };
+            // An additional output is the main output again: post-fader, unity, the main pan.
+            let as_output = snd.output;
+            let pre_fader = snd.pre_fader && !as_output;
+            let src = if pre_fader { &strip.pre } else { &strip.buf };
             // A send reaches a bus, or a hardware output (or the main mix) directly.
             let dst: (&mut Vec<Vec<f32>>, ChannelFormat) = match out_dest(s, &snd.target) {
                 Dest::Bus(b) => match self.busses.get_mut(&b) {
@@ -2905,25 +2908,25 @@ impl MixEngine {
                 Dest::None => continue,
             };
             let (dst_buf, dst_fmt) = dst;
-            let apos = back(if snd.pre_fader { strip.pre_at } else { strip.post_at });
-            let follows = snd.surround.is_none() && snd.follow_main_pan;
+            let apos = back(if pre_fader { strip.pre_at } else { strip.post_at });
+            let follows = as_output || (snd.surround.is_none() && snd.follow_main_pan);
             // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
             // block size (playback or bounce) sends the same.
             let mut start = 0;
             while start < frames {
-                let (at, end) = send_segment(t, i, apos, start, frames);
+                let (at, end) = if as_output { pan_segment(t, apos, start, frames) } else { send_segment(t, i, apos, start, frames) };
                 let span = start..end;
                 start = end;
-                if send_muted(t, i, snd.mute, at) {
+                if !as_output && send_muted(t, i, snd.mute, at) {
                     continue;
                 }
-                let gain = db_to_gain(send_level(t, i, snd.level_db, at));
+                let gain = if as_output { 1.0 } else { db_to_gain(send_level(t, i, snd.level_db, at)) };
                 if gain <= 0.0 {
                     continue;
                 }
                 // Mono sends use the send's own pan; a stereo send's pan balances it (see
                 // `stereo_send_pans`). A send whose pan follows the main pan takes the track's.
-                let stereo = if snd.pan_follows_main {
+                let stereo = if snd.pan_follows_main || as_output {
                     [pan_at(t, 0, at), pan_at(t, 1, at)]
                 } else {
                     let p = send_pan(t, i, snd.pan, at);
@@ -2931,7 +2934,7 @@ impl MixEngine {
                 };
                 // A send following the main pan follows its surround lanes too.
                 let main_sp = if follows { surround_at(t, at) } else { None };
-                let surround = snd.surround.as_ref().or(main_sp.as_ref());
+                let surround = if as_output { main_sp.as_ref() } else { snd.surround.as_ref().or(main_sp.as_ref()) };
                 let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
                 apply_matrix_span(src, span, dst_buf, &m, gain);
             }
@@ -10721,6 +10724,42 @@ mod tests {
         assert!(quiet[0].iter().all(|x| x.abs() < 1e-4), "the lane plays");
         s.track_mut(t).unwrap().automation[0].suspended = true;
         assert_eq!(render_range(&s, Range::new(0, 4096), 1024), plain, "suspended: the fader as set");
+    }
+
+    /// An additional output is the main output again: a track with no main output and an extra
+    /// output to the main mix sounds as one with its main output there, fader, pan, their
+    /// automation and mute included, whatever the slot's own send level, pan, mute and lanes say.
+    #[test]
+    fn an_additional_output_is_a_copy_of_the_main_output() {
+        let (mut s, t) = session_with_dc(0.5, 8192);
+        s.edit.click = false;
+        {
+            let tr = s.track_mut(t).unwrap();
+            tr.mixer.volume_db = -6.0;
+            tr.mixer.pan = vec![0.4];
+            let mut pan = soundcraft_model::AutomationLane::new(AutoParam::Pan(0));
+            pan.set_point(0, -0.8);
+            pan.set_point(8192, 0.8);
+            tr.automation.push(pan);
+            // The slot's own controls and lanes, which an output ignores.
+            let mut lvl = soundcraft_model::AutomationLane::new(AutoParam::SendLevel(0));
+            lvl.set_point(0, -144.0);
+            tr.automation.push(lvl);
+        }
+        let main = render_range(&s, Range::new(0, 4096), 1024);
+        {
+            let tr = s.track_mut(t).unwrap();
+            tr.mixer.output = Route::None;
+            let mut out = soundcraft_model::SendSlot::new(Route::Main);
+            out.output = true;
+            out.level_db = -144.0;
+            out.mute = true;
+            out.pan = -1.0;
+            tr.mixer.sends[0] = Some(out);
+        }
+        assert_eq!(render_range(&s, Range::new(0, 4096), 1024), main);
+        s.track_mut(t).unwrap().mixer.mute = true;
+        assert!(render_range(&s, Range::new(0, 4096), 1024)[0].iter().all(|x| *x == 0.0), "the track's mute silences it");
     }
 
     fn impulse_at(ch: &[f32]) -> Vec<usize> {

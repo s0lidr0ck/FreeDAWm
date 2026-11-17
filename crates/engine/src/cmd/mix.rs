@@ -166,7 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assign Send",
             [],
             None,
-            "{track?, slot?: 0..9|a..j, bus: name | output: hardware output name | to_track: track (its input becomes a bus the send feeds), level_db?: 0 (kept when re-targeting), pre_fader?: false, pan_follows_main?: bool}",
+            "{track?, slot?: 0..9|a..j, bus: name | output: hardware output name | to_track: track (its input becomes a bus the send feeds), level_db?: 0 (kept when re-targeting), pre_fader?: false, pan_follows_main?: bool, as_output?: bool (an additional output: a post-fader copy of the main output at the fader's level and the main pan)}",
             has_selection,
             send
         ),
@@ -602,6 +602,7 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
     sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
+    as_output(&mut sl, p);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
@@ -614,6 +615,18 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
         aux
     });
     Ok(json!({"slot": slot, "bus": bid, "return": ret}))
+}
+
+/// `as_output: true` makes the send an additional output (`SendSlot::output`): post-fader, at
+/// unity, with the main pan; false makes it an ordinary send again; absent keeps what it was.
+fn as_output(sl: &mut SendSlot, p: &Value) {
+    sl.output = bool_or(p, "as_output", sl.output);
+    if sl.output {
+        sl.level_db = 0.0;
+        sl.pre_fader = false;
+        sl.mute = false;
+        sl.pan_follows_main = true;
+    }
 }
 
 /// A send straight to a hardware output (a cue mix, an outboard effect): by the output's name.
@@ -632,6 +645,7 @@ fn send_to_output(e: &mut Engine, p: &Value, t: TrackId, explicit: Option<usize>
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
     sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
+    as_output(&mut sl, p);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
@@ -1236,6 +1250,19 @@ fn copy_to_send(e: &mut Engine, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    /// `mix.send` `as_output`: an additional output, post-fader at unity with the main pan.
+    #[test]
+    fn a_send_made_an_additional_output() {
+        let mut e = crate::Engine::default();
+        e.execute("track.new", &serde_json::json!({"count": 1, "name": "A"})).unwrap();
+        e.execute("mix.send", &serde_json::json!({"track": "A", "bus": "Out 2", "level_db": -10.0, "pre_fader": true, "as_output": true})).unwrap();
+        let snd = e.session().tracks[0].mixer.sends[0].clone().unwrap();
+        assert!(snd.output && snd.pan_follows_main && !snd.pre_fader && !snd.mute);
+        assert_eq!(snd.level_db, 0.0);
+        e.execute("mix.send", &serde_json::json!({"track": "A", "slot": 0, "bus": "Out 2", "as_output": false})).unwrap();
+        assert!(!e.session().tracks[0].mixer.sends[0].clone().unwrap().output);
+    }
+
     use super::*;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
