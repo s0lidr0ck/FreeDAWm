@@ -42,8 +42,8 @@ about 28, and none to about 20.
   summing folders, and remote recording over the internet.
 - **Where it has nothing:** a clip launcher (Pro Tools Sketch, Studio Pro Launcher, Logic Live
   Loops: three of the four now have one), a mastering or release page, a live-show page,
-  Dolby Atmos objects and renderer, AAF/OMF exchange, modulators, articulation maps, a loop
-  library, ARA. (A control room with cue mixes, mixer snapshots and Mackie/HUI surfaces have
+  Dolby Atmos objects and renderer, AAF/OMF exchange, a loop library, ARA. (Modulators and
+  articulation maps have since been built.) (A control room with cue mixes, mixer snapshots and Mackie/HUI surfaces have
   since been built in sections 3 and 6.)
 - **What it has that none of the four does:** an interface for scripts and AI agents that reaches
   every command; a mix analyser that asks an AI model for advice and draws it on the EQ; local
@@ -61,7 +61,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Hardware DSP mixing with near-zero monitoring latency (HDX, Carbon) | **Not planned here** | Needs one maker's DSP hardware. A software low-latency monitoring path, for audio tracks |
 | AAF and OMF exchange with video editors | **Not planned here** | DAWproject both ways instead. Large formats with little public documentation, and no AAF or OMF files from Pro Tools or a video editor here to build and test against (the owner's call whether to source some) |
 | Import chosen tracks and settings from another session | **Works** | Import Session Data, with audio and sampler samples |
-| Field-recorder workflow: match and expand location recordings by metadata | **Missing** | Broadcast WAV description is read and written; no iXML, no matching |
+| Field-recorder workflow: match and expand location recordings by metadata | **Missing** (designed) | Broadcast WAV description is read and written; no iXML, no matching. Design below (*Designs, round three, second pass*): iXML read on import first, then expanding a clip to its location channels by timecode, scene and take; not built (not reached) |
 | Clip effects: EQ and dynamics per clip, live | **Works** | Per-clip EQ, compressor and gain, with copy, paste and render |
 | Beat Detective across many tracks, phase kept | **Partial** | Finds hits across selected tracks and cuts all at the same points; conforming is done by Detect Tempo › Straighten; no trigger editing or edit smoothing |
 | Sketch: a clip-launcher window, also on a tablet | **Not planned here** | The clip launcher is skipped by the owner. DAWproject import drops launcher clips and says so |
@@ -80,13 +80,13 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
 | Project page: master an album in the same app, songs update from their mixes, DDP and digital release | **Not planned here** | The mastering page is tabled by the owner (design below). Bounce to a loudness target with a true-peak ceiling |
-| Show page: set lists for playing live | **Missing** | |
+| Show page: set lists for playing live | **Missing** (designed) | Not among the pages the owner skipped (the mastering page is tabled, not this one). Design below: a set list of memory locations played in order inside one session first, switching sessions later; not built (not reached) |
 | Scratch pads: try another arrangement beside the song | **Missing** | Playlists per track are the nearest thing. [Section 4](04-editing-audio.md)'s row (alternative arrangements); not reached here |
 | Arranger track: drag sections to reorder the song | **Partial** | Sections exist for the Band; moving one does not move track audio or MIDI |
 | Chord track that re-pitches audio as well as MIDI | **Partial** | Chords drive the Band and re-pitch single-line vocals (Fit to Lead, Make Harmony); MIDI clips follow the chord lane, per clip, opt in ([section 7](07-midi-writing.md)); chordal audio does not |
-| Mix Engine FX: one console model across every channel of a bus | **Missing** | |
+| Mix Engine FX: one console model across every channel of a bus | **Missing** (designed) | Design below: a per-bus summing model (shaper, crosstalk, per-channel tolerance), off by default so no session changes; not built (not reached) |
 | Splitter and extended chains: parallel and band-split routing inside the inserts, macro knobs | **Not planned here** | Skipped by the owner (rack and macros). Inserts are a straight chain; linked plug-ins share values, which is not a macro |
-| Sound variations (articulations for orchestral libraries) | **Missing** | Keyswitches exist only inside the Band's instrument profiles |
+| Sound variations (articulations for orchestral libraries) | **Works** (`e16557a`) | A track's articulations, each with its keyswitch (the input menu › Articulations, `track.articulations`), chosen in clips by a controller lane (CC 3 by default) whose value picks one: playback and chase send the keyswitch in its place. Per-note articulations, other switch kinds and map import are left (design below) |
 | Launcher: clips and scenes tied to the arrangement | **Not planned here** | The clip launcher is skipped by the owner |
 | Lyrics track, lyrics in the score and on a display | **Partial** | Lyrics lane and sheet, a teleprompter for the singer, rhymes and word tools; no lyrics in the score |
 | Drag and drop for everything | **Partial** | Plug-in to track or to empty space, audio to sampler, files from the system; nothing drags out |
@@ -109,20 +109,20 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Drum Machine Designer, Alchemy, Sculpture and the rest of the instrument set | **Partial** | A capable drum machine and a one-sample sampler; nothing like the synths ([section 7](07-midi-writing.md#l-instruments-in-the-box)) |
 | Smart Controls; tablet remote with touch instruments | **Partial** | A few key knobs per insert on the mixer; transport-only phone remote |
 | Track Stacks and patches | **Works** | Routing folders sum their tracks; track and chain presets carry their samples |
-| Scripter and the Environment | **Missing** | Scripting is from outside the app only |
+| Scripter and the Environment | **Partial** (design only) | Scripting is from outside the app only. A script MIDI effect is designed below on Rhai (`rhai`, a new dependency, so it waits for the owner); the Environment is not planned (MIDI effects, MIDI to Track and Input Transform cover its common uses) |
 | Spatial audio with binaural monitoring and head tracking | **Partial** | Surround panning; no binaural path |
 | A very large sound and loop library; loops follow tempo and key; one browser for everything | **Not planned here** | Content and licences, the owner's call. The browser lists plug-ins and presets; shipped content is about 20 MB |
 | Round trip with the tablet edition and with MainStage | **Not planned here** | Apple's own apps and formats |
 | Chord ID from audio | **Works** | Detect Chords writes the chord lane |
 | Flashback capture | **Partial** | MIDI: Capture MIDI makes a take of what was just played ([section 6](06-midi-recording.md#g-punch-count-in-and-capture)); audio played before Record is not kept ([section 2](02-recording-audio.md)) |
-| Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer; no automation rows, no articulations |
+| Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer; no automation rows. Articulation sets are a track's articulations now (Studio Pro's row) |
 | Assistant that operates the app from a prompt (13, by subscription) | **Partial** | No assistant inside the app; an outside agent can operate every command (section F) |
 
 ## D. Cubase
 
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
-| Expression Maps and Note Expression | **Missing** | |
+| Expression Maps and Note Expression | **Partial** | Expression maps as articulations switched by keyswitch, chosen by a controller lane (`e16557a`, Studio Pro's sound variations row; Cubase's direction type). Left: the attribute type (per note), map import, and Note Expression, which is per-note controller data ([section 7](07-midi-writing.md)'s MPE row) |
 | VariAudio: pitch and formant editing, harmonies from the chord track | **Works** | Note-based tuning with formant-preserving resynthesis; Make Harmony follows the chords; a view of every vocal track with clashes marked |
 | Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths, and a chord stamp for the Pencil ([section 7](07-midi-writing.md)); no pads, no suggestions |
 | Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
@@ -156,7 +156,7 @@ noticed, and the ones sections 1–7 did not already list:
 | Chord track that existing clips follow | ◐ | ● | ● | ● | **Partial** (MIDI clips, opt in; not audio) |
 | ARA 2 | ● | ● | ● | ● | **Not planned here** (no SDK in the tree) |
 | An assistant inside the app | ○ | ● | ● | ○ | **Partial** (Scout advises on the mix only) |
-| Tablet or phone remote | ● | ● | ● | ● | **Partial** |
+| Tablet or phone remote | ● | ● | ● | ● | **Partial** (a phone page on the local network: transport, record, arm, markers; left: mixing from it, see B) |
 
 ## F. What FreeDAWm has that none of the four does
 
@@ -212,7 +212,7 @@ local link allows in the Network window (row 6).
 | Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (aee379b): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
 | Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Not planned here**: rack and macros skipped by the owner |
-| Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)); still Missing there |
+| Modulators for any parameter | 10–16 | Also in section 5's list | **Done** in [section 5](05-built-in-effects.md) (eee0a00) |
 | Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback | **Done** in [section 3](03-mixing.md) (ec5efc3) |
 | Mixer snapshots | 6–10 | | **Done** in [section 3](03-mixing.md) (Window › Mix Snapshots) |
 | Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first | **Deferred by the owner** (2026-11-16): not to be built for now |
@@ -409,6 +409,71 @@ same pass as the items above; these are the starting points.
   is left to the system. *Order:* VST3 first (built in round three; its test plug-in is in the tree, so it was a
   tested step), then the CLAP editor (needs a desktop session to test), then AU (needs a Mac).
 
+**Designs (round three, second pass).** Written for the rows the first round-three pass did not
+reach; what was built is said in each.
+
+- *Sound variations and expression maps (built).* One feature closes the Studio Pro and Cubase
+  rows: a track's **articulations** (`Track::articulations`: a name and a keyswitch each, and the
+  controller lane that chooses, CC 3 by default), set in the instrument track's input menu ›
+  Articulations (`track.articulations`). A clip chooses one with a point on that lane whose value
+  is the articulation's number ("Set Here" puts one at the insertion point; the MIDI editor's
+  controller lane draws and moves them like any point): playback and chase send the keyswitch (a
+  short note on the point's channel) instead of the controller (`mix` `send_ctrl`), so a
+  locate in the middle of a passage plays it the right way, and cut, copy, split and merge keep
+  the changes because they are controller points. Left: per-note articulations (Studio Pro's and
+  Cubase's attribute type, which needs a field on every note), articulations switched by
+  program change or controller instead of a key, the lane drawn with the articulations' names,
+  and importing a library's map files (Cubase's `.expressionmap` is XML; Studio Pro's are
+  `.soundvariation`): each a later step on this model.
+- *Scripter (Logic) (design only).* Logic's Scripter runs JavaScript on the MIDI going into an
+  instrument. FreeDAWm's MIDI effects run on the audio thread without allocating
+  (`mix::midi_fx`); a script engine cannot promise that, so a script would run as a MIDI effect
+  of its own whose engine lives on a worker thread fed by lock-free rings, one block late, or,
+  better, run in the block with a hard instruction budget and no allocation after load. The
+  candidate is **Rhai** (`rhai`, MIT or Apache-2.0, pure Rust, no unsafe needed in our code, a
+  sandbox with operation limits): small, embeddable, and its `Engine::set_max_operations`
+  bounds a call. A script defines `handle(event)` and `process(block)` (as Scripter's
+  `HandleMIDI` and `ProcessMIDI`), sees the song position and tempo, and sends events with
+  `send(event, offset)`; parameters it declares become automatable knobs like the built-in
+  effects'. It is a new dependency, so it waits for the owner's yes; until then the four
+  built-in MIDI effects, Input Transform and the scripting interface from outside (every
+  command, section F) are the answer. The Environment (Logic's patchable MIDI objects) is not
+  planned: the MIDI effects list, MIDI to Track and the input transformer cover its common uses.
+- *Mix Engine FX (Studio Pro) (design only).* A console model applied across every channel
+  summed into a bus: each input of the bus gets the same non-linear stage (drive, crosstalk
+  between neighbours, a little noise and tolerance per channel so they differ) before the sum.
+  In FreeDAWm the sum is `mix`'s bus accumulation, so the stage would be a per-bus setting
+  (`Bus::summing`: off, or a model and drive) applied to each source as it is added: the model
+  is a static waveshaper plus a gentle filter per channel (the "Console Shaper" idea), with
+  each channel's tolerance seeded from the track id so a bounce repeats. Crosstalk mixes a small
+  part of each channel into its neighbours in track order. Cost is one shaper per source per
+  bus; nothing allocates. Folders that sum (routing folders) get the same setting. End state:
+  a Summing menu on the bus strip with two or three models (clean, console, tape) and a drive
+  knob, off by default so no session changes sound; bounce and freeze hear it. About a day
+  with tests (a sine through two tracks into a summing bus shows the model's harmonics and the
+  crosstalk; off is bit-identical to today).
+- *Field-recorder workflow (Pro Tools) (design only).* Location sound comes as polyphonic or
+  mono WAV files with iXML (scene, take, tape, channel names, timecode) beside the Broadcast WAV
+  `bext` chunk FreeDAWm already reads and writes. Step 1, the smallest useful one: read iXML on
+  import (`audio-io`: the `iXML` chunk as text, parsed for SCENE, TAKE, TAPE, TRACK_LIST names
+  and the BWF time reference) and keep it on the source, shown in the clip's properties and
+  searchable in the clip list, with the channel names naming the tracks a polyphonic file splits
+  into. Step 2: *expand* — for a clip of the edit (from a picture editor's export, mixed down),
+  find the files in a chosen folder whose timecode overlaps it and whose scene and take match,
+  and put each of their channels on a new track at the same place, cut to the clip's range.
+  Step 3: alternate takes (the same scene, another take) offered from the clip's menu. Tests
+  use generated WAV files with hand-written iXML, so nothing from outside is needed.
+- *Show page (Studio Pro) (design only).* A set list for playing live: an ordered list of songs
+  (sessions, or ranges of this session marked by memory locations), each with its own tempo,
+  a pause or "go straight on", and a big display of the current and next song, the bar and the
+  lyrics (the teleprompter already exists). The smallest useful step stays inside one session:
+  a **set list** of memory locations (`Session::set_list`: location ids in order, each with
+  "stop after" or "go on"), played in order by the transport (at the end of one range it locates
+  to the next), with Window › Set List to order them and a full-screen view of the song names.
+  Switching between sessions while playing (preloading the next session's audio and plug-ins
+  in the background) is step 2 and the larger part. Hardware (keyboards, players) is not
+  needed to build or test it.
+
 ## Sources
 
 Versions as in [section 1](01-playback-audio.md#sources). Release coverage used for this
@@ -426,6 +491,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Sound variations and expression maps built as track articulations chosen by a controller lane; designs for Scripter, Mix Engine FX, the field-recorder workflow and the show page; the modulators row in the work list says done |
 | 2026-11-17 | minor | Logical Editor: Partial, for notes (the rule-based transformer of section 7) |
 | 2026-11-17 | minor | Plug-ins in their own process: VST3 plug-ins run there too (the option is now for CLAP and VST3) |
 | 2026-11-17 | minor | Plug-ins in their own process: the plug-in's own presets listed and loaded through its process |
