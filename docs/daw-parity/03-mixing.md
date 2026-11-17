@@ -52,12 +52,12 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Audio, aux, instrument, MIDI, master, VCA, folder channels | ● | ● | ● | ● | **Works** |
 | Folder that only organises (no audio path) | ● | ● | ● | ● | **Missing**: every folder is a routing folder |
-| Formats from mono to 7.1.4 and wider | ● | ● | ● | ● | **Works** up to 16 channels; Ambisonics orders 4–7 are offered and silently truncated |
+| Formats from mono to 7.1.4 and wider | ● | ● | ● | ● | **Works** up to 16 channels (3rd-order Ambisonics); orders 4–7 are refused with a message (`track.new`, `track.change_width`, buses), not truncated |
 | Change a track's format later | ◐ | ● | ● | ◐ | **Works** |
 | Input trim and polarity on the strip | ● | ● | ● | ● | **Works**: trim, and a Ø button beside it on the strip's preamp row: a click inverts every channel, a right-click single ones (`mix.phase_invert` `channel`) |
 | Fader to +12 dB | ● | ◐ | ◐ | ◐ | **Works** |
 | Per-track delay in samples or ms | ● | ● | ● | ● | **Works**: Track › Strip › Delay (`mix.track_delay`, samples or ms, up to 192 000 samples), before the inserts, left in by delay compensation |
-| Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Missing**: everything is an insert |
+| Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden (owner decision 4); a strip's EQ and dynamics are inserts (CleanQ, Comp), which a track preset or a chain preset puts on every new track |
 | Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded |
 
 ## B. Panning
@@ -196,7 +196,7 @@ K-system scales, and the master a loudness meter.
 | Several formats in one pass | ● | ◐ | ● | ● | **Works**: Also write in the Bounce dialog (`also`): more formats from the same render, each beside the main file with its own extension (MP3 and Opus at their default bitrate; a surround mix needs a fold-down or a split for them) |
 | Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Works**: Export › Stems takes every unmuted track or the selected ones, and a stem of each bus as summed (`tracks`, `busses`), behind a progress window with Cancel; a track's stem is it soloed through the master |
 | Commit, freeze, bounce in place | ● | ● | ● | ● | **Works**: commit keeps the format, the pan and the fader automation |
-| AAF or OMF | ● | ● | ● | ● | **Missing** |
+| AAF or OMF | ● | ● | ● | ● | **Not planned here**: needs sample AAF and OMF files from other applications to build and test against, which the owner is sourcing; DAWproject covers session exchange with Studio Pro and Cubase meanwhile |
 | DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
 
 ## I. Surround and immersive
@@ -209,7 +209,7 @@ K-system scales, and the master a loudness meter.
 | Binaural monitoring | ● | ● | ● | ● | **Not planned here**: needs a measured head-related impulse response set, content the owner sources |
 | ADM BWF export | ● | ● | ● | ● | **Not planned here**: ADM BWF is the Atmos master's container and carries objects; with Atmos objects and a renderer not planned it has nothing to carry beyond a bed, which a WAV with a speaker mask already does |
 | Surround pan automation | ● | ● | ● | ● | **Missing** |
-| Ambisonics | ● | ○ | ○ | ● | **Partial**: first order only |
+| Ambisonics | ● | ○ | ○ | ● | **Partial**: tracks and busses to 3rd order; the panner encodes a source into every order present (SN3D, ACN); decoding to speakers is first order |
 | Correct loudness for 7.1 and wider | ● | ● | ● | ● | **Works**: every layout weighted by its speakers |
 
 Immersive delivery is gap G-12 in [`gaps.md`](../gaps.md). Since Studio One 6.5 all four ship an
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | built-in channel processing and AAF/OMF marked not planned here; the Ambisonics rows corrected (3rd-order tracks and encoding, orders above refused) |
 | 2026-11-17 | minor | instrument parameters were automated in the MIDI writing work; the suggested order brought up to date |
 | 2026-11-17 | minor | automation on tick-timebase tracks follows tempo changes |
 | 2026-11-17 | minor | copy a strip's settings onto the selected tracks |
