@@ -51,6 +51,9 @@ pub struct OpsState {
     pub human_timing: i64,
     pub human_velocity: i64,
     pub half_time: bool,
+    /// Flam: ticks before each note, and the grace note's velocity in percent of the note's.
+    pub flam_ticks: i64,
+    pub flam_velocity: f64,
     /// Select Notes: pitch, velocity and length (ticks) ranges, the beats of the bar a note
     /// starts in (1-based, fractional), and whether matching notes move to a new track instead.
     pub rule_pitch: (i64, i64),
@@ -105,6 +108,8 @@ impl Default for OpsState {
             human_timing: 10,
             human_velocity: 8,
             half_time: true,
+            flam_ticks: 30,
+            flam_velocity: 70.0,
             rule_pitch: (0, 127),
             rule_velocity: (1, 127),
             rule_length: (1, 15_360),
@@ -456,7 +461,7 @@ fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// The MIDI Operations window's operations.
-pub const MIDI_OPS: [&str; 12] = [
+pub const MIDI_OPS: [&str; 14] = [
     "select notes",
     "quantize",
     "transpose",
@@ -465,7 +470,9 @@ pub const MIDI_OPS: [&str; 12] = [
     "fix overlaps",
     "humanize",
     "strum",
+    "flam",
     "reverse",
+    "invert pitches",
     "half or double time",
     "flatten performance",
     "restore performance",
@@ -512,6 +519,8 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
         "humanize" => ("event.humanize", json!({"timing": o.human_timing, "velocity": o.human_velocity})),
         "strum" => ("event.strum", json!({"ticks": o.strum_ticks, "direction": if o.strum_up { "up" } else { "down" }})),
         "reverse" => ("event.reverse_notes", json!({})),
+        "invert pitches" => ("event.invert_pitch", json!({})),
+        "flam" => ("event.flam", json!({"ticks": o.flam_ticks, "velocity": o.flam_velocity})),
         "half or double time" => ("event.time_scale", json!({"factor": if o.half_time { 2.0 } else { 0.5 }})),
         "select notes" => {
             let mut p = json!({
@@ -623,6 +632,13 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.radio_value(&mut app.ops.strum_up, true, "Up (lowest first)");
                     ui.radio_value(&mut app.ops.strum_up, false, "Down");
                 });
+            }
+            "flam" => {
+                ui.add(egui::Slider::new(&mut app.ops.flam_ticks, 1..=240).text("Ticks before"));
+                ui.add(egui::Slider::new(&mut app.ops.flam_velocity, 0.0..=200.0).text("Grace velocity %"));
+            }
+            "invert pitches" => {
+                ui.label("Mirrors the pitches around the middle of their range.");
             }
             "half or double time" => {
                 ui.horizontal(|ui| {

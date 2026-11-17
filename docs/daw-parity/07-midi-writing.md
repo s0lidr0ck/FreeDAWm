@@ -127,7 +127,7 @@ The gaps are of four kinds:
 | Snap notes to the scale or the chord | ◐ | ● | ● | ● | **Works**, following the key ruler |
 | Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Works**: legato, set, add and scale length (bug 7, fixed) and Fix Overlaps in the MIDI Operations window, on the selected notes |
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
-| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Partial**: strum (up or down), reverse, half and double time in the MIDI Operations window; no flam or pitch inversion |
+| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Works**: strum (up or down), flam (a grace note of the same pitch a set number of ticks before each note, at a share of its velocity; `event.flam`), reverse, invert pitches (mirrored around the middle of their range, or a given pitch; `event.invert_pitch`), half and double time in the MIDI Operations window |
 | Split notes out by pitch or channel | ● | ● | ● | ● | **Flag only** |
 | Rule-based transformer | ◐ | ◐ | ● | ● | **Missing** |
 
@@ -432,3 +432,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Change Velocity… limits, randomises and compresses or expands |
 | 2026-11-17 | minor | Notes entered and edited in the score (click, keys, step entry), spelled in the key |
 | 2026-11-17 | minor | Transpose within the key, by steps of the key on the Key ruler |
+| 2026-11-17 | minor | Flam and pitch inversion in the MIDI Operations window |
