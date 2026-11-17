@@ -1,5 +1,10 @@
-//! Subtractive Synth: 16-voice polyphonic, two PolyBLEP oscillators, resonant state-variable
-//! low-pass (TPT form) with its own ADSR, amp ADSR, optional glide.
+//! Subtractive Synth: 16-voice polyphonic, two PolyBLEP oscillators with a sub oscillator (a
+//! square an octave below oscillator 1) and noise, a resonant state-variable filter (TPT form;
+//! 12 or 24 dB low-pass, high-pass, band-pass or notch) with its own ADSR and key tracking, amp
+//! ADSR, an LFO (sine, triangle, square or saw) to pitch, cutoff and level, poly, mono or legato
+//! play, optional glide. The parameters past Mod Wheel Vibrato came later and default to the
+//! sound the synth had before them (12 dB low-pass, LFO amounts, sub, noise and key tracking at
+//! 0, poly), so sessions saved before sound as they did.
 
 use crate::osc::{Osc, Waveform};
 use crate::params::{Params, choice, lin, log, param_plumbing};
@@ -88,7 +93,11 @@ fn wave(i: usize) -> Waveform {
     }
 }
 
-static SYNTH_PARAMS: [ParamInfo; 21] = [
+const FILTERS: &[&str] = &["Low-pass 12 dB", "Low-pass 24 dB", "High-pass", "Band-pass", "Notch"];
+const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Saw"];
+const MODES: &[&str] = &["Poly", "Mono", "Legato"];
+
+static SYNTH_PARAMS: [ParamInfo; 31] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
     choice("osc2_wave", "Osc 2", WAVES, 0),
     lin("osc2_semitones", "Osc 2 Pitch", -24.0, 24.0, 0.0, Unit::Semitones),
@@ -111,7 +120,27 @@ static SYNTH_PARAMS: [ParamInfo; 21] = [
     // The pitch bend's throw each way, and the vibrato (cents each way) the mod wheel brings in.
     lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
     lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
+    choice("filter_type", "Filter Type", FILTERS, 0),
+    lin("key_track", "Key Tracking", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("sub_level", "Sub Osc", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("noise_level", "Noise", 0.0, 100.0, 0.0, Unit::Percent),
+    choice("lfo_wave", "LFO Wave", LFO_WAVES, 0),
+    log("lfo_rate", "LFO Rate", 0.05, 30.0, 5.0, Unit::Hz),
+    lin("lfo_pitch", "LFO to Pitch", 0.0, 1200.0, 0.0, Unit::Cents),
+    lin("lfo_cutoff", "LFO to Cutoff", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("lfo_amp", "LFO to Level", 0.0, 100.0, 0.0, Unit::Percent),
+    choice("voice_mode", "Voice Mode", MODES, 0),
 ];
+const FILTER_TYPE: usize = 21;
+const KEY_TRACK: usize = 22;
+const SUB_LEVEL: usize = 23;
+const NOISE_LEVEL: usize = 24;
+const LFO_WAVE: usize = 25;
+const LFO_RATE: usize = 26;
+const LFO_PITCH: usize = 27;
+const LFO_CUTOFF: usize = 28;
+const LFO_AMP: usize = 29;
+const VOICE_MODE: usize = 30;
 const BEND_RANGE: usize = 19;
 const MOD_WHEEL: usize = 20;
 
@@ -216,7 +245,35 @@ struct Svf {
 }
 
 impl Svf {
+    /// One sample through the filter as `kind` ([`FILTERS`]: 0 and 1 low-pass, 2 high-pass, 3
+    /// band-pass, 4 notch).
     #[inline]
+    fn run(&mut self, x: f32, g: f32, k: f32, kind: usize) -> f32 {
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        let a2 = g * a1;
+        let a3 = g * a2;
+        let v3 = x - self.ic2;
+        let v1 = a1 * self.ic1 + a2 * v3;
+        let v2 = self.ic2 + a2 * self.ic1 + a3 * v3;
+        self.ic1 = crate::util::flush(2.0 * v1 - self.ic1);
+        self.ic2 = crate::util::flush(2.0 * v2 - self.ic2);
+        let y = match kind {
+            2 => x - k * v1 - v2,
+            3 => v1,
+            4 => x - k * v1,
+            _ => v2,
+        };
+        if y.is_finite() {
+            y
+        } else {
+            *self = Svf::default();
+            0.0
+        }
+    }
+
+    /// The low-pass the synth had before the filter types (kept to check `run` against it).
+    #[inline]
+    #[cfg(test)]
     fn lowpass(&mut self, x: f32, g: f32, k: f32) -> f32 {
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
@@ -246,6 +303,10 @@ struct Voice {
     amp: Adsr,
     filt: Adsr,
     svf: Svf,
+    /// The second stage of the 24 dB low-pass.
+    svf2: Svf,
+    sub: Osc,
+    noise: u32,
     age: u64,
     held: bool,
     /// Released while the sustain pedal was down.
@@ -264,6 +325,9 @@ impl Voice {
             amp: Adsr::new(),
             filt: Adsr::new(),
             svf: Svf::default(),
+            svf2: Svf::default(),
+            sub: Osc::new(seed.wrapping_mul(104_729)),
+            noise: seed.wrapping_mul(2_654_435_761).max(1),
             age: 0,
             held: false,
             sustained: false,
@@ -302,6 +366,11 @@ pub struct SubtractiveSynth {
     wheel: f32,
     /// The vibrato's phase (0..1).
     vib_phase: f32,
+    /// The LFO's phase (0..1).
+    lfo_phase: f32,
+    /// Mono and Legato: the keys held, oldest first (the last one sounds).
+    mono_held: [u8; 16],
+    mono_n: usize,
 }
 
 impl Default for SubtractiveSynth {
@@ -337,6 +406,9 @@ impl SubtractiveSynth {
             bend: 0.0,
             wheel: 0.0,
             vib_phase: 0.0,
+            lfo_phase: 0.0,
+            mono_held: [0; 16],
+            mono_n: 0,
         };
         s.update();
         s
@@ -360,6 +432,11 @@ impl SubtractiveSynth {
     fn start_note(&mut self, note: u8, vel: u8) {
         if vel == 0 {
             self.stop_note(note);
+            return;
+        }
+        if self.p.choice(VOICE_MODE) != 0 {
+            self.mono_push(note);
+            self.mono_play(note, vel, true);
             return;
         }
         self.counter += 1;
@@ -396,6 +473,7 @@ impl SubtractiveSynth {
                 v.osc1.reset();
                 v.osc2.phase = 0.37;
                 v.svf = Svf::default();
+                v.svf2 = Svf::default();
             }
             v.amp.gate_on();
             v.filt.gate_on();
@@ -406,7 +484,80 @@ impl SubtractiveSynth {
         self.last_freq = Some(freq);
     }
 
+    /// Mono and Legato: `note` joins the keys held (at the end).
+    fn mono_push(&mut self, note: u8) {
+        self.mono_pop(note);
+        if self.mono_n >= self.mono_held.len() {
+            self.mono_held.copy_within(1.., 0);
+            self.mono_n = self.mono_held.len() - 1;
+        }
+        if let Some(slot) = self.mono_held.get_mut(self.mono_n) {
+            *slot = note;
+            self.mono_n += 1;
+        }
+    }
+
+    fn mono_pop(&mut self, note: u8) {
+        let n = self.mono_n.min(self.mono_held.len());
+        if let Some(i) = self.mono_held.iter().take(n).position(|k| *k == note) {
+            self.mono_held.copy_within(i + 1..n, i);
+            self.mono_n = n - 1;
+        }
+    }
+
+    /// Mono and Legato: voice 0 plays `note`. Legato with the voice still held moves to it
+    /// without starting the envelopes again (gliding with Glide); Mono starts them again. `fresh`:
+    /// a key pressed (its velocity counts), not a return to a key still held.
+    fn mono_play(&mut self, note: u8, vel: u8, fresh: bool) {
+        self.counter += 1;
+        let freq = note_hz(f32::from(note.min(127)));
+        let legato = self.p.choice(VOICE_MODE) == 2;
+        let sens = self.p.v(17) / 100.0;
+        let glide = self.glide_coef > 0.0;
+        let counter = self.counter;
+        // Only voice 0 plays: the others stop.
+        for v in self.voices.iter_mut().skip(1) {
+            v.held = false;
+            v.amp.gate_off();
+            v.filt.gate_off();
+        }
+        if let Some(v) = self.voices.first_mut() {
+            let sounding = v.active() && v.held;
+            v.note = note;
+            v.target = freq;
+            if !(sounding && glide) {
+                v.freq = freq;
+            }
+            if !v.active() {
+                v.osc1.reset();
+                v.osc2.phase = 0.37;
+                v.svf = Svf::default();
+                v.svf2 = Svf::default();
+            }
+            if fresh {
+                v.vel = (1.0 - sens) + sens * f32::from(vel.min(127)) / 127.0;
+            }
+            if !(legato && sounding) {
+                v.amp.gate_on();
+                v.filt.gate_on();
+            }
+            v.age = counter;
+            v.held = true;
+            v.sustained = false;
+        }
+        self.last_freq = Some(freq);
+    }
+
     fn stop_note(&mut self, note: u8) {
+        if self.p.choice(VOICE_MODE) != 0 {
+            self.mono_pop(note);
+            let playing = self.voices.first().is_some_and(|v| v.held && v.note == note);
+            // Back to the last key still held, else let go.
+            if playing && let Some(prev) = self.mono_n.checked_sub(1).and_then(|i| self.mono_held.get(i)).copied() {
+                self.mono_play(prev, 100, false);
+                return;
+            }
+        }
         let sustain = self.sustain;
         for v in self.voices.iter_mut().filter(|v| v.held && v.note == note) {
             v.held = false;
@@ -435,6 +586,7 @@ impl SubtractiveSynth {
             EventKind::On(n, v) => self.start_note(n, v),
             EventKind::Off(n) => self.stop_note(n),
             EventKind::AllOff => {
+                self.mono_n = 0;
                 for v in &mut self.voices {
                     v.held = false;
                     v.sustained = false;
@@ -477,6 +629,28 @@ impl SubtractiveSynth {
         // the bend over its range, and the mod wheel's vibrato, as one frequency ratio
         let cents = self.pitch_cents();
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sr).fract();
+        // The LFO: one for every voice, -1..1.
+        let ph = self.lfo_phase;
+        let lfo = match self.p.choice(LFO_WAVE) {
+            1 => 1.0 - 4.0 * (ph - 0.5).abs(),
+            2 => {
+                if ph < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            3 => 2.0 * ph - 1.0,
+            _ => (std::f32::consts::TAU * ph).sin(),
+        };
+        self.lfo_phase = (self.lfo_phase + self.p.v(LFO_RATE) / sr).fract();
+        let cents = cents + self.p.v(LFO_PITCH) * lfo;
+        let lfo_oct = self.p.v(LFO_CUTOFF) / 100.0 * 4.0 * lfo;
+        let lfo_amp = 1.0 - self.p.v(LFO_AMP) / 100.0 * 0.5 * (1.0 - lfo);
+        let kind = self.p.choice(FILTER_TYPE);
+        let key_track = self.p.v(KEY_TRACK) / 100.0;
+        let sub_level = self.p.v(SUB_LEVEL) / 100.0;
+        let noise_level = self.p.v(NOISE_LEVEL) / 100.0;
         let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
         let mut out = 0.0;
         for v in &mut self.voices {
@@ -492,11 +666,24 @@ impl SubtractiveSynth {
             let fe = v.filt.next(&self.filt_rates);
             let s1 = v.osc1.next(w1, v.freq * bend / sr);
             let s2 = v.osc2.next(w2, v.freq * bend * ratio2 / sr);
-            let raw = s1 * (1.0 - mix) + s2 * mix;
-            let fc = (cutoff * 2f32.powf(env_oct * fe)).clamp(20.0, nyq);
+            let mut raw = s1 * (1.0 - mix) + s2 * mix;
+            if sub_level > 0.0 {
+                raw += sub_level * v.sub.next(Waveform::Square, v.freq * bend * 0.5 / sr);
+            }
+            if noise_level > 0.0 {
+                v.noise ^= v.noise << 13;
+                v.noise ^= v.noise >> 17;
+                v.noise ^= v.noise << 5;
+                raw += noise_level * (v.noise as f32 / u32::MAX as f32 * 2.0 - 1.0);
+            }
+            let track = if key_track > 0.0 { key_track * (f32::from(v.note) - 60.0) / 12.0 } else { 0.0 };
+            let fc = (cutoff * 2f32.powf(env_oct * fe + track + lfo_oct)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
-            let y = v.svf.lowpass(raw, g, k);
-            out += y * a * v.vel;
+            let mut y = v.svf.run(raw, g, k, kind);
+            if kind == 1 {
+                y = v.svf2.run(y, g, k, 1);
+            }
+            out += y * a * v.vel * lfo_amp;
         }
         out * 0.3
     }
@@ -532,6 +719,8 @@ impl Plugin for SubtractiveSynth {
         self.bend = 0.0;
         self.wheel = 0.0;
         self.vib_phase = 0.0;
+        self.lfo_phase = 0.0;
+        self.mono_n = 0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -689,5 +878,89 @@ mod tests {
             }
             assert!(last <= tail + 512, "{id}: sound until {last}, tail {tail}");
         }
+    }
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use super::*;
+
+    fn render(set: &[(&str, f32)], notes: &[(usize, u8)], frames: usize) -> Vec<f32> {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 1);
+        for (id, v) in set {
+            assert!(s.set_param(id, *v), "{id}");
+        }
+        let mut out = Vec::with_capacity(frames);
+        let mut io = vec![vec![0.0f32; 256]];
+        let mut at = 0;
+        while at < frames {
+            for (when, note) in notes.iter().filter(|(w, _)| (at..at + 256).contains(w)) {
+                s.note_on(when - at, *note, 100);
+            }
+            s.process(&mut io, 256);
+            out.extend_from_slice(&io[0]);
+            at += 256;
+        }
+        out
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    /// The new filter code at its defaults is the low-pass the synth had, sample for sample.
+    #[test]
+    fn the_default_filter_is_the_old_low_pass() {
+        let (mut a, mut b) = (Svf::default(), Svf::default());
+        for i in 0..2_000 {
+            let x = ((i * 7919) % 200) as f32 / 100.0 - 1.0;
+            assert_eq!(a.run(x, 0.3, 0.8, 0).to_bits(), b.lowpass(x, 0.3, 0.8).to_bits());
+        }
+    }
+
+    #[test]
+    fn high_pass_thins_a_low_note_the_low_pass_keeps() {
+        let low = |kind: f32| rms(&render(&[("filter_type", kind), ("cutoff", 2000.0), ("filter_env_amount", 0.0)], &[(0, 36)], 24_000)[4_000..]);
+        assert!(low(2.0) < low(0.0) * 0.5, "{} against {}", low(2.0), low(0.0));
+        // 24 dB takes off more of a bright saw above the cutoff than 12 dB.
+        let bright = |kind: f32| rms(&render(&[("filter_type", kind), ("cutoff", 200.0), ("filter_env_amount", 0.0)], &[(0, 72)], 24_000)[4_000..]);
+        assert!(bright(1.0) < bright(0.0), "{} against {}", bright(1.0), bright(0.0));
+    }
+
+    #[test]
+    fn the_lfo_to_level_makes_a_tremolo() {
+        let x = render(&[("lfo_amp", 100.0), ("lfo_rate", 4.0), ("lfo_wave", 2.0), ("amp_sustain", 100.0)], &[(0, 60)], 48_000);
+        // A square LFO at 4 Hz: full for an eighth of a second, then silent.
+        let a = rms(&x[2_000..5_000]);
+        let b = rms(&x[8_000..11_000]);
+        assert!(b < a * 0.1 || a < b * 0.1, "{a} {b}");
+    }
+
+    #[test]
+    fn sub_and_noise_add_to_the_sound_only_when_raised() {
+        let base = rms(&render(&[], &[(0, 60)], 12_000)[2_000..]);
+        assert!(rms(&render(&[("sub_level", 100.0)], &[(0, 60)], 12_000)[2_000..]) > base * 1.1);
+        assert!(rms(&render(&[("noise_level", 100.0), ("cutoff", 20000.0)], &[(0, 60)], 12_000)[2_000..]) > base * 1.1);
+        assert_eq!(render(&[("sub_level", 0.0), ("noise_level", 0.0)], &[(0, 60)], 4_096), render(&[], &[(0, 60)], 4_096));
+    }
+
+    #[test]
+    fn mono_plays_one_voice_and_returns_to_the_key_still_held() {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 1);
+        assert!(s.set_param("voice_mode", 2.0));
+        let mut io = vec![vec![0.0f32; 64]];
+        s.note_on(0, 60, 100);
+        s.note_on(1, 64, 100);
+        s.process(&mut io, 64);
+        assert_eq!(s.voices.iter().filter(|v| v.active() && v.held).count(), 1);
+        assert_eq!(s.voices[0].note, 64);
+        s.note_off(0, 64);
+        s.process(&mut io, 64);
+        assert_eq!((s.voices[0].note, s.voices[0].held), (60, true), "back to the key still held");
+        s.note_off(0, 60);
+        s.process(&mut io, 64);
+        assert!(!s.voices[0].held);
     }
 }

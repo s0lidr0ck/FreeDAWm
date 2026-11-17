@@ -236,7 +236,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Piano, electric piano, organ, strings and other sampled instruments | ● | ● | ● | ● | **Not planned here**: needs recorded samples the owner is sourcing; every imported MIDI part plays the synth |
-| Analogue-style synth | ● | ● | ● | ● | **Partial**: two oscillators (four waves), one 12 dB low-pass, two envelopes, glide, 16 voices, a Bend Range setting and mod-wheel vibrato. No LFO, unison, sub, noise, sync, mono mode, key tracking or effects. Mono output (the upgrade: design below, not built) |
+| Analogue-style synth | ● | ● | ● | ● | **Partial**: two oscillators (four waves) with a sub oscillator and noise, a 12 or 24 dB low-pass, high-pass, band-pass or notch filter with key tracking, two envelopes, an LFO (sine, triangle, square, saw) to pitch, cutoff and level, poly, mono or legato play, glide, 16 voices, a Bend Range setting and mod-wheel vibrato. The new parameters default to the sound it had, so sessions saved before sound the same. Left: unison with detune and stereo spread (the output is mono), hard sync, effects, and factory presets using the new parameters (est. 8–12 h); written without listening |
 | Wavetable, FM, granular synths | ◐ | ● | ● | ● | **Missing** (design below, not built) |
 | Sampler: drop a sound, play it across the keys, loop, slice | ● | ● | ● | ● | **Works**: loop with crossfade, slicing to keys, filter, LFO, tempo-following mode, root detection |
 | Sampler: many samples mapped by key and velocity; SFZ or other formats | ● | ● | ● | ● | **Missing**: one sample (design below, not built) |
@@ -585,3 +585,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Factory presets for the Subtractive Synth |
 | 2026-11-17 | minor | Designs for the rows still open: notes on the track, 14-bit and RPN lanes, per-note expression, the rest of the transformer, chord pads, pattern variations and melodic steps, score layout, tempo from a performance, arpeggio and progression writers, previews, and the instruments |
 | 2026-11-17 | minor | Commits noted on the follow-up's MIDI rows |
+| 2026-11-17 | minor | Subtractive Synth: filter types, LFO, sub and noise, key tracking, mono and legato |
