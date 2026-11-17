@@ -71,7 +71,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 955 factory presets, a searchable browser, chain and track presets, one save path, rename, a default per effect, A/B everywhere | Small |
 | J. Editors | Custom editors for 26 effects, live graphs on mixer tiles, sizes 75–200 %, typed values, pinned windows that can follow the selection | Small |
-| K. Common behaviour | Latency and tails reported, every parameter automatable, every channel processed | **Large**: no racks or macros, no modulators |
+| K. Common behaviour | Latency and tails reported, every parameter automatable and modulatable, every channel processed, a wet/dry mix on every insert | Medium: no racks or macros |
 
 Three things every one of the four did and FreeDAWm did not, at the first review: a compressor
 you can key from another track (now Comp); effects that process every channel of a surround
@@ -253,7 +253,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Wet/dry mix on every effect | ◐ | ● | ◐ | ◐ | **Works**: every insert slot has a Mix (the slot's menu, 0–100 % wet, `mix.module_mix`): the module's output blended with its input, the input delayed by the module's latency so there is no comb, a change gliding over one block. Not automatable yet. With a key from a later track (the main input waiting for it) the dry side is not delayed by that wait. Tests: `mix/tests/insert_mix.rs` |
 | Process every channel of a surround track | ● | ● | ● | ● | **Works**: the front pair as stereo, every other channel through its own mono instance; Comp can link its detection across all of them (Link All Channels), leaving the LFE out |
 | Map a hardware controller to a parameter | ● | ● | ● | ● | **Works** (built in section 6, K): right-click a plug-in knob on the chain › Learn MIDI Controller; Setup › MIDI Mappings lists them. Learning from a plug-in's own window or the drawer's knobs is section 6's leftover |
-| Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Missing** |
+| Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Works**: up to 8 per track (an insert's menu › Modulators…): an LFO (sine, triangle, saw, square, random; 0.01–40 Hz or locked to the bar, 4 bars to 1/32) or an envelope follower (attack, release; the track's signal entering the inserts), each moving up to 8 plug-in parameters by -100 to 100 % of their range in the plug-in's own taper, around the stored or automated value. The plug-ins that take sample-accurate changes get the movement every 64 samples, others once a block. Not verified by listening. Tests: `mix/tests/modulators.rs`, `engine` `modulators_are_added_set_aimed_and_removed` |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Missing**: chains are a straight line of up to 32 |
 | Console channel strip | ● | ● | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden, and Channel Strip is the two together (it still loads from old sessions) |
 | Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Works**: each module's share of a processor core in the last block (`ModuleMeter::load`), shown on hovering its chain tile or its insert slot; none on the web build. Test: `module_meters` `a_running_module_reports_its_processor_load` |
@@ -378,3 +378,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Plug-in windows can follow the selected track |
 | 2026-11-17 | minor | A wet/dry mix on every insert slot |
 | 2026-11-17 | minor | Each module shows its processor load |
+| 2026-11-17 | minor | Modulators: LFOs and envelope followers for any plug-in parameter |

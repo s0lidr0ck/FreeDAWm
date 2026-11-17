@@ -1236,6 +1236,13 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         if r.drag_stopped() || r.lost_focus() {
             app.engine.end_merge();
         }
+        // LFOs and envelope followers that move this track's plug-in parameters.
+        let mods = track.modulators.len();
+        let label = if mods == 0 { "Modulators…".to_string() } else { format!("Modulators ({mods})…") };
+        if ui.button(label).on_hover_text("LFOs and envelope followers that move plug-in parameters").clicked() {
+            crate::modulators_ui::open(app, id);
+            ui.close();
+        }
         if edit_list && crate::module_drawer::has_drawer(&ins.plugin) && ui.button("Open in Window").clicked() {
             // The generic window: every parameter as a slider, outside the Mix window.
             crate::chain_view::open_window(app, id, ins.id);

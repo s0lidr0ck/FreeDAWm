@@ -80,6 +80,7 @@ mod link;
 pub mod live_midi;
 pub mod midi_fx;
 pub mod midi_sync;
+mod modulate;
 mod monitor;
 mod prepare;
 mod rpn;
@@ -505,6 +506,8 @@ struct Strip {
     sample: Option<Arc<SourceAudio>>,
     /// MIDI notes currently sounding on the instrument (pitch), for note-offs at stops/seek.
     held: Vec<u8>,
+    /// The track's modulators' state ([`soundcraft_model::Modulator`]).
+    modrun: modulate::ModRun,
     /// The musician this strip's instrument last played (`Route::Musician`), `None` for clips.
     musician: Option<usize>,
     /// Notes live MIDI input (`Route::Midi`) holds on the instrument: let go when the track
@@ -737,6 +740,7 @@ impl Strip {
             instrument: None,
             sample: None,
             held: Vec::new(),
+            modrun: modulate::ModRun::default(),
             musician: None,
             live_held: HeldNotes::default(),
             live_filter: None,
@@ -2386,6 +2390,9 @@ impl MixEngine {
                 }
                 let mut level = chain_peak(&strip.buf, frames);
                 let mut bits = 0u64;
+                if !t.modulators.is_empty() {
+                    strip.modrun.advance(t, &strip.buf, frames, s.sample_rate.as_f64(), &transport);
+                }
                 for (i, ins) in t.mixer.inserts.iter().enumerate() {
                     // Post-fader modules run on the main mix after the master fader (below).
                     if ins.post_fader {
@@ -2399,6 +2406,7 @@ impl MixEngine {
                         if ins.active && !slot.failed {
                             apply_params(slot, ins, t, Some(ins.id), pos);
                             apply_timed(slot, ins, t, ins.id, pos, frames);
+                            strip.modrun.apply(t, ins, &mut *slot.plugin, &mut slot.applied, pos, frames);
                             full_m = full_m.saturating_add(slot.plugin.latency());
                             let byp = bypassed(t, ins, pos);
                             let (run, room) = insert_step(slot, byp, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
@@ -2472,6 +2480,7 @@ impl MixEngine {
                         {
                             apply_params(slot, ins, t, Some(ins.id), pos);
                             apply_timed(slot, ins, t, ins.id, pos, frames);
+                            strip.modrun.apply(t, ins, &mut *slot.plugin, &mut slot.applied, pos, frames);
                             full_m = full_m.saturating_add(slot.plugin.latency());
                             let (run, room) = insert_step(slot, bypassed(t, ins, pos), strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, xf);
                             fits &= room;
@@ -3452,6 +3461,9 @@ fn process_strip(
     let mut bits = 0u64;
     let mut skipped = 0usize;
     let on_llm = strip.llm;
+    if !t.modulators.is_empty() {
+        strip.modrun.advance(t, &strip.buf, frames, s.sample_rate.as_f64(), &transport);
+    }
     // The pre-fader modules, then the fader section, then the post-fader modules
     // (`Insert::post_fader`) on what the fader left. A post-fader module is never frozen.
     let mut pre_latency = 0usize;
@@ -3492,6 +3504,7 @@ fn process_strip(
                     let apos = pos.saturating_sub(i64::try_from(strip.base.saturating_add(latency)).unwrap_or(0));
                     apply_params(slot, ins, t, Some(ins.id), apos);
                     apply_timed(slot, ins, t, ins.id, apos, frames);
+                    strip.modrun.apply(t, ins, &mut *slot.plugin, &mut slot.applied, apos, frames);
                     let byp = bypassed(t, ins, apos);
                     let (run, fits) = insert_step(slot, byp, strip.llm, &mut strip.buf, &mut strip.llm_dry, frames, live.xf);
                     strip.key_regrow |= !fits;

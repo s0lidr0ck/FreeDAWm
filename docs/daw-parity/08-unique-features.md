@@ -133,7 +133,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
 | Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform, and warp markers placed by hand; no Time Warp of the tempo map by dragging |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
-| Modulators for any parameter | **Missing** | [Section 5](05-built-in-effects.md)'s row; not reached here |
+| Modulators for any parameter | **Works** | Built in [section 5](05-built-in-effects.md): LFOs and envelope followers on a track, each moving up to 8 plug-in parameters |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (4d3e275); no video |
 | ARA 2 and spectral editing | **Not planned here** | ARA needs its SDK, which is not in the tree; spectral editing is [section 4](04-editing-audio.md)'s. A view flag exists and is unread |

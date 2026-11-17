@@ -70,6 +70,7 @@ pub mod ml_downloads;
 pub mod ml_text_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_ui;
+mod modulators_ui;
 pub mod module_drawer;
 pub mod module_graphs;
 pub mod monitor_ui;
@@ -290,6 +291,9 @@ pub struct UiState {
     /// another track shows the same plug-in there, if it has one.
     #[serde(skip)]
     pub following_plugins: Vec<(TrackId, SlotKey)>,
+    /// The Modulators window, open on this track's modulators.
+    #[serde(skip)]
+    pub modulators_window: Option<TrackId>,
     /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
     /// the next detached window of that plugin opens there.
     #[serde(default, rename = "plugin_windows.rects")]
@@ -596,6 +600,7 @@ impl Default for UiState {
             detached_plugins: Vec::new(),
             pinned_plugins: Vec::new(),
             following_plugins: Vec::new(),
+            modulators_window: None,
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),

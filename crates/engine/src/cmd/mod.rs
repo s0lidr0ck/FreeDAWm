@@ -70,6 +70,7 @@ mod mix;
 pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ml;
+pub mod modulator;
 pub(crate) use mix::restore_plugin_param_ids;
 mod chain;
 pub(crate) mod copyq;
@@ -272,6 +273,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(instrument::specs());
         v.extend(midi_input::specs());
         v.extend(midi_fx::specs());
+        v.extend(modulator::specs());
         v.extend(midi_out::specs());
         v.extend(midi_learn::specs());
         v.extend(sampler::specs());

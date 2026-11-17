@@ -33,6 +33,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     loudness(app, ctx);
     mix_snapshots(app, ctx);
     crate::control_room::show(app, ctx);
+    crate::modulators_ui::show(app, ctx);
 }
 
 /// Window › Mix Snapshots: store the mix under a name, recall it whole or by section, on every

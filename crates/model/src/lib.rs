@@ -19,6 +19,7 @@ mod midi_fx;
 mod midi_map;
 pub mod migrate;
 mod mixer;
+mod modulator;
 pub mod monitor;
 mod notes;
 mod scout;
@@ -49,6 +50,7 @@ pub use mixer::{
     REFERENCE_KEYS, Route, SEND_SLOTS, SPACE_IR_KEY, SendSlot, SidechainSource, Speaker, StripSize, SurroundPan, default_input_channel,
     fader_db_to_pos, fader_pos_to_db, is_reference_key, track_input_channel,
 };
+pub use modulator::{LFO_SHAPES, LFO_SYNC, MAX_MOD_TARGETS, MAX_MODULATORS, ModTarget, Modulator, ModulatorKind, lfo_value};
 pub use notes::{MAX_NOTE_CHARS, MAX_NOTES, Note, note_typed, sanitize_notes, split_tags};
 pub use scout::{
     AutomatedParam, Guide, MAX_PROFILE_BYTES, MAX_SCOUT_ITEMS, PROFILE_ROLES, ProfileKind, ProfileSource, SCOUT_BANDS, ScoutCapture, ScoutMetrics,

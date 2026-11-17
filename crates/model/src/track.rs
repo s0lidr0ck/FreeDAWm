@@ -293,6 +293,10 @@ pub struct Track {
     /// everything the instrument is given; at most [`crate::MAX_MIDI_FX`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_fx: Vec<crate::MidiFx>,
+    /// LFOs and envelope followers that move its plug-ins' parameters, at most
+    /// [`crate::MAX_MODULATORS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulators: Vec<crate::Modulator>,
     /// Track › Lock Track: no command may add, change or remove a clip on any of its playlists
     /// (Insert and Cut Time still move them); recording into it is refused too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -359,6 +363,7 @@ impl Track {
             layers_open: false,
             record_layer: None,
             midi_fx: Vec::new(),
+            modulators: Vec::new(),
             edit_locked: false,
         }
     }
