@@ -271,6 +271,8 @@ pub struct MidiEditorState {
     pub drum_view: Option<bool>,
     /// The drum view shows every named drum, not only the rows with hits.
     pub drum_all_rows: bool,
+    /// The name typed in More › Drum Map for the selected notes' pitch.
+    pub drum_name: String,
     /// The rows the roll was last folded to (0: none), to centre the notes when folding turns
     /// on or off.
     pub fold_seen: u128,
@@ -345,6 +347,7 @@ impl Default for MidiEditorState {
             event_list: crate::midi_event_list::EventListState::default(),
             drum_view: None,
             drum_all_rows: false,
+            drum_name: String::new(),
             fold_seen: 0,
             keep_scale: false,
             snap_moves: false,
@@ -722,7 +725,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui
             .add_enabled(has_drums, egui::Checkbox::new(&mut dv, "Drum View"))
             .on_hover_text("A named row per drum, hits as diamonds")
-            .on_disabled_hover_text("For Juke and the drum synth")
+            .on_disabled_hover_text("For Juke, the drum synth and tracks with a drum map")
             .changed()
         {
             app.midi.drum_view = Some(dv);
@@ -735,6 +738,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         {
             app.midi.drum_all_rows = all_rows;
         }
+        ui.menu_button("Drum Map", |ui| drum_map_menu(app, ui, track, sequence))
+            .response
+            .on_hover_text("Name the drums of this track: the names override the instrument's and give any instrument a drum view");
         // Scale and chords.
         let keyed = !app.engine.session().key_signatures.is_empty();
         let mut fold = app.midi.fold_scale;
@@ -2212,6 +2218,40 @@ fn pattern_notice(app: &mut SoundApp, ui: &mut Ui, body: Rect, track: soundcraft
             let _ = app.run("pattern.to_midi", json!({"clip": cid.0}));
         }
     });
+}
+
+/// More › Drum Map: a name for the selected notes' pitch, General MIDI names, clear.
+fn drum_map_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, sequence: &soundcraft_midi::Sequence) {
+    let mut pitches: Vec<u8> = app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).map(|n| n.pitch).collect();
+    pitches.sort_unstable();
+    pitches.dedup();
+    let label = match pitches.as_slice() {
+        [] => "Select a note to name its pitch".to_string(),
+        [p] => format!("Name {}:", soundcraft_midi::note_name(*p)),
+        _ => format!("Name {} pitches:", pitches.len()),
+    };
+    ui.label(label);
+    ui.horizontal(|ui| {
+        let r = ui.add_enabled(!pitches.is_empty(), egui::TextEdit::singleline(&mut app.midi.drum_name).desired_width(120.0));
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.add_enabled(!pitches.is_empty(), egui::Button::new("Name")).clicked() || enter) && !pitches.is_empty() {
+            let name = app.midi.drum_name.clone();
+            for p in &pitches {
+                let _ = app.run("track.drum_map", json!({"track": track.0, "pitch": p, "name": name}));
+            }
+            app.midi.drum_view = Some(true);
+        }
+    });
+    if ui.button("General MIDI Names").on_hover_text("Give every pitch without a name its General MIDI drum name").clicked() {
+        let _ = app.run("track.drum_map", json!({"track": track.0, "gm": true}));
+        app.midi.drum_view = Some(true);
+        ui.close();
+    }
+    let has_map = app.engine.session().track(track).is_some_and(|t| !t.drum_map.is_empty());
+    if ui.add_enabled(has_map, egui::Button::new("Clear Drum Map")).clicked() {
+        let _ = app.run("track.drum_map", json!({"track": track.0, "clear": true}));
+        ui.close();
+    }
 }
 
 #[cfg(test)]

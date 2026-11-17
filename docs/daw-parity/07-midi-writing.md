@@ -57,7 +57,7 @@ The gaps are of four kinds:
    grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
    in the editor, controller ramps and a full event list; the third round editing across
    clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
-   probability (the rows below say how far each goes). Still absent: chord pads, editable drum maps and note entry in the score.
+   probability (the rows below say how far each goes). Still absent: chord pads.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
    filter, no LFO and no presets; the sampler holds one sample. Instrument parameters now take
    automation lanes, instrument latency is compensated and notes from clips keep their channel.
@@ -147,8 +147,8 @@ The gaps are of four kinds:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Works** in the note editor for Juke and the drum synth (More › Drum View, on by default there): a named row per drum, hits drawn as diamonds on their start and moved, not resized |
-| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Partial**: Juke's pad names on their trigger notes, General MIDI names for the drum synth; no editable drum maps, and hosted instruments get none |
+| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Works** in the note editor for Juke, the drum synth and any track with a drum map (More › Drum View, on by default there): a named row per drum, hits drawn as diamonds on their start and moved, not resized |
+| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Works**: Juke's pad names on their trigger notes, General MIDI names for the drum synth, and a drum map per track (MIDI Editor › More › Drum Map: name the selected notes' pitch, fill in General MIDI names, clear; `track.drum_map`, saved with the track) whose names override the instrument's and give any instrument, hosted ones too, the drum view. Names only: a map does not send a drum to another note (no input/output note pairs) and does not reorder the rows |
 | Show only the rows in use | ◐ | ● | ● | ● | **Works**: the drum view shows the rows with hits (every named drum while the clip is empty, or with More › Every Drum Row) |
 | Step sequencer with pattern clips | ○ | ● | ● | ● | **Works** (Juke Steps) |
 | Per-step velocity, probability, repeats, nudge | ○ | ● | ● | ● | **Works**, plus flam, accent and conditions (every Nth, fills) |
@@ -445,3 +445,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | MusicXML export writes later key changes as new key signatures and spells the notes after them for the new key |
 | 2026-11-17 | minor | Split Notes at the Cut: a note across a split is kept in both halves |
 | 2026-11-17 | minor | Dense clips: the clip index covers the controllers, so each block looks only at the controllers near it |
+| 2026-11-17 | minor | Drum maps: name a track's drums (or fill in General MIDI names) for any instrument |

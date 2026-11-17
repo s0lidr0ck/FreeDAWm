@@ -66,6 +66,21 @@ fn drum_names_come_from_the_instrument() {
     assert_eq!(drum_mask(&names, &seq, false).count_ones(), 16);
 }
 
+/// Parity section 7: a track's drum map names its rows over the instrument's names, and gives a
+/// drum view to an instrument that has none.
+#[test]
+fn a_drum_map_names_the_rows_of_any_instrument() {
+    let mut sub = soundcraft_model::Track::new(soundcraft_model::TrackId(1), "D", TrackKind::Instrument, ChannelFormat::Stereo, [90, 90, 90]);
+    sub.instrument = Some(soundcraft_model::Insert::new("subtractive_synth"));
+    sub.drum_map = vec![(36, "Boom".into()), (40, "Clap".into())];
+    let names = drum_names(&sub).unwrap();
+    assert_eq!((names[36].as_deref(), names[40].as_deref(), names[38].as_deref()), (Some("Boom"), Some("Clap"), None));
+    let mut juke = sub.clone();
+    juke.instrument = Some(soundcraft_engine::cmd::juke::juke_insert());
+    let names = drum_names(&juke).unwrap();
+    assert_eq!((names[36].as_deref(), names[38].as_deref()), (Some("Boom"), Some("Snare")), "the map over the pads' names");
+}
+
 #[test]
 fn a_juke_clip_shows_named_rows_with_hits_and_a_diamond_is_moved_not_resized() {
     let (mut h, clip) = harness();

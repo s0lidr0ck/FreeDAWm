@@ -758,9 +758,23 @@ pub fn release_key(app: &mut SoundApp) {
     }
 }
 
-/// The drum names of a track's instrument, by pitch: Juke's pads (each pad's name on its trigger
-/// note), the drum synth's General MIDI names; `None` for other instruments (no drum view).
+/// The drum names of a track, by pitch: its instrument's (Juke's pads, each pad's name on its
+/// trigger note; the drum synth's General MIDI names) with the track's drum map over them;
+/// `None` for another instrument without a drum map (no drum view).
 pub fn drum_names(track: &soundcraft_model::Track) -> Option<Vec<Option<String>>> {
+    let mut names = instrument_drum_names(track);
+    if !track.drum_map.is_empty() {
+        let names = names.get_or_insert_with(|| vec![None; 128]);
+        for (p, name) in &track.drum_map {
+            if let Some(slot) = names.get_mut(usize::from(*p)) {
+                *slot = Some(name.clone());
+            }
+        }
+    }
+    names
+}
+
+fn instrument_drum_names(track: &soundcraft_model::Track) -> Option<Vec<Option<String>>> {
     let ins = track.instrument.as_ref()?;
     let mut names: Vec<Option<String>> = vec![None; 128];
     match ins.plugin.as_str() {

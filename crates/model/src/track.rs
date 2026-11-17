@@ -314,6 +314,11 @@ pub struct Track {
     /// in the layer's header, until it is let go. Not saved.
     #[serde(skip)]
     pub audition_layer: Option<usize>,
+    /// The note editor's drum map: a name per pitch (pitch, name), sorted by pitch, set by the
+    /// user. Overrides the instrument's own drum names; on any other instrument it turns the drum
+    /// view on. Absent in sessions saved before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drum_map: Vec<(u8, String)>,
 }
 
 fn yes() -> bool {
@@ -381,6 +386,7 @@ impl Track {
             instrument_outs: Vec::new(),
             edit_locked: false,
             audition_layer: None,
+            drum_map: Vec::new(),
         }
     }
 
