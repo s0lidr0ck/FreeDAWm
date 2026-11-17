@@ -35,6 +35,8 @@ pub fn specs() -> Vec<CommandSpec> {
         option!("options.low_latency_monitoring", "Low Latency Monitoring", "options.low_latency_monitoring"),
         // Momentary solo: an S key clicked with the mouse solos only while it is held.
         option!("options.momentary_solo", "Momentary Solo", "options.momentary_solo"),
+        // Selecting tracks arms them and disarms the others (`mix::arm_follows_selection`).
+        option!("options.arm_follows_selection", "Arm Follows Selection", "options.arm_follows_selection"),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",

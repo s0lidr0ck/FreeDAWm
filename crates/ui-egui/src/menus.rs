@@ -796,6 +796,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("mix.pre_sends_ignore_mute", "mix.pre_sends_ignore_mute"),
     ("options.low_latency_monitoring", "options.low_latency_monitoring"),
     ("options.momentary_solo", "options.momentary_solo"),
+    ("options.arm_follows_selection", soundcraft_engine::cmd::ARM_FOLLOWS_SELECTION),
     ("options.keyboard_lock", "options.edit_tool_mode_keyboard_lock"),
     ("view.track_number", "edit_view.track_number"),
     ("view.ruler_tempo_editor", "view.ruler.tempo_editor"),

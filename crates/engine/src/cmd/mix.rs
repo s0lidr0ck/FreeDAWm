@@ -300,6 +300,31 @@ pub(super) fn grouped_ids(s: &Session, t: TrackId, attr: &str) -> Vec<TrackId> {
 }
 
 /// Apply a change to `t` and its active mix-group siblings.
+/// The flag of Options › Recording › Arm Follows Selection.
+pub const ARM_FOLLOWS_SELECTION: &str = "options.arm_follows_selection";
+
+/// Arm Follows Selection: when a command changes which tracks are selected, the selected tracks
+/// that can record (and are not record safe) are armed and every other track is disarmed, as in
+/// Studio One and Logic. Not while a take records (the recorded set stays as Record made it), and
+/// not when nothing is selected any more (clicking off a track keeps the arm where it was).
+pub(crate) fn arm_follows_selection(e: &mut Engine, before: &Session) {
+    if e.transport.recording || !e.session().edit.flag(ARM_FOLLOWS_SELECTION) {
+        return;
+    }
+    let sel = &e.session().edit.selected_tracks;
+    if sel.is_empty() || *sel == before.edit.selected_tracks {
+        return;
+    }
+    let sel = sel.clone();
+    let wants = |t: &soundcraft_model::Track| t.kind.has_playlist() && !t.mixer.record_safe && !t.inactive && sel.contains(&t.id);
+    if e.session().tracks.iter().all(|t| t.mixer.record_arm == wants(t)) {
+        return;
+    }
+    for t in &mut e.session_mut().tracks {
+        t.mixer.record_arm = wants(t);
+    }
+}
+
 fn set_grouped(s: &mut Session, t: TrackId, attr: &str, f: impl Fn(&mut soundcraft_model::Track)) {
     for id in grouped_ids(s, t, attr) {
         if let Some(tr) = s.track_mut(id) {
@@ -1761,5 +1786,30 @@ mod tests {
         e.execute("mix.record_safe", &json!({"tracks": [a.0], "value": false})).unwrap();
         e.execute("mix.record_arm", &json!({"tracks": [a.0], "value": true})).unwrap();
         assert!(e.session().track(a).unwrap().mixer.record_arm);
+    }
+
+    /// Options › Recording › Arm Follows Selection: selecting a track arms it and disarms the
+    /// others (not a record-safe one); with the option off, selection leaves the arms alone.
+    #[test]
+    fn arm_follows_the_selected_track() {
+        let mut s = Session::default();
+        let a = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("A"));
+        let b = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("B"));
+        let c = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("C"));
+        let mut e = Engine::new(s);
+        let armed = |e: &Engine| e.session().tracks.iter().filter(|t| t.mixer.record_arm).map(|t| t.id).collect::<Vec<_>>();
+        e.execute("track.scroll_to", &json!({"track": a.0})).unwrap();
+        assert!(armed(&e).is_empty(), "off by default");
+        e.execute("options.arm_follows_selection", &json!({"value": true})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": b.0})).unwrap();
+        assert_eq!(armed(&e), vec![b]);
+        e.execute("mix.record_safe", &json!({"tracks": [c.0], "value": true})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": c.0})).unwrap();
+        assert!(armed(&e).is_empty(), "a record-safe track is not armed; B is disarmed");
+        e.execute("track.scroll_to", &json!({"track": a.0})).unwrap();
+        assert_eq!(armed(&e), vec![a]);
+        e.execute("options.arm_follows_selection", &json!({"value": false})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": b.0})).unwrap();
+        assert_eq!(armed(&e), vec![a], "off again: the arm stays");
     }
 }

@@ -895,6 +895,9 @@ impl Engine {
                     self.refresh_vocal_fingerprints();
                 }
                 cmd::remember_selection(self, &before);
+                if self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") {
+                    cmd::arm_follows_selection(self, &before);
+                }
                 cmd::sync_loop(self, &before);
                 let label = self.step_label.take().unwrap_or(spec.label);
                 let changed = !Arc::ptr_eq(&before, &self.doc);
