@@ -731,6 +731,37 @@ mod tests {
         assert_eq!(e.undo_label(), Some("Record"));
     }
 
+    /// A lane at half rate and one played in reverse: a hit lands on the step that plays where
+    /// it was played.
+    #[test]
+    fn a_take_lands_on_the_step_a_slow_or_reversed_lane_plays_there() {
+        let mut e = Engine::default();
+        let t = armed(&mut e, "midi:all", 0);
+        set_record_mode(e.session_mut(), RecordMode::Merge);
+        let r = e.execute("pattern.new", &json!({"track": t.0, "start": 0, "bars": 1, "steps": 16, "lanes": [36, 38]})).unwrap();
+        let cid = ClipId(r["clip"].as_u64().unwrap());
+        e.execute("pattern.lane", &json!({"clip": cid.0, "lane": 0, "rate": "half"})).unwrap();
+        e.execute("pattern.lane", &json!({"clip": cid.0, "lane": 1, "direction": "reverse"})).unwrap();
+        let six = Q / 4;
+        let take = MidiTake { start: 0, end: 4 * Q, looped: None, punch: None, latency: 0 };
+        // The kick on the third beat (sixteenth 8: the half-rate lane's step 4); the snare on the
+        // second sixteenth (the reversed lane plays its step 14 there).
+        let events = [
+            ev(8 * six, "Keys", [0x90, 36, 100]),
+            ev(8 * six + 100, "Keys", [0x80, 36, 0]),
+            ev(six, "Keys", [0x90, 38, 100]),
+            ev(six + 100, "Keys", [0x80, 38, 0]),
+        ];
+        record_live_midi(&mut e, &take, &events);
+        let pc = clip(&e, cid).pattern.unwrap();
+        let on = |l: usize| pc.pattern.lanes[l].steps.iter().enumerate().filter(|(_, s)| s.on).map(|(i, _)| i).collect::<Vec<_>>();
+        assert_eq!(on(0), vec![4], "the half-rate lane");
+        assert_eq!(on(1), vec![14], "the reversed lane");
+        // And they play where they were played.
+        let notes = clip(&e, cid).midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.start)).collect::<Vec<_>>();
+        assert!(notes.contains(&(36, 1920)) && notes.contains(&(38, 240)), "{notes:?}");
+    }
+
     /// Record Effects' Output: the take keeps the chord the key played and plays past the
     /// effect; merged over a clip of keys, that clip is printed too so it sounds as it did; off,
     /// the take keeps the key.

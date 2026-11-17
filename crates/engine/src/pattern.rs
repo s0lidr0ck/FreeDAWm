@@ -72,7 +72,8 @@ pub fn phase_for(s: &Session, clip: &Clip, pc: &PatternClip) -> i64 {
 /// whole of `range`. Each note-on lands on the nearest step of the pattern's grid (its phase
 /// kept), on the lane that plays its note (a new lane, as long as the longest, when none does and
 /// there is room), at its velocity; a step already on stays as it was (overdub). A lane loops over
-/// its own length, so a note past it lands where the lane plays it. Returns the clip, `None` when
+/// its own length at its own rate and in its own direction, so a note lands on the step the lane
+/// plays where it was played (a Random lane: the step at that position going forward). Returns the clip, `None` when
 /// there is no such clip (the take is merged as usual). The clip's notes are expanded again by
 /// [`refresh`] with the undo step.
 pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: soundcraft_time::Range, take: &Sequence) -> Option<ClipId> {
@@ -90,7 +91,6 @@ pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: sou
     let width = pattern.lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16);
     for n in take.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
         let at = take_tick.saturating_add(n.start).saturating_sub(clip_tick).saturating_add(phase);
-        let k = (at as f64 / grid).round() as i64;
         let lane = match pattern.lanes.iter().position(|l| l.note == n.pitch) {
             Some(i) => i,
             None if pattern.lanes.len() < MAX_LANES => {
@@ -100,8 +100,11 @@ pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: sou
             None => continue,
         };
         let Some(l) = pattern.lanes.get_mut(lane) else { continue };
-        let len = i64::try_from(l.steps.len()).unwrap_or(1).max(1);
-        if let Some(step) = usize::try_from(k.rem_euclid(len)).ok().and_then(|i| l.steps.get_mut(i))
+        // The nearest step on the lane's own grid (half or double rate), and the step that plays
+        // there (a reversed or ping-pong lane plays its steps in another order).
+        let k = (at as f64 / soundcraft_midi::pattern::step_ticks(l, grid)).round() as i64;
+        let i = soundcraft_midi::pattern::step_at(l, k);
+        if let Some(step) = l.steps.get_mut(i)
             && !step.on
         {
             *step = Step::hit(n.velocity.clamp(1, 127));

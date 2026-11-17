@@ -227,6 +227,19 @@ fn unit(r: &mut XorShift) -> f64 {
     (r.next_signed() + 1.0) / 2.0
 }
 
+/// Which step of `lane` plays at its `k`-th position counted on its own rate's grid (where a
+/// recorded hit at that position belongs); a Random lane has no fixed answer, so it takes the
+/// step at that position going forward.
+pub fn step_at(lane: &Lane, k: i64) -> usize {
+    let dir = if lane.direction == Direction::Random { Direction::Forward } else { lane.direction };
+    lane_index(dir, lane.steps.len(), k, &mut XorShift::new(1))
+}
+
+/// The length of one of `lane`'s steps on a grid of `grid` ticks (its rate applied).
+pub fn step_ticks(lane: &Lane, grid: f64) -> f64 {
+    grid * lane.rate.factor()
+}
+
 /// Which step of a lane of `len` steps plays at its `k`-th position.
 fn lane_index(dir: Direction, len: usize, k: i64, rng: &mut XorShift) -> usize {
     let n = len.max(1) as i64;
