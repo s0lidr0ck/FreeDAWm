@@ -38,7 +38,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups | Small: no typed selection numbers |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients; overwrite, layer or crossfade on overlap | Small: no trim to close gaps |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor, real-time transpose, reverse and loop | Small: clip notes |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
@@ -143,7 +143,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Reverse a clip without a new file | ○ | ● | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place plays the clip's window backwards in real time; trims take audio off the matching end; the waveform is drawn reversed too (a looped reversed clip's is still drawn forwards) |
 | Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made off the audio thread when the session changes, not when a clip first plays (bug 13, fixed) |
 | Sync point | ● | ● | ● | ● | **Works** |
-| Clip notes | ○ | ● | ● | ● | **Missing** |
+| Clip notes | ○ | ● | ● | ● | **Works**: Notes… in the clip's menu; a clip with notes shows a mark in its name bar, and the notes beside the pointer on it; kept by splits and copies |
 
 ## F. Fades
 
@@ -397,3 +397,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Nudge the audio inside a clip |
 | 2026-11-17 | minor | Tap tempo |
 | 2026-11-17 | minor | Lock a whole track |
+| 2026-11-17 | minor | Clip notes |

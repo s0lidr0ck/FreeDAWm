@@ -114,6 +114,11 @@ pub enum Dialog {
         id: ClipId,
         name: String,
     },
+    /// Clip Notes…: the clip's free text.
+    ClipNotes {
+        id: ClipId,
+        text: String,
+    },
     RenameMarker {
         id: soundcraft_model::MarkerId,
         name: String,
@@ -293,6 +298,7 @@ impl Dialogs {
             Dialog::Bounce { .. } => "bounce",
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
+            Dialog::ClipNotes { .. } => "clip_notes",
             Dialog::RenameMarker { .. } => "rename_marker",
             Dialog::PointValue { .. } => "point_value",
             Dialog::ClearClips { .. } => "clear_clips",
@@ -322,6 +328,10 @@ impl Dialogs {
 
     pub fn open_rename_clip(&mut self, id: ClipId, name: &str) {
         self.open = Some(Dialog::RenameClip { id, name: name.to_string() });
+    }
+
+    pub fn open_clip_notes(&mut self, id: ClipId, text: &str) {
+        self.open = Some(Dialog::ClipNotes { id, text: text.to_string() });
     }
 
     pub fn open_rename_marker(&mut self, id: soundcraft_model::MarkerId, name: &str) {
@@ -712,6 +722,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
+        Dialog::ClipNotes { .. } => "Clip Notes",
         Dialog::RenameMarker { .. } => "Rename Marker",
         Dialog::PointValue { .. } => "Set Point Value",
         Dialog::ClearClips { .. } => "Clear",
@@ -966,6 +977,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("clip.rename".into(), json!({"clip": id.0, "name": name})));
+                    }
+                }
+                Dialog::ClipNotes { id, text } => {
+                    // Enter makes a new line here; OK applies.
+                    ui.add(egui::TextEdit::multiline(text).desired_rows(5).desired_width(320.0));
+                    if buttons(ui, "OK", false) {
+                        action = Some(("clip.notes".into(), json!({"clips": [id.0], "text": text})));
                     }
                 }
                 Dialog::RenameMarker { id, name } => {

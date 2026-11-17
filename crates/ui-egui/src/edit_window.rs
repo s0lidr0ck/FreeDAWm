@@ -2517,6 +2517,19 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
     if s.edit.flag("view.clip.rating") && clip.rating > 0 && name_h > 0.0 {
         painter.text(pos2(r.max.x - 18.0, r.min.y + 7.0), Align2::RIGHT_CENTER, "★".repeat(usize::from(clip.rating.min(5))), regular(9.0), ov);
     }
+    // Clip Notes: a mark in the name bar, and the notes beside the pointer while it rests there.
+    if !clip.notes.is_empty() && name_h > 0.0 {
+        let mark = Rect::from_center_size(pos2(r.max.x - 8.0, r.min.y + 7.0), vec2(12.0, 12.0));
+        painter.text(mark.center(), Align2::CENTER_CENTER, "✎", regular(10.0), ov);
+        let ctx = painter.ctx();
+        if ctx.pointer_hover_pos().is_some_and(|p| mark.contains(p) && painter.clip_rect().contains(p)) {
+            let id = egui::Id::new(("clip_notes_tip", clip.id.0));
+            egui::Tooltip::always_open(ctx.clone(), painter.layer_id(), id, mark).show(|ui| {
+                ui.set_max_width(320.0);
+                ui.label(clip.notes.as_str());
+            });
+        }
+    }
     if s.edit.flag("view.clip.sync_point") && clip.sync_point > 0 {
         let x = x_of(s, tl, clip.start + clip.sync_point);
         painter.add(Shape::convex_polygon(
@@ -4085,6 +4098,10 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
     if ui.button("Rename...").clicked() {
         let name = app.engine.session().find_clip(c).map(|(_, x)| x.name.clone()).unwrap_or_default();
         app.dialogs.open_rename_clip(c, &name);
+    }
+    if ui.button("Notes...").clicked() {
+        let text = app.engine.session().find_clip(c).map(|(_, x)| x.notes.clone()).unwrap_or_default();
+        app.dialogs.open_clip_notes(c, &text);
     }
     if ui.button("Delete").clicked() {
         let _ = app.run("edit.select", json!({"clips": ids}));

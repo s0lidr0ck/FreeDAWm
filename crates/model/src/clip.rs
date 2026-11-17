@@ -332,6 +332,10 @@ pub struct Clip {
     /// overlapping (a crossfade) play together. 0 for every clip placed in the Overwrite mode.
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub layer: i32,
+    /// Clip Notes: free text about the clip (Clip › Notes…), kept by splits and copies; at most
+    /// [`crate::MAX_NOTE_CHARS`] characters.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -400,6 +404,7 @@ impl Clip {
             transpose_cents: 0,
             shared: None,
             layer: 0,
+            notes: String::new(),
         }
     }
 
@@ -693,6 +698,9 @@ impl Clip {
     pub fn sanitize(&mut self) {
         bound(&mut self.start);
         self.length = self.length.clamp(1, MAX_POSITION);
+        if let Some((i, _)) = self.notes.char_indices().nth(crate::MAX_NOTE_CHARS) {
+            self.notes.truncate(i);
+        }
         bound(&mut self.sync_point);
         self.gain_env.iter_mut().for_each(|(at, _)| bound(at));
         match &mut self.content {
