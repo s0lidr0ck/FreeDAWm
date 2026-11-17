@@ -88,7 +88,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
 | Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
-| Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Missing** |
+| Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Works**: Clip › Real-Time › Nudge Contents Earlier / Later moves the audio inside the selected clips by the nudge value while they stay put (a loop turns, a reversed clip moves the way it sounds), stopping at the file's ends; a warped clip is left alone |
 | Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Works**: Edit › Selection › Nudge Edit Start / End Earlier / Later, by the nudge value; the edges never cross |
 
 ## C. Selection and navigation
@@ -394,3 +394,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | F6+F7 and F7+F8 choose the Smart Tool |
 | 2026-11-17 | minor | The Undo History lists undone steps and redoes to one by clicking |
 | 2026-11-17 | minor | Selection commands: extend to the session start or end, select clips on a track, following, by name, colour or mute; nudge one edge of the selection |
+| 2026-11-17 | minor | Nudge the audio inside a clip |
