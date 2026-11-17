@@ -1175,12 +1175,21 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         out_curvature: bend("out_curvature")?,
         batch,
     };
+    let short: usize = tracks.iter().map(|t| ops::short_crossfades(e.session(), *t, r)).sum();
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| ops::create_fades_with(s, *t, r, &spec)).sum();
     if n == 0 {
         return Err(bad("edit.fades_create", "the selection must cover a clip start, end or the boundary between two clips"));
     }
-    Ok(json!({"fades": n}))
+    let mut out = json!({"fades": n, "short": short});
+    if short > 0 {
+        // Shown in the status line: the crossfade is shorter on one side than the selection.
+        out["warning"] = json!(format!(
+            "{short} crossfade{} shorter than the selection: not enough audio beyond the cut",
+            if short == 1 { " is" } else { "s are" }
+        ));
+    }
+    Ok(out)
 }
 
 fn fades_delete(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1634,6 +1643,19 @@ mod tests {
         e.execute("edit.mode", &json!({"mode": "slip"})).unwrap();
         e.execute("edit.trim_end_to_insertion", &json!({"tracks": [t.0], "at": 2_000})).unwrap();
         assert_eq!(bounds(&e, t), vec![(0, 2_000, 2_000), (4_000, 9_000, 25_000), (19_000, 24_000, 0)]);
+    }
+
+    #[test]
+    fn a_crossfade_short_of_audio_beyond_the_cut_warns() {
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+        let v = e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_000, "end": 11_000})).unwrap();
+        assert_eq!(v["short"], 0);
+        assert!(v.get("warning").is_none());
+        // The second clip has only 500 samples before its start: the crossfade's first half is short.
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 500)]);
+        let v = e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_000, "end": 11_000})).unwrap();
+        assert_eq!(v["short"], 1);
+        assert!(v["warning"].as_str().unwrap().contains("not enough audio"));
     }
 
     #[test]

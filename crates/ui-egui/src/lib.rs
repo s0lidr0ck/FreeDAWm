@@ -1469,6 +1469,10 @@ impl SoundApp {
                     log::warn!("{id}: {note}");
                     self.ui.status = note;
                 }
+                // A command that did its work with a caveat says so in the status line.
+                if let Some(w) = v.get("warning").and_then(serde_json::Value::as_str) {
+                    self.ui.status = w.to_string();
+                }
                 if id.starts_with("session.save") && !self.engine.is_dirty() {
                     self.release_autosave(false);
                 }

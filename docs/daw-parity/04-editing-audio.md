@@ -155,7 +155,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Fade dialog with preview, length and separate in and out shapes | ● | ◐ | ◐ | ● | **Works**: a shape and bend for each side (a crossfade's two sides too), a drawn preview, presets (built-in and saved); the length is the selection's |
 | Batch fades over many clips | ● | ● | ● | ● | **Works**: the fade dialog's batch option fades both ends of every clip inside the selection, at a length in ms |
 | Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
-| Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Missing**: the fade lengths silently differ |
+| Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Works**: a crossfade made shorter on one side than the selection, for want of audio beyond the cut, says so in the status line (`edit.fades_create` returns `short` and a `warning`) |
 | Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback, bounces and exports (1 ms default), and Consolidate renders them too, as heard |
 | Delete fades in a selection | ● | ● | ● | ● | **Works**: only the fades and crossfades in the selection go (bug 9, fixed) |
 
@@ -405,3 +405,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Markers on a track |
 | 2026-11-17 | minor | Trim to Selection and the A/S trims follow Shuffle |
 | 2026-11-17 | minor | A looped clip's waveform is drawn repeat by repeat, reversed when the clip is |
+| 2026-11-17 | minor | A crossfade short of audio beyond the cut warns |

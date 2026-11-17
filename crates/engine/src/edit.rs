@@ -1227,6 +1227,29 @@ impl FadeSpec {
 }
 
 /// [`create_fades`] with a shape and bend for each side, and batch fades on clips inside the range.
+/// The crossfades a fade over `range` on `track` would make shorter on one side than the
+/// selection asks, for want of audio beyond the cut (a clip's handle): how many.
+pub fn short_crossfades(s: &Session, track: TrackId, range: Range) -> usize {
+    let Some(tr) = s.track(track) else { return 0 };
+    // In time order, as create_fades pairs them.
+    let mut clips: Vec<&Clip> = tr.clips().iter().collect();
+    clips.sort_by_key(|c| c.start);
+    clips
+        .windows(2)
+        .filter(|w| {
+            let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return false };
+            let boundary = a.end();
+            if b.start != boundary || range.start >= boundary || range.end <= boundary {
+                return false;
+            }
+            let (before, after) = (boundary - range.start.max(a.start), range.end.min(b.end()) - boundary);
+            let a_handle = material_len(s, a).map_or(0, |n| a.timeline_span(n.saturating_sub(a.source_offset())).saturating_sub(a.length));
+            let b_handle = b.timeline_span(b.source_offset());
+            after > a_handle || before > b_handle
+        })
+        .count()
+}
+
 pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &FadeSpec) -> usize {
     if range.is_empty() {
         return 0;
