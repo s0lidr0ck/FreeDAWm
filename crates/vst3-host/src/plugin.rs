@@ -16,6 +16,8 @@ const MAX_BLOCK: usize = 1 << 16;
 const MAX_CHANNELS: usize = 64;
 /// An `unsynced` slot with no value waiting (a NaN pattern, which `set_param` never stores).
 const SYNCED: u64 = u64::MAX;
+/// The most SysEx bytes waiting for the next block (a message is at most 1 KB).
+const SYSEX_ARENA: usize = 8 * 1024;
 
 /// How a SoundCraft parameter value maps to the VST3 normalized value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,6 +47,10 @@ pub struct Vst3Plugin {
     unsynced: Arc<[AtomicU64]>,
     /// Pending notes, kept sorted by time. Never grows past `EVENT_CAP`.
     notes: Vec<NoteEvent>,
+    /// The bytes of the pending SysEx messages (`NoteEvent::SysEx` points into it), made
+    /// beforehand; `sysex_used` bytes are taken. Emptied once none is pending.
+    sysex: Vec<u8>,
+    sysex_used: usize,
     /// The parameter each MIDI controller drives per channel (see `Instance::midi_mapping`),
     /// built at `prepare`.
     midi_map: Vec<Option<u32>>,
@@ -110,6 +116,8 @@ impl Vst3Plugin {
             pending: Vec::with_capacity(ids.len().min(PARAM_QUEUE_CAP)),
             unsynced: ids.iter().map(|_| AtomicU64::new(SYNCED)).collect(),
             notes: Vec::with_capacity(EVENT_CAP),
+            sysex: vec![0; SYSEX_ARENA],
+            sysex_used: 0,
             midi_map: Vec::new(),
             program_steps: [127.0; 16],
             dropped_program_changes: 0,
@@ -302,6 +310,7 @@ impl Plugin for Vst3Plugin {
 
     fn reset(&mut self) {
         self.notes.clear();
+        self.sysex_used = 0;
         self.controls.clear();
         self.held = [0; 128];
     }
@@ -406,6 +415,7 @@ impl Plugin for Vst3Plugin {
                 &self.pending,
                 &self.controls,
                 notes,
+                &self.sysex,
                 offset,
                 self.position,
                 self.transport.as_ref(),
@@ -450,6 +460,9 @@ impl Plugin for Vst3Plugin {
             start += n;
         }
         self.controls.clear();
+        if !self.notes.iter().any(|e| matches!(e, NoteEvent::SysEx { .. })) {
+            self.sysex_used = 0;
+        }
     }
 
     fn extra_outputs(&self) -> Vec<String> {
@@ -540,6 +553,20 @@ impl Plugin for Vst3Plugin {
             0x90 => self.key_off(offset, ch, d1, 0),
             _ => self.midi(offset, msg),
         }
+    }
+
+    /// To a plug-in with an event input, as a `kDataEvent` of type `kMidiSysEx` at its offset;
+    /// dropped when the block's SysEx room ([`SYSEX_ARENA`] bytes) or the event queue is full.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        if !self.event_input || data.is_empty() || self.notes.len() >= self.notes.capacity() {
+            return;
+        }
+        let at = self.sysex_used;
+        let Some(end) = at.checked_add(data.len()) else { return };
+        let (Some(dst), Ok(start), Ok(len)) = (self.sysex.get_mut(at..end), u32::try_from(at), u32::try_from(data.len())) else { return };
+        dst.copy_from_slice(data);
+        self.sysex_used = end;
+        self.push_note(NoteEvent::SysEx { time: u32::try_from(offset).unwrap_or(u32::MAX), at: start, len });
     }
 
     fn all_notes_off(&mut self) {

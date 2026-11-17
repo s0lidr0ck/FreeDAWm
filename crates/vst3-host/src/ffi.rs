@@ -1339,21 +1339,31 @@ pub(crate) enum NoteEvent {
         key: u8,
         pressure: f32,
     },
+    /// A System Exclusive message (`F0` … `F7`): `len` bytes at `at` of the block's SysEx
+    /// arena, passed to `process` (a `kDataEvent` of type `kMidiSysEx` points into it).
+    SysEx {
+        time: u32,
+        at: u32,
+        len: u32,
+    },
 }
 
 impl NoteEvent {
     pub fn time(&self) -> u32 {
         match *self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => time,
+            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } | NoteEvent::SysEx { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
         match self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => *time = t,
+            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } | NoteEvent::SysEx { time, .. } => *time = t,
         }
     }
 
-    fn to_raw(self, offset: u32) -> sv::Event {
+    /// The event as VST3 has it, its time made relative to `offset`. A SysEx points into
+    /// `sysex` (which must outlive the `process` call it is read in); `None` when its bytes are
+    /// not there.
+    fn to_raw(self, offset: u32, sysex: &[u8]) -> Option<sv::Event> {
         // SAFETY: `Event` is plain data (numbers and a union of plain structs); all-zero is valid.
         let mut e: sv::Event = unsafe { std::mem::zeroed() };
         e.busIndex = 0;
@@ -1374,8 +1384,14 @@ impl NoteEvent {
                 e.r#type = sv::Event_::EventTypes_::kPolyPressureEvent as u16;
                 e.__field0.polyPressure = sv::PolyPressureEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), pressure, noteId: -1 };
             }
+            NoteEvent::SysEx { at, len, .. } => {
+                let start = usize::try_from(at).ok()?;
+                let bytes = sysex.get(start..start.checked_add(usize::try_from(len).ok()?)?).filter(|b| !b.is_empty())?;
+                e.r#type = sv::Event_::EventTypes_::kDataEvent as u16;
+                e.__field0.data = sv::DataEvent { size: len, r#type: sv::DataEvent_::DataTypes_::kMidiSysEx as u32, bytes: bytes.as_ptr() };
+            }
         }
-        e
+        Some(e)
     }
 }
 
@@ -1930,7 +1946,7 @@ impl Instance {
     /// Runs one `process` call over `frames` frames: `params` become one point each at offset 0,
     /// `controls` (time, id, value) one point at their time when it falls in this call (the last
     /// one wins per parameter), and `notes` (sorted by time) have their times made relative to
-    /// `offset`.
+    /// `offset`; a SysEx among them points into `sysex`.
     pub fn process(
         &mut self,
         frames: usize,
@@ -1939,6 +1955,7 @@ impl Instance {
         params: &[(u32, f64)],
         controls: &[(u32, u32, f64)],
         notes: &[NoteEvent],
+        sysex: &[u8],
         offset: u32,
         project_time: i64,
         transport: Option<&Transport>,
@@ -1970,9 +1987,7 @@ impl Instance {
         self.in_events.with(|v| {
             v.clear();
             if event_in {
-                for n in notes.iter().take(EVENT_CAP) {
-                    v.push(n.to_raw(offset));
-                }
+                v.extend(notes.iter().take(EVENT_CAP).filter_map(|n| n.to_raw(offset, sysex)));
             }
         });
         self.out_events.with(Vec::clear);
@@ -3206,9 +3221,9 @@ mod tests {
 
     #[test]
     fn note_events_carry_their_channel() {
-        let on = NoteEvent::On { time: 0, channel: 9, key: 36, velocity: 1.0 }.to_raw(0);
-        let off = NoteEvent::Off { time: 0, channel: 15, key: 36, velocity: 0.5 }.to_raw(0);
-        let pressure = NoteEvent::Pressure { time: 0, channel: 3, key: 36, pressure: 0.5 }.to_raw(0);
+        let on = NoteEvent::On { time: 0, channel: 9, key: 36, velocity: 1.0 }.to_raw(0, &[]).unwrap();
+        let off = NoteEvent::Off { time: 0, channel: 15, key: 36, velocity: 0.5 }.to_raw(0, &[]).unwrap();
+        let pressure = NoteEvent::Pressure { time: 0, channel: 3, key: 36, pressure: 0.5 }.to_raw(0, &[]).unwrap();
         // SAFETY: each union field read is the one its event type wrote.
         unsafe {
             assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch), (9, 36));
@@ -3216,6 +3231,18 @@ mod tests {
             assert_eq!(off.__field0.noteOff.velocity, 0.5, "the release velocity");
             assert_eq!(pressure.__field0.polyPressure.channel, 3);
         }
+        // A SysEx is a data event pointing at its bytes in the arena; out of it, none.
+        let arena = [0u8, 0xF0, 0x43, 0xF7];
+        let x = NoteEvent::SysEx { time: 7, at: 1, len: 3 }.to_raw(2, &arena).unwrap();
+        assert_eq!((x.r#type, x.sampleOffset), (sv::Event_::EventTypes_::kDataEvent as u16, 5));
+        // SAFETY: the union field read is the one its event type wrote; `bytes` points into `arena`.
+        unsafe {
+            let d = x.__field0.data;
+            assert_eq!((d.size, d.r#type), (3, sv::DataEvent_::DataTypes_::kMidiSysEx as u32));
+            assert_eq!(std::slice::from_raw_parts(d.bytes, 3), &[0xF0, 0x43, 0xF7]);
+        }
+        assert!(NoteEvent::SysEx { time: 0, at: 2, len: 3 }.to_raw(0, &arena).is_none());
+        assert!(NoteEvent::SysEx { time: 0, at: 0, len: 0 }.to_raw(0, &arena).is_none());
     }
 
     #[test]
@@ -3250,7 +3277,7 @@ mod tests {
             assert_ne!(q.getPoint(0, std::ptr::null_mut(), &mut v), sb::kResultOk);
         }
         let el = EventList::new(1);
-        let mut e = NoteEvent::On { time: 5, channel: 0, key: 60, velocity: 1.0 }.to_raw(2);
+        let mut e = NoteEvent::On { time: 5, channel: 0, key: 60, velocity: 1.0 }.to_raw(2, &[]).unwrap();
         // SAFETY: as above.
         unsafe {
             assert_eq!(el.addEvent(&mut e), sb::kResultOk);

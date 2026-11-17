@@ -1,5 +1,6 @@
-//! The MIDI Event List (Window › MIDI Event List): every event of the edited MIDI clip, notes and
-//! controllers (CC, pitch bend, aftertouch, poly pressure, program change), in time order, with
+//! The MIDI Event List (Window › MIDI Event List): every event of the edited MIDI clip, notes,
+//! controllers (CC, pitch bend, aftertouch, poly pressure, program change) and SysEx (its bytes
+//! as hex, typed anew to change them), in time order, with
 //! typed values to change, a row to insert a new event, and filters by kind and channel.
 //! Each change is one undo step (a drag on a value is one).
 
@@ -18,9 +19,11 @@ pub struct EventListState {
     pub bend: bool,
     pub pressure: bool,
     pub program: bool,
+    pub sysex: bool,
     /// Only this channel (0-15); `None`: every channel.
     pub channel: Option<u8>,
-    /// The Insert row: its kind (`note`, `cc`, `pitchbend`, `aftertouch`, `polyat`, `program`),
+    /// The Insert row: its kind (`note`, `cc`, `pitchbend`, `aftertouch`, `polyat`, `program`,
+    /// `sysex`),
     /// number (CC number, or a poly pressure's key) and channel.
     pub insert_kind: String,
     pub insert_number: u8,
@@ -28,6 +31,8 @@ pub struct EventListState {
     /// A position being changed: the field's key and its value, written when the drag or the
     /// typing ends (a position moves its row, so it is not written frame by frame).
     pub pending: Option<(String, i64)>,
+    /// A SysEx's bytes being typed: the field's key and its text, written when the typing ends.
+    pub pending_bytes: Option<(String, String)>,
 }
 
 impl Default for EventListState {
@@ -38,24 +43,31 @@ impl Default for EventListState {
             bend: true,
             pressure: true,
             program: true,
+            sysex: true,
             channel: None,
             insert_kind: "note".into(),
             insert_number: 1,
             insert_channel: 0,
             pending: None,
+            pending_bytes: None,
         }
     }
 }
 
-/// A row of the list: a note or a controller event, by its index in the clip.
+/// A row of the list: a note, a controller event or a SysEx, by its index in the clip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     Note(usize),
     Ctrl(usize),
+    SysEx(usize),
 }
 
-/// The rows `f` shows of `seq`, in time order (notes before controllers at one tick), hidden
-/// events (before the clip's start) left out.
+/// The SysEx the Insert row adds: General MIDI System On.
+pub const INSERTED_SYSEX: &str = "F0 7E 7F 09 01 F7";
+
+/// The rows `f` shows of `seq`, in time order (at one tick: SysEx, as it plays first, then
+/// notes, then controllers), hidden events (before the clip's start) left out. A SysEx has no
+/// channel: the channel filter leaves it in.
 pub fn rows(seq: &Sequence, f: &EventListState) -> Vec<(i64, Row)> {
     let ch = |c: u8| f.channel.is_none_or(|x| x == c);
     let mut v: Vec<(i64, Row)> = Vec::new();
@@ -71,7 +83,19 @@ pub fn rows(seq: &Sequence, f: &EventListState) -> Vec<(i64, Row)> {
         };
         shown.then_some((c.tick, Row::Ctrl(i)))
     }));
-    v.sort_by_key(|(t, r)| (*t, matches!(r, Row::Ctrl(_))));
+    if f.sysex {
+        v.extend(seq.sysex.iter().enumerate().filter(|(_, x)| x.tick >= 0).map(|(i, x)| (x.tick, Row::SysEx(i))));
+    }
+    v.sort_by_key(|(t, r)| {
+        (
+            *t,
+            match r {
+                Row::SysEx(_) => 0,
+                Row::Note(_) => 1,
+                Row::Ctrl(_) => 2,
+            },
+        )
+    });
     v
 }
 
@@ -161,6 +185,7 @@ pub fn show(app: &mut SoundApp, ui: &mut egui::Ui) {
                 match row {
                     Row::Note(i) => note_row(app, ui, cid, i, &seq),
                     Row::Ctrl(i) => ctrl_row(app, ui, cid, i, &seq),
+                    Row::SysEx(i) => sysex_row(app, ui, cid, i, &seq),
                 }
                 ui.end_row();
             }
@@ -177,6 +202,7 @@ fn filters(app: &mut SoundApp, ui: &mut egui::Ui) {
         ui.checkbox(&mut f.bend, "Pitch Bend");
         ui.checkbox(&mut f.pressure, "Aftertouch");
         ui.checkbox(&mut f.program, "Program");
+        ui.checkbox(&mut f.sysex, "SysEx");
         let text = f.channel.map_or("All channels".to_string(), |c| format!("Channel {}", u16::from(c) + 1));
         egui::ComboBox::from_id_salt("evl_channel").selected_text(text).show_ui(ui, |ui| {
             ui.selectable_value(&mut f.channel, None, "All channels");
@@ -193,7 +219,7 @@ fn insert_row(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId) {
     ui.horizontal(|ui| {
         let f = &mut app.midi.event_list;
         egui::ComboBox::from_id_salt("evl_kind").selected_text(f.insert_kind.clone()).show_ui(ui, |ui| {
-            for k in ["note", "cc", "pitchbend", "aftertouch", "polyat", "program"] {
+            for k in ["note", "cc", "pitchbend", "aftertouch", "polyat", "program", "sysex"] {
                 ui.selectable_value(&mut f.insert_kind, k.to_string(), k);
             }
         });
@@ -212,6 +238,7 @@ fn insert_row(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId) {
             });
             let f = app.midi.event_list.clone();
             let r = match insert_lane(&f) {
+                None if f.insert_kind == "sysex" => app.run("midi.sysex_add", json!({"clip": cid.0, "tick": at, "bytes": INSERTED_SYSEX})),
                 Some(lane) => {
                     let value = if lane == "pitchbend" { 0 } else { 64 };
                     app.run("midi.ctrl_add", json!({"clip": cid.0, "lane": lane, "tick": at, "value": value, "channel": f.insert_channel}))
@@ -292,5 +319,41 @@ fn ctrl_row(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId, i: usize, seq: &
     ui.label("");
     if ui.small_button("✕").on_hover_text("Delete this event").clicked() {
         let _ = app.run("midi.ctrl_delete", json!({"clip": cid.0, "indices": [i]}));
+    }
+}
+
+fn sysex_row(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId, i: usize, seq: &Sequence) {
+    let Some(x) = seq.sysex.get(i) else { return };
+    let key = |field: &str| format!("evl.{}.x{i}.{field}", cid.0);
+    if let Some(tick) = deferred(app, ui, &key("tick"), x.tick)
+        && let Err(e) = app.run("midi.sysex_edit", json!({"clip": cid.0, "index": i, "tick": tick}))
+    {
+        app.ui.status = e;
+    }
+    ui.label("SysEx");
+    ui.label("");
+    ui.label(format!("{} bytes", x.data.len()));
+    // The bytes as hex: typed anew, written when the typing ends.
+    let k = key("bytes");
+    let mut text = match &app.midi.event_list.pending_bytes {
+        Some((pk, t)) if *pk == k => t.clone(),
+        _ => soundcraft_engine::cmd::midi_sysex::hex(&x.data),
+    };
+    let r = ui.add(egui::TextEdit::singleline(&mut text).font(mono(11.0)).desired_width(220.0));
+    if r.changed() {
+        app.midi.event_list.pending_bytes = Some((k.clone(), text.clone()));
+    }
+    if r.lost_focus()
+        && let Some((pk, t)) = app.midi.event_list.pending_bytes.clone()
+        && pk == k
+    {
+        app.midi.event_list.pending_bytes = None;
+        if let Err(e) = app.run("midi.sysex_edit", json!({"clip": cid.0, "index": i, "bytes": t})) {
+            app.ui.status = e;
+        }
+    }
+    ui.label("");
+    if ui.small_button("✕").on_hover_text("Delete this SysEx").clicked() {
+        let _ = app.run("midi.sysex_delete", json!({"clip": cid.0, "indices": [i]}));
     }
 }

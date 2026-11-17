@@ -182,6 +182,17 @@ fn synth_plays_notes_at_their_offsets() {
     assert!((io[0][20] - 64.0 / 127.0).abs() < 1e-6 && (io[0][63] - 64.0 / 127.0).abs() < 1e-6);
     p.midi(0, [0xB0, 7, 0]);
     p.process(&mut io, 64);
+    // A SysEx reaches it whole at its offset, as a data event, before a note at the same offset.
+    p.sysex(5, &[0xF0, 0x43, 0x10, 0x4C, 0xF7]);
+    p.sysex(20, &[0xF0, 0x41, 0xF7]);
+    p.process(&mut io, 64);
+    assert!(io[0][4].abs() < 1e-6 && (io[0][5] - 67.0).abs() < 1e-6 && (io[0][19] - 67.0).abs() < 1e-6 && (io[0][20] - 65.0).abs() < 1e-6);
+    p.sysex(3, &[0xF0, 0x7E, 0xF7]);
+    p.note_on(3, 60, 127);
+    p.process(&mut io, 64);
+    assert!((io[0][3] - 1.0).abs() < 1e-6, "the note after the SysEx: {}", io[0][3]);
+    p.all_notes_off();
+    p.process(&mut io, 64);
     // Notes in a later sub-block of a chunked call land at the right frame.
     p.prepare(48_000.0, 32, 2);
     let mut io = vec![vec![0.0f32; 96], vec![0.0f32; 96]];

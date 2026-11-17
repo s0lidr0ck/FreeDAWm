@@ -21,7 +21,8 @@
 //!   held (channel, key) has had its note-off. Poly pressure, and through `IMidiMapping` MIDI
 //!   CC 7 on channel 1 and CC 11 on channel 6 (hidden parameter 1), set it to their value too.
 //!   Program change on channel 1 maps to hidden parameter 2 ("Program", 127 steps), which sets
-//!   it to its normalized value.
+//!   it to its normalized value. A SysEx data event sets it to the message's second byte (-1
+//!   for anything not `F0` … `F7`).
 //!
 //! The module checks the host's module lifecycle the way real plugins depend on it (see "module
 //! lifecycle" below) and aborts the process when it is broken.
@@ -727,6 +728,12 @@ impl IAudioProcessorTrait for Synth {
                     }
                 } else if e.r#type == Event_::EventTypes_::kPolyPressureEvent as u16 {
                     level = unsafe { e.__field0.polyPressure.pressure };
+                } else if e.r#type == Event_::EventTypes_::kDataEvent as u16 {
+                    // A SysEx: its second byte (the maker's id), or -1 when not F0 … F7.
+                    let d = unsafe { e.__field0.data };
+                    let bytes = if d.bytes.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(d.bytes, d.size as usize) } };
+                    let whole = d.r#type == DataEvent_::DataTypes_::kMidiSysEx as u32 && bytes.len() >= 3 && bytes[0] == 0xF0 && bytes[bytes.len() - 1] == 0xF7;
+                    level = if whole { f32::from(bytes[1]) } else { -1.0 };
                 }
             }
             if let Some((at, v)) = volume

@@ -75,6 +75,7 @@ pub mod midi_input;
 pub mod midi_learn;
 mod midi_ops;
 pub mod midi_out;
+pub mod midi_sysex;
 pub mod midi_wide;
 pub mod midi_writers;
 mod mix;
@@ -263,6 +264,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audio_midi::specs());
         v.extend(midi::specs());
         v.extend(midi_ctrl::specs());
+        v.extend(midi_sysex::specs());
         v.extend(midi_wide::specs());
         v.extend(tempo_fit::specs());
         v.extend(midi_writers::specs());
