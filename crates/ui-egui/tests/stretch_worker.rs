@@ -57,4 +57,23 @@ fn the_worker_renders_a_live_stretch_and_swaps_it_in() {
     // Not an undo step: one undo takes the stretch back.
     app.engine.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(app.engine.session().find_clip(cid).unwrap().1.length, 96_000);
+
+    // Clip › Real-Time › Transpose: the live shifter first, then the render in the background.
+    app.engine.execute("clip.transpose", &json!({"clips": [cid.0], "semitones": 5})).unwrap();
+    let served = |app: &SoundApp| {
+        let s = app.engine.session();
+        soundcraft_mix::pitch_render(s, s.find_clip(cid).unwrap().1).is_some()
+    };
+    assert!(!served(&app), "heard live first");
+    let dirty = app.engine.is_dirty();
+    for _ in 0..2_000 {
+        frame(&ctx, &mut app);
+        if served(&app) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(served(&app), "the transpose render was put in place");
+    assert_eq!(app.engine.is_dirty(), dirty, "derived: no more modified than before");
+    assert_eq!(app.engine.session().find_clip(cid).unwrap().1.length, 96_000);
 }

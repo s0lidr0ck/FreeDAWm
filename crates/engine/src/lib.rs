@@ -285,6 +285,9 @@ pub struct Engine {
     /// an undo or redo that brings the entry back gets its render at once.
     pub(crate) stretch_done:
         std::collections::HashMap<soundcraft_model::SourceId, (soundcraft_model::LiveStretch, Arc<soundcraft_model::SourceAudio>)>,
+    /// Transpose renders already asked for (clip, file, cents, window): never asked twice, so a
+    /// render that cannot serve its clip is not made again and again.
+    pub(crate) pitch_tried: std::collections::HashSet<stretch_jobs::PitchKey>,
     /// Take files recorded in this run that nothing may use one day (an undone take, a take of a
     /// track deleted while it recorded): deleted once neither the session, its history nor a
     /// session file names them ([`io::clean_unused_takes`]).
@@ -334,6 +337,7 @@ impl Engine {
             take_hits_seq: 0,
             defer_stretch: false,
             stretch_done: std::collections::HashMap::new(),
+            pitch_tried: std::collections::HashSet::new(),
             scout_pending: Vec::new(),
             scout_floor: 0,
             band_lib: None,
@@ -461,6 +465,7 @@ impl Engine {
         self.merge_redo = None;
         self.last_selection = None;
         self.stretch_done.clear();
+        self.pitch_tried.clear();
         // The host stops the transport (`ResetSession`), which ends any armed capture.
         self.scout_capture = None;
         // A capture of the old session never lands in the new one.
@@ -676,6 +681,10 @@ impl Engine {
     fn keep_vocal_cache(&mut self, from: &Session) {
         if !self.doc.vocal.same(&from.vocal) {
             Arc::make_mut(&mut self.doc).vocal = from.vocal.clone();
+        }
+        // Transposed clips' renders are derived the same way: an undo or redo keeps them.
+        if !Arc::ptr_eq(&self.doc.pitch_renders.0, &from.pitch_renders.0) {
+            Arc::make_mut(&mut self.doc).pitch_renders = from.pitch_renders.clone();
         }
     }
 

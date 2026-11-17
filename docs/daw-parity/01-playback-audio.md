@@ -137,7 +137,7 @@ Varispeed is the only whole-project speed control among the four.
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
 | Mute a clip | ● | ● | ● | ● | **Works** |
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
-| Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, in real time (section 4, E) |
+| Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, heard at once in real time, then (in the app) by a background Pitch Shift render (section 4, E) |
 | Loop a clip by dragging its edge | ● | ○ | ● | ○ | **Works**: the loop trim (Shift at the end trim) repeats the material in real time |
 | Overlapping clips: top one plays, the lower one returns when uncovered | ● | ● | ● | ● | **Works** with Options › Overlap › Layer: the clip read gives way under a higher layer (the top clip's fades cross over to it); Overwrite, the default, still cuts the overlap away |
 | Takes and swipe comping | ● | ● | ● | ● | **Works**; a take cannot be auditioned without making it active |
@@ -269,6 +269,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | clip transpose: a background high-quality render replaces the live shifter |
 | 2026-11-16 | minor | the real-time stretch is heard at once in the app; a background worker swaps in the render |
 | 2026-11-16 | minor | the real-time stretcher in the clip read, behind the Elastic and warp paths |
 | 2026-11-16 | minor | the real-time stretcher (not wired to clips yet) |

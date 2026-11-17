@@ -170,6 +170,80 @@ pub fn rendered(s: &Session) -> Option<Session> {
     Some(out)
 }
 
+/// Which transpose render a job makes: clip, file, cents, first file position and length.
+pub type PitchKey = (soundcraft_model::ClipId, SourceId, i32, i64, usize);
+
+/// How much of the file beyond a transposed clip's window its render takes (so a small trim
+/// open still finds it), seconds.
+pub const PITCH_HANDLE_SECS: f64 = 1.0;
+
+/// A transposed clip's high-quality render to make (Clip › Real-Time › Transpose): its file
+/// window, pitch-shifted offline by Pitch Shift's algorithm, at the same length.
+#[derive(Debug, Clone)]
+pub struct PitchJob {
+    pub key: PitchKey,
+    base: Clip,
+    snap: Arc<Session>,
+}
+
+impl PitchJob {
+    /// Make the render (slow: off the UI thread). `None` when the audio is gone.
+    pub fn run(&self) -> Option<soundcraft_model::PitchRender> {
+        let (_, source, cents, start, len) = self.key;
+        let ch = soundcraft_mix::clip_heard_window(&self.snap, &self.base, start, len)?;
+        let sr = self.snap.sample_rate;
+        let out = soundcraft_dsp::offline::pitch_shift(&ch, cents as f32 / 100.0, sr.as_f64() as f32);
+        let audio = Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: sr.hz(), channels: out }));
+        Some(soundcraft_model::PitchRender { source, channel: self.base.source_channel, cents, start, audio })
+    }
+}
+
+/// The next transposed clip without a render that serves it (only where renders are made in
+/// the background: the CLI and scripts keep the live shifter alone, as before).
+pub fn next_pitch_job(e: &Engine) -> Option<PitchJob> {
+    if !e.defer_stretch {
+        return None;
+    }
+    let s = e.session_arc();
+    let handle = s.sample_rate.samples(PITCH_HANDLE_SECS).max(0);
+    for c in s.all_clips().filter(|c| c.transpose_cents != 0 && c.is_audio() && c.clean_alt().is_none()) {
+        let Some(source) = c.source() else { continue };
+        let Some(audio) = s.pool.get(source) else { continue };
+        if s.pitch_renders.0.get(&c.id).is_some_and(|r| r.serves(c)) {
+            continue;
+        }
+        let frames = i64::try_from(audio.frames()).unwrap_or(0);
+        let span = c.source_span(if c.loop_len > 0 { c.loop_len } else { c.length });
+        let lo = c.source_offset().saturating_sub(handle).max(0);
+        let hi = c.source_offset().saturating_add(span).saturating_add(handle).min(frames);
+        let Some(len) = usize::try_from(hi.saturating_sub(lo)).ok().filter(|n| *n > 0) else { continue };
+        let key = (c.id, source, c.transpose_cents, lo, len);
+        if e.pitch_tried.contains(&key) {
+            continue;
+        }
+        return Some(PitchJob { key, base: c.clone(), snap: Arc::clone(&s) });
+    }
+    None
+}
+
+/// Put a finished transpose render in place (derived data: no undo step). Returns whether it
+/// serves its clip as the clip is now.
+pub fn install_pitch(e: &mut Engine, job: &PitchJob, render: Option<soundcraft_model::PitchRender>) -> bool {
+    e.pitch_tried.insert(job.key);
+    let Some(render) = render else { return false };
+    let clip = job.key.0;
+    if !e.session().find_clip(clip).is_some_and(|(_, c)| render.serves(c)) {
+        return false;
+    }
+    let mut map = (*e.session().pitch_renders.0).clone();
+    map.insert(clip, Arc::new(render));
+    // Derived data: the session is no more modified than it was.
+    let dirty = e.dirty;
+    e.session_mut().pitch_renders = soundcraft_model::PitchRenders(Arc::new(map));
+    e.dirty = dirty;
+    true
+}
+
 impl Engine {
     /// Install every render made for a live entry the session holds (after a render finishes,
     /// and after an undo or redo brings a live entry back). Returns whether the session changed.
@@ -344,5 +418,57 @@ mod tests {
         assert!((hz_of(&live, 60_000, 105_000) / 440.0 - 1.0).abs() < 0.01);
         super::finish_all(&mut e);
         assert!(e.session().live_stretch.is_empty());
+    }
+
+    /// The strongest frequency of `v` between `lo` and `hi` Hz, in 0.5 Hz steps (a steady tone:
+    /// the offline render has no grains to beat).
+    fn peak_hz(v: &[f32], lo: f64, hi: f64) -> f64 {
+        let v = &v[..v.len().min(24_000)];
+        let power = |hz: f64| {
+            let w = std::f64::consts::TAU * hz / SR;
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, x) in v.iter().enumerate() {
+                re += f64::from(*x) * (w * i as f64).cos();
+                im += f64::from(*x) * (w * i as f64).sin();
+            }
+            re * re + im * im
+        };
+        let steps = ((hi - lo) * 2.0) as i64;
+        (0..steps).map(|k| lo + k as f64 * 0.5).max_by(|a, b| power(*a).total_cmp(&power(*b))).unwrap_or(0.0)
+    }
+
+    /// Clip › Real-Time › Transpose: the live shifter is heard at once; the background render,
+    /// by Pitch Shift's algorithm, replaces it at the asked pitch and the clip's length, without
+    /// an undo step, and stays across undo and redo. Untransposed clips are untouched.
+    #[test]
+    fn a_transpose_gets_a_high_quality_render_in_the_background() {
+        let (mut e, t, cid, plain) = tone(true);
+        e.session_mut().track_mut(t).unwrap().elastic = None;
+        let plain_before = out(&e, plain, 60_000);
+        e.execute("clip.transpose", &json!({"clips": [cid.0], "semitones": 7})).unwrap();
+        let live = out(&e, t, 96_000);
+        assert!(super::next_pitch_job(&e).is_some());
+        let job = super::next_pitch_job(&e).unwrap();
+        let undo_steps = e.undo_history().len();
+        assert!(super::install_pitch(&mut e, &job, job.run()));
+        assert_eq!(e.undo_history().len(), undo_steps, "no undo step");
+        assert!(super::next_pitch_job(&e).is_none(), "nothing left to render");
+        let hq = out(&e, t, 96_000);
+        assert_ne!(hq, live, "the render replaced the live shifter");
+        assert_eq!(e.session().find_clip(cid).unwrap().1.length, 96_000, "the length is unchanged");
+        let want = 440.0 * 2f64.powf(7.0 / 12.0);
+        let got = peak_hz(&hq[20_000..80_000], want - 40.0, want + 40.0);
+        assert!((got / want - 1.0).abs() < 0.005, "{got} Hz for {want}");
+        // An untransposed clip: bit-identical.
+        assert_eq!(out(&e, plain, 60_000), plain_before);
+        // A new transpose is heard live again until its own render; undo brings the first
+        // transpose back with its render still there.
+        e.execute("clip.transpose", &json!({"clips": [cid.0], "semitones": -5})).unwrap();
+        assert!(soundcraft_mix::pitch_render(e.session(), e.session().find_clip(cid).unwrap().1).is_none());
+        assert!(e.undo());
+        assert_eq!(out(&e, t, 96_000), hq, "the render made is kept across undo");
+        assert!(e.undo());
+        assert_eq!(e.session().find_clip(cid).unwrap().1.transpose_cents, 0, "one undo step for the transpose");
+        assert_eq!(out(&e, t, 96_000), out(&tone(true).0, t, 96_000), "back to the plain clip");
     }
 }

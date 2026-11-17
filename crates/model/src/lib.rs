@@ -34,7 +34,7 @@ pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, Musician
 pub use clip::{CleanAlt, CleanupPreview, Clip, ClipContent, Fade, FadeShape, MAX_TRANSPOSE_CENTS, MidiCleanup, PatternClip};
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
-pub use live_stretch::{LiveStretch, StretchKind};
+pub use live_stretch::{LiveStretch, PitchRender, PitchRenders, StretchKind};
 pub use lyrics::{
     LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
     track_has_lyrics, track_lines,

@@ -138,7 +138,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
 | Clip groups that select and move as one | ● | ● | ● | ● | **Works**: selecting a grouped clip selects its group; a drag from an unselected member takes the group; a trim moves the same edge of every member as far, and a fade drawn on one goes on all (`alone` for one) |
 | Loop a clip without making copies | ● | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Loop in Place… (N times, or by the loop trim) repeats the material as the clip plays; a start trim keeps each repeat where it was; `off` ends it. Clip › Loop… still makes copies |
-| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose… (semitones, fractions as cents, ±24) plays the clip transposed in real time at its length, by a two-grain shifter reading the file (no state, so locates and loops are exact); grainier than an offline Pitch Shift |
+| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose… (semitones, fractions as cents, ±24) plays the clip transposed in real time at its length, by a two-grain shifter reading the file (no state, so locates and loops are exact), heard at once; in the app a background render by Pitch Shift's algorithm then replaces it at the same length (derived, not saved, kept across undo; not an undo step) |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
 | Reverse a clip without a new file | ○ | ● | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place plays the clip's window backwards in real time; trims take audio off the matching end; the waveform is drawn reversed too (a looped reversed clip's is still drawn forwards) |
 | Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made off the audio thread when the session changes, not when a clip first plays (bug 13, fixed) |
@@ -388,3 +388,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Tier 2: edit groups move, trim, fade, separate and cut together |
 | 2026-11-16 | minor | Stretches and warp-marker moves are heard at once through the real-time stretcher while the render is made |
 | 2026-11-16 | minor | A reversed clip's waveform is drawn reversed |
+| 2026-11-16 | minor | Clip transpose gets a high-quality background render |

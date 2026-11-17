@@ -4295,6 +4295,8 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let pitch = clip.pitch_ratio();
     let grain = (s.sample_rate.as_f64() * TRANSPOSE_GRAIN_SECS).max(64.0);
     let live_grain = (s.sample_rate.as_f64() * soundcraft_dsp::live_stretch::GRAIN_SECS).max(64.0);
+    // A transposed clip's high-quality render, once made, plays in place of the live shifter.
+    let hq = pitch_render(s, clip).filter(|_| live.is_none());
     let tuned = tuned_spans(s, clip);
     // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
     let (taps, tap) = clip.channel_taps(nsrc, buf.len());
@@ -4302,6 +4304,8 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
         let (dch, ch, weight) = tap(which);
         let Some(dst) = buf.get_mut(dch) else { continue };
         let mut src = audio.cursor(ch, rt);
+        // The render holds the chosen channel alone, or every channel.
+        let mut hq_src = hq.map(|r| (r.start as f64, r.audio.cursor(if r.audio.num_channels() == 1 { 0 } else { ch }, rt)));
         let mut cleaned = alt.and_then(|(w, origin, a)| {
             let n = a.num_channels();
             (n > 0).then(|| (w, origin, a.cursor(ch % n, rt)))
@@ -4360,9 +4364,10 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                     // A varispeed clip reads its file at `1 / stretch` file samples a sample,
                     // band-limited (the sampler's reader): a sped-up clip no longer aliases.
                     let f = clip.material_at(rel);
-                    let v = match live {
-                        Some(l) => live_stretch_at(&mut src, l, f, pitch, live_grain).unwrap_or(0.0),
-                        None => shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0),
+                    let v = match (live, hq_src.as_mut()) {
+                        (Some(l), _) => live_stretch_at(&mut src, l, f, pitch, live_grain).unwrap_or(0.0),
+                        (None, Some((start, r))) => band_limited_at(r, f - *start, 1.0 / stretch).unwrap_or(0.0),
+                        (None, None) => shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0),
                     };
                     match cleaned.as_mut().and_then(|(w, origin, c)| shifted_at(c, f - *origin as f64, rel, stretch, pitch, grain).map(|cv| (*w, cv)))
                     {
@@ -4506,6 +4511,15 @@ impl CleanEdges {
 /// `(1 − w) · dry + w · wet`, exactly `wet` at `w = 1`.
 fn blend(dry: f32, wet: f32, w: f32) -> f32 {
     if w >= 1.0 { wet } else { (1.0 - w) * dry + w * wet }
+}
+
+/// The high-quality render of `clip`'s transpose, when one serves it as it is now
+/// ([`soundcraft_model::PitchRender::serves`]). Reads only: safe on the audio thread.
+pub fn pitch_render<'a>(s: &'a Session, clip: &Clip) -> Option<&'a soundcraft_model::PitchRender> {
+    if clip.transpose_cents == 0 || s.pitch_renders.0.is_empty() {
+        return None;
+    }
+    s.pitch_renders.0.get(&clip.id).map(|r| &**r).filter(|r| r.serves(clip))
 }
 
 /// The live stretch standing in for `source` while its render is made: only while the pool has

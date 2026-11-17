@@ -413,6 +413,10 @@ pub struct Session {
     /// ([`crate::LiveStretch`]). Never saved: a save renders what is still here first.
     #[serde(skip)]
     pub live_stretch: std::collections::BTreeMap<SourceId, crate::LiveStretch>,
+    /// Transposed clips' high-quality renders ([`crate::PitchRenders`]): derived, never saved;
+    /// the engine carries them across undo and redo.
+    #[serde(skip)]
+    pub pitch_renders: crate::PitchRenders,
 }
 
 impl Default for Session {
@@ -461,6 +465,7 @@ impl Session {
             folder: None,
             vocal: crate::VocalCache::default(),
             live_stretch: std::collections::BTreeMap::new(),
+            pitch_renders: crate::PitchRenders::default(),
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);
