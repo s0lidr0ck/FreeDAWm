@@ -679,6 +679,7 @@ Window > Loudness Meter = @window.loudness
 Window > Mix Snapshots = @window.mix_snapshots
 Window > Control Room = @window.control_room
 Window > Memory Locations
+Window > Set List = @window.set_list
 Window > Notes = @window.notes
 Window > Lyrics = @window.lyrics
 Window > Teleprompter = @window.teleprompter

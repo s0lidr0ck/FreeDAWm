@@ -33,6 +33,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     clip_effects(app, ctx);
     loudness(app, ctx);
     mix_snapshots(app, ctx);
+    crate::set_list_ui::show(app, ctx);
     crate::control_room::show(app, ctx);
     crate::modulators_ui::show(app, ctx);
 }

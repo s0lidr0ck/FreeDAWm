@@ -46,6 +46,7 @@ mod record_format;
 mod record_print;
 pub mod select_more;
 mod session_rate;
+pub mod set_list;
 pub mod strip_shape;
 pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
@@ -284,6 +285,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(warp::specs());
         v.extend(clip_list::specs());
         v.extend(field::specs());
+        v.extend(set_list::specs());
         v.extend(arrangement::specs());
         v.extend(sample_edit::specs());
         v.extend(event_more::specs());

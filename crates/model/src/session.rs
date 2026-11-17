@@ -392,6 +392,9 @@ pub struct Session {
     /// channels' names), by source id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub field_info: std::collections::BTreeMap<u64, soundcraft_audio_io::ixml::IxmlInfo>,
+    /// The show's set list: songs (memory locations holding a range) played in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_list: Vec<crate::SetListEntry>,
     pub groups: Vec<Group>,
     pub edit: EditState,
     pub next_id: u64,
@@ -496,6 +499,7 @@ impl Session {
             arrangements: Vec::new(),
             arrangement: None,
             field_info: std::collections::BTreeMap::new(),
+            set_list: Vec::new(),
             groups: Vec::new(),
             edit: EditState::default(),
             next_id: 1,

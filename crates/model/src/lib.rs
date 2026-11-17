@@ -48,7 +48,7 @@ pub use lyrics::{
     LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
     track_has_lyrics, track_lines,
 };
-pub use markers::{Group, LocationView, MarkerKind, MemoryLocation};
+pub use markers::{Group, LocationView, MarkerKind, MemoryLocation, SetListEntry};
 pub use midi_fx::{ARP_PATTERNS, CHORD_SHAPES, MAX_MIDI_FX, MIDI_FX_RATES, MidiFx, MidiFxKind, ROOT_NAMES, SCALES};
 pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAction};
 pub use mixer::{

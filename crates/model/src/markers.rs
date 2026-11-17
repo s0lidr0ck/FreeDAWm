@@ -53,6 +53,16 @@ fn one() -> u8 {
     1
 }
 
+/// A song of the show's set list (Window › Set List): a memory location holding a range,
+/// played from its start to its end; then the transport stops on the next song, or with
+/// `go_on` goes straight on to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SetListEntry {
+    pub location: MarkerId,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub go_on: bool,
+}
+
 /// A track group (Track › Group…).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Group {

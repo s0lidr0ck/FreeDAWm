@@ -80,7 +80,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
 | Project page: master an album in the same app, songs update from their mixes, DDP and digital release | **Not planned here** | The mastering page is tabled by the owner (design below). Bounce to a loudness target with a true-peak ceiling |
-| Show page: set lists for playing live | **Partial** (design only) | Not among the pages the owner skipped (the mastering page is tabled, not this one). Design below: a set list of memory locations played in order inside one session first (`Session::set_list`, the transport locating at each range's end, Window › Set List and a full-screen song view: about a day with tests), switching sessions while playing later (two to three days: preloading the next session in the background). Not built in this pass: over the half-day step size |
+| Show page: set lists for playing live | **Partial** (step 1 built) | Not among the pages the owner skipped (the mastering page is tabled, not this one). Window › Set List: the songs of the show, each a memory location that keeps a selection, in order (`Session::set_list`, saved with the session; `setlist.add`, `_remove`, `_move`, `_go_on`, one undo step each). Play Set or a song's ▶ plays it from its start to its end (`setlist.play`); then the transport waits on the next song's start, or with Go On plays it at once (the app starts it on the next frame: a short gap, not a seamless join). Stage View covers the whole window with the song, the next one and the counter, big, with Play/Stop (Esc leaves). Left: step 2, songs in other sessions, switching while playing with the next session loaded in the background (two to three days); a seamless Go On (the audio thread jumping); each song's own tempo is the session's tempo map, as now |
 | Scratch pads: try another arrangement beside the song | **Works** (`b3776ae`) | Alternative arrangements (Edit › Arrangements): several versions of the song, each naming the playlist every track plays and keeping its own markers, switched as one undo step ([section 4](04-editing-audio.md)'s row) |
 | Arranger track: drag sections to reorder the song | **Works** (`c8cfbb1`) | A block on the Sections ruler copies, moves, repeats (`b616514`) or removes its section with every track's clips and automation and the Band's chords (`arrange.copy`, `arrange.move`, `arrange.remove`, one undo step each). Left: a section that changes tempo or meter inside is refused ([section 7](07-midi-writing.md)) |
 | Chord track that re-pitches audio as well as MIDI | **Partial** | Chords drive the Band and re-pitch single-line vocals (Fit to Lead, Make Harmony); MIDI clips follow the chord lane, per clip, opt in ([section 7](07-midi-writing.md)); chordal audio does not |
@@ -224,7 +224,7 @@ local link allows in the Network window (row 6).
 hardware); cloud collaboration and tablet companions (a service and second app to run); a large
 sound library (content and licences, the owner's call); AAF and OMF (large formats with little
 public documentation; DAWproject covers the modern case); a live-show page and field-recorder
-workflow (specialist; revisit if users ask); vocal synthesis.
+workflow (specialist; revisit if users ask; both since built in part: the field-recorder workflow, and a set list inside one session); vocal synthesis.
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
 sessions kept between visits (12–18): sessions kept **done** (270aee2), recording **dropped by the owner**
@@ -463,7 +463,7 @@ reach; what was built is said in each.
   and put each of their channels on a new track at the same place, cut to the clip's range.
   Step 3: alternate takes (the same scene, another take) offered from the clip's menu. Tests
   use generated WAV files with hand-written iXML, so nothing from outside is needed.
-- *Show page (Studio Pro) (design only).* A set list for playing live: an ordered list of songs
+- *Show page (Studio Pro).* *Step 1 built (`engine::cmd::set_list`, `ui_egui::set_list_ui`): the follow is in the app, after the transport is read each frame, not in the audio thread; a song deleted from the memory locations stays in the list as missing and is skipped. Stage View is drawn over the app window, not as the computer's full screen.* A set list for playing live: an ordered list of songs
   (sessions, or ranges of this session marked by memory locations), each with its own tempo,
   a pause or "go straight on", and a big display of the current and next song, the bar and the
   lyrics (the teleprompter already exists). The smallest useful step stays inside one session:
@@ -511,3 +511,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-17 | minor | Field recordings: iXML read on import and kept; Mix Engine FX and the show page left as designs with estimates |
 | 2026-11-17 | minor | Rows built elsewhere reconciled (arranger, lyrics in the score, scratch pads, global transpose for MIDI, score import, note rules); what is left on the others stated |
 | 2026-11-17 | minor | Field recordings: a clip expands to its location channels, and plays another take of its scene from its menu |
+| 2026-11-17 | minor | Show page, step 1: Window › Set List plays the session's songs in order, with Go On and a Stage View |

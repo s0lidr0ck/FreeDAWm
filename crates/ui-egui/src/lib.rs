@@ -103,6 +103,7 @@ pub mod score_editor;
 pub mod scout;
 pub mod scrub;
 pub mod session_key;
+pub mod set_list_ui;
 pub mod shale_ui;
 pub mod shortcut_editor;
 pub mod shortcuts;
@@ -199,6 +200,9 @@ pub struct UiState {
     /// Window › Mix Snapshots.
     #[serde(default)]
     pub show_mix_snapshots: bool,
+    /// Window › Set List: the show's songs in order.
+    #[serde(default)]
+    pub show_set_list: bool,
     /// Window › Control Room.
     #[serde(default)]
     pub show_control_room: bool,
@@ -579,6 +583,7 @@ impl Default for UiState {
             show_big_counter: false,
             show_loudness: false,
             show_mix_snapshots: false,
+            show_set_list: false,
             show_control_room: false,
             talk_held: false,
             talk_button: false,
@@ -3177,6 +3182,7 @@ impl SoundApp {
         self.engine.copy_imported_audio = self.ui.copy_imported_audio;
         // Stop the old playback before sending a replacement session to the audio thread.
         self.handle_transport(dt);
+        set_list_ui::follow(self, ctx);
         midi_devices::tick(self);
         surfaces::tick(self);
         midi_learn::tick(self);
