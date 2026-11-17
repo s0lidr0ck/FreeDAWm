@@ -143,7 +143,7 @@ K-system scales, and the master a loudness meter.
 | Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Works**: Touch glides back over the return time, 250 ms unless set in the Automation window (`automation.return_time`, 0 to 5 s) |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Works**: Write on Stop in the Automation window (`automation.write_on_stop`: to start, end, all or the selection), armed for the next pass as Pro Tools arms it: when it stops, each lane it wrote keeps its last value over that range, in the pass's undo step |
-| Preview a value before committing it | ● | ○ | ○ | ● | **Missing** (not reached in round three): a preview switch that suspends the lanes of the controls touched (they play as set) until Punch Preview writes them over the selection or to the end; about 5–8 h |
+| Preview a value before committing it | ● | ○ | ○ | ● | **Works**: Preview in the Automation window (`automation.preview`): a control touched while it is on plays as set, its lane suspended (not saved) and not written by passes; Punch Preview (`automation.punch_preview`) writes each previewed value over the edit selection, or from the position heard to the end, in one undo step, and the lanes play again; Preview off without a punch drops the values. Pro Tools' Suspend Preview and capturing values into a preview are not built |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
 | Write from a MIDI controller or control surface | ● | ● | ● | ● | **Works**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
 | Automation follows tempo changes | ● | ● | ● | ● | **Works** on tracks kept in bars and beats (tick timebase, the default for MIDI and instrument tracks): a tempo edit moves each lane it left alone to the same ticks in the new map, as their clips move (`tick_clips::follow_tempo`); a sample-timebase track's points stay on their samples |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | automation Preview and Punch Preview |
 | 2026-11-17 | minor | surround pan lanes; pencil shapes; basic folders; a stop lets the mix ring out with its meters; the wet/dry Mix of an insert is automatable (section 5); what is left stated on every open row |
 | 2026-11-17 | minor | built-in channel processing and AAF/OMF marked not planned here; the Ambisonics rows corrected (3rd-order tracks and encoding, orders above refused) |
 | 2026-11-17 | minor | instrument parameters were automated in the MIDI writing work; the suggested order brought up to date |

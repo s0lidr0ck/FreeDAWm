@@ -3816,7 +3816,7 @@ fn fader_section(s: &Session, t: &Track, strip: &mut Strip, live: &LiveInput<'_>
     // The fader section reads its automation where the audio now in the buffer is on the
     // timeline: `post_at` samples back (the inserts' delay), so a move lines up with what it moves.
     let apos = pos.saturating_sub(i64::try_from(strip.post_at).unwrap_or(0));
-    let mute_lane = t.lane(&AutoParam::Mute).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty());
+    let mute_lane = t.played_lane(&AutoParam::Mute).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty());
     let auto_mute = mute_lane.is_some_and(|l| l.value_at(apos, 0.0) >= 0.5);
     strip.muted = t.mixer.mute || auto_mute || solo_muted;
     let pfl = t.mixer.solo && monitor::listen_mode(s) == monitor::Listen::Pfl;
@@ -3894,12 +3894,13 @@ fn fader_gains(t: &Track, vcas: &[Option<&Track>], at: Samples, frames: usize, o
     out.clear();
     let last = at.saturating_add(frames.saturating_sub(1) as i64);
     let reads = |tr: &Track| tr.mixer.automation_mode.reads();
-    let trim = t.lane(&AutoParam::Trim).filter(|l| reads(t) && !l.points.is_empty());
-    let vol =
-        t.lane(&AutoParam::Volume).filter(|l| reads(t) && t.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty());
+    let trim = t.played_lane(&AutoParam::Trim).filter(|l| reads(t) && !l.points.is_empty());
+    let vol = t
+        .played_lane(&AutoParam::Volume)
+        .filter(|l| reads(t) && t.mixer.automation_mode != soundcraft_model::AutomationMode::Write && !l.points.is_empty());
     fn vca_vol(v: &Track) -> Option<&soundcraft_model::AutomationLane> {
         let m = v.mixer.automation_mode;
-        v.lane(&AutoParam::Volume).filter(|l| m.reads() && m != soundcraft_model::AutomationMode::Write && !l.points.is_empty())
+        v.played_lane(&AutoParam::Volume).filter(|l| m.reads() && m != soundcraft_model::AutomationMode::Write && !l.points.is_empty())
     }
     let db = |p: Samples| {
         let mut d = volume_db_at(t, p);
@@ -5788,7 +5789,9 @@ fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track
         return apply_values(slot, ins, |_, v| (v, false));
     };
     let automated = t.mixer.automation_mode.reads()
-        && t.automation.iter().any(|l| matches!(&l.param, AutoParam::Plugin { module: m, .. } if *m == module) && !l.points.is_empty());
+        && t.automation
+            .iter()
+            .any(|l| matches!(&l.param, AutoParam::Plugin { module: m, .. } if *m == module) && !l.points.is_empty() && !l.suspended);
     apply_values(slot, ins, |k, val| {
         if automated && let Some(l) = plugin_lane(t, module, k) {
             return (l.value_at(pos, val), true);
@@ -5853,7 +5856,7 @@ fn plugin_lane<'a>(t: &'a Track, module: ModuleId, param: &str) -> Option<&'a so
     t.automation
         .iter()
         .find(|l| matches!(&l.param, AutoParam::Plugin { module: m, param: p } if *m == module && p == param))
-        .filter(|l| !l.points.is_empty())
+        .filter(|l| !l.points.is_empty() && !l.suspended)
 }
 
 /// Hands the plugin what its stored state was made ready as ([`Insert::prepared`], made off the
@@ -5942,7 +5945,7 @@ pub(crate) fn transport_at(s: &Session, pos: Samples, playing: bool, recording: 
 fn volume_db_at(t: &Track, pos: Samples) -> f32 {
     if t.mixer.automation_mode.reads()
         && t.mixer.automation_mode != soundcraft_model::AutomationMode::Write
-        && let Some(l) = t.lane(&AutoParam::Volume)
+        && let Some(l) = t.played_lane(&AutoParam::Volume)
         && !l.points.is_empty()
     {
         return l.value_at(pos, t.mixer.volume_db);
@@ -5953,7 +5956,7 @@ fn volume_db_at(t: &Track, pos: Samples) -> f32 {
 fn pan_at(t: &Track, idx: usize, pos: Samples) -> f32 {
     let base = t.mixer.pan.get(idx).copied().unwrap_or(if idx == 0 { 0.0 } else { 1.0 });
     if t.mixer.automation_mode.reads()
-        && let Some(l) = t.lane(&AutoParam::Pan(u8::try_from(idx).unwrap_or(0)))
+        && let Some(l) = t.played_lane(&AutoParam::Pan(u8::try_from(idx).unwrap_or(0)))
         && !l.points.is_empty()
     {
         return l.value_at(pos, base);
@@ -5970,6 +5973,7 @@ fn surround_at(t: &Track, pos: Samples) -> Option<SurroundPan> {
         for l in &t.automation {
             if let AutoParam::Surround(i) = l.param
                 && !l.points.is_empty()
+                && !l.suspended
             {
                 sp.set_axis(i, l.value_at(pos, sp.axis(i)));
             }
@@ -5986,9 +5990,11 @@ const PAN_STEP: Samples = 64;
 /// of the frames that share it. Without pan automation the whole block shares one pan.
 fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
     let automated = t.mixer.automation_mode.reads()
-        && t.automation
-            .iter()
-            .any(|l| matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_)) && !l.points.is_empty());
+        && t.automation.iter().any(|l| {
+            matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_))
+                && !l.points.is_empty()
+                && !l.suspended
+        });
     if !automated {
         return (pos, frames);
     }
@@ -6001,7 +6007,7 @@ fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples
 /// A stereo track's width or balance (`p`) at `pos`: its lane when automation reads, else the
 /// strip's setting `base`. On the pan's grid (`pan_segment`).
 fn shape_at(t: &Track, p: AutoParam, base: f32, pos: Samples) -> f32 {
-    match t.lane(&p).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty()) {
+    match t.played_lane(&p).filter(|l| t.mixer.automation_mode.reads() && !l.points.is_empty()) {
         Some(l) => l.value_at(pos, base).clamp(-1.0, 1.0),
         None => base,
     }
@@ -6013,9 +6019,11 @@ fn shape_at(t: &Track, p: AutoParam, base: f32, pos: Samples) -> f32 {
 fn send_segment(t: &Track, i: usize, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
     let k = u8::try_from(i).unwrap_or(0);
     let automated = t.mixer.automation_mode.reads()
-        && t.automation
-            .iter()
-            .any(|l| matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k) && !l.points.is_empty());
+        && t.automation.iter().any(|l| {
+            matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k)
+                && !l.points.is_empty()
+                && !l.suspended
+        });
     if !automated {
         return (pos.saturating_add(start as i64), frames);
     }
@@ -6027,7 +6035,7 @@ fn send_segment(t: &Track, i: usize, pos: Samples, start: usize, frames: usize) 
 
 fn send_level(t: &Track, i: usize, base: f32, pos: Samples) -> f32 {
     if t.mixer.automation_mode.reads()
-        && let Some(l) = t.lane(&AutoParam::SendLevel(u8::try_from(i).unwrap_or(0)))
+        && let Some(l) = t.played_lane(&AutoParam::SendLevel(u8::try_from(i).unwrap_or(0)))
         && !l.points.is_empty()
     {
         return l.value_at(pos, base);
@@ -6046,7 +6054,7 @@ fn stereo_send_pans(p: f32) -> [f32; 2] {
 /// A send's pan as its automation plays it (read like [`send_level`]).
 fn send_pan(t: &Track, i: usize, base: f32, pos: Samples) -> f32 {
     if t.mixer.automation_mode.reads()
-        && let Some(l) = t.lane(&AutoParam::SendPan(u8::try_from(i).unwrap_or(0)))
+        && let Some(l) = t.played_lane(&AutoParam::SendPan(u8::try_from(i).unwrap_or(0)))
         && !l.points.is_empty()
     {
         return l.value_at(pos, base);
@@ -6057,7 +6065,7 @@ fn send_pan(t: &Track, i: usize, base: f32, pos: Samples) -> f32 {
 /// Whether a send is muted: its key, or its mute automation.
 fn send_muted(t: &Track, i: usize, base: bool, pos: Samples) -> bool {
     if t.mixer.automation_mode.reads()
-        && let Some(l) = t.lane(&AutoParam::SendMute(u8::try_from(i).unwrap_or(0)))
+        && let Some(l) = t.played_lane(&AutoParam::SendMute(u8::try_from(i).unwrap_or(0)))
         && !l.points.is_empty()
     {
         return base || l.value_at(pos, 0.0) >= 0.5;
@@ -10555,6 +10563,23 @@ mod tests {
         let mut bare = realtime();
         bare.render(&s, 0, 512, &mut out);
         assert_eq!(bare.strips_made_in_sync(), s.tracks.len() as u64);
+    }
+
+    /// A suspended lane (automation Preview) is not played: the strip plays its own setting, as
+    /// with no lane at all; sends' and plug-ins' lanes alike.
+    #[test]
+    fn a_suspended_lane_plays_the_control_as_set() {
+        let (mut s, t) = session_with_dc(0.5, 8192);
+        s.edit.click = false;
+        let plain = render_range(&s, Range::new(0, 4096), 1024);
+        let mut lane = soundcraft_model::AutomationLane::new(AutoParam::Volume);
+        lane.set_point(0, -144.0);
+        lane.set_point(8192, -144.0);
+        s.track_mut(t).unwrap().automation.push(lane);
+        let quiet = render_range(&s, Range::new(0, 4096), 1024);
+        assert!(quiet[0].iter().all(|x| x.abs() < 1e-4), "the lane plays");
+        s.track_mut(t).unwrap().automation[0].suspended = true;
+        assert_eq!(render_range(&s, Range::new(0, 4096), 1024), plain, "suspended: the fader as set");
     }
 
     fn impulse_at(ch: &[f32]) -> Vec<usize> {

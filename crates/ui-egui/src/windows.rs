@@ -265,6 +265,24 @@ fn automation(app: &mut SoundApp, ctx: &egui::Context) {
         if ui.button("Write to Current").clicked() {
             let _ = app.run("automation.write_to_current", json!({}));
         }
+        ui.separator();
+        // Preview: touched controls play as set until punched.
+        ui.horizontal(|ui| {
+            let mut on = app.engine.automation_preview();
+            if crate::widgets::checkbox(ui, &mut on, "Preview")
+                .on_hover_text("A control touched plays as set, its automation suspended, until Punch Preview writes it")
+                .changed()
+            {
+                let _ = app.run("automation.preview", json!({"value": on}));
+            }
+            if ui
+                .add_enabled(on, egui::Button::new("Punch Preview"))
+                .on_hover_text("Write the previewed values over the selection, or from here to the end")
+                .clicked()
+            {
+                let _ = app.run("automation.punch_preview", json!({}));
+            }
+        });
         if ui.button("Thin All").clicked() {
             let _ = app.run("automation.thin_all", json!({}));
         }

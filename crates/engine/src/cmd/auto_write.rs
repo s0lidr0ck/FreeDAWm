@@ -17,6 +17,14 @@
 //! - **Trim**: the trim lane, from [`Engine::automation_trim`] (the fader in Trim mode), as Touch.
 //!   Other controls read, as in Pro Tools.
 //!
+//! **Preview** (`automation.preview`, Pro Tools' and Cubase's): while it is on, a control touched
+//! is taken out of its lane's playback (the lane is suspended, [`AutomationLane::suspended`]) and
+//! plays as set, and passes do not write it; `automation.punch_preview` writes each previewed
+//! value over the edit selection, or from where it is heard to the end of the session, and plays
+//! the lanes again. Turning Preview off without punching drops the previewed values.
+//!
+//! [`AutomationLane::suspended`]: soundcraft_model::AutomationLane::suspended
+//!
 //! Each written point replaces the automation since the previous one; stopping writes a last
 //! point. A pass, and everything dragged during it, is one undo step. Nothing here runs on the
 //! audio thread: it edits the document, which the player picks up as for any edit.
@@ -205,6 +213,32 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"track": t.0, "param": id}))
             }
         ),
+        crate::cmd!(noundo
+            "automation.preview",
+            "Automation Preview",
+            [],
+            None,
+            "{value?: bool} — Preview: a control touched while it is on plays as set (its lane is suspended) and is not written by passes, until Punch Preview writes it; off drops what was previewed; toggles when omitted → {value, previewing: [{track, param}]}",
+            always,
+            |e, p| {
+                let on = p.get("value").and_then(Value::as_bool).unwrap_or(!e.auto_write.preview);
+                e.auto_write.preview = on;
+                if !on {
+                    e.auto_write.previewing.clear();
+                }
+                e.preview_reconcile();
+                Ok(json!({"value": on, "previewing": previewing_json(e)}))
+            }
+        ),
+        crate::cmd!(
+            "automation.punch_preview",
+            "Punch Preview",
+            [],
+            None,
+            "{} — writes each previewed control's value into its lane over the edit selection, or from the position heard to the end of the session, and plays its lane again → {written: [{track, param}], start, end}",
+            |e| if e.auto_write.previewing.is_empty() { Err("no control is being previewed".into()) } else { Ok(()) },
+            punch_preview
+        ),
         crate::cmd!(query "automation.last_touched", "Last Touched Control", [], None, "{} → {track, param} | null", always, |e, _| {
             Ok(e.auto_write.last_touched.as_ref().map_or(Value::Null, |(t, p)| json!({"track": t.0, "param": p.id()})))
         }),
@@ -252,6 +286,10 @@ pub struct AutoWriter {
     last_point: Samples,
     /// The control moved or held last, written or not (`automation.show_last_touched`).
     last_touched: Option<(TrackId, AutoParam)>,
+    /// Automation Preview is on (`automation.preview`).
+    preview: bool,
+    /// The controls touched while previewing: their lanes are suspended until punched.
+    previewing: Vec<(TrackId, AutoParam)>,
 }
 
 impl AutoWriter {
@@ -340,11 +378,54 @@ impl Engine {
     /// [`TOUCH_HOLD_SECONDS`]. Every command that sets such a value calls this.
     pub fn automation_changed(&mut self, track: TrackId, param: AutoParam) {
         let pos = self.heard_position();
+        self.preview_isolate(&[(track, param.clone())]);
         let w = &mut self.auto_write;
         w.last_touched = Some((track, param.clone()));
         match w.pulses.iter_mut().find(|x| x.0 == track && x.1 == param) {
             Some(x) => x.2 = pos,
             None => w.pulses.push((track, param, pos)),
+        }
+    }
+
+    /// Whether Automation Preview is on.
+    pub fn automation_preview(&self) -> bool {
+        self.auto_write.preview
+    }
+
+    /// While previewing: the controls in `touched` play as set from now on (see the module docs).
+    fn preview_isolate(&mut self, touched: &[(TrackId, AutoParam)]) {
+        if !self.auto_write.preview {
+            return;
+        }
+        let mut new = false;
+        for (t, p) in touched {
+            if *p != AutoParam::Trim && !self.auto_write.previewing.iter().any(|x| x.0 == *t && x.1 == *p) {
+                self.auto_write.previewing.push((*t, p.clone()));
+                new = true;
+            }
+        }
+        if new {
+            self.preview_reconcile();
+        }
+    }
+
+    /// Suspends exactly the lanes being previewed (an undo can bring back a lane as it was, either
+    /// way). Edits the session only when something is to change.
+    fn preview_reconcile(&mut self) {
+        let w = &self.auto_write;
+        let want = |t: TrackId, p: &AutoParam| w.preview && w.previewing.iter().any(|x| x.0 == t && x.1 == *p);
+        let wrong = self.session().tracks.iter().any(|tr| tr.automation.iter().any(|l| l.suspended != want(tr.id, &l.param)));
+        if !wrong {
+            return;
+        }
+        let previewing = if w.preview { w.previewing.clone() } else { Vec::new() };
+        for tr in &mut self.session_mut().tracks {
+            for l in &mut tr.automation {
+                let on = previewing.iter().any(|x| x.0 == tr.id && x.1 == l.param);
+                if l.suspended != on {
+                    l.suspended = on;
+                }
+            }
         }
     }
 
@@ -356,7 +437,8 @@ impl Engine {
             w.held.retain(|x| !(x.0 == track && x.1 == param));
             if on {
                 w.last_touched = Some((track, param.clone()));
-                w.held.push((track, param));
+                w.held.push((track, param.clone()));
+                self.preview_isolate(&[(track, param)]);
             } else {
                 // A let-go control stops writing now, not half a second later.
                 w.pulses.retain(|x| !(x.0 == track && x.1 == param));
@@ -369,6 +451,7 @@ impl Engine {
     /// last frame's list; one let go stops writing at once.
     pub fn automation_ui_held(&mut self, held: Vec<(TrackId, AutoParam)>) {
         let held = with_group(self.session(), held);
+        self.preview_isolate(&held);
         let w = &mut self.auto_write;
         for x in &w.ui_held {
             if !held.contains(x) {
@@ -441,7 +524,7 @@ impl Engine {
         if !mode.reads() || mode == M::Write || self.automation_touched(track, param) {
             return None;
         }
-        let lane = tr.lane(param).filter(|l| !l.points.is_empty())?;
+        let lane = tr.played_lane(param).filter(|l| !l.points.is_empty())?;
         Some(lane.value_at(self.heard_position(), current_value(tr, param)))
     }
 
@@ -455,6 +538,7 @@ impl Engine {
     /// `playing`, but the frame playback stops on writes each written lane's last point. Returns
     /// how many points it wrote.
     pub fn automation_pass(&mut self, playing: bool) -> usize {
+        self.preview_reconcile();
         let writes_any = |m: M| matches!(m, M::Write | M::Touch | M::Latch | M::TouchLatch | M::Trim);
         let may_write = playing && self.session().tracks.iter().any(|t| writes_any(t.mixer.automation_mode));
         self.hold_merge(may_write.then_some(PASS));
@@ -620,7 +704,9 @@ impl Engine {
             params.sort();
             params.dedup();
             for p in params {
-                if !writable(s, tr.id, &p) || s.edit.flag(&write_disabled_flag(write_type(&p))) {
+                // A previewed control is written by Punch Preview, not by the pass.
+                let previewed = w.preview && w.previewing.iter().any(|x| x.0 == tr.id && x.1 == p);
+                if previewed || !writable(s, tr.id, &p) || s.edit.flag(&write_disabled_flag(write_type(&p))) {
                     continue;
                 }
                 let v = if p == AutoParam::Trim {
@@ -636,6 +722,33 @@ impl Engine {
         }
         out
     }
+}
+
+fn previewing_json(e: &Engine) -> Value {
+    Value::Array(e.auto_write.previewing.iter().map(|(t, p)| json!({"track": t.0, "param": p.id()})).collect())
+}
+
+/// `automation.punch_preview` (see the module docs).
+fn punch_preview(e: &mut Engine, _: &Value) -> Result<Value> {
+    let sel = e.session().edit.selection;
+    let (a, b) = if sel.is_empty() {
+        let at = e.heard_position();
+        (at, e.session().content_end().max(at.saturating_add(1)))
+    } else {
+        (sel.start.max(0), sel.end)
+    };
+    let previewing = std::mem::take(&mut e.auto_write.previewing);
+    let s = e.session_mut();
+    let mut written = Vec::new();
+    for (t, p) in &previewing {
+        let Some(tr) = s.track_mut(*t) else { continue };
+        let v = current_value(tr, p);
+        let lane = tr.lane_mut(p);
+        lane.write_range(a, b, v, v);
+        lane.suspended = false;
+        written.push(json!({"track": t.0, "param": p.id()}));
+    }
+    Ok(json!({"written": written, "start": a, "end": b}))
 }
 
 fn touch(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -708,6 +821,47 @@ mod tests {
 
     fn outgain(m: ModuleId) -> AutoParam {
         AutoParam::Plugin { module: m, param: "outGain".into() }
+    }
+
+    /// Preview: a touched fader plays as set (its lane suspended, not written by the Touch pass),
+    /// Punch Preview writes it over the selection and the lane plays again; Preview off without a
+    /// punch drops it, and an undo cannot leave a lane suspended.
+    #[test]
+    fn preview_plays_a_control_as_set_until_punched() {
+        let (mut e, t, _, q) = kick("touch");
+        for at in [0, 100 * q] {
+            e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": at, "value": -20.0})).unwrap();
+        }
+        e.execute("automation.preview", &json!({"value": true})).unwrap();
+        e.execute("mix.volume", &json!({"track": t.0, "db": -3.0})).unwrap();
+        let lane = |e: &crate::Engine| e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().clone();
+        assert!(lane(&e).suspended, "the touched fader's lane is out of playback");
+        assert!(e.session().track(t).unwrap().played_lane(&AutoParam::Volume).is_none());
+        assert_eq!(e.automation_shown(t, &AutoParam::Volume), None, "the fader shows its own value");
+        assert_eq!(play(&mut e, q), 0, "a previewed control is not written by the pass");
+        assert_eq!(play(&mut e, 2 * q), 0);
+        stop(&mut e, 3 * q);
+        assert!(points(&e, t, &AutoParam::Volume).iter().all(|p| p.1 == -20.0));
+        // Punched over the selection: written there, the lane plays again.
+        e.session_mut().edit.selection = soundcraft_time::Range::new(10 * q, 20 * q);
+        let r = e.execute("automation.punch_preview", &json!({})).unwrap();
+        assert_eq!(r["written"].as_array().unwrap().len(), 1);
+        let l = lane(&e);
+        assert!(!l.suspended);
+        assert_eq!(l.value_at(15 * q, 0.0), -3.0);
+        assert_eq!(l.value_at(5 * q, 0.0), -20.0);
+        assert_eq!(l.value_at(50 * q, 0.0), -20.0);
+        assert!(e.execute("automation.punch_preview", &json!({})).is_err(), "nothing previewed now");
+        // Undo brings back the suspended lane as the command saw it; the next frame plays it again.
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.automation_pass(false);
+        assert!(!lane(&e).suspended);
+        // Off without punching: dropped, the lane plays.
+        e.execute("mix.volume", &json!({"track": t.0, "db": -6.0})).unwrap();
+        assert!(lane(&e).suspended);
+        e.execute("automation.preview", &json!({"value": false})).unwrap();
+        assert!(!lane(&e).suspended);
+        assert!(points(&e, t, &AutoParam::Volume).iter().all(|p| p.1 == -20.0));
     }
 
     #[test]

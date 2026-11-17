@@ -249,11 +249,14 @@ pub struct AutomationLane {
     pub points: Vec<AutomationPoint>,
     #[serde(default)]
     pub enabled: bool,
+    /// Held out of playback for now: the control plays as set (automation Preview). Not saved.
+    #[serde(skip)]
+    pub suspended: bool,
 }
 
 impl AutomationLane {
     pub fn new(param: AutoParam) -> Self {
-        AutomationLane { param, points: Vec::new(), enabled: true }
+        AutomationLane { param, points: Vec::new(), enabled: true, suspended: false }
     }
 
     /// Value at `at` (linear interpolation; `default` when empty).

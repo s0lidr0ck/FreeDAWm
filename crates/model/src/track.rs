@@ -464,6 +464,11 @@ impl Track {
         self.automation.iter().find(|l| &l.param == p)
     }
 
+    /// The lane of `p` as playback reads it: `None` while it is suspended (automation Preview).
+    pub fn played_lane(&self, p: &AutoParam) -> Option<&AutomationLane> {
+        self.lane(p).filter(|l| !l.suspended)
+    }
+
     pub fn lane_mut(&mut self, p: &AutoParam) -> &mut AutomationLane {
         let idx = match self.automation.iter().position(|l| &l.param == p) {
             Some(i) => i,
