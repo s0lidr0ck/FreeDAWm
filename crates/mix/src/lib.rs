@@ -6267,13 +6267,26 @@ pub fn fold_down_stereo(fmt: ChannelFormat, ch: &[Vec<f32>]) -> Vec<Vec<f32>> {
 /// edits take it: without the automatic edge fades playback and bounces add (`Edges`), which a
 /// clip made from this render gets again where it plays.
 pub fn render_clips(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> {
+    render_clips_with(s, track, range, false)
+}
+
+/// [`render_clips`] as playback hears the clips: with the automatic edge fades
+/// (`playback.auto_fade_ms`) where a clip starts or ends inside `range` (Consolidate).
+pub fn render_clips_as_heard(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> {
+    render_clips_with(s, track, range, true)
+}
+
+fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> Vec<Vec<f32>> {
     let Some(t) = s.track(track) else { return Vec::new() };
     let len = usize::try_from(range.len().max(0)).unwrap_or(0).min(MAX_RENDER_SAMPLES / t.channels().max(1));
     let mut out = vec![vec![0.0f32; len]; t.channels().max(1)];
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
-        let edges = Edges::default();
-        // Layered clips give way as they do in playback, without the automatic edge ramps.
-        let cover = Cover::of(t.clips(), c, range, 0);
+        // Layered clips give way as they do in playback; the automatic edge ramps only as heard.
+        let (edges, cover) = if heard {
+            (Edges::of(s, t.clips(), c, range, None), Cover::of(t.clips(), c, range, auto_fade_frames(s)))
+        } else {
+            (Edges::default(), Cover::of(t.clips(), c, range, 0))
+        };
         match clip_fx_params(c) {
             None => render_clip(s, c, range.start, len, &mut out, edges, cover),
             Some(params) => {

@@ -1331,7 +1331,8 @@ pub fn consolidate(e: &mut Engine, cmd: &str, t: TrackId, r: Range) -> Result<bo
         return Err(crate::cmd::bad(cmd, format!("selection is too long to consolidate on `{}` (at most {secs:.0} s)", tr.name)));
     }
     let r = Range::new(start, start + len);
-    let audio = soundcraft_mix::render_clips(s, t, r);
+    // As playback hears it: the automatic edge fades where a clip starts or ends inside the range.
+    let audio = soundcraft_mix::render_clips_as_heard(s, t, r);
     if audio.iter().any(|ch| ch.len() as i64 != len) {
         return Err(EngineError::Internal(cmd.to_string(), "consolidate rendered the wrong length".into()));
     }
@@ -4562,6 +4563,24 @@ mod strip_tests {
         let r = e.execute("edit.strip_silence", &json!({"track": t.0, "start": 0, "end": far + 96_000})).unwrap();
         assert_eq!(r["clips"], 2);
         assert!(e.session().track(t).unwrap().clips().iter().any(|c| c.start >= far));
+    }
+
+    /// Consolidate renders the clips as playback hears them: the automatic edge fades ramp a clip
+    /// that starts or ends inside the range.
+    #[test]
+    fn consolidate_keeps_the_automatic_edge_fades() {
+        let (mut e, t) = tones(&[1000], 4000);
+        e.execute("options.auto_fades", &json!({"ms": 1.0})).unwrap();
+        e.execute("edit.consolidate", &json!({"tracks": [t.0], "start": 0, "end": 6000})).unwrap();
+        let s = e.session();
+        let c = &s.track(t).unwrap().clips()[0];
+        let out = soundcraft_mix::render_clips(s, t, c.range());
+        let ch = &out[0];
+        assert_eq!(ch[999], 0.0);
+        assert!(ch[1000] < 0.05, "ramps up from the clip's start: {}", ch[1000]);
+        assert!((ch[1100] - 0.5).abs() < 1e-6, "after a 1 ms ramp, the tone");
+        assert!(ch[4999] < 0.05, "ramps down to the clip's end: {}", ch[4999]);
+        assert_eq!(ch[5000], 0.0);
     }
 
     /// Parity bug 11: a muted clip is not silence to strip.
