@@ -150,6 +150,7 @@ Edit > Trim > Start to Insertion
 Edit > Trim > End to Insertion
 Edit > Trim > To Fill Selection
 Edit > Trim > To File Boundaries
+Edit > Trim > To Close Gaps = @edit.trim_to_close_gaps
 Edit > ---
 Edit > ## Playlists
 Edit > Copy Selection to... > Target Playlist
@@ -431,9 +432,9 @@ Clip > Elastic Properties
 Clip > Real-Time > Transpose... = @clip.transpose
 Clip > Real-Time > Reverse in Place = @clip.play_reversed
 Clip > Real-Time > Loop in Place... = @clip.loop_in_place
-Clip > Remove > Sync Point = Clip > Remove Sync Point
 Clip > Real-Time > Nudge Contents Earlier = @clip.slip_earlier
 Clip > Real-Time > Nudge Contents Later = @clip.slip_later
+Clip > Remove > Sync Point = Clip > Remove Sync Point
 Clip > Remove > Warp = Clip > Remove Warp
 Clip > Remove > Pitch Shift = Clip > Remove Pitch Shift
 

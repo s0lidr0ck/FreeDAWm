@@ -102,6 +102,15 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("edit.trim_to_file_boundaries", "To File Boundaries", ["Edit", "Trim"], None, "{clips?}", has_selection, trim_to_file),
         cmd!("edit.trim_to_fill_selection", "To Fill Selection", ["Edit", "Trim"], None, "{}", has_range, trim_to_fill),
+        cmd!(
+            "edit.trim_to_close_gaps",
+            "To Close Gaps",
+            [],
+            None,
+            "{clips?} — each selected audio clip's end runs on to the start of the clip after it, as far as its file (or loop) has audio",
+            has_selection,
+            close_gaps
+        ),
         cmd!("edit.mute_clips", "Mute", ["Edit"], Some("Cmd+M"), "{clips?}", has_selection, mute_clips),
         cmd!(
             "edit.copy_to_new_playlist",
@@ -929,6 +938,35 @@ fn trim_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"trimmed": n}))
 }
 
+fn close_gaps(e: &mut Engine, p: &Value) -> Result<Value> {
+    let ids = clip_ids_param(e, p);
+    let s = e.session_mut();
+    let mut n = 0;
+    for id in ids {
+        let Some((frames, _, hi)) = trim_limits(s, id) else { continue };
+        let Some(c) = s.find_clip_mut(id) else { continue };
+        if hi == Samples::MAX || hi <= c.end() || !c.is_audio() {
+            continue;
+        }
+        // The furthest the end can go with audio under it: a loop repeats; a reversed clip's end
+        // reads back towards the file's start, a plain one on towards its end.
+        let room = if c.loop_len > 0 {
+            Samples::MAX
+        } else if c.reversed {
+            c.end().saturating_add(c.timeline_span(c.source_offset()))
+        } else {
+            let file_start = c.start - c.timeline_span(c.source_offset());
+            file_start.saturating_add(c.timeline_span(frames))
+        };
+        let to = hi.min(room);
+        if to > c.end() {
+            c.trim_end_to(to);
+            n += 1;
+        }
+    }
+    Ok(json!({"trimmed": n}))
+}
+
 /// How far a trim may extend an audio clip: its source length in frames, and the earliest
 /// start and latest end before it would run over the clip before or after it on the playlist
 /// (an extension never overwrites, like the trim tool). An overlap the clip already has with
@@ -1520,6 +1558,15 @@ mod tests {
         let (mut e, t, ids) = trim_session(&[(0, 10_000, 0), (20_000, 10_000, 20_000), (40_000, 5_000, 0)]);
         e.execute("edit.trim_to_file_boundaries", &json!({"clips": [ids[1].0]})).unwrap();
         assert_eq!(bounds(&e, t), vec![(0, 10_000, 0), (10_000, 40_000, 10_000), (40_000, 45_000, 0)]);
+    }
+
+    #[test]
+    fn trim_to_close_gaps_runs_each_end_on_to_the_next_clip_as_far_as_its_file_goes() {
+        // The file holds 60 000 frames, so the second clip has 5 000 of audio from its start.
+        let (mut e, t, ids) = trim_session(&[(0, 10_000, 0), (20_000, 3_000, 55_000), (40_000, 5_000, 0)]);
+        let all: Vec<u64> = ids.iter().map(|c| c.0).collect();
+        assert_eq!(e.execute("edit.trim_to_close_gaps", &json!({"clips": all})).unwrap()["trimmed"], 2);
+        assert_eq!(bounds(&e, t), vec![(0, 20_000, 0), (20_000, 25_000, 55_000), (40_000, 45_000, 0)]);
     }
 
     #[test]

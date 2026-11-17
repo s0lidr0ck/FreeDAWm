@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups | Small: no typed selection numbers |
-| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients; overwrite, layer or crossfade on overlap | Small: no trim to close gaps |
+| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
@@ -122,7 +122,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
 | Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
-| Trim clips to close gaps | ◐ | ● | ● | ● | **Missing** |
+| Trim clips to close gaps | ◐ | ● | ● | ● | **Works**: Edit › Trim › To Close Gaps runs each selected clip's end on to the next clip's start, as far as its file (or loop) has audio |
 | Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Works**: Options › Overlap › Overwrite (the default), Layer (audio clips stay whole underneath; the newest is on top and heard, the lower one plays again where uncovered, crossing over through the top clip's fades or a 1 ms ramp) or Crossfade (overwrite with a 10 ms crossfade at each join, out of the handles). Moves, pastes, duplicates and recorded takes follow it; MIDI and video clips always overwrite; kept by undo like the Edit mode (`edit.overlap_mode`) |
 | Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Works**: each audio clip has a layer; Send to Back and Bring to Front put it below or above the clips it overlaps, which changes what is heard there; the Edit window draws the top one last and a click picks it |
 | Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**; whole files only, not a clip from the list |
@@ -398,3 +398,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Tap tempo |
 | 2026-11-17 | minor | Lock a whole track |
 | 2026-11-17 | minor | Clip notes |
+| 2026-11-17 | minor | Trim clips to close gaps |
