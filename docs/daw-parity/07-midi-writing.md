@@ -164,7 +164,7 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Event list of every kind of event, typed values, insert, filter | ● | ○ | ● | ● | **Works**: notes, CC, pitch bend, aftertouch, poly pressure and program changes in time order; position (written when the drag or typing ends), channel, note or number, velocity or value and length typed; an Insert row for each kind at the insertion point; filters by kind and channel. No SysEx (the model keeps none) |
 | Score view | ● | ● | ● | ● | **Partial**: a read-only grand staff |
-| Enter and edit notes in the score | ● | ● | ● | ● | **Missing** |
+| Enter and edit notes in the score | ● | ● | ● | ● | **Missing**; designed (below, not built) |
 | Print the score | ● | ● | ● | ● | **Works** |
 | Lyrics, layout, parts | ◐ | ◐ | ● | ● | **Missing** |
 | MusicXML export and import | ● | ● | ● | ● | **Partial**: export only, to 16ths, with no key signature |
@@ -273,6 +273,33 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file starting at the clip's start (with several, at the earliest one's, the others keeping their spacing; owner's decision), opened by the tempo and meter in force there |
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways; muted notes are left out of an export (the format cannot mark a note muted, so they would come back sounding; owner's decision), and the export report says so |
 | Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
+
+### Design: entering notes in the score (not built)
+
+The score (`ui-egui/src/score_editor.rs`, about 170 lines) only draws: heads placed at
+`start × px_per_tick` on a grand staff, pitch from `diatonic`, sharps only. Entry needs no new
+model or command: every edit goes through the commands the piano roll uses, so it is undoable
+and scriptable as they are.
+
+- **Values.** A row above the staff: whole to 32nd, dotted, triplet, and a rest; ♯ ♭ ♮ for the
+  next note; the current value is the length of new notes and the step the cursor moves.
+- **Where.** The inverse of the drawing: x to a tick snapped to the bar-counted grid of the
+  chosen value (`midi_edit_tools::snap_abs`), y to a diatonic step (`c4_y`, `STEP`) and to its
+  natural pitch, raised or lowered by the chosen accidental or by the key on the Key ruler
+  (so F in G major is F♯). A ghost head follows the pointer before the click.
+- **Click on empty staff** adds a note (`midi.note_add`, the last velocity); a click with
+  Shift on a beat that has notes adds to the chord. **Click on a head** selects it (shared
+  with the piano roll's selection, `app.midi.selected`); Delete removes it (`midi.note_delete`);
+  up and down arrows move it a diatonic step (`midi.note_edit` pitch), Alt+arrows a semitone;
+  a vertical drag does the same; a value key with a head selected sets its length.
+- **Step entry.** With the score focused, the computer keyboard's A–G (later a MIDI keyboard's
+  notes) enter the pitch nearest the last one at the cursor, then the cursor moves on by the
+  value; a rest key moves it without a note.
+- **Drawing to match.** Flats when the key has flats (today only sharps are drawn), and the
+  heads placed by tick so an entered note lands where it was clicked.
+- **Tests.** A UI test per gesture: a click on the treble G line at beat 2 with a quarter chosen
+  adds G4, 960 ticks long, at tick 960; Delete and the arrows edit it; each is one undo step;
+  the key of G sharpens an F. Est. 6–10 h with the tests.
 
 ## Bugs found on the way
 
@@ -400,3 +427,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Owner's decision: Export Clip as MIDI starts the file at the clip's start (several clips: the earliest's) |
 | 2026-11-16 | minor | Grooves from a clip keep velocity accents; the drawing grid swings with a clip's playback quantize; notes playback quantize moves are outlined where they play |
 | 2026-11-16 | minor | Dense clips: an index of each clip's notes lets the scheduler look only at the notes near the playhead; played event for event as before |
+| 2026-11-16 | minor | A design for entering notes in the score (not built) |
