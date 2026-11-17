@@ -65,8 +65,39 @@ pub fn specs() -> Vec<CommandSpec> {
             has_tracks,
             make_comp
         ),
+        cmd!(
+            "comp.flatten",
+            "Flatten Comp",
+            [],
+            None,
+            "{track?} — the comp's segments become plain clips (crossfades kept) and the take layers are deleted",
+            has_tracks,
+            flatten
+        ),
         cmd!(noundo "comp.layers", "Show Layers", [], None, "{track?, open?: toggle}", has_tracks, show_layers),
     ]
+}
+
+/// Flatten Comp: the comp (the active playlist) stays as it plays, its segments no longer tied
+/// to a take, and every other playlist (the take layers) goes.
+fn flatten(e: &mut Engine, p: &Value) -> Result<Value> {
+    let t = track_of(e, "comp.flatten", p)?;
+    let s = e.session_mut();
+    let Some(tr) = s.track_mut(t) else { return Err(bad("comp.flatten", "no track")) };
+    if tr.playlists.len() <= 1 {
+        return Err(bad("comp.flatten", "the track has no take layers to flatten"));
+    }
+    let active = tr.active_playlist.min(tr.playlists.len() - 1);
+    let gone = tr.playlists.len() - 1;
+    let comp = tr.playlists.swap_remove(active);
+    tr.playlists = vec![comp];
+    tr.active_playlist = 0;
+    tr.record_layer = None;
+    tr.layers_open = false;
+    for c in tr.playlists.iter_mut().flat_map(|pl| pl.clips.iter_mut()) {
+        c.from_layer = None;
+    }
+    Ok(json!({"deleted": gone}))
 }
 
 fn track_of(e: &Engine, id: &str, p: &Value) -> Result<TrackId> {
@@ -425,6 +456,21 @@ mod tests {
 
     fn comp(e: &Engine, t: TrackId) -> Vec<(Samples, Samples, Option<usize>)> {
         e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end(), c.from_layer)).collect()
+    }
+
+    #[test]
+    fn flatten_keeps_the_comp_as_plain_clips_and_deletes_the_takes() {
+        let (mut e, t) = four_takes();
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": 1, "start": 0, "end": LEN})).unwrap();
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": 3, "start": 100_000, "end": 200_000})).unwrap();
+        let before: Vec<(Samples, Samples)> = comp(&e, t).iter().map(|c| (c.0, c.1)).collect();
+        assert_eq!(e.execute("comp.flatten", &json!({"track": t.0})).unwrap()["deleted"], 4);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.playlists.len(), tr.active_playlist, tr.record_layer), (1, 0, None));
+        assert_eq!(comp(&e, t), before.iter().map(|&(a, b)| (a, b, None)).collect::<Vec<_>>());
+        assert!(e.execute("comp.flatten", &json!({"track": t.0})).is_err(), "nothing left to flatten");
+        e.undo();
+        assert_eq!(e.session().track(t).unwrap().playlists.len(), 5);
     }
 
     #[test]

@@ -117,7 +117,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it |
-| Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; ignores Shuffle |
+| Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; the fill is exactly the selection's length, so in Shuffle too nothing after it moves |
 | Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Works**: every playlist and take layer, automation, markers, key changes and the tempo and meter map move (bug 7, fixed); refused inside a tempo ramp |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
 | Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
@@ -178,13 +178,13 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Alternate playlists or versions per track | ● | ● | ● | ● | **Works**: new, duplicate, switch |
-| Delete one playlist | ● | ● | ● | ● | **Partial**: only "delete all unused" |
+| Delete one playlist | ● | ● | ● | ● | **Works**: any playlist but the one playing is a take layer, and Delete Take in its menu deletes it (one the comp uses: Remove and Delete); Delete Unused Playlists deletes them all |
 | Take lanes under the track | ● | ● | ● | ● | **Works** |
 | Swipe comping | ◐ | ● | ● | ● | **Works** |
 | Copy a selection up to the main playlist | ● | ● | ● | ● | **Works**; this route adds no crossfades |
 | Automatic crossfades at comp joins | ◐ | ● | ● | ● | **Works** (10 ms equal power) |
 | Name and rate takes | ● | ● | ● | ● | **Works** |
-| Flatten a comp | ● | ● | ● | ● | **Partial**: by consolidating; Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
+| Flatten a comp | ● | ● | ● | ● | **Works**: Flatten Comp in a take layer's menu keeps the comp as plain clips, crossfades and all, and deletes the take layers (one undo step); Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
 | Show only takes that match the selection | ● | ○ | ○ | ○ | **Missing** |
 | Comp grouped tracks together (drums) | ● | ● | ● | ● | **Missing** |
 
@@ -406,3 +406,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Trim to Selection and the A/S trims follow Shuffle |
 | 2026-11-17 | minor | A looped clip's waveform is drawn repeat by repeat, reversed when the clip is |
 | 2026-11-17 | minor | A crossfade short of audio beyond the cut warns |
+| 2026-11-17 | minor | Flatten Comp; deleting one playlist and Repeat to Fill in Shuffle were already covered |

@@ -354,6 +354,9 @@ pub fn layer_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track, layer: usize) 
     if ui.button("Make Comp from This Take").clicked() {
         let _ = app.run("comp.layer_make_comp", json!({"track": id, "layer": layer}));
     }
+    if ui.button("Flatten Comp").on_hover_text("Keep the comp as plain clips and delete every take layer").clicked() {
+        let _ = app.run("comp.flatten", json!({"track": id}));
+    }
     let target = track.record_layer == Some(layer);
     if ui.add(egui::Button::new("Record Into This Layer").selected(target)).clicked() {
         let v = if target { serde_json::Value::Null } else { json!(layer) };
