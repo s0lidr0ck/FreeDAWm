@@ -4860,6 +4860,48 @@ mod tests {
             .collect()
     }
 
+    /// A clip reversed in place draws its waveform reversed: loud where its file's loud end
+    /// plays, mirrored back when the reverse is taken off.
+    #[test]
+    fn a_reversed_clip_draws_its_waveform_reversed() {
+        let mut h = smart_demo();
+        let tl = timeline(&h);
+        let (clip, lane) = clip_on_screen(&h, |xs, xe| xs > tl.min.x + 30.0 && xe < tl.max.x - 100.0 && xe - xs > 100.0);
+        let source = clip.source().unwrap();
+        // The clip's window: silent in its first half, loud in its second.
+        let rate = h.state().engine.session().sample_rate.hz();
+        let frames = usize::try_from(clip.source_offset() + clip.length).unwrap() + 10;
+        let half = usize::try_from(clip.source_offset() + clip.length / 2).unwrap();
+        let wave: Vec<f32> = (0..frames).map(|i| if i < half { 0.0 } else { 0.8 * if i % 2 == 0 { 1.0 } else { -1.0 } }).collect();
+        let audio = soundcraft_model::SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: rate, channels: vec![wave] });
+        h.state_mut().engine.session_mut().pool.insert(source, std::sync::Arc::new(audio));
+        let tid = h.state().engine.session().find_clip(clip.id).unwrap().0;
+        h.state_mut().engine.session_mut().track_mut(tid).unwrap().format = soundcraft_model::ChannelFormat::Mono;
+        let loudness = |h: &Harness<SoundApp>| {
+            let s = h.state().engine.session().clone();
+            let (xs, xe) = (x_of(&s, tl, clip.start), x_of(&s, tl, clip.end()));
+            let mid = (xs + xe) * 0.5;
+            let clip_rect = Rect::from_min_max(pos2(xs, lane.min.y), pos2(xe, lane.max.y)).intersect(tl);
+            // The waveform: the mesh across the clip (not the narrow ones at its edges).
+            let meshes = waveform_geometry(h, clip_rect);
+            let wide =
+                |m: &Vec<Pos2>| m.iter().map(|p| p.x).fold(f32::MIN, f32::max) - m.iter().map(|p| p.x).fold(f32::MAX, f32::min) > (xe - xs) * 0.5;
+            let pts: Vec<Pos2> = meshes.into_iter().filter(wide).flatten().collect();
+            let spread = |left: bool| {
+                let ys: Vec<f32> = pts.iter().filter(|p| (p.x < mid - 4.0) == left && (p.x - mid).abs() > 4.0).map(|p| p.y).collect();
+                ys.iter().copied().fold(f32::MIN, f32::max) - ys.iter().copied().fold(f32::MAX, f32::min)
+            };
+            (spread(true), spread(false))
+        };
+        h.step();
+        let (l, r) = loudness(&h);
+        assert!(r > l + 10.0, "forwards: loud on the right ({l} vs {r})");
+        h.state_mut().engine.session_mut().find_clip_mut(clip.id).unwrap().reversed = true;
+        h.step();
+        let (l, r) = loudness(&h);
+        assert!(l > r + 10.0, "reversed: loud on the left ({l} vs {r})");
+    }
+
     #[test]
     fn waveforms_follow_fade_drags_before_release_and_match_the_committed_waveform() {
         for channels in [1, 2] {
