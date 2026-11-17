@@ -4,7 +4,8 @@
 //! instrument a note at a time, at several velocities, through the track's module chain
 //! (offline, as Freeze renders it), cuts each note where it has died away, and puts the notes in
 //! a new track's Pantry.
-//! `mix.multisample_load` reads an SFZ file's key-down regions into the track's Multisampler.
+//! `mix.multisample_load` reads an SFZ file's key-down regions, or a Decent Sampler preset's or
+//! library's samples, into the track's Multisampler.
 //! Each sample is a session source (`Insert::samples`, keyed `n{note}.v{velocity}.r{robin}`: the
 //! note it was recorded at, the top of its velocity range and its round-robin take), saved in
 //! `Audio Files/` with the session; the mix engine hands each to the running instrument. Of an
@@ -54,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Multisample",
             [],
             None,
-            "{track?, path: an .sfz file} -> {track, name, samples, notes, layers, skipped}: the track's Multisampler plays the file's samples in place of its own (the mapping only: recorded note, velocity layer and round-robin of each key-down region; at most 16 layers a note and 4 round-robins a layer, the rest skipped)",
+            "{track?, path: an SFZ file (.sfz), a Decent Sampler preset (.dspreset) or library (.dslibrary), preset?: which preset of a library (default: its first by name)} -> {track, name, samples, notes, layers, skipped, presets}: the track's Multisampler plays the instrument's samples in place of its own (the mapping only: recorded note, velocity layer and round-robin of each key-down sample; at most 16 layers a note and 4 round-robins a layer, the rest skipped); `presets` names a library's presets",
             has_selection,
             load
         ),
@@ -455,13 +456,29 @@ fn parse_sfz(text: &str) -> Vec<Region> {
     let mut scope = String::new();
     // The opcode a value's later words (a file name with spaces) belong to.
     let mut open: Option<String> = None;
-    let finish = |region: &mut Opcodes, control: &Opcodes, global: &Opcodes, master: &Opcodes, group: &Opcodes, out: &mut Vec<Region>| {
+    // The first keyswitch met, for a file that names no default.
+    let mut first_switch: Option<u8> = None;
+    let mut finish = |region: &mut Opcodes, control: &Opcodes, global: &Opcodes, master: &Opcodes, group: &Opcodes, out: &mut Vec<Region>| {
         let get = |k: &str| region.get(k).or_else(|| group.get(k)).or_else(|| master.get(k)).or_else(|| global.get(k)).map(String::as_str);
         let sample = get("sample").map(|s| s.trim().replace('\\', "/")).filter(|s| !s.is_empty() && !s.starts_with('*'));
-        let key_down = get("trigger").is_none_or(|t| t.trim().eq_ignore_ascii_case("attack"));
+        // Not the notes themselves: release samples, and sounds a controller sets off (pedal noise).
+        let on_controller = region
+            .keys()
+            .chain(group.keys())
+            .chain(master.keys())
+            .chain(global.keys())
+            .any(|k| k.starts_with("on_locc") || k.starts_with("on_hicc") || k.starts_with("start_locc") || k.starts_with("start_hicc"));
+        // Of an instrument with keyswitched versions (`sw_last`), the one it starts on.
+        let switched_off = get("sw_last").and_then(sfz_note).is_some_and(|last| match get("sw_default").and_then(sfz_note) {
+            Some(default) => last != default,
+            None => *first_switch.get_or_insert(last) != last,
+        });
+        let key_down = get("trigger").is_none_or(|t| t.trim().eq_ignore_ascii_case("attack")) && !on_controller && !switched_off;
         if let Some(sample) = sample.filter(|_| key_down) {
             let dir = control.get("default_path").map(|d| d.trim().replace('\\', "/")).unwrap_or_default();
-            let note = get("pitch_keycenter").or_else(|| get("key")).and_then(sfz_note).unwrap_or(60);
+            // The note it was recorded at, or the one key it plays.
+            let single = get("lokey").and_then(sfz_note).filter(|lo| get("hikey").and_then(sfz_note) == Some(*lo));
+            let note = get("pitch_keycenter").or_else(|| get("key")).and_then(sfz_note).or(single).unwrap_or(60);
             // A file Pantry saved says what each sample was played at; else the top of its range.
             let velocity =
                 get("pantry_velocity").or_else(|| get("hivel")).and_then(|v| v.trim().parse::<i64>().ok()).map_or(127, |v| v.clamp(1, 127) as u8);
@@ -536,21 +553,149 @@ fn multisampler_mut(e: &mut Engine, t: TrackId) -> Option<&mut Insert> {
     e.session_mut().track_mut(t).and_then(|tr| tr.instrument.as_mut()).filter(|i| i.plugin == MULTISAMPLER)
 }
 
+/// Largest sample read out of a library archive, in bytes.
+const MAX_PACKED_SAMPLE_BYTES: u64 = 1 << 30;
+/// How deep SFZ files may include one another.
+const MAX_SFZ_INCLUDES: usize = 8;
+
+/// The SFZ file at `path` with its `#include`s (paths relative to `root`, the main file's
+/// folder) put in place and its `#define`d variables (`$NAME`) filled in, appended to `out`.
+/// `budget` is the bytes that may still be read.
+fn expand_sfz(path: &Path, root: &Path, depth: usize, defines: &mut Vec<(String, String)>, out: &mut String, budget: &mut usize) -> Result<()> {
+    let bytes = crate::io::read_file_max(path, *budget as u64)
+        .map_err(|_| EngineError::Io(format!("{}: missing, or too large for an SFZ file", path.display())))?;
+    *budget = budget.saturating_sub(bytes.len());
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        // The settings of a file Pantry saved are in a comment: kept for `load` to read.
+        if line.trim_start().starts_with(PARAMS_LINE) {
+            out.push_str(line.trim_start());
+            out.push('\n');
+            continue;
+        }
+        // Directives may stand anywhere on a line (`<group> #include "a" lovel=1 #include "b"`).
+        let mut rest = line.split("//").next().unwrap_or("");
+        loop {
+            let (before, include) = match rest.find("#include") {
+                Some(at) => (rest.get(..at).unwrap_or(""), rest.get(at + "#include".len()..)),
+                None => (rest, None),
+            };
+            if let Some(define) = before.trim().strip_prefix("#define") {
+                let mut words = define.split_whitespace();
+                if let (Some(var), Some(value)) = (words.next().filter(|v| v.starts_with('$') && v.len() > 1), words.next()) {
+                    defines.retain(|(k, _)| k != var);
+                    defines.push((var.to_string(), value.to_string()));
+                    // The longest name first, so `$VELTRACK` is not read as `$VEL` and `TRACK`.
+                    defines.sort_by_key(|d| std::cmp::Reverse(d.0.len()));
+                }
+            } else if !before.trim().is_empty() {
+                let mut text = before.to_string();
+                if text.contains('$') {
+                    for (var, value) in defines.iter() {
+                        text = text.replace(var.as_str(), value);
+                    }
+                }
+                out.push_str(&text);
+                out.push(' ');
+            }
+            let Some(after) = include else { break };
+            // The file's name in quotes, then the rest of the line.
+            let after = after.trim_start();
+            let (file, tail) = match after.strip_prefix('"').and_then(|a| a.split_once('"')) {
+                Some((file, tail)) => (file, tail),
+                None => (after.split_whitespace().next().unwrap_or(""), ""),
+            };
+            let file = file.replace('\\', "/");
+            if !file.is_empty() && depth < MAX_SFZ_INCLUDES {
+                expand_sfz(&root.join(&file), root, depth + 1, defines, out, budget)?;
+            }
+            rest = tail;
+        }
+        out.push('\n');
+    }
+    Ok(())
+}
+
+/// `sample` (as a preset inside a library archive names it) relative to the preset's folder
+/// `base`, as an entry name: forward slashes, `.` and `..` resolved.
+fn archive_path(base: &str, sample: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let joined = format!("{base}/{}", sample.replace('\\', "/"));
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    parts.join("/")
+}
+
+/// The key-down samples of a Decent Sampler preset (`.dspreset`), in file order: each
+/// `<sample>` with its `path`, `rootNote`, `hiVel` and `seqPosition`, a value it lacks taken from
+/// its `<group>`, then from `<groups>`. Only the mapping is read.
+fn parse_dspreset(text: &str) -> std::result::Result<Vec<Region>, String> {
+    use crate::dawproject::xml::Element;
+    fn walk(e: &Element, inherited: &[&Element], out: &mut Vec<Region>) {
+        if e.name == "sample" {
+            let get = |k: &str| e.attr(k).or_else(|| inherited.iter().rev().find_map(|g| g.attr(k)));
+            let enabled = get("enabled").is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"));
+            let key_down = enabled && get("trigger").is_none_or(|t| t.trim().eq_ignore_ascii_case("attack"));
+            let Some(path) = e.attr("path").map(|p| p.trim().replace('\\', "/")).filter(|p| !p.is_empty() && key_down) else { return };
+            let note = |k: &str| get(k).and_then(sfz_note);
+            let single = note("loNote").filter(|lo| note("hiNote") == Some(*lo));
+            let whole = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok()).map(|v| v.round() as i64);
+            out.push(Region {
+                sample: path,
+                note: note("rootNote").or(single).unwrap_or(60),
+                velocity: whole("hiVel").map_or(127, |v| v.clamp(1, 127) as u8),
+                robin: whole("seqPosition").map_or(1, |v| v.clamp(1, 64) as usize),
+            });
+            return;
+        }
+        let mut chain = inherited.to_vec();
+        if e.name == "groups" || e.name == "group" {
+            chain.push(e);
+        }
+        for c in &e.children {
+            walk(c, &chain, out);
+        }
+    }
+    let root = Element::parse(text)?;
+    let mut out = Vec::new();
+    walk(&root, &[], &mut out);
+    Ok(out)
+}
+
 /// A sample to put in a Pantry: the note it was recorded at, its velocity, its take (from 1) and
 /// its file.
 struct Wanted {
     note: u8,
     velocity: u8,
     robin: usize,
+    /// The sample's file, or with `packed` its entry in the library archive being loaded.
     file: PathBuf,
+    packed: bool,
 }
+
+/// A Decent Sampler library file (`.dslibrary`): a zip archive of presets and their samples.
+type Library = crate::io::FileArchive;
 
 /// Decodes `wanted` into track `t`'s Pantry (in place of what it holds with `replace`, else
 /// beside it): a note keeps 16 velocities and a layer 4 takes, and a second sample for a taken
 /// place is the layer's next take; what does not fit is skipped. Returns the samples placed, the
 /// notes and most layers the Pantry then holds, and the samples skipped. A missing or broken
 /// file fails the command, which leaves the session as it was.
-fn attach(e: &mut Engine, id: &str, t: TrackId, wanted: &[Wanted], replace: bool, what: &str) -> Result<(usize, usize, usize, usize)> {
+fn attach(
+    e: &mut Engine,
+    id: &str,
+    t: TrackId,
+    wanted: &[Wanted],
+    replace: bool,
+    what: &str,
+    mut library: Option<&mut Library>,
+) -> Result<(usize, usize, usize, usize)> {
     let held: Vec<String> = match multisampler_mut(e, t) {
         Some(ins) if replace => {
             ins.samples.clear();
@@ -587,7 +732,10 @@ fn attach(e: &mut Engine, id: &str, t: TrackId, wanted: &[Wanted], replace: bool
     for (key, w) in &placed {
         let name = w.file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
         let ext = w.file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-        let bytes = crate::io::read_file(&w.file)?;
+        let bytes = match library.as_deref_mut().filter(|_| w.packed) {
+            Some(lib) => lib.read(&w.file.to_string_lossy(), MAX_PACKED_SAMPLE_BYTES).map_err(EngineError::Io)?,
+            None => crate::io::read_file(&w.file)?,
+        };
         let (format, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
         if buf.frames() == 0 || buf.num_channels() == 0 {
             return Err(EngineError::Io(format!("{name}: no audio")));
@@ -598,7 +746,9 @@ fn attach(e: &mut Engine, id: &str, t: TrackId, wanted: &[Wanted], replace: bool
         if total > crate::io::MAX_IMPORT_SAMPLES {
             return Err(EngineError::Io(format!("{what}: too much audio to hold in memory")));
         }
-        let src = crate::io::add_source(e.session_mut(), &name, buf, Some(&w.file.to_string_lossy()), format.format);
+        // A sample out of an archive has no file of its own: it is saved with the session.
+        let from = (!w.packed).then(|| w.file.to_string_lossy().into_owned());
+        let src = crate::io::add_source(e.session_mut(), &name, buf, from.as_deref(), format.format);
         let ins = multisampler_mut(e, t).ok_or_else(|| bad(id, "the track's instrument is not the Multisampler"))?;
         ins.samples.insert(key.clone(), src);
     }
@@ -616,19 +766,68 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad(id, "the track's instrument is not the Multisampler"));
     }
     let path = Path::new(str_param(p, "path").ok_or_else(|| bad(id, "`path` required"))?).to_path_buf();
-    let bytes = crate::io::read_file(&path)?;
-    if bytes.len() > MAX_SFZ_BYTES {
-        return Err(EngineError::Io(format!("{}: too large for an SFZ file", path.display())));
+    let kind = path.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let shown = path.display().to_string();
+    let none = || EngineError::Io(format!("{shown}: no samples to play (its key-down regions)"));
+    let mut text = String::new();
+    let mut library: Option<Library> = None;
+    let mut presets: Vec<String> = Vec::new();
+    let mut name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Multisample").to_string();
+    let wanted: Vec<Wanted> = match kind.as_str() {
+        // A Decent Sampler library: one of its presets, the samples read out of the archive.
+        "dslibrary" => {
+            let mut lib = Library::new(crate::io::open_read(&path)?)
+                .map_err(|_| EngineError::Io(format!("{shown}: not a Decent Sampler library (a zip archive)")))?;
+            presets = lib.names().iter().filter(|n| n.to_ascii_lowercase().ends_with(".dspreset") && !n.starts_with("__MACOSX")).cloned().collect();
+            presets.sort();
+            let stem = |n: &str| Path::new(n).file_stem().and_then(|x| x.to_str()).unwrap_or(n).to_string();
+            let entry = match str_param(p, "preset") {
+                Some(want) => presets.iter().find(|n| stem(n).eq_ignore_ascii_case(want) || n.eq_ignore_ascii_case(want)),
+                None => presets.first(),
+            }
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::Io(format!(
+                    "{shown}: no such preset in the library ({})",
+                    presets.iter().map(|n| stem(n)).collect::<Vec<_>>().join(", ")
+                ))
+            })?;
+            let xml = lib.read(&entry, MAX_SFZ_BYTES as u64).map_err(EngineError::Io)?;
+            let regions = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{entry}: {err}")))?;
+            let base = Path::new(&entry).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+            name = stem(&entry);
+            presets = presets.iter().map(|n| stem(n)).collect();
+            library = Some(lib);
+            regions
+                .iter()
+                .map(|r| Wanted {
+                    note: r.note,
+                    velocity: r.velocity,
+                    robin: r.robin,
+                    file: PathBuf::from(archive_path(&base, &r.sample)),
+                    packed: true,
+                })
+                .collect()
+        }
+        "dspreset" => {
+            let xml = crate::io::read_file_max(&path, MAX_SFZ_BYTES as u64)?;
+            let regions = parse_dspreset(&String::from_utf8_lossy(&xml)).map_err(|err| EngineError::Io(format!("{shown}: {err}")))?;
+            regions.iter().map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample), packed: false }).collect()
+        }
+        _ => {
+            let mut budget = MAX_SFZ_BYTES;
+            expand_sfz(&path, &dir, 0, &mut Vec::new(), &mut text, &mut budget)?;
+            parse_sfz(&text)
+                .iter()
+                .map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample), packed: false })
+                .collect()
+        }
+    };
+    if wanted.is_empty() {
+        return Err(none());
     }
-    let text = String::from_utf8_lossy(&bytes);
-    let regions = parse_sfz(&text);
-    if regions.is_empty() {
-        return Err(EngineError::Io(format!("{}: no samples to play (an SFZ file's key-down regions)", path.display())));
-    }
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let wanted: Vec<Wanted> =
-        regions.iter().map(|r| Wanted { note: r.note, velocity: r.velocity, robin: r.robin, file: dir.join(&r.sample) }).collect();
-    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, true, &path.display().to_string())?;
+    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, true, &shown, library.as_mut())?;
     // A file Pantry saved brings the instrument's settings with it.
     let saved: Option<BTreeMap<String, f64>> =
         text.lines().find_map(|l| l.trim().strip_prefix(PARAMS_LINE)).and_then(|j| serde_json::from_str(j).ok());
@@ -641,8 +840,7 @@ fn load(e: &mut Engine, p: &Value) -> Result<Value> {
             }
         }
     }
-    let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Multisample");
-    Ok(json!({"track": t.0, "name": name, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped}))
+    Ok(json!({"track": t.0, "name": name, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "presets": presets}))
 }
 
 /// File extensions a sample is imported from (what the audio decoder reads).
@@ -725,14 +923,14 @@ fn import(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut wanted = Vec::new();
     for file in files.into_iter().filter(audio) {
         match file.file_stem().and_then(|n| n.to_str()).and_then(place_from_name) {
-            Some((note, velocity, robin)) => wanted.push(Wanted { note, velocity, robin, file }),
+            Some((note, velocity, robin)) => wanted.push(Wanted { note, velocity, robin, file, packed: false }),
             None => unnamed += 1,
         }
     }
     if wanted.is_empty() {
         return Err(bad(id, "no sample there says its note and velocity in its name (as `Piano C3 v95.wav` or `060_C3_v095_rr1.wav`)"));
     }
-    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, bool_or(p, "replace", false), "the samples")?;
+    let (samples, notes, layers, skipped) = attach(e, id, t, &wanted, bool_or(p, "replace", false), "the samples", None)?;
     Ok(json!({"track": t.0, "samples": samples, "notes": notes, "layers": layers, "skipped": skipped, "unnamed": unnamed}))
 }
 
@@ -1117,6 +1315,162 @@ mod tests {
         assert!(e.execute("mix.multisample_import", &json!({"track": third.0})).is_err());
         let empty = track(&mut e, MULTISAMPLER);
         assert!(e.execute("mix.multisample_save", &json!({"track": empty.0, "path": d.join("Empty").to_string_lossy()})).is_err());
+    }
+
+    #[test]
+    fn sfz_files_include_one_another_and_fill_in_their_variables() {
+        let d = dir("include");
+        std::fs::create_dir_all(d.join("maps")).unwrap();
+        for f in ["A_soft.wav", "A_hard.wav", "pedal.wav", "rel.wav"] {
+            tone_wav(&d.join(f), 48_000);
+        }
+        let sfz = d.join("Main.sfz");
+        std::fs::write(&sfz, "#define $SOFT 50 // the soft layer's top\n#define $NAME A\n<global> ampeg_release=1\n#include \"maps/notes.sfz\"\n<group> on_locc64=64\n<region> sample=pedal.wav key=60\n").unwrap();
+        std::fs::write(
+            d.join("maps").join("notes.sfz"),
+            "<group> lokey=57 hikey=57\n<region> sample=$NAME_soft.wav hivel=$SOFT\n<region> sample=$NAME_hard.wav lovel=51\n<region> sample=rel.wav trigger=release\n",
+        )
+        .unwrap();
+        let mut e = Engine::default();
+        let t = track(&mut e, MULTISAMPLER);
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64()), (Some(2), Some(1), Some(2)));
+        let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        assert_eq!(ins.samples.keys().map(String::as_str).collect::<Vec<_>>(), ["n57.v127.r1", "n57.v50.r1"]);
+        // Includes in the middle of a line, a variable that starts like another, and a keyswitched
+        // second version of the same notes, which is left out.
+        std::fs::write(d.join("maps").join("v1.sfz"), "#define $VEL soft\n#define $VELTRACK 99\n").unwrap();
+        std::fs::write(d.join("maps").join("r.sfz"), "<region> sample=A_$VEL.wav key=57 amp_veltrack_oncc$VELTRACK=1\n").unwrap();
+        std::fs::write(
+            &sfz,
+            "<global> sw_default=c0\n<master> sw_last=c0\n<group> #include \"maps/v1.sfz\" hivel=40 #include \"maps/r.sfz\"\n<master> sw_last=c#0\n<group> hivel=40 #include \"maps/r.sfz\"\n",
+        )
+        .unwrap();
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(1), Some(0)));
+        // A file that includes itself, or one that is not there, fails without hanging.
+        std::fs::write(&sfz, "#include \"Main.sfz\"\n<region> sample=A_soft.wav key=57\n").unwrap();
+        // (nine copies of its one region: four takes fit a layer)
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).unwrap();
+        assert_eq!((v["samples"].as_u64(), v["skipped"].as_u64()), (Some(4), Some(5)));
+        std::fs::write(&sfz, "#include \"gone.sfz\"\n").unwrap();
+        assert!(e.execute("mix.multisample_load", &json!({"track": t.0, "path": sfz.to_string_lossy()})).is_err());
+    }
+
+    const DSPRESET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<DecentSampler minVersion="1.0.0">
+  <ui><tab><labeled-knob label="Tone"/></tab></ui>
+  <groups attack="0.0" release="0.4" hiVel="127">
+    <group loVel="1" hiVel="60">
+      <sample path="Samples/c_soft.wav" rootNote="48" loNote="46" hiNote="50"/>
+      <sample path="Samples\e_soft.wav" loNote="52" hiNote="52"/>
+    </group>
+    <group loVel="61" seqMode="round_robin">
+      <sample path="Samples/c_hard_1.wav" rootNote="48" seqPosition="1"/>
+      <sample path="Samples/c_hard_2.wav" rootNote="48" seqPosition="2"/>
+    </group>
+    <group trigger="release"><sample path="Samples/c_rel.wav" rootNote="48"/></group>
+    <group enabled="false"><sample path="Samples/c_off.wav" rootNote="48"/></group>
+  </groups>
+</DecentSampler>"#;
+
+    #[test]
+    fn a_decent_sampler_preset_gives_its_key_down_samples() {
+        assert_eq!(
+            parse_dspreset(DSPRESET).unwrap(),
+            [
+                region("Samples/c_soft.wav", 48, 60, 1),
+                region("Samples/e_soft.wav", 52, 60, 1),
+                region("Samples/c_hard_1.wav", 48, 127, 1),
+                region("Samples/c_hard_2.wav", 48, 127, 2),
+            ]
+        );
+        assert!(parse_dspreset("<DecentSampler><groups/></DecentSampler>").unwrap().is_empty());
+        assert!(parse_dspreset("not xml <").is_err());
+        assert_eq!(archive_path("Piano/Presets", "../Samples/./a.wav"), "Piano/Samples/a.wav");
+        assert_eq!(archive_path("", "Samples\\a.wav"), "Samples/a.wav");
+        assert_eq!(archive_path("", "../../a.wav"), "a.wav");
+    }
+
+    #[test]
+    fn decent_sampler_presets_and_libraries_load() {
+        let d = dir("decent");
+        std::fs::create_dir_all(d.join("Samples")).unwrap();
+        let names = ["c_soft.wav", "e_soft.wav", "c_hard_1.wav", "c_hard_2.wav", "c_rel.wav"];
+        for f in names {
+            tone_wav(&d.join("Samples").join(f), 44_100);
+        }
+        let preset = d.join("Upright.dspreset");
+        std::fs::write(&preset, DSPRESET).unwrap();
+        let mut e = Engine::default();
+        let t = track(&mut e, MULTISAMPLER);
+        let keys = |e: &Engine| e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap().samples.keys().cloned().collect::<Vec<_>>();
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": preset.to_string_lossy()})).unwrap();
+        assert_eq!(
+            (v["name"].as_str(), v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64()),
+            (Some("Upright"), Some(4), Some(2), Some(2))
+        );
+        assert_eq!(keys(&e), ["n48.v127.r1", "n48.v127.r2", "n48.v60.r1", "n52.v60.r1"]);
+        // The same instrument packed as a library, with a second preset beside it.
+        let mut w = crate::dawproject::archive::ArchiveWriter::new(std::io::Cursor::new(Vec::new()));
+        w.add("Upright/Upright Close.dspreset", DSPRESET.as_bytes()).unwrap();
+        w.add("Upright/Upright Far.dspreset", DSPRESET.replace("c_soft", "c_hard_1").as_bytes()).unwrap();
+        for f in names {
+            w.add(&format!("Upright/Samples/{f}"), &std::fs::read(d.join("Samples").join(f)).unwrap()).unwrap();
+        }
+        let lib = d.join("Upright.dslibrary");
+        std::fs::write(&lib, w.finish().unwrap().into_inner()).unwrap();
+        e.execute("mix.multisample_clear", &json!({"track": t.0})).unwrap();
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": lib.to_string_lossy()})).unwrap();
+        assert_eq!(
+            (v["name"].as_str(), v["samples"].as_u64(), &v["presets"]),
+            (Some("Upright Close"), Some(4), &json!(["Upright Close", "Upright Far"]))
+        );
+        assert_eq!(keys(&e).len(), 4);
+        // Its samples have no files of their own: they are the session's to save.
+        let s = e.session();
+        let ins = s.track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        assert!(ins.samples.values().all(|src| s.source(*src).is_some_and(|x| x.unsaved && x.path.starts_with("Audio Files/"))));
+        let v = e.execute("mix.multisample_load", &json!({"track": t.0, "path": lib.to_string_lossy(), "preset": "upright far"})).unwrap();
+        assert_eq!(v["name"], "Upright Far");
+        assert!(e.execute("mix.multisample_load", &json!({"track": t.0, "path": lib.to_string_lossy(), "preset": "Nope"})).is_err());
+        // Not an archive, and an archive with no preset.
+        std::fs::write(&lib, b"nope").unwrap();
+        assert!(e.execute("mix.multisample_load", &json!({"track": t.0, "path": lib.to_string_lossy()})).is_err());
+    }
+
+    /// `FREEDAWM_TEST_SFZ=<an .sfz file> cargo test -p soundcraft-engine --lib -- --ignored a_real_sfz_file_maps`
+    /// prints how a library's file maps (its samples need not be there).
+    #[test]
+    #[ignore = "needs FREEDAWM_TEST_SFZ: an SFZ file of a real library"]
+    fn a_real_sfz_file_maps() {
+        let path = PathBuf::from(std::env::var("FREEDAWM_TEST_SFZ").unwrap());
+        let (mut text, mut budget) = (String::new(), MAX_SFZ_BYTES);
+        expand_sfz(&path, path.parent().unwrap(), 0, &mut Vec::new(), &mut text, &mut budget).unwrap();
+        let regions = parse_sfz(&text);
+        let notes: BTreeSet<u8> = regions.iter().map(|r| r.note).collect();
+        let velocities: BTreeSet<u8> = regions.iter().map(|r| r.velocity).collect();
+        println!("{} regions, {} notes {:?}, {} velocities {:?}", regions.len(), notes.len(), notes, velocities.len(), velocities);
+        for r in regions.iter().take(3).chain(regions.iter().rev().take(2)) {
+            println!("  {r:?}");
+        }
+        assert!(!regions.is_empty());
+    }
+
+    /// `FREEDAWM_TEST_DSPRESET=<a .dspreset file>`: the same for a Decent Sampler preset.
+    #[test]
+    #[ignore = "needs FREEDAWM_TEST_DSPRESET: a Decent Sampler preset of a real library"]
+    fn a_real_decent_sampler_preset_maps() {
+        let path = PathBuf::from(std::env::var("FREEDAWM_TEST_DSPRESET").unwrap());
+        let regions = parse_dspreset(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let notes: BTreeSet<u8> = regions.iter().map(|r| r.note).collect();
+        let velocities: BTreeSet<u8> = regions.iter().map(|r| r.velocity).collect();
+        let takes: BTreeSet<usize> = regions.iter().map(|r| r.robin).collect();
+        println!("{} samples, {} notes, velocities {:?}, takes {:?}", regions.len(), notes.len(), velocities, takes);
+        for r in regions.iter().take(2) {
+            println!("  {r:?}");
+        }
+        assert!(!regions.is_empty());
     }
 
     #[test]

@@ -84,6 +84,9 @@ pub(crate) fn open_read(path: impl AsRef<Path>) -> Result<std::fs::File> {
     std::fs::File::open(path).map_err(err)
 }
 
+/// A zip archive read from a file opened with [`open_read`].
+pub(crate) type FileArchive = crate::dawproject::archive::Archive<std::fs::File>;
+
 /// Is there anything at `path` (inside the write root) a write would replace?
 pub(crate) fn path_taken(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
