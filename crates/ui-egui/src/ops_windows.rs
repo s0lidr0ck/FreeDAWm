@@ -147,6 +147,7 @@ fn result_line(ui: &mut egui::Ui, r: &Result<Value, String>) {
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     beat_detective(app, ctx);
+    process_history(app, ctx);
     tempo_ops(app, ctx);
     time_ops(app, ctx);
     midi_ops(app, ctx);
@@ -391,6 +392,58 @@ fn midi_offsets(app: &mut SoundApp, ctx: &egui::Context) {
         });
     });
     app.ui.show_midi_offsets = open;
+}
+
+/// Process › Process History: the selected audio clip's processes, oldest first, each bypassed,
+/// moved or removed (the clip is made again from the step that changed).
+fn process_history(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_process_history;
+    if !open {
+        return;
+    }
+    // A query: it changes nothing (and says nothing when no audio clip is selected).
+    let listed = app.engine.execute("process.history", &json!({}));
+    egui::Window::new("Process History").open(&mut open).default_size(vec2(340.0, 220.0)).show(ctx, |ui| {
+        let Ok(v) = listed else {
+            ui.label("Select an audio clip to see the processes its audio came through.");
+            return;
+        };
+        let clip = v["clip"].clone();
+        let steps = v["steps"].as_array().cloned().unwrap_or_default();
+        if steps.is_empty() {
+            ui.label("No processes yet: Process menu items add them here.");
+            return;
+        }
+        let last = steps.len().saturating_sub(1);
+        let mut action: Option<(&str, Value)> = None;
+        for (i, st) in steps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let bypassed = st["bypassed"].as_bool().unwrap_or(false);
+                let name = st["process"].as_str().unwrap_or("?").replace('_', " ");
+                let text = egui::RichText::new(format!("{}. {name}", i + 1));
+                ui.label(if bypassed { text.strikethrough().weak() } else { text });
+                if ui.small_button(if bypassed { "Use" } else { "Bypass" }).clicked() {
+                    action = Some(("process.bypass_step", json!({"clip": clip, "step": i})));
+                }
+                if ui.add_enabled(i > 0, egui::Button::new("Up").small()).clicked() {
+                    action = Some(("process.move_step", json!({"clip": clip, "step": i, "to": i - 1})));
+                }
+                if ui.add_enabled(i < last, egui::Button::new("Down").small()).clicked() {
+                    action = Some(("process.move_step", json!({"clip": clip, "step": i, "to": i + 1})));
+                }
+                if ui.small_button("Remove").clicked() {
+                    action = Some(("process.remove_step", json!({"clip": clip, "step": i})));
+                }
+            });
+        }
+        ui.label(egui::RichText::new("A change makes the clip again from the audio before that step.").small());
+        if let Some((cmd, p)) = action
+            && let Err(e) = app.run(cmd, p)
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_process_history = open;
 }
 
 fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {

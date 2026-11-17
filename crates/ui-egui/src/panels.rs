@@ -301,15 +301,30 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let mut filter: String = ui.ctx().memory(|m| m.data.get_temp(fkey)).unwrap_or_default();
     ui.add(egui::TextEdit::singleline(&mut filter).hint_text("🔍 Find clips").desired_width(f32::INFINITY));
     ui.ctx().memory_mut(|m| m.data.insert_temp(fkey, filter.clone()));
-    if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
-        let unused = unused_sources(app.engine.session());
-        if unused.is_empty() {
-            app.ui.status = "Every file is used".into();
-        } else {
-            let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
-            let _ = app.run("edit.select", json!({"sources": ids}));
+    ui.horizontal(|ui| {
+        if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
+            let unused = unused_sources(app.engine.session());
+            if unused.is_empty() {
+                app.ui.status = "Every file is used".into();
+            } else {
+                let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
+                let _ = app.run("edit.select", json!({"sources": ids}));
+            }
         }
-    }
+        if ui
+            .small_button("Compact")
+            .on_hover_text("Make each file again with only the parts its clips use (and a second either side); written at the next save, the old files stay on disk. Undo puts them back")
+            .clicked()
+        {
+            app.ui.status = match app.run("file.compact", json!({})) {
+                Ok(v) => {
+                    let mb = |f: &serde_json::Value| f.as_i64().unwrap_or(0) as f64 * 4.0 / 1e6;
+                    format!("Compacted {} file(s): {:.1} MB of audio per channel down to {:.1} MB", v["compacted"], mb(&v["frames_before"]), mb(&v["frames_after"]))
+                }
+                Err(e) => e,
+            };
+        }
+    });
     let needle = filter.to_lowercase();
     let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -416,7 +431,8 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
 pub fn unused_sources(s: &soundcraft_model::Session) -> Vec<SourceId> {
     let mut used: std::collections::HashSet<SourceId> =
         s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
-    for c in s.all_clips() {
+    // A clip's process history keeps the clips it was made from: their files count as used.
+    for c in s.all_clips().flat_map(|c| std::iter::once(c).chain(c.processes.iter().map(|p| &*p.before))) {
         if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content {
             used.insert(*source);
         }

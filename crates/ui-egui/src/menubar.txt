@@ -524,6 +524,8 @@ Process > Invert = AudioSuite > Other > Invert
 Process > More > DC Offset Removal = AudioSuite > Other > DC Offset Removal
 Process > More > Duplicate = AudioSuite > Other > Duplicate
 Process > More > Signal Generator = AudioSuite > Other > Signal Generator
+Process > More > ---
+Process > More > Process History
 
 AI > ## Separate [desktop]
 AI > Separate Stems… [desktop]

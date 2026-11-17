@@ -344,6 +344,32 @@ pub struct Clip {
     /// [`crate::MAX_NOTE_CHARS`] characters.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    /// Process history: the offline processes (Process, `process.run`) this audio clip's file
+    /// came through, oldest first. Each keeps the clip as it was before it, so a step can be
+    /// bypassed, moved or removed later and the clip made again from there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<ProcessStep>,
+}
+
+/// One step of a clip's process history ([`Clip::processes`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessStep {
+    /// The process (`process.run`'s `process`).
+    pub process: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<(String, f32)>,
+    /// The handles it rendered beyond the clip's edges, in milliseconds.
+    #[serde(default)]
+    pub handle_ms: f64,
+    /// Left out: the clip is made without it, and it stays listed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypassed: bool,
+    /// Where the clip started in the file the step made (its handle before the clip).
+    #[serde(default)]
+    pub lead: Samples,
+    /// The clip as it was before this step (its own history left out): where a change to
+    /// the history renders again from.
+    pub before: Box<Clip>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -415,6 +441,7 @@ impl Clip {
             shared: None,
             layer: 0,
             notes: String::new(),
+            processes: Vec::new(),
         }
     }
 
@@ -523,7 +550,7 @@ impl Clip {
 
     /// Whether the clip plays `src` (its source, or its cleaned alternate).
     pub fn uses_source(&self, src: SourceId) -> bool {
-        self.source() == Some(src) || self.clean_alt().is_some_and(|k| k.source == src)
+        self.source() == Some(src) || self.clean_alt().is_some_and(|k| k.source == src) || self.processes.iter().any(|p| p.before.uses_source(src))
     }
 
     /// The movie this clip shows (video clips only).

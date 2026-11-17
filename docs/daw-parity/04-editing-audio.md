@@ -40,12 +40,12 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
-| G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
+| G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Small: bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
-| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Medium: no sample editor, no compacting |
+| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Medium: no sample editor |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
@@ -169,7 +169,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
 | Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too, the clip's own window rendered as it played (a Clean alternate's edges are not faded by the longer render); stretch, pitch and varispeed render the clip only |
-| Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
+| Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Works**: every Process (`process.run`) is kept in the clip's process history with the clip as it was before it; Process › More › Process History lists the selected clip's steps, oldest first, and bypasses, moves or removes one (`process.bypass_step`, `process.move_step`, `process.remove_step`, one undo step each): the clip is made again from the audio before that step, at its edges now, the later steps applied again in order. A step after it that changed the length (time stretch, pitch shift, varispeed) or ran on stretched audio is refused with a message (remove the later steps first); a length-changing last step alone goes back to the clip as it was before it. The files the history keeps count as used (not offered as unused, not compacted away) |
 | Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
 | Strip silence preview before committing | ● | ● | ● | ● | **Works**: while the Strip Silence dialog is open, the Edit window shades what it would remove from the selection, worked out again as the settings change (`edit.strip_silence_preview`) |
 
@@ -244,7 +244,7 @@ why they score ◐ for "built-in".
 | Audition, rename and locate from the list | ● | ● | ● | ● | **Works**: a click selects the clip and scrolls to it when off screen; Alt-click or Audition plays it; Rename… from its menu |
 | Select and remove unused clips | ● | ● | ● | ● | **Works**: Select Unused Files picks the files no clip plays; Clear removes them |
 | Relink missing audio files | ● | ● | ● | ● | **Works**: the Clip List marks a file the session could not find as missing, and Relink… in a file's menu reads it from another file (`file.relink_audio`), its clips playing again from where they were; a file of another length or width is taken with a warning. One file at a time; no search of a folder |
-| Compact files to what is used | ● | ● | ● | ● | **Missing** |
+| Compact files to what is used | ● | ● | ● | ● | **Works**: Compact in the Clip List (`file.compact`, `sources?`, `handle_ms?` 1000): each audio file is made again holding only the parts its clips use (every playlist, the Clip List's captured clips and the clips process histories keep) and a second either side, the clips point at the new file and the old one leaves the session (it stays on disk; written at the next save). One undo step brings the old file back. Files of stretched, looped, reversed, tuned, cleaned or lyric clips, frozen tracks, inserts and instruments are left whole, and a file that would shrink by less than 10% is left. Runs on the UI thread (a long file pauses the window briefly) |
 | "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Works**: Clip › Capture… (Cmd+R) keeps the selection's clips on each selected track in the Clip List as new clips, the track untouched; a captured clip drags onto a track (or Place on Selected Track from its menu) as a copy, and Remove from List takes it out. Saved with the session; its file counts as used |
 | Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
 | Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn stretched, as it plays |
@@ -500,3 +500,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | The snap-suspend modifier works while selecting |
 | 2026-11-17 | minor | Follow-up: Scissors and Mute tools; Smart Tool crossfades at joins; separation grab; snap to the playhead; adaptive grid; relative-grid trims; clips dragged from the Clip List; grouped tracks comp together; Solo Take; pasting audio into another session brings it along; Shuffle nudge and linked selections as designed; fixed keys listed |
 | 2026-11-17 | minor | round three follow-up: Show Only Takes Matching Selection |
+| 2026-11-17 | minor | round three follow-up: process history (bypass, move, remove a step); Compact |
