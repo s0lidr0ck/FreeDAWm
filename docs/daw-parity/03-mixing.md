@@ -51,14 +51,14 @@ K-system scales, and the master a loudness meter.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Audio, aux, instrument, MIDI, master, VCA, folder channels | ● | ● | ● | ● | **Works** |
-| Folder that only organises (no audio path) | ● | ● | ● | ● | **Missing**: every folder is a routing folder |
+| Folder that only organises (no audio path) | ● | ● | ● | ● | **Works**: Move to New Basic Folder in a track's menu (`track.move_to_new_folder` `routing: false`): a folder with no bus and no input or output; its members keep their outputs as they move in and out; it shows, hides, collapses, selects and spills them as a routing folder does. Its strip passes no audio, so its fader, mute and solo do nothing (as Pro Tools' basic folders have none) |
 | Formats from mono to 7.1.4 and wider | ● | ● | ● | ● | **Works** up to 16 channels (3rd-order Ambisonics); orders 4–7 are refused with a message (`track.new`, `track.change_width`, buses), not truncated |
 | Change a track's format later | ◐ | ● | ● | ◐ | **Works** |
 | Input trim and polarity on the strip | ● | ● | ● | ● | **Works**: trim, and a Ø button beside it on the strip's preamp row: a click inverts every channel, a right-click single ones (`mix.phase_invert` `channel`) |
 | Fader to +12 dB | ● | ◐ | ◐ | ◐ | **Works** |
 | Per-track delay in samples or ms | ● | ● | ● | ● | **Works**: Track › Strip › Delay (`mix.track_delay`, samples or ms, up to 192 000 samples), before the inserts, left in by delay compensation |
 | Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden (owner decision 4); a strip's EQ and dynamics are inserts (CleanQ, Comp), which a track preset or a chain preset puts on every new track |
-| Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded |
+| Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded. Left: retire an inactive track's instances off the audio thread (as a deleted module's are) and make them again from their stored state when it is made active; a hosted plug-in's live state has to be read back into the session first, about 4–6 h |
 
 ## B. Panning
 
@@ -81,12 +81,12 @@ K-system scales, and the master a loudness meter.
 | Deactivate a plug-in to free CPU | ● | ● | ◐ | ● | **Works**: Inactive in an insert's menu (`mix.module_active`); the instance stays loaded |
 | Post-fader inserts | ◐ | ◐ | ○ | ● | **Works**: Post-Fader in an insert's menu (`mix.module_post_fader`): the module runs after the fader and mute, on any track and on the master (after the master fader, where Pro Tools runs the master's inserts); it is not in the pre-fader copy (pre-fader sends, keys, meters), delay compensation counts it and holds the pre-fader sends back for it, a freeze leaves it live and a commit moves it, with its lanes, onto the new track |
 | Chain presets | ● | ● | ● | ● | **Works** |
-| Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
+| Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins. Left: A and B of a hosted plug-in are its state chunks (CLAP state, VST3 component and controller state) read from the live instance and set back on it, where the built-in compare swaps parameter values; about 4–6 h |
 | Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
-| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
-| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** |
+| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** (not reached in round three): a module slot holding one mono instance per channel of the track, linked by default (one parameter set) or unlinked, each fed and writing its own channel; about 6–10 h |
+| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** (not reached in round three): an insert module that sends its input to a hardware output and returns a hardware input, delay-compensated by a measured round trip; the ping and its detection can be built and tested against a loopback in code, the real round trip needs an interface with a cable from output to input; about 6–10 h |
 
 ## D. Sends and routing
 
@@ -100,7 +100,7 @@ K-system scales, and the master a loudness meter.
 | Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Options › More › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
 | Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Works**: Edit › Automation › Copy to Send copies the volume, and pan and mute when asked (`automation.copy_to_send` `what`), over the edit selection when there is one (what the send had there is replaced, its curve either side kept), else the whole lane; without automation the values themselves; the Control Room's Add Cue Sends makes a pre-fader send to a cue on every track at its fader level (`monitor.cue_sends`) |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
-| Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** |
+| Several outputs from one track | ● | ○ | ○ | ◐ | **Missing** (not reached in round three): extra outputs beside the main one, each a full post-fader copy (Pro Tools' additional outputs); today a post-fader send at 0 dB with Pan Follows Main does the same to a bus or output; about 4–6 h |
 | Refuse or warn about a feedback loop | ● | ● | ● | ● | **Works**: refused, for outputs, inputs and sends |
 | Routing folders, nested | ● | ● | ● | ● | **Works** |
 
@@ -128,7 +128,7 @@ K-system scales, and the master a loudness meter.
 | Plug-in parameters, stock and third-party | ● | ● | ● | ● | **Works** for inserts |
 | Instrument parameters | ● | ● | ● | ● | **Works**: built in the MIDI writing work (33c96ba): an instrument's parameters take lanes as an insert's do (listed under the instrument's name in the lane picker, `plugin:instrument:<param>`), played into built-in and hosted instruments and written by Touch, Latch and Write |
 | Plug-in bypass | ● | ● | ● | ● | **Works**: each module has a Bypass lane (in its group of the lane picker; `plugin:m<id>:@bypass`, 1 bypassed): read where the module's input is, crossfaded as a click is, written in a pass when the module is bypassed or switched back on |
-| Surround pan | ● | ● | ● | ● | **Missing** |
+| Surround pan | ● | ● | ● | ● | **Works**: left-right, front-back, height and divergence lanes (`surround_x`, `_y`, `_z`, `_divergence`) on a track with a surround panner, read on the pan's 64-sample grid and by sends that follow the main pan; written when the panner moves in a pass |
 | VCA and master fader | ● | ● | ● | ● | **Works** |
 
 ### Writing and playing it
@@ -138,12 +138,12 @@ K-system scales, and the master a loudness meter.
 | Read, Touch, Latch, Write | ● | ● | ● | ● | **Works**, one undo step per pass |
 | Trim automation | ● | ○ | ● | ● | **Works** for volume |
 | Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Works**: the Mix window's faders, pan knobs and sends (level, pan, mute) and the built-in modules' drawers and full editors follow their lanes while the track reads and the control is not touched; a hosted plug-in's own window shows what the host sends it |
-| You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
+| You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it. Left: the touched control's value sent to the audio thread directly while held (bypassing the lane), so the move is heard within one block |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; hosted CLAP and VST3 plug-ins get a lane that moves inside a block as timed parameter events on the same 64-sample grid (`Plugin::set_param_at`); of the built-in plug-ins, Gain, Trim, Channel Tool, CleanQ, Filter and Comp take them too (run in pieces split at each change, section 5), the others still change once per block |
 | Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Works**: Touch glides back over the return time, 250 ms unless set in the Automation window (`automation.return_time`, 0 to 5 s) |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Works**: Write on Stop in the Automation window (`automation.write_on_stop`: to start, end, all or the selection), armed for the next pass as Pro Tools arms it: when it stops, each lane it wrote keeps its last value over that range, in the pass's undo step |
-| Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
+| Preview a value before committing it | ● | ○ | ○ | ● | **Missing** (not reached in round three): a preview switch that suspends the lanes of the controls touched (they play as set) until Punch Preview writes them over the selection or to the end; about 5–8 h |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
 | Write from a MIDI controller or control surface | ● | ● | ● | ● | **Works**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
 | Automation follows tempo changes | ● | ● | ● | ● | **Works** on tracks kept in bars and beats (tick timebase, the default for MIDI and instrument tracks): a tempo edit moves each lane it left alone to the same ticks in the new map, as their clips move (`tick_clips::follow_tempo`); a sample-timebase track's points stay on their samples |
@@ -154,11 +154,11 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Add, move, delete, nudge points | ● | ● | ● | ● | **Works** |
 | Curved segments | ○ | ● | ● | ● | **Works**: one bend per segment |
-| Pencil shapes (line, triangle, square, random) | ● | ● | ◐ | ● | **Partial**: freehand and line |
+| Pencil shapes (line, triangle, square, random) | ● | ● | ◐ | ● | **Works**: right-click the Pencil in the toolbar for Free Hand, Line, Triangle, Square or Random (`automation.pencil_shape`); a shape goes between the press's value and the pointer's, repeating at the grid's step (`automation.draw` `shape`, `period`); Shift still draws a line |
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Options › More › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
-| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** (not reached in round three): lanes stored on the clip and played on top of (or instead of) the track's while it plays; needs a design for how the two combine and how copies share them; about 10–16 h |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
 | Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
@@ -175,15 +175,15 @@ K-system scales, and the master a loudness meter.
 | Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, loudness range (EBU Tech 3342, from the short-term value every 100 ms), maximum momentary and true peak, with Reset |
 | Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Works**: the Spectrum and Phase Meter plug-ins (Utilities in the insert menu), as well as inside the Sprawl and CleanQ modules and Scout |
 | Output meter free of the click | ● | ● | ● | ● | **Works** |
-| Meters while stopped | ● | ● | ● | ● | **Partial**: only for armed or monitored tracks |
+| Meters while stopped | ● | ● | ● | ● | **Works**: armed and monitored tracks and live MIDI meter while stopped, and a Stop (or the end of play) lets the mix ring out, heard and metered, until it has been quiet 50 ms (at most 4 s, then faded); a second Stop cuts it. A stop while recording still cuts at once |
 
 ## H. Mixdown and export
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
-| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** |
-| Choose the source: any bus or output | ● | ● | ● | ● | **Works** for the main mix and busses, in the dialog; hardware outputs are not offered |
+| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** (not reached in round three): Bounce with "in real time" plays the range through the live player and writes the main output (or a bus) as it is heard, so outboard gear on hardware inserts or sends is printed; the internal-recording taps already record busses as the mix renders them; about 4–6 h, needs an audio device to try for real |
+| Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: the main mix and busses, in the dialog; hardware outputs are not offered. Left: a bounce source that taps a hardware output's buffer (`RangeRender` takes a bus only) with that output's latency, about 3–4 h |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
 | WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
@@ -208,8 +208,8 @@ K-system scales, and the master a loudness meter.
 | Dolby Atmos objects with a built-in renderer | ● | ● | ● | ● | **Not planned here** (the owner's call); the object switch stays a label |
 | Binaural monitoring | ● | ● | ● | ● | **Not planned here**: needs a measured head-related impulse response set, content the owner sources |
 | ADM BWF export | ● | ● | ● | ● | **Not planned here**: ADM BWF is the Atmos master's container and carries objects; with Atmos objects and a renderer not planned it has nothing to carry beyond a bed, which a WAV with a speaker mask already does |
-| Surround pan automation | ● | ● | ● | ● | **Missing** |
-| Ambisonics | ● | ○ | ○ | ● | **Partial**: tracks and busses to 3rd order; the panner encodes a source into every order present (SN3D, ACN); decoding to speakers is first order |
+| Surround pan automation | ● | ● | ● | ● | **Works**: see F, What can be automated; the centre % and LFE level are not automatable |
+| Ambisonics | ● | ○ | ○ | ● | **Partial**: tracks and busses to 3rd order; the panner encodes a source into every order present (SN3D, ACN); decoding to speakers is first order. Left: a decoder of the highest order the layout's speakers support (max-rE weighted), which changes how existing Ambisonic busses sound on 7.1.4 and 9.1.6; orders 4 to 7 need more than 16 channels per strip |
 | Correct loudness for 7.1 and wider | ● | ● | ● | ● | **Works**: every layout weighted by its speakers |
 
 Immersive delivery is gap G-12 in [`gaps.md`](../gaps.md). Since Studio One 6.5 all four ship an
@@ -223,12 +223,12 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 | Track presets | ● | ● | ● | ● | **Works** |
 | Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Works**: Window › Mix Snapshots stores every strip under a name and recalls it whole or by section (faders, pan, mutes, sends, inserts, routing, delay), on every track or the selected ones (`mix.snapshot_store`, `mix.snapshot_recall`), one undo step each; saved with the session |
 | Copy one channel's settings onto others | ● | ● | ● | ● | **Works**: Track › Copy Settings to Selected (inserts and sends, inserts, sends, fader with pan and mutes, or everything but routing; `mix.copy_strip`), one undo step; routing is never copied (it could feed a track into itself); also duplicate a track or apply a preset |
-| Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped |
+| Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped. Left: Import Session Data onto existing tracks matched by name, choosing what comes (inserts, sends, fader and pan, automation), as Copy Settings to Selected does within a session, about 4–6 h |
 | Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
 | Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
 | Find and filter tracks in the mixer | ● | ● | ● | ● | **Works**: a Find field above the Mix window's strips keeps those whose name holds the text (this window's view: not saved, not undone) |
 | Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Works**: Spill in a VCA's, folder's or aux's strip menu shows only it and what it controls or sums (a VCA's members, nested VCAs' too; a folder's tracks at every depth, closed or not; what feeds an aux's bus by output or send), Unspill above the strips puts the rest back |
-| Several mixer windows | ○ | ● | ● | ● | **Partial**: one, detachable |
+| Several mixer windows | ○ | ● | ● | ● | **Partial**: one, detachable. Left: more Mix windows, each with its own find filter, spill and shown sections (the Mix window keeps that state once today), about 6–10 h |
 
 ## Bugs found on the way
 
@@ -266,7 +266,7 @@ one a mix engineer would not forgive.
 |---|---:|---|
 | Automation playback: breakpoints honoured inside a block, sends, mute and plug-in values ramped, all of it delay-compensated, identical in a bounce | 14–22 | Closes "interior breakpoints" in `gaps.md` G-04. **Done for the fader section** (volume, trim, VCA, mute, pan, sends) and for hosted CLAP and VST3 plug-ins (timed parameter events, 2026-11-17, to the design below); plug-in values are delay-compensated; the built-in plug-ins still change once per block until each takes `set_param_at` |
 | Automation writing: controls follow automation, you hear what you move, written at the heard position, return time on release, thin after a pass | 10–16 | **Thin after a pass, faders and pan knobs following, writing at the heard position and a fixed return time done**; hearing the moved control live remains |
-| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables, bypass lanes and instrument lanes done** (2026-11-17; instrument lanes by the MIDI writing work); surround pan lanes remain (the panner's x, y and z are not lanes yet) |
+| Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables, bypass lanes and instrument lanes done** (2026-11-17; instrument lanes by the MIDI writing work); surround pan lanes done too |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP and VST3 keys, the generic routing and Comp's detector done**; AU key buses remain (macOS); a key taken from an aux by an ordinary track is done (built from the design below) |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
 | Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU, K and PPM scales, and Window › Loudness Meter with the loudness range |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | surround pan lanes; pencil shapes; basic folders; a stop lets the mix ring out with its meters; the wet/dry Mix of an insert is automatable (section 5); what is left stated on every open row |
 | 2026-11-17 | minor | built-in channel processing and AAF/OMF marked not planned here; the Ambisonics rows corrected (3rd-order tracks and encoding, orders above refused) |
 | 2026-11-17 | minor | instrument parameters were automated in the MIDI writing work; the suggested order brought up to date |
 | 2026-11-17 | minor | automation on tick-timebase tracks follows tempo changes |
