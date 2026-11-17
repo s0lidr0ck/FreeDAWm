@@ -263,7 +263,7 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 | Per-note expression sent to plug-ins | ◐ | ● | ● | ● | **Missing**: no note ids or note expressions (design below, not built) |
 | Parameter moves in the plug-in window recorded as automation | ● | ● | ● | ● | **Works**: a parameter changed in a plug-in's own window (or its drawer) while playing in Write, Touch or Latch is written to its lane, an instrument's too. For inserts this was already built (every parameter command reports the move to the automation pass); the instrument's now reports it as well |
 | A crashing plug-in does not take the session down | ○ | ○ | ◐ | ○ | **Partial**: scanning is isolated; a CLAP plug-in can run in a helper process (opt-in, a crash silences that plug-in; [section 8](08-unique-features.md) owns the rest: VST3, AU, editors, a setting) |
-| Preview an instrument preset or a MIDI file from the browser | ◐ | ● | ● | ● | **Missing** (design below, not built) |
+| Preview an instrument preset or a MIDI file from the browser | ◐ | ● | ● | ● | **Partial**: a click on a `.mid` in the Workspace browser plays it on the Subtractive Synth at the session tempo where the playhead is (every track and channel but the drum channel, rendered on a worker, up to two minutes), through the preview voice at the preview level; a click again stops it, a double-click still imports it. Left: playing it on the selected track's own instrument, and previewing an instrument preset (a hidden copy of the instrument playing a phrase; est. 3–4 h) |
 
 ## N. Getting MIDI in and out
 
@@ -590,3 +590,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | 14-bit controllers and RPN/NRPN parameters as one lane value |
 | 2026-11-17 | minor | Notes edited directly on a MIDI track showing Notes |
 | 2026-11-17 | minor | Tempo from a MIDI performance |
+| 2026-11-17 | minor | MIDI files previewed from the browser |

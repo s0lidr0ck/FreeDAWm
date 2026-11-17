@@ -626,11 +626,15 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                 let path = std::path::Path::new(&dir).join(&name).to_string_lossy().into_owned();
                 let label = if is_dir { format!("📁 {name}") } else { format!("🔊 {name}") };
                 let audio = !is_dir && !soundcraft_model::is_session_path(&name) && !is_midi_file(&name);
-                let on = audio && app.audition.playing.as_deref() == Some(path.as_str());
+                let on = !is_dir && app.audition.playing.as_deref() == Some(path.as_str());
                 let r = ui.selectable_label(on, label);
                 if audio && r.clicked() && !r.double_clicked() {
                     // A click auditions the file (again: stops it); a double-click imports it.
                     crate::audition::file(app, &path);
+                }
+                if !is_dir && is_midi_file(&name) && r.clicked() && !r.double_clicked() {
+                    // A MIDI file is heard on the synth at the session tempo.
+                    crate::audition::midi_file(app, &path);
                 }
                 if r.double_clicked() {
                     if is_dir {
@@ -649,8 +653,10 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             }
         });
         ui.label(
-            egui::RichText::new("Click an audio file to hear it; double-click to import audio/MIDI at the insertion point or open a session.")
-                .small(),
+            egui::RichText::new(
+                "Click an audio or MIDI file to hear it; double-click to import audio/MIDI at the insertion point or open a session.",
+            )
+            .small(),
         );
     });
     app.ui.show_workspace = open;

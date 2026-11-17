@@ -7,6 +7,10 @@
 //! tempo, see `soundcraft_audio_io::loop_info`, is stretched with its pitch kept on the worker)
 //! and in sync (`UiState::preview_sync`: while the session plays, it repeats in time with it from
 //! the bar the playhead was in).
+//!
+//! A MIDI file in the browser is heard too: its notes rendered on a worker with the Subtractive
+//! Synth at the session tempo where the playhead is (`midi_file`), every track and channel but the
+//! drum channel (10), and played through the same preview voice; a click on it again stops it.
 
 use crate::SoundApp;
 use soundcraft_model::{ClipContent, ClipId};
@@ -121,6 +125,87 @@ pub fn file(app: &mut SoundApp, path: &str) {
     }
 }
 
+/// Auditions the MIDI file at `path` on the Subtractive Synth at the session tempo, or stops it
+/// when it is what plays.
+pub fn midi_file(app: &mut SoundApp, path: &str) {
+    if app.audition.playing.as_deref() == Some(path) || app.audition.pending.as_ref().is_some_and(|(p, _)| p == path) {
+        stop(app);
+        return;
+    }
+    stop(app);
+    let (tx, rx) = channel();
+    let owned = path.to_string();
+    let s = app.engine.session();
+    let bpm = s.tempo.tempo_at_tick(s.tempo.samples_to_ticks(app.position().max(0), s.sample_rate));
+    let rate = s.sample_rate.hz();
+    let spawned = std::thread::Builder::new().name("audition-midi".into()).spawn(move || {
+        let got = std::fs::read(&owned).map_err(|e| e.to_string()).and_then(|bytes| render_midi(&bytes, bpm, rate));
+        let _ = tx.send(got.map(|ch| (ch, rate, None)));
+    });
+    match spawned {
+        Ok(_) => app.audition.pending = Some((path.to_string(), rx)),
+        Err(e) => app.ui.status = format!("Cannot audition: {e}"),
+    }
+}
+
+/// A Standard MIDI File's notes played by the Subtractive Synth at `bpm`, as stereo at `rate`, cut
+/// to [`MAX_SECONDS`] (and a second of release after the last note). The drum channel (10) is
+/// left out: the synth would play its kit as pitches.
+pub fn render_midi(bytes: &[u8], bpm: f64, rate: u32) -> Result<Vec<Vec<f32>>, String> {
+    use soundcraft_dsp::Plugin;
+    let smf = soundcraft_midi::read_smf(bytes).map_err(|e| e.to_string())?;
+    let bpm = if bpm.is_finite() && bpm > 1.0 { bpm } else { 120.0 };
+    let per_tick = f64::from(rate) * 60.0 / bpm / f64::from(soundcraft_midi::PPQ);
+    let max = (MAX_SECONDS * f64::from(rate)) as usize;
+    // (sample, on, pitch, velocity), offs before ons at the same sample.
+    let mut events: Vec<(usize, bool, u8, u8)> = Vec::new();
+    for n in smf.tracks.iter().flat_map(|t| t.sequence.notes.iter()).filter(|n| n.channel != 9 && !n.muted && n.start >= 0) {
+        let a = (n.start as f64 * per_tick) as usize;
+        if a >= max {
+            continue;
+        }
+        let b = ((n.end() as f64 * per_tick) as usize).clamp(a + 1, max);
+        events.push((a, true, n.pitch, n.velocity.max(1)));
+        events.push((b, false, n.pitch, 0));
+        if events.len() > 400_000 {
+            break;
+        }
+    }
+    if events.is_empty() {
+        return Err("no notes to play".into());
+    }
+    events.sort_by_key(|e| (e.0, e.1));
+    let len = events.iter().map(|e| e.0).max().unwrap_or(0).saturating_add(rate as usize).min(max + rate as usize);
+    let mut synth = soundcraft_dsp::plugins::synth::SubtractiveSynth::new();
+    const BLOCK: usize = 256;
+    synth.prepare(rate as f32, BLOCK, 2);
+    let mut out = vec![Vec::with_capacity(len), Vec::with_capacity(len)];
+    let mut io = vec![vec![0.0f32; BLOCK]; 2];
+    let mut next = 0;
+    let mut at = 0;
+    while at < len {
+        let n = BLOCK.min(len - at);
+        while let Some(&(t, on, pitch, vel)) = events.get(next) {
+            if t >= at + n {
+                break;
+            }
+            if on {
+                synth.note_on(t - at, pitch, vel);
+            } else {
+                synth.note_off(t - at, pitch);
+            }
+            next += 1;
+        }
+        io.iter_mut().for_each(|c| c.iter_mut().for_each(|x| *x = 0.0));
+        synth.process(&mut io, n);
+        for (o, c) in out.iter_mut().zip(&io) {
+            o.extend_from_slice(c.get(..n).unwrap_or(&[]));
+        }
+        at += n;
+    }
+    Ok(out)
+}
+
 /// Auditions `clip` as it sounds (its material with clip gain), or stops it when it is what plays.
 pub fn clip(app: &mut SoundApp, id: ClipId) {
     let what = format!("clip:{}", id.0);
@@ -190,6 +275,28 @@ mod tests {
         let bar = s.tempo.tick_to_samples(s.tempo.bar_start_tick(3), s.sample_rate);
         let sync = super::sync_at(&s, bar + 1000, 24_000, 48_000).unwrap();
         assert_eq!((sync.origin, sync.period), (bar, 24_000 * i64::from(s.sample_rate.hz()) / 48_000));
+    }
+
+    #[test]
+    fn a_midi_file_is_rendered_on_the_synth_at_the_tempo_without_its_drums() {
+        use soundcraft_midi::{Note, Sequence, Smf, SmfTrack, write_smf};
+        let n =
+            |pitch, channel, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel, start, length: 960 };
+        let file = |notes| {
+            let t = SmfTrack { name: "T".into(), sequence: Sequence { notes, ctrls: Vec::new() }, ..Default::default() };
+            write_smf(&Smf { format: 1, tracks: vec![t], ..Default::default() }).unwrap()
+        };
+        let bytes = file(vec![n(60, 0, 0), n(64, 0, 1920)]);
+        // Three beats at 120 bpm, then a second of release.
+        let at120 = super::render_midi(&bytes, 120.0, 48_000).unwrap();
+        assert_eq!(at120[0].len(), 72_000 + 48_000);
+        let at60 = super::render_midi(&bytes, 60.0, 48_000).unwrap();
+        assert_eq!(at60[0].len(), 144_000 + 48_000);
+        let energy = |c: &[f32]| c.iter().map(|x| x * x).sum::<f32>();
+        assert!(energy(&at120[0][..24_000]) > 0.01, "the first note sounds");
+        assert!(energy(&at120[0][60_000..72_000]) > 0.01, "the second note, two beats later");
+        assert!(super::render_midi(&file(vec![n(36, 9, 0)]), 120.0, 48_000).is_err(), "drums only: nothing to play");
+        assert!(super::render_midi(b"not midi", 120.0, 48_000).is_err());
     }
 
     #[test]
