@@ -149,6 +149,71 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     input_quantize(app, ctx);
     midi_offsets(app, ctx);
     click_countoff(app, ctx);
+    disk_allocation(app, ctx);
+}
+
+/// Setup › Disk Allocation: the folder the session's takes record into, and any track's own
+/// (`setup.disk_allocation`). A relative folder is inside the session's folder; empty is the
+/// default (`Audio Files`, or for a track the session's folder).
+fn disk_allocation(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_disk_allocation;
+    if !open {
+        return;
+    }
+    // As `setup.disk_allocation` reports them (read here, not run every frame).
+    let s = app.engine.session();
+    let text = |key: &str| s.edit.flags.iter().find_map(|f| f.strip_prefix(key).and_then(|r| r.strip_prefix('=')).map(str::to_string));
+    let root = text("disk.root").unwrap_or_else(|| "Audio Files".into());
+    let rows: Vec<(u64, String, String)> = s
+        .tracks
+        .iter()
+        .filter(|t| t.kind == soundcraft_model::TrackKind::Audio)
+        .map(|t| (t.id.0, t.name.clone(), text(&format!("disk.track.{}", t.id.0)).unwrap_or_else(|| root.clone())))
+        .collect();
+    let mut change: Option<Value> = None;
+    egui::Window::new("Disk Allocation").open(&mut open).default_size(vec2(460.0, 260.0)).show(ctx, |ui| {
+        ui.label(
+            egui::RichText::new(
+                "Where takes are recorded. A folder that is not inside the session's folder keeps its takes there when the session is saved.",
+            )
+            .small(),
+        );
+        let mut folder_row = |ui: &mut egui::Ui, label: &str, key: &str, value: &str, track: Option<u64>| {
+            ui.label(label);
+            let id = egui::Id::new(("disk_alloc", key));
+            let mut text: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(240.0));
+            ui.ctx().data_mut(|d| d.insert_temp(id, text.clone()));
+            let mut pick = None;
+            if let Some(choose) = &app.services.pick_folder
+                && ui.small_button("Choose…").clicked()
+            {
+                pick = choose("disk.allocation");
+            }
+            let commit = pick.or_else(|| (r.lost_focus() && text != value).then(|| text.clone()));
+            if let Some(path) = commit {
+                ui.ctx().data_mut(|d| d.remove::<String>(id));
+                let mut p = json!({"path": path});
+                if let (Some(t), Some(o)) = (track, p.as_object_mut()) {
+                    o.insert("track".into(), json!(t));
+                }
+                change = Some(p);
+            }
+            ui.end_row();
+        };
+        egui::Grid::new("disk_allocation").num_columns(3).striped(true).show(ui, |ui| {
+            folder_row(ui, "Session", "root", &root, None);
+            for (id, name, path) in &rows {
+                folder_row(ui, name, &id.to_string(), path, Some(*id));
+            }
+        });
+    });
+    if let Some(p) = change
+        && let Err(e) = app.run("setup.disk_allocation", p)
+    {
+        app.ui.status = e;
+    }
+    app.ui.show_disk_allocation = open;
 }
 
 /// Setup › Click/Countoff: the metronome's level and sounds, whether it clicks only while

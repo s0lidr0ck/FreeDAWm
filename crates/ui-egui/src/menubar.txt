@@ -608,6 +608,7 @@ Setup > I/O...
 Setup > ---
 Setup > ## Recording & MIDI
 Setup > Click/Countoff... = @window.click_countoff
+Setup > Disk Allocation... = @window.disk_allocation
 Setup > MIDI Input Devices... = @window.midi_inputs [desktop]
 Setup > Control Surfaces... = @window.control_surfaces [desktop]
 Setup > MIDI Mappings... = @window.midi_mappings [desktop]

@@ -52,7 +52,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("options.transport_online", "stored flag nothing reads"),
     ("setup.current_feet_frames", "needs a position and has no dialog"),
     ("setup.current_timecode", "needs a position and has no dialog"),
-    ("setup.disk_allocation", "a stored setting with no window"),
     ("setup.external_timecode_offset", "a stored setting with no window; nothing reads it"),
     ("setup.midi_input_devices", "shown greyed out (coming soon): needs its own window"),
     ("setup.midi_studio", "a stored setting with no window"),

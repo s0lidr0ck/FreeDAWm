@@ -2075,6 +2075,7 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
     };
     // Files written for audio during this save: sources playing the same audio share one.
     let mut files: HashMap<*const SourceAudio, String> = HashMap::new();
+    let allocated = allocated_folders(&s);
     for (i, src) in s.sources.iter_mut().enumerate() {
         if !same_dir
             && s.pool.get(src.id).is_none()
@@ -2084,6 +2085,10 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
             src.path = f.join(&src.path).to_string_lossy().into_owned();
         }
         if !copy_refs && !src.unsaved && Path::new(&src.path).is_absolute() && Path::new(&src.path).is_file() {
+            continue;
+        }
+        // A take recorded to a folder Setup › Disk Allocation chose stays on that disk.
+        if !src.unsaved && Path::new(&src.path).is_file() && allocated.iter().any(|a| Path::new(&src.path).starts_with(a)) {
             continue;
         }
         let exists_rel = same_dir && !Path::new(&src.path).is_absolute() && dir.join(&src.path).exists();
@@ -3044,7 +3049,8 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
             soundcraft_model::RecordFileType::Wav => "wav",
             soundcraft_model::RecordFileType::Aiff => "aif",
         };
-        let file = |n: usize| dir.join("Audio Files").join(format!("{stem}_{n:02}.{ext}"));
+        let folder = take_folder(s, dir, t.id);
+        let file = |n: usize| folder.join(format!("{stem}_{n:02}.{ext}"));
         // Numbered per track: one past the track's highest take in the session, skipping files
         // already there (and another armed track's of the same name).
         let take_no = s.sources.iter().filter_map(|x| take_number(&x.name, &stem)).max().map_or(1, |n| n.saturating_add(1));
@@ -3082,10 +3088,38 @@ pub fn record_seconds_left(s: &Session, free: u64) -> Option<u64> {
     (bps > 0).then(|| free / bps)
 }
 
-/// The folder a session's takes go into: `Audio Files` beside the session file, or in
-/// `unsaved_dir` for a session never saved (as [`plan_recording`] puts them).
+/// The folder a session's takes go into: Setup › Disk Allocation's folder for the session, else
+/// `Audio Files` beside the session file (in `unsaved_dir` for a session never saved).
 pub fn record_dir(e: &Engine, unsaved_dir: &Path) -> PathBuf {
-    e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir).join("Audio Files")
+    let dir = e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir);
+    allocated(e.session(), None).map_or_else(|| dir.join("Audio Files"), |f| dir.join(f))
+}
+
+/// The folder `track`'s takes go into: Setup › Disk Allocation's folder for the track, else the
+/// session's, else `Audio Files`. A relative folder is inside the session's folder `dir`.
+pub fn take_folder(s: &Session, dir: &Path, track: TrackId) -> PathBuf {
+    allocated(s, Some(track)).or_else(|| allocated(s, None)).map_or_else(|| dir.join("Audio Files"), |f| dir.join(f))
+}
+
+/// The folder Setup › Disk Allocation sets for `track`, or for the session (`None`).
+fn allocated(s: &Session, track: Option<TrackId>) -> Option<String> {
+    let key = match track {
+        Some(t) => format!("disk.track.{}=", t.0),
+        None => "disk.root=".to_string(),
+    };
+    s.edit.flags.iter().find_map(|f| f.strip_prefix(key.as_str())).map(str::to_string)
+}
+
+/// The absolute folders Setup › Disk Allocation records into: takes there stay there when the
+/// session is saved (they are not copied into its `Audio Files`).
+fn allocated_folders(s: &Session) -> Vec<PathBuf> {
+    s.edit
+        .flags
+        .iter()
+        .filter(|f| f.starts_with("disk.root=") || f.starts_with("disk.track."))
+        .filter_map(|f| f.split_once('=').map(|(_, v)| PathBuf::from(v)))
+        .filter(|p| p.is_absolute())
+        .collect()
 }
 
 /// Bytes free on the disk that holds `dir` (or, before it exists, its nearest existing parent).
@@ -4387,6 +4421,57 @@ mod save_tests {
         assert!(dir.join("New").join("Audio Files").join("Pad.wav").is_file());
         assert!(dir.join("New").join("Waveforms").join("Pad.wav.peaks").is_file());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Setup › Disk Allocation: each track's takes go to its folder (an absolute one elsewhere,
+    /// or one inside the session's folder), the others to the session's folder; a take on an
+    /// allocated disk stays there when the session is saved.
+    #[test]
+    fn takes_record_into_the_allocated_folders_and_stay_there() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-disk-alloc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let other = dir.join("Other Disk");
+        let mut e = Engine::default();
+        let mk = |e: &mut Engine, name: &str| -> u64 {
+            let id = e.execute("track.new", &json!({"name": name, "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+            e.execute("mix.record_arm", &json!({"tracks": [id], "value": true})).unwrap();
+            id
+        };
+        let (a, b, c) = (mk(&mut e, "Vox"), mk(&mut e, "Kick"), mk(&mut e, "Bass"));
+        e.execute("setup.disk_allocation", &json!({"path": other.to_string_lossy()})).unwrap();
+        e.execute("setup.disk_allocation", &json!({"track": b, "path": "Drums"})).unwrap();
+        let session = dir.join("Song");
+        let plan = plan_takes(&e, &session, 2).unwrap();
+        let folder = |t: u64| plan.iter().find(|x| x.0 == TrackId(t)).and_then(|x| x.2.parent().map(Path::to_path_buf)).unwrap();
+        assert_eq!(folder(a), other, "the session's folder");
+        assert_eq!(folder(b), session.join("Drums"), "the track's own, inside the session folder");
+        assert_eq!(folder(c), other);
+        assert_eq!(record_dir(&e, &session), other);
+        e.execute("setup.disk_allocation", &json!({"path": ""})).unwrap();
+        assert_eq!(folder_of(&e, &session, c), session.join("Audio Files"), "cleared: Audio Files again");
+
+        // A take on the other disk is not copied into the project when it is saved.
+        e.execute("setup.disk_allocation", &json!({"path": other.to_string_lossy()})).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let take = other.join("Vox_01.wav");
+        let opts =
+            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&take, soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 480]] }, &opts).unwrap())
+            .unwrap();
+        // As `add_recording_in` registers a take: its file, saved.
+        let s = e.session_mut();
+        add_source(s, "Vox_01", AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 480]] }, Some(&take.to_string_lossy()), FileFormat::Wav);
+        if let Some(x) = s.sources.last_mut() {
+            x.unsaved = false;
+        }
+        save_session(&mut e, &session.join("Song.fdawm").to_string_lossy()).unwrap();
+        assert_eq!(Path::new(&e.session().sources[0].path), take.as_path(), "stays on its disk");
+        assert!(!session.join("Audio Files").join("Vox_01.wav").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn folder_of(e: &Engine, session: &Path, t: u64) -> PathBuf {
+        take_folder(e.session(), session, TrackId(t))
     }
 
     #[test]

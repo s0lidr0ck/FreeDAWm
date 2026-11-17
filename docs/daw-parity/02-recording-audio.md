@@ -141,7 +141,7 @@ what a user can do, apart from punch out on the fly.
 | Choose file type (WAV/BWF, AIFF, others) | ● | ● | ● | ● | **Works** for WAV (BWF) and AIFF; an AIFF take loads into memory instead of streaming |
 | Timestamp in the file (BWF time reference) | ● | ● | ● | ● | **Works**: a `bext` chunk with FreeDAWm as originator, the date and time, and the time reference of the take's first frame from the timecode start |
 | Stereo as one interleaved file | ● | ● | ● | ● | **Works** |
-| Choose where each track records | ● | ◐ | ◐ | ◐ | **Flag only**: Disk Allocation stores paths nothing reads |
+| Choose where each track records | ● | ◐ | ◐ | ◐ | **Works**: Setup › Disk Allocation… sets the folder takes record into, for the session and for any track (a relative folder is inside the session's); a take in a folder outside the session stays there when the session is saved. Undone takes there are not cleaned up as they are in `Audio Files` |
 | Recover a take after a crash | ● | ◐ | ◐ | ◐ | **Works**: header rewritten every second, the take placed on recovery; no fsync, so a power loss can lose the last second |
 
 ## H. Safety and feedback
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |

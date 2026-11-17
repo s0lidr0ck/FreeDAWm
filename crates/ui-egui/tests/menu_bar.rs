@@ -21,7 +21,7 @@ const ROWS: [(&str, usize); 11] = [
     ("Process", 14),
     ("AI", 14),
     ("Options", 21),
-    ("Setup", 11),
+    ("Setup", 12),
     ("Window", 36),
 ];
 
@@ -155,7 +155,6 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "window.midi_front",
         "window.workspace_sounds",
         "window.clip_list_view",
-        "setup.disk_allocation",
         "setup.midi_studio",
     ] {
         assert!(!seen.keys().any(|k| k == dead || k.starts_with(&format!("{dead} "))), "`{dead}` is still on the menu bar");

@@ -62,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             engine_settings(e, p)
         }),
-        cmd!(noundo "setup.disk_allocation", "Disk Allocation...", ["Setup"], None, "{path?, track?} — the record folder for the session, or for one track", always, disk_allocation),
+        cmd!(noundo "setup.disk_allocation", "Disk Allocation...", ["Setup"], None, "{path?, track?} — the folder takes record into, for the session or for one track (relative: inside the session folder; empty: back to Audio Files, or for a track to the session's)", always, disk_allocation),
         cmd!(noundo "setup.peripherals", "Peripherals...", ["Setup"], None, "{settings?: {name: number|bool|string}} — control surface / sync device settings", always, peripherals),
         cmd!(
             "setup.io",
