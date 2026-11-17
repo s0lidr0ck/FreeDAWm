@@ -267,7 +267,7 @@ fn gutter_scroll<R>(ui: &Ui, gutter: Rect, out: &egui::scroll_area::ScrollAreaOu
 pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
     panel_header(ui, "CLIPS");
-    let items: Vec<(u64, String, bool, [u8; 3], bool)> = {
+    let items: Vec<(u64, String, bool, [u8; 3], bool, bool)> = {
         let s = app.engine.session();
         let mut v = Vec::new();
         // Whole files first (bold), then clips on tracks. A drum kit's pad samples belong to its
@@ -283,12 +283,17 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 true,
                 [150, 150, 150],
                 s.edit.selected_sources.contains(&src.id),
+                false,
             ));
         }
         for tr in &s.tracks {
             for c in tr.clips() {
-                v.push((c.id.0, c.name.clone(), false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id)));
+                v.push((c.id.0, c.name.clone(), false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id), false));
             }
+        }
+        // Clips captured into the list (Clip › Capture), on no track.
+        for c in &s.captured {
+            v.push((c.id.0, format!("{} (captured)", c.name), false, c.color.unwrap_or([150, 150, 150]), false, true));
         }
         v
     };
@@ -306,11 +311,28 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
         }
     }
     let needle = filter.to_lowercase();
-    let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
+    let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
-        for (id, name, whole, color, selected) in items {
+        for (id, name, whole, color, selected, captured) in items {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::click_and_drag());
             resp.context_menu(|ui| {
+                if captured {
+                    let sel_track = app.engine.session().edit.selected_tracks.first().map(|t| t.0);
+                    if let Some(t) = sel_track
+                        && ui.button("Place on Selected Track").clicked()
+                    {
+                        let at = app.engine.session().edit.selection.start;
+                        if let Err(e) = app.run("clip.place_captured", json!({"clip": id, "track": t, "at": at})) {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                    if ui.button("Remove from List").clicked() {
+                        let _ = app.run("clip.uncapture", json!({"clip": id}));
+                        ui.close();
+                    }
+                    return;
+                }
                 if whole {
                     if ui.button("Place on New Track").clicked() {
                         let _ = app.run("clip.place_source", json!({"source": id}));
@@ -355,6 +377,8 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
             // Whole files and clips drag onto tracks (a clip lands as a copy).
             if whole {
                 resp.dnd_set_drag_payload(crate::DragSource(id));
+            } else if captured {
+                resp.dnd_set_drag_payload(crate::DragCaptured(id));
             } else {
                 resp.dnd_set_drag_payload(crate::DragClip(id));
             }
@@ -372,7 +396,9 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 if whole { bold(11.0) } else { regular(11.0) },
                 t.text,
             );
-            if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
+            if captured {
+                // Placed by dragging or from its menu; nothing to select on a track.
+            } else if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
                 // Alt-click auditions a clip, as in Pro Tools.
                 crate::audition::clip(app, ClipId(id));
             } else if resp.clicked() {

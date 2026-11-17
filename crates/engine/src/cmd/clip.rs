@@ -192,19 +192,76 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"clip": id, "track": t}))
             }
         ),
-        cmd!("clip.capture", "Capture...", ["Clip"], Some("Cmd+R"), "{name?}", has_range, |e, p| {
-            // Captures the selection as a new whole-file-referencing clip in the clip list (we keep it on the track).
-            let name = str_param(p, "name").unwrap_or("Captured").to_string();
-            let ids = clip_ids_param(e, p);
+        cmd!(
+            "clip.capture",
+            "Capture...",
+            ["Clip"],
+            Some("Cmd+R"),
+            "{name?, tracks?, start?, end?} — the selection's clips on each selected track are kept in the Clip List as new clips (named `name`), the track left as it is",
+            has_range,
+            capture
+        ),
+        cmd!(
+            "clip.place_captured",
+            "Place Captured Clip",
+            [],
+            None,
+            "{clip: a captured clip's id, track, at} — a copy of a Clip List clip on the track, at `at` (the overlap mode applies)",
+            has_tracks,
+            place_captured
+        ),
+        cmd!("clip.uncapture", "Remove from Clip List", [], None, "{clip} — a captured clip leaves the Clip List", always, |e, p| {
+            let id = clip_id(p, "clip.uncapture")?;
             let s = e.session_mut();
-            for id in &ids {
-                if let Some(c) = s.find_clip_mut(*id) {
-                    c.name = name.clone()
-                }
-            }
-            Ok(json!({"clips": ids.len()}))
+            let n = s.captured.len();
+            s.captured.retain(|c| c.id != id);
+            if s.captured.len() == n { Err(bad("clip.uncapture", "no such captured clip")) } else { Ok(json!({"removed": id.0})) }
         }),
     ]
+}
+
+/// Clip › Capture: the selection's clips on each selected track, cut to the range and timed
+/// from its start, go into the Clip List as new clips.
+fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.capture";
+    let tracks = tracks_required(e, C, p)?;
+    let r = range_param(e, C, p)?;
+    let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Captured").to_string();
+    let s = e.session_mut();
+    let mut ids = Vec::new();
+    for t in &tracks {
+        for mut c in crate::edit::copy_range(s, *t, r) {
+            c.id = s.new_clip_id();
+            c.name = if ids.is_empty() { name.clone() } else { format!("{name} {}", ids.len() + 1) };
+            c.group = None;
+            ids.push(c.id.0);
+            s.captured.push(c);
+        }
+    }
+    if ids.is_empty() {
+        return Err(bad(C, "no clip in the selection to capture"));
+    }
+    Ok(json!({"clips": ids}))
+}
+
+/// A copy of a captured clip placed on `track` at `at`.
+fn place_captured(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.place_captured";
+    let id = clip_id(p, C)?;
+    let at = position_param(e, C, p, "at")?.unwrap_or(0).max(0);
+    let track = super::track_param(e, C, p, "track")?.ok_or_else(|| bad(C, "give the track"))?;
+    let s = e.session_mut();
+    let mut c = s.captured.iter().find(|c| c.id == id).cloned().ok_or_else(|| bad(C, "no such captured clip"))?;
+    let kind = s.track(track).map(|t| t.kind).ok_or_else(|| bad(C, "no such track"))?;
+    if c.is_audio() != (kind == soundcraft_model::TrackKind::Audio) {
+        return Err(bad(C, "the clip and the track are of different kinds"));
+    }
+    c.id = s.new_clip_id();
+    c.start = at;
+    let new = c.id;
+    crate::edit::put_clips(s, vec![(track, c)]);
+    s.edit.selected_clips = vec![new];
+    Ok(json!({"clip": new.0}))
 }
 
 /// Warp clips. On Elastic tracks the material is rendered with a pitch-preserving time stretch
@@ -633,6 +690,28 @@ mod tests {
         let vari = e.session().find_clip(c.id).unwrap().1.clone();
         assert!((vari.stretch - 2.0).abs() < 1e-6 && vari.length == len * 2 && vari.source() == c.source());
         assert!(e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start})).is_err(), "no length left");
+    }
+
+    /// Clip › Capture keeps the selection's clips in the Clip List (the track untouched), and a
+    /// captured clip is placed on a track as a copy.
+    #[test]
+    fn captured_clips_live_in_the_clip_list_and_place_as_copies() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
+        let c = e.session().track(pad).unwrap().clips()[0].clone();
+        let before = e.session().track(pad).unwrap().clips().to_vec();
+        let r = e.execute("clip.capture", &json!({"tracks": [pad.0], "start": c.start, "end": c.start + 48_000, "name": "Swell"})).unwrap();
+        let id = r["clips"][0].as_u64().unwrap();
+        let s = e.session();
+        assert_eq!(s.track(pad).unwrap().clips(), before.as_slice(), "the track is left as it is");
+        let cap = s.captured.iter().find(|x| x.id.0 == id).unwrap();
+        assert_eq!((cap.name.as_str(), cap.start, cap.length), ("Swell", 0, 48_000));
+        assert!(s.all_clips().any(|x| x.id.0 == id), "its file counts as used");
+        let placed = e.execute("clip.place_captured", &json!({"clip": id, "track": pad.0, "at": 960_000})).unwrap()["clip"].as_u64().unwrap();
+        let (t, p) = e.session().find_clip(ClipId(placed)).unwrap();
+        assert_eq!((t, p.start, p.length, p.source()), (pad, 960_000, 48_000, c.source()));
+        e.execute("clip.uncapture", &json!({"clip": id})).unwrap();
+        assert!(e.session().captured.is_empty());
     }
 
     /// Re-stretch after trimming: a stretched clip trimmed to half and stretched again plays the

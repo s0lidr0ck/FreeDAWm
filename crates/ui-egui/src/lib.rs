@@ -782,6 +782,11 @@ pub struct DragSource(pub u64);
 #[derive(Debug, Clone, Copy)]
 pub struct DragClip(pub u64);
 
+/// Drag-and-drop payload: a clip captured into the Clip List (Clip › Capture); a copy lands
+/// where it is dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct DragCaptured(pub u64);
+
 /// Ballistic meter display state per strip.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MeterDisplay {

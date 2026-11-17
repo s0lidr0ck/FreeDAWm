@@ -372,6 +372,10 @@ pub struct Session {
     #[serde(default, deserialize_with = "lenient_inputs")]
     pub inputs: Vec<InputPath>,
     pub markers: Vec<MemoryLocation>,
+    /// Clips kept in the Clip List rather than on a track (Clip › Capture…), timed from 0; a
+    /// copy is placed by dragging one onto a track (`clip.place_captured`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captured: Vec<crate::Clip>,
     pub groups: Vec<Group>,
     pub edit: EditState,
     pub next_id: u64,
@@ -460,6 +464,7 @@ impl Session {
             outputs: vec![OutputPath { name: "Out 1-2".into(), first_channel: 0, format: ChannelFormat::Stereo }],
             inputs: Vec::new(),
             markers: Vec::new(),
+            captured: Vec::new(),
             groups: Vec::new(),
             edit: EditState::default(),
             next_id: 1,
@@ -586,8 +591,9 @@ impl Session {
     }
 
     /// Clips on every playlist, alternates included.
+    /// Every clip: on every track's playlists, then those captured in the Clip List.
     pub fn all_clips(&self) -> impl Iterator<Item = &Clip> {
-        self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| &p.clips))
+        self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| &p.clips)).chain(&self.captured)
     }
 
     /// Whether `clip` was cleaned by Clean Vocal but its cleaned audio isn't loaded (its file was

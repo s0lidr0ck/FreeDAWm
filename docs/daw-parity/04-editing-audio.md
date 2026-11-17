@@ -245,7 +245,7 @@ why they score ◐ for "built-in".
 | Select and remove unused clips | ● | ● | ● | ● | **Works**: Select Unused Files picks the files no clip plays; Clear removes them |
 | Relink missing audio files | ● | ● | ● | ● | **Works**: the Clip List marks a file the session could not find as missing, and Relink… in a file's menu reads it from another file (`file.relink_audio`), its clips playing again from where they were; a file of another length or width is taken with a warning. One file at a time; no search of a folder |
 | Compact files to what is used | ● | ● | ● | ● | **Missing** |
-| "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Missing**: the command only renames the clip "Captured" |
+| "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Works**: Clip › Capture… (Cmd+R) keeps the selection's clips on each selected track in the Clip List as new clips, the track untouched; a captured clip drags onto a track (or Place on Selected Track from its menu) as a copy, and Remove from List takes it out. Saved with the session; its file counts as used |
 | Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
 | Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn stretched, as it plays |
 
