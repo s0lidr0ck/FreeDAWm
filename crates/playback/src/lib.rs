@@ -779,6 +779,7 @@ impl AudioState {
         // came in the same batch is synced, at the final position and with that session's
         // automation (`MixEngine::reset_at`).
         let mut reset = false;
+        let mut ring = false;
         while let Ok(c) = self.rx.try_recv() {
             match c {
                 Cmd::Input(feed, buffers) => self.attach_input(feed, buffers),
@@ -840,8 +841,14 @@ impl AudioState {
                 Cmd::Stop => {
                     let stop = Deferred::Stop { then_at: None };
                     if !self.defer(stop) {
+                        // A stop while rolling lets the mix ring out (`MixEngine::ring_out`);
+                        // a second stop (or one while counting off) cuts it, as before.
+                        if self.playing && !self.recording {
+                            ring = true;
+                        } else {
+                            reset = true;
+                        }
                         self.apply(stop);
-                        reset = true;
                     }
                 }
                 Cmd::Loop(l) => {
@@ -1010,6 +1017,8 @@ impl AudioState {
         }
         if reset {
             self.mix.reset_at(&self.session, self.pos);
+        } else if ring && !self.playing {
+            self.mix.ring_out();
         }
         self.send_garbage(false);
         self.return_scout();
@@ -1301,7 +1310,13 @@ impl AudioState {
         if let Some(d) = self.deferred {
             if self.ramp <= 0.0 {
                 self.apply(d);
-                self.mix.reset_at(&self.session, self.pos);
+                if matches!(d, Deferred::Stop { then_at: None }) {
+                    // Stopped where it played: the mix rings out (`MixEngine::ring_out`).
+                    self.mix.ring_out();
+                    self.monitoring = true;
+                } else {
+                    self.mix.reset_at(&self.session, self.pos);
+                }
                 if !self.playing && self.countoff.is_none() && !self.monitoring && !self.mix.scout_armed() {
                     for c in &mut self.pending {
                         c.iter_mut().for_each(|x| *x = 0.0);
@@ -1334,6 +1349,8 @@ impl AudioState {
                 // The transport stopping by itself ends a Scout capture, as a Stop does.
                 self.mix.stop_scout();
                 self.shared.playing.store(false, Ordering::Relaxed);
+                // What the mix holds rings out from the next callback, as after a Stop.
+                self.mix.ring_out();
                 // Monitored input carries on (monitor-only); else the block is silence.
                 if !self.monitoring {
                     n = 0;
@@ -1806,7 +1823,7 @@ impl AudioState {
             let mut start = self.read.max(0.0).floor() as usize;
             let mut ended = false;
             if start >= self.pending_len {
-                if !self.playing && !monitoring && !capturing {
+                if !self.playing && !(monitoring || self.monitoring) && !capturing {
                     break;
                 }
                 let was_playing = self.playing;
@@ -1818,7 +1835,7 @@ impl AudioState {
             if n == 0 {
                 break;
             }
-            let sounding = self.playing || monitoring;
+            let sounding = self.playing || monitoring || self.monitoring;
             let pending = &self.pending;
             if let Some(dest) = out.get_mut(done * channels..(done + n) * channels) {
                 for (i, frame) in dest.chunks_mut(channels).enumerate() {
@@ -1843,7 +1860,7 @@ impl AudioState {
             while self.read > self.pending_len as f64 - 1.0 {
                 self.hist.push(&self.pending, self.pending_len);
                 self.read -= self.pending_len as f64;
-                if !self.playing && !monitoring && !capturing {
+                if !self.playing && !(monitoring || self.monitoring) && !capturing {
                     // Nothing more to hear: start afresh next time.
                     (self.read, self.pending_len) = (0.0, 0);
                     self.hist.clear();
@@ -1854,7 +1871,7 @@ impl AudioState {
                     break;
                 }
             }
-            let sounding = self.playing || monitoring;
+            let sounding = self.playing || monitoring || self.monitoring;
             let (first, w) = self.kernel.at(self.read, step);
             let (pending, hist, len) = (&self.pending, &*self.hist, self.pending_len);
             write_frame(frame, sounding, |c| resample::sample(pending, len, hist, c, first, &w));
@@ -5535,6 +5552,41 @@ mod tests {
             assert!(side[..heard].iter().all(|x| x.abs() <= peak + 1e-6), "the ramp out is no louder than playback");
             assert!(side[heard..].iter().all(|x| x.abs() < 1e-6), "playback heard after the ramp: {:?}", &side[heard..heard + 12]);
         }
+    }
+
+    /// A Stop lets a reverb ring out (heard and metered, stopped) until it dies away; a second
+    /// Stop cuts it at once.
+    #[test]
+    fn stop_lets_the_mix_ring_out_and_a_second_stop_cuts_it() {
+        let s = clip_session(96_000, &["fs_reverb"]);
+        let (mut st, _shared, tx) = playing(&s, 48_000.0, 256);
+        callbacks(&mut st, &[4096; 6]);
+        tx.send(Cmd::Stop).unwrap();
+        // The ramp out, then the tail: not silent for a while after the stop.
+        let after = callbacks(&mut st, &[4800]);
+        let tail = after[0][2400..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(tail > 1e-4, "the reverb rings on after Stop: {tail}, rendering on: {}", st.mix.live_tail());
+        assert!(st.mix.live_tail(), "the stopped mix renders on");
+        // It ends by itself (at most the tail's 4 s).
+        let mut ended = false;
+        for _ in 0..60 {
+            callbacks(&mut st, &[4800]);
+            if !st.mix.live_tail() {
+                ended = true;
+                break;
+            }
+        }
+        assert!(ended, "the tail ends");
+        assert!(callbacks(&mut st, &[1024])[0].iter().all(|x| x.abs() < 1e-6));
+        // Played again and stopped twice: cut.
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        callbacks(&mut st, &[4096; 6]);
+        tx.send(Cmd::Stop).unwrap();
+        callbacks(&mut st, &[512]);
+        tx.send(Cmd::Stop).unwrap();
+        let cut = callbacks(&mut st, &[2048]);
+        assert!(!st.mix.live_tail());
+        assert!(cut[0][256..].iter().all(|x| x.abs() < 1e-6), "a second Stop cuts the tail");
     }
 
     #[test]

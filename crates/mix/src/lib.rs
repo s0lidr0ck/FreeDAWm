@@ -1241,6 +1241,17 @@ impl MixEngine {
         self.tail_on || self.strips.values().any(|s| s.live_tail > 0)
     }
 
+    /// The transport stopped: what the inserts, sends and aux returns still hold (a reverb, a
+    /// delay, audio in the delay-compensation lines) rings on, stopped, and the meters show it,
+    /// as a live release's tail does (`track_tail`: until the mix has been quiet for
+    /// [`TAIL_QUIET_SECS`], at most [`LIVE_TAIL_SECS`], then faded and reset), instead of a reset
+    /// cutting it. Clip notes are let go by the first stopped block (`render`). No allocation.
+    pub fn ring_out(&mut self) {
+        if !self.tail_on {
+            (self.tail_on, self.tail_age, self.tail_quiet) = (true, 0, 0);
+        }
+    }
+
     /// A Scout capture is armed (running, or ended and not yet handed back).
     pub fn scout_armed(&self) -> bool {
         self.scout.is_some()
