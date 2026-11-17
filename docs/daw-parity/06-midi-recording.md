@@ -44,7 +44,7 @@ revision history:
 
 1. **Record modes.** Settled: Merge (the MIDI Merge switch: overdub, loop passes adding up in
    one clip; the default for new sessions), Replace and New Playlist. Loop passes after the first keep the rest of the
-   song. Loop passes are heard while the loop runs, and the last can be undone while it does. Still missing: MIDI takes to comp.
+   song. Loop passes are heard while the loop runs, and the last can be undone while it does. MIDI takes comp on take lanes; a take can keep what the MIDI effects made of the keys, and one over a Juke pattern clip writes its steps.
 2. **Switches that did nothing.** All MIDI Notes Off, MIDI Merge, Input Quantize, MIDI Track
    Offsets, count-off set-up, capture of what was just played and the input filter now work. Still stored and
    unread: MIDI Thru in the Options menu and the other settings bug 22 lists.
@@ -67,7 +67,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | More than 15 input ports | ● | ● | ● | ● | **Works**: 63 hardware ports at once (64 slots, one for Musical Typing) |
 | Device names and aliases, a studio setup of what is connected | ● | ● | ● | ● | **Partial**: an alias per port (Setup › MIDI Input Devices, per computer) names it in the track input menus; no studio setup |
 | Per-device timing offset | ● | ◐ | ● | ● | **Works**: 0–100 ms per input port in Setup › MIDI Input Devices (per computer): its messages are placed that much earlier, heard and recorded |
-| Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port; FreeDAWm opens no virtual port of its own |
+| Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port. **Not planned here**: a virtual port of FreeDAWm's own (midir can make one on macOS and Linux, not Windows) needs the system's MIDI service (CoreMIDI, the ALSA sequencer) and another program to connect to it to develop against; the build machine has neither |
 | MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Not planned here**: the MIDI library in use (midir 0.11) speaks MIDI 1.0 only; MIDI 2.0 needs the systems' own UMP interfaces (CoreMIDI's, Windows MIDI Services, ALSA's UMP) and a MIDI 2.0 device to develop against |
 | MIDI in the browser | ○ | ○ | ○ | ○ | **Not planned here**: the owner has stopped work on the browser build (2026-11-17); its menus leave the MIDI windows out |
 | A take recorded on another computer arrives on the track | ○ | ○ | ○ | ○ | **Works** (remote recorder; the take arrives after the pass, not as a live stream) |
@@ -81,22 +81,22 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Layer several instruments from one keyboard | ● | ● | ● | ● | **Works** (arm them all) |
 | Channel changed on the way in | ● | ● | ● | ● | **Works**: the track input menu › Input Transform › Channel (otherwise the played channel is kept in the clip) |
 | Record arm and input monitor (auto, on, off) on the track | ● | ● | ● | ● | **Works** |
-| The selected track is armed and heard automatically | ○ | ● | ● | ● | **Missing** |
-| Global MIDI thru switch | ● | ● | ● | ● | **Works** in the devices window; the Options menu item is **Flag only** |
+| The selected track is armed and heard automatically | ○ | ● | ● | ● | **Works** (`07fac63`): Setup › MIDI Input Devices › Auto-arm the selected MIDI track (`options.midi_auto_arm`, the session's, off by default): selecting one instrument or MIDI track that listens to MIDI input arms it (heard through MIDI Thru, ready to record) and disarms the one it armed before; a track armed by hand stays armed; nothing changes while recording |
+| Global MIDI thru switch | ● | ● | ● | ● | **Works** in the devices window (Setup › MIDI Input Devices › MIDI Thru); the stored Options flag that did nothing is off the menus |
 | A played note is heard through the track's instrument with the transport stopped | ● | ● | ● | ● | **Works** |
 | Stuck-note protection on stop, disarm, input change, device unplugged | ● | ● | ● | ● | **Works**; a quick unplug and replug (within a rescan) is caught where the system gives the port a new identity (Linux/ALSA), not on macOS or Windows (bug 10) |
 | Panic (all notes off) | ● | ● | ● | ● | **Works** (Event › All MIDI Notes Off, Cmd+Shift+.) |
-| Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Missing**: Low Latency Monitoring covers audio tracks only |
+| Low-latency mode for the instrument being played | ◐ | ● | ● | ● | **Not planned here**: Low Latency Monitoring covers audio tracks only; the instrument path (designed below) changes what is heard by a few milliseconds, which only a loopback measurement through an audio interface can confirm |
 | MIDI activity or velocity meter on the track | ● | ● | ● | ● | **Partial**: only on the take being recorded |
-| MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Works** (`f7169c2`): the track's output menu › Play Instrument On picks an instrument or MIDI track and a channel (`mix.midi_to_track`); the track's instrument becomes MIDI to Track, which passes what it plays (clips, live input, chase, the panic) to the target's instrument in the same block, each event on its channel, merged with the target's own notes. The source renders first, so its notes land at the same sample offsets as the target's own and share its delay compensation; a route that would feed a track into itself is refused. Mute or solo of the source lets go of its notes; a route added, changed or taken off lets go only of the notes of that track (another source's held notes sound on). Multi-output instruments (one instrument's outputs on several mixer channels) remain |
-| Instrument with several audio outputs to separate mixer channels | ● | ● | ● | ● | **Missing**: designed, not built (Designs, *Instruments with several outputs*) |
+| MIDI track that plays an instrument on another track; several MIDI tracks into one multi-timbral instrument | ● | ● | ● | ● | **Works** (`f7169c2`): the track's output menu › Play Instrument On picks an instrument or MIDI track and a channel (`mix.midi_to_track`); the track's instrument becomes MIDI to Track, which passes what it plays (clips, live input, chase, the panic) to the target's instrument in the same block, each event on its channel, merged with the target's own notes. The source renders first, so its notes land at the same sample offsets as the target's own and share its delay compensation; a route that would feed a track into itself is refused. Mute or solo of the source lets go of its notes; a route added, changed or taken off lets go only of the notes of that track (another source's held notes sound on). Multi-output instruments: see the next row |
+| Instrument with several audio outputs to separate mixer channels | ● | ● | ● | ● | **Works** for built-in instruments (`07fac63`): Juke has Out 2 to Out 8 (each pad's Out, beside its Choke); the track's output menu › Instrument Outputs › New Track for Out *n* makes a stereo bus and an aux reading it (`mix.new_output_track`, `mix.instrument_output`), the aux with its own inserts, fader and sends. The output waits for the track's inserts and the aux returns as the main output does; a muted or soloed-out source is silent on every output; a pad set to an output nobody takes stays on the main output. **Partial**: CLAP, VST3 and AU instruments' auxiliary outputs are not read yet (the hosts' part of the design); freeze and bounce of the source follow its main output only |
 
 ## C. Timing
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Notes placed where they were played, corrected for output latency | ● | ● | ● | ● | **Works** (output plus delay-compensation latency) |
-| Timing kept inside an audio buffer, not snapped to its start | ● | ● | ● | ● | **Works** for recording; for what you hear, **Partial**: one buffer late by design, and timing flattens when a buffer is split |
+| Timing kept inside an audio buffer, not snapped to its start | ● | ● | ● | ● | **Works** for recording; for what you hear, **Partial**: one buffer late by design, and timing flattens when a buffer is split (bug 12). **Not planned here**: the fix needs a loopback measurement on hardware to confirm |
 | The driver's own timestamp used | ● | ● | ● | ● | **Works** where midir passes one: put on FreeDAWm's clock by the smallest delivery delay seen (drift allowed), so messages delivered together keep their spacing; not measured on hardware |
 | Follows the tempo map, including ramps | ● | ● | ● | ● | **Works** |
 | Resolution | 960 | 960+ | 960 | 480+ | 960 ticks per quarter note |
@@ -108,15 +108,15 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Data | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Notes with velocity and channel | ● | ● | ● | ● | **Works** |
-| Release velocity | ● | ● | ● | ● | **Partial**: recorded; when played live it reaches CLAP and AU instruments, not VST3 or the built-in ones |
+| Release velocity | ● | ● | ● | ● | **Works** (`6e45ebd`): recorded, and played (live or from a clip) to CLAP, AU and VST3 instruments (VST3's note-off velocity, 0–1). The built-in instruments do not use it (their releases are fixed) |
 | Sustain and other controllers, pitch bend, channel and poly aftertouch, program change | ● | ● | ● | ● | **Works**, stored in the clip unthinned |
 | Bank select, 14-bit controllers, RPN and NRPN understood as such | ● | ◐ | ● | ● | **Partial**: kept as plain controllers and played in order; when playback starts mid-clip the chase follows RPN and NRPN (each parameter set before the play position is selected and set again, then the selection in effect restored) and sends the bank before the program (`mix::rpn`). Not shown or edited as one value in the editor; 14-bit pairs other than Data Entry are chased as two controllers |
 | SysEx | ● | ○ | ● | ● | **Missing** |
-| MPE (per-note bend, pressure, timbre) | ● | ● | ● | ● | **Partial**: the channels pass through and are kept; nothing sets up or understands a zone |
+| MPE (per-note bend, pressure, timbre) | ● | ● | ● | ● | **Partial**: the channels pass through, are kept and play back on their channels. Left: setting up a zone (the MPE Configuration Message to the instrument, a track's zone and pitch-bend range) and per-note editing (section 7's MPE row) |
 | MIDI 2.0 resolution | ○ | ○ | ● | ◐ | **Not planned here**: as MIDI 2.0 devices above (no MIDI 2.0 input to take it from) |
 | Controllers recorded onto notes already there | ● | ● | ● | ● | **Works** with Merge, the default record mode (`68d0dc0`): a take of only controllers joins the clip under it and its notes stay; Replace still clears what the take covers |
 | Controller moves recorded as plug-in or mixer automation | ● | ● | ● | ● | **Works** through MIDI learn (K): a learnt controller moves its fader, pan, send or plug-in knob through the control's own command, and a track in Write, Touch or Latch writes that move as automation, as it does a mouse move; the controller itself is kept out of the take |
-| Thin or reduce controller data on the way in | ● | ◐ | ● | ● | **Missing** |
+| Thin or reduce controller data on the way in | ● | ◐ | ● | ● | **Works** (`07fac63`): Setup › MIDI Input Devices › Thin controllers (the session's, `setup.midi_input_filter` `thin`): a take keeps the controller, pitch bend and pressure points that shape a move (a point the line between its neighbours passes within one step of goes, a 64th of the range for pitch bend) and the kept point ramps to the next, so a sweep plays as it was played; pedals and programs are kept as played. Off by default |
 | A note held when recording starts | ◐ | ◐ | ◐ | ◐ | Dropped |
 | A note still held at Stop or at the loop end | ● | ● | ● | ● | **Works**: cut at the end; a pedal still down comes up there |
 
@@ -129,9 +129,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | New clip on top, old one kept | ◐ | ● | ● | ● | **Works** as take lanes: Keep Takes as Lanes puts each take on a lane of its own under the track, the comp playing the newest; New Playlist still keeps the old part on its own playlist. Clips do not overlap on one playlist |
 | Choose the mode | ● | ● | ● | ● | **Works**: the MIDI Merge switch, its right-click menu (Replace, Merge, New Playlist, Keep Takes as Lanes), `options.midi_record_mode` |
 | The existing part is heard while you record over it | ● | ● | ● | ● | **Works**, which makes replace surprising: you hear the old part, then lose it under the whole take |
-| MIDI and audio recorded in one pass | ● | ● | ● | ● | **Works**, as separate undo steps |
-| Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Partial**: only a chain module's MIDI output (the drum gate's triggers) |
-| One undo for the pass | ● | ● | ● | ● | **Partial**: two or three steps when audio and MIDI are both armed |
+| MIDI and audio recorded in one pass | ● | ● | ● | ● | **Works**, one undo step |
+| Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Works** for MIDI effects (Record Effects' Output, H) and a chain module's MIDI output (the drum gate's triggers). **Partial**: a MIDI to Track source's notes are recorded on the source track, not printed on the target |
+| One undo for the pass | ● | ● | ● | ● | **Works** (`07fac63`): what Stop places (audio takes, modules' MIDI, MIDI takes) is one Record step (`Engine::join_undo_since`) |
 | The take survives a crash | ◐ | ◐ | ◐ | ◐ | **Works**: what a take hears is spilled to the autosave folder as it comes (`recording-midi.jsonl`), and recovery places it as Stop would have, with the audio takes |
 
 ## F. Loops and takes
@@ -144,7 +144,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Undo the last pass, or erase held notes, while the loop runs | ○ | ● | ◐ | ◐ | **Partial**: Undo (Cmd+Z) or Event › More MIDI › Undo Last Pass while loop recording takes back the last finished pass, from what plays and from the take (`c458cdf`); erasing held notes is missing |
 | Take lanes for MIDI, pick or comp between takes | ◐ | ● | ● | ● | **Works** (`2af9eae`): with Keep Takes as Lanes (or on a MIDI or instrument track whose lanes are open, in any mode but Merge) each take and each loop pass goes on a take lane, drawn under the track with its notes; a click on a lane picks the whole take, a drag swipes a range of it into the comp, Up/Down cycle a comp segment through the takes, as on audio tracks. MIDI joins get no crossfade: the outgoing piece's notes end at the join, a note the incoming take held over it sounds from there. Merge keeps passes in one clip as before |
 | Note repeat | ○ | ● | ● | ◐ | **Works** as a MIDI effect (the track's input menu › MIDI Effects › Add › Note Repeat): each key held plays again at the rate (1/4 to 1/32T), on the song's grid while the transport plays, a step after the key when stopped; channel or poly pressure sets the repeats' velocity. What is recorded is the keys as played |
-| Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Partial**: the drum machine's pads are recorded: on a Juke track that is armed and listens to Musical Typing (that port or all inputs, Omni or channel 1) a pad's play button goes in through the Musical Typing port, heard and kept by the take like a key; recording over a pattern clip still replaces it rather than writing its steps |
+| Record straight into a step pattern or drum grid | ○ | ● | ● | ◐ | **Partial**: the drum machine's pads are recorded: on a Juke track that is armed and listens to Musical Typing (that port or all inputs, Omni or channel 1) a pad's play button goes in through the Musical Typing port, heard and kept by the take like a key; and with MIDI Merge on (the default), a take over a Juke pattern clip writes its steps (`07fac63`): each note-on on the nearest step of the pattern's grid, on the lane that plays its note (a new lane when none does), at its velocity; steps already on stay; a loop pass adds to it. Lanes at half or double rate and reversed directions place by the plain grid |
 
 ## G. Punch, count-in and capture
 
@@ -170,9 +170,9 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Input filter (leave out aftertouch, SysEx and so on) | ● | ◐ | ● | ● | **Works**: Setup › MIDI Input Devices › Leave out (notes, pitch bend, aftertouch, poly aftertouch, program, controllers; `setup.midi_input_filter`, the session's), for every port, from what is heard, recorded and captured; SysEx and real-time bytes are never taken |
 | Transpose, velocity scale or curve, fixed velocity, key range on input | ● | ● | ● | ● | **Works**: per track, the input menu › Input Transform (`track.midi_input_transform`), applied to what the instrument hears and to the take, kept when the port or channel changes; Real-Time Properties still change clip playback only |
 | Live MIDI effects before the instrument (arpeggiator, chord, scale) | ● | ● | ● | ● | **Works**: up to four per instrument or MIDI track (input menu › MIDI Effects; `track.midi_fx_add`, `_set`, `_remove`, undoable, saved with the session): Arpeggiator (rate, Up, Down, Up/Down, As Played, Random, 1-4 octaves, gate, latch; on the song's grid while playing), Chord (twelve shapes), Scale (root and twelve scales; move to the nearest note or leave out) and Note Repeat, in list order, each with a bypass. They run on the audio thread without allocating, on everything the instrument is given (clips, live input, routed MIDI tracks, the Band); a MIDI track routed to another instrument passes on what they made. A change of setting lets go of the notes they made and plays the held keys through the new list |
-| Record the effect's output, not the raw keys | ● | ● | ● | ● | **Missing**: a take keeps the keys as played (the effects play them again on playback) |
+| Record the effect's output, not the raw keys | ● | ● | ● | ● | **Works** (`07fac63`): per track, the input menu › MIDI Effects › Record Effects' Output (`track.midi_fx_record`, off by default: takes keep the keys). On, each take or loop pass is printed through the track's effects as the transport played it (`mix::midi_fx::print`: the arpeggiator and note repeat on the song's grid) and the clip is marked to play past them (`Clip::midi_fx_printed`), so nothing is processed twice. Merged over clips of keys, those are printed too and the merged clip sounds as before. The Random arpeggio rolls afresh when printed, so it need not repeat what was heard |
 | Scale or key lock on what you play | ○ | ◐ | ◐ | ● | **Works** with the Scale MIDI effect (its own root and scale; it does not follow the Key ruler) |
-| The chord track follows or shapes live input | ○ | ● | ◐ | ● | **Partial**: the chord picker names the chord you hold |
+| The chord track follows or shapes live input | ○ | ● | ◐ | ● | **Partial**: the chord picker names the chord you hold; recorded clips can follow the chord lane (`clip.follow_chords`). Left: live input shaped by the chord lane (a Scale MIDI effect that follows it) |
 | Programmable input transformer | ○ | ○ | ● | ● | **Not planned here**: Logic's and Cubase's; it is the logical editor's rule engine applied on the way in, which section 8 owns (not built there yet); the fixed Input Transform covers transpose, velocity, range and channel |
 
 ## I. Step entry and the computer keyboard
@@ -218,7 +218,7 @@ Compared in full in section 7; listed here for what matters while recording.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Import a standard MIDI file with its tempo map | ● | ● | ● | ● | **Works** (formats 0, 1 and 2; tempo optional) |
-| Format 0 split by channel; markers imported | ● | ● | ● | ● | **Missing** (markers are read, not placed) |
+| Format 0 split by channel; markers imported | ● | ● | ● | ● | **Works** (`6b0003f`): a format-0 file on several channels comes in as a track per channel (named after it, channel 10 as drums); with the tempo map (the default), the file's markers become markers where they fall |
 | Imported tracks ready to record on | ● | ● | ● | ● | **Works**: they listen to every MIDI input |
 | Export a MIDI file | ● | ● | ● | ● | **Works**: what plays (trims kept, muted clips left out) |
 
@@ -273,14 +273,14 @@ either wire the control or take it off the menu.
 | Input quantize control; count-in and click setup window; pickup notes from the count-in | 5–8 | Partly: the Input Quantize and Click/Countoff windows (`6d66dce`); pickup notes from the count-in kept as an option (`e5635d1`) |
 | Punch out and keep playing | 2–4 | Done: QuickPunch (recording-audio work); MIDI takes follow its punches (`1b92b9f`) |
 | Input filter and input transforms (transpose, velocity, channel) applied to thru and take | 6–10 | Done: the filter at the hub, the transform per track in the mix and the take (`036f22e`) |
-| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Done for the effects (`mix::midi_fx`: a host plugin around the instrument, see Designs); recording the processed output remains (takes keep the keys) |
-| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly (`f7169c2`): a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments not started: the CLAP host already gives a plug-in a buffer per output port but plays only the main one (`clap-host` `out_main`), the instrument slot hands the mixer one buffer, and the mixer has no channel to return the other outputs on (an aux-like strip fed by an instrument output, ordered after it); that is a host, plug-in trait and mixer change, designed (Designs, *Instruments with several outputs*) and not built |
+| MIDI effects before the instrument: arpeggiator, chord, scale; record raw or processed | 14–22 | Done (`mix::midi_fx`: a host plugin around the instrument, see Designs); Record Effects' Output prints a take through them (`07fac63`) |
+| MIDI routing: a MIDI track plays an instrument elsewhere; multi-timbral; multi-output instruments | 14–22 | Partly (`f7169c2`): a MIDI or instrument track plays another track's instrument on its channel, several into one (MIDI to Track, ordered with the module MIDI inputs in `mix::sidechain`). Multi-output instruments built for built-in instruments (`07fac63`: Juke's Out 2-8 through a bus to an aux); the CLAP, VST3 and AU hosts' auxiliary outputs remain (Designs, *Instruments with several outputs*) |
 | MIDI output: hardware ports, external instrument with measured latency, clock and timecode out | 14–22 | Partly: hardware ports, enable/disable, notes off on stop and close (External MIDI); clock and MTC out (`mix::midi_sync`, `c1ae613`). The external instrument's latency remains |
 | MIDI learn, a mapping list, transport from a controller, mapped moves kept out of takes | 10–16 | Done: learn from the fader, pan, send level and chain knobs; the MIDI Mappings window; MMC and learnt transport keys; claimed messages kept out of takes and Thru. Learn from a plug-in's own window and from the drawer's knobs remain |
 | Mackie Control and HUI surfaces | 12–20 | Done for the roles above (`soundcraft_engine::surface`): a protocol trait with Mackie Control (and XT) and HUI behind it; tested against simulated devices. Hardware checks, V-Pot pages (sends, plug-ins) and flip remain |
 | Step entry from a MIDI keyboard and in the editor, with length, rests, ties, chords | 6–10 | Done: the Step Input window and the editor's Step button (`fa832ab`, `486cf93`; Musical Typing's step mode fixed: bug 18) |
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Partly: driver timestamps and per-device offsets done (`2a34aa9`); bug 12 and the low-latency path open |
-| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Partly: RPN and NRPN chased as parameters, bank before program (`mix::rpn`). SysEx and controllers as automation not started |
+| SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Partly: RPN and NRPN chased as parameters, bank before program (`mix::rpn`); controllers become automation through MIDI learn. SysEx designed (Designs, round three), not built |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Done: bug 11 fixed, 63 ports, aliases; bug 10 fixed where the system gives a new identity (`2a34aa9`) |
 | Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
 | MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery (`397e268`) |
@@ -362,8 +362,10 @@ controllers, which it collects through the block and runs through the effects be
 instrument processes (fixed arrays, nothing allocated after the wrap). Every route into an
 instrument already arrives through those calls, so clips, live input, routed MIDI tracks, the
 Band and preview notes are all processed with no change at their call sites, and a track that
-never had an effect is not wrapped at all. The record switch (as played / as processed) is not
-built: takes keep the keys.* A per-track MIDI effects slot list ahead of
+never had an effect is not wrapped at all. The record switch is built as a print at Stop, not a
+capture on the audio thread: the take's keys go through a fresh host offline over the take's range
+(`midi_fx::print`), and a printed clip's events are handed past the effects (`MidiFxHost::set_direct`)
+while the track's other clips and live input still go through them.* A per-track MIDI effects slot list ahead of
 the instrument, run on the audio thread each block on the strip's merged live and clip events
 (fixed-capacity buffers, no allocation): arpeggiator (rate, pattern, octaves, gate, latch;
 follows the tempo map), chord (one key plays a stored chord shape), scale (snap or drop notes
@@ -378,7 +380,7 @@ take keeps them). SysEx would need a variable-length side ring next to the 3-byt
 `CtrlKind::SysEx` in clips; bank select, RPN and NRPN would be paired into 14-bit controller
 events when a take is placed (the raw controllers kept as they are).
 
-**Instruments with several outputs on separate mixer channels (not built; design).** Today an
+**Instruments with several outputs on separate mixer channels.** *Built for built-in instruments, simpler than this sketch: no new route; each taken output plays into an ordinary bus that an aux reads (`Track::instrument_outs`, `mix::inst_outs`), so the bus ordering, latency and cycle rules already in the mixer apply; the plug-in trait gained `extra_outputs`, `set_outputs_taken` and `read_output` (read after `process`) instead of a second process call. The CLAP and VST3 host parts below are not built.* Today an
 instrument hands the mixer one buffer: the strip's (`Strip::buf`, the track's width), which
 `process` fills. What each layer would need:
 
@@ -416,6 +418,45 @@ instrument hands the mixer one buffer: the strip's (`Strip::buf`, the track's wi
 
 Estimate: 14-22 h with tests (host work 4-6 each, mixer 6-10), plus hardware-free checks only;
 whether a given third-party plug-in sends audio to its aux outputs can only be checked with it.
+
+## Designs for what is left (round three)
+
+Written for the next agent; none of this is built.
+
+**SysEx recorded and played (D).** Today the input path is 3-byte messages end to end: `midi_in`
+drops anything from 0xF0 on (`parse`), the take is `RecordedEvent { msg: [u8; 3] }`, a clip's
+`Sequence` has notes and controllers only, and the output ring (`OutHub`) carries 3 bytes. The
+work, in order: (1) *input*: a second lock-free ring per port for SysEx (fixed pool, e.g. 64 messages
+of up to 256 bytes, longer ones counted and dropped), filled by the hub only while recording or
+capturing, and the input filter's `sysex` kind honoured there; (2) *the take*:
+`RecordedEvent` gains an optional `sysex: Vec<u8>` (the JSONL spill and the remote recorder carry it,
+`serde(default)`), placed by `place_passes` like a controller; (3) *storage*: `Sequence` gains
+`sysex: Vec<SysEx { tick, data }>` with `serde(default)` (sixty-odd struct literals need
+`..Default::default()`), kept by the editing operations that copy controllers (cut, split, trim,
+merge, copy between sessions), read and written by `smf` (F0/F7 events; today they are skipped);
+(4) *playback*: the mix schedules a clip's SysEx in the block it falls in to External MIDI (the
+output ring grows a SysEx pool beside its 3-byte events; the sender thread writes them whole) and
+to CLAP instruments (`clap_event_midi_sysex`); VST3 and the built-ins have no SysEx input, so they
+skip it; chase does not resend SysEx. Tests: hub parse with SysEx split over two driver callbacks;
+a take round-trip; SMF round-trip; External MIDI order (a SysEx before a note at the same tick
+leaves first). About a day and a half.
+
+**Record straight into a step pattern (F).** *Built (`pattern::record_into`) as below, except that notes no lane plays get a lane of their own.* A pattern clip (`ClipContent::Pattern`, Juke's step
+grid) is replaced by a take today. With the pattern clip under the take on an armed Juke track and
+MIDI Merge on, the take would instead write steps: each note-on lands on the nearest step of the
+pattern's grid (its resolution and swing), on the lane whose pad answers that note (the kit's
+`pN_note`), with its velocity as the step's level, toggling nothing that was already set (overdub),
+and a loop pass after the first adding to the same pattern. Notes no lane answers are kept as an
+ordinary take next to it. One undo step with the rest of the pass. Lives in `midi_record`
+(`place_passes` choosing it before `merge_take`) and `soundcraft_midi::pattern` (a `set_step`
+that keeps the pattern's length). About half a day with tests.
+
+**MIDI effects on a clip (section 7's I).** A clip-level list next to the track's
+(`Clip::midi_fx`), run by the same `MidiFxHost` code: the mix would keep one host per clip with
+effects (made in `sync`, as Clip Effects are), feed it that clip's events only, and pass its
+output to the instrument as direct events (`MidiFxHost::set_direct`, built this round) so the
+track's own effects do not run on them twice. Record Effects' Output's print (`midi_fx::print`)
+already gives "render the clip's effects into its notes". About a day.
 
 ## Sources
 
@@ -472,3 +513,13 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Chase after a locate follows RPN and NRPN (select, then value) and sends the bank before the program |
 | 2026-11-16 | minor | Design for instruments with several outputs on their own mixer channels (not built); bug 10's remaining part re-checked |
 | 2026-11-17 | minor | Round three: rows reconciled with the code (controllers onto notes, controller moves as automation, footswitch punch already worked); the rows that cannot be built here say why |
+| 2026-11-17 | minor | Release velocity reaches VST3 instruments |
+| 2026-11-17 | minor | MIDI import: a format-0 file is split by channel, and its markers are placed |
+| 2026-11-17 | minor | Record Effects' Output: a take keeps what the track's MIDI effects made, and plays past them |
+| 2026-11-17 | minor | A recording pass with audio and MIDI is one undo step |
+| 2026-11-17 | minor | Instruments with several outputs: Juke's pads on Out 2 to 8, each on a mixer channel of its own |
+| 2026-11-17 | minor | Thin controllers on the way in: takes keep the points that shape a move, the rest ramps |
+| 2026-11-17 | minor | Auto-arm the selected MIDI track |
+| 2026-11-17 | minor | Rows that cannot be finished here say why, and what is left on the partial ones |
+| 2026-11-17 | minor | Designs for SysEx, recording into a step pattern and MIDI effects on clips |
+| 2026-11-17 | minor | A take over a Juke pattern clip writes its steps |
