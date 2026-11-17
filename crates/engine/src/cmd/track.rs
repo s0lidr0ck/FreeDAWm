@@ -656,6 +656,11 @@ fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"folder": fid, "bus": bus}))
 }
 
+/// The tracks inside `folder`, directly or through nested folders, in session order.
+pub fn folder_members(s: &Session, folder: TrackId) -> Vec<TrackId> {
+    s.tracks.iter().filter(|t| in_folder(s, t.id, folder)).map(|t| t.id).collect()
+}
+
 /// Whether `track` sits inside `folder`, directly or through nested folders.
 fn in_folder(s: &Session, track: TrackId, folder: TrackId) -> bool {
     let mut current = s.track(track).and_then(|track| track.folder);

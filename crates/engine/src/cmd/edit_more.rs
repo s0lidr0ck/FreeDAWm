@@ -1210,6 +1210,31 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_folder_edits_its_members_as_one() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 2, "kind": "midi"})).unwrap();
+        let members: Vec<soundcraft_model::TrackId> = e.session().tracks.iter().map(|t| t.id).collect();
+        for (i, t) in members.iter().enumerate() {
+            e.execute("midi.new_clip", &json!({"track": t.0, "start": i * 1_000, "end": i * 1_000 + 48_000})).unwrap();
+        }
+        e.execute("track.move_to_new_folder", &json!({})).unwrap();
+        let folder = e.session().tracks.iter().find(|t| t.is_folder()).unwrap().id;
+        // Open: the folder alone.
+        e.execute("edit.select", &json!({"tracks": [folder.0], "start": 0, "end": 10_000})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks, vec![folder]);
+        e.execute("track.folder_toggle", &json!({"track": folder.0, "open": false})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [folder.0], "start": 0, "end": 10_000})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks.len(), 3, "closed: its members come with it");
+        e.execute("edit.clear", &json!({})).unwrap();
+        let starts: Vec<i64> = members.iter().map(|t| e.session().track(*t).unwrap().clips()[0].start).collect();
+        assert_eq!(starts, vec![10_000, 10_000], "the cut reached every member");
+        assert!(e.undo());
+        assert_eq!(e.session().track(members[1]).unwrap().clips()[0].start, 1_000, "one undo step");
+        e.execute("edit.select", &json!({"tracks": [folder.0], "exact": true})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks, vec![folder], "unless exact");
+    }
+
+    #[test]
     fn marker_lane_selection() {
         let mut e = Engine::default();
         e.execute("edit.marker_lane_move_down", &json!({})).unwrap();

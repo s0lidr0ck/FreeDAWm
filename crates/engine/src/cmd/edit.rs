@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             repeat_to_fill
         ),
         cmd!(noundo "edit.select_all", "Select All", ["Edit"], Some("Cmd+A"), "{}", always, select_all),
-        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, length?: samples | text in the main counter's format (the end moves to start + length), clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups)}", always, select),
+        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, length?: samples | text in the main counter's format (the end moves to start + length), clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups and closed folders)} — a closed folder brings its members, so an edit on it edits them all", always, select),
         cmd!(noundo "edit.select_none", "Deselect All", [], None, "{}", always, |e, _| {
             let s = e.session_mut();
             s.edit.selected_tracks.clear();
@@ -696,6 +696,16 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
             for m in extra {
                 if !t.contains(&m) {
                     t.push(m);
+                }
+            }
+            // A closed folder edits as one clip: its members (nested ones too) come with it.
+            let closed: Vec<soundcraft_model::TrackId> =
+                t.iter().filter(|id| s.track(**id).is_some_and(|x| x.is_folder() && !x.folder_open)).copied().collect();
+            for f in closed {
+                for m in super::track::folder_members(s, f) {
+                    if !t.contains(&m) {
+                        t.push(m);
+                    }
                 }
             }
             let order: Vec<soundcraft_model::TrackId> = s.tracks.iter().map(|x| x.id).collect();

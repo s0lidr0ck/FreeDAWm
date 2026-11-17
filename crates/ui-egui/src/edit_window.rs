@@ -1019,6 +1019,15 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
     for clip in shown {
         draw_clip(app, &painter, &s, track, clip, tl, lane, auto_view.is_some());
     }
+    // A closed folder's lane shows its members' clips as blocks: a selection on it edits them all.
+    if track.is_folder() && !track.folder_open {
+        let fill = clip_colors(track.color, false).0.gamma_multiply(0.85);
+        for r in folder_blocks(&s, track.id, view) {
+            let (x0, x1) = (x_of(&s, tl, r.start), x_of(&s, tl, r.end).max(x_of(&s, tl, r.start) + 1.0));
+            let b = Rect::from_min_max(pos2(x0, lane.min.y + 3.0), pos2(x1, lane.max.y - 3.0));
+            painter.rect(b, CornerRadius::same(2), fill, Stroke::new(1.0, Color32::from_rgb(10, 10, 10)), StrokeKind::Inside);
+        }
+    }
     // The pitch view: the lines over the clips, the TUNED badges over the lines; a double-click
     // on a line opens the editor and is not also the lane's.
     let mut pitch_claimed = false;
@@ -1915,6 +1924,26 @@ pub fn lane_params(
                 || track.auto_lanes.iter().filter_map(|v| AutoParam::parse(v)).any(|v| this(&v, p.id))
         })
         .collect()
+}
+
+/// A closed folder's blocks over `view`: where any member track (nested ones too) has a clip,
+/// overlapping clips joined into one block.
+pub fn folder_blocks(s: &Session, folder: TrackId, view: Range) -> Vec<Range> {
+    let mut spans: Vec<Range> = soundcraft_engine::cmd::folder_members(s, folder)
+        .into_iter()
+        .filter_map(|m| s.track(m))
+        .flat_map(|t| t.clips().iter().map(Clip::range))
+        .filter(|r| r.overlaps(&view) && !r.is_empty())
+        .collect();
+    spans.sort_by_key(|r| r.start);
+    let mut out: Vec<Range> = Vec::new();
+    for r in spans {
+        match out.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
+    out
 }
 
 /// The plain views the track view menu offers (before the plugin parameters).
