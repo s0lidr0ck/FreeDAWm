@@ -110,7 +110,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Spectrum behind the curve | ● | ● | ● | ● | **Works** |
 | Linear-phase mode | ◐ | ◐ | ● | ● | **Partial**: in the match EQ only; the rest, a linear-phase CleanQ, was dropped by the owner |
 | Correct bell shapes near the top of the range at 44.1/48 kHz | ● | ● | ● | ● | **Works**: matched to the analog shape (within about 2 dB) |
-| Tilt band | ○ | ○ | ◐ | ◐ | **Missing** |
+| Tilt band | ○ | ○ | ◐ | ◐ | **Partial**: the CleanQ factory preset Tilt (Mix Bus): two gentle shelves at 1 kHz, -3 dB below and +3 dB above; move both gains to tilt. A single tilt control is left out: a new band type would change CleanQ's packed band mode, which every saved CleanQ setting uses. Test: cleanq `the_tilt_preset_tilts` |
 | Match EQ | ○ | ○ | ● | ◐ | **Works** (CopyQ: up to four weighted profiles) |
 | Modelled vintage EQs | ● | ● | ● | ◐ | **Works** (Vint: two Pultecs, 1073, 550A, SSL E) |
 | Graphic EQ | ◐ | ○ | ● | ● | **Dropped by the owner** |
@@ -373,3 +373,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Round three reconciled: controller mapping already built (section 6); the new effects, the bundled impulse responses, the mastering assistant, the hidden stock EQ and channel strip and the browser build marked not planned here, with the owner's reasons |
 | 2026-11-17 | minor | Comp gets a look-ahead |
 | 2026-11-17 | minor | Lo-Fi offered under Utilities: bit and sample-rate reduction in the menu |
+| 2026-11-17 | minor | CleanQ factory preset Tilt |

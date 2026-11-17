@@ -924,16 +924,30 @@ mod tests {
     #[test]
     fn every_factory_preset_parses() {
         let presets = factory_presets("fs_cleanq");
-        assert_eq!(presets.len(), 22);
+        assert_eq!(presets.len(), 23);
         for (name, json) in presets {
             let p = FsPreset::parse(json, &CLEANQ_INFO).unwrap();
             assert_eq!(&p.name, name);
             assert!(p.values.len() >= 245, "{name}: {}", p.values.len());
             assert_eq!(p.values["b01_on"].fract(), 0.0);
         }
-        let p = FsPreset::parse(PRESETS[21].1, &CLEANQ_INFO).unwrap();
+        let p = FsPreset::parse(PRESETS[22].1, &CLEANQ_INFO).unwrap();
         assert_eq!(p.name, "Vocal cleanup");
         assert_eq!((p.values["b01_type"], p.values["b01_slope"], p.values["b03_thr"]), (3.0, 1.0, -24.0));
+    }
+
+    /// The parity list's tilt band, as a preset: two first-order shelves at 1 kHz, the lows
+    /// down and the highs up by as much, flat in the middle.
+    #[test]
+    fn the_tilt_preset_tilts() {
+        let (_, json) = PRESETS.iter().find(|(n, _)| *n == "Tilt").unwrap();
+        let p = FsPreset::parse(json, &CLEANQ_INFO).unwrap();
+        let values: Vec<f32> = CLEANQ_INFO.params.iter().map(|i| p.values.get(i.id).copied().unwrap_or(i.default)).collect();
+        let at = |f: f32| response_db(&values, 48_000.0, f);
+        assert!(at(1000.0).abs() < 0.3, "{}", at(1000.0));
+        assert!(at(30.0) < -2.2 && at(30.0) > -3.2, "{}", at(30.0));
+        assert!(at(16_000.0) > 2.2 && at(16_000.0) < 3.2, "{}", at(16_000.0));
+        assert!(at(100.0) < at(300.0) && at(3000.0) < at(10_000.0), "a slope, not a step");
     }
 
     #[test]

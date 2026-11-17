@@ -24,5 +24,6 @@ pub static PRESETS: &[(&str, &str)] = &[
     ("Snare top", include_str!("presets/Snare top.json")),
     ("Spoken word", include_str!("presets/Spoken word.json")),
     ("Strings and pads", include_str!("presets/Strings and pads.json")),
+    ("Tilt", include_str!("presets/Tilt.json")),
     ("Vocal cleanup", include_str!("presets/Vocal cleanup.json")),
 ];
