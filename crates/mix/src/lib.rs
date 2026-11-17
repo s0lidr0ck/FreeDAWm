@@ -780,14 +780,38 @@ const CROSSFADE_MS: f32 = 10.0;
 const HEADROOM_S: f32 = 0.25;
 
 /// Clip Effects: an EQ and a compressor per clip, configured from [`Clip::effects`]
-/// (`eq.<param>`, `comp.<param>`, `gain`).
+/// (`eq.<param>`, `comp.<param>`, `gain`), then the clip's chain of modules ([`Clip::modules`]),
+/// slot `i` holding module `i` of the chain once `arrange` has run.
 struct ClipFx {
     eq: Option<Box<dyn Plugin>>,
     comp: Option<Box<dyn Plugin>>,
     gain_db: f32,
     sr: f32,
     ch: usize,
+    mods: ClipMods,
 }
+
+/// The instances of a clip's Clip Effects modules: a fixed array, so seating and moving them
+/// never allocates on the audio thread.
+type ClipMods = [Option<ClipMod>; soundcraft_model::MAX_CLIP_MODULES];
+
+/// One Clip Effects module instance: the chain module's id, and whether it is heard this block.
+struct ClipMod {
+    id: u32,
+    on: bool,
+    /// Not configured yet: its first parameters are set without a glide from the defaults.
+    fresh: bool,
+    plugin: Box<dyn Plugin>,
+}
+
+impl ClipMod {
+    fn is(&self, m: &soundcraft_model::ClipModule) -> bool {
+        self.id == m.id && self.plugin.info().id == m.plugin
+    }
+}
+
+/// The longest tail a clip's modules ring on for after the clip ends, in seconds.
+const CLIP_TAIL_MAX_S: f32 = 10.0;
 
 impl Strip {
     fn new() -> Self {
@@ -1462,8 +1486,9 @@ impl MixEngine {
             self.adopt_busses.extend(busses);
         }
         for c in clip_fx {
-            if let Some(old) = self.adopt_clip.insert((c.track, c.clip), c) {
-                self.retired.extend(old.eq.into_iter().chain(old.comp));
+            if let Some(mut old) = self.adopt_clip.insert((c.track, c.clip), c) {
+                self.retired.extend(old.eq.take().into_iter().chain(old.comp.take()));
+                self.retired.extend(old.mods.iter_mut().filter_map(Option::take).map(|(_, m)| m));
             }
         }
     }
@@ -3553,31 +3578,45 @@ fn process_strip(
         TrackKind::Instrument | TrackKind::Midi
             if live.monitor_only && musician.is_none() && !module_in && !routed && live_filter.is_none() && strip.live_tail == 0 => {}
         TrackKind::Audio => {
-            let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
             // An auditioned take layer plays in place of the comp (`Track::heard_clips`).
             let clips = t.heard_clips();
             for clip in clips {
-                if clip.muted || !clip.is_audio() || !clip.range().overlaps(&block) {
+                if clip.muted || !clip.is_audio() {
                     continue;
                 }
-                let edges = Edges::of(s, clips, clip, block, live.looping);
-                let cover = Cover::of(clips, clip, block, auto_fade_frames(s));
+                // Clip Effects modules: the clip is read their latency ahead (so it is heard in
+                // place) and their tail rings on after it ends. Neither is there without modules.
+                let (lat, tail) = match strip.clip_fx.get(&clip.id.0).filter(|_| !clip.live_modules().is_empty()) {
+                    Some(fx) => (fx.mod_latency(), fx.mod_tail()),
+                    None => (0, 0),
+                };
+                let heard = Range { start: clip.start, end: clip.end().saturating_add((lat + tail) as i64) };
+                let at = pos.saturating_add(lat as i64);
+                let read = Range { start: at, end: at.saturating_add(frames as i64) };
+                if !heard.overlaps(&read) {
+                    continue;
+                }
+                let edges = Edges::of(s, clips, clip, read, live.looping);
+                let cover = Cover::of(clips, clip, read, auto_fade_frames(s));
                 // The effects and the buffer were made by `sync` when the session changed: here
                 // nothing is allocated. Effects not prepared yet (never the case after a sync)
                 // are skipped for this block rather than made on the audio thread.
                 let ready = strip.clipbuf.len() == strip.buf.len() && strip.clipbuf.iter().all(|c| c.len() >= frames);
                 let fx = clip_fx_params(clip).filter(|_| ready).and_then(|params| {
-                    let fx = strip.clip_fx.get_mut(&clip.id.0).filter(|fx| fx.ready(params.clone()))?;
+                    let chain = clip.live_modules();
+                    let fx = strip.clip_fx.get_mut(&clip.id.0).filter(|fx| fx.ready(params.clone(), chain))?;
                     fx.configure(params);
+                    fx.configure_modules(chain);
                     Some(fx)
                 });
                 match fx {
+                    None if lat + tail > 0 => {}
                     None => render_clip(s, clip, pos, frames, &mut strip.buf, edges, cover),
                     Some(fx) => {
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
-                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, edges, cover);
+                        render_clip(s, clip, at, frames, &mut strip.clipbuf, edges, cover);
                         fx.process(&mut strip.clipbuf, frames);
                         for (d, c) in strip.buf.iter_mut().zip(strip.clipbuf.iter()) {
                             for (x, y) in d.iter_mut().zip(c.iter()).take(frames) {
@@ -4139,10 +4178,11 @@ fn contain_failure(slot: &mut PluginSlot, buf: &mut [Vec<f32>], frames: usize) -
     true
 }
 
-/// Clip-effect parameters of a clip ([`Clip::effects`]), or None when it has none or they are
-/// bypassed. Reads only: safe on the audio thread.
+/// Clip-effect parameters of a clip ([`Clip::effects`]), or None when it has no Clip Effects
+/// (settings or modules) or they are bypassed; a clip with modules only has an empty list.
+/// Reads only: safe on the audio thread.
 fn clip_fx_params(clip: &Clip) -> Option<impl Iterator<Item = (&str, f32)> + Clone> {
-    clip.live_effects().map(|fx| fx.iter().map(|(k, v)| (k.as_str(), *v as f32)))
+    clip.has_live_effects().then(|| clip.live_effects().unwrap_or(&[]).iter().map(|(k, v)| (k.as_str(), *v as f32)))
 }
 
 /// A short key formatted on the stack: lookups made on the audio thread must not allocate.
@@ -4178,12 +4218,15 @@ impl ClipFx {
     const EQ: &'static str = "eq_7band";
     const COMP: &'static str = "compressor";
     fn new(sr: f32, ch: usize) -> ClipFx {
-        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch }
+        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch, mods: Default::default() }
     }
     /// Clear filter, detector and lookahead history (transport stop / locate).
     fn reset(&mut self) {
         for p in self.eq.iter_mut().chain(self.comp.iter_mut()) {
             p.reset();
+        }
+        for m in self.mods.iter_mut().flatten() {
+            m.plugin.reset();
         }
     }
     fn make(&self, id: &str) -> Option<Box<dyn Plugin>> {
@@ -4191,6 +4234,54 @@ impl ClipFx {
             p.prepare(self.sr, 16_384, self.ch.max(1));
             p
         })
+    }
+    /// Retires the module instances the chain no longer has and puts the others in chain order.
+    /// Allocates nothing.
+    fn arrange(&mut self, chain: &[soundcraft_model::ClipModule], retired: &mut Vec<Box<dyn Plugin>>) {
+        let chain = chain.get(..chain.len().min(soundcraft_model::MAX_CLIP_MODULES)).unwrap_or(&[]);
+        for slot in self.mods.iter_mut() {
+            if slot.as_ref().is_some_and(|m| !chain.iter().any(|c| m.is(c))) {
+                retired.extend(slot.take().map(|m| m.plugin));
+            }
+        }
+        for (i, c) in chain.iter().enumerate() {
+            if let Some(j) = (i..self.mods.len()).find(|j| self.mods.get(*j).is_some_and(|m| m.as_ref().is_some_and(|m| m.is(c)))) {
+                self.mods.swap(i, j);
+            }
+        }
+    }
+    /// Makes the chain's modules this chain lacks (after `arrange`); allocates. Returns how many.
+    fn make_modules(&mut self, chain: &[soundcraft_model::ClipModule]) -> u64 {
+        let mut made = 0;
+        for (i, c) in chain.iter().enumerate().take(soundcraft_model::MAX_CLIP_MODULES) {
+            if self.mods.get(i).is_some_and(Option::is_none)
+                && clip_module_plugin(&c.plugin).is_some()
+                && let Some(plugin) = self.make(&c.plugin)
+                && let Some(slot) = self.mods.get_mut(i)
+            {
+                *slot = Some(ClipMod { id: c.id, on: true, fresh: true, plugin });
+                made += 1;
+            }
+        }
+        made
+    }
+    /// Whether every module of `chain` that can be made sits in its slot, and nothing else.
+    fn modules_ready(&self, chain: &[soundcraft_model::ClipModule]) -> bool {
+        let n = chain.len().min(soundcraft_model::MAX_CLIP_MODULES);
+        chain.iter().take(n).zip(self.mods.iter()).all(|(c, m)| match m {
+            Some(m) => m.is(c),
+            None => clip_module_plugin(&c.plugin).is_none(),
+        }) && self.mods.iter().skip(n).all(Option::is_none)
+    }
+    /// The latency of the modules heard (samples), as `configure_modules` last set them.
+    fn mod_latency(&self) -> usize {
+        self.mods.iter().flatten().filter(|m| m.on).map(|m| m.plugin.latency().min(MAX_LATENCY)).fold(0usize, usize::saturating_add)
+    }
+    /// How long the modules heard ring on after their input ends (samples), at most
+    /// [`CLIP_TAIL_MAX_S`].
+    fn mod_tail(&self) -> usize {
+        let cap = (CLIP_TAIL_MAX_S * self.sr) as usize;
+        self.mods.iter().flatten().filter(|m| m.on).map(|m| m.plugin.tail_samples()).fold(0usize, usize::saturating_add).min(cap)
     }
     /// Which modules `params` need: the EQ, the compressor.
     fn needs<'a>(params: impl Iterator<Item = (&'a str, f32)> + Clone) -> (bool, bool) {
@@ -4217,20 +4308,45 @@ impl ClipFx {
         }
         made
     }
-    /// Seats modules made off the audio thread ([`PreparedClipFx`]) where this chain has none;
-    /// the rest are retired. Allocates nothing.
-    fn seat(&mut self, p: PreparedClipFx, retired: &mut Vec<Box<dyn Plugin>>) {
-        for (have, new) in [(&mut self.eq, p.eq), (&mut self.comp, p.comp)] {
+    /// Seats modules made off the audio thread ([`PreparedClipFx`]) where this chain has none
+    /// (the chain's modules after `arrange`); the rest are retired. Allocates nothing.
+    fn seat(&mut self, p: PreparedClipFx, chain: &[soundcraft_model::ClipModule], retired: &mut Vec<Box<dyn Plugin>>) {
+        let PreparedClipFx { eq, comp, mut mods, .. } = p;
+        for (have, new) in [(&mut self.eq, eq), (&mut self.comp, comp)] {
             match (have.is_none(), new) {
                 (true, new) => *have = new,
                 (false, Some(n)) => retired.push(n),
                 (false, None) => {}
             }
         }
+        for (i, c) in chain.iter().enumerate().take(soundcraft_model::MAX_CLIP_MODULES) {
+            let Some(slot) = self.mods.get_mut(i).filter(|x| x.is_none()) else { continue };
+            let found = mods.iter_mut().find(|m| m.as_ref().is_some_and(|(id, pl)| *id == c.id && pl.info().id == c.plugin));
+            if let Some((id, plugin)) = found.and_then(Option::take) {
+                *slot = Some(ClipMod { id, on: true, fresh: true, plugin });
+            }
+        }
+        retired.extend(mods.iter_mut().filter_map(Option::take).map(|(_, p)| p));
     }
-    /// Whether the modules match what `params` need (`prepare_modules` has run since they changed).
-    fn ready<'a>(&self, params: impl Iterator<Item = (&'a str, f32)> + Clone) -> bool {
-        Self::needs(params) == (self.eq.is_some(), self.comp.is_some())
+    /// Whether the modules match what the clip needs (`prepare_modules` and `make_modules` have
+    /// run since it changed).
+    fn ready<'a>(&self, params: impl Iterator<Item = (&'a str, f32)> + Clone, chain: &[soundcraft_model::ClipModule]) -> bool {
+        Self::needs(params) == (self.eq.is_some(), self.comp.is_some()) && self.modules_ready(chain)
+    }
+    /// Set each module's parameters and whether it is heard. Allocates nothing.
+    fn configure_modules(&mut self, chain: &[soundcraft_model::ClipModule]) {
+        for (c, m) in chain.iter().zip(self.mods.iter_mut()) {
+            let Some(m) = m.as_mut() else { continue };
+            m.on = !c.bypass;
+            for (k, v) in &c.params {
+                if m.plugin.param(k) != Some(*v) {
+                    m.plugin.set_param(k, *v);
+                }
+            }
+            if std::mem::take(&mut m.fresh) {
+                m.plugin.reset();
+            }
+        }
     }
     /// Set the modules' parameters and the gain. Allocates nothing: safe on the audio thread.
     fn configure<'a>(&mut self, params: impl Iterator<Item = (&'a str, f32)> + Clone) {
@@ -4266,7 +4382,19 @@ impl ClipFx {
                 ch.iter_mut().take(frames).for_each(|x| *x *= g);
             }
         }
+        for m in self.mods.iter_mut().flatten().filter(|m| m.on) {
+            m.plugin.process(io, frames);
+        }
     }
+}
+
+/// The built-in effect a Clip Effects module may be: a listed effect of the registry (not an
+/// instrument, a meter, a capture or a generator). `None` for anything else, hosted plug-ins
+/// included.
+pub fn clip_module_plugin(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
+    soundcraft_dsp::plugin_info(id).filter(|i| {
+        i.listed() && !i.is_instrument && !soundcraft_dsp::is_generator(id) && !soundcraft_dsp::METER_PLUGINS.contains(&id) && id != "imprint"
+    })
 }
 
 /// Clip Effects of a track's clips, made here (the session changed) rather than the first time a
@@ -4286,26 +4414,31 @@ fn sync_clip_fx(
     made: &mut u64,
 ) {
     let ch = strip.buf.len();
-    let live = || t.heard_clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p)));
+    let live = || t.heard_clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p, c.live_modules())));
     strip.clip_fx.retain(|id, fx| {
-        let keep = fx.ch == ch && live().any(|(c, _)| c == *id);
+        let keep = fx.ch == ch && live().any(|(c, _, _)| c == *id);
         if !keep {
             retired.extend(fx.eq.take().into_iter().chain(fx.comp.take()));
+            retired.extend(fx.mods.iter_mut().filter_map(Option::take).map(|m| m.plugin));
         }
         keep
     });
     let mut any = false;
-    for (id, params) in live() {
+    for (id, params, chain) in live() {
         any = true;
         let fx = strip.clip_fx.entry(id).or_insert_with(|| ClipFx::new(sr, ch));
-        if let Some(p) = host.as_deref_mut().and_then(|a| a.remove(&(t.id, id))) {
+        fx.arrange(chain, retired);
+        if let Some(mut p) = host.as_deref_mut().and_then(|a| a.remove(&(t.id, id))) {
             if p.ch == ch {
-                fx.seat(p, retired);
+                fx.seat(p, chain, retired);
             } else {
-                retired.extend(p.eq.into_iter().chain(p.comp));
+                retired.extend(p.eq.take().into_iter().chain(p.comp.take()));
+                retired.extend(p.mods.iter_mut().filter_map(Option::take).map(|(_, m)| m));
             }
         }
-        let n = fx.prepare_modules(params, retired);
+        let n = fx.prepare_modules(params, retired).saturating_add(fx.make_modules(chain));
+        // Their parameters now, so the latency the clip is read ahead by is known before it plays.
+        fx.configure_modules(chain);
         if host.is_some() {
             *made = made.saturating_add(n);
         }
@@ -4345,6 +4478,9 @@ fn structure_fingerprint(s: &Session) -> usize {
         for c in t.heard_clips() {
             if let Some(p) = clip_fx_params(c) {
                 (c.id.0, ClipFx::needs(p)).hash(&mut h);
+                for m in c.live_modules() {
+                    (m.id, m.plugin.as_str()).hash(&mut h);
+                }
             }
         }
         for snd in t.mixer.sends.iter().flatten() {
@@ -6993,6 +7129,19 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
     let len = usize::try_from(range.len().max(0)).unwrap_or(0).min(MAX_RENDER_SAMPLES / t.channels().max(1));
     let mut out = vec![vec![0.0f32; len]; t.channels().max(1)];
     for c in t.clips().iter().filter(|c| !c.muted && c.range().overlaps(&range)) {
+        // Clip Effects modules: the clip read their latency ahead, so it lands in place.
+        let mut fx = clip_fx_params(c).map(|params| {
+            let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, out.len());
+            let chain = c.live_modules();
+            fx.prepare_modules(params.clone(), &mut Vec::new());
+            fx.make_modules(chain);
+            fx.configure(params);
+            fx.configure_modules(chain);
+            fx
+        });
+        let lat = fx.as_ref().map_or(0, ClipFx::mod_latency) as i64;
+        let read = Range { start: range.start.saturating_add(lat), end: range.end.saturating_add(lat) };
+        let range = read;
         // Layered clips give way as they do in playback; the automatic edge ramps only as heard.
         let (edges, cover) = if heard {
             // An edge on the range's own boundary is the new clip's edge, which playback ramps
@@ -7004,14 +7153,11 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
         } else {
             (Edges::default(), Cover::of(t.clips(), c, range, 0))
         };
-        match clip_fx_params(c) {
+        match fx.as_mut() {
             None => render_clip(s, c, range.start, len, &mut out, edges, cover),
-            Some(params) => {
+            Some(fx) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
                 render_clip(s, c, range.start, len, &mut tmp, edges, cover);
-                let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, tmp.len());
-                fx.prepare_modules(params.clone(), &mut Vec::new());
-                fx.configure(params);
                 let mut done = 0;
                 while done < len {
                     let n = (len - done).min(4096);
@@ -10922,12 +11068,97 @@ mod tests {
         play(&s, &mut eng, &mut prep, &mut reference);
         let fx = &eng.strips[&t].clip_fx[&cid.0];
         assert!(fx.eq.is_some() && fx.comp.is_some());
+        // Clip Effects modules (any built-in effect) come made too, and keep their instances
+        // when the chain is reordered or one is taken off.
+        let c = s.find_clip_mut(cid).unwrap();
+        c.modules.push(soundcraft_model::ClipModule::new(1, "fs_sat"));
+        c.modules.push(soundcraft_model::ClipModule::new(2, "gain"));
+        play(&s, &mut eng, &mut prep, &mut reference);
+        s.find_clip_mut(cid).unwrap().modules.swap(0, 1);
+        play(&s, &mut eng, &mut prep, &mut reference);
+        s.find_clip_mut(cid).unwrap().modules.remove(0);
+        play(&s, &mut eng, &mut prep, &mut reference);
+        let fx = &eng.strips[&t].clip_fx[&cid.0];
+        assert!(fx.mods[0].as_ref().is_some_and(|m| m.id == 1) && fx.mods[1].is_none());
         // A session already handed over makes nothing new.
         assert!(prep.prepare(&s, 512).is_empty());
         // The guard bites: an engine given nothing makes its modules in `sync` and says so.
         let mut bare = realtime();
         bare.render(&s, 0, 512, &mut out);
-        assert_eq!(bare.made_in_sync(), 5, "two inserts, an instrument and two Clip Effects modules");
+        assert_eq!(bare.made_in_sync(), 6, "two inserts, an instrument and three Clip Effects modules");
+    }
+
+    /// Clip Effects take any built-in effect: a Gain module turns the clip down, after the
+    /// clip's own gain; bypassed (the module or all the clip's effects) it is not heard.
+    #[test]
+    fn clip_modules_take_any_builtin_effect() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        let cid = s.track(t).unwrap().clips()[0].id;
+        let full = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        let mut m = soundcraft_model::ClipModule::new(1, "gain");
+        m.params.insert("gain".into(), -6.0);
+        s.find_clip_mut(cid).unwrap().modules.push(m);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][2000] - full * db_to_gain(-6.0)).abs() < 1e-3, "{}", out[0][2000]);
+        // With the clip's own Clip Effects gain: both.
+        s.find_clip_mut(cid).unwrap().set_effect("gain", -6.0);
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][2000] - full * db_to_gain(-12.0)).abs() < 1e-3, "{}", out[0][2000]);
+        s.find_clip_mut(cid).unwrap().modules[0].bypass = true;
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][2000] - full * db_to_gain(-6.0)).abs() < 1e-3, "{}", out[0][2000]);
+        s.find_clip_mut(cid).unwrap().modules[0].bypass = false;
+        s.find_clip_mut(cid).unwrap().effects_bypass = true;
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!((out[0][2000] - full).abs() < 1e-3, "{}", out[0][2000]);
+        // The offline clip render (Consolidate, Process) hears it the same way.
+        s.find_clip_mut(cid).unwrap().effects_bypass = false;
+        let off = render_clips(&s, t, Range::new(0, 4800));
+        assert!((off[0][2000] - 0.5 * db_to_gain(-12.0)).abs() < 1e-3, "{}", off[0][2000]);
+        // Not a Clip Effects module: instruments, meters, hosted plug-ins.
+        for id in ["subtractive_synth", "spectrum", "clap:foo", "signal_generator"] {
+            assert!(clip_module_plugin(id).is_none(), "{id}");
+        }
+        assert!(clip_module_plugin("fs_reverb").is_some() && clip_module_plugin("lull").is_some());
+    }
+
+    /// A latent Clip Effects module (Lull's lookahead) plays the clip in place: the clip is read
+    /// that far ahead, in playback and in the offline clip render; a reverb module's tail rings on
+    /// after the clip ends.
+    #[test]
+    fn a_latent_clip_module_is_heard_in_place_and_its_tail_after_the_clip() {
+        let mut s = Session::default();
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        let mut imp = vec![0.0f32; 24_000];
+        imp[6000] = 1.0;
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![imp] })));
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let cid = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(cid, "i", SourceId(900), 0, 0, 24_000));
+        let argmax = |c: &[f32]| c.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).map(|(i, _)| i).unwrap();
+        let dry = render_range(&s, Range::new(0, 12_000), 512);
+        let mut m = soundcraft_model::ClipModule::new(1, "lull");
+        m.params.insert("lookahead".into(), 5.0);
+        m.params.insert("threshold".into(), -80.0);
+        s.find_clip_mut(cid).unwrap().modules.push(m);
+        let mut probe = soundcraft_dsp::create("lull").unwrap();
+        probe.set_param("lookahead", 5.0);
+        probe.prepare(48_000.0, 512, 1);
+        probe.process(&mut [vec![0.0; 512]], 512);
+        assert!(probe.latency() > 100, "the test needs a latent module: {}", probe.latency());
+        let wet = render_range(&s, Range::new(0, 12_000), 512);
+        assert_eq!(argmax(&wet[0]), argmax(&dry[0]), "heard in place");
+        assert!(wet[0][argmax(&wet[0])].abs() > 0.1);
+        let off = render_clips(&s, t, Range::new(0, 12_000));
+        assert_eq!(argmax(&off[0]), 6000, "the offline render too");
+        // A reverb on a clip that ends right after the impulse rings on past its end.
+        let c = s.find_clip_mut(cid).unwrap();
+        c.modules.clear();
+        c.modules.push(soundcraft_model::ClipModule::new(1, "fs_reverb"));
+        c.length = 6100;
+        let out = render_range(&s, Range::new(0, 24_000), 512);
+        let after: f32 = out[0][7000..20_000].iter().map(|x| x.abs()).sum();
+        assert!(after > 1e-3, "the reverb's tail is heard after the clip: {after}");
     }
 
     /// The realtime path: a track added while playing comes with its strip made and sized by the

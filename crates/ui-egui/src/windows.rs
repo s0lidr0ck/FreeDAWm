@@ -1489,9 +1489,88 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
                 let _ =
                     app.engine.execute_merged("clip.effects_set", &json!({"clips": [cid.0], "params": {"gain": g}}), &format!("cfx:{}:gain", cid.0));
             }
+            clip_modules(app, ui, cid);
         });
     });
     app.ui.show_clip_effects = open;
+}
+
+/// Clip Effects modules (`Clip::modules`): any built-in effect after the EQ, dynamics and gain,
+/// each with its bypass, order, removal and parameters.
+fn clip_modules(app: &mut SoundApp, ui: &mut egui::Ui, cid: soundcraft_model::ClipId) {
+    ui.separator();
+    let mods = app.engine.session().find_clip(cid).map(|(_, c)| c.modules.clone()).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Modules").strong());
+        let full = mods.len() >= soundcraft_model::MAX_CLIP_MODULES;
+        ui.add_enabled_ui(!full, |ui| {
+            egui::ComboBox::from_id_salt(("clip_module_add", cid.0)).selected_text("Add…").show_ui(ui, |ui| {
+                for info in soundcraft_dsp::listed_plugins().filter(|i| soundcraft_mix::clip_module_plugin(i.id).is_some()) {
+                    if ui.selectable_label(false, info.name).clicked() {
+                        let _ = app.run("clip.module_add", json!({"clips": [cid.0], "plugin": info.id}));
+                    }
+                }
+            });
+        });
+    });
+    if mods.is_empty() {
+        ui.weak("Any built-in effect can go on the clip, after the EQ and dynamics.");
+    }
+    let n = mods.len();
+    for (i, m) in mods.iter().enumerate() {
+        let Some(info) = soundcraft_dsp::plugin_info(&m.plugin) else { continue };
+        egui::CollapsingHeader::new(info.name).id_salt(("clip_module", cid.0, m.id)).default_open(n == 1).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(m.bypass, "Bypass").clicked() {
+                    let _ = app.run("clip.module_set", json!({"clips": [cid.0], "module": m.id, "bypass": !m.bypass}));
+                }
+                if ui.add_enabled(i > 0, egui::Button::new("Up")).clicked() {
+                    let _ = app.run("clip.module_set", json!({"clips": [cid.0], "module": m.id, "move": i - 1}));
+                }
+                if ui.add_enabled(i + 1 < n, egui::Button::new("Down")).clicked() {
+                    let _ = app.run("clip.module_set", json!({"clips": [cid.0], "module": m.id, "move": i + 1}));
+                }
+                if ui.button("Remove").clicked() {
+                    let _ = app.run("clip.module_remove", json!({"clips": [cid.0], "module": m.id}));
+                }
+            });
+            for p in info.params {
+                let mut v = m.params.get(p.id).copied().unwrap_or(p.default);
+                let before = v;
+                match p.unit {
+                    soundcraft_dsp::Unit::Toggle => {
+                        let mut on = v >= 0.5;
+                        ui.checkbox(&mut on, p.name);
+                        v = if on { 1.0 } else { 0.0 };
+                    }
+                    soundcraft_dsp::Unit::Choice if !p.choices.is_empty() => {
+                        let at = v.max(0.0).round() as usize;
+                        egui::ComboBox::from_id_salt(("clip_module_choice", cid.0, m.id, p.id))
+                            .selected_text(format!("{}: {}", p.name, p.choices.get(at).copied().unwrap_or("")))
+                            .show_ui(ui, |ui| {
+                                for (k, c) in p.choices.iter().enumerate() {
+                                    if ui.selectable_label(k == at, *c).clicked() {
+                                        v = k as f32;
+                                    }
+                                }
+                            });
+                    }
+                    _ => {
+                        ui.add(egui::Slider::new(&mut v, p.min..=p.max).text(p.name));
+                    }
+                }
+                if (v - before).abs() > f32::EPSILON {
+                    let mut params = serde_json::Map::new();
+                    params.insert(p.id.to_string(), json!(v));
+                    let _ = app.engine.execute_merged(
+                        "clip.module_set",
+                        &json!({"clips": [cid.0], "module": m.id, "params": params}),
+                        &format!("cfxm:{}:{}:{}", cid.0, m.id, p.id),
+                    );
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]

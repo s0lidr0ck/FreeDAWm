@@ -391,6 +391,7 @@ fn run_step(e: &mut Engine, track: TrackId, clip: &Clip, name: &str, params: &[(
         // stay as they were.
         if !nc.effects_bypass {
             nc.effects.clear();
+            nc.modules.clear();
         }
         Ok(Some((nc, lead)))
     }

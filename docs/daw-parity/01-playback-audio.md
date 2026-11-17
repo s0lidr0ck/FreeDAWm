@@ -133,7 +133,7 @@ Varispeed is the only whole-project speed control among the four.
 | Crossfades | ● | ● | ● | ● | **Works**: Edit › Fades › Create… gives each side its own shape and bend (`b6812b6`, section 4, F) |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
 | Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
-| Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in. Left: a chain of any module per clip (instances per clip made in `BuiltinPrep` as the EQ and compressor are now, latency per clip, a drawer per clip); not reached |
+| Per-clip effects | ● | ● | ○ | ● | **Partial** (2026-11-17, @@CLIPFX@@): after the clip's EQ → compressor → gain, a chain of up to eight of any built-in effect (`Clip::modules`; Clip Effects window › Modules: add, bypass, reorder, remove, every parameter; `clip.module_add`, `clip.module_set`, `clip.module_remove`). Instances per clip are made off the audio thread in `BuiltinPrep` and keep their state when the chain is reordered; the clip is read the chain's latency ahead so it is heard in place, and the chain's tail (a reverb's) rings on after the clip ends (at most 10 s); the offline clip render (Consolidate, Process, Render) hears the same. Copy/Paste/Clear Special › Clip Effects take the modules along. Left: hosted plug-ins (CLAP, VST3, AU) on a clip, which need their editor window and saved state per clip slot; a module's files (an amp's cabinet, Vault's impulse) are not loaded on a clip, so it uses its built-in one |
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing** here: Process writes a new file. Not built in this section: it is section 4's process history (G), designed there, and is tracked on that row |
 | Mute a clip | ● | ● | ● | ● | **Works** |
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: Clip Effects take any built-in effect as a chain of modules per clip |
 | 2026-11-17 | minor | Round three: the session's sample rate can be changed later |
 | 2026-11-17 | minor | Round three: a design for playing files at their own rate (mixed rates) |
 | 2026-11-17 | minor | Round three: designs for busses on the worker pool, reverse playback through the mixer and the large playback buffer; the processing stack row points at section 4 |

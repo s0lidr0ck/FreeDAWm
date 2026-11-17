@@ -145,6 +145,9 @@ pub struct PreparedClipFx {
     pub ch: usize,
     pub eq: Option<Box<dyn Plugin>>,
     pub comp: Option<Box<dyn Plugin>>,
+    /// Modules of the clip's chain ([`soundcraft_model::Clip::modules`]): the module's id and its
+    /// instance (a fixed array: nothing to free on the audio thread).
+    pub mods: [Option<(u32, Box<dyn Plugin>)>; soundcraft_model::MAX_CLIP_MODULES],
 }
 
 /// Everything made off the audio thread for one session hand-over.
@@ -173,12 +176,22 @@ impl From<Vec<crate::PreparedInstance>> for Prepared {
     }
 }
 
+/// What was handed over for one clip's Clip Effects: channels, EQ, compressor, and the chain's
+/// modules (id, plugin).
+#[derive(PartialEq)]
+struct HandedClip {
+    ch: usize,
+    eq: bool,
+    comp: bool,
+    mods: Vec<(u32, String)>,
+}
+
 /// What the control thread has handed to one realtime engine: per built-in slot (plugin id,
 /// channels, the state load that makes it anew), per clip with effects (channels, EQ, compressor).
 #[derive(Default)]
 pub struct BuiltinPrep {
     slots: HashMap<(TrackId, SlotKey), (String, usize, u64)>,
-    clips: HashMap<(TrackId, u64), (usize, bool, bool)>,
+    clips: HashMap<(TrackId, u64), HandedClip>,
     /// Tracks whose strip was handed over, and busses whose buffers were (with the channels).
     tracks: HashSet<TrackId>,
     busses: HashMap<BusId, usize>,
@@ -243,21 +256,32 @@ impl BuiltinPrep {
                 let key = (t.id, c.id.0);
                 seen_clips.insert(key);
                 let (eq, comp) = ClipFx::needs(params);
-                let have = match self.clips.get(&key) {
-                    Some(&(hch, heq, hcomp)) if hch == ch => (heq, hcomp),
-                    _ => (false, false),
-                };
-                if (eq && !have.0) || (comp && !have.1) {
+                let chain: Vec<(u32, String)> = c
+                    .live_modules()
+                    .iter()
+                    .take(soundcraft_model::MAX_CLIP_MODULES)
+                    .filter(|m| crate::clip_module_plugin(&m.plugin).is_some())
+                    .map(|m| (m.id, m.plugin.clone()))
+                    .collect();
+                let had = self.clips.get(&key).filter(|h| h.ch == ch);
+                let have = had.map_or((false, false), |h| (h.eq, h.comp));
+                let new_mods: Vec<&(u32, String)> = chain.iter().filter(|m| !had.is_some_and(|h| h.mods.contains(m))).collect();
+                if (eq && !have.0) || (comp && !have.1) || !new_mods.is_empty() {
                     let fx = ClipFx::new(sr, ch);
+                    let mut mods: [Option<(u32, Box<dyn Plugin>)>; soundcraft_model::MAX_CLIP_MODULES] = Default::default();
+                    for (slot, (id, plugin)) in mods.iter_mut().zip(new_mods) {
+                        *slot = fx.make(plugin).map(|p| (*id, p));
+                    }
                     out.clip_fx.push(PreparedClipFx {
                         track: t.id,
                         clip: c.id.0,
                         ch,
                         eq: if eq && !have.0 { fx.make(ClipFx::EQ) } else { None },
                         comp: if comp && !have.1 { fx.make(ClipFx::COMP) } else { None },
+                        mods,
                     });
                 }
-                self.clips.insert(key, (ch, eq, comp));
+                self.clips.insert(key, HandedClip { ch, eq, comp, mods: chain });
             }
         }
         self.slots.retain(|k, _| seen.contains(k));

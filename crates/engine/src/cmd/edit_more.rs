@@ -38,7 +38,7 @@ fn has_clip_gain_clipboard(e: &Engine) -> std::result::Result<(), String> {
 }
 
 fn has_clip_effects_clipboard(e: &Engine) -> std::result::Result<(), String> {
-    if e.clipboard.clip_effects.is_empty() { Err("no clip effects have been copied".into()) } else { Ok(()) }
+    if e.clipboard.clip_effects.is_empty() && e.clipboard.clip_modules.is_empty() { Err("no clip effects have been copied".into()) } else { Ok(()) }
 }
 
 fn has_automation_clipboard(e: &Engine) -> std::result::Result<(), String> {
@@ -402,18 +402,20 @@ fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -
     let first = *ids.first().ok_or_else(|| bad(id, "select a clip"))?;
     if copy {
         let fx: Vec<(String, f64)> = e.session().find_clip(first).map(|(_, c)| c.effects.clone()).unwrap_or_default();
-        if fx.is_empty() {
+        let mods = e.session().find_clip(first).map(|(_, c)| c.modules.clone()).unwrap_or_default();
+        if fx.is_empty() && mods.is_empty() {
             return Err(bad(id, "the clip has no clip effects"));
         }
-        e.clipboard = Clipboard { clip_effects: fx, ..Clipboard::default() };
+        e.clipboard = Clipboard { clip_effects: fx, clip_modules: mods, ..Clipboard::default() };
     }
     let mut removed = 0;
     if remove {
         let s = e.session_mut();
         for id in &ids {
             let Some(c) = s.find_clip_mut(*id) else { continue };
-            removed += c.effects.len();
+            removed += c.effects.len() + c.modules.len();
             c.effects.clear();
+            c.modules.clear();
             c.effects_bypass = false;
         }
     }
@@ -426,9 +428,13 @@ pub(super) fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("edit.paste_clip_effects", "select a clip"));
     }
     let fx = e.clipboard.clip_effects.clone();
+    let mods = e.clipboard.clip_modules.clone();
     let s = e.session_mut();
     for id in &ids {
         let Some(c) = s.find_clip_mut(*id) else { continue };
+        if c.is_audio() {
+            c.modules.clone_from(&mods);
+        }
         c.effects.clear();
         for (k, v) in &fx {
             c.set_effect(k, *v);

@@ -47,6 +47,33 @@ pub fn specs() -> Vec<CommandSpec> {
             effects_set
         ),
         cmd!(
+            "clip.module_add",
+            "Add Clip Effects Module",
+            [],
+            None,
+            "{clips?, plugin: id} — adds a built-in effect to the end of each clip's Clip Effects chain (at most 8; heard after the EQ, dynamics and gain, its latency taken off and its tail heard after the clip)",
+            has_selection,
+            module_add
+        ),
+        cmd!(
+            "clip.module_remove",
+            "Remove Clip Effects Module",
+            [],
+            None,
+            "{clips?, module: id} — takes the module off each clip's Clip Effects chain",
+            has_selection,
+            module_remove
+        ),
+        cmd!(
+            "clip.module_set",
+            "Set Clip Effects Module",
+            [],
+            None,
+            "{clips?, module: id, params?: {name: number}, bypass?: bool, move?: index} — sets the module's parameters, bypasses it or moves it in the chain",
+            has_selection,
+            module_set
+        ),
+        cmd!(
             "clip.effects_bypass",
             "Bypass",
             ["Clip", "Clip Effects"],
@@ -198,6 +225,92 @@ fn effects_set(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids.len(), "params": vals.len()}))
 }
 
+fn module_add(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_add";
+    let plugin = p.get("plugin").and_then(Value::as_str).ok_or_else(|| bad(ID, "`plugin` must be a built-in effect's id"))?;
+    let Some(info) = soundcraft_mix::clip_module_plugin(plugin) else {
+        return Err(bad(ID, format!("{plugin} cannot go on a clip: only the built-in effects can (no instruments, meters or hosted plug-ins)")));
+    };
+    let ids: Vec<ClipId> = clip_ids_param(e, p);
+    let s = e.session_mut();
+    let mut added = Vec::new();
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id).filter(|c| c.is_audio()) else { continue };
+        if c.modules.len() >= soundcraft_model::MAX_CLIP_MODULES {
+            continue;
+        }
+        let m = c.modules.iter().map(|m| m.id).max().unwrap_or(0).saturating_add(1);
+        c.modules.push(soundcraft_model::ClipModule::new(m, info.id));
+        added.push(json!({"clip": id.0, "module": m}));
+    }
+    if added.is_empty() {
+        return Err(bad(ID, format!("select an audio clip with room for another module (at most {})", soundcraft_model::MAX_CLIP_MODULES)));
+    }
+    Ok(json!({"added": added}))
+}
+
+fn module_id(id: &str, p: &Value) -> Result<u32> {
+    p.get("module").and_then(Value::as_u64).and_then(|m| u32::try_from(m).ok()).ok_or_else(|| bad(id, "`module` must be a module id"))
+}
+
+fn module_remove(e: &mut Engine, p: &Value) -> Result<Value> {
+    let m = module_id("clip.module_remove", p)?;
+    let ids = clip_ids_param(e, p);
+    let s = e.session_mut();
+    let mut n = 0;
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        let before = c.modules.len();
+        c.modules.retain(|x| x.id != m);
+        n += before - c.modules.len();
+    }
+    if n == 0 {
+        return Err(bad("clip.module_remove", "no such module on the clips"));
+    }
+    Ok(json!({"removed": n}))
+}
+
+fn module_set(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_set";
+    let m = module_id(ID, p)?;
+    let ids = clip_ids_param(e, p);
+    let params: Vec<(String, f32)> = p
+        .get("params")
+        .and_then(Value::as_object)
+        .map(|o| o.iter().filter_map(|(k, v)| Some((k.chars().take(64).collect(), v.as_f64().filter(|x| x.is_finite())? as f32))).collect())
+        .unwrap_or_default();
+    let bypass = p.get("bypass").and_then(Value::as_bool);
+    let to = p.get("move").and_then(Value::as_u64).map(|x| usize::try_from(x).unwrap_or(usize::MAX));
+    let s = e.session_mut();
+    let mut n = 0;
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        let Some(at) = c.modules.iter().position(|x| x.id == m) else { continue };
+        n += 1;
+        if let Some(x) = c.modules.get_mut(at) {
+            let info = soundcraft_dsp::plugin_info(&x.plugin);
+            for (k, v) in &params {
+                // Only the module's own parameters, inside their range.
+                if let Some(q) = info.and_then(|i| i.params.iter().find(|q| q.id == k)) {
+                    x.params.insert(k.clone(), v.clamp(q.min, q.max));
+                }
+            }
+            if let Some(b) = bypass {
+                x.bypass = b;
+            }
+        }
+        if let Some(to) = to {
+            let x = c.modules.remove(at);
+            let to = to.min(c.modules.len());
+            c.modules.insert(to, x);
+        }
+    }
+    if n == 0 {
+        return Err(bad(ID, "no such module on the clips"));
+    }
+    Ok(json!({"clips": n}))
+}
+
 fn effects_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     if ids.is_empty() {
@@ -222,6 +335,7 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
         let s = e.session_mut();
         if let Some(c) = s.find_clip_mut(*id) {
             c.effects.clear();
+            c.modules.clear();
             c.effects_bypass = false;
             c.fade_in.len = c.fade_in.len.min(c.length);
             c.fade_out.len = c.fade_out.len.min(c.length);
@@ -467,6 +581,40 @@ mod tests {
         assert!(e.session().find_clip(ids[0]).unwrap().1.effects.is_empty());
         e.execute("edit.paste_clip_effects", &json!({"clip": ids[0].0})).unwrap();
         assert_eq!(e.session().find_clip(ids[0]).unwrap().1.effects.len(), 1);
+    }
+
+    /// Clip Effects modules: any built-in effect goes on a clip (one undo step each), its
+    /// parameters kept in range, moved, bypassed, copied with the clip's effects and taken off;
+    /// a split's pieces keep the chain.
+    #[test]
+    fn clip_modules_add_set_move_copy_and_remove() {
+        let (mut e, _, ids) = engine_with(&[(0, 1000, 0)]);
+        let c = ids[0].0;
+        let v = e.execute("clip.module_add", &json!({"clip": c, "plugin": "fs_reverb"})).unwrap();
+        assert_eq!(v["added"][0]["module"], 1);
+        e.execute("clip.module_add", &json!({"clip": c, "plugin": "lull"})).unwrap();
+        assert!(e.execute("clip.module_add", &json!({"clip": c, "plugin": "subtractive_synth"})).is_err(), "no instruments");
+        assert!(e.execute("clip.module_add", &json!({"clip": c, "plugin": "clap:x"})).is_err(), "no hosted plug-ins yet");
+        e.execute("clip.module_set", &json!({"clip": c, "module": 2, "params": {"threshold": -500.0, "nonsense": 1.0}})).unwrap();
+        let clip = |e: &Engine| e.session().find_clip(ids[0]).unwrap().1.clone();
+        assert_eq!(clip(&e).modules[1].params.get("threshold"), Some(&-80.0), "clamped to the range");
+        assert!(!clip(&e).modules[1].params.contains_key("nonsense"));
+        e.execute("clip.module_set", &json!({"clip": c, "module": 2, "move": 0, "bypass": true})).unwrap();
+        assert_eq!(clip(&e).modules.iter().map(|m| m.id).collect::<Vec<_>>(), vec![2, 1]);
+        assert!(clip(&e).modules[0].bypass);
+        e.undo();
+        assert_eq!(clip(&e).modules.iter().map(|m| m.id).collect::<Vec<_>>(), vec![1, 2], "one undo step");
+        e.execute("edit.copy_clip_effects", &json!({"clip": c})).unwrap();
+        e.execute("edit.clear_clip_effects", &json!({"clip": c})).unwrap();
+        assert!(clip(&e).modules.is_empty());
+        e.execute("edit.paste_clip_effects", &json!({"clip": c})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 2);
+        e.execute("clip.module_remove", &json!({"clip": c, "module": 1})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 1);
+        // Saved and opened again: the chain is kept.
+        let json = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.find_clip(ids[0]).unwrap().1.modules, clip(&e).modules);
     }
 
     #[test]

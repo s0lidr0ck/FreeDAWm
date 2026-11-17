@@ -294,6 +294,11 @@ pub struct Clip {
     /// Clip Effects bypassed: kept but not heard.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub effects_bypass: bool,
+    /// Clip Effects modules: any built-in effect, in order, after the EQ, compressor and gain
+    /// above. Heard while the clip plays (and for their tail after it), the chain's latency taken
+    /// off; [`Clip::effects_bypass`] bypasses them too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ClipModule>,
     /// A MIDI clip's playback quantize: its notes play quantized and stay where they are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub play_quantize: Option<soundcraft_midi::ops::PlayQuantize>,
@@ -436,6 +441,7 @@ impl Clip {
             effects: Vec::new(),
             automation: Vec::new(),
             effects_bypass: false,
+            modules: Vec::new(),
             play_quantize: None,
             follow_chords: None,
             midi_fx_printed: false,
@@ -475,6 +481,16 @@ impl Clip {
             Err(i) if self.effects.len() < MAX_CLIP_EFFECTS => self.effects.insert(i, (key.to_string(), value)),
             Err(_) => {}
         }
+    }
+
+    /// The Clip Effects modules to hear: none when the effects are bypassed.
+    pub fn live_modules(&self) -> &[ClipModule] {
+        if self.effects_bypass { &[] } else { self.modules.as_slice() }
+    }
+
+    /// Whether the clip has Clip Effects to hear (settings or modules).
+    pub fn has_live_effects(&self) -> bool {
+        self.live_effects().is_some() || !self.live_modules().is_empty()
     }
 
     /// The Clip Effects to hear: none when bypassed or not set.
@@ -806,6 +822,46 @@ impl Clip {
         self.effects.sort_by(|a, b| a.0.cmp(&b.0));
         self.effects.dedup_by(|a, b| a.0 == b.0);
         self.effects.truncate(MAX_CLIP_EFFECTS);
+        // Clip Effects modules: a bounded chain of unique ids, finite parameters.
+        self.modules.truncate(MAX_CLIP_MODULES);
+        let mut seen: Vec<u32> = Vec::with_capacity(self.modules.len());
+        for m in &mut self.modules {
+            truncate_chars(&mut m.plugin, 128);
+            m.params.retain(|k, v| v.is_finite() && !k.is_empty() && k.len() <= 64);
+            while m.params.len() > MAX_CLIP_EFFECTS {
+                m.params.pop_last();
+            }
+            if m.id == 0 || seen.contains(&m.id) {
+                m.id = seen.iter().copied().max().unwrap_or(0).saturating_add(1).max(1);
+            }
+            seen.push(m.id);
+        }
+        if !self.is_audio() {
+            self.modules.clear();
+        }
+    }
+}
+
+/// The most modules a clip's Clip Effects chain holds.
+pub const MAX_CLIP_MODULES: usize = 8;
+
+/// One module of a clip's Clip Effects chain ([`Clip::modules`]): a built-in effect (its
+/// `soundcraft-dsp` registry id) with the parameters set on it (the rest at their defaults).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ClipModule {
+    /// Stable within the clip (1, 2, …); a split's pieces and copies keep it.
+    #[serde(default)]
+    pub id: u32,
+    pub plugin: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub params: std::collections::BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+}
+
+impl ClipModule {
+    pub fn new(id: u32, plugin: impl Into<String>) -> ClipModule {
+        ClipModule { id, plugin: plugin.into(), params: std::collections::BTreeMap::new(), bypass: false }
     }
 }
 

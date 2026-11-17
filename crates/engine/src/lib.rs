@@ -188,6 +188,8 @@ pub struct Clipboard {
     pub clip_gain: Vec<Vec<(Samples, f32)>>,
     /// Copy Special › Clip Effects: clip-effect settings (`param` → value) of the first copied clip.
     pub clip_effects: Vec<(String, f64)>,
+    /// And its Clip Effects modules.
+    pub clip_modules: Vec<soundcraft_model::ClipModule>,
     /// Markers inside the copied range (starts relative to it), for Paste Special › Merge Markers.
     pub markers: Vec<soundcraft_model::MemoryLocation>,
     /// How far the copied range started after a grid line; Relative Grid pastes keep it.
