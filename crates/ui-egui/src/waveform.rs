@@ -28,6 +28,49 @@ pub fn draw_mapped(
     body: Rect,
     wave: Color32,
 ) {
+    // A looped clip (Loop in Place) is drawn one repeat at a time, each the loop's window as a
+    // clip of its own (reversed too when the clip is), with the whole clip's gain and fades.
+    if clip.loop_len > 0 && clip.is_audio() {
+        let (tl_x, scroll, spp) = map;
+        let x_of = |pos: Samples| tl_x + ((pos as f64 - scroll) / spp.max(0.01)) as f32;
+        let r = painter.clip_rect();
+        let first = clip.start.saturating_sub(clip.loop_phase.rem_euclid(clip.loop_len));
+        let mut at = first;
+        // Only the repeats on screen, and never more than a screenful of them.
+        let mut n = 0;
+        while at < clip.end() && n < 4096 {
+            let end = at.saturating_add(clip.loop_len);
+            let (x0, x1) = (x_of(at.max(clip.start)), x_of(end.min(clip.end())));
+            if x1 >= r.min.x && x0 <= r.max.x {
+                let seg = Clip { start: at, length: clip.loop_len, loop_len: 0, loop_phase: 0, ..clip.clone() };
+                let p = painter.with_clip_rect(r.intersect(Rect::from_x_y_ranges(x0..=x1, r.y_range())));
+                draw_one(&p, s, map, &seg, clip, audio, channels, body, wave);
+            }
+            if x0 > r.max.x {
+                break;
+            }
+            at = end;
+            n += 1;
+        }
+        return;
+    }
+    draw_one(painter, s, map, clip, clip, audio, channels, body, wave);
+}
+
+/// One clip's waveform: `clip` places the material, `gains` (the clip itself, or the looped clip
+/// a repeat belongs to) its gain and fades on the timeline.
+#[allow(clippy::too_many_arguments)]
+fn draw_one(
+    painter: &Painter,
+    s: &Session,
+    map: (f32, f64, f64),
+    clip: &Clip,
+    gains: &Clip,
+    audio: &SourceAudio,
+    channels: usize,
+    body: Rect,
+    wave: Color32,
+) {
     let alt: Option<Alt<'_>> = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, &**a)));
     // A clip reversed in place (not looped) is drawn as it plays: its window mirrored end for
     // end. The waveform is worked out for the mirror image of what is visible, then flipped
@@ -43,7 +86,7 @@ pub fn draw_mapped(
         None => painter.clone(),
     };
     for (ch, band) in bands(body, channels.min(audio.peaks.len()).max(1)).enumerate() {
-        channel(&shown, painter, s, map, clip, audio, alt, ch, band, wave, flip);
+        channel(&shown, painter, s, map, (clip, gains), audio, alt, ch, band, wave, flip);
     }
 }
 
@@ -67,7 +110,7 @@ fn channel(
     out: &Painter,
     s: &Session,
     map: (f32, f64, f64),
-    clip: &Clip,
+    (clip, gains): (&Clip, &Clip),
     audio: &SourceAudio,
     alt: Option<Alt<'_>>,
     ch: usize,
@@ -90,7 +133,7 @@ fn channel(
     let mirror = (clip.start + clip.end()) as f64;
     let gain = |pos: f64| {
         let at = if flip.is_some() { mirror - pos } else { pos };
-        clip.gain_at((at as Samples).saturating_sub(clip.start).min(clip.length).max(0)) * s.edit.zoom.waveform_zoom
+        gains.gain_at((at as Samples).saturating_sub(gains.start).min(gains.length).max(0)) * s.edit.zoom.waveform_zoom
     };
     // The samples shown (positions `first..last` of the source), read around what is visible: a
     // file played from disk is never read whole for its waveform.

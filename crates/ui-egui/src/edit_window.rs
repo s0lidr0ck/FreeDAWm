@@ -4954,6 +4954,11 @@ mod tests {
         h.step();
         let (l, r) = loudness(&h);
         assert!(l > r + 10.0, "reversed: loud on the left ({l} vs {r})");
+        // Looped in place over its whole window, it is still drawn reversed.
+        h.state_mut().engine.session_mut().find_clip_mut(clip.id).unwrap().loop_len = clip.length;
+        h.step();
+        let (l, r) = loudness(&h);
+        assert!(l > r + 10.0, "looped and reversed: loud on the left ({l} vs {r})");
     }
 
     #[test]
