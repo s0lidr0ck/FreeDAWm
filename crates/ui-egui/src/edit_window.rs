@@ -1992,6 +1992,32 @@ fn strip_shape_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u
     });
 }
 
+/// Track › Copy Settings to Selected: this track's inserts, sends or more onto the other selected
+/// tracks (`mix.copy_strip`), one undo step.
+fn copy_strip_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
+    let others: Vec<u64> = selection.iter().copied().filter(|t| *t != id.0).collect();
+    ui.add_enabled_ui(!others.is_empty(), |ui| {
+        ui.menu_button("Copy Settings to Selected", |ui| {
+            for (label, sections) in [
+                ("Inserts and Sends", &["inserts", "sends"][..]),
+                ("Inserts", &["inserts"][..]),
+                ("Sends", &["sends"][..]),
+                ("Fader, Pan and Mutes", &["faders", "pan", "mutes"][..]),
+                ("Everything but Routing", &["faders", "pan", "mutes", "sends", "inserts", "delay"][..]),
+            ] {
+                if ui.button(label).clicked() {
+                    if let Err(e) = app.run("mix.copy_strip", json!({"from": id.0, "tracks": others, "sections": sections})) {
+                        app.ui.status = e;
+                    }
+                    ui.close();
+                }
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text("Select the tracks to copy onto as well");
+}
+
 fn freeze_submenu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
     let Some(track) = app.engine.session().track(id).cloned() else { return };
     let why = soundcraft_engine::cmd::cannot_freeze(&track);
@@ -2193,6 +2219,7 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         });
     }
     strip_shape_menu(app, ui, id, &selection);
+    copy_strip_menu(app, ui, id, &selection);
     if app.engine.session().track(id).is_some_and(|track| track.folder.is_some()) && ui.button("Remove from Folder").clicked() {
         let _ = app.run("track.remove_from_folder", json!({"tracks": selection}));
     }

@@ -222,7 +222,7 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 | Undo for mixer moves | ◐ | ● | ● | ● | **Works**: every move, one step per gesture |
 | Track presets | ● | ● | ● | ● | **Works** |
 | Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Works**: Window › Mix Snapshots stores every strip under a name and recalls it whole or by section (faders, pan, mutes, sends, inserts, routing, delay), on every track or the selected ones (`mix.snapshot_store`, `mix.snapshot_recall`), one undo step each; saved with the session |
-| Copy one channel's settings onto others | ● | ● | ● | ● | **Partial**: duplicate a track or apply a preset |
+| Copy one channel's settings onto others | ● | ● | ● | ● | **Works**: Track › Copy Settings to Selected (inserts and sends, inserts, sends, fader with pan and mutes, or everything but routing; `mix.copy_strip`), one undo step; routing is never copied (it could feed a track into itself); also duplicate a track or apply a preset |
 | Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped |
 | Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
 | Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | copy a strip's settings onto the selected tracks |
 | 2026-11-17 | minor | send controls and built-in module controls follow their automation |
 | 2026-11-17 | minor | a PPM scale and the loudness range |
 | 2026-11-17 | minor | hosted plug-ins' automation is sample-accurate: timed parameter changes through a new, default-off plug-in method |
