@@ -165,7 +165,10 @@ pub fn preset_state(id: &str, preset: &soundcraft_clap_host::ClapPreset) -> Opti
     #[cfg(not(target_arch = "wasm32"))]
     return host::preset_state(id, preset);
     #[cfg(target_arch = "wasm32")]
-    None
+    {
+        let _ = preset;
+        None
+    }
 }
 
 static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
