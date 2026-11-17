@@ -68,7 +68,12 @@ jobs:
             exit 1
           fi
           notes="$RUNNER_TEMP/notes.md"
-          bash packaging/release-notes.sh "$tag" "$target" >"$notes"
+          # A release built without a macOS package says so in its Downloads section.
+          macos=()
+          if ! printf '%s' "$release" | jq -r '.assets[].name' | grep -q macos; then
+            macos=(no-macos)
+          fi
+          bash packaging/release-notes.sh "$tag" "$target" "${macos[@]}" >"$notes"
           if [ "${{ inputs.notes_only }}" = true ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F "body=@$notes" --jq '.html_url'
             echo "notes of $tag rewritten from docs/releases/$tag.md" >>"$GITHUB_STEP_SUMMARY"

@@ -16,6 +16,12 @@
 //!                                                 in-process server, so they conflict with --connect.
 //! freedawm-cli parity [--write PATH]            parity report (markdown)
 //! freedawm-cli plugins                          list built-in plugins
+//! freedawm-cli monitor-test-file OUT.wav        the capture test file (95.5 s, 48 kHz, 24-bit stereo):
+//!                                                 bounce it through a device or a model of one
+//! freedawm-cli monitor-profile CAPTURE.wav [--name NAME] [--out FILE.json | --library DIR]
+//!                                                 a simulated output for the master fader's SIM key from
+//!                                                 that bounce (frequency response and stereo width):
+//!                                                 printed, written to FILE, or saved in the Library at DIR
 //! freedawm-cli ml separate|karaoke|drums|clean IN.wav OUTDIR [--device auto|gpu|cpu] [--models DIR]
 //!                 [--model demucs|sw6|best] [--keep-backing] [--from-mix] [--quality fast|high] [--mode vocal|speech] [--mix PCT] [--amount DB] [--no-dereverb] [--no-denoise] [--bit-depth 16|24|32f]
 //!                                                 local ML on a file: writes OUTDIR/<in> - <Stem>.wav (32-bit float)
@@ -140,6 +146,8 @@ fn main() -> ExitCode {
             info(&rest)
         }
         "convert" => convert(&rest),
+        "monitor-test-file" => monitor_test_file(&rest),
+        "monitor-profile" => monitor_profile(&rest),
         "run" => {
             use_plugin_scan_cache();
             run(&rest)
@@ -632,6 +640,76 @@ fn ml_lyrics(args: &[String], buf: soundcraft_audio_io::AudioBuffer, out: &str, 
     for line in made["text"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         outln!("  {line}");
     }
+    ExitCode::SUCCESS
+}
+
+/// `monitor-test-file OUT.wav`: writes the capture test signal.
+fn monitor_test_file(args: &[String]) -> ExitCode {
+    let Some(output) = args.first() else { return fail("monitor-test-file OUT.wav") };
+    let [l, r] = soundcraft_engine::monitor_capture::test_signal();
+    let buf = soundcraft_audio_io::AudioBuffer { sample_rate: soundcraft_engine::monitor_capture::RATE, channels: vec![l, r] };
+    let opts = soundcraft_audio_io::EncodeOptions {
+        format: soundcraft_audio_io::FileFormat::Wav,
+        bit_depth: soundcraft_audio_io::BitDepth::Int24,
+        dither: false,
+        bwf: None,
+        bitrate_kbps: 0,
+    };
+    match soundcraft_audio_io::encode(&buf, &opts).map_err(|e| e.to_string()).and_then(|b| std::fs::write(output, b).map_err(|e| e.to_string())) {
+        Ok(()) => {
+            outln!("wrote {output}: bounce all of it at 48 kHz through one device, then run `freedawm-cli monitor-profile` on the bounce");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(format!("{output}: {e}")),
+    }
+}
+
+/// `monitor-profile CAPTURE.wav [--name NAME] [--out FILE.json | --library DIR]`.
+fn monitor_profile(args: &[String]) -> ExitCode {
+    let Some(input) = args.first().filter(|a| !a.starts_with("--")) else {
+        return fail("monitor-profile CAPTURE.wav [--name NAME] [--out FILE.json | --library DIR]");
+    };
+    let path = std::path::Path::new(input);
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return fail(format!("{input}: {e}")),
+    };
+    let buf = match soundcraft_audio_io::decode(&bytes, path.extension().and_then(|x| x.to_str())) {
+        Ok((_, b)) => b,
+        Err(e) => return fail(format!("{input}: {e}")),
+    };
+    let name = arg_value(args, "--name").or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_default();
+    let found = match soundcraft_engine::monitor_capture::analyze(&name, &buf.channels, buf.sample_rate) {
+        Ok(a) => a,
+        Err(e) => return fail(format!("{input}: {e}")),
+    };
+    if found.unprocessed {
+        return fail(format!(
+            "{input}: this is the test file as it went in (flat, fully stereo): the device was not in the path when it was bounced"
+        ));
+    }
+    let summary =
+        format!("{}: stereo width {}, level {:+.1} dB, {} frames late", found.profile.name, found.profile.width, -found.trim_db, found.offset);
+    if let Some(dir) = arg_value(args, "--library") {
+        let folder = soundcraft_engine::monitor_profiles::dir_in(std::path::Path::new(&dir));
+        return match soundcraft_engine::monitor_profiles::save_device(&folder, &found.profile) {
+            Ok(file) => {
+                outln!("{summary}\nsaved {}", file.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(e),
+        };
+    }
+    if let Some(out) = arg_value(args, "--out") {
+        return match std::fs::write(&out, found.profile.to_json()) {
+            Ok(()) => {
+                outln!("{summary}\nwrote {out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(format!("{out}: {e}")),
+        };
+    }
+    outln!("{}", found.profile.to_json());
     ExitCode::SUCCESS
 }
 

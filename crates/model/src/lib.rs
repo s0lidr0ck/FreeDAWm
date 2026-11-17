@@ -19,6 +19,7 @@ mod midi_fx;
 mod midi_map;
 pub mod migrate;
 mod mixer;
+pub mod monitor;
 mod notes;
 mod scout;
 mod session;

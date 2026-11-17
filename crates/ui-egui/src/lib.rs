@@ -30,6 +30,7 @@ pub mod fade_dialog;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
+pub mod hearing_ui;
 pub mod hit_picker;
 pub mod icons;
 mod imprint_ui;
@@ -70,6 +71,7 @@ pub mod ml_text_ui;
 pub mod ml_ui;
 pub mod module_drawer;
 pub mod module_graphs;
+pub mod monitor_ui;
 pub mod musical_typing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net_ui;
@@ -423,6 +425,19 @@ pub struct UiState {
     /// the session is saved (on by default); off, the project refers to the original file.
     #[serde(default = "default_true")]
     pub copy_imported_audio: bool,
+    /// The monitor stage (`monitor_ui`): the master fader's EAR key and its hearing profile.
+    /// This computer's, never a session's.
+    pub monitor_ear: bool,
+    pub monitor_ear_profile: String,
+    /// The master fader's SIM key and the simulated output it plays the mix through.
+    pub monitor_sim: bool,
+    pub monitor_sim_profile: String,
+    /// The Ear Profile window.
+    #[serde(skip)]
+    pub show_ear_profile: bool,
+    /// The Hearing Test window.
+    #[serde(skip)]
+    pub show_hearing_test: bool,
     /// The user's keyboard shortcuts: command id → shortcut ("Cmd+Shift+X"), `""` for none.
     /// Commands not in it keep the registry's (`shortcuts::effective_shortcut`).
     pub shortcuts: shortcuts::Overrides,
@@ -625,6 +640,12 @@ impl Default for UiState {
             meter_hold_secs: preferences::DEFAULT_HOLD,
             meter_scale: String::new(),
             copy_imported_audio: true,
+            monitor_ear: false,
+            monitor_ear_profile: String::new(),
+            monitor_sim: false,
+            monitor_sim_profile: String::new(),
+            show_ear_profile: false,
+            show_hearing_test: false,
             shortcuts: shortcuts::Overrides::new(),
             shortcut_editor: shortcut_editor::EditorState::default(),
             show_clip_effects: false,
@@ -1064,6 +1085,10 @@ pub struct SoundApp {
     /// and taken out and put back each frame without re-boxing.
     pub(crate) editor_states: HashMap<egui::Id, Box<dyn std::any::Any + Send>>,
     last_rev: u64,
+    /// The monitor stage's state on this side (`monitor_ui`).
+    pub monitor: monitor_ui::MonitorUi,
+    /// The hearing test under way (`hearing_ui`).
+    pub hearing: Option<hearing_ui::HearingTest>,
     /// The band Library last handed to the player (its address; 0 = none yet).
     band_lib_key: usize,
     fonts_ready: bool,
@@ -1260,6 +1285,8 @@ impl SoundApp {
             editor_states: HashMap::new(),
             last_rev: 0,
             band_lib_key: 0,
+            monitor: monitor_ui::MonitorUi::default(),
+            hearing: None,
             fonts_ready: false,
             fonts_installed: false,
             theme_applied: None,
@@ -2942,6 +2969,8 @@ impl SoundApp {
             self.last_rev = self.engine.revision.wrapping_sub(1);
             self.sync_player();
         }
+        // The monitor stage follows its keys (and a new player is told what the last one knew).
+        monitor_ui::sync(self);
         self.open_inserted();
         // A drawer closes with its module, however it went (undo included).
         module_drawer::prune(self);

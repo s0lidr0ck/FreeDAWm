@@ -48,6 +48,7 @@ use measure::MeasureBuf;
 use outmap::{MAX_DEVICE_CHANNELS, OutMap};
 use soundcraft_band::library::LibraryData;
 use soundcraft_band::runtime::{BandRuntime, Retired};
+use soundcraft_dsp::monitor::{Plan as MonitorPlan, State as MonitorState};
 use soundcraft_dsp::{Plugin, PluginEditor, PluginStateReader};
 pub use soundcraft_mix::CountOff;
 use soundcraft_mix::scout::ScoutRig;
@@ -148,6 +149,9 @@ enum Cmd {
     /// audio that is not in the session, as Juke's hit picker's. The UI keeps a clone of each, so
     /// the audio thread never frees one.
     Preview(Option<Arc<PreviewAudio>>),
+    /// What the monitor stage does from now on ([`Player::set_monitor`]). The UI keeps a clone of
+    /// each, so the audio thread never frees one.
+    Monitor(Arc<MonitorPlan>),
     /// Where the callback sends Scout rigs back (finished, or refused while another is armed).
     ScoutReturn(SyncSender<Box<ScoutRig>>),
     /// Arm a Scout capture (built on the UI thread with `ScoutRig::new`).
@@ -454,6 +458,10 @@ struct AudioState {
     declick: bool,
     /// The preview playing ([`Cmd::Preview`]) and its read position, in its own frames.
     preview: Option<(Arc<PreviewAudio>, f64)>,
+    /// The monitor stage ([`Player::set_monitor`]): the stereo main mix passes through it on its
+    /// way to the device, after the meters and the remote tap. Only this realtime path has one:
+    /// offline renders (`RangeRender`) never run it.
+    monitor: MonitorState,
     rx: Receiver<Cmd>,
     shared: Arc<Shared>,
     session: Arc<Session>,
@@ -681,6 +689,7 @@ impl AudioState {
             deferred: None,
             declick: true,
             preview: None,
+            monitor: MonitorState::default(),
             garbage,
             old_sessions: None,
             scout_done: None,
@@ -850,6 +859,10 @@ impl AudioState {
                 Cmd::Preview(p) => {
                     // (no free: the UI holds a clone of the one replaced)
                     self.preview = p.map(|a| (a, 0.0));
+                }
+                Cmd::Monitor(plan) => {
+                    // (no allocation, no free: plain data copied in; the UI holds a clone)
+                    self.monitor.load(&plan);
                 }
                 Cmd::Shutdown => {
                     // Plugin stability, part 2: the instances go back to the UI thread, which
@@ -1396,6 +1409,14 @@ impl AudioState {
             }
         }
         self.let_go = false;
+        // The monitor stage: what the listener hears, never what a meter, the remote stream or a
+        // bounce holds. A stereo main mix only.
+        if !self.monitor.is_idle()
+            && let [l, r] = main
+            && let (Some(l), Some(r)) = (l.get_mut(..n), r.get_mut(..n))
+        {
+            self.monitor.process(l, r);
+        }
         self.out.map(main, self.mix.hardware_out(), &mut self.pending, n);
         // A recording block: the very input frames the mix heard, and what each bus-input track
         // took from its bus (internal recording), captured with the block's position (the take's
@@ -1777,6 +1798,8 @@ struct Side {
     /// The last previews sent ([`Player::preview`]): held here so the audio thread, dropping the
     /// one it replaces, never frees it.
     previews: Vec<Arc<PreviewAudio>>,
+    /// The last monitor plans sent ([`Player::set_monitor`]), held for the same reason.
+    monitor_plans: Vec<Arc<MonitorPlan>>,
     /// Per slot: the plugin id, channel count and `state_load` its instance was made for, and
     /// whether it could be made.
     shadow: HashMap<(TrackId, SlotKey), (String, usize, u64, bool)>,
@@ -1933,6 +1956,7 @@ impl Side {
     fn new(rate: f32, max_block: usize, garbage: Receiver<Garbage>) -> Side {
         Side {
             previews: Vec::new(),
+            monitor_plans: Vec::new(),
             shadow: HashMap::new(),
             rate,
             max_block,
@@ -3112,6 +3136,26 @@ impl Player {
         side.previews.drain(..extra);
         drop(side);
         let _ = self.tx.send(Cmd::Preview(Some(audio)));
+    }
+
+    /// Sets what the monitor stage does (`soundcraft_dsp::monitor`): the simulated output and the
+    /// ear correction the stereo main mix is heard through, on this player's device only. Bounces
+    /// and every other offline render never pass through it.
+    pub fn set_monitor(&self, plan: MonitorPlan) {
+        let plan = Arc::new(plan);
+        let mut side = self.side();
+        // The audio thread drops each plan once loaded: the latest stay held here.
+        side.monitor_plans.push(plan.clone());
+        let extra = side.monitor_plans.len().saturating_sub(8);
+        side.monitor_plans.drain(..extra);
+        drop(side);
+        let _ = self.tx.send(Cmd::Monitor(plan));
+    }
+
+    /// A number that tells this player from every other one alive (what was sent to one is not
+    /// known to its replacement).
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.shared) as usize
     }
 
     pub fn locate(&self, at: Samples) {
@@ -4844,6 +4888,49 @@ mod tests {
     /// Send `feed` to the audio state as its input, with a mix input buffer of `max_block`.
     fn attach(tx: &Sender<Cmd>, feed: &Arc<feed::InputFeed>, max_block: usize) {
         tx.send(Cmd::Input(Arc::clone(feed), vec![vec![0.0; max_block]; feed.channels()])).unwrap();
+    }
+
+    /// The monitor stage is heard on the device and nowhere else: with it off the device plays
+    /// the offline render bit for bit; with it on the device differs while the main meter (and
+    /// the offline render, which has no stage) stay as they were.
+    #[test]
+    fn the_monitor_stage_is_heard_on_the_device_only() {
+        use soundcraft_dsp::monitor::{Curve, Plan, Sim, ear_curves};
+        let s = clip_session(48_000, &[]);
+        let ear = ear_curves(&[[100.0, 0.0], [3000.0, 12.0]], &[], 48_000.0);
+        let sim = Sim { curve: Curve::fit(&[], 0.0, 48_000.0).cut(false, 400.0, 48_000.0), width: 0.0 };
+        let sizes = [512usize; 20];
+        let peak = |sh: &Shared| sh.meters.lock().unwrap().main.peak;
+
+        // Loaded but off: nothing changes.
+        let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+        tx.send(Cmd::Monitor(Arc::new(Plan { rate: 48_000.0, ear: Some(ear), sim: Some(sim), ..Plan::default() }))).unwrap();
+        let off = callbacks(&mut st, &sizes);
+        assert_matches_offline(&off, &s);
+        let off_peak = peak(&shared);
+
+        // On: the device hears the stage, the meter does not.
+        for (ear_on, sim_on) in [(true, false), (false, true), (true, true)] {
+            let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+            let plan = Arc::new(Plan { rate: 48_000.0, ear: Some(ear), ear_on, sim: Some(sim), sim_on });
+            tx.send(Cmd::Monitor(Arc::clone(&plan))).unwrap();
+            let on = callbacks(&mut st, &sizes);
+            let differs = on[0].iter().zip(&off[0]).skip(2048).any(|(a, b)| (a - b).abs() > 0.01);
+            assert!(differs, "ear {ear_on}, sim {sim_on}: the stage is heard");
+            assert!(on.iter().flatten().all(|x| x.is_finite() && x.abs() <= 1.0));
+            if sim_on {
+                assert!(on[0].iter().zip(&on[1]).skip(2048).all(|(l, r)| (l - r).abs() < if ear_on { 1.0 } else { 1e-6 }));
+            }
+            assert_eq!(peak(&shared), off_peak, "ear {ear_on}, sim {sim_on}: the meter reads the mix");
+            // Turned off again, the device is back on the mix exactly once the fade is over.
+            tx.send(Cmd::Monitor(Arc::new(Plan { ear_on: false, sim_on: false, ..*plan }))).unwrap();
+            let again = callbacks(&mut st, &sizes);
+            let from = sizes.iter().sum::<usize>();
+            let want = soundcraft_mix::render_range(&s, Range::new(0, 2 * from as i64), 512);
+            for c in 0..2 {
+                assert_eq!(again[c][2048..], want[c][from + 2048..], "ear {ear_on}, sim {sim_on}, channel {c}");
+            }
+        }
     }
 
     /// A stereo clip of `frames` (a tone on each side, well inside ±1), click off, plus `inserts`

@@ -694,6 +694,9 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             let m = row.input(|i| i.modifiers);
             crate::scope::toggle(app, crate::MainWindow::Mix, id, "mix.mute", m);
         }
+    } else if session.tracks.iter().find(|t| t.kind == TrackKind::Master && !t.inactive).is_some_and(|t| t.id == id) {
+        // The first master fader has no solo or mute: the monitor stage's keys sit there.
+        crate::monitor_ui::strip_keys(app, &mut row, vec2(bw, 18.0));
     }
     y += 26.0;
     // Fader + meter.

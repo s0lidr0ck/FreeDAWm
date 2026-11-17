@@ -35,6 +35,8 @@ pub mod midi_stretch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
+pub mod monitor_capture;
+pub mod monitor_profiles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod movie_export;
 pub mod note_index;
