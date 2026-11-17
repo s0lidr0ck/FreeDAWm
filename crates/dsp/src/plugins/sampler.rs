@@ -92,7 +92,7 @@ const fn slice(id: &'static str, name: &'static str) -> ParamInfo {
     }
 }
 
-fn pan_display(v: f32) -> String {
+pub(super) fn pan_display(v: f32) -> String {
     let v = v.round();
     if v.abs() < 0.5 {
         "C".to_string()
@@ -446,7 +446,7 @@ fn ordered(a: u8, b: u8) -> (u8, u8) {
 /// 4-point cubic (Catmull-Rom) interpolation of `x` at fractional frame `pos` (>= 0). Reads
 /// outside the slice are silence.
 #[inline]
-fn hermite(x: &[f32], pos: f64) -> f32 {
+pub(super) fn hermite(x: &[f32], pos: f64) -> f32 {
     let i = pos as usize;
     let t = (pos - i as f64) as f32;
     let at = |k: usize| x.get(k).copied().unwrap_or(0.0);

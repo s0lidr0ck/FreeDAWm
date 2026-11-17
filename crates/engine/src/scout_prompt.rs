@@ -93,6 +93,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_vint" => "Vintage EQ / colour boxes: seven circuits (four passive/active EQs solved by nodal analysis) plus the MEQ-5.",
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
+        "multisampler" => {
+            "Instrument: plays an instrument recorded note by note at several velocities (velocity layers that blend, round-robins, sustain pedal); `mix.multisample_load` loads an SFZ file's samples."
+        }
         "juke" => {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }
