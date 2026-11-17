@@ -185,7 +185,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Automatic crossfades at comp joins | ◐ | ● | ● | ● | **Works** (10 ms equal power) |
 | Name and rate takes | ● | ● | ● | ● | **Works** |
 | Flatten a comp | ● | ● | ● | ● | **Works**: Flatten Comp in a take layer's menu keeps the comp as plain clips, crossfades and all, and deletes the take layers (one undo step); Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
-| Show only takes that match the selection | ● | ○ | ○ | ○ | **Partial**: cycling takes over the selection (Up/Down, `comp.cycle`) already offers only the layers with audio there. Left: hiding the other layer lanes while a selection is made, which needs the lane layout (`layer_rows`, `layers_height`) to see the selection |
+| Show only takes that match the selection | ● | ○ | ○ | ○ | **Works**: Track › More › Show Only Takes Matching Selection (also on a take layer's right-click menu): with a selection made, the selected tracks' open take layers are only those with audio inside it; the others are hidden, not changed, and come back when the selection goes or the option is off. Cycling takes (Up/Down, `comp.cycle`) offers the same ones |
 | Comp grouped tracks together (drums) | ● | ● | ● | ● | **Works**: a swipe (or click) on one track of an active edit group comps the same take layer over the same range on the group's other tracks where that layer has audio, in one undo step (`comp.swipe` `alone` for one track; not while groups are suspended). Takes are matched by layer number, as tracks recorded together number them |
 
 ## I. Timing
@@ -499,3 +499,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Round three: status, and designs for the rows too large for one step |
 | 2026-11-17 | minor | The snap-suspend modifier works while selecting |
 | 2026-11-17 | minor | Follow-up: Scissors and Mute tools; Smart Tool crossfades at joins; separation grab; snap to the playhead; adaptive grid; relative-grid trims; clips dragged from the Clip List; grouped tracks comp together; Solo Take; pasting audio into another session brings it along; Shuffle nudge and linked selections as designed; fixed keys listed |
+| 2026-11-17 | minor | round three follow-up: Show Only Takes Matching Selection |

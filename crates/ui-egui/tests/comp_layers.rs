@@ -300,3 +300,23 @@ fn the_solo_key_auditions_a_take() {
     steps(&mut h, 4);
     assert_eq!(vox(&h).audition_layer, None, "the transport stopping lets go too");
 }
+
+#[test]
+fn only_the_takes_matching_the_selection_are_shown() {
+    let (mut h, t) = harness();
+    // Take 3 ends early: nothing of it lies in the second half.
+    h.state_mut().engine.session_mut().track_mut(t).unwrap().playlists[3].clips[0].length = LEN / 4;
+    let medium = vox(&h).height.points();
+    h.state_mut().run("edit.select", json!({"tracks": [t.0], "start": LEN / 2, "end": LEN * 3 / 4})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 5.0 * LAYER_H, "off: every layer");
+    h.state_mut().run("comp.matching_takes", json!({"value": true})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 4.0 * LAYER_H, "take 3 is hidden");
+    assert!(h.query_by_label("Vox layer Take 3").is_none());
+    h.get_by_label("Vox layer Take 4");
+    // Without a selection every layer shows again.
+    h.state_mut().run("edit.select_none", json!({})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 5.0 * LAYER_H);
+}

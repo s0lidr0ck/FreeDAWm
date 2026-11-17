@@ -16,8 +16,21 @@ pub const JOIN_FADE_SECONDS: f64 = 0.010;
 /// Refusal of a layer delete while the comp still plays part of it.
 pub const LAYER_IN_COMP: &str = "Remove it from the comp first";
 
+/// The flag of Show Only Takes Matching Selection: with a selection made, a track's open take
+/// layers are only those with audio inside it (the others are hidden, not changed).
+pub const MATCHING_TAKES: &str = "comp.matching_takes_only";
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            noundo "comp.matching_takes",
+            "Show Only Takes Matching Selection",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — with a selection, the selected tracks' open take layers are only the ones with audio inside it",
+            always,
+            |e, p| super::more_util::toggle_flag(e, p, MATCHING_TAKES)
+        ),
         cmd!(
             "comp.swipe",
             "Comp",

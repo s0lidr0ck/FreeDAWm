@@ -805,6 +805,7 @@ const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("options.arm_follows_selection", soundcraft_engine::cmd::ARM_FOLLOWS_SELECTION),
     ("options.record_lock", soundcraft_engine::cmd::RECORD_LOCK),
     ("options.pre_record", soundcraft_engine::cmd::PRE_RECORD),
+    ("comp.matching_takes", soundcraft_engine::cmd::MATCHING_TAKES),
     ("options.wait_for_note", "options.wait_for_note"),
     ("options.input_only_monitoring", soundcraft_mix::INPUT_ONLY_MONITORING),
     ("options.dynamic_transport", "options.dynamic_transport"),

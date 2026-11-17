@@ -389,6 +389,8 @@ Track > Designate as Target Playlist
 Track > Show Target Playlist
 Track > Toggle Recent Playlist
 Track > ---
+Track > More > Show Only Takes Matching Selection = @comp.matching_takes
+Track > More > ---
 Track > More > Write MIDI Real-Time Properties = Track > Write MIDI Real-Time Properties
 Track > More > Set Record Tracks to Input Only = Track > Set Record Tracks to Input Only
 Track > More > Clear All Clip Indicators = Track > Clear All Clip Indicators
