@@ -1334,6 +1334,26 @@ mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, Clip, ClipContent, TrackId, TrackKind};
 
+    /// Parity section 7: a MIDI clip copied in one session pastes into the next one opened (the
+    /// clipboard belongs to the program, not to the session).
+    #[test]
+    fn a_midi_clip_copied_in_one_session_pastes_into_another() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 64, "start_ticks": 480})).unwrap();
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        e.execute("session.new", &json!({"name": "Second"})).unwrap();
+        let t2 = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Lead"));
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 48_000})).unwrap();
+        let tr = e.session().track(t2).unwrap();
+        let pasted = tr.clips().iter().find_map(|c| match &c.content {
+            ClipContent::Midi { sequence } => Some((c.start, sequence.notes.iter().map(|n| (n.pitch, n.start)).collect::<Vec<_>>())),
+            _ => None,
+        });
+        assert_eq!(pasted, Some((48_000, vec![(64, 480)])));
+    }
+
     #[test]
     fn targeted_fade_curvature_saves_reopens_and_undoes_without_changing_lengths() {
         for side in ["in", "out"] {
