@@ -473,9 +473,37 @@ pub fn relink_videos(s: &mut Session, session: &Path) -> Vec<String> {
 /// Most meter changes a MIDI file may bring into the tempo map; scores have a handful.
 const MAX_MIDI_METERS: usize = 10_000;
 
-/// Import a Standard MIDI File as MIDI tracks (one per SMF track).
+/// A format-0 file's one track, when it plays on several channels, as one track per channel
+/// (named after the channel, the source's name kept in front), each with that channel's notes and
+/// controllers; its lyrics go with the first. Other files are left as they are.
+fn split_format0(smf: &mut soundcraft_midi::Smf) {
+    if smf.format != 0 || smf.tracks.len() != 1 {
+        return;
+    }
+    let Some(tr) = smf.tracks.pop() else { return };
+    let mut chans: Vec<u8> = tr.sequence.notes.iter().map(|n| n.channel & 0x0F).chain(tr.sequence.ctrls.iter().map(|c| c.channel & 0x0F)).collect();
+    chans.sort_unstable();
+    chans.dedup();
+    if chans.len() < 2 {
+        smf.tracks.push(tr);
+        return;
+    }
+    for ch in chans {
+        let mut sequence = soundcraft_midi::Sequence::default();
+        sequence.notes = tr.sequence.notes.iter().filter(|n| n.channel & 0x0F == ch).copied().collect();
+        sequence.ctrls = tr.sequence.ctrls.iter().filter(|c| c.channel & 0x0F == ch).cloned().collect();
+        let label = if ch == 9 { "Drums (Ch 10)".to_string() } else { format!("Ch {}", ch + 1) };
+        let name = if tr.name.trim().is_empty() { label } else { format!("{} {label}", tr.name.trim()) };
+        smf.tracks.push(soundcraft_midi::SmfTrack { name, sequence });
+    }
+}
+
+/// Import a Standard MIDI File as MIDI tracks (one per SMF track; a format-0 file's one track
+/// split by channel). With `tempo_map`, its tempo and meter changes go into the session's map and
+/// its markers become markers, where they fall.
 pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: bool) -> Result<Vec<TrackId>> {
-    let smf = soundcraft_midi::read_smf(bytes).map_err(|err| EngineError::Io(err.to_string()))?;
+    let mut smf = soundcraft_midi::read_smf(bytes).map_err(|err| EngineError::Io(err.to_string()))?;
+    split_format0(&mut smf);
     let s = e.session_mut();
     // Where the file's tick 0 lands: the file's tempo and meter changes go in from there, with
     // its notes (a tempo set there leaves the time before it, so this tick stays put).
@@ -490,6 +518,19 @@ pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: b
         }
         for (tick, n, d) in &smf.meters {
             let _ = s.tempo.set_meter(base_tick.saturating_add(*tick), u32::from(*n), u32::from(*d));
+        }
+        // Its markers, where they fall in the map just set (one already there by that name and
+        // position is not added again).
+        for (tick, text) in smf.markers.iter().take(MAX_MIDI_METERS) {
+            let mut name = text.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            soundcraft_model::truncate_chars(&mut name, soundcraft_model::MAX_NAME_CHARS);
+            let pos = s.tempo.tick_to_samples(base_tick.saturating_add((*tick).max(0)), s.sample_rate);
+            if !s.markers.iter().any(|m| m.start == pos && m.name == name) {
+                s.add_marker(&name, soundcraft_model::MarkerKind::Marker, pos, pos);
+            }
         }
     }
     let mut out = Vec::new();
@@ -4891,6 +4932,41 @@ mod open_tests {
 #[cfg(test)]
 mod name_tests {
     use super::*;
+
+    /// A format-0 file on two channels comes in as two tracks, its marker as a marker.
+    #[test]
+    fn a_format_0_file_is_split_by_channel_and_its_markers_placed() {
+        let mut body: Vec<u8> = Vec::new();
+        body.extend([0x00, 0xFF, 0x03, 4]);
+        body.extend(b"Song");
+        body.extend([0x00, 0xFF, 0x06, 5]);
+        body.extend(b"Verse");
+        body.extend([0x00, 0x90, 60, 100, 0x00, 0x99, 36, 100]);
+        // A quarter later (960 ticks: 0x87 0x40), both end; a marker there.
+        body.extend([0x87, 0x40, 0x80, 60, 64, 0x00, 0x89, 36, 64]);
+        body.extend([0x00, 0xFF, 0x06, 6]);
+        body.extend(b"Chorus");
+        body.extend([0x00, 0xFF, 0x2F, 0x00]);
+        let mut file: Vec<u8> = b"MThd".to_vec();
+        file.extend([0, 0, 0, 6, 0, 0, 0, 1, 0x03, 0xC0]);
+        file.extend(b"MTrk");
+        file.extend(u32::try_from(body.len()).unwrap().to_be_bytes());
+        file.extend(&body);
+        let mut e = Engine::default();
+        let ids = import_midi_bytes(&mut e, &file, 0, true).unwrap();
+        let s = e.session();
+        let names: Vec<&str> = ids.iter().map(|t| s.track(*t).unwrap().name.as_str()).collect();
+        assert_eq!(names, vec!["Song Ch 1", "Song Drums (Ch 10)"]);
+        let drums = s.track(ids[1]).unwrap();
+        assert_eq!(drums.instrument.as_ref().unwrap().plugin, "drum_synth");
+        assert_eq!(drums.clips()[0].midi_playing().unwrap().notes[0].pitch, 36);
+        let marks: Vec<(&str, Samples)> = s.markers.iter().map(|m| (m.name.as_str(), m.start)).collect();
+        assert_eq!(marks, vec![("Verse", 0), ("Chorus", 24_000)]);
+        // Without the tempo map (a loop dropped in), no markers.
+        let mut e = Engine::default();
+        assert_eq!(import_midi_bytes(&mut e, &file, 0, false).unwrap().len(), 2);
+        assert!(e.session().markers.is_empty());
+    }
 
     #[test]
     fn a_midi_track_name_is_cut_to_a_length_that_can_be_drawn() {
