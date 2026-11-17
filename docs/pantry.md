@@ -130,7 +130,12 @@ envelopes, and anything driven by a controller other than the sustain pedal.
   `seq_position`, `volume`, `tune`, `transpose`, `offset`, `end`, `loop_mode` with
   `loop_start`/`loop_end`, `pitch_keytrack`, `amp_veltrack`, `trigger` (attack, release) and
   `on_locc64`/`on_hicc64` (the pedal), with `default_path`, `<global>`, `<master>` and `<group>`
-  inherited, `#include` (anywhere on a line, eight deep) and `#define`d variables. A part is a
+  inherited, `#include` (anywhere on a line, eight deep) and `#define`d variables. `key` gives
+  a zone's one key and root, and a `lokey` or `hikey` beside it widens the range
+  (`key=a1 lokey=g1`). `locc64`/`hicc64` say where the sustain pedal must be: a piano recorded
+  with the dampers down and again with them lifted plays one set or the other, the lifted set
+  as a part of its own (**Notes pedal down**). A layer's own velocity curve (`amp_velcurve_N`)
+  is kept as how far the velocity sets its level, as near as Velocity Curve 2 comes to it. A part is a
   `master_label`, else Notes, Release or Pedal by what sets the zone off. Of an instrument with
   keyswitched versions (`sw_last`), the one it starts on (`sw_default`, else the first) is
   loaded. Checked against the Salamander Grand Piano V3 file.

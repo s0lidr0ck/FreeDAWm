@@ -64,6 +64,11 @@ pub const ON_KEY_UP: u8 = 1;
 pub const ON_PEDAL_DOWN: u8 = 2;
 pub const ON_PEDAL_UP: u8 = 3;
 
+/// Where the sustain pedal must be for a zone to play.
+pub const PEDAL_ANY: u8 = 0;
+pub const PEDAL_UP: u8 = 1;
+pub const PEDAL_DOWN: u8 = 2;
+
 const LEVEL: usize = 0;
 const PAN: usize = 1;
 const TRANSPOSE: usize = 2;
@@ -188,6 +193,8 @@ struct Zone {
     veltrack: f32,
     /// The velocity it plays as recorded at.
     ref_vel: u8,
+    /// Where the sustain pedal must be for it to play: [`PEDAL_ANY`], [`PEDAL_UP`] or [`PEDAL_DOWN`].
+    pedal: u8,
 }
 
 impl Zone {
@@ -213,13 +220,16 @@ impl Zone {
             keytrack: true,
             veltrack: 1.0,
             ref_vel: 127,
+            pedal: PEDAL_ANY,
         }
     }
 
-    /// Whether `trigger` sets it off for `key` at `vel` (the pedal's zones answer no key).
-    fn answers(&self, trigger: u8, key: u8, vel: u8) -> bool {
+    /// Whether `trigger` sets it off for `key` at `vel` with the sustain pedal `down` or not
+    /// (the pedal's zones answer no key).
+    fn answers(&self, trigger: u8, key: u8, vel: u8, down: bool) -> bool {
         self.used
             && self.trigger == trigger
+            && (self.pedal == PEDAL_ANY || trigger >= ON_PEDAL_DOWN || (self.pedal == PEDAL_DOWN) == down)
             && (trigger >= ON_PEDAL_DOWN || (self.lokey <= key && key <= self.hikey && self.lovel <= vel && vel <= self.hivel))
     }
 }
@@ -256,6 +266,9 @@ pub struct ZoneSpec {
     pub veltrack: f32,
     /// The velocity it plays as recorded at.
     pub ref_vel: u8,
+    /// Where the sustain pedal must be for it to play: [`PEDAL_ANY`], [`PEDAL_UP`] (a piano's
+    /// notes recorded with the dampers down) or [`PEDAL_DOWN`] (with them lifted).
+    pub pedal: u8,
 }
 
 impl Default for ZoneSpec {
@@ -281,6 +294,7 @@ impl Default for ZoneSpec {
             keytrack: true,
             veltrack: 1.0,
             ref_vel: 127,
+            pedal: PEDAL_ANY,
         }
     }
 }
@@ -290,7 +304,7 @@ impl ZoneSpec {
     pub fn key(&self) -> String {
         let name: String = self.part_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').take(24).collect();
         format!(
-            "z{} p{} k{}_{} r{} v{}_{} s{} t{} g{} c{} a{} e{} l{}_{}_{} y{} w{} h{} q{}",
+            "z{} p{} k{}_{} r{} v{}_{} s{} t{} g{} c{} a{} e{} l{}_{}_{} y{} w{} h{} d{} q{}",
             self.index,
             self.part,
             self.lokey,
@@ -310,6 +324,7 @@ impl ZoneSpec {
             u8::from(self.keytrack),
             (self.veltrack * 100.0).round() as i32,
             self.ref_vel,
+            self.pedal,
             name.trim(),
         )
     }
@@ -338,6 +353,7 @@ impl ZoneSpec {
             keytrack: z.keytrack,
             veltrack: z.veltrack,
             ref_vel: z.ref_vel,
+            pedal: z.pedal,
         })
     }
 }
@@ -377,6 +393,7 @@ fn parse_zone(key: &str) -> Option<(usize, Zone, &str)> {
             "y" => z.keytrack = value != "0",
             "w" => z.veltrack = (value.parse::<i32>().ok()? as f32 / 100.0).clamp(0.0, 1.0),
             "h" => z.ref_vel = value.parse::<u8>().ok()?.clamp(1, 127),
+            "d" => z.pedal = value.parse::<u8>().ok().filter(|d| *d <= PEDAL_DOWN)?,
             _ => return None,
         }
     }
@@ -577,9 +594,10 @@ impl Multisampler {
     /// each part's sequence, and with Layer Blend the layer below.
     fn fire(&mut self, trigger: u8, key: u8, vel: u8) {
         let vel = vel.clamp(1, 127);
+        let pedal = self.pedal;
         // Whose turn it is in each part's sequence.
         let mut seqs = [0u64; PARTS];
-        for z in self.zones.iter().filter(|z| z.seq > 0 && z.answers(trigger, key, vel)) {
+        for z in self.zones.iter().filter(|z| z.seq > 0 && z.answers(trigger, key, vel, pedal)) {
             if let Some(s) = seqs.get_mut(usize::from(z.part)) {
                 *s |= 1u64 << z.seq.min(63);
             }
@@ -614,7 +632,7 @@ impl Multisampler {
                 count += 1;
             }
         };
-        for (slot, z) in self.zones.iter().enumerate().filter(|(_, z)| z.answers(trigger, key, vel) && its_turn(z)) {
+        for (slot, z) in self.zones.iter().enumerate().filter(|(_, z)| z.answers(trigger, key, vel, pedal) && its_turn(z)) {
             let mut gain = level(z);
             // The bottom of a layer's range mixes with the layer just below it in its part.
             if trigger == ON_KEY_DOWN && blend > 0.0 && z.lovel > 1 {
@@ -626,6 +644,7 @@ impl Multisampler {
                     u.used
                         && u.trigger == ON_KEY_DOWN
                         && u.part == z.part
+                        && u.pedal == z.pedal
                         && u.hivel == z.lovel - 1
                         && u.lokey <= key
                         && key <= u.hikey
@@ -1073,6 +1092,22 @@ mod tests {
     }
 
     #[test]
+    fn a_zone_for_one_pedal_position_plays_only_there() {
+        let mut s = Multisampler::new();
+        s.prepare(SR, 512, 2);
+        let zone = |index, pedal| ZoneSpec { index, lokey: 0, hikey: 127, root: 60, lovel: 1, hivel: 127, pedal, ..ZoneSpec::default() };
+        assert!(s.set_asset(&zone(0, PEDAL_UP).key(), Some(sine(300.0, 0.5, SR as usize))));
+        assert!(s.set_asset(&zone(1, PEDAL_DOWN).key(), Some(sine(700.0, 0.5, SR as usize))));
+        let out = held(&mut s, 60, 127);
+        assert!(partial(&out, 300.0) > 0.3 && partial(&out, 700.0) < 0.01, "pedal up");
+        s.note_off(0, 60);
+        run(&mut s, 48_000);
+        s.midi(0, [0xB0, 64, 127]);
+        let out = held(&mut s, 60, 127);
+        assert!(partial(&out, 700.0) > 0.3 && partial(&out, 300.0) < 0.01, "pedal down");
+    }
+
+    #[test]
     fn a_sample_played_from_disk_sounds_as_one_in_memory() {
         // Two channels that differ, a loop with a crossfade, and a key off the recorded note.
         let len = 30_000usize;
@@ -1348,9 +1383,10 @@ mod tests {
             keytrack: false,
             veltrack: 0.25,
             ref_vel: 100,
+            pedal: PEDAL_UP,
         };
         let key = spec.key();
-        assert_eq!(key, "z41 p3 k30_34 r34 v1_70 s2 t1 g85 c-19 a27584 e1211610 l100_900_50 y0 w25 h100 qP LAYER notes");
+        assert_eq!(key, "z41 p3 k30_34 r34 v1_70 s2 t1 g85 c-19 a27584 e1211610 l100_900_50 y0 w25 h100 d1 qP LAYER notes");
         assert_eq!(ZoneSpec::parse(&key), Some(ZoneSpec { part_name: "P LAYER notes".into(), ..spec }));
         assert_eq!(ZoneSpec::parse(&ZoneSpec::default().key()), Some(ZoneSpec::default()));
         for bad in ["", "z5000 p0", "z1 p8", "z1 k10_200", "z1 x3", "p1 k1_2", "n60.v100.r1", "z1 t9"] {

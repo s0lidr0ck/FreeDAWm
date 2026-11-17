@@ -20,7 +20,8 @@ use crate::cmd;
 use serde_json::json;
 use soundcraft_audio_io::{AudioBuffer, FileFormat};
 use soundcraft_dsp::plugins::multisampler::{
-    LAYERS, NOTES, ON_KEY_DOWN, ON_KEY_UP, ON_PEDAL_DOWN, ON_PEDAL_UP, PART_OFF_DB, PARTS, ROBINS, ZONES, ZoneSpec, parse_sample_key, sample_key,
+    LAYERS, NOTES, ON_KEY_DOWN, ON_KEY_UP, ON_PEDAL_DOWN, ON_PEDAL_UP, PART_OFF_DB, PARTS, PEDAL_ANY, PEDAL_DOWN, PEDAL_UP, ROBINS, ZONES, ZoneSpec,
+    parse_sample_key, sample_key,
 };
 use soundcraft_midi::{Note, Sequence, note_name};
 use soundcraft_model::{ChannelFormat, Clip, Insert, Route, TrackKind};
@@ -640,9 +641,10 @@ fn parse_sfz(text: &str) -> Vec<Region> {
         };
         if let (Some(sample), Some(trigger), false) = (sample, trigger, switched_off) {
             let dir = control.get("default_path").map(|d| d.trim().replace('\\', "/")).unwrap_or_default();
+            // `key` gives all three of lokey, hikey and pitch_keycenter; one named beside it
+            // stands (`key=a1 lokey=g1` plays G1 to A1).
             let key = get("key").and_then(sfz_note);
-            let (lokey, hikey) =
-                (key.or_else(|| get("lokey").and_then(sfz_note)).unwrap_or(0), key.or_else(|| get("hikey").and_then(sfz_note)).unwrap_or(127));
+            let (lokey, hikey) = (get("lokey").and_then(sfz_note).or(key).unwrap_or(0), get("hikey").and_then(sfz_note).or(key).unwrap_or(127));
             // The note it was recorded at, or the one key it plays.
             let note = get("pitch_keycenter").and_then(sfz_note).or(key).or((lokey == hikey).then_some(lokey)).unwrap_or(60);
             let vel = |k: &str, d: u8| whole(k).map_or(d, |v| v.clamp(1.0, 127.0) as u8);
@@ -651,9 +653,36 @@ fn parse_sfz(text: &str) -> Vec<Region> {
             let frames = |k: &str| whole(k).filter(|v| *v >= 0.0).map_or(0, |v| v.min(f64::from(u32::MAX)) as u32);
             let looped = get("loop_mode").is_some_and(|m| m.trim().starts_with("loop_")) && frames("loop_end") > frames("loop_start");
             let captured = whole("pantry_velocity").map(|v| v.clamp(1.0, 127.0) as u8);
+            // Where the sustain pedal must be (`locc64`/`hicc64`): a piano recorded twice, with
+            // the dampers down and lifted, plays one set or the other.
+            let pedal = match (whole("locc64"), whole("hicc64")) {
+                (Some(lo), _) if lo > 0.0 => PEDAL_DOWN,
+                (_, Some(hi)) if hi < 127.0 => PEDAL_UP,
+                _ => PEDAL_ANY,
+            };
+            // A velocity curve of its own (`amp_velcurve_N`): the level it has at the bottom of
+            // its range against the top, kept as how far the velocity sets its level.
+            let mut curve: Vec<(f64, f64)> = region
+                .iter()
+                .chain(group.iter())
+                .chain(master.iter())
+                .chain(global.iter())
+                .filter_map(|(k, v)| Some((k.strip_prefix("amp_velcurve_")?.parse::<f64>().ok()?, v.trim().parse::<f64>().ok()?)))
+                .filter(|(at, level)| (0.0..=128.0).contains(at) && (0.0..=1.0).contains(level))
+                .collect();
+            curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let shaped = match (curve.first(), curve.last()) {
+                (Some(&(v0, g0)), Some(&(v1, g1))) if v1 > v0 && g1 > 0.0 => {
+                    let top = v1.clamp(1.0, 127.0);
+                    let fall = 1.0 - (v0.max(0.0) / top).powi(2);
+                    Some((top as u8, if fall > 0.0 { ((1.0 - g0 / g1) / fall).clamp(0.0, 1.0) as f32 } else { 1.0 }))
+                }
+                _ => None,
+            };
             let part = match get("pantry_part_name").or_else(|| get("master_label")).map(str::trim).filter(|n| !n.is_empty()) {
                 Some(name) => name.to_string(),
                 None => match trigger {
+                    ON_KEY_DOWN if pedal == PEDAL_DOWN => "Notes pedal down",
                     ON_KEY_DOWN => "Notes",
                     ON_KEY_UP => "Release",
                     _ => "Pedal",
@@ -677,8 +706,9 @@ fn parse_sfz(text: &str) -> Vec<Region> {
                 loop_end: if looped { frames("loop_end").saturating_add(1) } else { 0 },
                 xfade: if looped { frames("pantry_xfade") } else { 0 },
                 keytrack: whole("pitch_keytrack").is_none_or(|v| v != 0.0),
-                veltrack: whole("amp_veltrack").map_or(1.0, |v| (v / 100.0).clamp(0.0, 1.0) as f32),
-                ref_vel: vel("pantry_ref", 127),
+                veltrack: whole("amp_veltrack").map_or(shaped.map_or(1.0, |s| s.1), |v| (v / 100.0).clamp(0.0, 1.0) as f32),
+                ref_vel: whole("pantry_ref").map_or(shaped.map_or(127, |s| s.0), |v| v.clamp(1.0, 127.0) as u8),
+                pedal,
                 ..ZoneSpec::default()
             };
             out.push(Region {
@@ -1416,6 +1446,11 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
             line.push(' ');
             line.push_str(&text);
         };
+        match z.pedal {
+            PEDAL_UP => add("locc64=0 hicc64=63".into()),
+            PEDAL_DOWN => add("locc64=64 hicc64=127".into()),
+            _ => {}
+        }
         match z.trigger {
             ON_KEY_UP => add("trigger=release".into()),
             ON_PEDAL_DOWN => add("on_locc64=64 on_hicc64=127".into()),
@@ -1518,6 +1553,26 @@ mod tests {
             ]
         );
         assert!(parse_sfz("").is_empty() && parse_sfz("sample=a.wav <nonsense> = == <region>").is_empty());
+    }
+
+    #[test]
+    fn an_sfz_piano_recorded_pedal_up_and_down_maps_as_it_was_made() {
+        // As a real library writes it: `key` with a lower `lokey` beside it, the two pedal
+        // positions as masters, a velocity curve per layer.
+        let text = "<master> locc64=0 hicc64=64\n<group> lovel=40 hivel=55 amp_velcurve_40=.68 amp_velcurve_55=1\n\
+                    <region> sample=up a.wav key=a1 lokey=g1\n<region> sample=up c.wav key=c2 lokey=a#1\n\
+                    <master> locc64=16 hicc64=127\n<group> lovel=40 hivel=55\n<region> sample=down a.wav key=a1 lokey=g1\n";
+        let r = parse_sfz(text);
+        let z: Vec<_> = r.iter().map(|r| (r.zone.lokey, r.zone.hikey, r.zone.root, r.zone.pedal, r.part.as_str())).collect();
+        assert_eq!(z, [(31, 33, 33, PEDAL_UP, "Notes"), (34, 36, 36, PEDAL_UP, "Notes"), (31, 33, 33, PEDAL_DOWN, "Notes pedal down")]);
+        // The layer is 0.68 as loud at its softest as at its hardest, and full at 55.
+        let up = &r[0].zone;
+        assert_eq!(up.ref_vel, 55);
+        let at = |vel: f32| 1.0 - up.veltrack + up.veltrack * (vel / 55.0).powi(2);
+        assert!((at(40.0) - 0.68).abs() < 0.01 && (at(55.0) - 1.0).abs() < 1e-6, "{}", up.veltrack);
+        assert_eq!(r[2].zone.ref_vel, 127);
+        // A zone's key spells its pedal position and reads back.
+        assert_eq!(ZoneSpec::parse(&r[2].zone.key()).map(|z| z.pedal), Some(PEDAL_DOWN));
     }
 
     #[test]
@@ -2118,6 +2173,12 @@ mod tests {
         for r in regions.iter().take(3).chain(regions.iter().rev().take(2)) {
             println!("  {r:?}");
         }
+        // The keys no key-down zone answers with the pedal up, between the lowest and highest.
+        let up: Vec<&Region> = regions.iter().filter(|r| r.zone.trigger == ON_KEY_DOWN && r.zone.pedal != PEDAL_DOWN).collect();
+        let (lo, hi) = (up.iter().map(|r| r.zone.lokey).min().unwrap_or(0), up.iter().map(|r| r.zone.hikey).max().unwrap_or(0));
+        let gaps: Vec<u8> = (lo..=hi).filter(|k| !up.iter().any(|r| r.zone.lokey <= *k && *k <= r.zone.hikey)).collect();
+        let parts: BTreeSet<&str> = regions.iter().map(|r| r.part.as_str()).collect();
+        println!("keys {lo}..={hi}, silent keys {gaps:?}, parts {parts:?}");
         assert!(!regions.is_empty());
     }
 
