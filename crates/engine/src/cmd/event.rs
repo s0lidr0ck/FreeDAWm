@@ -297,6 +297,11 @@ pub(super) fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
             *k = k.saturating_add(r.len());
         }
     }
+    for (k, _) in &mut s.transpose_track {
+        if *k >= r.start && *k > 0 {
+            *k = k.saturating_add(r.len());
+        }
+    }
     s.tempo.insert_ticks(at, ticks);
     // The Band's chord and section lanes (in ticks) move with the music after the point; a chord
     // or section running across it grows by the inserted time.
@@ -376,6 +381,20 @@ pub(super) fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
     {
         s.key_signatures.push((r.start, key));
         s.key_signatures.sort_by_key(|(k, _)| *k);
+    }
+    // The transpose track the same way.
+    let carried = s.transpose_track.iter().filter(|(k, _)| r.contains(*k)).max_by_key(|(k, _)| *k).map(|(_, st)| *st);
+    s.transpose_track.retain(|(k, _)| !r.contains(*k));
+    for (k, _) in &mut s.transpose_track {
+        if *k >= r.end {
+            *k = k.saturating_sub(r.len());
+        }
+    }
+    if let Some(st) = carried
+        && !s.transpose_track.iter().any(|(k, _)| *k == r.start)
+    {
+        s.transpose_track.push((r.start, st));
+        s.transpose_track.sort_by_key(|(k, _)| *k);
     }
     s.tempo.remove_ticks(from, to);
     // The Band's chords and sections lose what was inside the cut and close up after it.

@@ -7,6 +7,11 @@
 //! key changes the ruler shows the band key, dimmed, or "No key set" (`session_key`). Every action
 //! is one engine command: `event.add_key_change`, `event.key_change_edit`,
 //! `event.key_change_delete`.
+//!
+//! The ruler also shows the global transpose track (`Session::transpose_track`) as small "T+2"
+//! tags along its bottom; right-click › Global Transpose from Here sets one at the grid line under
+//! the pointer (`song.transpose`), removes the one under it (`song.transpose_remove`), and sets
+//! whether the selected tracks follow it (`track.global_transpose`).
 
 use crate::SoundApp;
 use crate::dialogs::Dialog;
@@ -23,6 +28,7 @@ const BG: Color32 = Color32::from_rgb(64, 52, 88);
 const LINE: Color32 = Color32::from_rgb(200, 180, 240);
 const TEXT: Color32 = Color32::from_rgb(236, 230, 250);
 const DIM: Color32 = Color32::from_rgb(160, 148, 186);
+const TRANSPOSE: Color32 = Color32::from_rgb(250, 200, 120);
 
 /// A drag in progress: the key change's position and the pointer's x at the press.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,6 +119,14 @@ pub fn key_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Session
         let text = crate::session_key::empty_ruler_text(s);
         painter.text(pos2(tl.min.x + 6.0, row.center().y), Align2::LEFT_CENTER, text, bold(11.0), DIM);
     }
+    // The global transpose track's changes, small along the bottom.
+    for (at, st) in &s.transpose_track {
+        let x = x_of(s, tl, *at);
+        if x < tl.min.x - 40.0 || x > tl.max.x {
+            continue;
+        }
+        painter.text(pos2(x + 2.0, row.max.y - 1.0), Align2::LEFT_BOTTOM, format!("T{st:+}"), bold(9.0), TRANSPOSE);
+    }
     for ((at, k), (_, spot)) in s.key_signatures.iter().zip(&spots) {
         let x = x_of(s, tl, *at);
         let moving = live.is_some_and(|(from, _)| from == *at);
@@ -164,13 +178,60 @@ pub fn key_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Session
         if let Some(at) = on {
             pick(app, RulerItem::Key(at));
         }
-        ui.ctx().data_mut(|m| m.insert_temp(menu_id, on));
+        let at = resp.interact_pointer_pos().map(|p| grid_snap(s, sample_at(s, tl, p.x)));
+        ui.ctx().data_mut(|m| {
+            m.insert_temp(menu_id, on);
+            m.insert_temp(menu_id.with("at"), at);
+        });
     }
     let menu_target = ui.ctx().data(|m| m.get_temp::<Option<Samples>>(menu_id)).flatten();
+    let menu_at = ui.ctx().data(|m| m.get_temp::<Option<Samples>>(menu_id.with("at"))).flatten();
     resp.context_menu(|ui| {
         if let Some(at) = menu_target {
             crate::ruler_items::key_menu(app, ui, at);
         }
+        if let Some(at) = menu_at {
+            transpose_menu(app, ui, s, tl, at);
+        }
         crate::menus::ruler_context_menu(app, ui, "key");
     });
+}
+
+/// The Key ruler's Global Transpose menu at `at` (a grid line).
+fn transpose_menu(app: &mut SoundApp, ui: &mut Ui, s: &Session, tl: Rect, at: Samples) {
+    // A change drawn within a few points of the click is the one it is on.
+    let near = s.transpose_track.iter().find(|(t, _)| (x_of(s, tl, *t) - x_of(s, tl, at)).abs() < 12.0).copied();
+    ui.menu_button("Global Transpose from Here", |ui| {
+        let now = near.map_or(0, |c| i64::from(c.1));
+        for st in (-12i64..=12).rev() {
+            if ui.selectable_label(near.is_some() && st == now, format!("{st:+}")).clicked() {
+                if let Err(e) = app.run("song.transpose", json!({"at": near.map_or(at, |c| c.0), "semitones": st})) {
+                    app.ui.status = e;
+                }
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("MIDI and instrument tracks play transposed from here (drum instruments and tracks set to ignore it do not)");
+    if let Some((t, st)) = near
+        && ui.button(format!("Remove Transpose {st:+}")).clicked()
+    {
+        if let Err(e) = app.run("song.transpose_remove", json!({"at": t})) {
+            app.ui.status = e;
+        }
+        ui.close();
+    }
+    let sel: Vec<u64> = s.tracks.iter().filter(|t| s.edit.selected_tracks.contains(&t.id) && t.kind.is_midi()).map(|t| t.id.0).collect();
+    if !sel.is_empty() {
+        let ignoring = s.tracks.iter().filter(|t| sel.contains(&t.id.0)).all(|t| t.transpose_independent);
+        let label = if ignoring { "Selected Tracks Follow Global Transpose" } else { "Selected Tracks Ignore Global Transpose" };
+        if ui.button(label).clicked() {
+            if let Err(e) = app.run("track.global_transpose", json!({"tracks": sel, "follow": ignoring})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
 }

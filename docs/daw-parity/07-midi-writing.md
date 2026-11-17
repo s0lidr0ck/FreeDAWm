@@ -212,7 +212,7 @@ The gaps are of four kinds:
 | Insert and cut time across the song | ● | ● | ● | ● | **Works**: clips, automation, markers, tempo, meter, key and the Band's chord and section lanes move (bug 14, fixed) |
 | Arranger sections to reorder the song | ○ | ● | ● | ● | **Works**: a block on the Sections ruler (the Band's song lane) is a handle on the song: its right-click menu Copies with the Song (right after it), Moves with the Song (before another section or to the end) and Removes with the Song (`arrange.copy`, `arrange.move`, `arrange.remove`). Every track's clips (the playlist shown) and automation, the Band's chords and the block go with it; later material makes room or closes up as with Insert and Cut Time; one undo step. A section that changes tempo or meter inside is refused, and a copy goes only where the same tempo and meter are in force (the material is copied in samples). Markers, key changes and take layers other than the one shown are not copied |
 | Track alternatives for MIDI | ● | ● | ● | ● | **Works** (playlists) |
-| Global transpose track | ○ | ● | ● | ● | **Missing** |
+| Global transpose track | ○ | ● | ● | ● | **Works** for MIDI: the transpose track (`Session::transpose_track`), shown on the Key ruler as "T+2" tags and set from its right-click › Global Transpose from Here (−12 to +12; `song.transpose` takes −24 to 24, `song.transpose_remove`). Every MIDI and instrument track plays its notes transposed by the change in force where each note is written, with the clip's and the track's own transpose; drum instruments (Juke, the drum synth) and tracks set to ignore it (`track.global_transpose`, from the same menu) play as written. Insert and Cut Time move the changes; MIDI export writes the notes transposed, as they play. Audio clips do not follow; poly pressure keys are not moved with it |
 
 ## K. Tools that write MIDI
 
@@ -450,3 +450,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Arranger: copy, move and remove a section with the song's clips and automation |
 | 2026-11-17 | minor | A rule-based transformer for notes: the matching notes deleted, muted or changed |
 | 2026-11-17 | minor | Lyrics under their notes in the printed score and the MusicXML export |
+| 2026-11-17 | minor | A global transpose track for MIDI and instrument tracks, on the Key ruler |

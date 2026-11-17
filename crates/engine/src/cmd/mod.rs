@@ -73,6 +73,7 @@ pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ml;
 pub mod modulator;
+pub mod transpose_track;
 pub(crate) use mix::restore_plugin_param_ids;
 mod chain;
 pub(crate) mod copyq;
@@ -251,6 +252,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_follow::specs());
         v.extend(clip_midi::specs());
         v.extend(arrange::specs());
+        v.extend(transpose_track::specs());
         v.extend(clip_shared::specs());
         v.extend(midi_cleanup::specs());
         v.extend(midi_ops::specs());

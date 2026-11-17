@@ -319,6 +319,9 @@ pub struct Track {
     /// view on. Absent in sessions saved before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drum_map: Vec<(u8, String)>,
+    /// Track › Global Transpose › Independent: the track's notes ignore the transpose track.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transpose_independent: bool,
 }
 
 fn yes() -> bool {
@@ -387,7 +390,16 @@ impl Track {
             edit_locked: false,
             audition_layer: None,
             drum_map: Vec::new(),
+            transpose_independent: false,
         }
+    }
+
+    /// Whether the track's notes follow the global transpose track: MIDI and instrument tracks
+    /// not set to Independent, whose instrument is not a drum machine (Juke, the drum synth).
+    pub fn follows_global_transpose(&self) -> bool {
+        self.kind.is_midi()
+            && !self.transpose_independent
+            && !self.instrument.as_ref().is_some_and(|i| matches!(i.plugin.as_str(), "juke" | "drum_synth"))
     }
 
     /// Whether the track is a vocal track: the owner's flag, else its name; audio tracks only.

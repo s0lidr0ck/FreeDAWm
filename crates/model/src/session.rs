@@ -360,6 +360,11 @@ pub struct Session {
     pub tempo: TempoMap,
     #[serde(default)]
     pub key_signatures: Vec<(Samples, String)>,
+    /// The global transpose track: (position, semitones -24..24) changes, sorted, that MIDI and
+    /// instrument tracks follow at playback ([`Session::global_transpose`]). Absent in sessions
+    /// saved before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transpose_track: Vec<(Samples, i8)>,
     pub tracks: Vec<Track>,
     pub sources: Vec<Source>,
     /// Movies referenced by Video track clips.
@@ -457,6 +462,7 @@ impl Session {
             timecode_start: 0,
             tempo: TempoMap::default(),
             key_signatures: Vec::new(),
+            transpose_track: Vec::new(),
             tracks: Vec::new(),
             sources: Vec::new(),
             videos: Vec::new(),
@@ -885,6 +891,13 @@ impl Session {
             bound(at);
             truncate_chars(key, MAX_NAME_CHARS);
         }
+        for (at, st) in &mut self.transpose_track {
+            bound(at);
+            *st = (*st).clamp(-24, 24);
+        }
+        self.transpose_track.sort_by_key(|c| c.0);
+        self.transpose_track.dedup_by_key(|c| c.0);
+        self.transpose_track.truncate(10_000);
         self.midi_originals.values_mut().for_each(bound_sequence);
         // The Chord Symbols ruler (`chords`) is gone. It showed marker lane 2, so a session that
         // showed it shows Markers 2 in its place (or just drops it when Markers 2 is shown too).
@@ -983,6 +996,19 @@ pub const MAX_COMMENT_CHARS: usize = 4096;
 pub fn truncate_chars(s: &mut String, max: usize) {
     if let Some((end, _)) = s.char_indices().nth(max) {
         s.truncate(end);
+    }
+}
+
+impl Session {
+    /// The global transpose `track` plays with at `at`: the transpose track's change in force
+    /// there (0 before the first), or 0 for a track that does not follow it (set to Independent,
+    /// or a drum instrument: Juke and the drum synth). Binary search; no allocation.
+    pub fn global_transpose(&self, track: &crate::Track, at: Samples) -> i64 {
+        if self.transpose_track.is_empty() || !track.follows_global_transpose() {
+            return 0;
+        }
+        let i = self.transpose_track.partition_point(|(t, _)| *t <= at);
+        i.checked_sub(1).and_then(|k| self.transpose_track.get(k)).map_or(0, |(_, st)| i64::from(*st))
     }
 }
 

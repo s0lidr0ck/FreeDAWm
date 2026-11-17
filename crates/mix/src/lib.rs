@@ -5157,7 +5157,9 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                 quantize_note(s, base, q, &mut n);
             }
             n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
-            n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
+            // The global transpose in force where the note is written.
+            let global = if s.transpose_track.is_empty() { 0 } else { s.global_transpose(t, at_tick(n0.start)) };
+            n.pitch = (i64::from(n.pitch) + dp + global).clamp(0, 127) as u8;
             n.length = ((n.length as f64 * dur) as i64).max(1);
             n.start = n.start.saturating_add(delay);
             let on = at_tick(n.start);
@@ -8760,6 +8762,39 @@ mod tests {
                 (false, 300, [0xE0, 0, 64]),
             ]
         );
+    }
+
+    /// Parity section 7: the global transpose track shifts a note by the change in force where
+    /// the note is written (its note-off too); a track set to ignore it plays as written.
+    #[test]
+    fn notes_follow_the_global_transpose_track() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        for start in [0, 20] {
+            seq.notes.push(soundcraft_midi::Note {
+                probability: 100,
+                pitch: 60,
+                velocity: 100,
+                muted: false,
+                release_velocity: 64,
+                channel: 0,
+                start,
+                length: 4,
+            });
+        }
+        let (mut s, mut eng, heard) = taped_clip(Clip::midi(ClipId(1), "m", 0, 48_000, seq));
+        // 25 samples a tick: the second note is written at sample 500.
+        s.transpose_track = vec![(400, 3)];
+        render_block(&mut eng, &s, 0);
+        render_block(&mut eng, &s, 512);
+        let ons: Vec<u8> = heard.lock().unwrap().iter().filter(|e| e.2[0] & 0xF0 == 0x90).map(|e| e.2[1]).collect();
+        let offs: Vec<u8> = heard.lock().unwrap().iter().filter(|e| e.2[0] & 0xF0 == 0x80).map(|e| e.2[1]).collect();
+        assert_eq!((ons, offs), (vec![60, 63], vec![60, 63]));
+        let t = s.tracks[0].id;
+        s.track_mut(t).unwrap().transpose_independent = true;
+        heard.lock().unwrap().clear();
+        render_block(&mut eng, &s, 0);
+        let ons: Vec<u8> = heard.lock().unwrap().iter().filter(|e| e.2[0] & 0xF0 == 0x90).map(|e| e.2[1]).collect();
+        assert_eq!(ons, vec![60, 60]);
     }
 
     /// A tape on a new instrument track holding `clip`, and its engine.

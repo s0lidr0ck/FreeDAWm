@@ -793,7 +793,8 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
                         soundcraft_mix::quantize_note(s, base, q, &mut n);
                     }
                     n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
-                    n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
+                    let global = s.global_transpose(t, s.tempo.tick_to_samples(base.saturating_add(n.start), sr).max(c.start));
+                    n.pitch = (i64::from(n.pitch) + dp + global).clamp(0, 127) as u8;
                     let played = n.start;
                     let start = played.saturating_add(delay);
                     let end = start.saturating_add(((n.length as f64 * dur) as i64).max(1)).min(len);
