@@ -719,15 +719,70 @@ pub fn rulers_submenu(app: &mut SoundApp, ui: &mut egui::Ui) {
 
 /// Why a menu item is greyed out: the item's own reason, or the command's.
 fn disabled_reason(app: &SoundApp, id: Option<&str>) -> Option<String> {
-    let id = id?;
+    availability(app, id?).err()
+}
+
+/// Whether `id` names a UI-layer command (one [`run_ui_command`] handles, listed in
+/// [`UI_COMMANDS`]) rather than an engine command.
+pub fn is_ui_command(id: &str) -> bool {
+    UI_COMMANDS.iter().any(|c| c.0 == id)
+}
+
+/// Whether the menu item running `id` can be clicked now, and if not, why (its hover text). The
+/// one rule for every menu presentation: UI-layer commands answer here, engine commands through
+/// their own `enabled`; an id that is neither is greyed out and says so.
+pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
+    let when = |ok: bool, why: &str| if ok { Ok(()) } else { Err(why.to_string()) };
     match id {
-        "ui.mix.slim_editors" => Some("Needs Plugin Editors as in the VST".into()),
-        i if i.starts_with("ui.mix.width.") => Some("Select channels in the Mix window".into()),
-        "track.rename" => Some("Select a track".into()),
-        "ui.ml.text_midi" | "ui.ml.song" => Some("Wait for the running ML job".into()),
-        i if i.starts_with("ui.ml.") => Some("Select an audio clip or track".into()),
-        i if i.starts_with("clip.clean_") => Some("Select a clip cleaned by Clean Vocal".into()),
-        _ => soundcraft_engine::find_command(id).and_then(|c| (c.enabled)(&app.engine).err()),
+        i if i.starts_with("window.")
+            || i.starts_with("view.mix_section")
+            || i == "view.mix_slim"
+            || i.starts_with("monitor.")
+            || i.starts_with("hearing_test.")
+            || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "ui.mix.wide_editors" | "presets.import_firestation") =>
+        {
+            Ok(())
+        }
+        // The ML jobs need an audio track or clip to run on; Generate MIDI from Text and Generate
+        // Song need no source, only no job running.
+        "ui.ml.text_midi" | "ui.ml.song" => when(ml_idle(app), "Wait for the running ML job"),
+        i if i.starts_with("ui.ml.") => {
+            when(!app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(), "Select an audio clip or track")
+        }
+        // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
+        "ui.mix.slim_editors" => when(app.ui.wide_editors, "Needs Plugin Editors as in the VST"),
+        "ui.mix.editors_larger" => {
+            let now = app.ui.editor_scale;
+            when(crate::editor_kit::step_editor_scale(now, true) > now, "Plugin editors are at their largest size")
+        }
+        "ui.mix.editors_smaller" => {
+            let now = app.ui.editor_scale;
+            when(crate::editor_kit::step_editor_scale(now, false) < now, "Plugin editors are at their smallest size")
+        }
+        "ui.mix.editors_actual" => when((app.ui.editor_scale - 1.0).abs() > 1e-3, "Plugin editors are at their actual size"),
+        i if i.starts_with("ui.mix.width.") => when(crate::channel_width::enabled(app, i), "Select channels in the Mix window"),
+        // Rename… opens its dialog on the first selected track.
+        "track.rename" => when(!app.engine.target_tracks().is_empty(), "Select a track"),
+        // Clean Vocal's follow-ups act on a cleaned clip only.
+        i if i.starts_with("clip.clean_") => when(cleaned_clip_selected(app), "Select a clip cleaned by Clean Vocal"),
+        // Undo Last Pass and Erase Held Notes act on a MIDI loop recording under way.
+        "ui.midi_undo_pass" | "ui.midi_erase_held" => {
+            when(app.engine.transport.recording && app.midi_loop_preview.is_some(), "Works while loop recording MIDI")
+        }
+        // Make Harmony… harmonises a vocal track.
+        "ui.vocal_harmony" => {
+            when(app.engine.session().tracks.iter().any(soundcraft_model::Track::is_vocal), "No vocal track: mark one with Track › Vocal Track")
+        }
+        // Import › Reference… asks for the file with the desktop's file picker.
+        "ui.scout.import_reference" => when(app.services.pick_open.is_some(), "Needs the desktop app's file picker"),
+        i => match soundcraft_engine::find_command(i) {
+            Some(c) => {
+                (c.enabled)(&app.engine)?;
+                when(!app.engine.blocked_while_recording(i), "Stop recording first")
+            }
+            None if is_ui_command(i) => Ok(()),
+            None => Err(format!("`{i}` is not a command")),
+        },
     }
 }
 
@@ -767,30 +822,7 @@ fn cleaned_clip_selected(app: &SoundApp) -> bool {
 
 /// Enabled and checked state shared by all menu presentations.
 pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) {
-    let enabled = match id {
-        Some(i)
-            if i.starts_with("window.")
-                || i.starts_with("view.mix_section")
-                || i == "view.mix_slim"
-                || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "presets.import_firestation" | "ui.mix.wide_editors") =>
-        {
-            true
-        }
-        // The ML jobs need an audio track or clip to run on.
-        // Generate MIDI from Text needs no source.
-        Some("ui.ml.text_midi" | "ui.ml.song") => ml_idle(app),
-        Some(i) if i.starts_with("ui.ml.") => !app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(),
-        // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
-        Some("ui.mix.slim_editors") => app.ui.wide_editors,
-        Some(i) if i.starts_with("monitor.") || i.starts_with("hearing_test.") => true,
-        Some(i) if i.starts_with("ui.mix.width.") => crate::channel_width::enabled(app, i),
-        // Rename… opens its dialog on the first selected track.
-        Some("track.rename") => !app.engine.target_tracks().is_empty(),
-        // Clean Vocal's follow-ups act on a cleaned clip only.
-        Some(i) if i.starts_with("clip.clean_") => cleaned_clip_selected(app),
-        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok() && !app.engine.blocked_while_recording(i)),
-        None => false,
-    };
+    let enabled = id.is_some_and(|i| availability(app, i).is_ok());
     (enabled, checked_state(app, path, id))
 }
 
