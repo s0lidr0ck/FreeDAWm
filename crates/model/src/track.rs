@@ -302,6 +302,14 @@ pub struct Track {
     /// instead of the keys as played (off, the default).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub midi_fx_record: bool,
+    /// The MPE zone its instrument is set up for (the input menu's MPE Zone): the MPE
+    /// Configuration Message and pitch-bend ranges are sent to it (`None`: not MPE, nothing sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpe: Option<MpeZone>,
+    /// Sound variations (an expression map): the articulations its instrument switches between
+    /// by keyswitch, chosen in its clips by a controller lane (`None`: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub articulations: Option<Articulations>,
     /// The instrument's extra outputs taken by mixer channels (`Plugin::extra_outputs`): each
     /// plays into a bus, which an aux reads (the track's output menu › New Track for Output).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -386,6 +394,8 @@ impl Track {
             midi_fx: Vec::new(),
             modulators: Vec::new(),
             midi_fx_record: false,
+            mpe: None,
+            articulations: None,
             instrument_outs: Vec::new(),
             edit_locked: false,
             audition_layer: None,
@@ -598,3 +608,73 @@ mod tests {
         assert_eq!(serde_json::from_str::<TrackHeight>("\"Large\"").unwrap(), TrackHeight::Large);
     }
 }
+
+/// An MPE zone (MIDI Polyphonic Expression): a master channel (1 for the lower zone, 16 for the
+/// upper) and `members` channels next to it, one per sounding note, each with its own pitch
+/// bend over `bend` semitones (48 by MPE's default) and the master's over `master_bend` (2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MpeZone {
+    /// The upper zone (master channel 16, members counted down from 15); else the lower.
+    #[serde(default)]
+    pub upper: bool,
+    /// Member channels, 1 to 15.
+    pub members: u8,
+    /// Member channels' pitch-bend range, semitones (0 to 96).
+    pub bend: u8,
+    /// The master channel's pitch-bend range, semitones (0 to 96).
+    #[serde(default = "MpeZone::default_master_bend")]
+    pub master_bend: u8,
+}
+
+impl Default for MpeZone {
+    fn default() -> Self {
+        MpeZone { upper: false, members: 15, bend: 48, master_bend: 2 }
+    }
+}
+
+impl MpeZone {
+    fn default_master_bend() -> u8 {
+        2
+    }
+
+    /// The master channel (0-based).
+    pub fn master(&self) -> u8 {
+        if self.upper { 15 } else { 0 }
+    }
+
+    /// The member channels (0-based), nearest the master first.
+    pub fn member_channels(&self) -> impl Iterator<Item = u8> + '_ {
+        let n = self.members.clamp(1, 15);
+        (1..=n).map(move |k| if self.upper { 15 - k } else { k })
+    }
+}
+
+/// Sound variations, or an expression map: a track's articulations (legato, staccato, pizzicato
+/// of an orchestral library), each switched to by its keyswitch, a key the instrument takes as
+/// "play the following notes this way". A clip chooses one with a controller of the lane `cc`
+/// whose value is the articulation's index: playback and chase send that articulation's
+/// keyswitch (a short note on the event's channel) in place of the controller, so the change is
+/// drawn, moved, cut and copied as any controller point is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Articulations {
+    /// The controller number that chooses (0 to 119); 3 by default (undefined in MIDI).
+    pub cc: u8,
+    pub items: Vec<Articulation>,
+}
+
+impl Default for Articulations {
+    fn default() -> Self {
+        Articulations { cc: 3, items: Vec::new() }
+    }
+}
+
+/// One articulation of [`Articulations`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Articulation {
+    pub name: String,
+    /// The key that switches to it (MIDI note number).
+    pub keyswitch: u8,
+}
+
+/// Most articulations a track holds (a controller value picks one).
+pub const MAX_ARTICULATIONS: usize = 128;

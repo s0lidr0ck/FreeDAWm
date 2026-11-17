@@ -620,6 +620,8 @@ struct Strip {
     inst_readouts: [f32; 8],
     /// The loudest note-on velocity its instrument was given in the last block (0: none).
     midi_vel: u8,
+    /// The MPE zone its instrument was last set up for (`rpn::mpe_setup`).
+    mpe_sent: Option<soundcraft_model::MpeZone>,
     /// This strip's Scout PRE/POST taps while a capture runs (see [`scout`]).
     scout: Option<Box<scout::StripTaps>>,
     /// Where the strip's output goes, resolved in `sync` (no name lookups while rendering).
@@ -820,6 +822,7 @@ impl Strip {
             inst_outs: inst_outs::InstOuts::default(),
             inst_readouts: [f32::NAN; 8],
             midi_vel: 0,
+            mpe_sent: None,
             scout: None,
             dest: Dest::None,
             in_span: None,
@@ -2037,6 +2040,7 @@ impl MixEngine {
                 let old = strip.instrument.take();
                 cx.retire(t.id, SlotKey::Instrument, old);
                 strip.instrument = want.and_then(|i| cx.make(t.id, SlotKey::Instrument, i, ich));
+                strip.mpe_sent = None;
                 strip.sample = None;
                 strip.inst_readouts = [f32::NAN; 8];
             }
@@ -3560,6 +3564,15 @@ fn process_strip(
                 }
                 // A musician or module input has no clip controllers to chase (and while only live
                 // MIDI is heard, stopped, the clips wait for the transport).
+                // The track's MPE zone, sent to the instrument when it changes (or is new).
+                if strip.mpe_sent != t.mpe {
+                    let mut msgs = [[0u8; 3]; rpn::MPE_SETUP_MAX];
+                    let n = rpn::mpe_setup(t.mpe, strip.mpe_sent, &mut msgs);
+                    for m in msgs.iter().take(n) {
+                        inst.plugin.midi_raw(0, *m);
+                    }
+                    strip.mpe_sent = t.mpe;
+                }
                 let chased = !live.monitor_only && musician.is_none() && !module_in && std::mem::take(&mut strip.chase);
                 if chased {
                     strip.pass = strip.pass.wrapping_add(1);
@@ -5137,10 +5150,8 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                 let mut m = ctrl_message(c.kind, c.value, dp);
                 if chans {
                     m[0] |= c.channel & 0x0F;
-                    inst.plugin.midi_raw(offset, m);
-                } else {
-                    inst.plugin.midi(offset, m);
                 }
+                send_ctrl(inst, offset, m, chans, t.articulations.as_ref());
             }
         }
         // The controllers that can send something in this block: with the clip's index, those in
@@ -5162,13 +5173,12 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                     let mut m = ctrl_message(c.kind, c.value, dp);
                     if chans {
                         m[0] |= c.channel & 0x0F;
-                        inst.plugin.midi_raw(offset, m);
-                    } else {
-                        inst.plugin.midi(offset, m);
                     }
+                    send_ctrl(inst, offset, m, chans, t.articulations.as_ref());
                 }
-                // A ramp to the next point of its lane plays on as a stream of values.
-                if !c.shape.is_step() {
+                // A ramp to the next point of its lane plays on as a stream of values (not the
+                // articulation lane: it switches).
+                if !c.shape.is_step() && !is_articulation(t, c.kind) {
                     let span = (clip.start, clip.end(), pos, end);
                     send_ramp(inst, sequence, i, &|t: i64| at_tick(t.saturating_add(delay)), span, chans, dp);
                 }
@@ -5413,6 +5423,34 @@ fn send_ramp(
 
 /// A controller event as a MIDI 1.0 message on channel 1 (where the notes go), with `transpose`
 /// applied to a poly-pressure key.
+/// A clip's controller to the instrument (raw: on its own channel), or, on the track's
+/// articulation lane ([`soundcraft_model::Articulations`]), the keyswitch of the articulation its
+/// value picks: a note-on and its note-off at the same offset (a value no articulation has sends
+/// nothing).
+fn send_ctrl(inst: &mut PluginSlot, offset: usize, m: [u8; 3], raw: bool, art: Option<&soundcraft_model::Articulations>) {
+    if let Some(a) = art
+        && m[0] & 0xF0 == 0xB0
+        && m[1] == a.cc
+    {
+        if let Some(k) = a.items.get(usize::from(m[2])) {
+            let ch = if raw { m[0] & 0x0F } else { 0 };
+            inst.plugin.midi_raw(offset, [0x90 | ch, k.keyswitch & 0x7F, 100]);
+            inst.plugin.midi_raw(offset, [0x80 | ch, k.keyswitch & 0x7F, 0]);
+        }
+        return;
+    }
+    if raw {
+        inst.plugin.midi_raw(offset, m);
+    } else {
+        inst.plugin.midi(offset, m);
+    }
+}
+
+/// Whether `kind` is `t`'s articulation lane.
+fn is_articulation(t: &Track, kind: CtrlKind) -> bool {
+    t.articulations.as_ref().is_some_and(|a| kind == CtrlKind::Cc(a.cc))
+}
+
 pub(crate) fn ctrl_message(kind: CtrlKind, value: i32, transpose: i64) -> [u8; 3] {
     let v7 = value.clamp(0, 127) as u8;
     match kind {
@@ -5522,13 +5560,10 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
         };
         if at != i64::MIN {
             let mut m = ctrl_message(kind, value, 0);
-            match ch {
-                None => inst.plugin.midi(0, m),
-                Some(ch) => {
-                    m[0] |= ch;
-                    inst.plugin.midi_raw(0, m);
-                }
+            if let Some(ch) = ch {
+                m[0] |= ch;
             }
+            send_ctrl(inst, 0, m, ch.is_some(), t.articulations.as_ref());
         }
     }
     params.send(|mut m| match ch {
@@ -9622,6 +9657,53 @@ mod tests {
         m.merge_from(eng.meters.get(&id).unwrap());
         m.clear_peaks();
         assert_eq!(m.midi_velocity, 0, "taken by the reader");
+    }
+
+    #[test]
+    fn an_mpe_zone_is_sent_to_the_instrument_once_and_again_when_it_changes() {
+        let (mut s, mut eng, heard) = armed_with_clip_note();
+        eng.monitor_only = true;
+        render_block(&mut eng, &s, 0);
+        take_heard(&heard);
+        s.tracks[0].mpe = Some(soundcraft_model::MpeZone { members: 3, ..Default::default() });
+        render_block(&mut eng, &s, 0);
+        let got = take_heard(&heard);
+        assert!(got.contains(&(true, 0, [0xB0, 6, 3])), "the configuration message: {got:?}");
+        assert!(got.contains(&(true, 0, [0xB3, 6, 48])), "the last member's bend range");
+        render_block(&mut eng, &s, 0);
+        assert!(take_heard(&heard).iter().all(|h| h.2 != [0xB0, 100, 6]), "sent once");
+        s.tracks[0].mpe = None;
+        render_block(&mut eng, &s, 0);
+        assert!(take_heard(&heard).contains(&(true, 0, [0xB0, 6, 0])), "turned off: no members");
+    }
+
+    #[test]
+    fn an_articulation_lane_sends_its_keyswitch_instead_of_the_controller() {
+        let mut seq = soundcraft_midi::Sequence::default();
+        let cc = |tick: i64, value: i32| soundcraft_midi::CtrlEvent {
+            tick,
+            channel: 0,
+            kind: soundcraft_midi::CtrlKind::Cc(3),
+            value,
+            shape: Default::default(),
+        };
+        // Staccato from the start, then legato half way into the first block.
+        seq.ctrls.push(cc(0, 1));
+        seq.ctrls.push(cc(10, 0));
+        let (mut s, mut eng, heard) = taped_clip(Clip::midi(soundcraft_model::ClipId(1), "m", 0, 48_000, seq));
+        let item = |name: &str, keyswitch: u8| soundcraft_model::Articulation { name: name.into(), keyswitch };
+        s.tracks[0].articulations = Some(soundcraft_model::Articulations { cc: 3, items: vec![item("legato", 24), item("staccato", 25)] });
+        render_block(&mut eng, &s, 0);
+        let got: Vec<[u8; 3]> =
+            take_heard(&heard).into_iter().map(|h| h.2).filter(|m| m[0] & 0xE0 == 0x80 || m[0] & 0xF0 == 0xB0 && m[1] == 3).collect();
+        assert!(got.iter().all(|m| m[0] & 0xF0 != 0xB0), "the lane's controller never reaches the instrument: {got:?}");
+        let ons: Vec<u8> = got.iter().filter(|m| m[0] & 0xF0 == 0x90).map(|m| m[1]).collect();
+        assert_eq!(ons.last(), Some(&24), "legato last: {ons:?}");
+        assert!(ons.contains(&25), "staccato first");
+        // Chased from the middle: the articulation in force there.
+        render_block(&mut eng, &s, 24_000);
+        let chased: Vec<u8> = take_heard(&heard).into_iter().filter(|h| h.2[0] & 0xF0 == 0x90).map(|h| h.2[1]).collect();
+        assert_eq!(chased, vec![24]);
     }
 
     #[test]

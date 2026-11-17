@@ -510,6 +510,128 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
     });
 }
 
+/// The input menu's MPE Zone: off, the lower or upper zone, its member channels and bend ranges
+/// (`track.mpe`), sent to the instrument as MPE's configuration message.
+fn mpe_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let now = app.engine.session().track(id).and_then(|t| t.mpe);
+    let title = match now {
+        None => "MPE Zone: Off".to_string(),
+        Some(z) => format!("MPE Zone: {} ({} channels)", if z.upper { "Upper" } else { "Lower" }, z.members),
+    };
+    let mut ask: Option<serde_json::Value> = None;
+    ui.menu_button(title, |ui| {
+        for (label, zone) in [("Off", "off"), ("Lower (master channel 1)", "lower"), ("Upper (master channel 16)", "upper")] {
+            let on = match now {
+                None => zone == "off",
+                Some(z) => zone == if z.upper { "upper" } else { "lower" },
+            };
+            if ui.add(egui::Button::selectable(on, label)).clicked() {
+                ask = Some(json!({"tracks": [id.0], "zone": zone}));
+            }
+        }
+        if let Some(z) = now {
+            ui.separator();
+            let (mut members, mut bend, mut master) = (z.members, z.bend, z.master_bend);
+            let a = ui.add(egui::Slider::new(&mut members, 1..=15).text("member channels")).changed();
+            let b = ui.add(egui::Slider::new(&mut bend, 0..=96).text("member bend (semitones)")).changed();
+            let c = ui.add(egui::Slider::new(&mut master, 0..=96).text("master bend (semitones)")).changed();
+            if a || b || c {
+                ask = Some(json!({"tracks": [id.0], "members": members, "bend": bend, "master_bend": master}));
+            }
+        }
+        ui.label(
+            egui::RichText::new("Sent to the instrument as MPE's configuration message and pitch-bend ranges")
+                .small()
+                .color(Tokens::current().text_dim),
+        );
+    });
+    if let Some(p) = ask {
+        let r = if p.get("zone").is_some() {
+            app.run("track.mpe", p).map(|_| ())
+        } else {
+            app.engine.execute_merged("track.mpe", &p, &format!("mpe-{}", id.0)).map(|_| ()).map_err(|e| e.to_string())
+        };
+        if let Err(e) = r {
+            app.ui.status = e;
+        }
+    }
+}
+
+/// The input menu's Articulations (sound variations, an expression map): the track's
+/// articulations with their keyswitches (`track.articulations`), and one set in the selected
+/// MIDI clip at the insertion point (a point on the articulation lane, `midi.ctrl_add`).
+fn articulations_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let now = app.engine.session().track(id).and_then(|t| t.articulations.clone()).unwrap_or_default();
+    let mut asks: Vec<(&str, serde_json::Value)> = Vec::new();
+    let title = if now.items.is_empty() { "Articulations".to_string() } else { format!("Articulations ({})", now.items.len()) };
+    ui.menu_button(title, |ui| {
+        for (i, a) in now.items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(&a.name);
+                let mut k = a.keyswitch;
+                if ui
+                    .add(egui::DragValue::new(&mut k).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)))
+                    .on_hover_text("Its keyswitch")
+                    .changed()
+                {
+                    asks.push(("track.articulations", json!({"tracks": [id.0], "index": i, "keyswitch": k})));
+                }
+                if ui.small_button("Set Here").on_hover_text("From the insertion point on, the selected clip plays this way").clicked() {
+                    asks.push(("articulation.here", json!(i)));
+                    ui.close();
+                }
+                if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    asks.push(("track.articulations", json!({"tracks": [id.0], "index": i, "remove": true})));
+                }
+            });
+        }
+        let key = egui::Id::new(("articulation-new", id.0));
+        let mut name: String = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("New articulation").desired_width(110.0));
+            let next = now.items.last().map_or(24, |a| a.keyswitch.saturating_add(1).min(127));
+            if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Add")).clicked() {
+                asks.push(("track.articulations", json!({"tracks": [id.0], "add": {"name": name.trim(), "keyswitch": next}})));
+                name.clear();
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(key, name));
+        ui.label(
+            egui::RichText::new(format!(
+                "Chosen in clips by controller {} (value = the articulation's number, from 0); its keyswitch is sent in its place",
+                now.cc
+            ))
+            .small()
+            .color(Tokens::current().text_dim),
+        );
+    });
+    for (cmd, p) in asks {
+        let r =
+            if cmd == "articulation.here" { set_articulation_here(app, id, now.cc, p.as_u64().unwrap_or(0)) } else { app.run(cmd, p).map(|_| ()) };
+        if let Err(e) = r {
+            app.ui.status = e;
+        }
+    }
+}
+
+/// The selected MIDI clip on `track` (or the one under the insertion point) gets articulation
+/// `index` from the insertion point on.
+fn set_articulation_here(app: &mut SoundApp, track: TrackId, cc: u8, index: u64) -> Result<(), String> {
+    let s = app.engine.session();
+    let at = s.edit.selection.start;
+    let tr = s.track(track).ok_or("no such track")?;
+    let clip = tr
+        .clips()
+        .iter()
+        .filter(|c| c.midi_playing().is_some())
+        .find(|c| s.edit.selected_clips.contains(&c.id) && c.range().contains(at))
+        .or_else(|| tr.clips().iter().filter(|c| c.midi_playing().is_some()).find(|c| c.start <= at && at < c.end()))
+        .ok_or("Put the insertion point in one of the track's MIDI clips first")?;
+    let tick = s.tempo.samples_to_ticks(at, s.sample_rate) - s.tempo.samples_to_ticks(clip.start, s.sample_rate);
+    let cid = clip.id.0;
+    app.run("midi.ctrl_add", json!({"clip": cid, "lane": format!("cc{cc}"), "tick": tick.max(0), "value": index})).map(|_| ())
+}
+
 /// The output menu's Instrument Outputs part (an instrument with outputs besides its main one,
 /// Juke's Out 2-8): each output on a track of its own (`mix.new_output_track`), or back on the
 /// main output (`mix.instrument_output`).
@@ -677,6 +799,8 @@ pub(crate) fn input_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
     }
     crate::midi_fx_menu::menu(app, ui, id);
+    mpe_menu(app, ui, id);
+    articulations_menu(app, ui, id);
     let Some(m) = current else { return };
     transform_menu(app, ui, id, &m.transform);
     ui.menu_button(if m.channel == 0 { "Channel: Omni".to_string() } else { format!("Channel: {}", m.channel) }, |ui| {
@@ -1163,6 +1287,25 @@ pub(crate) mod tests {
         assert!(app.run("ui.midi_undo_pass", json!({})).is_err(), "not while stopped");
         app.run("edit.undo", json!({})).unwrap();
         assert!(pitches(&app).is_empty());
+    }
+
+    #[test]
+    fn an_articulation_is_set_in_the_clip_at_the_insertion_point() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let c = app.run("midi.new_clip", json!({"track": t, "start": 48_000, "end": 144_000})).unwrap()["clip"].as_u64().unwrap();
+        app.run("track.articulations", json!({"tracks": [t], "add": {"name": "Legato", "keyswitch": 24}})).unwrap();
+        app.run("track.articulations", json!({"tracks": [t], "add": {"name": "Staccato", "keyswitch": 25}})).unwrap();
+        assert!(set_articulation_here(&mut app, TrackId(t), 3, 1).is_err(), "the insertion point is outside the clip");
+        app.engine.session_mut().edit.selection = soundcraft_time::Range::point(72_000);
+        set_articulation_here(&mut app, TrackId(t), 3, 1).unwrap();
+        let (_, clip) = app.engine.session().find_clip(soundcraft_model::ClipId(c)).unwrap();
+        let ev = &clip.midi_playing().unwrap().ctrls;
+        assert_eq!(
+            ev.iter().map(|e| (e.tick, e.kind, e.value)).collect::<Vec<_>>(),
+            vec![(960, soundcraft_midi::CtrlKind::Cc(3), 1)],
+            "a beat into the clip"
+        );
     }
 
     #[test]
