@@ -220,6 +220,11 @@ pub const HIDDEN_STOCK: &[Category] =
 /// the bass amp, is offered beside Amp, and Heft, the bass enhancer.
 pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft"];
 
+/// Stock plugins in a [`HIDDEN_STOCK`] category that the lists offer all the same, under
+/// Utilities (not with the engines): Lo-Fi, the only bit-depth and sample-rate reducer (Vint's
+/// Sampler circuit is a fixed 12-bit model).
+pub const LISTED_UTILITIES: &[&str] = &["lofi"];
+
 /// The meter plug-ins (Spectrum, Loudness Meter, Phase Meter, Tuner): utilities with an editor of
 /// their own, listed under Utilities (the owner's call), not with the engines.
 pub const METER_PLUGINS: &[&str] = &["spectrum", "loudness", "phase_meter", "tuner"];
@@ -231,9 +236,10 @@ pub const HIDDEN_PLUGINS: &[&str] = &["drum_synth"];
 
 impl PluginInfo {
     /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories
-    /// (or one of [`LISTED_STOCK`]), and not one of [`HIDDEN_PLUGINS`].
+    /// (or one of [`LISTED_STOCK`] or [`LISTED_UTILITIES`]), and not one of [`HIDDEN_PLUGINS`].
     pub fn listed(&self) -> bool {
-        (!HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id)) && !HIDDEN_PLUGINS.contains(&self.id)
+        (!HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id) || LISTED_UTILITIES.contains(&self.id))
+            && !HIDDEN_PLUGINS.contains(&self.id)
     }
 
     /// Whether the lists offer this plugin among the FireStation engines (the picker's first
@@ -753,7 +759,10 @@ mod trait_default_tests {
         );
         assert_eq!(listed("drum_synth"), Some(false));
         assert!(create("drum_synth").is_some() && HIDDEN_PLUGINS.iter().all(|id| plugin_info(id).is_some()));
-        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id)));
+        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id) || LISTED_UTILITIES.contains(&p.id)));
+        // Lo-Fi, the bit and sample-rate reducer, is offered under Utilities.
+        assert_eq!(listed("lofi"), Some(true));
+        assert!(plugin_info("lofi").is_some_and(|p| !p.with_engines()));
         // Rez is a stock dynamics plugin no engine covers: listed, with the engines.
         assert_eq!(listed("rez"), Some(true));
         assert!(plugin_info("rez").is_some_and(|p| p.with_engines() && HIDDEN_STOCK.contains(&p.category)));

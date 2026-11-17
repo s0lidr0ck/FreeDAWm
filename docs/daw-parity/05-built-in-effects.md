@@ -127,7 +127,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Tube, transformer and console saturation | ● | ● | ● | ● | **Works** (Sat: five circuits) |
 | Overdrive, distortion and fuzz pedals | ● | ● | ● | ● | **Works** (Dist: twelve) |
 | Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp; Dist and Filter use a weak filter (bug 8) |
-| Bit and sample-rate reduction | ● | ● | ● | ● | **Partial**: inside Vint's Sampler circuit; the Lo-Fi effect is hidden |
+| Bit and sample-rate reduction | ● | ● | ● | ● | **Works**: Lo-Fi (bit depth 1–24, sample rate down to 500 Hz, noise, mix) is offered under Utilities again, the one stock effect the lists show; Vint's Sampler circuit is a fixed 12-bit model |
 | Exciter / enhancer | ◐ | ◐ | ● | ◐ | **Works** (Vint Enhancer) |
 | Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator) |
 | Bass enhancer (harmonics so low notes are heard on small speakers) | ◐ | ○ | ◐ | ○ | **Works** (Heft): harmonics made only from the band below Frequency (40–250 Hz) and added only above it, Character from even to odd, Original Bass keeps, reduces or removes the lows; transparent at zero, no latency, no aliasing (cubic at most, from a band under 250 Hz); every channel. Tests: `heft/tests.rs` |
@@ -192,7 +192,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Gater or drawn volume shaper | ◐ | ● | ● | ● | **Partial**: Swale repeats one attack-hold-release shape per beat; the rest, a gater or drawn shaper, was dropped by the owner |
 | Step-sequenced multi-effect | ○ | ◐ | ● | ● | **Partial**: the Filter's 16-step cutoff only; a multi-effect is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
 | Glitch, granular or spectral effects | ◐ | ○ | ● | ◐ | **Not planned here**: new effects (beat repeat dropped by the owner), and the owner builds only Keel and Heft of the new effects in this section |
-| Lo-fi and vinyl | ● | ◐ | ● | ● | **Partial**: cassette and 12-bit sampler models; a vinyl model is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
+| Lo-fi and vinyl | ● | ◐ | ● | ● | **Partial**: cassette and 12-bit sampler models, and Lo-Fi under Utilities; a vinyl model is a new effect, not planned here (the owner builds only Keel and Heft of the new effects in this section) |
 | Mastering assistant | ○ | ○ | ● | ○ | **Not planned here**: the owner has tabled the mastering page; LevelUp does loudness to a target |
 | Loudness match against reference tracks | ○ | ◐ | ◐ | ◐ | **Works** (LevelUp: four references, platform preview) |
 
@@ -372,3 +372,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-16 | minor | Keel: silence in gives silence out (the tube stage's idle point is where it settles, not its exact DC solution) |
 | 2026-11-17 | minor | Round three reconciled: controller mapping already built (section 6); the new effects, the bundled impulse responses, the mastering assistant, the hidden stock EQ and channel strip and the browser build marked not planned here, with the owner's reasons |
 | 2026-11-17 | minor | Comp gets a look-ahead |
+| 2026-11-17 | minor | Lo-Fi offered under Utilities: bit and sample-rate reduction in the menu |

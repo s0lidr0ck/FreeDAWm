@@ -1258,8 +1258,10 @@ pub(crate) enum Pick {
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
     use soundcraft_dsp::Category;
-    // Dither is a utility here, not a group of its own (the owner's call).
-    let group_of = |p: &soundcraft_dsp::PluginInfo| if p.category == Category::Dither { Category::Other } else { p.category };
+    // Dither is a utility here, not a group of its own (the owner's call), and so is Lo-Fi.
+    let group_of = |p: &soundcraft_dsp::PluginInfo| {
+        if p.category == Category::Dither || soundcraft_dsp::LISTED_UTILITIES.contains(&p.id) { Category::Other } else { p.category }
+    };
     let listed = || soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument == instruments);
     let mut out = Vec::new();
     let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
@@ -2476,18 +2478,21 @@ mod tests {
         for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "channel_tool"] {
             assert!(ids.contains(&id), "{id}");
         }
-        // The meters and Dither are utilities (the owner's call), not in the first group.
-        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither"] {
+        // The meters and Dither are utilities (the owner's call), not in the first group, and so
+        // is Lo-Fi (bit and sample-rate reduction), the one stock effect the lists offer.
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither", "lofi"] {
             assert!(ids.contains(&id), "{id} under Utilities");
             assert!(groups[0].1.iter().all(|p| p.id != id), "{id} not with the engines");
         }
         for (_, l) in &groups {
             assert!(l.iter().all(|p| p.listed() && !p.is_instrument));
-            assert!(l.iter().all(|p| !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category) || soundcraft_dsp::LISTED_STOCK.contains(&p.id)));
+            assert!(l.iter().all(|p| !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category)
+                || soundcraft_dsp::LISTED_STOCK.contains(&p.id)
+                || soundcraft_dsp::LISTED_UTILITIES.contains(&p.id)));
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
         assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
-        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither));
+        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither || p.id == "lofi"));
         // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);
