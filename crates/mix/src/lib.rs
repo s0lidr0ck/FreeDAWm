@@ -1743,6 +1743,17 @@ impl MixEngine {
         Some((st.bus_in.as_slice(), st.base))
     }
 
+    /// The main mix as the last block rendered it (after the master's chain, before the click
+    /// and the monitor stage) and its delay: a real-time bounce's print. No allocation.
+    pub fn main_print(&self) -> (&[Vec<f32>], usize) {
+        (self.main.as_slice(), self.latency)
+    }
+
+    /// [`MixEngine::main_print`] for `bus` (its output as its consumers took it).
+    pub fn bus_print(&self, bus: BusId) -> Option<(&[Vec<f32>], usize)> {
+        Some((self.busses.get(&bus)?.buf.as_slice(), self.bus_latency(bus)))
+    }
+
     pub fn hardware_out(&self) -> &[Vec<Vec<f32>>] {
         &self.hw
     }

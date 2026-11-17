@@ -877,6 +877,34 @@ pub struct Bounce {
     import: bool,
     /// What the first pass measured, and whether the true-peak ceiling held the gain back.
     measured: Option<Measured>,
+    /// The audio a real-time bounce printed, written in place of a render ([`Bounce::printed`]).
+    printed: Option<Printed>,
+}
+
+/// A real-time bounce's print, read a block at a time as a render would be.
+struct Printed {
+    audio: Vec<Vec<f32>>,
+    at: usize,
+    block: Vec<Vec<f32>>,
+}
+
+impl Printed {
+    const BLOCK: usize = 1024;
+
+    fn next_block(&mut self) -> Option<(&[Vec<f32>], usize)> {
+        let len = self.audio.iter().map(Vec::len).max().unwrap_or(0);
+        let n = len.saturating_sub(self.at).min(Printed::BLOCK);
+        if n == 0 {
+            return None;
+        }
+        self.block.resize_with(self.audio.len(), Vec::new);
+        for (b, a) in self.block.iter_mut().zip(&self.audio) {
+            b.clear();
+            b.extend((self.at..self.at + n).map(|i| a.get(i).copied().unwrap_or(0.0)));
+        }
+        self.at += n;
+        Some((&self.block, n))
+    }
 }
 
 /// One file a bounce writes: its part file until it is complete, and which channel it takes.
@@ -1149,6 +1177,7 @@ impl Bounce {
             tags: export.tags.clone().filter(|t| !t.is_empty()),
             import: export.import,
             measured: None,
+            printed: None,
         })
     }
 
@@ -1201,6 +1230,22 @@ impl Bounce {
         self
     }
 
+    /// Writes `audio` instead of rendering: the source's channels over the range as a real-time
+    /// bounce printed them while the live player played the range (hardware inserts and outboard
+    /// gear included). Every option of the bounce (rate, dither, formats, tags, normalize, fold
+    /// down, layout) applies unchanged. A print shorter than the range ends the file early; the
+    /// host checks it is whole first.
+    pub fn printed(mut self, audio: Vec<Vec<f32>>) -> Bounce {
+        self.live = None;
+        self.printed = Some(Printed { audio, at: 0, block: Vec::new() });
+        self
+    }
+
+    /// Whether the bounce writes a real-time print ([`Bounce::printed`]).
+    pub fn is_printed(&self) -> bool {
+        self.printed.is_some()
+    }
+
     /// Whether the bounce renders through the host's live instances.
     pub fn is_live(&self) -> bool {
         self.live.is_some() || self.render.as_ref().is_some_and(soundcraft_mix::RangeRender::is_live)
@@ -1229,6 +1274,11 @@ impl Bounce {
         self.range
     }
 
+    /// The bus bounced, or `None` for the main mix.
+    pub fn bus(&self) -> Option<BusId> {
+        self.bus
+    }
+
     /// How far along the bounce is, from 0 to 1.
     pub fn progress(&self) -> f32 {
         let pass = (self.done as f64 / self.range.len().max(1) as f64).min(1.0) as f32;
@@ -1243,9 +1293,15 @@ impl Bounce {
     /// bounce once its file is complete.
     pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<Option<Bounced>> {
         loop {
-            self.render();
-            let Some(render) = self.render.as_mut() else { return Ok(None) };
-            match render.next_block(&self.session) {
+            let next = match &mut self.printed {
+                Some(p) => p.next_block(),
+                None => {
+                    self.render();
+                    let Some(render) = self.render.as_mut() else { return Ok(None) };
+                    render.next_block(&self.session)
+                }
+            };
+            match next {
                 Some((chunk, n)) => {
                     fill(&mut self.block, chunk, n, self.fold, self.gain);
                     self.done += n;
@@ -1266,6 +1322,9 @@ impl Bounce {
                     self.measuring = false;
                     // The second pass renders again from the start, through the same instances.
                     self.live = self.render.take().and_then(soundcraft_mix::RangeRender::into_live);
+                    if let Some(p) = &mut self.printed {
+                        p.at = 0;
+                    }
                 }
                 None => return self.finish().map(Some),
             }

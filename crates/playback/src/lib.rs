@@ -36,6 +36,7 @@ pub mod measure;
 pub mod midi_in;
 pub mod midi_out;
 mod outmap;
+pub mod print;
 pub mod pw;
 pub mod record;
 mod resample;
@@ -136,6 +137,9 @@ enum Cmd {
     Capture(Arc<record::Capture>),
     /// What a recording frame holds ([`Player::set_record_taps`]).
     Taps(record::Taps),
+    /// A real-time bounce's print of the mix ([`Player::print`]), or none; the old one goes back
+    /// as garbage.
+    Print(Option<Arc<print::PrintTap>>),
     Recording(bool),
     /// The range a recording punches into ([`Player::set_punch`]).
     Punch(Option<Range>),
@@ -535,6 +539,8 @@ struct AudioState {
     /// Where recording blocks are captured, and the samples it still owes as silence.
     capture: Option<Arc<record::Capture>>,
     owed: usize,
+    /// A real-time bounce's print ([`Player::print`]).
+    print: Option<Arc<print::PrintTap>>,
     /// A recording frame: the device input's channels, then each bus-input track's tap.
     taps: record::Taps,
     /// Input is heard: an input and an armed or monitored track (set each fill).
@@ -601,6 +607,9 @@ struct Garbage {
     feed: Option<Arc<feed::InputFeed>>,
     input: Vec<Vec<f32>>,
     capture: Option<Arc<record::Capture>>,
+    /// A replaced print (only dropped, on the UI thread).
+    #[allow(dead_code)]
+    print: Option<Arc<print::PrintTap>>,
     /// What the band let go of: old songs and Libraries, a replaced update, a refused runtime.
     band: Retired,
     band_update: Option<Box<BandUpdate>>,
@@ -745,6 +754,7 @@ impl AudioState {
             shut: false,
             capture: None,
             owed: 0,
+            print: None,
             taps: record::Taps::default(),
             monitoring: false,
             let_go: false,
@@ -792,6 +802,14 @@ impl AudioState {
                     }
                 }
                 Cmd::Taps(t) => self.taps = t,
+                Cmd::Print(p) => {
+                    let old = std::mem::replace(&mut self.print, p);
+                    // No click in a print (nor heard while it plays).
+                    self.mix.metronome = self.print.is_none();
+                    if old.is_some() {
+                        let _ = self.garbage.send(Garbage { print: old, ..Garbage::default() });
+                    }
+                }
                 Cmd::Recording(r) => {
                     self.recording = r;
                     self.punch = None;
@@ -1068,7 +1086,7 @@ impl AudioState {
     /// the block is cut to end where that ramp must begin. A play that starts inside one plays
     /// it. Returns the block length to render. Never allocates.
     fn skip_ahead(&mut self, n: usize) -> usize {
-        if !self.playing || self.recording || self.countoff.is_some() || self.deferred.is_some() || self.lent {
+        if !self.playing || self.recording || self.print.is_some() || self.countoff.is_some() || self.deferred.is_some() || self.lent {
             return n;
         }
         let lead = if self.declick { self.ramp_frames() as i64 } else { 0 };
@@ -1436,6 +1454,14 @@ impl AudioState {
         let width = self.main_width.min(self.main.len());
         let main = self.main.get_mut(..width).unwrap_or_default();
         self.mix.render(&self.session, self.pos, n, main);
+        // A real-time bounce: the source as rendered, before the monitor stage (no allocation).
+        if let Some(p) = self.print.as_ref().filter(|_| self.playing) {
+            let (src, latency) = match p.bus() {
+                Some(b) => self.mix.bus_print(b).unwrap_or((&[], self.mix.latency)),
+                None => self.mix.main_print(),
+            };
+            p.capture(src, self.pos, latency, n);
+        }
         // The remote mix stream: the host's main mix out to the network thread, the performer's
         // stream in from it (both lock-free, see `stream`).
         if self.shared.tap.is_on() || self.shared.stream_in.is_on() {
@@ -3053,6 +3079,21 @@ impl Player {
         let buffers = vec![vec![0.0; self.max_block]; feed.channels()];
         let _ = self.tx.send(Cmd::Input(feed, buffers));
         let _ = self.tx.send(Cmd::Capture(capture));
+    }
+
+    /// Prints the main mix (or `bus`, `channels` wide) over `range` as it plays from now on: a
+    /// real-time bounce. The caller plays the range ([`Player::play`]), drains the tap
+    /// ([`print::PrintTap::drain`]) until it is done, then ends the print ([`Player::end_print`]).
+    /// While a print is attached the click is off and skip ranges play.
+    pub fn print(&self, range: Range, bus: Option<soundcraft_model::BusId>, channels: usize) -> Arc<print::PrintTap> {
+        let tap = Arc::new(print::PrintTap::new(range, bus, channels, self.session_rate()));
+        let _ = self.tx.send(Cmd::Print(Some(Arc::clone(&tap))));
+        tap
+    }
+
+    /// Ends the print [`Player::print`] started (finished or not).
+    pub fn end_print(&self) {
+        let _ = self.tx.send(Cmd::Print(None));
     }
 
     /// Records the bus-input tracks `taps` (track, channels) after the `device` input channels in
@@ -5164,6 +5205,40 @@ mod tests {
             }
         }
         assert!(want[0].iter().any(|x| x.abs() > 0.1), "the clip is heard");
+    }
+
+    /// A real-time bounce's print is the offline render of the range, sample for sample, and
+    /// the click is not in it.
+    #[test]
+    fn a_print_of_the_main_mix_is_the_offline_render() {
+        let mut s = clip_session(9600, &[]);
+        s.edit.click = true;
+        let range = Range::new(0, 6000);
+        let tap = Arc::new(print::PrintTap::new(range, None, 2, 48_000));
+        let (st, _shared, tx) = playing(&s, 48_000.0, 512);
+        tx.send(Cmd::Print(Some(Arc::clone(&tap)))).unwrap();
+        let mut st = exact(st);
+        let mut got = Vec::new();
+        for _ in 0..20 {
+            callbacks(&mut st, &[480]);
+            tap.drain(&mut got);
+        }
+        assert!(tap.is_done());
+        assert_eq!(tap.lost(), 0);
+        let want = soundcraft_mix::render_range(&s_without_click(&s), range, 512);
+        for c in 0..2 {
+            assert_eq!(got[c].len(), 6000);
+            for (i, (a, b)) in got[c].iter().zip(&want[c]).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "channel {c}, sample {i}");
+            }
+        }
+        assert!(got[0].iter().any(|x| x.abs() > 0.1), "the clip is printed");
+    }
+
+    fn s_without_click(s: &Session) -> Session {
+        let mut s = s.clone();
+        s.edit.click = false;
+        s
     }
 
     #[test]

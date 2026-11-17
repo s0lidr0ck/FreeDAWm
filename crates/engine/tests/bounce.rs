@@ -139,3 +139,27 @@ fn a_surround_main_bounces_to_mp3_only_folded_down() {
     assert_eq!(info.channels, 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A real-time bounce's print, written through the bounce writer, is the offline bounce: the
+/// same file, normalized or not, and in every extra format.
+#[test]
+fn a_printed_bounce_writes_what_the_offline_bounce_writes() {
+    let e = soundcraft_engine::demo::demo_engine();
+    let s = e.session();
+    let dir = scratch("bounce-printed");
+    let r = Range::new(s.sample_rate.samples(10.0), s.sample_rate.samples(12.0));
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None, bitrate_kbps: 0 };
+    let print = soundcraft_mix::render_range(s, r, 1024);
+    for normalize in [false, true] {
+        let (a, b) = (dir.join("Offline.wav"), dir.join("Printed.wav"));
+        Bounce::new(e.session_arc(), &a, r, &opts, None, normalize, false).unwrap().run().unwrap();
+        let bounce = Bounce::new(e.session_arc(), &b, r, &opts, None, normalize, false).unwrap().printed(print.clone());
+        assert!(bounce.is_printed());
+        let done = bounce.run().unwrap();
+        let (_, offline) = soundcraft_audio_io::decode(&std::fs::read(&a).unwrap(), None).unwrap();
+        let (_, printed) = soundcraft_audio_io::decode(&std::fs::read(&b).unwrap(), None).unwrap();
+        assert_eq!(printed.channels, offline.channels, "normalize: {normalize}");
+        assert!(done.peak_db > -60.0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

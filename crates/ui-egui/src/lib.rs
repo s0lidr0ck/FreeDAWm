@@ -1197,6 +1197,9 @@ pub struct SoundApp {
     pub video: video_track::VideoPool,
     /// The Bounce Mix in progress, rendered a slice per frame.
     pub bounce: Option<soundcraft_engine::io::Bounce>,
+    /// A real-time bounce's pass: the live player prints the range while it plays it, then
+    /// `bounce` writes the print (see [`bounce::start`]).
+    pub print: Option<bounce::PrintPass>,
     /// Export › Stems in progress, rendered a slice per frame (see [`bounce::start_stems`]).
     pub stems: Option<soundcraft_engine::io::StemsJob>,
     /// The movie bounce (File › Export › Movie) in progress, a few frames per frame.
@@ -1390,6 +1393,7 @@ impl SoundApp {
             last_meter_poll: f64::NEG_INFINITY,
             video: video_track::VideoPool::default(),
             bounce: None,
+            print: None,
             stems: None,
             #[cfg(not(target_arch = "wasm32"))]
             movie: None,

@@ -64,11 +64,22 @@ pub struct BounceMore {
     pub tags: soundcraft_audio_io::export::Tags,
     /// Add the bounce to the session on new tracks.
     pub import: bool,
+    /// Play the range through the live player and print it (hardware inserts and outboard gear
+    /// heard and printed), instead of rendering offline.
+    pub realtime: bool,
 }
 
 impl Default for BounceMore {
     fn default() -> Self {
-        BounceMore { sample_rate: 0, dither: "tpdf".into(), channels: "as_mixed".into(), also: Vec::new(), tags: Default::default(), import: false }
+        BounceMore {
+            sample_rate: 0,
+            dither: "tpdf".into(),
+            channels: "as_mixed".into(),
+            also: Vec::new(),
+            tags: Default::default(),
+            import: false,
+            realtime: false,
+        }
     }
 }
 
@@ -91,6 +102,9 @@ impl BounceMore {
         }
         if self.import {
             params["import"] = json!(true);
+        }
+        if self.realtime {
+            params["realtime"] = json!(true);
         }
     }
 
@@ -158,6 +172,9 @@ impl BounceMore {
             ui.label(egui::RichText::new("Written as ID3 in MP3 files and as INFO and the BWF description in WAV files").small().color(dim));
         });
         crate::widgets::checkbox(ui, &mut self.import, "Add to session (new tracks at the range's start)");
+        crate::widgets::checkbox(ui, &mut self.realtime, "In real time").on_hover_text(
+            "Plays the range through the audio device and prints it as it plays: hardware inserts and outboard gear are heard and printed",
+        );
     }
 }
 
@@ -2143,9 +2160,11 @@ mod bounce_options_tests {
             also: vec!["mp3".into()],
             tags: soundcraft_audio_io::export::Tags { title: "Song".into(), ..Default::default() },
             import: true,
+            realtime: true,
         };
         let mut p = json!({});
         more.apply(&mut p);
+        assert_eq!(p["realtime"], true);
         assert_eq!(p["sample_rate"], 44_100);
         assert_eq!((p["dither"].as_str(), p["channels"].as_str()), (Some("shaped"), Some("split")));
         assert_eq!(p["also"], json!(["mp3"]));

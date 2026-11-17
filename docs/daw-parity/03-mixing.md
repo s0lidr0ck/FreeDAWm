@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated, hosted plug-ins' sample-accurate; faders follow | **Large**: built-in plug-ins block-rate |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K/PPM scales, a master loudness meter with loudness range | Small |
-| H. Mixdown and export | Offline bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no real-time bounce, AAF or OMF |
+| H. Mixdown and export | Offline and real-time bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots, find and spill | Small |
 
@@ -182,7 +182,7 @@ K-system scales, and the master a loudness meter.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
-| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** (not reached in round three): designed below (Design: real-time bounce): plays the range through the live player and records the main mix or a bus from a new record tap, then runs the file through the offline bounce's writer; testable against the silent clock, outboard gear needs hardware; about 4–6 h |
+| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Works** (2026-11-17, to the design below): Bounce Mix › "In real time" plays the range through the audio device and prints the main mix or a bus as it plays (`playback::print`, after the master's chain, without the click or the monitor stage), then writes the print through the offline bounce's writer, so every option applies. Editing waits behind the progress window; Cancel stops it; a pass that falls behind or is stopped writes nothing. Held in memory, so as long as Consolidate allows (about 93 min stereo at 48 kHz). Tested against a test device and against the offline bounce; through outboard gear needs hardware |
 | Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: the main mix and busses, in the dialog; hardware outputs are not offered. Left: a bounce source that taps a hardware output's buffer (`RangeRender` takes a bus only) with that output's latency, about 3–4 h |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
@@ -273,7 +273,7 @@ one a mix engineer would not forgive.
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Done** (2026-11-17); tags in FLAC, AIFF and Opus remain |
-| Real-time bounce | 4–6 | Designed (below), not built |
+| Real-time bounce | 4–6 | **Done** (2026-11-17) |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Done** |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
@@ -308,7 +308,7 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   the clip moves its automation; the flattened lane is identical in playback and bounce.
 - **Size.** 10–16 h, most of it the clip-lane drawing and the editing commands.
 
-### Design: real-time bounce (round three, not built)
+### Design: real-time bounce (round three, built 2026-11-17)
 
 - **The switch.** "In real time" in the Bounce dialog (`bounce` `realtime: true`). Only the main
   mix or a bus as the source; stems and Add to Session as for an offline bounce.
@@ -324,6 +324,11 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   an offline bounce).
 - **After.** The float file is fed through the existing bounce writer (rate conversion, dither,
   formats, tags, normalize), so every option of the offline bounce applies unchanged.
+- **As built.** The capture is a print tap of its own (`playback::print::PrintTap`, a lock-free
+  ring the audio thread fills after `MixEngine::render` and the UI drains each frame) rather than
+  a record tap, and the print is held in memory rather than written to a float file
+  (`Bounce::printed`): the bounce writer reads it as it reads a render. The click is off while a
+  print is attached and skip ranges play through; Stop is Cancel in the progress window.
 - **Tests.** With the silent clock (no device) a real-time bounce of the demo is sample-identical
   to the offline bounce. What needs hardware: outboard gear on a hardware insert or send.
 - **Size.** 4–6 h.
@@ -497,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | real-time bounce (Bounce Mix › In real time) |
 | 2026-11-17 | minor | designs for automation inside a clip, real-time bounce, multi-mono processing and hardware inserts |
 | 2026-11-17 | minor | several outputs from one track (additional outputs) |
 | 2026-11-17 | minor | automation Preview and Punch Preview |
