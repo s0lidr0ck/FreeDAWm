@@ -279,6 +279,7 @@ const DIALOG_COMMANDS: &[&str] = &[
     "ui.new_from_template",
     "file.import_audio",
     "file.import_midi",
+    "file.import_musicxml",
     "session.open",
     "session.save",
     "session.save_as",

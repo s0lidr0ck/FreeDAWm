@@ -63,6 +63,23 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"tracks": tracks}))
         }),
         cmd!(
+            "file.import_musicxml",
+            "MusicXML...",
+            ["File", "Import"],
+            None,
+            "{path, at?} — a partwise MusicXML score: a track per part, its meters and tempo marks on the tempo map, its keys on the Key ruler, its words as lyrics",
+            always,
+            |e, p| {
+                const C: &str = "file.import_musicxml";
+                let path = str_param(p, "path").ok_or_else(|| bad(C, "`path` required"))?.to_string();
+                let at = position_param(e, C, p, "at")?.unwrap_or(0);
+                let bytes = crate::io::read_file(&path)?;
+                let text = String::from_utf8(bytes).map_err(|_| bad(C, "a MusicXML file is UTF-8 text (a compressed .mxl is not read)"))?;
+                let tracks = crate::musicxml::import(e, &text, at)?;
+                Ok(json!({"tracks": tracks}))
+            }
+        ),
+        cmd!(
             noundo "file.import_dawproject",
             "DAWproject...",
             ["File", "Import"],

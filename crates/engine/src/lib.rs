@@ -40,6 +40,7 @@ pub mod monitor_capture;
 pub mod monitor_profiles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod movie_export;
+pub mod musicxml;
 pub mod note_index;
 pub mod open_job;
 pub mod pattern;
