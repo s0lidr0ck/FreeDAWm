@@ -5112,8 +5112,18 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                 }
             }
         }
+        // The controllers that can send something in this block: with the clip's index, those in
+        // `near` (less the delay) and ramp points whose ramp can reach into it; every one without.
+        let ctrl_range = soundcraft_midi::NoteIndex::ctrl_window(
+            clip.midi_index.0.as_deref(),
+            &sequence.ctrls,
+            near.start().saturating_sub(delay).saturating_sub(2),
+            near.end().saturating_sub(delay).saturating_add(2),
+        );
         let ctrls = |inst: &mut PluginSlot| {
-            for (i, c) in sequence.ctrls.iter().enumerate() {
+            let first = ctrl_range.start;
+            for (k, c) in sequence.ctrls.get(ctrl_range.clone()).unwrap_or(&[]).iter().enumerate() {
+                let i = first + k;
                 let tick = c.tick.saturating_add(delay);
                 let at = if c.tick >= 0 && near.contains(&tick) { at_tick(tick) } else { end };
                 if at >= pos && at < end && at < clip.end() {
@@ -8606,7 +8616,7 @@ mod tests {
     const ALL_OFF: (bool, usize, [u8; 3]) = (true, usize::MAX, [0xFF; 3]);
 
     /// The note index changes nothing that plays: random dense clips (overlapping notes of one
-    /// pitch, muted and hidden notes, channels, probabilities, playback quantize by grid, swing and
+    /// pitch, muted and hidden notes, controllers with ramps, channels, probabilities, playback quantize by grid, swing and
     /// groove, Real-Time delay and length, a start trim, locates with Note Chase) played block by
     /// block with and without their indexes give every message at the same offset.
     #[test]
@@ -8641,6 +8651,23 @@ mod tests {
                         length: 1 + if pick(20) == 0 { pick(20_000) } else { pick(600) } as i64,
                     });
                 }
+                // Controllers on a few lanes and channels, some ramps among them, and some hidden
+                // before the start.
+                for _ in 0..(100 + pick(300)) {
+                    let kind = match pick(4) {
+                        0 => CtrlKind::Cc(1),
+                        1 => CtrlKind::Cc(7),
+                        2 => CtrlKind::PitchBend,
+                        _ => CtrlKind::PolyPressure(48 + pick(12) as u8),
+                    };
+                    seq.ctrls.push(soundcraft_midi::CtrlEvent {
+                        tick: pick(30_000) as i64 - 1_000,
+                        channel: if channels { pick(4) as u8 } else { 0 },
+                        kind,
+                        value: if kind == CtrlKind::PitchBend { pick(16_000) as i32 - 8_000 } else { pick(128) as i32 },
+                        shape: if pick(3) == 0 { soundcraft_midi::CtrlShape::Ramp(pick(3) as f32 * 0.4 - 0.4) } else { Default::default() },
+                    });
+                }
                 seq.sort();
                 let len = 600_000 + pick(400_000) as i64;
                 let cid = s.new_clip_id();
@@ -8657,7 +8684,7 @@ mod tests {
             let indexed = {
                 let mut s = s.clone();
                 for c in s.track_mut(t).unwrap().playlist_mut().unwrap().clips.iter_mut() {
-                    c.midi_index.0 = c.midi_playing().map(|q| Arc::new(soundcraft_midi::NoteIndex::of(&q.notes)));
+                    c.midi_index.0 = c.midi_playing().map(|q| Arc::new(soundcraft_midi::NoteIndex::of_sequence(q)));
                     let notes = &c.midi_playing().unwrap().notes;
                     assert!(soundcraft_midi::NoteIndex::usable(c.midi_index.0.as_deref(), notes).is_some());
                 }
@@ -8687,6 +8714,7 @@ mod tests {
             };
             let (a, b) = (play(&s), play(&indexed));
             assert!(a.iter().filter(|e| e.2[0] & 0xF0 == 0x90).count() > 100, "round {round}: notes play");
+            assert!(a.iter().filter(|e| e.2[0] & 0xF0 == 0xB0).count() > 50, "round {round}: controllers play");
             assert_eq!(a.len(), b.len(), "round {round}");
             for (k, (x, y)) in a.iter().zip(&b).enumerate() {
                 assert_eq!(x, y, "round {round}, event {k}");

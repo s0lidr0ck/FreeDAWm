@@ -1,5 +1,5 @@
 //! Keeps each MIDI clip's [`NoteIndex`] (`Clip::midi_index`) made from the notes it plays, so the
-//! mix scheduler looks only at the notes near the playhead of a dense clip. Derived data, made
+//! mix scheduler looks only at the notes (and controllers) near the playhead of a dense clip. Derived data, made
 //! here off the audio thread: after a command or an undo step and when a session is opened. A
 //! clip whose index is missing or out of date is searched whole by the scheduler, as before.
 
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 fn stale(c: &Clip) -> bool {
     match c.midi_playing() {
-        Some(seq) => c.midi_index.0.as_ref().is_none_or(|ix| !ix.is_of(&seq.notes)),
+        Some(seq) => c.midi_index.0.as_ref().is_none_or(|ix| !ix.is_of_sequence(seq)),
         None => c.midi_index.0.is_some(),
     }
 }
@@ -23,7 +23,7 @@ pub fn any_stale(s: &Session) -> bool {
 pub fn refresh(s: &mut Session) {
     for c in s.tracks.iter_mut().flat_map(|t| t.playlists.iter_mut()).flat_map(|p| p.clips.iter_mut()) {
         if stale(c) {
-            c.midi_index.0 = c.midi_playing().map(|seq| Arc::new(NoteIndex::of(&seq.notes)));
+            c.midi_index.0 = c.midi_playing().map(|seq| Arc::new(NoteIndex::of_sequence(seq)));
         }
     }
 }
@@ -37,7 +37,7 @@ mod tests {
     fn fresh(e: &Engine, c: u64) -> bool {
         let clip = &e.session().find_clip(ClipId(c)).unwrap().1;
         let notes = &clip.midi_playing().unwrap().notes;
-        clip.midi_index.0.as_ref().is_some_and(|ix| ix.is_of(notes))
+        clip.midi_index.0.as_ref().is_some_and(|ix| ix.is_of(notes) && ix.is_of_sequence(clip.midi_playing().unwrap()))
     }
 
     #[test]
