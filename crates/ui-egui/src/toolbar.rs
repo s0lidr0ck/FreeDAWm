@@ -160,7 +160,8 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let row = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if icon_button(ui, vec2(36.0, 26.0), "zoom_toggle", app.engine.session().edit.zoom_toggle.is_some(), "Zoom Toggle (E)").clicked() {
+                // Nine buttons share the row the original seven had: 30 wide, 32 apart.
+                if icon_button(ui, vec2(30.0, 26.0), "zoom_toggle", app.engine.session().edit.zoom_toggle.is_some(), "Zoom Toggle (E)").clicked() {
                     crate::edit_window::zoom_toggle(app);
                 }
                 for (tool, icon) in [
@@ -170,6 +171,8 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
                     (Tool::Grabber, "grabber"),
                     (Tool::Scrubber, "scrubber"),
                     (Tool::Pencil, "pencil"),
+                    (Tool::Scissors, "scissors"),
+                    (Tool::Mute, "mute_tool"),
                 ] {
                     let smart_member = cur == Tool::Smart && matches!(tool, Tool::Trim | Tool::Selector | Tool::Grabber);
                     let mut tip = format!("{}{}", tool.label(), tool.fkey().map(|k| format!(" ({k})")).unwrap_or_default());
@@ -177,7 +180,7 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
                     if tool == Tool::Pencil {
                         tip.push_str(&format!(" · automation shape: {} (right-click to change)", shape.id()));
                     }
-                    let resp = icon_button(ui, vec2(36.0, 26.0), icon, cur == tool || smart_member, &tip);
+                    let resp = icon_button(ui, vec2(30.0, 26.0), icon, cur == tool || smart_member, &tip);
                     if resp.clicked() {
                         let _ = app.run("edit.tool", json!({"tool": tool.id()}));
                     }
@@ -203,8 +206,8 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
             });
             // Smart tool bracket above Trim/Selector/Grabber.
             let rr = row.response.rect;
-            let bx0 = rr.min.x + 76.0;
-            let bx1 = bx0 + 38.0 * 3.0 - 2.0;
+            let bx0 = rr.min.x + 64.0;
+            let bx1 = bx0 + 32.0 * 3.0 - 2.0;
             let bracket = Rect::from_min_max(pos2(bx0 - 2.0, r.min.y + 1.0), pos2(bx1 + 2.0, r.min.y + 5.0));
             let resp = ui.interact(bracket.expand2(vec2(0.0, 2.0)), ui.id().with("smart"), Sense::click());
             ui.painter().rect_filled(bracket, 1.0, if cur == Tool::Smart { t.accent } else { t.tool_bracket_off });

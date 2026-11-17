@@ -839,6 +839,13 @@ pub enum Gesture {
         fade_in: bool,
         to: Samples,
     },
+    /// A crossfade drawn by the Smart Tool from where two clips meet: centred on `edge`, as
+    /// wide as the drag to `to` either way.
+    Crossfade {
+        track: TrackId,
+        edge: Samples,
+        to: Samples,
+    },
     FadeCurve {
         clip: soundcraft_model::ClipId,
         fade_in: bool,

@@ -2896,6 +2896,61 @@ pub fn snap(s: &Session, at: Samples) -> Samples {
 }
 
 /// [`snap`] for an edit point on `track`: also to the zero crossing of its audio when asked.
+/// The join nearest `x` (within 8 points) where one clip on `track` ends as another starts or
+/// overlaps it: the sample the Smart Tool's crossfade centres on.
+fn crossfade_join_near(s: &Session, tl: Rect, track: &Track, x: f32) -> Option<Samples> {
+    let clips = track.clips();
+    clips
+        .iter()
+        .filter(|c| c.is_audio())
+        .filter_map(|c| {
+            let d = clips.iter().find(|d| d.id != c.id && d.is_audio() && d.start <= c.end() && d.start > c.start && d.end() > c.end())?;
+            Some(c.end().saturating_add(d.start) / 2)
+        })
+        .map(|edge| (edge, (x_of(s, tl, edge) - x).abs()))
+        .filter(|(_, dx)| *dx < 8.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(edge, _)| edge)
+}
+
+/// Separation grab (Pro Tools' Separation Grabber): a Grabber drag that starts inside a range
+/// selection on one of its tracks, over a clip the range cuts into, separates the clips at the
+/// range's edges (one undo step) and returns the pieces inside it, selected, for the drag to
+/// move. `None` (nothing done) for any other drag.
+fn separation_grab(app: &mut SoundApp, s: &Session, track: TrackId, hit: Option<&Clip>, at: Samples) -> Option<Vec<ClipId>> {
+    let r = s.edit.selection;
+    let c = hit?;
+    let cuts = r.start > c.start || r.end < c.end();
+    if r.is_empty() || !s.edit.selected_tracks.contains(&track) || !r.contains(at) || !cuts || !c.range().overlaps(&r) {
+        return None;
+    }
+    app.run("edit.separate", json!({})).ok()?;
+    let s = app.engine.session();
+    let ids: Vec<ClipId> = s
+        .tracks
+        .iter()
+        .filter(|t| s.edit.selected_tracks.contains(&t.id))
+        .flat_map(|t| t.clips().iter().filter(|c| c.start >= r.start && c.end() <= r.end).map(|c| c.id))
+        .collect();
+    let list: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    app.run("edit.select", json!({"clips": list, "exact": true})).ok()?;
+    (!ids.is_empty()).then_some(ids)
+}
+
+/// A click of the Scissors (separate the clip there, on the track and the tracks an active edit
+/// group spreads the point to) or the Mute tool (mute or unmute the clip, its clip group and the
+/// clips an edit group brings along).
+fn scissors_or_mute(app: &mut SoundApp, s: &Session, tool: Tool, track: TrackId, c: &Clip, at: Samples) {
+    if tool == Tool::Scissors {
+        if at > c.start && at < c.end() && app.run("edit.select", json!({"tracks": [track.0], "start": at, "end": at})).is_ok() {
+            let _ = app.run("edit.separate", json!({"at": at}));
+        }
+    } else {
+        let ids: Vec<u64> = ops::with_edit_groups(s, &ops::group_members(s, c.id)).iter().map(|id| id.0).collect();
+        let _ = app.run("edit.mute_clips", json!({"clips": ids}));
+    }
+}
+
 pub fn snap_on(s: &Session, at: Samples, track: TrackId) -> Samples {
     let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
     let gridded = if on { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
@@ -3360,6 +3415,8 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             Tool::Selector => egui::CursorIcon::Text,
             Tool::Zoom => egui::CursorIcon::ZoomIn,
             Tool::Pencil => egui::CursorIcon::Crosshair,
+            Tool::Scissors if hit.is_some() => egui::CursorIcon::VerticalText,
+            Tool::Mute if hit.is_some() => egui::CursorIcon::PointingHand,
             _ => egui::CursorIcon::Default,
         };
         ui.ctx().set_cursor_icon(icon);
@@ -3386,6 +3443,16 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     };
     if fade_corner.is_some() && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+    }
+    // The Smart Tool's crossfade zone: the lower corners where two clips meet. A drag from it
+    // draws a crossfade centred on the join, as wide as the drag.
+    let xfade_at = |q: Pos2| {
+        (tool == Tool::Smart && point_hit.is_none() && fade_corner.is_none() && auto_view.is_none() && q.y > lane.max.y - lane.height() * 0.28)
+            .then(|| crossfade_join_near(&s, tl, track, q.x))
+            .flatten()
+    };
+    if resp.hovered() && xfade_at(p).is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
     }
     if (curve_handle.is_some() || segment_hit.is_some()) && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
@@ -3464,6 +3531,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         app.gesture = Some(Gesture::FadeCurve { clip: c.id, fade_in, curvature: fade_curve_drag_value(fade, anchor, height, p.y), anchor, height });
         ui.ctx().request_repaint();
     } else if resp.drag_started()
+        && let Some(edge) = xfade_at(origin)
+    {
+        app.gesture = Some(Gesture::Crossfade { track: track.id, edge, to: edge });
+        ui.ctx().request_repaint();
+    } else if resp.drag_started()
         && let (Some(fade_in), Some(c)) = (fade_corner, hit.as_ref())
     {
         app.gesture = fade_drag_range(c, fade_in, at).map(|range| Gesture::Fade {
@@ -3473,6 +3545,20 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             to: if fade_in { range.end } else { range.start },
         });
         ui.ctx().request_repaint();
+    } else if resp.drag_started()
+        && eff == Tool::Grabber
+        && let Some(clips) = separation_grab(app, &s, track.id, hit.as_ref(), at_origin)
+    {
+        // Separation grab: the range's middle, cut free, moves.
+        app.gesture = Some(Gesture::MoveClips {
+            clips,
+            grab_at: at_origin,
+            delta: 0,
+            from_track: track.id,
+            to_track: track.id,
+            copy: mods.ctrl,
+            keep_time: mods.alt,
+        });
     } else if resp.drag_started() {
         app.gesture = match eff {
             Tool::Selector | Tool::Smart => {
@@ -3520,6 +3606,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
                 Some(Gesture::Pencil { track: track.id, param: auto_view.clone(), points: first.into_iter().collect(), line: mods.shift })
             }
             Tool::Zoom => Some(Gesture::ZoomBox { start: origin.x }),
+            Tool::Scissors | Tool::Mute => None,
         };
     }
     if let Some(Gesture::ClipGain { clip, track: t, pos, anchor, fine, fader_bottom }) = &mut app.gesture
@@ -3614,6 +3701,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             }
             Tool::Zoom => {
                 let _ = app.run(if mods.alt { "view.zoom_out" } else { "view.zoom_in" }, json!({}));
+            }
+            Tool::Scissors | Tool::Mute => {
+                if let Some(c) = &hit {
+                    scissors_or_mute(app, &s, eff, track.id, c, snap_on(&s, at, track.id));
+                }
             }
             Tool::Pencil => {
                 // One click of the Pencil adds a point wherever the lane shows automation (on the
@@ -3821,7 +3913,8 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.ui.status = "Copy".into();
             }
         }
-        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. }) => *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::TrimStart { clip, to, .. }) => *to = trim_snap(&s, *clip, true, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::TrimEnd { clip, to, .. }) => *to = trim_snap(&s, *clip, false, at, ctx.input(|i| i.modifiers.command)),
         Some(Gesture::WarpMarker { clip, index, to }) => {
             let new = drag_snap(&s, at, ctx.input(|i| i.modifiers.command));
             // Heard while dragging: the marker moves as the pointer goes (at most every
@@ -3843,6 +3936,7 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
             }
         }
         Some(Gesture::MidiClip { to, .. }) => *to = at,
+        Some(Gesture::Crossfade { to, .. }) => *to = at,
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
             if let Some(range) = s.find_clip(*clip).and_then(|(_, c)| fade_drag_range(c, *fade_in, at)) {
                 *to = if *fade_in { range.end } else { range.start };
@@ -4043,6 +4137,18 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
             }
             let _ = app.run("clip.copy_to", params);
         }
+        Some(Gesture::Crossfade { track, edge, to }) => {
+            // Centred on the join, as wide as the drag either way; `edit.fades_create` keeps it
+            // inside the audio both clips have (and says when it had to make it shorter).
+            let to = p.map_or(to, |p| sample_at(s, tl, p.x).max(0));
+            let half = to.saturating_sub(edge).saturating_abs();
+            if half > 0 {
+                let _ = app.run(
+                    "edit.fades_create",
+                    json!({"tracks": [track.0], "start": edge.saturating_sub(half).max(0), "end": edge.saturating_add(half)}),
+                );
+            }
+        }
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
             let to = p.map_or(to, |p| sample_at(s, tl, p.x).max(0));
             if let Some(fade) = s.find_clip(clip).and_then(|(_, c)| fade_drag_preview(c, fade_in, to)) {
@@ -4112,6 +4218,22 @@ fn automation_id(p: &AutoParam) -> String {
 }
 
 /// Grid snapping while dragging; holding Cmd/Ctrl swaps Grid and Slip.
+/// Where a trim of `clip`'s start (or end) dragged to `at` puts the edge. In relative Grid mode
+/// the edge moves by whole grid steps from where it was, keeping its offset from the grid;
+/// otherwise as [`drag_snap`].
+fn trim_snap(s: &Session, clip: ClipId, start: bool, at: Samples, flip: bool) -> Samples {
+    let relative = s.edit.edit_mode.is_grid() && s.edit.flag(ops::RELATIVE_GRID) && !flip;
+    match s.find_clip(clip).filter(|_| relative) {
+        Some((_, c)) => {
+            let (g, ctx) = (&s.edit.grid, s.grid_ctx());
+            let edge = if start { c.start } else { c.end() };
+            let line = g.line_at_or_before(edge, &ctx);
+            edge.saturating_add(g.snap(line.saturating_add(at.saturating_sub(edge)), &ctx).saturating_sub(line))
+        }
+        None => drag_snap(s, at, flip),
+    }
+}
+
 fn drag_snap(s: &Session, at: Samples, flip: bool) -> Samples {
     let gridded = if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
     // The suspend modifier lets go of clip edges and markers too.
@@ -4517,6 +4639,15 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     {
         let x = x_of(s, tl, *to);
         painter.line_segment([pos2(x, r[1]), pos2(x, r[3])], Stroke::new(2.0, Color32::WHITE));
+    }
+    if let Some(Gesture::Crossfade { track, edge, to }) = &app.gesture
+        && let Some((_, r)) = app.edit_layout.rows.iter().find(|(id, _)| *id == track.0)
+    {
+        // The crossfade being drawn: its span shaded on the track.
+        let half = to.saturating_sub(*edge).saturating_abs();
+        let (x0, x1) = (x_of(s, tl, edge.saturating_sub(half)), x_of(s, tl, edge.saturating_add(half)));
+        painter.rect_filled(Rect::from_min_max(pos2(x0, r[1]), pos2(x1.max(x0 + 1.0), r[3])), 0.0, Color32::from_white_alpha(40));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
     }
     if let Some(at) = scroll_to {
         let _ = app.engine.execute("view.scroll", &json!({"to": at}));

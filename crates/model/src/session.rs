@@ -95,10 +95,15 @@ pub enum Tool {
     Scrubber,
     Pencil,
     Smart,
+    /// A click separates the clip under the pointer there (Studio Pro's Split, Logic's Scissors).
+    Scissors,
+    /// A click mutes or unmutes the clip under the pointer.
+    Mute,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 7] = [Tool::Zoom, Tool::Trim, Tool::Selector, Tool::Grabber, Tool::Scrubber, Tool::Pencil, Tool::Smart];
+    pub const ALL: [Tool; 9] =
+        [Tool::Zoom, Tool::Trim, Tool::Selector, Tool::Grabber, Tool::Scrubber, Tool::Pencil, Tool::Smart, Tool::Scissors, Tool::Mute];
     pub fn id(self) -> &'static str {
         match self {
             Tool::Zoom => "zoom",
@@ -108,6 +113,8 @@ impl Tool {
             Tool::Scrubber => "scrubber",
             Tool::Pencil => "pencil",
             Tool::Smart => "smart",
+            Tool::Scissors => "scissors",
+            Tool::Mute => "mute",
         }
     }
     pub fn label(self) -> &'static str {
@@ -119,6 +126,8 @@ impl Tool {
             Tool::Scrubber => "Scrubber",
             Tool::Pencil => "Pencil",
             Tool::Smart => "Smart Tool",
+            Tool::Scissors => "Scissors",
+            Tool::Mute => "Mute Tool",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -133,7 +142,7 @@ impl Tool {
             Tool::Grabber => Some("F8"),
             Tool::Scrubber => Some("F9"),
             Tool::Pencil => Some("F10"),
-            Tool::Smart => None,
+            Tool::Smart | Tool::Scissors | Tool::Mute => None,
         }
     }
 }

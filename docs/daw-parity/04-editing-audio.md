@@ -34,8 +34,8 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
-| B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
+| A. Tools | Selector, Grabber (with separation grab), Trimmer, Smart Tool (with crossfades at joins), Zoomer, Scrubber, Scissors, Mute; fade handles on clips | Small: no waveform pencil |
+| B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid for moves and trims; an adaptive grid; snap to clip edges, markers, the playhead and zero crossings | Small |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups, typed selection numbers | Small |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
 | E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
@@ -59,14 +59,14 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Range selector | ● | ● | ● | ● | **Works** |
 | Object grabber, drag between tracks, modifier to copy | ● | ● | ● | ● | **Works** |
-| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Missing** |
+| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Works**: a Grabber drag that starts inside a range selection over a clip the range cuts into separates the clips at the range's edges on every selected track and drags the pieces inside it (Ctrl copies, Alt keeps the time); the separate and the move are two undo steps |
 | Trim tool | ● | ● | ● | ● | **Works**; stops at file ends and neighbours |
 | Stretch by dragging a clip edge | ● | ● | ● | ● | **Works**: Alt held as a trim starts (Trim tool or the Smart Tool's edge) stretches the material to the new edge, by the track's Elastic algorithm (pitch-preserving on a plain track, speed on Varispeed) |
 | Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Works**: Shift held as an end trim starts makes it a loop trim, the clip's material repeating to the new end in real time (no copies) |
 | Smart / combined tool | ● | ● | ● | ● | **Works**: trim, select, grab, fades, fade curve, clip gain by zone |
-| Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Missing** |
-| Scissors / split tool | ◐ | ● | ● | ● | **Missing** as a tool; Separate is a key (B, Cmd+E) |
-| Mute tool | ◐ | ● | ● | ● | **Missing** as a tool; Mute Clips is a key |
+| Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Works**: the Smart Tool's lower corners where two clips meet (within 8 points of the join) draw a crossfade centred on the join, as wide as the drag either way, through `edit.fades_create` (its short-audio warning included) |
+| Scissors / split tool | ◐ | ● | ● | ● | **Works**: the Scissors tool (toolbar) separates the clip under a click there (snapped as edit points are), on the tracks an active edit group spreads the point to; Separate is still a key (B, Cmd+E) |
+| Mute tool | ◐ | ● | ● | ● | **Works**: the Mute tool (toolbar) mutes or unmutes the clip under a click, with its clip group and the clips an edit group brings along; Mute Clips is still a key |
 | Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
 | Scrub tool with audio | ● | ◐ | ● | ● | **Works**: plays what it passes, both ways, at the drag's speed, through the track's built-in inserts and fader; on a ruler it scrubs every audible track (section 1) |
@@ -77,10 +77,10 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Slip (free) editing | ● | ● | ● | ● | **Works** |
-| Shuffle / ripple editing | ● | ● | ● | ● | **Partial**: drag, trim, cut, paste, duplicate, Trim to Selection and the A/S trims (Start / End to Insertion) honour it, the clip keeping its start and what follows closing up; a nudge still moves the clips alone, without rippling |
+| Shuffle / ripple editing | ● | ● | ● | ● | **Works**: drag, trim, cut, paste, duplicate, Trim to Selection and the A/S trims (Start / End to Insertion) honour it, the clip keeping its start and what follows closing up. A nudge moves the clips alone, without rippling: as designed (the owner's decision) |
 | Shuffle lock | ● | — | — | — | **Works** |
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
-| Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
+| Grid, absolute and relative | ● | ● | ● | ● | **Works**: in relative Grid a trim moves the clip's edge by whole grid steps from where it was, keeping its offset from the grid, as a move does; absolute Grid puts it on a line |
 | Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; typed values read "1/4.", "1/4 dotted", "1/8t" and "1/8 triplet" alike |
 | Grid in time, frames and samples | ● | ● | ● | ● | **Works**: lines do not drift and count from the session's timecode start (bug 18, fixed) |
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Works**: Options › Snap › Adaptive Grid: a musical grid's note value follows the zoom, the one whose lines are nearest 16 points apart (bar down to 1/64; no dotted or triplet); a time, frame or sample grid stays as chosen |
@@ -103,7 +103,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Type the selection's start, end and length | ● | ● | ● | ● | **Works**: a click on Start, End or Length in the counters opens a field that takes the value in the main counter's format (a length counts from the start: bars, beats and ticks in its meter) |
 | Tab to clip boundaries, Tab to Transient | ● | ● | ● | ● | **Works** |
 | Link timeline and edit selection | ● | — | — | — | **Works** |
-| Link track and edit selection | ● | ◐ | ● | ● | **Flag only** |
+| Link track and edit selection | ● | ◐ | ● | ● | **Works**, as designed: FreeDAWm keeps one selection list, so the selected tracks and the edit selection are always linked (the toolbar button stores a value nothing needs) |
 | Edit groups: an edit on one grouped track applies to all | ● | ● | ● | ● | **Works**: in an active group with Edit on (Track › Group…; not while groups are suspended) a clip grabbed, moved, nudged, trimmed or faded on one track brings the clips the other members hold at that time, as a clip group does (`alone` for one); a range selected on one track spreads to the group, so separate, cut, copy, paste and fades over it apply to all. One undo step |
 | Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; zoom-to-selection and fit size to the timeline on screen (bug 23, fixed) |
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
@@ -151,7 +151,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Fade in, fade out, crossfade, calculated in real time | ● | ● | ● | ● | **Works** |
 | Shapes: linear, equal power, S-curve, adjustable slope | ● | ● | ● | ● | **Works**, plus exponential and logarithmic |
-| Drag fade handles on the clip | ● | ● | ● | ● | **Works** for one clip; no crossfade by dragging |
+| Drag fade handles on the clip | ● | ● | ● | ● | **Works** for one clip, and a crossfade by dragging from where two clips meet (Smart Tool, row A) |
 | Fade dialog with preview, length and separate in and out shapes | ● | ◐ | ◐ | ● | **Works**: a shape and bend for each side (a crossfade's two sides too), a drawn preview, presets (built-in and saved); the length is the selection's |
 | Batch fades over many clips | ● | ● | ● | ● | **Works**: the fade dialog's batch option fades both ends of every clip inside the selection, at a length in ms |
 | Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
@@ -209,7 +209,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Built-in note-level pitch editor | ◐ | ◐ | ● | ● | **Works**: pitch, drift, vibrato, formant, per-note gain; monophonic sources |
-| Pitch editor on a stretched clip | ● | ● | ● | ● | **Missing**: a stretched clip plays untuned |
+| Pitch editor on a stretched clip | ● | ● | ● | ● | **Partial**: the note commands refuse a stretched clip with "tuning can't follow a stretched clip — commit the stretch first" rather than play it untuned (the design's first step). Left: analyse the stretched render (a source of its own) and map note times through the ratio |
 | Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
 | ARA 2 for third-party editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
@@ -227,7 +227,7 @@ why they score ◐ for "built-in".
 | Duplicate a track with a choice of what comes along | ● | ● | ● | ● | **Works**; the copy's clips keep the original's group and loop ids |
 | Freeze, commit | ● | ● | ● | ● | **Works** (see G for the commit bug) |
 | Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
-| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing |
+| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing. Left to the mixing section's follow-up, which has the same row (doc 03); design below |
 | Lock a whole track | ◐ | ● | ● | ● | **Works**: Lock Track in the track's menu; a command that would add, change or remove a clip on any of its playlists, or record-arm it, is refused and undone (Insert and Cut Time still move it) |
 | Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
 | Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
@@ -257,7 +257,7 @@ why they score ◐ for "built-in".
 | Undo leaves zoom, scroll and the current tool alone | ● | ● | ● | ● | **Works**: undo and redo keep the zoom, scroll, waveform height and tool, as they keep the Edit mode |
 | Undo history list | ● | ● | ● | ● | **Works**: the undone steps are listed after the current one, dimmed; a click on any step undoes or redoes to it |
 | Single-key editing commands | ● | ● | ● | ● | **Works** |
-| Editable key bindings | ● | ● | ● | ● | **Works**; a few fixed keys cannot be changed |
+| Editable key bindings | ● | ● | ● | ● | **Works**. Fixed, by design: the context keys that act by where the pointer or focus is or name a family of keys the binding strings cannot hold (Space, Shift/Cmd+Space, F12, Enter, F1–F10, Alt+1–4, `, Tab, = / keypad + −, Shift/Alt+Shift with = −, Cmd+=, Delete, R / T, and single-key editing), and five commands those keys run (track height up/down, clip gain nudge up/down, search). The key editor lists them as "(fixed)" and refuses to give them away |
 
 ## Bugs found on the way
 
@@ -417,7 +417,8 @@ None is built yet.
   history) use plus handles; write a new file of those spans and point the clips at it with new
   offsets. Needs a confirmation (it is the one destructive file operation) and runs off the UI
   thread like Commit.
-- **Smaller UI items** (A, B): a Scissors and a Mute tool (two `Tool` variants: click separates or
+- **Smaller UI items** (A, B; built in the follow-up except the last: a stretched clip's
+  waveform is still drawn unstretched): a Scissors and a Mute tool (two `Tool` variants: click separates or
   mutes the clip under the pointer, edit-group aware); separation grab (a Grabber drag inside a range
   selection separates at its edges, then drags the middle); a crossfade made by the Smart Tool at a
   clip boundary (bottom corner zone over two touching clips → `edit.fades_create` over the drag);
@@ -498,3 +499,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Relink a missing audio file from the Clip List |
 | 2026-11-17 | minor | Round three: status, and designs for the rows too large for one step |
 | 2026-11-17 | minor | The snap-suspend modifier works while selecting |
+| 2026-11-17 | minor | Follow-up: Scissors and Mute tools; Smart Tool crossfades at joins; separation grab; snap to the playhead; adaptive grid; relative-grid trims; clips dragged from the Clip List; grouped tracks comp together; Solo Take; pasting audio into another session brings it along; Shuffle nudge and linked selections as designed; fixed keys listed |
