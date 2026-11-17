@@ -963,6 +963,10 @@ pub struct KitFx {
 /// The first module id kit effects use; chain modules stay below it.
 pub const KIT_FX_BASE: u32 = u32::MAX - 63;
 
+/// The id automation lanes and mappings give a track's instrument (`Track::instrument`), which
+/// is not in the chain: just below the kit effects' ids, never handed to a chain module.
+pub const INSTRUMENT_MODULE: ModuleId = ModuleId(KIT_FX_BASE - 1);
+
 impl KitFx {
     /// Effect slots per bus.
     pub const SLOTS: usize = 4;
@@ -1243,8 +1247,8 @@ impl Mixer {
 
     /// Hands out the next unused id; `None` once the counter is exhausted.
     fn fresh_module_id(&mut self) -> Option<ModuleId> {
-        // Ids from `KIT_FX_BASE` up are the kit effects'.
-        if self.next_module >= KIT_FX_BASE {
+        // Ids from `KIT_FX_BASE` up are the kit effects', the one below it the instrument's.
+        if self.next_module >= INSTRUMENT_MODULE.0 {
             return None;
         }
         let id = self.next_module.max(1);
@@ -1258,14 +1262,14 @@ impl Mixer {
         let mut max_id = 0u32;
         let mut need = Vec::new();
         for (idx, ins) in self.inserts.iter().enumerate() {
-            if ins.id.0 == 0 || ins.id.0 >= KIT_FX_BASE || !seen.insert(ins.id) {
+            if ins.id.0 == 0 || ins.id.0 >= INSTRUMENT_MODULE.0 || !seen.insert(ins.id) {
                 need.push(idx);
             } else {
                 max_id = max_id.max(ins.id.0);
             }
         }
         self.next_module = self.next_module.max(max_id.saturating_add(1));
-        let mut exhausted = max_id >= KIT_FX_BASE - 1;
+        let mut exhausted = max_id >= INSTRUMENT_MODULE.0 - 1;
         if !exhausted {
             for idx in need {
                 match self.fresh_module_id() {

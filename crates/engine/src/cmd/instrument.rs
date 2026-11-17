@@ -85,6 +85,9 @@ fn set_instrument_param(e: &mut Engine, p: &Value) -> Result<Value> {
     let pi = info.param(&param).ok_or_else(|| bad(id, format!("`{}` has no parameter `{param}`", info.id)))?;
     let v = pi.clamp(value);
     ins.params.insert(param.clone(), v);
+    // A move in the instrument's window or drawer is written as automation in Touch, Latch and
+    // Write, as a chain module's is.
+    e.automation_changed(t, soundcraft_model::AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: param.clone() });
     Ok(json!({"track": t, "param": param, "value": v}))
 }
 
@@ -103,6 +106,25 @@ mod tests {
 
     fn instrument_of(e: &Engine, t: TrackId) -> Option<String> {
         e.session().track(t).and_then(|tr| tr.instrument.as_ref()).map(|i| i.plugin.clone())
+    }
+
+    /// Parity section 7: an instrument's parameter moved while playing in Touch is written to its
+    /// lane, as a chain module's is.
+    #[test]
+    fn an_instrument_parameter_moved_in_touch_is_written() {
+        let mut e = Engine::default();
+        let t = track(&mut e, "instrument");
+        e.execute("mix.automation_mode", &json!({"tracks": [t.0], "mode": "touch"})).unwrap();
+        let q = i64::from(e.session().sample_rate.hz()) / 10;
+        e.transport.playing = true;
+        e.transport.position = 0;
+        e.automation_pass(true);
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "level", "value": -18.0})).unwrap();
+        e.transport.position = q;
+        assert_eq!(e.automation_pass(true), 1);
+        let key = soundcraft_model::AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: "level".into() };
+        let lane = e.session().track(t).unwrap().lane(&key).expect("a lane on the instrument");
+        assert!(lane.points.iter().any(|p| p.value == -18.0), "{:?}", lane.points);
     }
 
     #[test]

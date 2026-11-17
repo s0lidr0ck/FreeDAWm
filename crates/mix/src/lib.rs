@@ -1571,7 +1571,7 @@ impl MixEngine {
             if let (Some(ins), Some(slot)) = (&t.instrument, st.instrument.as_mut())
                 && slot.id == ins.plugin
             {
-                apply_params(slot, ins, t, None, pos);
+                apply_params(slot, ins, t, Some(soundcraft_model::INSTRUMENT_MODULE), pos);
             }
         }
         self.reset();
@@ -3190,7 +3190,7 @@ fn process_strip(
                 // instance and the rendered audio matches the plugin's defaults — e.g. a saved
                 // `level = -12 dB` sounds the same as `level = -6 dB`.
                 if let Some(ins) = &t.instrument {
-                    apply_params(inst, ins, t, None, pos);
+                    apply_params(inst, ins, t, Some(soundcraft_model::INSTRUMENT_MODULE), pos);
                 }
                 inst.plugin.set_transport(&transport);
                 if inst.id == track_midi::ID {
@@ -5373,7 +5373,8 @@ fn note_insert_latency(t: &Track, strip: &mut Strip, pos: Samples) {
 
 fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track, module: Option<soundcraft_model::ModuleId>, pos: Samples) {
     apply_prepared(slot, ins);
-    // Automation lanes are keyed by module id; the instrument has none, so it picks up no lanes.
+    // Automation lanes are keyed by module id (the instrument's is `INSTRUMENT_MODULE`); `None`
+    // reads no lanes.
     let Some(module) = module else {
         return apply_values(slot, ins, |_, v| (v, false));
     };
@@ -7078,6 +7079,20 @@ mod tests {
         lane.set_point(0, -48.0);
         tr.automation.push(lane);
         assert_eq!(render_range(&s, Range::new(0, 12_000), 512), reference);
+    }
+
+    /// Parity section 7: a lane on the instrument (`INSTRUMENT_MODULE`) drives its parameter.
+    #[test]
+    fn an_instrument_lane_drives_the_instrument() {
+        let mut s = synth_session(-6.0);
+        let loud = render_range(&s, Range::new(0, 12_000), 512);
+        let mut lane =
+            soundcraft_model::AutomationLane::new(AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: "level".into() });
+        lane.set_point(0, -46.0);
+        s.tracks[0].automation.push(lane);
+        let quiet = render_range(&s, Range::new(0, 12_000), 512);
+        let (a, b) = (peak(&loud[0]), peak(&quiet[0]));
+        assert!(a > 0.01 && b < a * 0.05, "{a} against {b}");
     }
 
     fn session_with_dc(level: f32, frames: usize) -> (Session, TrackId) {

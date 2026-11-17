@@ -675,8 +675,9 @@ fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
 
 /// Parses an automation param id against a track. Accepts everything `AutoParam::parse` does,
 /// plus the legacy `plugin:<letter|index>:<p>` whose letter/index is a chain position, resolved to
-/// the module id at that position. A module id that is not in the track's chain resolves to
-/// nothing: its lane or view would be an orphan.
+/// the module id at that position, and `plugin:instrument:<p>` for the track's instrument. A
+/// module id that is not in the track's chain (or the instrument's) resolves to nothing: its lane
+/// or view would be an orphan.
 ///
 /// A plugin parameter is the module's own id ([`canonical_param`]: "outgain" is CleanQ's
 /// `outGain`); one the plugin does not have resolves to nothing, as a missing module does, so no
@@ -688,14 +689,18 @@ pub(crate) fn resolve_auto_param(track: &Track, s: &str) -> Option<AutoParam> {
             // As `AutoParam::parse`: the prefix and position in any case, the parameter id as written.
             let rest = s.trim();
             let (pos, param) = rest.get(..7).filter(|p| p.eq_ignore_ascii_case("plugin:")).and(rest.get(7..))?.split_once(':')?;
-            let pos = soundcraft_model::letter_slot(pos)?;
-            let module = track.mixer.inserts.get(usize::from(pos))?.id;
+            // `plugin:instrument:<p>` names the track's instrument.
+            let module = if pos.eq_ignore_ascii_case("instrument") {
+                soundcraft_model::INSTRUMENT_MODULE
+            } else {
+                track.mixer.inserts.get(usize::from(soundcraft_model::letter_slot(pos)?))?.id
+            };
             AutoParam::Plugin { module, param: param.to_string() }
         }
     };
     match parsed {
         AutoParam::Plugin { module, param } => {
-            let ins = track.mixer.module(module)?;
+            let ins = track.module_or_instrument(module)?;
             Some(AutoParam::Plugin { module, param: canonical_param(&ins.plugin, &param)? })
         }
         // A send lane past the last slot (`send_k_level`) would never play.
@@ -726,7 +731,7 @@ pub(crate) fn canonical_param(plugin: &str, param: &str) -> Option<String> {
 /// is, and so is a lane whose canonical twin already exists.
 pub(crate) fn restore_plugin_param_ids(s: &mut Session) {
     for t in &mut s.tracks {
-        let plugin_of = |m: ModuleId| t.mixer.module(m).map(|i| i.plugin.clone());
+        let plugin_of = |m: ModuleId| t.module_or_instrument(m).map(|i| i.plugin.clone());
         let mut renames: Vec<(usize, String)> = Vec::new();
         for (i, l) in t.automation.iter().enumerate() {
             if let AutoParam::Plugin { module, param } = &l.param
@@ -826,7 +831,7 @@ pub(crate) fn current_value(tr: &soundcraft_model::Track, param: &AutoParam) -> 
         AutoParam::Trim => 0.0,
         AutoParam::Width => tr.mixer.width,
         AutoParam::Balance => tr.mixer.balance,
-        AutoParam::Plugin { module, param } => tr.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
+        AutoParam::Plugin { module, param } => tr.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
 
@@ -1442,6 +1447,22 @@ mod tests {
         assert_eq!(e.session().tracks[0].mixer.inserts.iter().map(|i| i.plugin.as_str()).collect::<Vec<_>>(), ["eq_7band"]);
         let r = e.execute("mix.send", &json!({"track": "Gtr", "bus": "Verb"})).unwrap();
         assert_eq!(r["slot"], 0);
+    }
+
+    /// Parity section 7: the instrument's parameters take automation lanes.
+    #[test]
+    fn the_instrument_takes_automation_lanes() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "instrument"})).unwrap();
+        let t = e.session().tracks.last().unwrap().id.0;
+        e.execute("automation.set_point", &json!({"track": t, "param": "plugin:instrument:level", "at": 0, "value": -20.0})).unwrap();
+        let key = AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: "level".into() };
+        let tr = e.session().track(TrackId(t)).unwrap();
+        assert_eq!(tr.lane(&key).map(|l| l.points.len()), Some(1));
+        // By its id too, and shown as a lane; a parameter the instrument does not have is refused.
+        e.execute("track.auto_lane", &json!({"track": t, "param": key.id(), "show": true})).unwrap();
+        assert!(e.session().track(TrackId(t)).unwrap().auto_lanes.contains(&key.id()));
+        assert!(e.execute("automation.set_point", &json!({"track": t, "param": "plugin:instrument:nonsense", "at": 0, "value": 1.0})).is_err());
     }
 
     #[test]

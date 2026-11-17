@@ -44,10 +44,10 @@ pub use markers::{Group, LocationView, MarkerKind, MemoryLocation};
 pub use midi_fx::{ARP_PATTERNS, CHORD_SHAPES, MAX_MIDI_FX, MIDI_FX_RATES, MidiFx, MidiFxKind, ROOT_NAMES, SCALES};
 pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAction};
 pub use mixer::{
-    Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx, KitLayout, KitPad,
-    MAX_MODULES, MAX_TRACK_DELAY, MidiIn, MidiTransform, Mixer, ModuleId, ModuleRef, OutputPath, PreparedState, REFERENCE_KEYS, Route, SEND_SLOTS,
-    SPACE_IR_KEY, SendSlot, SidechainSource, Speaker, StripSize, SurroundPan, default_input_channel, fader_db_to_pos, fader_pos_to_db,
-    is_reference_key, track_input_channel,
+    Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, INSTRUMENT_MODULE, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx,
+    KitLayout, KitPad, MAX_MODULES, MAX_TRACK_DELAY, MidiIn, MidiTransform, Mixer, ModuleId, ModuleRef, OutputPath, PreparedState, REFERENCE_KEYS,
+    Route, SEND_SLOTS, SPACE_IR_KEY, SendSlot, SidechainSource, Speaker, StripSize, SurroundPan, default_input_channel, fader_db_to_pos,
+    fader_pos_to_db, is_reference_key, track_input_channel,
 };
 pub use notes::{MAX_NOTE_CHARS, MAX_NOTES, Note, note_typed, sanitize_notes, split_tags};
 pub use scout::{

@@ -1139,7 +1139,7 @@ fn static_value(track: &Track, p: &AutoParam) -> f32 {
         AutoParam::Trim => 0.0,
         AutoParam::Width => track.mixer.width,
         AutoParam::Balance => track.mixer.balance,
-        AutoParam::Plugin { module, param } => track.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
+        AutoParam::Plugin { module, param } => track.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
 
@@ -1825,7 +1825,7 @@ pub fn view_label(track: &Track, v: &str) -> String {
 /// The lane name, with a module's id replaced by its plugin and parameter names.
 fn param_label(track: &Track, p: &AutoParam) -> String {
     if let AutoParam::Plugin { module, param } = p
-        && let Some(ins) = track.mixer.module(*module)
+        && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
     {
         let name = info.param(param).map_or(param.as_str(), |pi| pi.name);
@@ -2773,7 +2773,7 @@ fn breakpoint_at(s: &Session, tl: Rect, lane: Rect, track: &Track, p: &AutoParam
 
 fn plugin_range(track: &Track, p: &AutoParam) -> (f32, f32) {
     if let AutoParam::Plugin { module, param } = p
-        && let Some(ins) = track.mixer.module(*module)
+        && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
         && let Some(pi) = info.param(param)
     {

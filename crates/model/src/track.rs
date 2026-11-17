@@ -405,6 +405,12 @@ impl Track {
         self.playlist().map_or(&[], |p| p.clips.as_slice())
     }
 
+    /// The module automation lanes and mappings name by `id`: a chain module, or the
+    /// instrument for [`crate::INSTRUMENT_MODULE`].
+    pub fn module_or_instrument(&self, id: crate::ModuleId) -> Option<&crate::Insert> {
+        if id == crate::INSTRUMENT_MODULE { self.instrument.as_ref() } else { self.mixer.module(id) }
+    }
+
     pub fn lane(&self, p: &AutoParam) -> Option<&AutomationLane> {
         self.automation.iter().find(|l| &l.param == p)
     }

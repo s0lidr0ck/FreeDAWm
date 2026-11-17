@@ -59,9 +59,8 @@ The gaps are of four kinds:
    clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
    probability (the rows below say how far each goes). Still absent: chord pads, editable drum maps and note entry in the score.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
-   filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
-   automated, instrument latency is not compensated, and notes from clips reach the instrument
-   without their channel.
+   filter, no LFO and no presets; the sampler holds one sample. Instrument parameters now take
+   automation lanes, instrument latency is compensated and notes from clips keep their channel.
 
 ## A. The note editor
 
@@ -254,14 +253,14 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 |---|:-:|:-:|:-:|:-:|---|
 | Swap the instrument, keep the notes | ● | ● | ● | ● | **Works** |
 | Track presets: instrument plus effects | ● | ● | ● | ● | **Works** |
-| Automate instrument parameters | ● | ● | ● | ● | **Missing**, for built-in and hosted instruments alike |
+| Automate instrument parameters | ● | ● | ● | ● | **Works** for built-in and hosted instruments: the lane picker lists the instrument's parameters under its name, a lane plays into the instrument as an insert's does (sample-block rate), and scripts name it `plugin:instrument:<param>` (stored with the instrument's own module id, `INSTRUMENT_MODULE`). Sessions without such lanes sound as before. Not carried to DAWproject |
 | Instrument latency compensated | ● | ● | ● | ● | **Works** (bug 23, fixed) |
 | Freeze with the release tail | ● | ● | ● | ● | **Works** |
 | Mix bounce keeps the last note's tail | ● | ● | ● | ● | **Works**: the Bounce dialog's tail (`file.bounce_mix` `tail`, up to 30 s past the range; see [section 3](03-mixing.md)) lets the last notes ring out; it is 0 unless set |
 | Third-party instruments with state saved in the session | ● | ● | ● | ● | **Works** (CLAP, VST3, AU) |
 | Their editor windows | ● | ● | ● | ● | **Partial**: not for AU. **Not planned here**: an AU editor needs a Mac to build and test |
 | Per-note expression sent to plug-ins | ◐ | ● | ● | ● | **Missing**: no note ids or note expressions |
-| Parameter moves in the plug-in window recorded as automation | ● | ● | ● | ● | **Missing** |
+| Parameter moves in the plug-in window recorded as automation | ● | ● | ● | ● | **Works**: a parameter changed in a plug-in's own window (or its drawer) while playing in Write, Touch or Latch is written to its lane, an instrument's too. For inserts this was already built (every parameter command reports the move to the automation pass); the instrument's now reports it as well |
 | A crashing plug-in does not take the session down | ○ | ○ | ◐ | ○ | **Partial**: scanning is isolated; a CLAP plug-in can run in a helper process (opt-in, a crash silences that plug-in; [section 8](08-unique-features.md) owns the rest: VST3, AU, editors, a setting) |
 | Preview an instrument preset or a MIDI file from the browser | ◐ | ● | ● | ● | **Missing** |
 
@@ -435,3 +434,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Flam and pitch inversion in the MIDI Operations window |
 | 2026-11-17 | minor | The release velocity shown and set in the note bar |
 | 2026-11-17 | minor | Notes split out by channel too (the pitch split was already built) |
+| 2026-11-17 | minor | Instrument parameters take automation lanes, and their moves are written in Touch, Latch and Write |

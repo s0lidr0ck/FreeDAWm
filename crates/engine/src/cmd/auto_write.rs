@@ -247,7 +247,7 @@ fn writable(s: &Session, t: TrackId, p: &AutoParam) -> bool {
         // Width and balance shape a stereo track's main output.
         AutoParam::Width | AutoParam::Balance => tr.mixer.pan.len() == 2,
         AutoParam::SendLevel(i) | AutoParam::SendPan(i) | AutoParam::SendMute(i) => tr.mixer.sends.get(usize::from(*i)).is_some_and(Option::is_some),
-        AutoParam::Plugin { module, param } => tr.mixer.module(*module).is_some_and(|ins| !is_link_role_param(&ins.plugin, param)),
+        AutoParam::Plugin { module, param } => tr.module_or_instrument(*module).is_some_and(|ins| !is_link_role_param(&ins.plugin, param)),
     }
 }
 

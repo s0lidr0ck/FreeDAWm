@@ -1024,7 +1024,7 @@ fn auto_lanes(e: &mut Engine, p: &Value) -> Result<Value> {
         let mut ids: Vec<String> = Vec::new();
         for l in tr.automation.iter().filter(|l| !l.points.is_empty()) {
             let ok = match &l.param {
-                soundcraft_model::AutoParam::Plugin { module, .. } => tr.mixer.module(*module).is_some(),
+                soundcraft_model::AutoParam::Plugin { module, .. } => tr.module_or_instrument(*module).is_some(),
                 _ => true,
             };
             let id = l.param.id();

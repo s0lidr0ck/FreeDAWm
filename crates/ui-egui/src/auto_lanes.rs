@@ -64,7 +64,9 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
             v.push(Choice { group: Some(group.clone()), param: p, label: format!("send {} {label}", letter.to_ascii_lowercase()) });
         }
     }
-    for ins in &track.mixer.inserts {
+    // The instrument's parameters, under its name (lanes name it by `INSTRUMENT_MODULE`).
+    let instrument = track.instrument.as_ref().map(|i| soundcraft_model::Insert { id: soundcraft_model::INSTRUMENT_MODULE, ..i.clone() });
+    for ins in instrument.iter().chain(&track.mixer.inserts) {
         let Some(info) = crate::mix_window::plugin_info(&ins.plugin) else { continue };
         for p in crate::edit_window::lane_params(track, ins, info) {
             let name = crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name);
@@ -134,7 +136,7 @@ pub fn shown_lanes(track: &Track) -> Vec<AutoParam> {
     for id in &track.auto_lanes {
         let Some(p) = AutoParam::parse(id) else { continue };
         if let AutoParam::Plugin { module, .. } = &p
-            && track.mixer.module(*module).is_none()
+            && track.module_or_instrument(*module).is_none()
         {
             continue;
         }
