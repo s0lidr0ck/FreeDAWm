@@ -243,7 +243,7 @@ pub fn refused_edit(id: &str, before: &Session, after: &Session) -> Option<Strin
         let new = after.track(old.id).filter(|new| new.frozen_audio() == old.frozen_audio() && *new != old)?;
         if new.mixer.record_arm && !old.mixer.record_arm {
             Some(format!("`{}` is frozen. {UNFREEZE_TO_RECORD}", old.name))
-        } else if sounds_differ(before, old, after, new) {
+        } else if sounds_differ(old, new) {
             Some(format!("`{}` is frozen. {UNFREEZE_TO_EDIT}", old.name))
         } else {
             None
@@ -273,13 +273,13 @@ pub fn refused_edit(id: &str, before: &Session, after: &Session) -> Option<Strin
 /// mode, the input, trim, phase, width and Elastic Audio; and on a MIDI or instrument track the
 /// instrument (plugin, parameters, state) and the clips' timebase. Modules after the point are live: any
 /// edit to them (adding, removing and reordering them among themselves included) is allowed.
-fn sounds_differ(sa: &Session, a: &Track, sb: &Session, b: &Track) -> bool {
+fn sounds_differ(a: &Track, b: &Track) -> bool {
     let (fa, fb) = (frozen_part(a), frozen_part(b));
     let module_lanes = |t: &Track| {
         let frozen = |m: &ModuleId| fa.is_some_and(|f| f.iter().any(|i| i.id == *m));
         t.automation.iter().filter(|l| matches!(&l.param, AutoParam::Plugin { module, .. } if frozen(module))).cloned().collect::<Vec<_>>()
     };
-    !same_audible_clips(sa, a, sb, b)
+    !same_audible_clips(a, b)
         || fa.map(|f| f.iter().map(audible_module).collect::<Vec<_>>()) != fb.map(|f| f.iter().map(audible_module).collect::<Vec<_>>())
         || a.mixer.automation_mode != b.mixer.automation_mode
         || a.mixer.input != b.mixer.input
@@ -321,9 +321,9 @@ fn audible_module(i: &soundcraft_model::Insert) -> AudibleModule<'_> {
 }
 
 /// The active playlists play the same: clip for clip, everything but identity and labels, clip
-/// effects included (they live in the session's edit values, by clip id), and on a MIDI clip its
-/// MIDI Cleanup (the settings, the Original/Cleaned switch, and the cleaned notes that play).
-fn same_audible_clips(sa: &Session, a: &Track, sb: &Session, b: &Track) -> bool {
+/// effects included (as heard: none while bypassed), and on a MIDI clip its MIDI Cleanup (the
+/// settings, the Original/Cleaned switch, and the cleaned notes that play).
+fn same_audible_clips(a: &Track, b: &Track) -> bool {
     let (ca, cb) = (a.clips(), b.clips());
     ca.len() == cb.len()
         && ca.iter().zip(cb).all(|(x, y)| {
@@ -338,17 +338,8 @@ fn same_audible_clips(sa: &Session, a: &Track, sb: &Session, b: &Track) -> bool 
                 && x.fade_out == y.fade_out
                 && x.muted == y.muted
                 && x.stretch == y.stretch
-                && clip_fx(sa, x.id.0) == clip_fx(sb, y.id.0)
+                && x.live_effects() == y.live_effects()
         })
-}
-
-/// A clip's effect settings (`clip_fx.<clip>.*` and its bypass), keyed without the clip id.
-fn clip_fx(s: &Session, clip: u64) -> Vec<(String, f64)> {
-    let mut out = values_under(s, &format!("clip_fx.{clip}."));
-    if let Some(v) = s.edit.values.get(&format!("clip_fx.bypass.{clip}")) {
-        out.push(("bypass".into(), *v));
-    }
-    out
 }
 
 /// A track's settings under `<group>.<track>.` (`rtp.<track>.*`: the MIDI Real-Time Properties),

@@ -1,9 +1,80 @@
-//! Second-order IIR filters designed from the RBJ "Audio EQ Cookbook" formulas, plus first-order
+//! Second-order IIR filters designed from the RBJ "Audio EQ Cookbook" formulas (bells and shelves
+//! matched to their analog prototypes up to Nyquist instead, see [`matched`]), plus first-order
 //! low/high-pass sections (bilinear transform) for 6 dB/oct slopes.
 
 use std::f64::consts::PI;
 
 use crate::util::{flush, sane_sr};
+
+/// Which bell or shelf [`matched`] designs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Matched {
+    Peak,
+    LowShelf,
+    HighShelf,
+}
+
+/// A bell or shelf designed to follow its analog prototype all the way to Nyquist (M. Vicanek,
+/// "Matched Second Order Digital Filters", 2016): poles matched to the analog ones (impulse
+/// invariance), zeros chosen so the magnitude equals the analog one at DC, at the centre `w0`
+/// (rad/sample) and at Nyquist. The bilinear transform (the RBJ cookbook) instead pins the gain
+/// at Nyquist to the gain at analog infinity, so a bell or shelf high up at 44.1 or 48 kHz
+/// narrows and loses gain on its top side ("cramping").
+///
+/// The analog prototypes are the cookbook's, with `a` = 10^(dB/40): bell
+/// `(s² + s·a/q + 1)/(s² + s/(a·q) + 1)`, low shelf `a·(s² + s·√a/q + a)/(a·s² + s·√a/q + 1)`,
+/// high shelf `a·(a·s² + s·√a/q + 1)/(s² + s·√a/q + a)`, so a design low down matches the
+/// cookbook's. `(b0, b1, b2, a1, a2)` with `a0 = 1`; `None` where the matched poles would sit at
+/// or past Nyquist (a high shelf near the top boosting): use the bilinear design there.
+pub fn matched(kind: Matched, w0: f64, q: f64, a: f64) -> Option<[f64; 5]> {
+    if !(w0.is_finite() && q.is_finite() && a.is_finite()) || w0 <= 0.0 || w0 >= PI || q <= 0.0 || a <= 0.0 {
+        return None;
+    }
+    let ra = a.sqrt();
+    // The analog poles (natural frequency, relative to w0, and damping) and |H|² at Ω (relative).
+    let (wn, zeta) = match kind {
+        Matched::Peak => (1.0, 1.0 / (2.0 * a * q)),
+        Matched::LowShelf => (1.0 / ra, 1.0 / (2.0 * q)),
+        Matched::HighShelf => (ra, 1.0 / (2.0 * q)),
+    };
+    let mag2 = |w: f64| {
+        let o = w / w0;
+        let o2 = o * o;
+        let x = a * o2 / (q * q);
+        match kind {
+            Matched::Peak => {
+                let d = (1.0 - o2) * (1.0 - o2);
+                (d + (a * o / q).powi(2)) / (d + (o / (a * q)).powi(2))
+            }
+            Matched::LowShelf => a * a * ((a - o2).powi(2) + x) / ((1.0 - a * o2).powi(2) + x),
+            Matched::HighShelf => a * a * ((1.0 - a * o2).powi(2) + x) / ((a - o2).powi(2) + x),
+        }
+    };
+    let wp = wn * w0;
+    if wp >= 0.95 * PI {
+        return None;
+    }
+    let r = (-zeta * wp).exp();
+    let a1 = if zeta < 1.0 { -2.0 * r * (wp * (1.0 - zeta * zeta).sqrt()).cos() } else { -2.0 * r * (wp * (zeta * zeta - 1.0).sqrt()).cosh() };
+    let a2 = r * r;
+    // |B(e^jw)|² = B0·φ0 + B1·φ1 + B2·φ2 with φ1 = sin²(w/2), φ0 = 1 - φ1, φ2 = 4·φ0·φ1, and the same
+    // for the poles (A0 = (1 + a1 + a2)², A1 = (1 - a1 + a2)², A2 = -4·a2).
+    let (big_a0, big_a1, big_a2) = ((1.0 + a1 + a2).powi(2), (1.0 - a1 + a2).powi(2), -4.0 * a2);
+    let p1 = (w0 / 2.0).sin().powi(2);
+    let p0 = 1.0 - p1;
+    let p2 = 4.0 * p0 * p1;
+    let b0_ = big_a0 * mag2(0.0);
+    let b1_ = big_a1 * mag2(PI);
+    let b2_ = (mag2(w0) * (big_a0 * p0 + big_a1 * p1 + big_a2 * p2) - b0_ * p0 - b1_ * p1) / p2;
+    let (s0, s1) = (b0_.max(0.0).sqrt(), b1_.max(0.0).sqrt());
+    let w = 0.5 * (s0 + s1);
+    let b0 = 0.5 * (w + (w * w + b2_).max(0.0).sqrt());
+    if b0.abs() < 1e-12 {
+        return None;
+    }
+    let out = [b0, 0.5 * (s0 - s1), -b2_ / (4.0 * b0), a1, a2];
+    out.iter().all(|v| v.is_finite()).then_some(out)
+}
 
 /// Filter response shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -59,6 +130,20 @@ impl Coeffs {
             FilterType::BandPass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::Notch => (1.0, -2.0 * cw, 1.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::AllPass => (1.0 - alpha, -2.0 * cw, 1.0 + alpha, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
+            FilterType::Peak | FilterType::LowShelf | FilterType::HighShelf
+                if let Some([b0, b1, b2, a1, a2]) = matched(
+                    match kind {
+                        FilterType::Peak => Matched::Peak,
+                        FilterType::LowShelf => Matched::LowShelf,
+                        _ => Matched::HighShelf,
+                    },
+                    w0,
+                    q,
+                    a,
+                ) =>
+            {
+                (b0, b1, b2, 1.0, a1, a2)
+            }
             FilterType::Peak => (1.0 + alpha * a, -2.0 * cw, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cw, 1.0 - alpha / a),
             FilterType::LowShelf => {
                 let s = 2.0 * a.sqrt() * alpha;
@@ -196,6 +281,89 @@ mod tests {
         assert!((c.magnitude_db(1000.0, 48_000.0) + 3.01).abs() < 0.05);
         let c1 = Coeffs::design(FilterType::HighPass1, 1000.0, 0.0, 0.0, 48_000.0);
         assert!((c1.magnitude_db(1000.0, 48_000.0) + 3.01).abs() < 0.05);
+    }
+
+    /// The analog prototype's level in dB at `f` (the cookbook's bell and shelves, `a` as there).
+    fn analog_db(kind: FilterType, f0: f64, q: f64, db: f64, f: f64) -> f64 {
+        let a = 10f64.powf(db / 40.0);
+        let o = f / f0;
+        let (o2, x) = (o * o, a * o * o / (q * q));
+        let m2 = match kind {
+            FilterType::Peak => ((1.0 - o2).powi(2) + (a * o / q).powi(2)) / ((1.0 - o2).powi(2) + (o / (a * q)).powi(2)),
+            FilterType::LowShelf => a * a * ((a - o2).powi(2) + x) / ((1.0 - a * o2).powi(2) + x),
+            _ => a * a * ((1.0 - a * o2).powi(2) + x) / ((a - o2).powi(2) + x),
+        };
+        10.0 * m2.log10()
+    }
+
+    /// The cookbook's (bilinear) design, as it was before the matched one.
+    fn rbj(kind: FilterType, f0: f64, q: f64, db: f64, sr: f64) -> Coeffs {
+        let w0 = 2.0 * PI * f0 / sr;
+        let (sw, cw) = w0.sin_cos();
+        let (alpha, a) = (sw / (2.0 * q), 10f64.powf(db / 40.0));
+        let s = 2.0 * a.sqrt() * alpha;
+        let (b0, b1, b2, a0, a1, a2) = match kind {
+            FilterType::Peak => (1.0 + alpha * a, -2.0 * cw, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cw, 1.0 - alpha / a),
+            FilterType::LowShelf => (
+                a * ((a + 1.0) - (a - 1.0) * cw + s),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cw),
+                a * ((a + 1.0) - (a - 1.0) * cw - s),
+                (a + 1.0) + (a - 1.0) * cw + s,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cw),
+                (a + 1.0) + (a - 1.0) * cw - s,
+            ),
+            _ => (
+                a * ((a + 1.0) + (a - 1.0) * cw + s),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cw),
+                a * ((a + 1.0) + (a - 1.0) * cw - s),
+                (a + 1.0) - (a - 1.0) * cw + s,
+                2.0 * ((a - 1.0) - (a + 1.0) * cw),
+                (a + 1.0) - (a - 1.0) * cw - s,
+            ),
+        };
+        let n = |x: f64| (x / a0) as f32;
+        Coeffs { b0: n(b0), b1: n(b1), b2: n(b2), a1: n(a1), a2: n(a2) }
+    }
+
+    /// Built-in effects parity, bug 16: bells and shelves near the top of the range at 44.1 and
+    /// 48 kHz narrowed and lost gain (the bilinear transform's cramping). The matched design keeps
+    /// to the analog shape, at most half as far from it as the bilinear one and under 2 dB, with
+    /// the centre exact.
+    #[test]
+    fn bells_and_shelves_follow_the_analog_shape_up_high() {
+        for sr in [44_100.0f32, 48_000.0] {
+            for (kind, f0, q, db) in [
+                (FilterType::Peak, 10_000.0, 0.7, 12.0),
+                (FilterType::Peak, 14_000.0, 2.0, -9.0),
+                (FilterType::Peak, 16_000.0, 1.0, 6.0),
+                (FilterType::Peak, 12_000.0, 8.0, 12.0),
+                (FilterType::LowShelf, 8_000.0, 0.7, 6.0),
+                (FilterType::HighShelf, 6_000.0, 0.7, -8.0),
+                (FilterType::HighShelf, 4_000.0, 0.7, 6.0),
+            ] {
+                let c = Coeffs::design(kind, f0 as f32, q as f32, db as f32, sr);
+                let old = rbj(kind, f0, q, db, f64::from(sr));
+                let (mut worst, mut was) = (0.0f64, 0.0f64);
+                let mut f = 20.0;
+                while f < 20_000.0 {
+                    let want = analog_db(kind, f0, q, db, f);
+                    worst = worst.max((f64::from(c.magnitude_db(f as f32, sr)) - want).abs());
+                    was = was.max((f64::from(old.magnitude_db(f as f32, sr)) - want).abs());
+                    f *= 1.05;
+                }
+                let what = format!("{kind:?} {f0} Hz q {q} {db} dB at {sr}");
+                assert!(worst < 2.0 && worst <= 0.5 * was, "{what}: off by {worst:.2} dB (bilinear {was:.2})");
+                assert!((f64::from(c.magnitude_db(f0 as f32, sr)) - analog_db(kind, f0, q, db, f0)).abs() < 0.05, "{what}: at its centre");
+            }
+        }
+        // Low down the matched design and the cookbook's agree.
+        let c = Coeffs::design(FilterType::Peak, 200.0, 1.0, 6.0, 48_000.0);
+        for f in [50.0, 150.0, 200.0, 300.0, 1000.0] {
+            assert!((f64::from(c.magnitude_db(f, 48_000.0)) - analog_db(FilterType::Peak, 200.0, 1.0, 6.0, f64::from(f))).abs() < 0.05);
+        }
+        // 0 dB is the identity.
+        let c = Coeffs::design(FilterType::Peak, 12_000.0, 1.0, 0.0, 48_000.0);
+        assert!((c.b0 - 1.0).abs() < 1e-5 && (c.b1 - c.a1).abs() < 1e-5 && (c.b2 - c.a2).abs() < 1e-5);
     }
 
     #[test]

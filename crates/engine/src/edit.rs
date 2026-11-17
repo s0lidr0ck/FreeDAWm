@@ -1,9 +1,10 @@
 //! Editing algorithms on playlists, independent of the command layer.
 //!
 //! Model rules: clips on a playlist are sorted and do not overlap, except where two clips
-//! overlap exactly over a crossfade (the earlier clip fades out while the later fades in).
-//! Placing a clip overwrites whatever is under it (like the incumbent's Slip mode); Shuffle
-//! mode also ripples later clips.
+//! overlap exactly over a crossfade (the earlier clip fades out while the later fades in), or
+//! where a clip of a higher layer covers others (the Layer overlap mode, [`Overlap`]).
+//! Placing a clip overwrites whatever is under it (like the incumbent's Slip mode) unless the
+//! session's overlap mode says otherwise; Shuffle mode also ripples later clips.
 
 use soundcraft_model::{AutoParam, AutomationPoint, Clip, ClipContent, ClipId, Fade, FadeShape, Session, Track, TrackId};
 use soundcraft_time::{Range, SampleRate, Samples, TempoMap};
@@ -49,32 +50,86 @@ pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> O
         ls.notes.retain(|n| n.start < boundary);
         ls.ctrls.retain(|c| c.tick < boundary);
         rs.notes.retain(|n| n.start >= boundary);
-        rs.ctrls.retain(|c| c.tick >= boundary);
-        for n in &mut rs.notes {
-            n.start -= boundary;
-        }
-        for c in &mut rs.ctrls {
-            c.tick -= boundary;
-        }
+        // The right part keeps the controller state from before the cut (the program, the pedal,
+        // the bend in force there): the last value of each, hidden before its start, which sets
+        // the state it starts in.
+        let before = last_values_before(&rs.ctrls, boundary);
+        rs.ctrls.retain(|c| c.tick >= boundary || before.contains(c));
+        shift_sequence(rs, boundary);
     }
     Some((left, right))
 }
 
-/// Trim a MIDI clip's start: drop notes before the new start and re-anchor the rest.
-fn rebase_midi_start(clip: &mut Clip, old_start: Samples, t: TimeCtx<'_>) {
+/// The last event of each controller (per channel and kind) before `tick`, in time order.
+fn last_values_before(ctrls: &[soundcraft_midi::CtrlEvent], tick: i64) -> Vec<soundcraft_midi::CtrlEvent> {
+    let mut out: Vec<soundcraft_midi::CtrlEvent> = Vec::new();
+    for c in ctrls.iter().rev().filter(|c| c.tick < tick) {
+        if !out.iter().any(|o| o.channel == c.channel && o.kind == c.kind) {
+            out.push(*c);
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// Every note and controller `delta` ticks earlier.
+fn shift_sequence(seq: &mut soundcraft_midi::Sequence, delta: i64) {
+    for n in &mut seq.notes {
+        n.start = n.start.saturating_sub(delta);
+    }
+    for c in &mut seq.ctrls {
+        c.tick = c.tick.saturating_sub(delta);
+    }
+}
+
+/// Trim a MIDI clip's start: re-anchor the notes and controllers to the new start. Nothing is
+/// dropped: what falls before it gets a negative tick, is hidden and does not play (the
+/// controllers there still set the state the clip starts in), and comes back when the start is
+/// dragged out again. Returns the shift in ticks (0 for other clips), which the clip's stored
+/// original performance takes too ([`shift_originals`]).
+fn rebase_midi_start(clip: &mut Clip, old_start: Samples, t: TimeCtx<'_>) -> i64 {
     let delta = t.ticks(clip.start) - t.ticks(old_start);
     if let ClipContent::Midi { sequence } = &mut clip.content {
-        if delta == 0 {
-            return;
+        if delta != 0 {
+            shift_sequence(sequence, delta);
         }
-        sequence.notes.retain(|n| n.start >= delta);
-        sequence.ctrls.retain(|c| c.tick >= delta);
-        for n in &mut sequence.notes {
-            n.start -= delta;
+        return delta;
+    }
+    0
+}
+
+/// Keeps Restore Performance in step with start trims: each clip's stored original (Flatten
+/// Performance, a recorded take) moves with its notes. `shifts` are (clip, ticks) as
+/// [`rebase_midi_start`] returned them.
+fn shift_originals(s: &mut Session, shifts: &[(ClipId, i64)]) {
+    for (id, delta) in shifts.iter().filter(|(_, d)| *d != 0) {
+        if let Some(orig) = s.midi_originals.get_mut(&id.0) {
+            shift_sequence(orig, *delta);
         }
-        for c in &mut sequence.ctrls {
-            c.tick -= delta;
+    }
+}
+
+/// A copied piece of a MIDI clip keeps only what can sound in it: the notes that reach into it
+/// and, from before its start, the last value of each controller (the state it starts in).
+fn crop_hidden_midi(clip: &mut Clip, t: TimeCtx<'_>) {
+    let len = t.ticks(clip.end()) - t.ticks(clip.start);
+    if let ClipContent::Midi { sequence } = &mut clip.content {
+        sequence.notes.retain(|n| n.end() > 0 && n.start < len);
+        let mut seen: Vec<(u8, soundcraft_midi::CtrlKind)> = Vec::new();
+        let mut keep: Vec<bool> = vec![true; sequence.ctrls.len()];
+        for (i, c) in sequence.ctrls.iter().enumerate().rev() {
+            let earlier = c.tick < 0 && seen.contains(&(c.channel, c.kind));
+            if c.tick < 0 && !earlier {
+                seen.push((c.channel, c.kind));
+            }
+            if (c.tick >= len || earlier)
+                && let Some(k) = keep.get_mut(i)
+            {
+                *k = false;
+            }
         }
+        let mut k = keep.into_iter();
+        sequence.ctrls.retain(|_| k.next().unwrap_or(true));
     }
 }
 
@@ -91,12 +146,16 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut out = Vec::with_capacity(pl.clips.len() + ids.len());
     let mut count = 0;
+    let mut halves = Vec::new();
     for c in pl.clips.drain(..) {
         if at > c.start
             && at < c.end()
             && let Some(id) = ids.pop()
             && let Some((l, r)) = split_clip(&c, at, id, t)
         {
+            if matches!(c.content, ClipContent::Midi { .. }) {
+                halves.push((c.id, r.id, t.ticks(at) - t.ticks(c.start)));
+            }
             out.push(l);
             out.push(r);
             count += 1;
@@ -106,6 +165,13 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     }
     pl.clips = out;
     pl.sort();
+    // Each half keeps the stored original performance, in its own time, for Restore Performance.
+    for (left, right, boundary) in halves {
+        if let Some(mut orig) = s.midi_originals.get(&left.0).cloned() {
+            shift_sequence(&mut orig, boundary);
+            s.midi_originals.insert(right.0, orig);
+        }
+    }
     count
 }
 
@@ -137,14 +203,42 @@ pub fn clear_range(s: &mut Session, track: TrackId, range: Range, shuffle: bool)
     removed
 }
 
+/// Remove clips `ids` from a track as objects, leaving whatever lies between them alone. In
+/// Shuffle mode the clips leave the Shuffle way (later clips close each gap, see [`lift_plan`];
+/// time- and edit-locked clips stay); otherwise every clip in `ids` that is not edit-locked goes.
+/// Returns the removed clips, in time order.
+pub fn remove_clips(s: &mut Session, track: TrackId, ids: &[ClipId], shuffle: bool) -> Vec<Clip> {
+    let set: HashSet<ClipId> = ids.iter().copied().collect();
+    let mut out: Vec<Clip> = if shuffle {
+        lift_all(s, track, &set).into_iter().map(|(c, _)| c).collect()
+    } else {
+        let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return Vec::new() };
+        let (out, kept): (Vec<Clip>, Vec<Clip>) = std::mem::take(&mut pl.clips).into_iter().partition(|c| set.contains(&c.id) && !c.edit_locked);
+        pl.clips = kept;
+        out
+    };
+    out.sort_by_key(|c| (c.start, c.id));
+    out
+}
+
 /// Copy the material inside `range` (clips trimmed to the range), relative to `range.start`.
 pub fn copy_range(s: &Session, track: TrackId, range: Range) -> Vec<Clip> {
+    copy_range_with(s, track, range, false)
+}
+
+/// [`copy_range`]; with `as_heard`, a MIDI clip on Cleaned gives the notes it plays (its MIDI
+/// Cleanup's), not its raw ones, and leaves its cleanup behind: what Consolidate merges.
+fn copy_range_with(s: &Session, track: TrackId, range: Range, as_heard: bool) -> Vec<Clip> {
     let t = TimeCtx::of(s);
     let Some(tr) = s.track(track) else { return Vec::new() };
     let mut out = Vec::new();
     for c in tr.clips() {
         let Some(isect) = c.range().intersect(&range) else { continue };
         let mut part = c.clone();
+        if as_heard && let Some(heard) = c.midi_playing() {
+            part.content = ClipContent::Midi { sequence: heard.clone() };
+            part.midi_cleanup = None;
+        }
         if isect.start > part.start {
             let old = part.start;
             part.trim_start_to(isect.start);
@@ -153,6 +247,7 @@ pub fn copy_range(s: &Session, track: TrackId, range: Range) -> Vec<Clip> {
         if isect.end < part.end() {
             part.trim_end_to(isect.end);
         }
+        crop_hidden_midi(&mut part, t);
         part.start -= range.start;
         out.push(part);
     }
@@ -169,7 +264,7 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
         let t = TimeCtx::of(s);
         let base = t.ticks(range.start);
         let parts: Vec<Clip> =
-            copy_range(s, track, range).into_iter().filter(|c| !c.muted && matches!(c.content, ClipContent::Midi { .. })).collect();
+            copy_range_with(s, track, range, true).into_iter().filter(|c| !c.muted && matches!(c.content, ClipContent::Midi { .. })).collect();
         // A printed band clip among the parts keeps its channels (and its controllers-first
         // order); the other parts play on channel 1, so they go there.
         channels = parts.iter().any(|c| c.midi_channels);
@@ -186,8 +281,9 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
                 n.start += at;
                 merged.notes.push(n);
             }
-            for mut c in sequence.ctrls.into_iter().filter(|c| (0..len).contains(&c.tick)) {
-                c.tick += at;
+            // A controller a start trim hid sets the state the part starts in.
+            for mut c in sequence.ctrls.into_iter().filter(|c| c.tick < len) {
+                c.tick = c.tick.max(0) + at;
                 merged.ctrls.push(c);
             }
         }
@@ -219,13 +315,16 @@ pub fn paste(s: &mut Session, track: TrackId, at: Samples, clips: &[Clip], lengt
         make_room(s, track, at, length)?;
     }
     let mut ids = Vec::new();
+    let mut placed = Vec::with_capacity(clips.len());
     for c in clips {
         let mut nc = c.clone();
         nc.id = s.new_clip_id();
         nc.start += at;
         ids.push(nc.id);
-        place_clip(s, track, nc);
+        placed.push((track, nc));
     }
+    // All at once: a crossfaded pair overwrites what is under it, never its own partner.
+    put_clips(s, placed);
     Ok(ids)
 }
 
@@ -255,6 +354,49 @@ pub fn shift_from(s: &mut Session, track: TrackId, from: Samples, by: Samples) {
             c.start = c.start.saturating_add(by);
         }
     }
+}
+
+/// Commands an edit-locked clip never blocks: undo and redo, and the lock itself.
+const LOCK_EXEMPT: [&str; 3] = ["edit.undo", "edit.redo", "clip.edit_lock"];
+
+/// Commands that move whole stretches of the timeline: an edit-locked clip may move with them, as
+/// long as nothing else about it changes.
+const LOCK_MOVES: [&str; 2] = ["event.insert_time", "event.cut_time"];
+
+/// What an edit-locked clip's lock protects: where it is, what it plays and how it sounds.
+/// Names, colours, ratings, groups and the caches kept current by the engine are not edits.
+fn locked_material(c: &Clip) -> impl PartialEq + '_ {
+    (
+        (c.length, &c.content, c.gain_db.to_bits(), &c.gain_env, c.gain_bypass),
+        (c.fade_in, c.fade_out, c.muted, c.stretch.to_bits(), c.source_channel, &c.warp, c.sync_point),
+        (&c.effects, c.effects_bypass),
+    )
+}
+
+/// Why the command `id`, which turned `before` into `after`, must be refused: it changed or
+/// removed an edit-locked clip (one the command left locked). A clip that went with its track or
+/// its playlist is not refused; neither is a change of the session's sample rate, which moves
+/// everything. The engine undoes a refused command.
+pub fn locked_edit_refused(id: &str, before: &Session, after: &Session) -> Option<String> {
+    if LOCK_EXEMPT.contains(&id) || before.sample_rate != after.sample_rate {
+        return None;
+    }
+    let moves = LOCK_MOVES.contains(&id);
+    for t in &before.tracks {
+        // A deleted track takes its clips with it; so does a deleted playlist.
+        let Some(nt) = after.track(t.id) else { continue };
+        let playlist_gone = nt.playlists.len() < t.playlists.len();
+        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked) {
+            let refused = match nt.playlists.iter().flat_map(|p| &p.clips).find(|c| c.id == old.id) {
+                None => !playlist_gone,
+                Some(new) => new.edit_locked && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start)),
+            };
+            if refused {
+                return Some(format!("clip `{}` on `{}` is edit-locked; unlock it to change it", old.name, t.name));
+            }
+        }
+    }
+    None
 }
 
 /// Time- or edit-locked: the clip doesn't move, and Shuffle stops at it.
@@ -384,18 +526,20 @@ pub fn trim_to(s: &mut Session, track: TrackId, range: Range) -> usize {
     let tc = TimeCtx { tempo: &tempo, sr: s.sample_rate };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut n = 0;
+    let mut shifts = Vec::new();
     for c in &mut pl.clips {
         if let Some(i) = c.range().intersect(&range)
             && i != c.range()
         {
             let old = c.start;
             c.trim_start_to(i.start);
-            rebase_midi_start(c, old, tc);
+            shifts.push((c.id, rebase_midi_start(c, old, tc)));
             c.trim_end_to(i.end);
             n += 1;
         }
     }
     pl.sort();
+    shift_originals(s, &shifts);
     n
 }
 
@@ -405,14 +549,16 @@ pub fn trim_start_to(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let tc = TimeCtx { tempo: &tempo, sr: s.sample_rate };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut n = 0;
+    let mut shifts = Vec::new();
     for c in &mut pl.clips {
         if c.range().contains(at) && at > c.start {
             let old = c.start;
             c.trim_start_to(at);
-            rebase_midi_start(c, old, tc);
+            shifts.push((c.id, rebase_midi_start(c, old, tc)));
             n += 1;
         }
     }
+    shift_originals(s, &shifts);
     n
 }
 
@@ -435,23 +581,53 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
     let mut out: Vec<Clip> = Vec::with_capacity(pl.clips.len());
     let mut healed = 0;
     for c in pl.clips.drain(..) {
-        if let Some(prev) = out.last_mut() {
-            let contiguous = prev.end() == c.start && c.start >= range.start && c.start <= range.end;
-            let same = match (&prev.content, &c.content) {
-                (ClipContent::Audio { source: a, offset: oa }, ClipContent::Audio { source: b, offset: ob }) => a == b && oa + prev.length == *ob,
-                _ => false,
-            };
-            if contiguous && same && (prev.gain_db - c.gain_db).abs() < 1e-6 {
-                prev.length += c.length;
-                prev.fade_out = c.fade_out;
-                healed += 1;
-                continue;
+        if let Some(prev) = out.last_mut()
+            && prev.end() == c.start
+            && c.start >= range.start
+            && c.start <= range.end
+            && heals(prev, &c)
+        {
+            prev.gain_env = prev.joined_env(&c);
+            if prev.sync_point == 0 && c.sync_point != 0 {
+                prev.sync_point = c.sync_point.saturating_add(prev.length);
             }
+            prev.length += c.length;
+            prev.fade_out = c.fade_out;
+            healed += 1;
+            continue;
         }
         out.push(c);
     }
     pl.clips = out;
     healed
+}
+
+/// Whether `next`, starting where `prev` ends, is the rest of `prev` and sounds like it: the same
+/// file continuing at the same stretch, and everything that shapes the sound but the clip-gain
+/// envelope (which [`Clip::joined_env`] joins) the same, with no fade at the join. Pieces that
+/// differ stay apart rather than one of them losing its settings.
+fn heals(prev: &Clip, next: &Clip) -> bool {
+    let (ClipContent::Audio { source: a, offset: oa }, ClipContent::Audio { source: b, offset: ob }) = (&prev.content, &next.content) else {
+        return false;
+    };
+    a == b
+        && oa.saturating_add(prev.source_span(prev.length)) == *ob
+        && prev.stretch.to_bits() == next.stretch.to_bits()
+        && (prev.gain_db - next.gain_db).abs() < 1e-6
+        && prev.gain_bypass == next.gain_bypass
+        && prev.muted == next.muted
+        && prev.source_channel == next.source_channel
+        && prev.effects == next.effects
+        && prev.effects_bypass == next.effects_bypass
+        && prev.clean == next.clean
+        && prev.tune == next.tune
+        && prev.warp.is_empty()
+        && next.warp.is_empty()
+        && prev.plays_plain()
+        && next.plays_plain()
+        && prev.fade_out.len == 0
+        && next.fade_in.len == 0
+        && prev.layer == next.layer
 }
 
 /// Move clips by `delta`, overwriting what they land on; `dest` sends whole tracks of them
@@ -473,6 +649,10 @@ pub fn move_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(Trac
         }
     }
     let n = moving.len();
+    // A move left stops at the session start for all of them together, keeping their spacing
+    // (each stopping on its own would close the gaps between them).
+    let floor = moving.iter().map(|(_, c)| c.start).min().unwrap_or(0).max(0);
+    let delta = delta.max(-floor);
     // Automation Follows Edit: the points under each clip go with it (empty when it's off).
     let points: Vec<Vec<(AutoParam, AutomationPoint)>> = moving.iter().map(|(tid, c)| take_automation(s, *tid, c.start, c.end(), c.start)).collect();
     let placed: Vec<(TrackId, Clip)> = moving
@@ -498,23 +678,194 @@ pub fn move_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(Trac
     n
 }
 
-/// Place moved clips, overwriting what they cover but not each other, so a crossfaded pair
-/// moved together stays a crossfade.
-fn put_clips(s: &mut Session, placed: Vec<(TrackId, Clip)>) {
+/// Place clips together (moved, pasted or copied), as the session's [`Overlap`] mode says, never
+/// cutting each other, so a crossfaded pair placed together stays a crossfade.
+pub fn put_clips(s: &mut Session, placed: Vec<(TrackId, Clip)>) {
+    let mode = Overlap::of(s);
+    // Layer keeps audio under audio; MIDI and video clips still overwrite.
+    let (layered, placed): (Vec<(TrackId, Clip)>, Vec<(TrackId, Clip)>) =
+        placed.into_iter().partition(|(t, c)| mode == Overlap::Layer && c.is_audio() && s.track(*t).is_some_and(|t| !t.kind.is_midi()));
+    let joins = if mode == Overlap::Crossfade { landing_edges(s, &placed) } else { Vec::new() };
     for (t, c) in &placed {
         clear_range(s, *t, c.range(), false);
     }
-    for (t, c) in placed {
+    let mut tracks: Vec<TrackId> = layered.iter().map(|(t, _)| *t).collect();
+    tracks.dedup();
+    // Clips placed together on a track share one layer, just above every clip they land on.
+    let tops: Vec<(TrackId, i32)> = tracks
+        .iter()
+        .map(|t| {
+            let top = s
+                .track(*t)
+                .into_iter()
+                .flat_map(|tr| tr.clips())
+                .filter(|x| layered.iter().any(|(lt, c)| lt == t && c.range().overlaps(&x.range())))
+                .map(|x| x.layer)
+                .max();
+            (*t, top.map_or(0, |l| l.saturating_add(1)))
+        })
+        .collect();
+    let layered = layered.into_iter().map(|(t, mut c)| {
+        c.layer = tops.iter().find(|(x, _)| *x == t).map_or(0, |(_, l)| *l);
+        (t, c)
+    });
+    for (t, c) in placed.into_iter().chain(layered) {
         if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
             pl.clips.push(c);
             pl.sort();
         }
     }
+    for (t, edge, room) in joins {
+        crossfade_join(s, t, edge, room);
+    }
+}
+
+/// Session value (`s.edit.values`): what a clip moved, pasted, duplicated or recorded onto other
+/// clips does to them (Options › Overlap): see [`Overlap`].
+pub const OVERLAP_KEY: &str = "edit.overlap_mode";
+/// Session value: the crossfade the Crossfade overlap mode makes at each join, ms.
+pub const OVERLAP_XFADE_KEY: &str = "edit.overlap_xfade_ms";
+/// The Crossfade overlap mode's crossfade when none is set, ms.
+pub const OVERLAP_XFADE_MS: f64 = 10.0;
+
+/// What a clip placed over others does to them (Options › Overlap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlap {
+    /// What it covers is cut away (the default, and how sessions always worked).
+    Overwrite,
+    /// Audio clips stay whole underneath: the new clip goes on a higher [`Clip::layer`] and is
+    /// heard where it covers them; a lower clip plays again where it is uncovered.
+    Layer,
+    /// Overwrite, then a crossfade at each edge where the clip landed on other audio, out of the
+    /// clips' handles.
+    Crossfade,
+}
+
+impl Overlap {
+    pub const ALL: [Overlap; 3] = [Overlap::Overwrite, Overlap::Layer, Overlap::Crossfade];
+
+    /// The session's mode.
+    pub fn of(s: &Session) -> Overlap {
+        match s.edit.value(OVERLAP_KEY, 0.0) as i64 {
+            1 => Overlap::Layer,
+            2 => Overlap::Crossfade,
+            _ => Overlap::Overwrite,
+        }
+    }
+
+    /// The value stored under [`OVERLAP_KEY`].
+    pub fn value(self) -> f64 {
+        match self {
+            Overlap::Overwrite => 0.0,
+            Overlap::Layer => 1.0,
+            Overlap::Crossfade => 2.0,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Overlap::Overwrite => "overwrite",
+            Overlap::Layer => "layer",
+            Overlap::Crossfade => "crossfade",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Overlap> {
+        Overlap::ALL.into_iter().find(|o| o.id() == id.trim().to_ascii_lowercase())
+    }
+}
+
+/// Where audio clips about to be placed land on other audio: `(track, edge, room)` for each clip
+/// edge that falls inside an audio clip already there (and not inside another clip placed with
+/// it, as a crossfaded pair's inner edges do), `room` being how far the crossfade may reach into
+/// the placed clip (half its length).
+fn landing_edges(s: &Session, placed: &[(TrackId, Clip)]) -> Vec<(TrackId, Samples, Samples)> {
+    let mut out = Vec::new();
+    for (t, c) in placed.iter().filter(|(_, c)| c.is_audio()) {
+        let Some(tr) = s.track(*t) else { continue };
+        let inside = |x: &Clip, at: Samples| x.start < at && x.end() > at;
+        for edge in [c.start, c.end()] {
+            let lands = tr.clips().iter().any(|x| x.is_audio() && !placed.iter().any(|(_, p)| p.id == x.id) && inside(x, edge));
+            let partner = placed.iter().any(|(pt, p)| {
+                pt == t && p.id != c.id && (inside(p, edge) || p.end() == edge && edge == c.start || p.start == edge && edge == c.end())
+            });
+            if lands && !partner {
+                out.push((*t, edge, c.length / 2));
+            }
+        }
+    }
+    out
+}
+
+/// The Crossfade overlap mode's crossfade at `edge` on track `t`, no further into either side
+/// than `room`.
+fn crossfade_join(s: &mut Session, t: TrackId, edge: Samples, room: Samples) {
+    let ms = s.edit.value(OVERLAP_XFADE_KEY, OVERLAP_XFADE_MS).clamp(0.0, 1000.0);
+    let h = ((s.sample_rate.as_f64() * ms / 1000.0 / 2.0).round() as Samples).min(room).max(0);
+    if h > 0 {
+        create_fades(s, t, Range::new(edge.saturating_sub(h), edge.saturating_add(h)), FadeShape::default());
+    }
+}
+
+/// Place one recorded or created clip as the session's [`Overlap`] mode says (see
+/// [`put_clips`]). [`place_clip`] always overwrites.
+pub fn place_clip_overlapping(s: &mut Session, track: TrackId, clip: Clip) {
+    put_clips(s, vec![(track, clip)]);
+}
+
+/// `ids` and the clips an active edit group brings along with them (Track › Group… with Edit
+/// on, unless every group is suspended): on the group's other tracks, each clip that overlaps one
+/// of `ids` in time. `ids` first, then the others in track order; no repeats.
+pub fn with_edit_groups(s: &Session, ids: &[ClipId]) -> Vec<ClipId> {
+    let mut out: Vec<ClipId> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    if s.edit.flag(crate::cmd::GROUPS_SUSPENDED) {
+        return out;
+    }
+    let found: Vec<(TrackId, Range)> = ids.iter().filter_map(|id| s.find_clip(*id).map(|(t, c)| (t, c.range()))).collect();
+    for tr in &s.tracks {
+        let spans: Vec<Range> = found
+            .iter()
+            .filter(|(t, _)| *t != tr.id && s.groups.iter().any(|g| g.active && g.edit && g.members.contains(t) && g.members.contains(&tr.id)))
+            .map(|(_, r)| *r)
+            .collect();
+        if spans.is_empty() {
+            continue;
+        }
+        for c in tr.clips().iter().filter(|c| spans.iter().any(|r| r.overlaps(&c.range()))) {
+            if !out.contains(&c.id) {
+                out.push(c.id);
+            }
+        }
+    }
+    out
 }
 
 /// Whether the Edit window shows track `t`: not hidden, and not inside a closed folder at any level.
 pub fn shown(s: &Session, t: &Track) -> bool {
     !t.hidden && !folder_collapsed(s, t)
+}
+
+/// How many tracks move with track `t` as one block: 1, or for a folder, it and the tracks right
+/// after it that sit inside it at any level.
+pub fn folder_block(s: &Session, t: TrackId) -> usize {
+    let Some(i) = s.track_index(t) else { return 1 };
+    let inside = |tr: &Track| {
+        let mut f = tr.folder;
+        for _ in 0..64 {
+            match f {
+                Some(id) if id == t => return true,
+                Some(id) => f = s.track(id).and_then(|x| x.folder),
+                None => return false,
+            }
+        }
+        false
+    };
+    1 + s.tracks.iter().skip(i + 1).take_while(|tr| inside(tr)).count()
 }
 
 /// Hidden because a folder at any level above this track is closed.
@@ -733,11 +1084,40 @@ pub fn shuffle_clips(s: &mut Session, ids: &[ClipId], delta: Samples, dest: &[(T
 /// start when it has none inside the clip) on the nearest grid line; Relative moves it by whole
 /// grid steps, keeping its offset from the grid.
 pub fn grid_delta(s: &Session, clip: &Clip, raw: Samples, relative: bool) -> Samples {
-    let (g, sr, map, rate) = (&s.edit.grid, s.sample_rate, &s.tempo, s.frame_rate);
+    let (g, ctx) = (&s.edit.grid, s.grid_ctx());
     let sync = if (0..clip.length).contains(&clip.sync_point) { clip.sync_point } else { 0 };
     let anchor = clip.start.saturating_add(sync);
-    let from = if relative { g.line_at_or_before(anchor, sr, map, rate) } else { anchor };
-    g.snap(from.saturating_add(raw), sr, map, rate).saturating_sub(from)
+    let from = if relative { g.line_at_or_before(anchor, &ctx) } else { anchor };
+    g.snap(from.saturating_add(raw), &ctx).saturating_sub(from)
+}
+
+/// How far quantizing moves `clip` (its sync point, else its start) towards the grid:
+/// `strength` 0..1 of the way to the nearest line, with `swing` 0..1 delaying every second line
+/// of a note grid (counted from the bar) by up to a third of a step, as MIDI quantize does.
+pub fn quantize_delta(s: &Session, clip: &Clip, strength: f64, swing: f64) -> Samples {
+    let (g, sr, map) = (&s.edit.grid, s.sample_rate, &s.tempo);
+    let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 1.0 };
+    let swing = if swing.is_finite() { swing.clamp(0.0, 1.0) } else { 0.0 };
+    let full = match *g {
+        soundcraft_time::GridValue::Note { value, dotted, triplet } if swing > 0.0 => {
+            let sync = if (0..clip.length).contains(&clip.sync_point) { clip.sync_point } else { 0 };
+            let anchor = clip.start.saturating_add(sync);
+            let t = map.samples_to_ticks_f(anchor, sr);
+            if !t.is_finite() {
+                return 0;
+            }
+            let bar_tick = map.bar_start_tick(map.bar_beat_at_tick(t.floor() as i64).bar);
+            let step = soundcraft_time::GridValue::note_ticks(value, dotted, triplet, map, bar_tick).max(1);
+            let off = swing * step as f64 / 3.0;
+            let k0 = ((t - bar_tick as f64) / step as f64).floor() as i64;
+            let line = |k: i64| bar_tick as f64 + (k * step) as f64 + if k.rem_euclid(2) == 1 { off } else { 0.0 };
+            let best = (k0 - 1..=k0 + 2).map(line).min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs())).unwrap_or(t);
+            let target = map.tick_to_samples(best.round() as i64, sr);
+            target.saturating_sub(anchor)
+        }
+        _ => grid_delta(s, clip, 0, false),
+    };
+    soundcraft_time::to_samples(full as f64 * strength)
 }
 
 /// Trim a clip's edges to `start` and/or `end` like the Trim tool, never past its file. In
@@ -761,14 +1141,16 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
         lo = lo.max(0);
     }
     let file = |c: &Clip| {
-        let start = c.start.saturating_sub(c.source_offset());
-        material_len(s, c).map(|n| (start.min(c.start), start.saturating_add(n).max(c.end())))
+        // Where the file starts and ends on the timeline, at the clip's stretch.
+        let start = c.start.saturating_sub(c.timeline_span(c.source_offset()));
+        material_len(s, c).map(|n| (start.min(c.start), start.saturating_add(c.timeline_span(n)).max(c.end())))
     };
     let t = TimeCtx::of(s);
     let mut c = old.clone();
+    let mut shift = 0;
     if let Some(at) = start {
         c.trim_start_to(at.max(file(&c).map_or(lo, |(f, _)| lo.max(f))));
-        rebase_midi_start(&mut c, old.start, t);
+        shift = rebase_midi_start(&mut c, old.start, t);
         if shuffle {
             c.start = old.start;
         }
@@ -779,15 +1161,20 @@ pub fn trim_clip(s: &mut Session, id: ClipId, start: Option<Samples>, end: Optio
     let pl = s.track_mut(track).and_then(|t| t.playlist_mut())?;
     *pl.clip_mut(id)? = c.clone();
     pl.sort();
+    shift_originals(s, &[(id, shift)]);
     if shuffle {
-        let moved = ripple(s, track, old.start.saturating_add(1), c.end().saturating_sub(old.end()));
-        follow_automation(s, track, old.end(), moved);
+        // The clips after this one move, a crossfade partner starting inside it included; the
+        // automation moves from the same place (the partner's start, else this clip's end).
+        let from = old.start.saturating_add(1);
+        let first = s.track(track).map(|t| t.clips()).unwrap_or_default().iter().filter(|x| x.id != id && x.start >= from).map(|x| x.start).min();
+        let moved = ripple(s, track, from, c.end().saturating_sub(old.end()));
+        follow_automation(s, track, first.map_or(old.end(), |f| f.min(old.end())), moved);
     }
     Some(c)
 }
 
 /// Length of the file or movie under a clip; None for MIDI, which has no end.
-fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
+pub(crate) fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
     match c.content {
         ClipContent::Audio { source, .. } => s.source(source).map(|src| i64::try_from(src.frames).unwrap_or(i64::MAX)),
         ClipContent::Video { source, .. } => s.video(source).map(|v| s.sample_rate.samples(v.duration.clamp(0.0, 1e7))),
@@ -798,12 +1185,45 @@ fn material_len(s: &Session, c: &Clip) -> Option<Samples> {
 /// Create fades from a selection (the incumbent's Edit › Fades › Create semantics):
 /// a range across a clip boundary makes a crossfade; at a clip start a fade-in; at its end a fade-out.
 pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeShape) -> usize {
+    create_fades_with(s, track, range, &FadeSpec::of(shape))
+}
+
+/// The fades [`create_fades_with`] makes: the shape and bend of fade-ins (and a crossfade's
+/// incoming side), of fade-outs (and its outgoing side), and, with `batch` set, a fade of that
+/// length at both ends of every clip that lies wholly inside the range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FadeSpec {
+    pub in_shape: FadeShape,
+    pub in_curvature: f32,
+    pub out_shape: FadeShape,
+    pub out_curvature: f32,
+    pub batch: Option<Samples>,
+}
+
+impl FadeSpec {
+    /// One shape for every fade, unbent, no batch fades.
+    pub fn of(shape: FadeShape) -> FadeSpec {
+        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None }
+    }
+    fn fade_in(&self, len: Samples) -> Fade {
+        Fade { len, shape: self.in_shape, curvature: self.in_curvature }
+    }
+    fn fade_out(&self, len: Samples) -> Fade {
+        Fade { len, shape: self.out_shape, curvature: self.out_curvature }
+    }
+}
+
+/// [`create_fades`] with a shape and bend for each side, and batch fades on clips inside the range.
+pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &FadeSpec) -> usize {
     if range.is_empty() {
         return 0;
     }
     let handles: Vec<(ClipId, Samples)> = {
         let Some(tr) = s.track(track) else { return 0 };
-        tr.clips().iter().map(|c| (c.id, material_len(s, c).map_or(0, |n| n.saturating_sub(c.source_offset()).saturating_sub(c.length)))).collect()
+        tr.clips()
+            .iter()
+            .map(|c| (c.id, material_len(s, c).map_or(0, |n| c.timeline_span(n.saturating_sub(c.source_offset())).saturating_sub(c.length))))
+            .collect()
     };
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     pl.sort();
@@ -818,67 +1238,202 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
             let before = boundary - range.start.max(a.start);
             let after = range.end.min(b.end()) - boundary;
             let a_handle = handles.iter().find(|h| h.0 == a.id).map_or(0, |h| h.1);
-            let b_handle = b.source_offset();
+            let b_handle = b.timeline_span(b.source_offset());
             // Extend each clip into the other's territory using its handles.
             let ext_a = after.min(a_handle).max(0);
             let ext_b = before.min(b_handle).max(0);
             if let Some(ca) = pl.clips.get_mut(i) {
                 ca.length += ext_a;
-                ca.fade_out = Fade { len: (ext_a + before).min(ca.length), shape, curvature: 0.0 };
+                ca.fade_out = spec.fade_out((ext_a + before).min(ca.length));
             }
             if let Some(cb) = pl.clips.get_mut(i + 1) {
                 let old = cb.start;
                 cb.trim_start_to(old - ext_b);
-                cb.fade_in = Fade { len: (ext_b + after).min(cb.length), shape, curvature: 0.0 };
+                cb.fade_in = spec.fade_in((ext_b + after).min(cb.length));
             }
             made += 1;
             xfaded.push(a.id);
             xfaded.push(b.id);
         }
     }
-    for c in pl.clips.iter_mut().filter(|c| !xfaded.contains(&c.id)) {
+    for c in pl.clips.iter_mut() {
+        let inside = range.start <= c.start && range.end >= c.end();
+        if let Some(len) = spec.batch.filter(|l| *l > 0 && inside) {
+            // Batch fades: both ends of a clip standing inside the range, where no crossfade is.
+            let len = len.min(c.length / 2).max(0);
+            if len > 0 {
+                let (into, out_of) = (xfaded.contains(&c.id) && c.fade_in.len > 0, xfaded.contains(&c.id) && c.fade_out.len > 0);
+                if !into {
+                    c.fade_in = spec.fade_in(len);
+                    made += 1;
+                }
+                if !out_of {
+                    c.fade_out = spec.fade_out(len);
+                    made += 1;
+                }
+            }
+            continue;
+        }
+        if xfaded.contains(&c.id) {
+            continue;
+        }
         if range.start <= c.start && range.end > c.start && range.end < c.end() {
-            c.fade_in = Fade { len: range.end - c.start, shape, curvature: 0.0 };
+            c.fade_in = spec.fade_in(range.end - c.start);
             made += 1;
         } else if range.end >= c.end() && range.start > c.start && range.start < c.end() {
-            c.fade_out = Fade { len: c.end() - range.start, shape, curvature: 0.0 };
+            c.fade_out = spec.fade_out(c.end() - range.start);
             made += 1;
         }
     }
     made
 }
 
-/// Remove fades on clips touching `range`.
+/// Remove the fades in `range`: each fade that lies in it (with an empty range, every fade of
+/// the clip under the point). A crossfade in it is taken apart: both clips are trimmed back to
+/// its midpoint and lose the fades that made it. Fades and crossfades outside the range stay.
 pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
+    pl.sort();
+    let hit = |c: &Clip, start: Samples, end: Samples| {
+        if range.is_empty() { c.range().contains(range.start) } else { Range::new(start, end).overlaps(&range) }
+    };
+    // Crossfades first, from the clips as they are: the overlap of each neighbouring pair.
     let mut n = 0;
+    for i in 0..pl.clips.len().saturating_sub(1) {
+        let (Some(a), Some(b)) = (pl.clips.get(i), pl.clips.get(i + 1)) else { continue };
+        let (a_end, b_start) = (a.end(), b.start);
+        if a_end <= b_start || !(hit(a, b_start, a_end) || hit(b, b_start, a_end)) {
+            continue;
+        }
+        let mid = b_start + (a_end - b_start) / 2;
+        if let Some(a) = pl.clips.get_mut(i) {
+            a.trim_end_to(mid);
+            a.fade_out = Fade::default();
+        }
+        if let Some(b) = pl.clips.get_mut(i + 1) {
+            b.trim_start_to(mid);
+            b.fade_in = Fade::default();
+        }
+        n += 1;
+    }
     for c in &mut pl.clips {
-        if c.range().overlaps(&range) || (range.is_empty() && c.range().contains(range.start)) {
-            if c.fade_in.len > 0 || c.fade_out.len > 0 {
-                n += 1;
-            }
+        let (fi, fo) = (c.fade_in.len, c.fade_out.len);
+        let fade_in = fi > 0 && hit(c, c.start, c.start.saturating_add(fi));
+        let fade_out = fo > 0 && hit(c, c.end().saturating_sub(fo), c.end());
+        if fade_in {
             c.fade_in = Fade::default();
+        }
+        if fade_out {
             c.fade_out = Fade::default();
         }
-    }
-    // Overlapping (crossfaded) neighbours are trimmed back to the midpoint.
-    pl.sort();
-    for i in 0..pl.clips.len().saturating_sub(1) {
-        let (Some(a_end), Some(b_start)) = (pl.clips.get(i).map(Clip::end), pl.clips.get(i + 1).map(|c| c.start)) else { continue };
-        if a_end > b_start {
-            let mid = b_start + (a_end - b_start) / 2;
-            if let Some(a) = pl.clips.get_mut(i) {
-                a.trim_end_to(mid);
-            }
-            if let Some(b) = pl.clips.get_mut(i + 1) {
-                b.trim_start_to(mid);
-            }
+        if fade_in || fade_out {
+            n += 1;
         }
     }
     // A clip trimmed from the left can now start after its next neighbour (several short
     // crossfaded clips, e.g. after Beat Detective): keep the playlist in time order.
     pl.sort();
     n
+}
+
+/// `id` and the other clips of its clip group on every track's active playlist (`id` alone when
+/// it is not grouped), `id` first, and the clips an active edit group brings along with them
+/// ([`with_edit_groups`]): what a grab, a trim or a fade drawn on `id` acts on.
+pub fn group_members(s: &Session, id: ClipId) -> Vec<ClipId> {
+    let group = s.find_clip(id).and_then(|(_, c)| c.group);
+    let mut out = vec![id];
+    if let Some(g) = group {
+        out.extend(s.tracks.iter().flat_map(|t| t.clips()).filter(|c| c.group == Some(g) && c.id != id).map(|c| c.id));
+    }
+    with_edit_groups(s, &out)
+}
+
+/// Edit-state flag: edit points snap to clip edges near them (Options › Snap to Clip Edges).
+pub const SNAP_TO_CLIPS: &str = "edit.snap_to_clips";
+/// Edit-state flag: edit points snap to markers near them (Options › Snap to Markers).
+pub const SNAP_TO_MARKERS: &str = "edit.snap_to_markers";
+/// Edit-state flag: a selection's edges and the insertion snap to the nearest zero crossing of
+/// the audio under them (Options › Snap to Zero Crossings).
+pub const SNAP_TO_ZERO: &str = "edit.snap_to_zero_crossings";
+
+/// The clip edge or marker nearest `at` within `reach`, as [`SNAP_TO_CLIPS`] and
+/// [`SNAP_TO_MARKERS`] ask. Clip edges count on every visible track's active playlist, clips in
+/// `skip` (the ones being dragged) left out; a marker counts by its start, a range by its end too.
+pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) -> Option<Samples> {
+    let reach = reach.max(0);
+    let mut best: Option<Samples> = None;
+    let mut take = |p: Samples| {
+        let d = p.saturating_sub(at).saturating_abs();
+        if d <= reach && best.is_none_or(|b| d < b.saturating_sub(at).saturating_abs()) {
+            best = Some(p);
+        }
+    };
+    if s.edit.flag(SNAP_TO_CLIPS) {
+        for t in s.tracks.iter().filter(|t| !t.hidden) {
+            for c in t.clips().iter().filter(|c| !skip.contains(&c.id)) {
+                take(c.start);
+                take(c.end());
+            }
+        }
+    }
+    if s.edit.flag(SNAP_TO_MARKERS) {
+        for m in &s.markers {
+            take(m.start);
+            if m.end > m.start {
+                take(m.end);
+            }
+        }
+    }
+    best
+}
+
+/// The zero crossing nearest `at` within `reach` in the audio clip under `at` on `track` (its
+/// first channel, or the channel it plays): where the waveform changes sign or touches zero.
+pub fn zero_crossing_near(s: &Session, track: TrackId, at: Samples, reach: Samples) -> Option<Samples> {
+    let t = s.track(track)?;
+    let c = t.clips().iter().rev().find(|c| c.range().contains(at) && !c.muted)?;
+    let ClipContent::Audio { source, offset } = &c.content else { return None };
+    let audio = s.pool.get(*source)?;
+    let reach = reach.clamp(1, 1 << 16);
+    let file_at = offset.saturating_add(c.source_span(at.saturating_sub(c.start)));
+    let from = file_at.saturating_sub(c.source_span(reach)).max(*offset).max(0);
+    let to = file_at.saturating_add(c.source_span(reach)).min(offset.saturating_add(c.source_span(c.length)));
+    let n = usize::try_from(to.saturating_sub(from)).ok()?.saturating_add(1);
+    if n < 2 {
+        return None;
+    }
+    let mut buf = vec![0.0f32; n];
+    let got = audio.read(c.source_channel.map_or(0, usize::from), usize::try_from(from).ok()?, &mut buf);
+    let buf = buf.get(..got)?;
+    let best = buf
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[1] == 0.0 || (w[0] < 0.0) != (w[1] < 0.0))
+        // The sample nearer zero of the two is the crossing.
+        .map(|(i, w)| if w[0].abs() < w[1].abs() { i } else { i + 1 })
+        .map(|i| from.saturating_add(i as Samples))
+        .min_by_key(|f| f.saturating_sub(file_at).saturating_abs())?;
+    let timeline = c.start.saturating_add(c.timeline_span(best.saturating_sub(*offset)));
+    Some(timeline.clamp(c.start, c.end()))
+}
+
+/// An edit point at `raw` after snapping: `gridded` (the grid's answer, or `raw` when the grid is
+/// off), unless a clip edge or marker within `reach` of `raw` is nearer; then, on `track` with
+/// [`SNAP_TO_ZERO`] on, the nearest zero crossing within 5 ms.
+pub fn snap_point(s: &Session, raw: Samples, gridded: Samples, reach: Samples, track: Option<TrackId>, skip: &[ClipId]) -> Samples {
+    let mut at = gridded;
+    if let Some(m) = magnet_target(s, raw, reach, skip)
+        && (gridded == raw || m.saturating_sub(raw).saturating_abs() <= gridded.saturating_sub(raw).saturating_abs())
+    {
+        at = m;
+    }
+    if s.edit.flag(SNAP_TO_ZERO)
+        && let Some(t) = track
+        && let Some(z) = zero_crossing_near(s, t, at, s.sample_rate.samples(0.005))
+    {
+        at = z;
+    }
+    at
 }
 
 #[cfg(test)]
@@ -1068,7 +1623,7 @@ mod tests {
     #[test]
     fn grid_moves_snap_the_clip_start_or_keep_its_offset() {
         let (s, t) = session_with_clip();
-        let step = s.edit.grid.step_samples(0, s.sample_rate, &s.tempo, s.frame_rate);
+        let step = s.edit.grid.step_samples(0, &s.grid_ctx());
         let c = s.track(t).unwrap().clips()[0].clone();
         assert_eq!(c.start + grid_delta(&s, &c, step + 200, false), step);
         assert_eq!(c.start + grid_delta(&s, &c, step + 200, true), step + 1000);

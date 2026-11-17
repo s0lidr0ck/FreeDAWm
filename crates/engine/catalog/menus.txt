@@ -414,6 +414,9 @@ Options > Edit Window Scrolling > After Playback
 Options > Edit Window Scrolling > Page
 Options > Edit Window Scrolling > Continuous
 Options > Edit Window Scrolling > Center Playhead
+Options > Record Mode > Replace
+Options > Record Mode > Keep Takes as Lanes
+Options > Record Mode > New Playlist per Take
 Options > Link Timeline and Edit Selection
 Options > Link Track and Edit Selection
 Options > Insertion Follows Playback

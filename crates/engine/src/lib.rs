@@ -11,9 +11,11 @@ pub mod band_print;
 pub mod brand;
 pub mod catalog;
 pub mod catalog_more;
+pub mod chord_follow;
 pub mod clip_group_file;
 pub mod cmd;
 pub mod dawproject;
+pub mod decode_cache;
 pub mod demo;
 pub mod edit;
 pub mod file_access;
@@ -28,11 +30,16 @@ pub mod lyric_tools;
 pub mod lyrics;
 pub mod midi_cleanup;
 pub mod midi_record;
+pub mod midi_shared;
+pub mod midi_stretch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
 pub mod monitor_capture;
 pub mod monitor_profiles;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod movie_export;
+pub mod note_index;
 pub mod open_job;
 pub mod pattern;
 pub mod peak_cache;
@@ -42,7 +49,10 @@ pub mod scout_profiles;
 pub mod scout_prompt;
 pub mod spill;
 pub mod split_files;
+pub mod stretch_jobs;
+pub mod surface;
 pub mod tempo_detect;
+pub mod tick_clips;
 pub mod vocal;
 pub mod vocal_studio;
 
@@ -114,9 +124,24 @@ pub enum TransportRequest {
         countoff: bool,
     },
     Locate(Samples),
+    /// Play from `from` (whatever the selection), stopping at `end` or looping `looped`.
+    PlayRange {
+        from: Samples,
+        end: Option<Samples>,
+        looped: Option<soundcraft_time::Range>,
+    },
     PlaySelection,
     Pause,
     HalfSpeed,
+    /// Varispeed: every Play from now on runs at this speed (tape style, the pitch moves with
+    /// it), and a play under way changes now; `None` (or 1) turns it off.
+    Varispeed(Option<f32>),
+    /// Shuttle: `speed` plays at that speed (negative: backwards, heard), 0 stops; without one,
+    /// `step` 1 goes forward (each again doubles the speed, to 4×), −1 back (to −8×), 0 stops.
+    Shuttle {
+        step: i8,
+        speed: Option<f32>,
+    },
     Scrub(Samples),
     AllNotesOff,
     /// `scout.capture` start: build a Scout rig for `strips` (off the audio thread) and arm it.
@@ -130,6 +155,8 @@ pub enum TransportRequest {
     },
     /// `scout.capture` stop: end the armed capture (it comes back to be stored with `scout.store`).
     ScoutStop,
+    /// `transport.discard_take`: stop, and throw the take being recorded away (its files too).
+    DiscardTake,
 }
 
 /// Snapshot of the transport reported back by the host (playback position etc.).
@@ -165,7 +192,7 @@ pub struct Clipboard {
 impl Clipboard {
     /// An empty clipboard for material copied from `range`.
     pub fn of_range(s: &Session, range: soundcraft_time::Range) -> Clipboard {
-        let line = s.edit.grid.line_at_or_before(range.start, s.sample_rate, &s.tempo, s.frame_rate);
+        let line = s.edit.grid.line_at_or_before(range.start, &s.grid_ctx());
         Clipboard { length: range.len(), grid_offset: range.start.saturating_sub(line), ..Clipboard::default() }
     }
 }
@@ -253,6 +280,20 @@ pub struct Engine {
     pub take_hits: Option<crate::cmd::juke::TakeHits>,
     /// Numbers each analysis (`TakeHits::id`).
     pub take_hits_seq: u64,
+    /// Stretch renders are made by a worker while the clip is heard through the real-time
+    /// stretcher ([`stretch_jobs`]); off, commands render them in place (the CLI, scripts).
+    pub defer_stretch: bool,
+    /// Stretch renders made, by reserved source, with the live entry each was made for: kept so
+    /// an undo or redo that brings the entry back gets its render at once.
+    pub(crate) stretch_done:
+        std::collections::HashMap<soundcraft_model::SourceId, (soundcraft_model::LiveStretch, Arc<soundcraft_model::SourceAudio>)>,
+    /// Transpose renders already asked for (clip, file, cents, window): never asked twice, so a
+    /// render that cannot serve its clip is not made again and again.
+    pub(crate) pitch_tried: std::collections::HashSet<stretch_jobs::PitchKey>,
+    /// Take files recorded in this run that nothing may use one day (an undone take, a take of a
+    /// track deleted while it recorded): deleted once neither the session, its history nor a
+    /// session file names them ([`io::clean_unused_takes`]).
+    pub(crate) recorded_takes: Vec<std::path::PathBuf>,
 }
 
 impl Default for Engine {
@@ -296,6 +337,9 @@ impl Engine {
             scout_capture: None,
             take_hits: None,
             take_hits_seq: 0,
+            defer_stretch: false,
+            stretch_done: std::collections::HashMap::new(),
+            pitch_tried: std::collections::HashSet::new(),
             scout_pending: Vec::new(),
             scout_floor: 0,
             band_lib: None,
@@ -306,6 +350,7 @@ impl Engine {
             auto_write: cmd::auto_write::AutoWriter::new(),
             copy_imported_audio: true,
             unsaved_audio_root: None,
+            recorded_takes: Vec::new(),
         }
     }
 
@@ -407,6 +452,8 @@ impl Engine {
         let thawed = crate::io::thaw_missing_renders(&mut s);
         // MIDI Cleanup previews are derived, not saved.
         crate::midi_cleanup::refresh(&mut s);
+        // So are the notes' playback indexes (after the previews they index).
+        crate::note_index::refresh(&mut s);
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
@@ -419,6 +466,8 @@ impl Engine {
         self.redo.clear();
         self.merge_redo = None;
         self.last_selection = None;
+        self.stretch_done.clear();
+        self.pitch_tried.clear();
         // The host stops the transport (`ResetSession`), which ends any armed capture.
         self.scout_capture = None;
         // A capture of the old session never lands in the new one.
@@ -429,6 +478,8 @@ impl Engine {
         for n in thawed {
             self.message(n);
         }
+        // The old session's history is gone: its takes nothing names any more go too.
+        crate::io::clean_unused_takes(self, true);
     }
 
     /// Reports the silent sidechains of the session now in place as just loaded (messages, and
@@ -555,6 +606,7 @@ impl Engine {
         self.redo.push(HistoryEntry { label: h.label, doc: cur });
         self.revision = self.revision.wrapping_add(1);
         self.dirty = true;
+        self.restore_stretch_renders();
         true
     }
 
@@ -587,19 +639,39 @@ impl Engine {
         self.undo.push(HistoryEntry { label: h.label, doc: cur });
         self.revision = self.revision.wrapping_add(1);
         self.dirty = true;
+        self.restore_stretch_renders();
         true
     }
 
     /// Undo and Redo never change the Edit mode or its settings (Shuffle Lock above all).
     fn keep_edit_mode(&mut self, from: &Session) {
-        use edit::{RELATIVE_GRID, SHUFFLE_LOCK, SNAP_TO_GRID};
-        let flags = [SNAP_TO_GRID, SHUFFLE_LOCK, RELATIVE_GRID];
+        use edit::{RELATIVE_GRID, SHUFFLE_LOCK, SNAP_TO_CLIPS, SNAP_TO_GRID, SNAP_TO_MARKERS, SNAP_TO_ZERO};
+        let flags = [SNAP_TO_GRID, SHUFFLE_LOCK, RELATIVE_GRID, SNAP_TO_CLIPS, SNAP_TO_MARKERS, SNAP_TO_ZERO];
         let ed = &self.doc.edit;
-        if ed.edit_mode != from.edit.edit_mode || flags.iter().any(|f| ed.flag(f) != from.edit.flag(f)) {
+        // The view (zoom, scroll, waveform height) and the current tool stay too: undo takes back
+        // the edit, not where the person was looking or what they were holding.
+        if ed.edit_mode != from.edit.edit_mode
+            || flags.iter().any(|f| ed.flag(f) != from.edit.flag(f))
+            || ed.zoom != from.edit.zoom
+            || ed.tool != from.edit.tool
+        {
             let ed = &mut Arc::make_mut(&mut self.doc).edit;
             ed.edit_mode = from.edit.edit_mode;
             for f in flags {
                 ed.set_flag(f, from.edit.flag(f));
+            }
+            ed.zoom = from.edit.zoom;
+            ed.tool = from.edit.tool;
+        }
+        // The overlap mode (Options › Overlap) is a setting like the Edit mode.
+        for key in [edit::OVERLAP_KEY, edit::OVERLAP_XFADE_KEY] {
+            let (now, then) = (self.doc.edit.values.get(key).copied(), from.edit.values.get(key).copied());
+            if now != then {
+                let vals = &mut Arc::make_mut(&mut self.doc).edit.values;
+                match then {
+                    Some(v) => vals.insert(key.into(), v),
+                    None => vals.remove(key),
+                };
             }
         }
     }
@@ -611,6 +683,10 @@ impl Engine {
     fn keep_vocal_cache(&mut self, from: &Session) {
         if !self.doc.vocal.same(&from.vocal) {
             Arc::make_mut(&mut self.doc).vocal = from.vocal.clone();
+        }
+        // Transposed clips' renders are derived the same way: an undo or redo keeps them.
+        if !Arc::ptr_eq(&self.doc.pitch_renders.0, &from.pitch_renders.0) {
+            Arc::make_mut(&mut self.doc).pitch_renders = from.pitch_renders.clone();
         }
     }
 
@@ -635,12 +711,22 @@ impl Engine {
         self.refresh_vocal_fingerprints();
         // Audio this step made goes to disk now, so neither the session nor its history holds it.
         spill::spill(self, label);
+        // The notes' playback indexes, from the notes this step leaves.
+        self.refresh_note_index();
         self.undo.push(HistoryEntry { label: label.to_string(), doc: before });
         self.redo.clear();
         self.merge_redo = None;
         if self.undo.len() > self.history_limit {
             let excess = self.undo.len() - self.history_limit;
             self.undo.drain(..excess);
+        }
+    }
+
+    /// Re-derives every MIDI clip's playback index made from other notes (`note_index`); a scan
+    /// first, so a session whose indexes are current is not copied.
+    pub(crate) fn refresh_note_index(&mut self) {
+        if crate::note_index::any_stale(&self.doc) {
+            crate::note_index::refresh(Arc::make_mut(&mut self.doc));
         }
     }
 
@@ -661,6 +747,13 @@ impl Engine {
     /// Run a command by id. Never panics: escaped panics become `EngineError::Internal` and the
     /// document is restored.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // Stretch renders inside this command (and the tempo follow after it) are deferred
+        // when the host renders them in the background.
+        let defer = self.defer_stretch;
+        stretch_jobs::with_defer(defer, || self.execute_inner(id, params))
+    }
+
+    fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
         let id = cmd::canonical_id(id);
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if self.blocked_while_recording(id) {
@@ -706,10 +799,42 @@ impl Engine {
         }
         match result {
             Ok(mut v) => {
-                // A frozen track's frozen parts are not edited: the command is undone.
+                // MIDI clips on tick-timebase tracks stay on their bars when an edit changes the
+                // tempo map (undo and redo restore whole documents; a loaded session is as saved).
                 if !Arc::ptr_eq(&before, &self.doc)
                     && self.loads == loads
-                    && let Some(why) = cmd::freeze::refused_edit(id, &before, &self.doc)
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && before.tempo != self.doc.tempo
+                {
+                    let followed = tick_clips::follow_tempo(&before, Arc::make_mut(&mut self.doc));
+                    // Pitch-preserving Elastic clips render to their new length, from their
+                    // original material (a clip that cannot keeps its place and its old length).
+                    for (clip, ratio) in followed.renders {
+                        let key = format!("elastic.{}.ratio", clip.0);
+                        let was = self.doc.edit.values.get(&key).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(1.0);
+                        let _ = cmd::clip::elastic(self, &serde_json::json!({"clips": [clip.0], "ratio": was * ratio}));
+                    }
+                }
+                // MIDI clips set to follow the chord lane take its changes, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && (before.band.chords != self.doc.band.chords
+                        || (before.band.key, before.band.scale) != (self.doc.band.key, self.doc.band.scale))
+                    && self.doc.tracks.iter().any(|t| t.clips().iter().any(|c| c.follow_chords.is_some()))
+                {
+                    chord_follow::follow(Arc::make_mut(&mut self.doc));
+                }
+                // Shared MIDI clips take a note edit made in one of them, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc) && self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") && midi_shared::any(&self.doc)
+                {
+                    midi_shared::follow(id, &before, Arc::make_mut(&mut self.doc));
+                }
+                // A frozen track's frozen parts and edit-locked clips are not edited: the command
+                // is undone.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && let Some(why) = cmd::freeze::refused_edit(id, &before, &self.doc).or_else(|| edit::locked_edit_refused(id, &before, &self.doc))
                 {
                     self.doc = before;
                     self.revision = self.revision.wrapping_add(1);
@@ -762,8 +887,13 @@ impl Engine {
                 cmd::remember_selection(self, &before);
                 cmd::sync_loop(self, &before);
                 let label = self.step_label.take().unwrap_or(spec.label);
-                if spec.undoable && !Arc::ptr_eq(&before, &self.doc) {
+                let changed = !Arc::ptr_eq(&before, &self.doc);
+                if spec.undoable && changed {
                     self.push_undo(label, before);
+                }
+                // Last: the notes' playback indexes, made from the notes as this step leaves them.
+                if changed {
+                    self.refresh_note_index();
                 }
                 if spec.journal {
                     self.journal.push((id.to_string(), params.clone()));

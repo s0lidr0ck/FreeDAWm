@@ -77,7 +77,7 @@ pub const PRESET_PARAMS: [&str; 28] = [
 ];
 
 /// The family's preset facts: `storageKey`, and what `getPresetParams` leaves out.
-const FAM: Family = Family::new("DelayEngine", &["trim", "level", "tempo", "tempoSrc", "tap", "trails"]);
+pub(crate) const FAM: Family = Family::new("DelayEngine", &["trim", "level", "tempo", "tempoSrc", "tap", "trails"]);
 
 /// The family's plain (untracked) `Pill::Small`.
 const PLAIN: PillLook = PillLook { active_colour: None, tracked: false, dimmed: false };

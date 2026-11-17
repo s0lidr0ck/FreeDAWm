@@ -66,6 +66,7 @@ pub use presets::PRESETS;
 use crate::params::{Params, fs_choice, fs_toggle, knob01};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Transport};
 use delay_config as dc;
+use delay_engine_dsp as d;
 
 /// The drawer's tabs: the pedal face, then the editor's own drawer tabs.
 const DELAY: &str = "Delay";
@@ -216,6 +217,34 @@ impl Delay {
     }
 }
 
+/// Longest tail [`Delay`] reports: a frozen or self-oscillating loop rings on for ever, and a
+/// bounce or freeze stops there.
+pub(crate) const MAX_TAIL_S: f64 = 60.0;
+
+/// How long the echoes ring on after the input stops, in seconds: the C++'s 8 s
+/// (`getTailLengthSeconds`) at the least, and as long as the echoes take to fall 80 dB at the
+/// Feedback and time set (the longest Division at `bpm`, or 60 BPM when there is none, when
+/// synced). Freeze, or a loop gain of 1 and over, rings for [`MAX_TAIL_S`].
+pub(crate) fn tail_seconds(p: &Params, bpm: f32) -> f64 {
+    let v = |i: usize| f64::from(p.v(i));
+    let gain = v(d::P_FEEDBACK) * 1.15;
+    if v(d::P_FREEZE) >= 0.5 || gain >= 0.999 {
+        return MAX_TAIL_S;
+    }
+    let bpm = if bpm.is_finite() && bpm >= 20.0 { f64::from(bpm) } else { 60.0 };
+    let beat = 60.0 / bpm;
+    let idx = |i: usize| (v(i) + 0.5) as i32;
+    let free = f64::from(d::knob_to_ms(p.v(d::P_TIME))) / 1000.0;
+    // R Note 0 is "Ratio" (the left time and the offset); the others are divisions from 1/16T.
+    let right = if idx(d::P_DIVISION_R) > 0 { f64::from(d::division_beats(idx(d::P_DIVISION_R) - 1)) } else { 0.0 };
+    let synced = f64::from(d::division_beats(idx(d::P_DIVISION))).max(right) * beat;
+    let echo = if v(d::P_SYNC) >= 0.5 { synced } else { free };
+    // Echoes until -80 dB, plus the first one, the offset and the diffusion's smear.
+    let repeats = if gain > 1e-3 { (1e-4f64).ln() / gain.ln() } else { 0.0 };
+    let tail = echo * 2.0 * (repeats + 1.0) + 1.0;
+    tail.clamp(8.0, MAX_TAIL_S)
+}
+
 impl Plugin for Delay {
     fn info(&self) -> &'static PluginInfo {
         &DELAY_INFO
@@ -250,8 +279,7 @@ impl Plugin for Delay {
     }
 
     fn tail_samples(&self) -> usize {
-        // `getTailLengthSeconds`: 8 s.
-        (8.0 * self.sr) as usize
+        (tail_seconds(&self.p, self.dsp.bpm_now()) * self.sr) as usize
     }
 
     fn set_transport(&mut self, transport: &Transport) {

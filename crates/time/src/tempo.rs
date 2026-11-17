@@ -398,11 +398,147 @@ impl TempoMap {
         self.tempos = out;
         Ok(())
     }
+
+    /// Whether `tick` lies strictly inside a tempo ramp (where inserting or removing time would
+    /// have to bend the ramp).
+    pub fn in_ramp(&self, tick: i64) -> bool {
+        self.tempos.windows(2).any(|w| matches!(w, [a, b] if a.ramp && a.bpm != b.bpm && a.tick < tick && tick < b.tick))
+    }
+
+    /// Insert Time: `n` ticks of the tempo and meter in effect at `at` are inserted there, so the
+    /// tempo and meter changes at or after it move `n` ticks later. A meter change moved off a bar
+    /// line goes to the next one. Callers refuse a point inside a ramp ([`TempoMap::in_ramp`]).
+    pub fn insert_ticks(&mut self, at: i64, n: i64) {
+        if n <= 0 {
+            return;
+        }
+        for e in self.tempos.iter_mut().filter(|e| e.tick >= at && e.tick > 0) {
+            e.tick = e.tick.saturating_add(n).min(MAX_POSITION);
+        }
+        self.tempos.dedup_by_key(|e| e.tick);
+        let later: Vec<MeterEvent> = self.meters.iter().filter(|m| m.tick >= at && m.tick > 0).copied().collect();
+        self.meters.retain(|m| m.tick < at || m.tick == 0);
+        self.put_meters_from(later.into_iter().map(|m| MeterEvent { tick: m.tick.saturating_add(n).min(MAX_POSITION), ..m }));
+    }
+
+    /// Cut Time: the ticks `[from, to)` go, and the tempo and meter changes after them move back
+    /// to `from`. Changes inside the span go; the tempo and meter in effect at `to` carry on from
+    /// `from`. Callers refuse a span with an end inside a ramp ([`TempoMap::in_ramp`]).
+    pub fn remove_ticks(&mut self, from: i64, to: i64) {
+        let n = to.saturating_sub(from);
+        if n <= 0 {
+            return;
+        }
+        let (bpm, ramp) = {
+            let i = self.tempos.partition_point(|e| e.tick <= to).saturating_sub(1);
+            self.tempos.get(i).map_or((120.0, false), |e| (e.bpm, e.ramp && e.tick == to))
+        };
+        let meter = self.meter_at_tick(to);
+        let had_tempo = self.tempos.iter().any(|e| e.tick >= from && e.tick <= to);
+        self.tempos.retain(|e| e.tick < from || e.tick > to || e.tick == 0);
+        for e in self.tempos.iter_mut().filter(|e| e.tick > to) {
+            e.tick = e.tick.saturating_sub(n);
+        }
+        if (had_tempo && self.tempo_at_tick(from.saturating_sub(1).max(0)) != bpm) || from == 0 {
+            match self.tempos.binary_search_by(|e| e.tick.cmp(&from)) {
+                Ok(i) => {
+                    if let Some(e) = self.tempos.get_mut(i) {
+                        (e.bpm, e.ramp) = (bpm, ramp);
+                    }
+                }
+                Err(i) => self.tempos.insert(i, TempoEvent { tick: from, bpm, ramp }),
+            }
+        }
+        let later: Vec<MeterEvent> =
+            self.meters.iter().filter(|m| m.tick > to).map(|m| MeterEvent { tick: m.tick.saturating_sub(n), ..*m }).collect();
+        let before = self.meter_at_tick(from.saturating_sub(1).max(0));
+        self.meters.retain(|m| m.tick < from || m.tick == 0);
+        let carry = (meter.numerator, meter.denominator) != (before.numerator, before.denominator) || from == 0;
+        let carried = carry.then_some(MeterEvent { tick: from, ..meter });
+        if from == 0 {
+            self.meters.retain(|m| m.tick != 0);
+        }
+        self.put_meters_from(carried.into_iter().chain(later));
+    }
+
+    /// Identify Beat: the ticks `[from, to)` become `len` ticks at `bpm`, and what follows keeps
+    /// its tempo and its place in time: the tempo in effect at `to` resumes where the span now
+    /// ends, and later changes move with that end. Changes inside the span go (a meter change
+    /// there moves in proportion). Callers refuse ends inside a ramp ([`TempoMap::in_ramp`]).
+    pub fn set_span(&mut self, from: i64, to: i64, len: i64, bpm: f64) -> Result<(), TimeError> {
+        let bpm = valid_bpm(bpm)?;
+        let (from, to) = (from.max(0), to.max(0));
+        if to <= from || len <= 0 {
+            return Ok(());
+        }
+        let end = from.saturating_add(len).min(MAX_POSITION);
+        let shift = end.saturating_sub(to);
+        let after = {
+            let i = self.tempos.partition_point(|e| e.tick <= to).saturating_sub(1);
+            self.tempos.get(i).map_or(TempoEvent { tick: end, bpm: 120.0, ramp: false }, |e| TempoEvent { tick: end, ..*e })
+        };
+        let later: Vec<TempoEvent> =
+            self.tempos.iter().filter(|e| e.tick > to).map(|e| TempoEvent { tick: e.tick.saturating_add(shift).min(MAX_POSITION), ..*e }).collect();
+        self.tempos.retain(|e| e.tick <= from);
+        self.set_tempo(from, bpm)?;
+        if let Some(e) = self.tempos.iter_mut().find(|e| e.tick == from) {
+            e.ramp = false;
+        }
+        if !later.iter().any(|e| e.tick == end) {
+            self.tempos.push(after);
+        }
+        self.tempos.extend(later);
+        self.tempos.sort_by_key(|e| e.tick);
+        self.tempos.dedup_by_key(|e| e.tick);
+        let scale = |t: i64| from.saturating_add(to_samples((t - from) as f64 * len as f64 / (to - from) as f64));
+        let moved: Vec<MeterEvent> = self
+            .meters
+            .iter()
+            .filter(|m| m.tick > from)
+            .map(|m| MeterEvent { tick: if m.tick <= to { scale(m.tick) } else { m.tick.saturating_add(shift) }, ..*m })
+            .collect();
+        self.meters.retain(|m| m.tick <= from);
+        self.put_meters_from(moved.into_iter());
+        Ok(())
+    }
+
+    /// Put meter changes back in tick order, each on the bar line at or after its tick under the
+    /// meters before it.
+    fn put_meters_from(&mut self, meters: impl Iterator<Item = MeterEvent>) {
+        for m in meters {
+            let bb = self.bar_beat_at_tick(m.tick);
+            let start = self.bar_start_tick(bb.bar);
+            let tick = if start >= m.tick { start } else { self.bar_start_tick(bb.bar.saturating_add(1)) };
+            self.put_meter(MeterEvent { tick: tick.clamp(0, MAX_POSITION), ..m });
+        }
+        if self.meters.first().is_none_or(|m| m.tick > 0) {
+            self.meters.insert(0, MeterEvent { tick: 0, numerator: 4, denominator: 4 });
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserting_and_removing_ticks_moves_later_changes() {
+        let mut m = TempoMap::default();
+        let bar = 4 * TICKS_PER_QUARTER;
+        m.set_tempo(2 * bar, 90.0).unwrap();
+        m.set_meter(3 * bar, 3, 4).unwrap();
+        m.insert_ticks(bar, bar);
+        assert_eq!(m.tempos().iter().map(|e| (e.tick, e.bpm)).collect::<Vec<_>>(), vec![(0, 120.0), (3 * bar, 90.0)]);
+        assert_eq!(m.meters().iter().map(|e| (e.tick, e.numerator)).collect::<Vec<_>>(), vec![(0, 4), (4 * bar, 3)]);
+        m.remove_ticks(bar, 2 * bar);
+        assert_eq!(m.tempos().iter().map(|e| (e.tick, e.bpm)).collect::<Vec<_>>(), vec![(0, 120.0), (2 * bar, 90.0)]);
+        assert_eq!(m.meters().iter().map(|e| (e.tick, e.numerator)).collect::<Vec<_>>(), vec![(0, 4), (3 * bar, 3)]);
+        // Cutting across a change: what was in effect at the end carries on from the start.
+        m.remove_ticks(bar, 5 * bar / 2);
+        assert_eq!(m.tempos().iter().map(|e| (e.tick, e.bpm)).collect::<Vec<_>>(), vec![(0, 120.0), (bar, 90.0)]);
+        // The 3/4 change moved off a bar line, to the next one.
+        assert_eq!(m.meters().iter().map(|e| (e.tick, e.numerator)).collect::<Vec<_>>(), vec![(0, 4), (2 * bar, 3)]);
+    }
 
     #[test]
     fn default_map_is_120_4_4() {

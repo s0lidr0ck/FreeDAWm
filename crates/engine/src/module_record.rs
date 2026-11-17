@@ -43,6 +43,22 @@ pub fn render_module_midi(s: &Session, range: Range, tracks: &[TrackId]) -> Vec<
 /// or MIDI track whose input is modules) over `range` as one MIDI clip per track that received
 /// anything (channels kept, as a printed band clip), one undo step "Record". Frozen tracks and
 /// tracks without such an input are skipped. Returns the clips.
+/// The range a take recorded with `plan` and stopped at `end` prints the modules' MIDI over: the
+/// record range, cut to the punch range. Loop recording prints the loop (the print is the same
+/// each time round; the playhead at Stop is somewhere in a later pass), from where recording
+/// started when that was partway through it. `None` when nothing is left.
+pub fn print_range(plan: &crate::io::Recording, end: Samples) -> Option<Range> {
+    let r = match plan.pass {
+        Some(len) => {
+            let from = plan.loop_from.unwrap_or(plan.start);
+            let lp_end = from.saturating_add(len);
+            Range::new(if plan.start > from && plan.start < lp_end { plan.start } else { from }, lp_end)
+        }
+        None => Range::new(plan.start, end.max(plan.start)),
+    };
+    plan.punch.map_or(Some(r), |p| r.intersect(&p)).filter(|r| !r.is_empty())
+}
+
 pub fn record_module_inputs(e: &mut Engine, range: Range, tracks: Option<&[TrackId]>) -> Vec<ClipId> {
     let s = e.session();
     let wanted: Vec<TrackId> = s

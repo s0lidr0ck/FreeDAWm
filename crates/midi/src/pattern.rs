@@ -307,7 +307,16 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                         if seq.notes.len() >= at.max_notes {
                             return false;
                         }
-                        seq.notes.push(Note { pitch: lane.note, velocity, release_velocity: 64, channel: CHANNEL, start: tick, length });
+                        seq.notes.push(Note {
+                            probability: 100,
+                            pitch: lane.note,
+                            velocity,
+                            muted: false,
+                            release_velocity: 64,
+                            channel: CHANNEL,
+                            start: tick,
+                            length,
+                        });
                     }
                     true
                 };

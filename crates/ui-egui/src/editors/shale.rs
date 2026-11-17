@@ -84,7 +84,7 @@ pub const PRESET_PARAMS: [&str; 19] = [
 ];
 
 /// The preset facts: `storageKey`, and what `getPresetParams` leaves out besides Bypass.
-const FAM: Family = Family::new(
+pub(crate) const FAM: Family = Family::new(
     "Shale",
     &[
         "threshold",
@@ -514,7 +514,7 @@ fn knob(fam: &mut FamilyState, app: &mut SoundApp, ui: &mut Ui, host: &Host, rec
     let Some(info) = host.info.params.iter().find(|p| p.id == id) else { return };
     let v = param(host, id);
     let text = shale_ui::value_text(host.ins, info, v);
-    let o = DialOpts { label, value_text: &text, tracked: true, default: info.to_normalized(info.default), ..o };
+    let o = DialOpts { label, value_text: &text, tracked: true, default: info.to_normalized(info.default), info: Some(info), ..o };
     let out = dial(ui, rect, id, &PALETTE, info.to_normalized(v), &o);
     if out.started {
         end_gesture(app);

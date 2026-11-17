@@ -31,11 +31,14 @@
 pub mod devices;
 pub mod feed;
 pub mod jack;
+mod keep_pitch;
 pub mod measure;
 pub mod midi_in;
+pub mod midi_out;
 mod outmap;
 pub mod pw;
 pub mod record;
+mod resample;
 pub mod stream;
 
 pub use devices::AudioConfig;
@@ -49,7 +52,9 @@ use soundcraft_dsp::monitor::{Plan as MonitorPlan, State as MonitorState};
 use soundcraft_dsp::{Plugin, PluginEditor, PluginStateReader};
 pub use soundcraft_mix::CountOff;
 use soundcraft_mix::scout::ScoutRig;
-use soundcraft_mix::{BandSongCache, BandUpdate, LiveInstances, MAX_CHANNELS, MixEngine, PreparedInstance, StripMeter, main_channels};
+use soundcraft_mix::{
+    BandSongCache, BandUpdate, BuiltinPrep, LiveInstances, MAX_CHANNELS, MixEngine, Prepared, PreparedInstance, StripMeter, main_channels,
+};
 use soundcraft_model::{ModuleId, Session, TrackId};
 use soundcraft_time::{Range, Samples};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -99,9 +104,12 @@ pub struct PreviewAudio {
     pub rate: u32,
 }
 
+// `Taps` is the largest: a fixed array, so the audio thread takes it without freeing anything.
+#[allow(clippy::large_enum_variant)]
 enum Cmd {
-    /// A new snapshot plus the third-party instances it needs (created on the UI thread).
-    Session(Arc<Session>, Vec<PreparedInstance>),
+    /// A new snapshot plus the plugin instances and Clip Effects modules it needs (created on
+    /// the UI thread: third-party ones and, through a [`BuiltinPrep`], built-in ones).
+    Session(Arc<Session>, Prepared),
     /// Where the callback sends the snapshots it replaces (freeing one takes thousands of frees).
     OldSessions(SyncSender<Arc<Session>>),
     /// Live input, and a planar buffer for it (channels × `max_block`) to replace the mix's input:
@@ -109,6 +117,8 @@ enum Cmd {
     Input(Arc<feed::InputFeed>, Vec<Vec<f32>>),
     /// Where recording blocks are captured; the old one goes back as garbage.
     Capture(Arc<record::Capture>),
+    /// What a recording frame holds ([`Player::set_record_taps`]).
+    Taps(record::Taps),
     Recording(bool),
     /// The range a recording punches into ([`Player::set_punch`]).
     Punch(Option<Range>),
@@ -124,10 +134,17 @@ enum Cmd {
     },
     Stop,
     Locate(Samples),
+    /// The loop of the playback under way changed (moved, resized, or Loop Playback turned on
+    /// or off): see [`Player::set_loop`].
+    Loop(Option<Range>),
     /// A one-off action for a module's live plugin ([`Plugin::action`]).
     Action(TrackId, ModuleId, &'static str),
     /// A note played on a track's instrument now (note-off at velocity 0): auditions.
     Audition(TrackId, u8, u8),
+    /// All MIDI Notes Off: every instrument lets go of every note and pedal now.
+    AllNotesOff,
+    /// Start the master loudness meter's integrated value and maxima afresh.
+    LoudnessReset,
     /// Audio played straight to the output now, over the mix (`None` stops it): a preview of
     /// audio that is not in the session, as Juke's hit picker's. The UI keeps a clone of each, so
     /// the audio thread never frees one.
@@ -193,7 +210,13 @@ struct Shared {
     countoff_at: AtomicI64,
     /// Speed × 1000.
     speed: AtomicU32,
+    /// Varispeed keeps the pitch ([`Player::set_keep_pitch`]).
+    keep_pitch: AtomicBool,
     meters: Mutex<MeterSnapshot>,
+    /// `meters` holds peaks [`Player::copy_meters`] has not taken yet: the callback folds each
+    /// block's peaks into them (the maximum) instead of replacing them, so a peak or clip between
+    /// two UI polls is not lost. Written only with `meters` locked.
+    meters_unread: AtomicBool,
     /// Callbacks that came late or after a gap (at most one per callback).
     underruns: AtomicU64,
     /// The peak share of a callback's period spent filling it since the last read, in ‰.
@@ -202,6 +225,8 @@ struct Shared {
     direct: AtomicBool,
     /// A take records (set by [`Player::set_recording`]): half speed waits.
     recording: AtomicBool,
+    /// Loop recording: the pass under way, as the last block left it ([`Player::loop_pass`]).
+    midi_pass: AtomicU32,
     /// Reported latencies, read live for [`Player::reported_latency`]: the output callback's
     /// (playback − callback) and the input callback's (callback − capture), in ns; the input
     /// feed's own and the mix's compensation after the last render, in frames.
@@ -235,11 +260,14 @@ impl Shared {
             counting: AtomicBool::new(false),
             countoff_at: AtomicI64::new(0),
             speed: AtomicU32::new(1000),
+            keep_pitch: AtomicBool::new(false),
             meters: Mutex::new(MeterSnapshot::default()),
+            meters_unread: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
             load_permille: AtomicU32::new(0),
             direct: AtomicBool::new(false),
             recording: AtomicBool::new(false),
+            midi_pass: AtomicU32::new(0),
             out_latency_ns: AtomicU64::new(0),
             in_latency_ns: AtomicU64::new(0),
             feed_latency: AtomicU32::new(0),
@@ -383,8 +411,51 @@ fn guarded_block(fault: &Fault, shared: &Shared, out: &mut [f32], fill: impl FnO
     }
 }
 
+/// Shortest loop the transport repeats, in samples. A shorter one would render the mix once per
+/// lap (hundreds of times a callback); it plays once, to its end, instead.
+const MIN_LOOP: i64 = 64;
+
+/// The loop and end a Play keeps: a loop shorter than [`MIN_LOOP`] (an accidental sliver of a
+/// selection) plays once and stops at its end, never on through the rest of the session.
+fn loop_or_end(looped: Option<Range>, end: Option<Samples>) -> (Option<Range>, Option<Samples>) {
+    match looped {
+        Some(l) if l.len() > MIN_LOOP => (Some(l), end),
+        Some(l) => (None, Some(end.map_or(l.end, |e| e.min(l.end)))),
+        None => (None, end),
+    }
+}
+
+/// How long the output ramps in after a start and out before a stop or a jump, in seconds: long
+/// enough that cutting into or out of a waveform does not click, short enough not to be heard
+/// as a fade.
+const DECLICK_SECS: f64 = 0.003;
+
+/// A transport change that waits for the output to ramp out first (see [`AudioState::defer`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Deferred {
+    /// Stop; then locate to `then_at` if one came in during the ramp.
+    Stop {
+        then_at: Option<Samples>,
+    },
+    Locate(Samples),
+    Play {
+        from: Samples,
+        end: Option<Samples>,
+        looped: Option<Range>,
+        countoff: Option<CountOff>,
+    },
+}
+
 /// State owned by the audio callback.
 struct AudioState {
+    /// The declick ramp: the gain the output plays at now, moving by one ramp step a frame
+    /// towards `ramp_to` (0 while a deferred change waits, else 1).
+    ramp: f32,
+    ramp_to: f32,
+    /// A Stop, Locate or Play received while playing: applied once the ramp reaches 0.
+    deferred: Option<Deferred>,
+    /// The declick ramps run (always, but for tests comparing render paths sample for sample).
+    declick: bool,
     /// The preview playing ([`Cmd::Preview`]) and its read position, in its own frames.
     preview: Option<(Arc<PreviewAudio>, f64)>,
     /// The monitor stage ([`Player::set_monitor`]): the stereo main mix passes through it on its
@@ -399,6 +470,9 @@ struct AudioState {
     playing: bool,
     end: Option<Samples>,
     looped: Option<Range>,
+    /// The loop wraps: false only when a loop set while playing ([`Cmd::Loop`]) begins behind
+    /// the playhead, until the next Play or locate.
+    loop_armed: bool,
     /// The count-off under way before the transport rolls from `pos`, and the frames of it
     /// rendered so far.
     countoff: Option<CountOff>,
@@ -411,6 +485,12 @@ struct AudioState {
     /// on the audio thread never allocates).
     main: Vec<Vec<f32>>,
     main_width: usize,
+    /// The remote mix stream with the control room's talkback in it (left, right; `max_block`
+    /// each, allocated once), and where the talkback's level and the music's dim under it were
+    /// at the end of the last block (ramped, see [`AudioState::talk_into_stream`]).
+    tap_buf: [Vec<f32>; 2],
+    talk_gain: f32,
+    talk_dim: f32,
     /// Where the main mix and the hardware outputs land on the device.
     out: OutMap,
     pending_len: usize,
@@ -421,9 +501,14 @@ struct AudioState {
     max_block: usize,
     /// The last fill took the direct path (see [`AudioState::fill`]).
     direct: bool,
-    /// The last frame of the block before `pending`, per channel: the resampler interpolates
-    /// from it into the block (`read` in -1..0).
-    carry: [f32; MAX_DEVICE_CHANNELS],
+    /// The frames of the blocks before `pending`, per channel: the resampler's kernel reaches
+    /// back into them (`resample`).
+    hist: Box<resample::History>,
+    /// The resampler's kernel, tabulated for the step in use.
+    kernel: Box<resample::Kernel>,
+    /// Varispeed's pitch keeper ([`keep_pitch`]), and whether the last fill ran it.
+    keep_pitch: Box<keep_pitch::KeepPitch>,
+    keeping_pitch: bool,
     /// Live input, popped into `mix.input` once per mix block.
     feed: Option<Arc<feed::InputFeed>>,
     /// Input frames popped during the current callback.
@@ -433,6 +518,8 @@ struct AudioState {
     /// Where recording blocks are captured, and the samples it still owes as silence.
     capture: Option<Arc<record::Capture>>,
     owed: usize,
+    /// A recording frame: the device input's channels, then each bus-input track's tap.
+    taps: record::Taps,
     /// Input is heard: an input and an armed or monitored track (set each fill).
     monitoring: bool,
     /// Input was heard and no longer is: the mix renders one more block, so the strips let go
@@ -447,11 +534,18 @@ struct AudioState {
     midi: Option<Arc<midi_in::MidiHub>>,
     /// Loop recording: the pass under way (each wrap of the loop starts the next).
     midi_pass: u16,
+    /// Recording turned on and its first block not yet heard: the pedals already down go into the
+    /// take then ([`midi_in::MidiHub::record_pedals`]).
+    midi_take_fresh: bool,
     /// A recording's live MIDI clock (set each fill): the hub's time at the callback's start, and
     /// the timeline frames from what the callback starts playing to the next block rendered
     /// (the previous callback's unplayed frames, then each block rendered, through a loop wrap).
     midi_now: u64,
     midi_lead: i64,
+    /// MIDI output's clock at the callback's start (`soundcraft_mix::external_midi`).
+    out_now: u64,
+    /// MIDI clock and timecode out (Setup › MIDI Beat Clock).
+    sync_out: soundcraft_mix::midi_sync::SyncOut,
     /// Where the take starts, until the first block after a Play (without a count-off) has
     /// rolled: MIDI recorded in that block never lands before it (a note played between the
     /// Record press and the transport rolling is the take's first, not lost before it).
@@ -521,10 +615,67 @@ fn send_band_garbage(mix: &mut MixEngine, garbage: &Sender<Garbage>, runtime: Op
     }
 }
 
+/// Talkback into the remote mix stream: while the control room's talkback is on (or still
+/// ramping off), `tap` gets the main mix (`main`, its first two channels; a mono mix on both)
+/// with the talkback input added at its level, and the music dimmed by the control room's dim
+/// unless the monitor dims it already (talkback that dims). Both ramp over 10 ms from where the
+/// last block left them (`gain`, `dim`). Returns whether `tap` holds this block (else the tap
+/// takes the mix as it is). Audio thread: never allocates.
+fn talk_into_stream(s: &Session, input: &[Vec<f32>], main: &[Vec<f32>], n: usize, tap: &mut [Vec<f32>; 2], gain: &mut f32, dim: &mut f32) -> bool {
+    let Some(tb) = s.control_room.as_ref().map(|c| (&c.talkback, c.dim_db)) else {
+        (*gain, *dim) = (0.0, 1.0);
+        return false;
+    };
+    let (talk, dim_db) = tb;
+    let on = talk.on && !talk.input.is_empty();
+    let to = if on { soundcraft_dsp::db_to_gain(talk.level_db) } else { 0.0 };
+    let dim_to = if on && !talk.dims { soundcraft_dsp::db_to_gain(dim_db) } else { 1.0 };
+    if to == 0.0 && *gain == 0.0 && (*dim - 1.0).abs() < 1e-6 {
+        *dim = 1.0;
+        return false;
+    }
+    let src = s.input_channels(&talk.input);
+    let rate = s.sample_rate.as_f64() as f32;
+    let step = 1.0 / (0.010 * rate).max(1.0);
+    let ramp = |cur: f32, target: f32| {
+        if (target - cur).abs() <= step {
+            target
+        } else if target > cur {
+            cur + step
+        } else {
+            cur - step
+        }
+    };
+    let (mut g, mut d) = (*gain, *dim);
+    let left = main.first();
+    let right = main.get(1).or(left);
+    let [tl, tr] = tap;
+    for i in 0..n.min(tl.len()).min(tr.len()) {
+        g = ramp(g, to);
+        d = ramp(d, dim_to);
+        let mic = src.map_or(0.0, |(first, width)| {
+            let sum: f32 = (first..first + width).filter_map(|c| input.get(c).and_then(|x| x.get(i))).copied().filter(|v| v.is_finite()).sum();
+            sum / width.max(1) as f32
+        });
+        let l = left.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        let r = right.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        if let (Some(a), Some(b)) = (tl.get_mut(i), tr.get_mut(i)) {
+            *a = l * d + mic * g;
+            *b = r * d + mic * g;
+        }
+    }
+    (*gain, *dim) = (g, d);
+    true
+}
+
 fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
+    // Built-in modules and Clip Effects come made from the UI thread too (`Side::builtins`).
+    m.set_prepared_builtins(true);
     m.metronome = true;
+    // The master's loudness meter (Window › Loudness Meter) reads the live mix.
+    m.set_loudness_metering(true);
     m
 }
 
@@ -533,6 +684,10 @@ impl AudioState {
         let sr = session.sample_rate.as_f64() as f32;
         let nch = main_channels(&session);
         AudioState {
+            ramp: 1.0,
+            ramp_to: 1.0,
+            deferred: None,
+            declick: true,
             preview: None,
             monitor: MonitorState::default(),
             garbage,
@@ -548,22 +703,30 @@ impl AudioState {
             playing: false,
             end: None,
             looped: None,
+            loop_armed: true,
             countoff: None,
             countoff_at: 0,
             pending: vec![vec![0.0; max_block]; nch],
             main: vec![vec![0.0; max_block]; MAX_CHANNELS],
             main_width: nch,
+            tap_buf: [vec![0.0; max_block], vec![0.0; max_block]],
+            talk_gain: 0.0,
+            talk_dim: 1.0,
             pending_len: 0,
             read: 0.0,
             device_rate,
             max_block,
             direct: false,
-            carry: [0.0; MAX_DEVICE_CHANNELS],
+            hist: Box::default(),
+            kernel: Box::default(),
+            keep_pitch: Box::default(),
+            keeping_pitch: false,
             feed: None,
             popped: 0,
             shut: false,
             capture: None,
             owed: 0,
+            taps: record::Taps::default(),
             monitoring: false,
             let_go: false,
             heard: false,
@@ -571,8 +734,11 @@ impl AudioState {
             punch: None,
             midi: None,
             midi_pass: 0,
+            midi_take_fresh: false,
             midi_now: 0,
             midi_lead: 0,
+            out_now: 0,
+            sync_out: soundcraft_mix::midi_sync::SyncOut::new(),
             midi_floor: None,
             lent: false,
             measure: None,
@@ -605,10 +771,13 @@ impl AudioState {
                         let _ = self.garbage.send(Garbage { capture: Some(old), ..Garbage::default() });
                     }
                 }
+                Cmd::Taps(t) => self.taps = t,
                 Cmd::Recording(r) => {
                     self.recording = r;
                     self.punch = None;
                     self.midi_pass = 0;
+                    self.shared.midi_pass.store(0, Ordering::Relaxed);
+                    self.midi_take_fresh = r;
                 }
                 Cmd::Punch(p) => self.punch = p,
                 // The app keeps its own handle: the one replaced is never the last.
@@ -634,7 +803,7 @@ impl AudioState {
                         // with the new engine's garbage, after the next meter copy (see `send_garbage`).
                         self.mix.keep_retired_analysis(old.take_retired_analysis());
                     }
-                    self.mix.adopt(instances);
+                    self.mix.adopt_prepared(instances);
                     // The main format may have changed: buffers for the widest are already here.
                     self.main_width = main_channels(&s).min(self.main.len());
                     // Outputs may have moved: the device layout stays, the map follows.
@@ -646,43 +815,30 @@ impl AudioState {
                 }
                 Cmd::OldSessions(tx) => self.old_sessions = Some(tx),
                 Cmd::Play { from, end, looped, countoff } => {
-                    self.shared.rolled.store(0, Ordering::Relaxed);
-                    self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
-                    self.shared.play_pending.store(false, Ordering::Release);
-                    self.midi_pass = 0;
-                    self.pos = from;
-                    self.shared.position.store(from, Ordering::Relaxed);
-                    self.end = end;
-                    self.looped = looped.filter(|r| r.len() > 64);
-                    // With a count-off the transport rolls once it is over (`render_next`).
-                    self.countoff = countoff.filter(|c| !c.is_empty());
-                    self.countoff_at = 0;
-                    self.playing = self.countoff.is_none();
-                    // After a count-off nothing is moved in: what was played during it is not taken.
-                    self.midi_floor = self.playing.then_some(from);
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    reset = true;
+                    let play = Deferred::Play { from, end, looped, countoff };
+                    if !self.defer(play) {
+                        self.apply(play);
+                        reset = true;
+                    }
                 }
                 Cmd::Stop => {
-                    self.playing = false;
-                    // A count-off stopped is over: the transport never rolls, nothing is taken.
-                    self.countoff = None;
-                    self.end = None;
-                    self.looped = None;
-                    // What was rendered ahead is playback: not heard after Stop.
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    reset = true;
-                    // The transport stopping ends a Scout capture.
-                    self.mix.stop_scout();
+                    let stop = Deferred::Stop { then_at: None };
+                    if !self.defer(stop) {
+                        self.apply(stop);
+                        reset = true;
+                    }
+                }
+                Cmd::Loop(l) => {
+                    // No jump: the playhead plays on, and wraps at the new end if it is still
+                    // before it (a loop it is already past waits for the next Play or locate).
+                    self.looped = l.filter(|r| r.len() > MIN_LOOP);
+                    self.loop_armed = self.looped.is_some_and(|r| self.pos < r.end);
                 }
                 Cmd::Locate(at) => {
-                    self.pos = at;
-                    self.pending_len = 0;
-                    self.read = 0.0;
-                    // A jump keeps the Scout capture: it records a new played range.
-                    reset = true;
+                    if !self.defer(Deferred::Locate(at)) {
+                        self.apply(Deferred::Locate(at));
+                        reset = true;
+                    }
                 }
                 Cmd::Action(track, module, name) => {
                     // (no allocation: a lookup and the plugin's own flag)
@@ -691,6 +847,14 @@ impl AudioState {
                 Cmd::Audition(track, note, velocity) => {
                     // (no allocation: a lookup and the plugin's event queue)
                     self.mix.audition(track, note, velocity);
+                }
+                Cmd::LoudnessReset => self.mix.reset_loudness(),
+                Cmd::AllNotesOff => {
+                    // (no allocation: fixed arrays and the plugins' event queues)
+                    self.mix.all_notes_off();
+                    if let Some(h) = &self.midi {
+                        h.clear_held();
+                    }
                 }
                 Cmd::Preview(p) => {
                     // (no free: the UI holds a clone of the one replaced)
@@ -725,8 +889,9 @@ impl AudioState {
                         Some(refused) => self.send_scout(refused),
                         None => {
                             self.pos = range.start;
-                            self.end = None;
-                            self.looped = Some(range).filter(|r| r.len() > 64);
+                            (self.looped, self.end) = loop_or_end(Some(range), None);
+                            self.loop_armed = true;
+                            self.ramp_in();
                             self.playing = true;
                             self.pending_len = 0;
                             self.read = 0.0;
@@ -783,6 +948,7 @@ impl AudioState {
                     self.playing = false;
                     self.end = None;
                     self.looped = None;
+                    self.deferred = None;
                     self.pending_len = 0;
                     self.read = 0.0;
                     self.mix.stop_scout();
@@ -819,6 +985,7 @@ impl AudioState {
             self.countoff = None;
             self.end = None;
             self.looped = None;
+            self.deferred = None;
         }
         if changed {
             // Place adopted instances now (not only once playback starts), so editors see them;
@@ -830,8 +997,137 @@ impl AudioState {
         }
         self.send_garbage(false);
         self.return_scout();
-        self.shared.playing.store(self.playing, Ordering::Relaxed);
+        self.publish_playing();
         self.publish_countoff();
+    }
+
+    /// Whether the transport reads as playing: a Stop ramping out already reads stopped.
+    fn publish_playing(&self) {
+        let stopping = matches!(self.deferred, Some(Deferred::Stop { .. }));
+        self.shared.playing.store(self.playing && !stopping, Ordering::Relaxed);
+    }
+
+    /// Frames of the declick ramp at the session rate (at least one).
+    fn ramp_frames(&self) -> usize {
+        ((self.session.sample_rate.as_f64() * DECLICK_SECS).round() as usize).max(1)
+    }
+
+    /// Holds `change` until the output has ramped out, when the transport is playing (so cutting
+    /// away from the audio would click). False when it is to be applied now: stopped, counting
+    /// off, recording (the take's edges stay exact) or lent. A change arriving while another
+    /// waits replaces it, except that a Locate after a Stop is applied after the Stop, and a
+    /// Locate during a deferred Play moves the Play's start.
+    fn defer(&mut self, change: Deferred) -> bool {
+        if !self.declick || !self.playing || self.countoff.is_some() || self.recording || self.lent {
+            if self.deferred.is_some() {
+                // (cannot happen: a deferral is only made while playing, and those end it)
+                self.deferred = None;
+            }
+            return false;
+        }
+        self.deferred = Some(match (self.deferred, change) {
+            (Some(Deferred::Stop { .. }), Deferred::Locate(at)) => Deferred::Stop { then_at: Some(at) },
+            (Some(Deferred::Play { end, looped, countoff, .. }), Deferred::Locate(at)) => Deferred::Play { from: at, end, looped, countoff },
+            (_, c) => c,
+        });
+        self.ramp_to = 0.0;
+        true
+    }
+
+    /// Ramp the output in from silence (a start, or the far side of a jump).
+    fn ramp_in(&mut self) {
+        self.ramp = if self.declick { 0.0 } else { 1.0 };
+        self.ramp_to = 1.0;
+    }
+
+    /// Applies a transport change: at once (see [`AudioState::defer`]), or once its ramp out is
+    /// over. The caller resets the mix at the new position.
+    fn apply(&mut self, change: Deferred) {
+        self.deferred = None;
+        self.ramp_to = 1.0;
+        match change {
+            Deferred::Play { from, end, looped, countoff } => {
+                self.shared.rolled.store(0, Ordering::Relaxed);
+                self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
+                self.shared.play_pending.store(false, Ordering::Release);
+                self.midi_pass = 0;
+                self.shared.midi_pass.store(0, Ordering::Relaxed);
+                self.pos = from;
+                self.shared.position.store(from, Ordering::Relaxed);
+                (self.looped, self.end) = loop_or_end(looped, end);
+                self.loop_armed = true;
+                // With a count-off the transport rolls once it is over (`render_next`).
+                self.countoff = countoff.filter(|c| !c.is_empty());
+                self.countoff_at = 0;
+                self.playing = self.countoff.is_none();
+                // After a count-off nothing is moved in: what was played during it is not taken.
+                self.midi_floor = self.playing.then_some(from);
+                self.pending_len = 0;
+                self.read = 0.0;
+                self.ramp_in();
+            }
+            Deferred::Stop { then_at } => {
+                self.playing = false;
+                // A count-off stopped is over: the transport never rolls, nothing is taken.
+                self.countoff = None;
+                self.end = None;
+                self.looped = None;
+                // What was rendered ahead is playback: not heard after Stop.
+                self.pending_len = 0;
+                self.read = 0.0;
+                // The transport stopping ends a Scout capture.
+                self.mix.stop_scout();
+                if let Some(at) = then_at {
+                    self.pos = at;
+                }
+                // Live input still heard comes back in smoothly from the ramp's silence.
+                self.publish_playing();
+            }
+            Deferred::Locate(at) => {
+                self.pos = at;
+                self.loop_armed = true;
+                self.pending_len = 0;
+                self.read = 0.0;
+                // A jump keeps the Scout capture: it records a new played range.
+                if self.playing {
+                    self.ramp_in();
+                }
+            }
+        }
+    }
+
+    /// The declick ramp over the `n` frames just mapped into `pending`: towards `ramp_to`, and
+    /// out towards a known end of play so the last frame before it is silent. Nothing to do (no
+    /// work) when the gain is 1 and no end is near.
+    fn apply_ramp(&mut self, n: usize) {
+        let len = self.ramp_frames();
+        let step = 1.0 / len as f32;
+        let end_near = self.declick && self.playing && self.end.is_some_and(|e| e.saturating_sub(self.pos) <= len as i64 + n as i64);
+        if self.ramp == 1.0 && self.ramp_to == 1.0 && !end_near {
+            return;
+        }
+        let mut g = self.ramp;
+        for i in 0..n {
+            g = if g < self.ramp_to { (g + step).min(self.ramp_to) } else { (g - step).max(self.ramp_to) };
+            // Rounding must not leave a sliver short of the target (a frame more to wait).
+            if (g - self.ramp_to).abs() < step * 0.5 {
+                g = self.ramp_to;
+            }
+            let mut k = g;
+            if end_near && let Some(e) = self.end {
+                // Reaches 0 on the last frame before the end.
+                let left = e.saturating_sub(self.pos.saturating_add(i as i64)).saturating_sub(1);
+                k *= (left as f32 / len as f32).clamp(0.0, 1.0);
+            }
+            if k != 1.0 {
+                for ch in &mut self.pending {
+                    if let Some(x) = ch.get_mut(i) {
+                        *x *= k;
+                    }
+                }
+            }
+        }
+        self.ramp = g;
     }
 
     /// The count-off state for [`Player::countoff_elapsed`] (two atomic stores).
@@ -905,6 +1201,46 @@ impl AudioState {
         }
     }
 
+    /// Captures this block of `n` frames while a take records (see [`record::Taps`]); true for
+    /// the take's first block. No allocation.
+    fn capture_block(&mut self, n: usize) -> bool {
+        let Some(cap) = self.capture.as_ref().filter(|c| self.recording && self.playing && c.armed.load(Ordering::Acquire)) else {
+            self.owed = 0;
+            return false;
+        };
+        let first = !cap.started.load(Ordering::Relaxed);
+        let taps = &self.taps;
+        let mut tapped: [Option<&[Vec<f32>]>; record::MAX_TAPS] = [None; record::MAX_TAPS];
+        for (k, (slot, (track, _))) in tapped.iter_mut().zip(taps.list()).enumerate() {
+            if let Some((bufs, late)) = self.mix.record_tap(*track) {
+                *slot = Some(bufs);
+                if first && let Some(at) = cap.start_tap.get(k) {
+                    at.store(u32::try_from(late).unwrap_or(u32::MAX), Ordering::Relaxed);
+                }
+            }
+        }
+        if first {
+            cap.start_pos.store(self.pos, Ordering::Relaxed);
+            // The feed's latency now, at the take's start (a drift feed's moves).
+            cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
+        }
+        let input = &self.mix.input;
+        // Without taps the frame is the input as it is (its width is the device's).
+        let (dev, width) = if taps.is_empty() { (input.len(), input.len()) } else { (taps.device, taps.width()) };
+        if width > 0 {
+            let sample = |i: usize| {
+                let (f, c) = (i / width, i % width);
+                if c < dev {
+                    return input.get(c).and_then(|x| x.get(f)).copied().unwrap_or(0.0);
+                }
+                let (k, ch) = taps.locate(c - dev);
+                tapped.get(k).copied().flatten().and_then(|b| b.get(ch)).and_then(|x| x.get(f)).copied().unwrap_or(0.0)
+            };
+            cap.capture_with(n * width, sample, &mut self.owed);
+        }
+        first
+    }
+
     /// Pop `frames` of input that nothing hears, so the feed keeps its timing.
     fn discard_input(&mut self, frames: usize) {
         let Some(feed) = &self.feed else { return };
@@ -920,16 +1256,35 @@ impl AudioState {
     fn render_next(&mut self, quantum: usize) {
         let mb = self.max_block;
         let mut n = quantum.clamp(1, mb);
-        if let Some(l) = self.looped
+        // A change waiting for the ramp out: applied once the output is silent; until then the
+        // block ends where the ramp reaches 0, so the change lands on that frame.
+        if let Some(d) = self.deferred {
+            if self.ramp <= 0.0 {
+                self.apply(d);
+                self.mix.reset_at(&self.session, self.pos);
+                if !self.playing && self.countoff.is_none() && !self.monitoring && !self.mix.scout_armed() {
+                    for c in &mut self.pending {
+                        c.iter_mut().for_each(|x| *x = 0.0);
+                    }
+                    self.pending_len = mb;
+                    return;
+                }
+            } else {
+                let left = (self.ramp * self.ramp_frames() as f32).ceil() as usize;
+                n = n.min(left.max(1));
+            }
+        }
+        if let Some(l) = self.looped.filter(|_| self.loop_armed)
             && self.pos >= l.end
         {
             self.pos = l.start;
             self.midi_pass = self.midi_pass.saturating_add(1);
         }
+        self.shared.midi_pass.store(u32::from(self.midi_pass), Ordering::Relaxed);
         if let Some(c) = &self.countoff {
             // The count-off ends on a block edge: the take's first block starts at the record point.
             n = n.min(usize::try_from((c.len() - self.countoff_at).max(1)).unwrap_or(mb));
-        } else if let Some(l) = self.looped {
+        } else if let Some(l) = self.looped.filter(|_| self.loop_armed) {
             n = n.min(usize::try_from((l.end - self.pos).max(1)).unwrap_or(mb));
         } else if let Some(e) = self.end {
             if self.pos >= e {
@@ -957,26 +1312,9 @@ impl AudioState {
             feed.pop_into(&mut self.mix.input, n);
             self.popped += n;
         }
-        // A recording block: the very input frames the mix hears, captured with the block's
-        // position (the take's first frame has an exact timeline position).
-        let mut first = false;
-        match &self.capture {
-            Some(cap) if self.recording && self.playing && cap.armed.load(Ordering::Acquire) => {
-                if !cap.started.load(Ordering::Relaxed) {
-                    first = true;
-                    cap.start_pos.store(self.pos, Ordering::Relaxed);
-                    // The feed's latency now, at the take's start (a drift feed's moves).
-                    cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
-                }
-                let input = &self.mix.input;
-                let ch = input.len();
-                if ch > 0 {
-                    cap.capture_with(n * ch, |i| input.get(i % ch).and_then(|c| c.get(i / ch)).copied().unwrap_or(0.0), &mut self.owed);
-                }
-            }
-            _ => self.owed = 0,
-        }
         self.mix.monitor_only = !self.playing;
+        // Clips running across the loop's edges ramp there (`MixEngine::looping`).
+        self.mix.looping = if self.declick && self.loop_armed { self.looped } else { None };
         self.mix.recording = self.recording;
         self.mix.punch = self.punch;
         self.mix.countoff = self.countoff.map(|c| (c, self.countoff_at));
@@ -991,11 +1329,46 @@ impl AudioState {
             h.drain_into(&mut self.mix.live_midi, h.now_us(), n, rate);
             if self.recording && self.playing {
                 let floor = self.midi_floor.unwrap_or(i64::MIN);
+                if std::mem::take(&mut self.midi_take_fresh) {
+                    h.record_pedals(self.pos.saturating_sub(self.midi_lead).max(floor), self.midi_pass);
+                }
                 h.record_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass, floor);
+            } else if self.playing && !self.mix.live_midi.is_empty() {
+                // Not recording: kept for Capture MIDI (what was just played).
+                h.capture_block(&self.mix.live_midi, self.pos.saturating_sub(self.midi_lead), self.midi_now, rate, self.midi_pass);
+            } else if let Some(c) = self.countoff.filter(|_| self.recording && !self.mix.live_midi.is_empty()) {
+                // A count-off before a take: what is played is before the record point by what is
+                // left of it (a pickup, which the take keeps if asked: `midi_record`).
+                let left = c.len().saturating_sub(self.countoff_at);
+                h.record_block(&self.mix.live_midi, self.pos.saturating_sub(left).saturating_sub(self.midi_lead), self.midi_now, rate, 0, i64::MIN);
+            } else if !self.playing && !self.mix.live_midi.is_empty() {
+                // Stopped: Capture MIDI listens on a clock of its own.
+                h.listen_block(&self.mix.live_midi, rate);
             }
         }
         if self.playing {
             self.midi_floor = None;
+        }
+        // MIDI output: this block is heard after the frames before it this callback, the
+        // device's output latency and the mix's delay compensation; External MIDI instruments
+        // stamp their messages from then so the hardware plays with the audio beside it.
+        let out_hub = soundcraft_mix::external_midi::hub();
+        if out_hub.any_open() {
+            let rate = self.session.sample_rate.as_f64().max(1.0);
+            let frames_ahead = self.midi_lead.saturating_add(i64::try_from(self.mix.latency).unwrap_or(0)).max(0) as f64;
+            let ahead_us = frames_ahead * 1e6 / rate + self.shared.out_latency_ns.load(Ordering::Relaxed) as f64 / 1e3;
+            let base = self.out_now.saturating_add(ahead_us as u64).max(1);
+            out_hub.begin_block(base);
+            // MIDI clock and timecode out (Setup › MIDI Beat Clock), stamped as the instruments' are.
+            let cfg = soundcraft_mix::midi_sync::SyncCfg::of(&self.session);
+            if !cfg.is_off() {
+                let us = |frames: i64| (frames as f64 * 1e6 / rate) as i64;
+                self.sync_out.block(&self.session, cfg, self.pos, n, self.playing, |k, at, m| {
+                    let port = if k == soundcraft_mix::midi_sync::Stream::Clock { cfg.clock } else { cfg.mtc };
+                    let stamp = (base as i64).saturating_add(us(at as i64 + cfg.offset)).max(1) as u64;
+                    out_hub.send(port, stamp, m);
+                });
+            }
         }
         let width = self.main_width.min(self.main.len());
         let main = self.main.get_mut(..width).unwrap_or_default();
@@ -1010,15 +1383,26 @@ impl AudioState {
             let pdc = i64::try_from(self.mix.latency).unwrap_or(0);
             let rolled = self.shared.rolled.load(Ordering::Relaxed).saturating_sub(pdc);
             let pos = self.pos.saturating_sub(pdc);
+            // Talkback rides the stream to the performer (never the booth's own outputs).
+            let talk = self.shared.tap.is_on()
+                && talk_into_stream(&self.session, &self.mix.input, main, n, &mut self.tap_buf, &mut self.talk_gain, &mut self.talk_dim);
             if let Some((first, rest)) = main.split_first_mut() {
                 let second = rest.first_mut();
+                if talk {
+                    let [l, r] = &self.tap_buf;
+                    self.shared.tap.push_block_talk(l, r, n, rolled, pos, self.playing, true);
+                }
                 match second {
                     Some(r) => {
-                        self.shared.tap.push_block(first, r, n, rolled, pos, self.playing);
+                        if !talk {
+                            self.shared.tap.push_block(first, r, n, rolled, pos, self.playing);
+                        }
                         self.shared.stream_in.mix_into(first, r, n, rolled, self.playing);
                     }
                     None => {
-                        self.shared.tap.push_block(first, first, n, rolled, pos, self.playing);
+                        if !talk {
+                            self.shared.tap.push_block(first, first, n, rolled, pos, self.playing);
+                        }
                         self.shared.stream_in.mix_into(first, &mut [], n, rolled, self.playing);
                     }
                 }
@@ -1034,6 +1418,11 @@ impl AudioState {
             self.monitor.process(l, r);
         }
         self.out.map(main, self.mix.hardware_out(), &mut self.pending, n);
+        // A recording block: the very input frames the mix heard, and what each bus-input track
+        // took from its bus (internal recording), captured with the block's position (the take's
+        // first frame has an exact timeline position).
+        let first = self.capture_block(n);
+        self.apply_ramp(n);
         let mix_latency = u32::try_from(self.mix.latency).unwrap_or(u32::MAX);
         self.shared.mix_latency.store(mix_latency, Ordering::Relaxed);
         if first && let Some(cap) = &self.capture {
@@ -1045,17 +1434,12 @@ impl AudioState {
         let mut meters_copied = false;
         if let Ok(mut m) = self.shared.meters.try_lock() {
             meters_copied = true;
-            m.main.copy_from(&self.mix.main_meter);
-            for (k, v) in &self.mix.meters {
-                match m.tracks.get_mut(k) {
-                    Some(d) => d.copy_from(v),
-                    None => {
-                        m.tracks.insert(*k, v.clone());
-                    }
-                }
-            }
-            // Meters of tracks the engine no longer has (an engine swap) must not keep handles.
-            m.tracks.retain(|k, _| self.mix.meters.contains_key(k));
+            publish_meters(&mut m, &self.mix.meters, &self.mix.main_meter, self.shared.meters_unread.swap(true, Ordering::Relaxed));
+            // Taken: the engine's next block starts its peaks afresh.
+            self.mix.meters_held = false;
+        } else {
+            // Not published: the next block's peaks are folded into these, not lost.
+            self.mix.meters_held = true;
         }
         // After the meter copy: the snapshot no longer holds retired analysis handles.
         self.send_garbage(meters_copied);
@@ -1164,14 +1548,22 @@ impl AudioState {
         }
         // An instrument releasing what live input held keeps the mix rendering until it is done.
         // So does a count-off (its clicks, with the transport held at the record point).
-        let monitoring = hears || self.let_go || self.mix.live_tail() || self.countoff.is_some();
+        // Talkback is heard (in the cues, and in the remote performer's stream) while stopped too.
+        // (On the performer's side: the booth's talkback, queued while both are stopped.)
+        let talking = self.talk_gain > 0.0
+            || self.session.control_room.as_ref().is_some_and(|c| c.talkback.on && !c.talkback.input.is_empty())
+            || (!self.playing && self.shared.stream_in.is_on() && self.shared.stream_in.queued() > 0);
+        let monitoring = hears || self.let_go || self.mix.live_tail() || self.countoff.is_some() || talking;
         self.monitoring = monitoring;
         // A Scout capture runs while the transport is stopped too (it measures silence, or the
         // live input): the mix renders, the output stays silent.
         let capturing = self.mix.scout_armed();
         if self.lent || (!self.playing && !monitoring && !capturing) {
             out.iter_mut().for_each(|x| *x = 0.0);
-            if let Ok(mut m) = self.shared.meters.try_lock() {
+            // Peaks the UI has not taken yet (the last block before a stop) stay until it does.
+            if let Ok(mut m) = self.shared.meters.try_lock()
+                && !self.shared.meters_unread.load(Ordering::Relaxed)
+            {
                 m.main = StripMeter::default();
                 m.tracks.clear();
             }
@@ -1191,8 +1583,10 @@ impl AudioState {
         // The live MIDI clock: what this callback starts playing is the rest of the last block.
         if let Some(h) = &self.midi {
             self.midi_now = h.now_us();
-            self.midi_lead = (self.pending_len as f64 - self.read).max(0.0).round() as i64;
         }
+        self.midi_lead = (self.pending_len as f64 - self.read).max(0.0).round() as i64;
+        // MIDI output's clock (External MIDI instruments): the hub's time at the callback's start.
+        self.out_now = soundcraft_mix::external_midi::hub().now_us();
         let speed_milli = self.shared.speed.load(Ordering::Relaxed);
         let direct = (self.device_rate - self.session.sample_rate.as_f64()).abs() < 0.5 && speed_milli == 1000;
         if direct && let Some(feed) = &self.feed {
@@ -1202,6 +1596,7 @@ impl AudioState {
         self.direct = direct;
         self.shared.direct.store(direct, Ordering::Relaxed);
         if direct {
+            self.keeping_pitch = false;
             self.fill_direct(out, channels, monitoring, capturing);
             // Frames nothing rendered (play ended, nothing monitored): their input leaves too.
             self.discard_input(frames.saturating_sub(self.popped));
@@ -1215,6 +1610,15 @@ impl AudioState {
                 feed.begin_elastic(resampled_pops(self.read, self.pending_len, frames, step, quantum), arrive);
             }
             self.fill_resampled(out, channels, monitoring, capturing, step, quantum);
+            // Varispeed that keeps the pitch: the resampled play shifted back by 1 / speed.
+            let keep = speed_milli != 1000 && self.shared.keep_pitch.load(Ordering::Relaxed);
+            if keep {
+                if !self.keeping_pitch {
+                    self.keep_pitch.clear();
+                }
+                self.keep_pitch.process(out, channels, 1000.0 / f64::from(speed_milli.max(1)));
+            }
+            self.keeping_pitch = keep;
         }
         self.return_scout();
     }
@@ -1344,18 +1748,15 @@ impl AudioState {
     /// `step` per device frame.
     fn fill_resampled(&mut self, out: &mut [f32], channels: usize, monitoring: bool, capturing: bool, step: f64, quantum: usize) {
         for frame in out.chunks_mut(channels) {
-            // The next block is needed as soon as the read falls between this block's last frame
-            // and the next block's first: that last frame is carried over to interpolate from.
+            // The next block is needed as soon as the read passes this block's last frame; the
+            // kernel reads `resample::HALF` frames behind, back into the history.
             while self.read > self.pending_len as f64 - 1.0 {
-                if let Some(last) = self.pending_len.checked_sub(1) {
-                    for (k, ch) in self.carry.iter_mut().zip(&self.pending) {
-                        *k = ch.get(last).copied().unwrap_or(0.0);
-                    }
-                }
+                self.hist.push(&self.pending, self.pending_len);
                 self.read -= self.pending_len as f64;
                 if !self.playing && !monitoring && !capturing {
                     // Nothing more to hear: start afresh next time.
                     (self.read, self.pending_len) = (0.0, 0);
+                    self.hist.clear();
                     break;
                 }
                 self.render_next(quantum);
@@ -1363,26 +1764,10 @@ impl AudioState {
                     break;
                 }
             }
-            // A read in -1..0 falls between the carried frame and the block's first.
-            let (i0, fr) = if self.read < 0.0 {
-                (None, (self.read + 1.0).clamp(0.0, 1.0) as f32)
-            } else {
-                let i = self.read.floor();
-                (Some(i as usize), (self.read - i) as f32)
-            };
             let sounding = self.playing || monitoring;
-            let (pending, carry, len) = (&self.pending, &self.carry, self.pending_len);
-            let sample = |c: usize| {
-                let ch = pending.get(c);
-                let (a, b) = match i0 {
-                    Some(i) => (ch.and_then(|v| v.get(i)).copied(), ch.and_then(|v| v.get(i + 1)).filter(|_| i + 1 < len).copied()),
-                    None => (carry.get(c).copied(), ch.and_then(|v| v.first()).copied()),
-                };
-                let a = a.unwrap_or(0.0);
-                let b = b.unwrap_or(a);
-                a + (b - a) * fr
-            };
-            write_frame(frame, sounding, sample);
+            let (first, w) = self.kernel.at(self.read, step);
+            let (pending, hist, len) = (&self.pending, &*self.hist, self.pending_len);
+            write_frame(frame, sounding, |c| resample::sample(pending, len, hist, c, first, &w));
             self.read += step;
         }
     }
@@ -1466,6 +1851,9 @@ struct Side {
     /// Instances made ahead, a step at a time, for a session about to be handed over
     /// ([`Player::preload_begin`]); the next `prepare` for that session takes them.
     preload: Option<Preload>,
+    /// The built-in instances and Clip Effects modules handed to the audio thread's engine (made
+    /// here, so its `sync` never creates one).
+    builtins: BuiltinPrep,
 }
 
 /// Third-party instances being made ahead of a session's hand-over (the progress window's
@@ -1594,6 +1982,7 @@ impl Side {
             band_installed: false,
             loan: None,
             preload: None,
+            builtins: BuiltinPrep::default(),
         }
     }
 
@@ -1656,7 +2045,8 @@ impl Side {
             l.pending = Some(s);
             return;
         }
-        let instances = self.prepare(&s);
+        let mut instances = self.builtins.prepare(&s, self.max_block);
+        instances.instances.extend(self.prepare(&s));
         let band = self.prepare_band(&s);
         // The disk thread keeps this session's audio played from disk ready around the playhead.
         soundcraft_model::disk::focus(Some(Arc::clone(&s)));
@@ -1955,6 +2345,12 @@ impl Player {
             in_channels: None,
             buffer: self.device_buffer,
         }
+    }
+
+    /// What to tell the user when this player did not open what `cfg` chose (see
+    /// [`devices::fallback_notice`]).
+    pub fn fallback_notice(&self, cfg: &AudioConfig) -> Option<String> {
+        devices::fallback_notice(cfg, &self.system, &self.device_name, self.silent)
     }
 
     /// Open the default output device. Never fails: without a device it runs a silent clock.
@@ -2539,6 +2935,22 @@ impl Player {
         let _ = self.tx.send(Cmd::Capture(capture));
     }
 
+    /// Records the bus-input tracks `taps` (track, channels) after the `device` input channels in
+    /// each recording frame from now on (the frame a take's channel indices count in). At most
+    /// [`record::MAX_TAPS`]; the rest are left out.
+    pub fn set_record_taps(&self, device: usize, taps: &[(TrackId, usize)]) {
+        let _ = self.tx.send(Cmd::Taps(record::Taps::new(device, taps)));
+    }
+
+    /// A recorder with no input device, for takes that only record busses (internal recording):
+    /// the mix's taps are captured as they render.
+    pub fn internal_recorder(&self) -> record::Recorder {
+        let rate = self.session_rate();
+        let capture = record::Capture::for_rate(rate, 0);
+        let _ = self.tx.send(Cmd::Capture(Arc::clone(&capture)));
+        record::Recorder::internal(capture, rate)
+    }
+
     /// A recorder on the input opened with the output (duplex), when there is one: it captures
     /// from the same clock as the output. `None`: open one with [`record::Recorder::open_with`].
     pub fn duplex_recorder(&self) -> Option<record::Recorder> {
@@ -2695,6 +3107,19 @@ impl Player {
         let _ = self.tx.send(Cmd::Audition(track, note, velocity));
     }
 
+    /// All MIDI Notes Off (panic): every instrument lets go of every note and pedal at the next
+    /// block, whatever played it ([`MixEngine::all_notes_off`]), and the hub forgets the keys it
+    /// thought held.
+    pub fn all_notes_off(&self) {
+        let _ = self.tx.send(Cmd::AllNotesOff);
+    }
+
+    /// Starts the master loudness meter afresh: integrated loudness, maximum momentary and
+    /// true peak (`StripMeter::loudness` of the main meter).
+    pub fn reset_loudness(&self) {
+        let _ = self.tx.send(Cmd::LoudnessReset);
+    }
+
     /// Plays `audio` (planar, at `rate`) straight to the output now, over the mix, whether or not
     /// the transport runs: a preview of audio that is not in the session (Juke's hit picker).
     /// A new preview replaces the one playing; an empty one stops it.
@@ -2739,6 +3164,13 @@ impl Player {
         let _ = self.tx.send(Cmd::Locate(at));
     }
 
+    /// Changes the loop of the playback under way, without a jump: moved or resized, or `None`
+    /// to play on (Loop Playback turned off). A loop the playhead is already past does not pull
+    /// it back; it takes from the next Play or locate into it.
+    pub fn set_loop(&self, looped: Option<Range>) {
+        let _ = self.tx.send(Cmd::Loop(looped));
+    }
+
     /// Sets the playback rate. While a take records only full speed is taken (see
     /// [`Player::can_record`]).
     pub fn set_speed(&self, speed: f32) {
@@ -2750,6 +3182,11 @@ impl Player {
         self.shared.speed.store(v, Ordering::Relaxed);
     }
 
+    /// Varispeed keeps the pitch (on) or moves it with the speed as tape does (off, the default).
+    pub fn set_keep_pitch(&self, keep: bool) {
+        self.shared.keep_pitch.store(keep, Ordering::Relaxed);
+    }
+
     /// Playback rate last requested, 1.0 at full speed.
     pub fn speed(&self) -> f32 {
         self.shared.speed.load(Ordering::Relaxed) as f32 / 1000.0
@@ -2757,6 +3194,12 @@ impl Player {
 
     pub fn position(&self) -> Samples {
         self.shared.position.load(Ordering::Relaxed)
+    }
+
+    /// Loop recording: the pass under way (0 for the first; each wrap of the loop starts the
+    /// next), as the last block rendered left it.
+    pub fn loop_pass(&self) -> u16 {
+        u16::try_from(self.shared.midi_pass.load(Ordering::Relaxed)).unwrap_or(u16::MAX)
     }
 
     /// A handle other threads (the LAN remote's network threads) read the transport through,
@@ -2813,10 +3256,40 @@ impl Player {
 
     /// Copy meters into reusable UI storage. Once track/channel counts are stable this performs
     /// no allocation, unlike cloning a new snapshot every video frame.
+    ///
+    /// The peaks are those of every block rendered since the previous call (the loudest of
+    /// them), not only the latest block's, and this call takes them: the next one starts afresh.
+    /// Call it from one place (the UI's meter poll); [`Player::meters`] only looks.
     pub fn copy_meters(&self, out: &mut MeterSnapshot) {
-        let source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
         copy_meter_snapshot(&source, out);
+        take_meter_peaks(&mut source, &self.shared.meters_unread);
     }
+}
+
+/// Publishes the engine's meters into the shared snapshot (the audio callback, with it locked).
+/// While `unread`, the snapshot's peaks are folded with the new ones (see
+/// [`StripMeter::merge_from`]); otherwise they are replaced. Allocates only when a track appears.
+fn publish_meters(m: &mut MeterSnapshot, tracks: &HashMap<TrackId, StripMeter>, main: &StripMeter, unread: bool) {
+    let put = |d: &mut StripMeter, v: &StripMeter| if unread { d.merge_from(v) } else { d.copy_from(v) };
+    put(&mut m.main, main);
+    for (k, v) in tracks {
+        match m.tracks.get_mut(k) {
+            Some(d) => put(d, v),
+            None => {
+                m.tracks.insert(*k, v.clone());
+            }
+        }
+    }
+    // Meters of tracks the engine no longer has (an engine swap) must not keep handles.
+    m.tracks.retain(|k, _| tracks.contains_key(k));
+}
+
+/// After a reader copied the snapshot: its peaks are taken, the next block starts them afresh.
+fn take_meter_peaks(m: &mut MeterSnapshot, unread: &AtomicBool) {
+    m.main.clear_peaks();
+    m.tracks.values_mut().for_each(StripMeter::clear_peaks);
+    unread.store(false, Ordering::Relaxed);
 }
 
 fn copy_meter_snapshot(source: &MeterSnapshot, out: &mut MeterSnapshot) {
@@ -3335,6 +3808,49 @@ fn open_device(
 mod tests {
     use super::*;
 
+    #[test]
+    fn talkback_goes_into_the_remote_stream_with_the_music_dimmed_and_nowhere_else() {
+        let mut s = Session {
+            control_room: Some(soundcraft_model::ControlRoom {
+                talkback: soundcraft_model::Talkback { input: "In 1".into(), level_db: 0.0, dims: false, on: true },
+                dim_db: -20.0,
+                ..soundcraft_model::ControlRoom::default()
+            }),
+            ..Session::default()
+        };
+        let input = vec![vec![0.5f32; 64]];
+        let main = vec![vec![1.0f32; 64], vec![-1.0f32; 64]];
+        let mut tap = [vec![0.0f32; 64], vec![0.0f32; 64]];
+        let (mut g, mut d) = (0.0f32, 1.0f32);
+        // Ramped in over 10 ms (480 frames at 48 kHz): the first block starts from silence.
+        assert!(talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+        assert!(tap[0][0] < 1.0 && tap[0][0] > 0.99, "{}", tap[0][0]);
+        for _ in 0..10 {
+            assert!(talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+        }
+        // The music dimmed by 20 dB, the voice at its level, on both sides.
+        assert!((tap[0][63] - (0.1 + 0.5)).abs() < 1e-4, "{}", tap[0][63]);
+        assert!((tap[1][63] - (-0.1 + 0.5)).abs() < 1e-4, "{}", tap[1][63]);
+        assert_eq!(main, vec![vec![1.0f32; 64], vec![-1.0f32; 64]], "the booth's own mix is untouched");
+        // Talkback that dims the monitor: the mix arrives dimmed already, not dimmed again.
+        s.control_room.as_mut().unwrap().talkback.dims = true;
+        for _ in 0..10 {
+            talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d);
+        }
+        assert!((tap[0][63] - 1.5).abs() < 1e-4, "{}", tap[0][63]);
+        // Let go: it ramps out, then the tap takes the mix as it is.
+        s.control_room.as_mut().unwrap().talkback.on = false;
+        let mut blocks = 0;
+        while talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d) {
+            blocks += 1;
+            assert!(blocks < 20, "it ramps out");
+        }
+        assert_eq!((g, d), (0.0, 1.0));
+        // Without a control room: never.
+        s.control_room = None;
+        assert!(!talk_into_stream(&s, &input, &main, 64, &mut tap, &mut g, &mut d));
+    }
+
     /// A stream that builds; `starts` says whether the device lets it play (it can refuse after a
     /// reconnect).
     struct Fake {
@@ -3490,6 +4006,54 @@ mod tests {
         assert_eq!(out.main, source.main);
     }
 
+    /// Mix bug 1: the meter showed the latest block only, so a peak (or a clip) in a block the
+    /// UI did not poll right after was lost.
+    #[test]
+    fn a_peak_between_two_meter_polls_is_kept_until_it_is_taken() {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = soundcraft_model::Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        // Quiet, with one loud sample in the first block and one in the fifth.
+        let mut x = vec![0.1f32; 48_000];
+        x[100] = 0.95;
+        x[4 * 256 + 50] = 0.9;
+        s.pool.insert(SourceId(5), Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![x] })));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(5), 0, 0, 48_000));
+        let shared = Arc::new(Shared::new());
+        let (tx, rx) = channel();
+        let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s), 48_000.0, max_block_for(None), channel().0);
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        let mut out = vec![0.0f32; 2 * 256];
+        let take = || {
+            let mut snap = MeterSnapshot::default();
+            let mut m = shared.meters.lock().unwrap();
+            copy_meter_snapshot(&m, &mut snap);
+            take_meter_peaks(&mut m, &shared.meters_unread);
+            snap
+        };
+        // The loud block, then two quiet ones before the UI looks.
+        for _ in 0..3 {
+            st.fill(&mut out, 2);
+        }
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] > 0.9, "the track's peak survives two later blocks: {:?}", seen.tracks[&t].peak);
+        assert!(seen.main.peak[0] > 0.5, "and the main mix's: {:?}", seen.main.peak);
+        // Taken: the next poll sees only what came after.
+        st.fill(&mut out, 2);
+        assert!(take().tracks[&t].peak[0] < 0.2);
+        let m = shared.meters.lock().unwrap();
+        // While the UI holds the lock, the callback cannot publish: the block is kept in the engine.
+        st.fill(&mut out, 2);
+        drop(m);
+        st.fill(&mut out, 2);
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] > 0.85, "a block that could not be published is folded into the next: {:?}", seen.tracks[&t].peak);
+        st.fill(&mut out, 2);
+        let seen = take();
+        assert!(seen.tracks[&t].peak[0] < 0.2, "and then forgotten: {:?}", seen.tracks[&t].peak);
+    }
+
     #[test]
     fn a_block_that_panics_goes_silent_and_is_reported_once() {
         let shared = {
@@ -3623,7 +4187,7 @@ mod tests {
         // Disarmed with the key down: nothing hears live input now, so the mix stops rendering.
         let mut s = (*st.session).clone();
         s.tracks[0].mixer.record_arm = false;
-        tx.send(Cmd::Session(Arc::new(s.clone()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s.clone()), Prepared::default())).unwrap();
         // The instrument runs on while the note releases (heard, not frozen), then the mix stops.
         st.fill(&mut out, 2);
         let mut tail = peak(&out);
@@ -3638,7 +4202,7 @@ mod tests {
         // Armed again a while later (the key's note-off was never heard): the note must not
         // come back sounding.
         s.tracks[0].mixer.record_arm = true;
-        tx.send(Cmd::Session(Arc::new(s), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s), Prepared::default())).unwrap();
         for _ in 0..400 {
             st.fill(&mut out, 2);
         }
@@ -3712,7 +4276,7 @@ mod tests {
     }
 
     #[test]
-    fn live_midi_is_heard_during_the_count_off_but_only_recorded_from_the_record_point() {
+    fn live_midi_is_heard_during_the_count_off_and_recorded_before_the_record_point() {
         // One bar of four 2400-frame beats: 9600 frames.
         let countoff = CountOff { bars: 1, beats_per_bar: 4, beat: 2400.0 };
         let start = |play: bool| {
@@ -3750,9 +4314,12 @@ mod tests {
         st.fill(&mut out, 2);
         let mut got = Vec::new();
         hub.take_recorded(&mut got);
-        assert_eq!(got.len(), 1, "only the note-off, played after the record point: {got:?}");
-        assert_eq!(got[0].msg, [0x80, 60, 0]);
-        assert!((48_000..48_000 + 4 * 256).contains(&got[0].at), "{}", got[0].at);
+        // The note played in the count-off is before the record point, where it was played (a
+        // pickup: the take leaves it out unless asked), the note-off after it.
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].msg, got[1].msg), ([0x90, 60, 110], [0x80, 60, 0]));
+        assert!((48_000 - 9_600..48_000).contains(&got[0].at), "{}", got[0].at);
+        assert!((48_000..48_000 + 4 * 256).contains(&got[1].at), "{}", got[1].at);
     }
 
     #[test]
@@ -3801,6 +4368,8 @@ mod tests {
     fn audio_output_state(format: soundcraft_model::ChannelFormat, channels: Vec<Vec<f32>>) -> AudioState {
         use soundcraft_model::{Clip, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         s.outputs[0].format = format;
         let t = s.add_track(TrackKind::Audio, format, None);
@@ -3812,7 +4381,8 @@ mod tests {
         let (tx, rx) = channel();
         let st = AudioState::new(rx, shared, Arc::new(s), 48_000.0, max_block_for(None), channel().0);
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
-        st
+        // (a channel-layout test: the declick ramps have tests of their own)
+        exact(st)
     }
 
     #[test]
@@ -3880,7 +4450,7 @@ mod tests {
         let s = Arc::new(s);
         let shared = Arc::new(Shared::new());
         let (tx, rx) = channel();
-        let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), channel().0);
+        let mut st = exact_new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), channel().0);
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
         // An 8-channel device: channels in order, the rest silent.
         let mut out = vec![0.0f32; 8 * 256];
@@ -3928,7 +4498,7 @@ mod tests {
         // the UI thread sends one built for the new rate.
         let mut s44 = s.clone();
         s44.sample_rate = soundcraft_time::SampleRate::new(44_100).unwrap();
-        tx.send(Cmd::Session(Arc::new(s44), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s44), Prepared::default())).unwrap();
         st.drain();
         assert!(!st.mix.has_band());
         let g: Vec<Garbage> = grx.try_iter().collect();
@@ -3974,14 +4544,14 @@ mod tests {
         let plugin = soundcraft_dsp::create("gain").unwrap();
         tx.send(Cmd::Session(
             Arc::clone(&s),
-            vec![PreparedInstance { track: t, slot: SlotKey::Module(m), id: "clap:test.fake".into(), ch: 2, plugin }],
+            vec![PreparedInstance { track: t, slot: SlotKey::Module(m), id: "clap:test.fake".into(), ch: 2, plugin }].into(),
         ))
         .unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
         assert!(grx.try_recv().is_err(), "nothing retired yet");
         // A session without the insert retires the instance to the return channel.
-        tx.send(Cmd::Session(Arc::new(soundcraft_model::Session::default()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(soundcraft_model::Session::default()), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         assert_eq!(grx.try_recv().unwrap().plugins.len(), 1);
         // A sample-rate change rebuilds the engine without dropping plugins on this thread.
@@ -3993,13 +4563,14 @@ mod tests {
                 id: "clap:test.fake".into(),
                 ch: 2,
                 plugin: soundcraft_dsp::create("gain").unwrap(),
-            }],
+            }]
+            .into(),
         ))
         .unwrap();
         st.fill(&mut out, 2);
         let mut s44 = (*s).clone();
         s44.sample_rate = soundcraft_time::SampleRate::new(44_100).unwrap();
-        tx.send(Cmd::Session(Arc::new(s44), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s44), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         assert_eq!(grx.try_recv().unwrap().plugins.len(), 1);
     }
@@ -4190,7 +4761,7 @@ mod tests {
             let s = Arc::new(soundcraft_model::Session::default());
             watched.push(Arc::downgrade(&s));
             side.collect_garbage();
-            tx.send(Cmd::Session(s, Vec::new())).unwrap();
+            tx.send(Cmd::Session(s, Prepared::default())).unwrap();
             st.fill(&mut out, 2);
             let replaced = watched.len().checked_sub(2).and_then(|i| watched.get(i));
             assert!(replaced.is_none_or(|w| w.strong_count() == 1), "freed on the audio thread");
@@ -4281,9 +4852,14 @@ mod tests {
             }
             assert!(before > 0.1, "{plugin}: the clip plays before the locate");
             tx.send(Cmd::Locate(1_000_000)).unwrap();
-            for _ in 0..8 {
+            // The old position ramps out over the declick (never louder than it played), then
+            // nothing from before the locate is heard.
+            let ramp = st.ramp_frames();
+            for k in 0..8 {
                 st.fill(&mut out, 2);
-                assert!(out.iter().all(|x| x.abs() < 1e-6), "{plugin}: audio from before the locate");
+                let quiet = if k == 0 { 2 * ramp } else { 0 };
+                assert!(out.iter().take(quiet).all(|x| x.abs() <= before + 1e-6), "{plugin}: the ramp out");
+                assert!(out.iter().skip(quiet).all(|x| x.abs() < 1e-6), "{plugin}: audio from before the locate");
             }
         }
     }
@@ -4327,7 +4903,9 @@ mod tests {
         let peak = |sh: &Shared| sh.meters.lock().unwrap().main.peak;
 
         // Loaded but off: nothing changes.
-        let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+        // (compared with an offline render sample for sample: no declick ramps)
+        let (st, shared, tx) = playing(&s, 48_000.0, 512);
+        let mut st = exact(st);
         tx.send(Cmd::Monitor(Arc::new(Plan { rate: 48_000.0, ear: Some(ear), sim: Some(sim), ..Plan::default() }))).unwrap();
         let off = callbacks(&mut st, &sizes);
         assert_matches_offline(&off, &s);
@@ -4335,7 +4913,9 @@ mod tests {
 
         // On: the device hears the stage, the meter does not.
         for (ear_on, sim_on) in [(true, false), (false, true), (true, true)] {
-            let (mut st, shared, tx) = playing(&s, 48_000.0, 512);
+            // (compared with an offline render sample for sample: no declick ramps)
+            let (st, shared, tx) = playing(&s, 48_000.0, 512);
+            let mut st = exact(st);
             let plan = Arc::new(Plan { rate: 48_000.0, ear: Some(ear), ear_on, sim: Some(sim), sim_on });
             tx.send(Cmd::Monitor(Arc::clone(&plan))).unwrap();
             let on = callbacks(&mut st, &sizes);
@@ -4362,6 +4942,8 @@ mod tests {
     fn clip_session(frames: usize, inserts: &[&str]) -> Session {
         use soundcraft_model::{ChannelFormat, Clip, Insert, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
         let left: Vec<f32> = (0..frames).map(|i| 0.4 * (i as f32 * 0.031).sin()).collect();
@@ -4387,9 +4969,44 @@ mod tests {
         let (tx, rx) = channel();
         let st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s.clone()), device_rate, max_block, channel().0);
         // Synced first, so the Play's reset seats the plugins as an offline render does.
-        tx.send(Cmd::Session(Arc::new(s.clone()), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s.clone()), Prepared::default())).unwrap();
         tx.send(play).unwrap();
         (st, shared, tx)
+    }
+
+    /// `st` without its declick ramps: for tests comparing the render paths with an offline
+    /// render sample for sample (the ramps have tests of their own, `declick_*`).
+    fn exact(mut st: AudioState) -> AudioState {
+        st.declick = false;
+        st.ramp = 1.0;
+        st
+    }
+
+    /// A session with one mono clip of `len` frames at `level` from 0 (no click).
+    fn const_clip_session(level: f32, len: usize) -> Session {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        s.edit.click = false;
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        s.pool.insert(
+            SourceId(9),
+            Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![level; len]] })),
+        );
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "c", SourceId(9), 0, 0, len as i64));
+        s
+    }
+
+    /// A centred mono track's gain into each side of a stereo main (the −3 dB pan law).
+    fn db_to_gain_pan() -> f32 {
+        soundcraft_dsp::db_to_gain(-3.0)
+    }
+
+    /// [`AudioState::new`], [`exact`].
+    fn exact_new(rx: Receiver<Cmd>, shared: Arc<Shared>, s: Arc<Session>, rate: f64, max_block: usize, garbage: Sender<Garbage>) -> AudioState {
+        exact(AudioState::new(rx, shared, s, rate, max_block, garbage))
     }
 
     /// Stereo callbacks of these sizes, deinterleaved.
@@ -4427,7 +5044,8 @@ mod tests {
     #[test]
     fn a_128_frame_callback_renders_one_128_frame_block() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, max_block_for(Some(128)));
+        let (st, shared, _tx) = playing(&s, 48_000.0, max_block_for(Some(128)));
+        let mut st = exact(st);
         let mut got = [Vec::new(), Vec::new()];
         for k in 1..=10 {
             let block = callbacks(&mut st, &[128]);
@@ -4444,7 +5062,8 @@ mod tests {
     #[test]
     fn odd_and_oversized_callbacks_render_in_chunks_without_allocating() {
         let s = clip_session(20_000, &[]);
-        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         attach(&tx, &feed::InputFeed::fixed(2, 256), 256);
         let sizes = [441, 1056, 5000];
         let mut got = callbacks(&mut st, &sizes);
@@ -4538,13 +5157,15 @@ mod tests {
         callbacks(&mut st, &[256]);
         let r = probe.read();
         assert!(r.playing);
-        assert_eq!(r.rolled, 256, "counted from the new Play");
+        // The old pass ramps out first (declick), then the new Play takes and the clock restarts.
+        assert_eq!(r.rolled, 256 - st.ramp_frames() as i64, "counted from the new Play");
     }
 
     #[test]
     fn builtin_plugins_render_any_block_size() {
         let s = clip_session(4800, &["gain", "compressor"]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[96, 128, 17, 256, 96, 128, 17, 256]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 2 * (96 + 128 + 17 + 256));
         assert_matches_offline(&got, &s);
@@ -4613,7 +5234,8 @@ mod tests {
     #[test]
     fn switching_to_the_direct_path_plays_out_what_the_resampler_rendered() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         // At ×1.25 a 10-frame callback renders 13 frames and reads up to 12.5.
         shared.speed.store(1250, Ordering::Relaxed);
         callbacks(&mut st, &[10]);
@@ -4632,24 +5254,49 @@ mod tests {
     #[test]
     fn switching_to_the_resampler_starts_where_the_direct_path_stopped() {
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         callbacks(&mut st, &[100]);
         shared.speed.store(2000, Ordering::Relaxed);
         let got = callbacks(&mut st, &[50]);
         assert!(!shared.direct.load(Ordering::Relaxed));
         assert_eq!(shared.position.load(Ordering::Relaxed), 200);
-        let want = offline(&s, 0..200);
+        // Read at ×2 from frame 100 through the band-limited kernel (which lags `HALF` frames
+        // and reaches back into what the direct path played).
+        let want = offline(&s, 0..300);
         for c in 0..2 {
-            let every_other: Vec<f32> = (0..50).map(|i| want[c][100 + 2 * i]).collect();
-            assert_bits(&got[c], &every_other, "at ×2 from frame 100");
+            let every_other = resample::reference(&want[c], 100.0, 2.0, 50);
+            for (k, (g, w)) in got[c].iter().zip(&every_other).enumerate() {
+                assert!((g - w).abs() < 1e-5, "at ×2 from frame 100, sample {k}: {g} vs {w}");
+            }
         }
+    }
+
+    #[test]
+    fn a_loop_too_short_to_repeat_plays_once_and_stops() {
+        // Bug: a selection of 64 samples or less with Loop Playback on played to the session end.
+        let s = clip_session(4800, &[]);
+        let tiny = Cmd::Play { from: 1000, end: None, looped: Some(Range::new(1000, 1040)), countoff: None };
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, tiny);
+        let mut st = exact(st);
+        let got = callbacks(&mut st, &[441, 441]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 1040);
+        assert!(!shared.playing.load(Ordering::Relaxed), "stopped at the sliver's end");
+        let want = offline(&s, 1000..1040);
+        for c in 0..2 {
+            assert_bits(&got[c][..40], &want[c], "the sliver, once");
+            assert!(got[c][40..].iter().all(|x| x.to_bits() == 0), "silent after it");
+        }
+        assert_eq!(loop_or_end(Some(Range::new(0, 65)), None), (Some(Range::new(0, 65)), None));
+        assert_eq!(loop_or_end(Some(Range::new(0, 64)), Some(30)), (None, Some(30)));
     }
 
     #[test]
     fn the_direct_path_loops_and_ends_on_the_exact_frame() {
         let s = clip_session(4800, &[]);
         let looped = Cmd::Play { from: 1000, end: None, looped: Some(Range::new(1000, 1700)), countoff: None };
-        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, looped);
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, looped);
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[441, 333, 1056, 17, 441]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 1000 + 2288 % 700);
         let lap = offline(&s, 1000..1700);
@@ -4658,7 +5305,9 @@ mod tests {
             assert_bits(&got[c], &want, "the loop, lap after lap");
         }
 
-        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(300), looped: None, countoff: None });
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(300), looped: None, countoff: None });
+
+        let mut st = exact(st);
         let got = callbacks(&mut st, &[441]);
         assert_eq!(shared.position.load(Ordering::Relaxed), 300);
         assert!(!shared.playing.load(Ordering::Relaxed));
@@ -4753,38 +5402,162 @@ mod tests {
     }
 
     #[test]
-    fn stop_drops_what_was_rendered_ahead() {
+    fn stop_ramps_out_what_was_rendered_ahead_and_then_is_silent() {
         // The resampler renders ahead: at 44.1 kHz a 100-frame callback renders 109 frames.
-        let (mut st, _shared, tx, feed, _s) = monitored_clip(44_100.0, Cmd::Play { from: 0, end: None, looped: None, countoff: None });
+        // Those, and the declick ramp after them, play out falling to silence; nothing after.
+        let (mut st, _shared, tx, feed, s) = monitored_clip(44_100.0, Cmd::Play { from: 0, end: None, looped: None, countoff: None });
         feed.push(&[0.0; 100]);
         let played = callbacks(&mut st, &[100]);
         assert!(played[0].iter().any(|x| x.abs() > 0.05), "the clip plays");
         assert!(st.pending_len as f64 > st.read, "frames are left over");
         tx.send(Cmd::Stop).unwrap();
-        feed.push(&[0.0; 100]);
-        let after = callbacks(&mut st, &[100]);
-        for side in &after {
-            assert!(side.iter().all(|x| x.abs() < 1e-6), "playback heard after Stop: {:?}", &side[..12]);
+        let mut after = [Vec::new(), Vec::new()];
+        for _ in 0..4 {
+            feed.push(&[0.0; 100]);
+            let got = callbacks(&mut st, &[100]);
+            for c in 0..2 {
+                after[c].extend_from_slice(&got[c]);
+            }
         }
+        // At 44.1 kHz: the leftover (under 10 frames) and the ramp's 144 session frames.
+        let heard = 10 + (st.ramp_frames() as f64 * 44_100.0 / 48_000.0).ceil() as usize + 2;
+        // Full level over the stretch heard (the start's own ramp-in keeps `played` lower).
+        let peak = offline(&s, 0..400).iter().flatten().fold(0.0f32, |m, x| m.max(x.abs()));
+        for side in &after {
+            assert!(side[..heard].iter().all(|x| x.abs() <= peak + 1e-6), "the ramp out is no louder than playback");
+            assert!(side[heard..].iter().all(|x| x.abs() < 1e-6), "playback heard after the ramp: {:?}", &side[heard..heard + 12]);
+        }
+    }
+
+    #[test]
+    fn declick_ramps_in_at_play_and_out_at_stop_without_moving_the_audio() {
+        // A constant clip: the start ramps in linearly over the ramp, then plays at full level;
+        // a Stop ramps out over the same length, then the transport stops.
+        let (mut st, shared, tx) = playing(&const_clip_session(0.5, 48_000), 48_000.0, 256);
+        let r = st.ramp_frames();
+        assert_eq!(r, 144, "3 ms at 48 kHz");
+        let got = callbacks(&mut st, &[512]);
+        assert!(got[0][0].abs() < 0.5 / r as f32 * 1.5, "starts from silence: {}", got[0][0]);
+        for i in 1..r {
+            assert!(got[0][i] >= got[0][i - 1], "rising at {i}");
+        }
+        assert!(got[0][r..].iter().all(|x| (x - got[0][r]).abs() < 1e-6), "full level after the ramp");
+        tx.send(Cmd::Stop).unwrap();
+        st.drain();
+        assert!(!shared.playing.load(Ordering::Relaxed), "a Stop reads stopped at once");
+        let got = callbacks(&mut st, &[512]);
+        for i in 1..r {
+            assert!(got[0][i] <= got[0][i - 1], "falling at {i}");
+        }
+        assert!(got[0][r - 1].abs() < 0.5 / r as f32 * 1.5);
+        assert!(got[0][r..].iter().all(|x| *x == 0.0), "stopped after the ramp");
+        assert_eq!(shared.position.load(Ordering::Relaxed), 512 + r as i64, "the ramp plays on from where it was");
+    }
+
+    #[test]
+    fn declick_locate_ramps_out_jumps_and_ramps_in() {
+        let s = const_clip_session(0.5, 96_000);
+        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        let r = st.ramp_frames();
+        callbacks(&mut st, &[512]);
+        tx.send(Cmd::Locate(48_000)).unwrap();
+        let got = callbacks(&mut st, &[512]);
+        // Out over r frames, then in over r frames from the new place: a dip, never a step.
+        assert!(got[0][r - 1].abs() < 0.01 && got[0][r].abs() < 0.01, "silent at the jump");
+        assert!(got[0][2 * r..].iter().all(|x| (x - got[0][511]).abs() < 1e-6), "full level from the new place");
+        for w in got[0].windows(2) {
+            assert!((w[1] - w[0]).abs() <= 0.5 / r as f32 * 1.01 + 1e-6, "a step of {} at a jump", (w[1] - w[0]).abs());
+        }
+        assert_eq!(shared.position.load(Ordering::Relaxed), 48_000 + 512 - r as i64);
+        // A second Play while rolling ramps out first too.
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        let got = callbacks(&mut st, &[512]);
+        for w in got[0].windows(2) {
+            assert!((w[1] - w[0]).abs() <= 0.5 / r as f32 * 1.01 + 1e-6, "a step of {} at a Play", (w[1] - w[0]).abs());
+        }
+    }
+
+    #[test]
+    fn declick_a_clip_running_across_the_loop_ramps_at_the_wrap() {
+        // A constant clip longer than the loop: without ramps the wrap would jump straight from
+        // the loop's end into the middle of the clip. With them it dips to silence and back,
+        // the plug-ins and the rest of the mix carrying on.
+        let mut s = const_clip_session(0.5, 48_000);
+        s.edit.values.remove("playback.auto_fade_ms");
+        let lp = Range::new(1000, 2000);
+        let (st, _shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 1000, end: None, looped: Some(lp), countoff: None });
+        let mut st = st;
+        let got = callbacks(&mut st, &[2500]);
+        let auto = soundcraft_mix::auto_fade_frames(&s) as usize;
+        assert_eq!(got[0][999], 0.0, "silent on the loop's last frame");
+        assert_eq!(got[0][1000], 0.0, "and on its first, after the wrap");
+        assert!((got[0][1000 + 2 * auto] - got[0][500]).abs() < 1e-6, "full level again");
+        let step = 0.5 * db_to_gain_pan() / 16.0;
+        for w in got[0][200..2500].windows(2) {
+            assert!((w[1] - w[0]).abs() < step, "a step of {}", (w[1] - w[0]).abs());
+        }
+    }
+
+    #[test]
+    fn the_loop_changes_while_playing_without_a_jump() {
+        let s = const_clip_session(0.5, 48_000);
+        let (st, shared, tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: None, looped: Some(Range::new(0, 4000)), countoff: None });
+        let mut st = exact(st);
+        callbacks(&mut st, &[1000]);
+        // Moved and shortened while playing: wraps at the new end, to the new start.
+        tx.send(Cmd::Loop(Some(Range::new(500, 2000)))).unwrap();
+        callbacks(&mut st, &[1000, 10]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 510, "wrapped at 2000 to 500");
+        // Turned off: plays on past the old end.
+        tx.send(Cmd::Loop(None)).unwrap();
+        callbacks(&mut st, &[3000]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 3510);
+        // A loop behind the playhead does not pull it back; one ahead of it wraps.
+        tx.send(Cmd::Loop(Some(Range::new(0, 1000)))).unwrap();
+        callbacks(&mut st, &[500]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 4010);
+        tx.send(Cmd::Loop(Some(Range::new(4200, 4400)))).unwrap();
+        callbacks(&mut st, &[500]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 4310, "wrapped at 4400 to 4200");
+        assert!(shared.playing.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn declick_ramps_out_before_a_known_end_and_not_while_recording() {
+        let s = const_clip_session(0.5, 48_000);
+        let (mut st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 0, end: Some(1000), looped: None, countoff: None });
+        let r = st.ramp_frames();
+        let got = callbacks(&mut st, &[1200]);
+        assert!(!shared.playing.load(Ordering::Relaxed));
+        assert_eq!(got[0][999], 0.0, "the last frame before the end is silent");
+        assert!((got[0][1000 - r - 1] - 0.5 * db_to_gain_pan()).abs() < 1e-6, "full level until the ramp");
+        for i in (1000 - r)..1000 {
+            assert!(got[0][i] <= got[0][i - 1], "falling at {i}");
+        }
+        // Recording: a Stop is exact (the take's end must not move).
+        let (mut st, shared, tx) = playing(&s, 48_000.0, 256);
+        tx.send(Cmd::Recording(true)).unwrap();
+        callbacks(&mut st, &[512]);
+        tx.send(Cmd::Stop).unwrap();
+        callbacks(&mut st, &[64]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 512, "stopped where it was");
     }
 
     #[test]
     fn the_resampler_interpolates_into_the_next_block() {
         // At ×1.25 a 10-frame callback renders 13 frames and reads 0..11.25; the next starts at
-        // 12.5, between that block's last frame and the next block's first.
+        // 12.5, between that block's last frame and the next block's first. Block by block the
+        // band-limited kernel reads what it reads from the whole render at once.
         let s = clip_session(4800, &[]);
-        let (mut st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let (st, shared, _tx) = playing(&s, 48_000.0, 256);
+        let mut st = exact(st);
         shared.speed.store(1250, Ordering::Relaxed);
         let got = callbacks(&mut st, &[10; 40]);
         let want = offline(&s, 0..600);
         for c in 0..2 {
-            for (k, g) in got[c].iter().enumerate() {
-                let at = k as f64 * 1.25;
-                let i = at.floor() as usize;
-                let fr = (at - i as f64) as f32;
-                let (a, b) = (want[c][i], want[c][i + 1]);
-                let w = a + (b - a) * fr;
-                assert!((g - w).abs() < 1e-6, "channel {c}, frame {k} (read {at}): {g} vs {w}");
+            let w = resample::reference(&want[c], 0.0, 1.25, got[c].len());
+            for (k, (g, w)) in got[c].iter().zip(&w).enumerate() {
+                assert!((g - w).abs() < 1e-5, "channel {c}, frame {k}: {g} vs {w}");
             }
         }
     }
@@ -4839,6 +5612,8 @@ mod tests {
     fn device_callback(device: usize, rate: f64, output: soundcraft_model::Route, edit: impl FnOnce(&mut Session)) -> Vec<Vec<f32>> {
         use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
         let mut s = Session::default();
+        // (sample-exact clip edges: no automatic edge fades)
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
         s.edit.click = false;
         edit(&mut s);
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
@@ -4849,7 +5624,8 @@ mod tests {
         tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(5), 0, 0, 4800));
         tr.mixer.output = output;
         let (st, _shared, _tx) = playing(&s, rate, 256);
-        let mut st = st.with_device_channels(device);
+        // (a channel-layout test: the declick ramps have tests of their own)
+        let mut st = exact(st).with_device_channels(device);
         let mut out = vec![0.0f32; device * 128];
         st.fill(&mut out, device);
         (0..device).map(|c| out.iter().skip(c).step_by(device).copied().collect()).collect()
@@ -4925,7 +5701,7 @@ mod tests {
         assert_eq!(before.len(), 8);
         let mut moved = s.clone();
         moved.outputs[0].first_channel = 6;
-        tx.send(Cmd::Session(Arc::new(moved), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(moved), Prepared::default())).unwrap();
         st.fill(&mut out, 8);
         assert_eq!(ids(&st), before);
         assert!(out.chunks(8).all(|f| f[0] == 0.0 && f[1] == 0.0), "the main left 1-2");
@@ -5021,8 +5797,10 @@ mod tests {
         st.fill(&mut out, 2);
         let back = side.take_scout().expect("a transport Stop ends it");
         assert!(back.finished());
-        assert_eq!(back.played(), &[Range::new(0, 512), Range::new(96_000, 96_512), Range::new(10_000, 10_512)]);
-        assert_eq!(back.frames(), 3 * 512);
+        // Each jump and the Stop first ramp the old position out over the declick, then land.
+        let r = st.ramp_frames() as i64;
+        assert_eq!(back.played(), &[Range::new(0, 512 + r), Range::new(96_000, 96_512), Range::new(10_000, 10_512)]);
+        assert_eq!(back.frames(), 3 * 512 + r as u64);
 
         // Playback reaching its end stops the transport, and the capture with it.
         side.arm(&tx, rig(&s, t, None, None), Cmd::ScoutArm);
@@ -5124,7 +5902,7 @@ mod tests {
         // A sample-rate change rebuilds the engine: the armed rig comes back first.
         let mut s2 = (*s).clone();
         s2.sample_rate = soundcraft_time::SampleRate::HZ_44100;
-        tx.send(Cmd::Session(Arc::new(s2), Vec::new())).unwrap();
+        tx.send(Cmd::Session(Arc::new(s2), Prepared::default())).unwrap();
         st.fill(&mut out, 2);
         let back = side.take_scout().expect("the armed rig comes back with the old engine");
         assert!(back.finished() && back.frames() > 0);
@@ -5203,7 +5981,7 @@ mod tests {
         for format in [ChannelFormat::Surround51, ChannelFormat::Atmos712, ChannelFormat::Stereo] {
             let mut changed = s.clone();
             changed.outputs[0].format = format;
-            tx.send(Cmd::Session(Arc::new(changed), Vec::new())).unwrap();
+            tx.send(Cmd::Session(Arc::new(changed), Prepared::default())).unwrap();
             st.fill(&mut out, 2);
             assert_eq!(ids(&st), before, "{format:?}");
             assert!(out.iter().any(|x| x.abs() > 0.05), "{format:?}: the clip still plays");
@@ -5260,6 +6038,30 @@ mod tests {
         player.preview(Vec::new(), 48_000);
         st.fill(&mut out, 2);
         assert!(out.iter().all(|x| *x == 0.0));
+    }
+
+    /// Realtime safety: the player makes built-in inserts and Clip Effects modules on the UI
+    /// thread and hands them over with the session, so the audio thread's `sync` creates none,
+    /// also for an insert or a clip effect added while playing.
+    #[test]
+    fn the_audio_thread_creates_no_builtin_module() {
+        let mut s = clip_session(48_000, &["compressor"]);
+        let (player, mut st) = Player::offline(Arc::new(s.clone()), 48_000, 256, 2);
+        player.update_session(Arc::new(s.clone()));
+        player.play(0, None, None);
+        let mut out = vec![0.0f32; 2 * 256];
+        st.fill(&mut out, 2);
+        assert_eq!(st.mix.made_in_sync(), 0);
+        let t = s.tracks[0].id;
+        let cid = s.tracks[0].clips()[0].id;
+        s.track_mut(t).unwrap().mixer.add_module(soundcraft_model::Insert::new("eq_7band"), None).unwrap();
+        s.find_clip_mut(cid).unwrap().set_effect("comp.lookahead", 5.0);
+        player.update_session(Arc::new(s.clone()));
+        for _ in 0..4 {
+            st.fill(&mut out, 2);
+        }
+        assert_eq!(st.mix.made_in_sync(), 0, "nothing was made on the audio thread");
+        assert!(out.iter().any(|x| *x != 0.0), "it plays");
     }
 
     #[test]
@@ -5619,7 +6421,7 @@ mod tests {
         let dropped_on = Arc::new(Mutex::new(None));
         let spy = DropSpy { inner: soundcraft_dsp::create("gain").unwrap(), dropped_on: Arc::clone(&dropped_on) };
         let instance = PreparedInstance { track: TrackId(1), slot: SlotKey::Instrument, id: "vst3:fake".into(), ch: 2, plugin: Box::new(spy) };
-        player.tx.send(Cmd::Session(session, vec![instance])).unwrap();
+        player.tx.send(Cmd::Session(session, vec![instance].into())).unwrap();
         // The "audio thread": fills until the shutdown, then goes away with its state.
         let audio = std::thread::Builder::new()
             .name("fake-audio".into())
@@ -5650,7 +6452,7 @@ mod tests {
         let dropped_on = Arc::new(Mutex::new(None));
         let spy = DropSpy { inner: soundcraft_dsp::create("gain").unwrap(), dropped_on: Arc::clone(&dropped_on) };
         let instance = PreparedInstance { track: TrackId(1), slot: SlotKey::Instrument, id: "vst3:fake".into(), ch: 2, plugin: Box::new(spy) };
-        player.tx.send(Cmd::Session(Arc::clone(&session), vec![instance])).unwrap();
+        player.tx.send(Cmd::Session(Arc::clone(&session), vec![instance].into())).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
         // The "audio thread" keeps draining commands after the shutdown (the stream is not down
@@ -5795,7 +6597,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
@@ -5828,7 +6630,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let (etx, erx) = sync_channel(1);
         drop(erx);
         tx.send(Cmd::Lend(Box::new(new_engine(48_000.0, max_block_for(None))), etx)).unwrap();
@@ -5845,7 +6647,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let (etx, erx) = sync_channel(1);
         tx.send(Cmd::Lend(Box::new(new_engine(48_000.0, max_block_for(None))), etx)).unwrap();
         let mut out = vec![0.0f32; 256];
@@ -5876,7 +6678,7 @@ mod lend_tests {
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::clone(&s), 48_000.0, max_block_for(None), gtx);
-        tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         tx.send(Cmd::Shutdown).unwrap();
         let mut out = vec![0.0f32; 256];
         st.fill(&mut out, 2);
@@ -5960,7 +6762,7 @@ mod lend_tests {
         // not be lost with the receiver, and the audio thread must not stay lent for ever.
         let (s, instance) = hosted();
         let (p, mut st) = Player::offline(Arc::clone(&s), 48_000, 256, 2);
-        p.tx.send(Cmd::Session(Arc::clone(&s), vec![instance])).unwrap();
+        p.tx.send(Cmd::Session(Arc::clone(&s), vec![instance].into())).unwrap();
         let mut out = vec![0.0f32; 2 * 128];
         st.fill(&mut out, 2);
         assert_eq!(st.mix.hosted_instances(), 1);

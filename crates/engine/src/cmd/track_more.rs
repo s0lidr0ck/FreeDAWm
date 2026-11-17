@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Object / Bed",
             [],
             None,
-            "{tracks?, object?: bool} — routes the tracks as immersive objects (true) or to the bed; toggles when `object` is omitted",
+            "{tracks?, object?: bool} — marks the tracks as immersive objects (true) or bed (false); toggles when `object` is omitted. A mark only: objects are not rendered yet, every track plays through its panner into the bed",
             has_selection,
             |e, p| {
                 let tracks = tracks_required(e, "track.object", p)?;
@@ -328,6 +328,9 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
             if tr.mixer.pan.len() != keep.4.len() {
                 tr.mixer.pan = keep.4;
             }
+            // The old modules' automation went with them: left, a lane would drive whichever new
+            // module took its id.
+            tr.automation.retain(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. }));
             if tr.kind == TrackKind::Instrument && instrument.is_some() {
                 tr.instrument = instrument.clone();
             }
@@ -407,6 +410,39 @@ fn write_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut notes = 0;
     for t in &tracks {
         let r = rtp_of(s, *t);
+        // Playback quantize (the clip's own, else the track's) is written first, as it plays;
+        // the performance before is kept for Restore Performance.
+        let quantized: Vec<(u64, Option<soundcraft_model::Clip>)> = match s.track(*t) {
+            Some(tr) => tr
+                .clips()
+                .iter()
+                .map(|c| {
+                    let q = soundcraft_mix::play_quantize(s, tr, c).map(std::borrow::Cow::into_owned);
+                    let mut c2 = c.clone();
+                    if let (Some(q), ClipContent::Midi { sequence }) = (q, &mut c2.content) {
+                        let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+                        for n in sequence.notes.iter_mut() {
+                            soundcraft_mix::quantize_note(s, base, &q, n);
+                        }
+                        (c.id.0, Some(c2))
+                    } else {
+                        (c.id.0, None)
+                    }
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        for (id, c) in quantized {
+            if let Some(c) = c
+                && let Some(ClipContent::Midi { sequence }) = s.find_clip(soundcraft_model::ClipId(id)).map(|(_, x)| x.content.clone())
+            {
+                s.midi_originals.entry(id).or_insert(sequence);
+                if let Some(slot) = s.find_clip_mut(soundcraft_model::ClipId(id)) {
+                    slot.content = c.content;
+                    slot.play_quantize = None;
+                }
+            }
+        }
         let Some(pl) = s.track_mut(*t).and_then(Track::playlist_mut) else { continue };
         for c in &mut pl.clips {
             let ClipContent::Midi { sequence } = &mut c.content else { continue };
@@ -675,6 +711,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Mix bug 13: loading a preset kept the old modules' automation, which could drive the new.
+    #[test]
+    fn loading_a_preset_drops_the_old_modules_automation() {
+        let dir = std::env::temp_dir().join(format!("sc-preset-lanes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bass.json").to_string_lossy().into_owned();
+        let mut e = crate::demo::demo_engine();
+        e.execute("track.save_preset", &json!({"path": path, "tracks": ["Bass"]})).unwrap();
+        let hats = e.session().track_by_name("Hats").unwrap().id;
+        let module = soundcraft_model::ModuleId(1);
+        let plugin = soundcraft_model::AutoParam::Plugin { module, param: "threshold".into() };
+        {
+            let tr = e.session_mut().track_mut(hats).unwrap();
+            tr.lane_mut(&plugin).set_point(0, 0.5);
+            tr.lane_mut(&soundcraft_model::AutoParam::Volume).set_point(0, -3.0);
+        }
+        e.execute("track.load_preset", &json!({"path": path, "tracks": ["Hats"]})).unwrap();
+        let tr = e.session().track(hats).unwrap();
+        assert!(tr.lane(&plugin).is_none_or(|l| l.points.is_empty()), "the module lane went");
+        assert!(tr.lane(&soundcraft_model::AutoParam::Volume).is_some_and(|l| !l.points.is_empty()), "the fader's stays");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn rtp_written_into_notes() {
         let mut e = crate::demo::demo_engine();
@@ -705,9 +764,9 @@ mod tests {
             && let ClipContent::Midi { sequence } = &mut pl.clips[0].content
         {
             sequence.ctrls.clear();
-            sequence.ctrls.push(CtrlEvent { tick: 100, channel: 0, kind: CtrlKind::Cc(7), value: 90 });
-            sequence.ctrls.push(CtrlEvent { tick: 200, channel: 0, kind: CtrlKind::PitchBend, value: 10 });
-            sequence.ctrls.push(CtrlEvent { tick: -30, channel: 0, kind: CtrlKind::Cc(1), value: 5 });
+            sequence.ctrls.push(CtrlEvent { tick: 100, channel: 0, kind: CtrlKind::Cc(7), value: 90, shape: Default::default() });
+            sequence.ctrls.push(CtrlEvent { tick: 200, channel: 0, kind: CtrlKind::PitchBend, value: 10, shape: Default::default() });
+            sequence.ctrls.push(CtrlEvent { tick: -30, channel: 0, kind: CtrlKind::Cc(1), value: 5, shape: Default::default() });
         }
         s.edit.values.insert(track_key("rtp", keys, "delay"), 50.0);
         e.execute("edit.select", &json!({"tracks": [keys.0]})).unwrap();

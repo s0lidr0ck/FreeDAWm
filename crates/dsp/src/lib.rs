@@ -20,6 +20,7 @@ pub mod derive;
 pub mod drum_import;
 pub mod hearing_test;
 pub mod link;
+pub mod live_stretch;
 pub mod meter;
 pub mod monitor;
 pub mod offline;
@@ -28,6 +29,8 @@ pub mod pan;
 mod params;
 pub mod pitch_detect;
 pub mod plugins;
+mod resample;
+pub use resample::read_with as read_band_limited;
 pub mod scout;
 pub mod slices;
 pub mod spectrum;
@@ -207,22 +210,19 @@ pub const REFERENCE_KEYS: [&str; 4] = ["ref0", "ref1", "ref2", "ref3"];
 /// The stock effect categories kept out of every plugin list (the picker, its search, the
 /// plugin browser): the FireStation engines cover them. Their plugins still load from sessions,
 /// open from the chain and can be added by id (`mix.module_add`).
-pub const HIDDEN_STOCK: &[Category] = &[
-    Category::Eq,
-    Category::Dynamics,
-    Category::PitchShift,
-    Category::Reverb,
-    Category::Delay,
-    Category::Modulation,
-    Category::Harmonic,
-    Category::Dither,
-];
+pub const HIDDEN_STOCK: &[Category] =
+    &[Category::Eq, Category::Dynamics, Category::PitchShift, Category::Reverb, Category::Delay, Category::Modulation, Category::Harmonic];
 
 /// The stock plugins the lists offer with the engines ([`PluginInfo::with_engines`]), by id:
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
-/// drawer with its response picker, for now, and Mend's the drawer with its model's status.)
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend"];
+/// drawer with its response picker, for now, and Mend's the drawer with its model's status.) Keel,
+/// the bass amp, is offered beside Amp, and Heft, the bass enhancer.
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft"];
+
+/// The meter plug-ins (Spectrum, Loudness Meter, Phase Meter, Tuner): utilities with an editor of
+/// their own, listed under Utilities (the owner's call), not with the engines.
+pub const METER_PLUGINS: &[&str] = &["spectrum", "loudness", "phase_meter", "tuner"];
 
 /// Plugins kept out of every plugin list by id, whatever their category: Drum Synth, which Juke
 /// has taken over from. Like the [`HIDDEN_STOCK`] ones they still load from sessions, play (a
@@ -409,6 +409,12 @@ pub trait Plugin: Send {
     /// `kOffline`, CLAP `clap.render`): disk-streaming instruments wait for their data instead
     /// of dropping it. Built-in plugins ignore it. Off the audio thread, before `prepare`.
     fn set_offline(&mut self, _offline: bool) {}
+    /// The track's speaker layout as far as a plugin needs it: bit `n` set when channel `n` is a
+    /// low-frequency effects channel (the LFE of 5.1, 7.1, 7.1.4 …), as the track's channel format
+    /// says; 0 for none (mono, stereo, LCR, Ambisonics, or a host that does not say). A plugin
+    /// that links its channels (Comp's Link All Channels) leaves the LFE out of the link. Off the
+    /// audio thread; called again when the format changes.
+    fn set_lfe_channels(&mut self, _mask: u64) {}
     /// Whether the host now drives `id` from an automation lane (called when that changes, before
     /// `set_param`). A plugin that derives parameters itself (FireStation Dist's Link) leaves a
     /// laned one alone: the lane wins. Must not allocate.
@@ -521,6 +527,11 @@ pub trait Plugin: Send {
     }
     /// Reads this instance's state from the UI thread (`None` when it has no state of its own).
     fn state_reader(&mut self) -> Option<Box<dyn PluginStateReader>> {
+        None
+    }
+    /// A host's own wrapper around a plugin (the mix's MIDI effects ahead of an instrument) as
+    /// `Any`, so the host can find and configure it again. Plugins leave the default (`None`).
+    fn host_wrapper(&mut self) -> Option<&mut dyn std::any::Any> {
         None
     }
 }
@@ -665,7 +676,10 @@ pub fn prepare_state(id: &str, state: &[u8]) -> Option<Vec<f64>> {
 /// The actions a built-in plugin takes through [`Plugin::action`], by plugin id (empty for every
 /// other plugin): the names the host may send it.
 pub fn plugin_actions(id: &str) -> &'static [&'static str] {
-    plugins::fs::engine(id).map_or(&[], |e| e.actions)
+    match id {
+        "loudness" | "phase_meter" => &["reset"],
+        _ => plugins::fs::engine(id).map_or(&[], |e| e.actions),
+    }
 }
 
 /// Looks up a plugin description by id.
@@ -710,11 +724,11 @@ mod trait_default_tests {
     #[test]
     fn stock_effects_are_hidden_but_still_load() {
         let listed = |id: &str| plugin_info(id).map(PluginInfo::listed);
-        for id in ["eq_7band", "compressor", "room_reverb", "mod_delay", "chorus", "saturator", "pitch_shifter", "channel_strip", "dither"] {
+        for id in ["eq_7band", "compressor", "room_reverb", "mod_delay", "chorus", "saturator", "pitch_shifter", "channel_strip"] {
             assert_eq!(listed(id), Some(false), "{id}");
             assert!(create(id).is_some(), "{id} still runs");
         }
-        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator"] {
+        for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "dither", "channel_tool", "spectrum", "tuner"] {
             assert_eq!(listed(id), Some(true), "{id}");
         }
         // Every engine and every instrument is listed, but Drum Synth (Juke took over from it),
@@ -737,6 +751,10 @@ mod trait_default_tests {
         // Sprawl is a stock stereo imager: listed by its category, offered with the engines too.
         assert!(plugin_info("sprawl").is_some_and(|p| p.listed() && p.with_engines() && !HIDDEN_STOCK.contains(&p.category)));
         assert!(LISTED_STOCK.iter().all(|id| plugin_info(id).is_some()), "every exception is a real plugin");
+        // The meters and Dither are listed utilities, not offered with the engines.
+        for id in METER_PLUGINS.iter().copied().chain(["dither", "channel_tool"]) {
+            assert!(plugin_info(id).is_some_and(|p| p.listed() && !p.with_engines()), "{id}");
+        }
         assert!(plugin_info("gain").is_some_and(|p| !p.with_engines()) && plugin_info("fs_comp").is_some_and(PluginInfo::with_engines));
         assert!(listed_plugins().any(|p| p.category == Category::FireStation));
     }

@@ -31,6 +31,11 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
                 _ => {
                     v.push(top(AutoParam::Pan(0), "pan left"));
                     v.push(top(AutoParam::Pan(1), "pan right"));
+                    // A stereo track's width and balance (Track › Strip › Width and Balance).
+                    if track.mixer.pan.len() == 2 {
+                        v.push(top(AutoParam::Width, "width"));
+                        v.push(top(AutoParam::Balance, "balance"));
+                    }
                 }
             }
         }

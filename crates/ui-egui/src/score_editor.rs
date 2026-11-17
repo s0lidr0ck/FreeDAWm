@@ -33,6 +33,21 @@ fn diatonic(pitch: u8) -> (i32, bool) {
     (oct * 7 + step, sharp)
 }
 
+/// The ledger lines a note `step` diatonic steps above middle C needs on the grand staff: above
+/// the treble staff (A5 up), middle C's own line, below the bass staff (E2 down). The D above
+/// middle C and the B below it sit in the spaces next to the staves and need none.
+fn ledgers(step: i32) -> Vec<i32> {
+    if step >= 12 {
+        (12..=step).step_by(2).collect()
+    } else if step <= -12 {
+        (step..=-12).filter(|s| s % 2 == 0).collect()
+    } else if step == 0 {
+        vec![0]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_score;
     if !open {
@@ -93,21 +108,12 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 guard += 1;
             }
             // Notes.
-            for n in &sequence.notes {
+            for n in sequence.notes.iter().filter(|n| n.start >= 0 && n.start < len_ticks) {
                 let x = left + n.start as f32 * px_per_tick;
                 let (step, sharp) = diatonic(n.pitch);
                 let y = y_of(step);
                 // Ledger lines.
-                let ledgers: Vec<i32> = if step >= 12 {
-                    (12..=step).step_by(2).collect()
-                } else if step <= -12 {
-                    (step..=-12).filter(|s| s % 2 == 0).collect()
-                } else if step == 0 || step == 1 {
-                    vec![0]
-                } else {
-                    Vec::new()
-                };
-                for l in ledgers {
+                for l in ledgers(step) {
                     p.line_segment([pos2(x - 7.0, y_of(l)), pos2(x + 7.0, y_of(l))], Stroke::new(1.0, ink));
                 }
                 let q = n.length as f32 / TICKS_PER_QUARTER as f32;
@@ -155,5 +161,15 @@ mod tests {
         assert_eq!(super::diatonic(72), (7, false));
         assert_eq!(super::diatonic(48), (-7, false));
         assert_eq!(super::diatonic(64), (2, false));
+    }
+
+    /// Bug 22: middle C has its ledger line; the D above it (step 1) and the B below (-1) none.
+    #[test]
+    fn only_middle_c_takes_the_ledger_between_the_staves() {
+        assert_eq!(super::ledgers(0), vec![0]);
+        assert!(super::ledgers(1).is_empty());
+        assert!(super::ledgers(-1).is_empty());
+        assert_eq!(super::ledgers(13), vec![12]);
+        assert_eq!(super::ledgers(-14), vec![-14, -12]);
     }
 }

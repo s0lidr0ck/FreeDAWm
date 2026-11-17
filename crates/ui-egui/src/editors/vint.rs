@@ -64,7 +64,7 @@ fn id_of(i: usize) -> &'static str {
 }
 
 /// `PresetCatalogue`: the storage key, and what `getPresetParams` leaves out besides `bypass`.
-const FAMILY: Family = Family::new("VintEngine", &["output", "quality"]);
+pub(crate) const FAMILY: Family = Family::new("VintEngine", &["output", "quality"]);
 
 // ============================================================================ the editor
 

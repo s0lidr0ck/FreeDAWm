@@ -94,7 +94,7 @@ pub(crate) struct Editor {
 
 /// Draws LevelUp's editor for `module` on `track`.
 /// What `getPresetParams` leaves out besides `bypass` (LevelUp's `Presets.h`).
-const NOT_IN_PRESETS: [&str; 6] = ["linkGroup", "reference", "refSlot", "preview", "normalize", "learn"];
+pub(crate) const NOT_IN_PRESETS: [&str; 6] = ["linkGroup", "reference", "refSlot", "preview", "normalize", "learn"];
 
 pub(crate) fn draw(app: &mut SoundApp, ui: &mut Ui, track: &Track, module: ModuleId, meters: Option<&StripMeter>) {
     crate::editor_kit::run_with::<Editor>(app, ui, track, module, meters, |st, app| st.slim = app.ui.slim_editors);
@@ -345,7 +345,7 @@ fn knob(app: &mut SoundApp, ui: &mut Ui, host: &Host, r: Rect, id: &'static str,
     let Some(info) = host.info.params.iter().find(|p| p.id == id) else { return };
     let value = param(host, id);
     let text = info.format(value);
-    let o = DialOpts { label, value_text: &text, default: info.to_normalized(info.default), tracked: true, ..DialOpts::default() };
+    let o = DialOpts { label, value_text: &text, default: info.to_normalized(info.default), tracked: true, info: Some(info), ..DialOpts::default() };
     let out = dial(ui, r, id, &PALETTE, info.to_normalized(value), &o);
     if let Some(t) = tooltip(id) {
         let _ = out.response.clone().on_hover_text(t);

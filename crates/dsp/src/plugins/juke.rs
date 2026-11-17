@@ -8,8 +8,9 @@
 //! * **Samples** arrive as keyed assets (`Plugin::set_asset`), `p{pad}.v{layer}.r{robin}` with
 //!   pad 1–16, velocity layer 1–4 (1 the softest) and round-robin 1–4. A hit picks the layer by its
 //!   velocity among the layers that hold samples, then the next round-robin of that layer.
-//!   Playback is pitched by Tune and Fine (and the sample's own rate), 4-point cubic, forwards or
-//!   reversed. A replaced sample is handed back through [`Plugin::take_released_asset`], so it is
+//!   Playback is pitched by Tune and Fine (and the sample's own rate), forwards or reversed, read
+//!   band-limited when it plays faster than recorded (`resample`: no folded-back highs). A stereo
+//!   sample keeps its two sides (Pan balances it); a mono one is placed. A replaced sample is handed back through [`Plugin::take_released_asset`], so it is
 //!   never freed on the audio thread.
 //! * **Synth voices** (kick, snare, clap, tom, closed and open hat, cymbal, rim, cowbell, shaker),
 //!   shaped by Tone and Snappy; "Both" mixes sample and synth by Blend.
@@ -28,6 +29,7 @@ use std::sync::Arc;
 use super::synth::{EventKind, EventQueue, MAX_EVENTS};
 use crate::biquad::{Biquad, FilterType};
 use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
+use crate::resample;
 use crate::util::{Rng, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Unit, db_to_gain};
 
@@ -40,9 +42,13 @@ pub const ROBINS: usize = 4;
 /// Parameters per pad (see [`PadParam`]).
 const K: usize = 38;
 const VOICES: usize = 64;
-const MAX_PENDING: usize = 64;
+/// Hits waiting for their delay (humanise, flams, ratchets, swing): room for a dense fill of
+/// ratchets on many pads at once, so none is dropped (it was 64).
+const MAX_PENDING: usize = 512;
 /// Envelopes below this are silent.
 const OFF: f32 = 1.0e-4;
+/// [`OFF`] in dB below full scale.
+const OFF_DB: f32 = 80.0;
 /// Effect slots per bus, and every bus's: bus A's four, bus B's, then the output's
 /// ([`Plugin::set_child`] slots `0..FX_SLOTS`).
 pub const FX_PER_BUS: usize = 4;
@@ -263,24 +269,15 @@ fn decay60(ms: f32, sr: f32) -> f32 {
     (0.001f32.ln() / ms_to_samples(ms, sr).max(1.0)).exp()
 }
 
-fn hermite(x: &[f32], pos: f64) -> f32 {
-    let i = pos as usize;
-    let t = (pos - i as f64) as f32;
-    let at = |k: usize| x.get(k).copied().unwrap_or(0.0);
-    let (xm1, x0, x1, x2) = (at(i.saturating_sub(1)), at(i), at(i.saturating_add(1)), at(i.saturating_add(2)));
-    let c1 = 0.5 * (x1 - xm1);
-    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
-    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
-    let y = ((c3 * t + c2) * t + c1) * t + x0;
-    if y.is_finite() { y } else { 0.0 }
-}
-
 /// Inharmonic partials (Hz) of the metallic voices.
 const METAL: [f32; 6] = [263.0, 400.0, 421.0, 474.0, 587.0, 845.0];
 
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
+    /// What the voice added to the six outputs (left, right, send A and B, each side) on its last
+    /// frame: a stolen voice fades from there instead of stopping dead.
+    last: [f32; 6],
     pad: usize,
     age: u64,
     t: u32,
@@ -308,6 +305,8 @@ struct Voice {
     fenv: f32,
     fenv_coef: f32,
     filt: Biquad,
+    /// The right side's filter, for a stereo sample (the left's coefficients).
+    filt_r: Biquad,
     drive: f32,
     // sample part
     sample: Option<(usize, usize)>,
@@ -337,6 +336,7 @@ impl Voice {
     fn new(seed: u32) -> Voice {
         Voice {
             active: false,
+            last: [0.0; 6],
             pad: 0,
             age: 0,
             t: 0,
@@ -362,6 +362,7 @@ impl Voice {
             fenv: 0.0,
             fenv_coef: 0.0,
             filt: Biquad::default(),
+            filt_r: Biquad::default(),
             drive: 0.0,
             sample: None,
             w_sample: 0.0,
@@ -393,6 +394,9 @@ pub struct Juke {
     sr: f32,
     ch: usize,
     voices: [Voice; VOICES],
+    /// Stolen voices' sound fading out (see `Voice::last`), and the fade's per-frame factor.
+    declick: [f32; 6],
+    declick_coef: f32,
     events: EventQueue,
     /// Stacked hits waiting their delay: (samples left, pad, velocity).
     /// Hits to come: (frames left, pad, velocity, with its stacks).
@@ -474,6 +478,8 @@ impl Default for Juke {
 
 impl Juke {
     pub fn new() -> Juke {
+        // the band-limited reader's table, made here rather than on the first pitched-up hit
+        resample::warm();
         let mut voices = [Voice::new(1); VOICES];
         for (i, v) in voices.iter_mut().enumerate() {
             *v = Voice::new(0x5EED_0000 + i as u32 * 7919);
@@ -486,6 +492,8 @@ impl Juke {
             events: EventQueue::new(),
             pending: [(0, 0, 0, false, u8::MAX); MAX_PENDING],
             pending_len: 0,
+            declick: [0.0; 6],
+            declick_coef: 0.0,
             counter: 0,
             robin: [0; PADS * LAYERS],
             samples: vec![None; PADS * LAYERS * ROBINS],
@@ -711,6 +719,11 @@ impl Juke {
             .or_else(|| self.voices.iter().enumerate().min_by_key(|(_, v)| v.age).map(|(i, _)| i))
             .unwrap_or(0);
         let Some(v) = self.voices.get_mut(idx) else { return };
+        if v.active {
+            for (d, l) in self.declick.iter_mut().zip(v.last) {
+                *d += l;
+            }
+        }
         let seed = v.rng.next_u32();
         *v = Voice::new(seed);
         v.active = true;
@@ -767,7 +780,7 @@ impl Juke {
             EventKind::On(n, v) => self.note_on_now(n, v),
             EventKind::Off(n) => self.note_off_now(n),
             EventKind::AllOff => self.release_all(30.0),
-            EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
+            EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::Mod(_) | EventKind::ResetControllers => {}
         }
     }
 
@@ -794,7 +807,9 @@ impl Juke {
             v.pitch_env *= v.pitch_coef;
             let pitch = if v.pitch_amt == 0.0 { 1.0 } else { 1.0 + (v.pitch_ratio - 1.0) * v.pitch_env };
             v.fenv *= v.fenv_coef;
-            let mut y = 0.0;
+            // left and right: a stereo sample keeps its two sides, anything else is the same on both
+            let (mut yl, mut yr) = (0.0f32, 0.0f32);
+            let mut stereo = false;
             let mut sample_done = true;
             if let Some((layer, robin)) = v.sample
                 && let Some(Some(src)) = self.samples.get(Self::slot(v.pad, layer, robin))
@@ -802,36 +817,45 @@ impl Juke {
             {
                 let frames = src.frames();
                 let at = if v.reverse { (frames as f64 - 1.0 - v.pos).max(0.0) } else { v.pos };
-                let n = src.num_channels().clamp(1, 2);
-                let mut s = 0.0;
-                for c in 0..n {
-                    s += src.channel(c).map_or(0.0, |x| hermite(x, at));
-                }
-                y += s / n as f32 * v.w_sample;
-                v.pos += v.step * f64::from(pitch);
+                // read band-limited at the step it plays at (pitched up, it would fold back)
+                let step = v.step * f64::from(pitch);
+                let l = src.channel(0).map_or(0.0, |x| resample::read(x, at, step));
+                stereo = src.num_channels() >= 2;
+                let r = if stereo { src.channel(1).map_or(0.0, |x| resample::read(x, at, step)) } else { l };
+                yl += l * v.w_sample;
+                yr += r * v.w_sample;
+                v.pos += step;
                 sample_done = false;
             }
             if v.w_synth > 0.0 {
-                y += synth_sample(v, pitch, sr) * v.w_synth;
+                let s = synth_sample(v, pitch, sr) * v.w_synth;
+                yl += s;
+                yr += s;
             }
             if v.filter > 0 {
                 if v.fenv_amt != 0.0 && v.t.is_multiple_of(32) {
                     set_filter(v, sr);
                 }
-                y = v.filt.process_sample(y);
+                yl = v.filt.process_sample(yl);
+                yr = if stereo { v.filt_r.process_sample(yr) } else { yl };
             }
             if v.drive > 0.0 {
                 let g = 1.0 + v.drive * 8.0;
-                y = (y * g).tanh() / g.tanh();
+                let shape = |y: f32| (y * g).tanh() / g.tanh();
+                yl = shape(yl);
+                yr = if stereo { shape(yr) } else { yl };
             }
-            let out = y * v.env * v.gain;
+            let amp = v.env * v.gain;
+            let (out_l, out_r) = (yl * amp, yr * amp);
             v.t = v.t.saturating_add(1);
             let past_attack = v.t > v.attack;
-            if !out.is_finite() || (past_attack && v.env < OFF) || (sample_done && v.w_synth == 0.0) {
+            if !out_l.is_finite() || !out_r.is_finite() || (past_attack && v.env < OFF) || (sample_done && v.w_synth == 0.0) {
                 v.active = false;
                 continue;
             }
-            let (ol, or) = (out * v.pan_l, out * v.pan_r);
+            // Pan: a mono pad is placed, a stereo one balanced (each side kept on its side).
+            let (ol, or) = (out_l * v.pan_l, out_r * v.pan_r);
+            v.last = [ol, or, ol * v.send_a, or * v.send_a, ol * v.send_b, or * v.send_b];
             if let Some(pk) = self.pad_peak.get_mut(v.pad) {
                 *pk = pk.max(ol.abs()).max(or.abs());
             }
@@ -842,7 +866,13 @@ impl Juke {
             bl += ol * v.send_b;
             br += or * v.send_b;
         }
-        (l, r, al, ar, bl, br)
+        let d = self.declick;
+        if d != [0.0; 6] {
+            for x in &mut self.declick {
+                *x = if x.abs() < 1e-7 { 0.0 } else { *x * self.declick_coef };
+            }
+        }
+        (l + d[0], r + d[1], al + d[2], ar + d[3], bl + d[4], br + d[5])
     }
 
     fn tick_pending(&mut self) {
@@ -1022,6 +1052,7 @@ fn set_filter(v: &mut Voice, sr: f32) {
     let f = (v.cutoff * 2f32.powf(v.fenv_amt * v.fenv)).clamp(20.0, sr * 0.45);
     // New coefficients, the filter's state kept (a sweep, not a click).
     v.filt.set(kind, f, v.q, 0.0, sr);
+    v.filt_r.set(kind, f, v.q, 0.0, sr);
 }
 
 impl Plugin for Juke {
@@ -1030,6 +1061,8 @@ impl Plugin for Juke {
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
+        self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
+        self.declick = [0.0; 6];
         let block = max_block.clamp(1, 1 << 16);
         for w in &mut self.work {
             for c in w.iter_mut() {
@@ -1185,8 +1218,17 @@ impl Plugin for Juke {
     }
 
     fn tail_samples(&self) -> usize {
-        let longest =
-            (0..PADS).map(|pad| self.pv(pad, PadParam::Decay) + self.pv(pad, PadParam::Hold) + self.pv(pad, PadParam::Attack)).fold(0.0, f32::max);
+        // The longest a hit rings: its attack and hold, then its decay (a time to -60 dB) on to the
+        // -80 dB where a voice stops, made longer by the longest decay a note variant playing the
+        // pad gives it; later by its own timing humanize and its stacks' delays.
+        let longest = (0..PADS)
+            .map(|pad| {
+                let stretch = (0..VARIANTS).filter(|v| self.var_pad(*v) == Some(pad)).map(|v| self.vv(v, VarParam::Decay)).fold(100.0f32, f32::max);
+                let decay = self.pv(pad, PadParam::Decay) * stretch / 100.0 * (OFF_DB / 60.0);
+                let late = self.pv(pad, PadParam::HumTiming) + self.pv(pad, PadParam::Stack1Ms).max(self.pv(pad, PadParam::Stack2Ms));
+                self.pv(pad, PadParam::Attack) + self.pv(pad, PadParam::Hold) + decay + late
+            })
+            .fold(0.0, f32::max);
         // A bus effect (a reverb, a delay) rings on after the pads.
         let fx = self.fx.iter().flatten().map(|f| f.tail_samples()).max().unwrap_or(0);
         (ms_to_samples(longest + 50.0, self.sr) as usize).saturating_add(fx)
@@ -1316,6 +1358,20 @@ mod tests {
         }
     }
 
+    /// Bug 26 of the MIDI writing parity list: a stolen voice stopped dead (a click); it now
+    /// fades out over a few milliseconds.
+    #[test]
+    fn a_stolen_voice_fades_instead_of_clicking() {
+        let mut j = juke();
+        let mut hits: Vec<(usize, u8, u8)> = (0..VOICES).map(|i| (i * 7, 36, 127)).collect();
+        // every voice busy with a kick when a quiet hat takes the oldest one
+        hits.push((2400, 42, 1));
+        let (l, _) = run(&mut j, 2600, &hits);
+        let slope = l[2300..2399].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let jump = l[2399..2410].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 2.0 * slope + 1e-3, "a step of {jump} against the kicks' own {slope}");
+    }
+
     #[test]
     fn the_closed_hat_chokes_the_open_hat() {
         let mut free = juke();
@@ -1363,6 +1419,61 @@ mod tests {
         for bad in ["p0.v1.r1", "p17.v1.r1", "p1.v5.r1", "p1.v1.r5", "p1.v1", "x1.v1.r1", "p1.v1.r1.x", "ref0"] {
             assert!(!j.set_asset(bad, None), "{bad}");
         }
+    }
+
+    /// Doc 07's instrument rows: a stereo pad keeps its two sides (it was summed to mono), panned
+    /// as a balance; a mono pad is placed as before.
+    #[test]
+    fn a_stereo_pad_stays_stereo() {
+        let g = db_to_gain(-6.0) * std::f32::consts::FRAC_1_SQRT_2;
+        let play = |left: f32, right: f32| {
+            let mut j = juke();
+            set(&mut j, "p1_source", 0.0);
+            set(&mut j, "p1_decay", 2000.0);
+            let wide: Arc<dyn SampleSource> = Arc::new(SampleBuffer { sample_rate: SR, channels: vec![vec![left; 200], vec![right; 200]] });
+            assert!(j.set_asset("p1.v1.r1", Some(wide)));
+            let (l, r) = run(&mut j, 100, &[(0, 36, 127)]);
+            (l[50], r[50])
+        };
+        let (l, r) = play(0.5, -0.25);
+        assert!((l - 0.5 * g).abs() < 0.01 && (r + 0.25 * g).abs() < 0.01, "{l} {r}");
+        // dual mono plays as the mono pad did
+        let (l, r) = play(0.5, 0.5);
+        assert!((l - 0.5 * g).abs() < 0.01 && (r - 0.5 * g).abs() < 0.01, "{l} {r}");
+    }
+
+    /// A pad pitched up an octave reads its sample band-limited: a tone near the top of the sample
+    /// does not fold back under the output's Nyquist.
+    #[test]
+    fn a_pitched_up_pad_does_not_alias() {
+        let mut j = juke();
+        set(&mut j, "p1_source", 0.0);
+        set(&mut j, "p1_decay", 5000.0);
+        set(&mut j, "p1_tune", 12.0);
+        // 0.4 of the sample rate: an octave up, 0.8, folding to 0.2 of it
+        let tone: Vec<f32> = (0..20_000).map(|i| (std::f32::consts::TAU * 0.4 * i as f32).sin() * 0.5).collect();
+        assert!(j.set_asset("p1.v1.r1", Some(Arc::new(SampleBuffer { sample_rate: SR, channels: vec![tone] }))));
+        let (l, _) = run(&mut j, 4000, &[(0, 36, 127)]);
+        assert!(peak(&l[500..4000]) < 1e-3, "folded back at {}", peak(&l[500..4000]));
+    }
+
+    /// Doc 07 bug 30: the tail covers a note variant's longer decay, down to where a voice stops.
+    #[test]
+    fn the_tail_covers_a_variants_decay() {
+        let mut j = juke();
+        set(&mut j, "p1_decay", 1000.0);
+        let plain = j.tail_samples();
+        assert!(plain as f32 >= SR * 80.0 / 60.0, "to -80 dB: {plain}");
+        set(&mut j, "var1_note", 60.0);
+        set(&mut j, "var1_pad", 0.0);
+        set(&mut j, "var1_decay", 400.0);
+        let long = j.tail_samples();
+        assert!(long as f32 >= SR * 4.0 * 80.0 / 60.0, "{long}");
+        // the voice really rings past the pad's own tail, and not past the reported one
+        set(&mut j, "p1_source", 1.0);
+        let (l, _) = run(&mut j, long + 4096, &[(0, 60, 127)]);
+        let last = l.iter().rposition(|v| v.abs() > 0.0).unwrap_or(0);
+        assert!(last > plain && last <= long, "{last} within {plain}..{long}");
     }
 
     #[test]

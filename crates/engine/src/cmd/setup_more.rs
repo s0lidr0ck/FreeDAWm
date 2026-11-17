@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "setup.current_feet_frames", "Current Feet+Frames Position...", ["Setup"], None, "{feet_frames: 'F+FF'} — the feet+frames reading at the insertion point", always, current_feet_frames),
         cmd!(noundo "setup.external_timecode_offset", "External Timecode Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset applied to incoming timecode", always, |e, p| offset_setting(e, p, "sync.external_offset")),
         cmd!(noundo "setup.video_sync_offset", "Video Sync Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset between audio and video playback", always, |e, p| offset_setting(e, p, "video.sync_offset")),
-        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool}", always, click_countoff),
+        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool, keep_pickup?: bool (notes played during the count-off are kept in a MIDI take)}", always, click_countoff),
         cmd!(query "setup.keyboard_shortcuts", "Keyboard Shortcuts...", ["Setup"], None, "{filter?} — every command shortcut", always, |_, p| {
             let f = str_param(p, "filter").map(str::to_ascii_lowercase);
             let rows: Vec<Value> = command_specs()
@@ -92,16 +92,19 @@ pub fn specs() -> Vec<CommandSpec> {
             let devices: Vec<String> = text(&s.edit, "midi.studio.devices").map(|t| t.split('|').map(str::to_string).collect()).unwrap_or_default();
             Ok(json!({"devices": devices}))
         }),
-        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool, offset?: samples, destination?: name}", always, |e, p| {
+        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), offset?: samples (later; negative earlier), destination?: output port name} — sync out to that port (`soundcraft_mix::midi_sync`)", always, |e, p| {
             let s = e.session_mut();
             if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock", v);
+            }
+            if let Some(v) = p.get("mtc").and_then(Value::as_bool) {
+                s.edit.set_flag("midi.beat_clock.mtc", v);
             }
             store_value(&mut s.edit, p, "offset", "midi.beat_clock.offset", -1e7, 1e7);
             if let Some(d) = str_param(p, "destination") {
                 set_text(&mut s.edit, "midi.beat_clock.destination", Some(d));
             }
-            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
+            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
         }),
         cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...]} — filtered kinds are not recorded", always, midi_filter),
         cmd!(noundo "setup.midi_input_devices", "MIDI Input Devices...", ["Setup", "MIDI"], None, "{enable?: [names], disable?: [names]}", always, midi_inputs),
@@ -276,7 +279,9 @@ fn io_setup(e: &mut Engine, p: &Value) -> Result<Value> {
         .map(|n| n.chars().take(soundcraft_model::MAX_NAME_CHARS).collect::<String>());
     // Busses and outputs: any format, stereo by default. Inputs check theirs below.
     let format_or_stereo = match str_param(p, "format") {
-        Some(f) if !action.ends_with("_input") => ChannelFormat::from_id(f).ok_or_else(|| bad(id, format!("unknown format `{f}`")))?,
+        Some(f) if !action.ends_with("_input") => {
+            mixable_format(id, ChannelFormat::from_id(f).ok_or_else(|| bad(id, format!("unknown format `{f}`")))?)?
+        }
         _ => ChannelFormat::Stereo,
     };
     let has_channel = p.get("first_channel").is_some_and(Value::is_number);
@@ -479,6 +484,9 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("only_during_record").and_then(Value::as_bool) {
         s.edit.set_flag("click.only_during_record", v);
     }
+    if let Some(v) = p.get("keep_pickup").and_then(Value::as_bool) {
+        s.edit.set_flag("midi.keep_pickup", v);
+    }
     Ok(json!({
         "volume_db": s.edit.value("click.volume_db", -6.0),
         "accent_note": s.edit.value("click.accent_note", 84.0),
@@ -488,6 +496,7 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
         "countoff": s.edit.countoff,
         "countoff_bars": s.edit.countoff_bars,
         "only_during_record": s.edit.flag("click.only_during_record"),
+        "keep_pickup": s.edit.flag("midi.keep_pickup"),
     }))
 }
 

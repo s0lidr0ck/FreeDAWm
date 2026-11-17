@@ -29,8 +29,21 @@ pub fn draw_mapped(
     wave: Color32,
 ) {
     let alt: Option<Alt<'_>> = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, &**a)));
+    // A clip reversed in place (not looped) is drawn as it plays: its window mirrored end for
+    // end. The waveform is worked out for the mirror image of what is visible, then flipped
+    // about the clip's middle.
+    let (tl_x, scroll, spp) = map;
+    let x_of = |pos: Samples| tl_x + ((pos as f64 - scroll) / spp.max(0.01)) as f32;
+    let flip = (clip.reversed && clip.loop_len <= 0 && clip.is_audio()).then(|| (x_of(clip.start) + x_of(clip.end())) * 0.5);
+    let shown = match flip {
+        Some(axis) => {
+            let r = painter.clip_rect();
+            painter.with_clip_rect(Rect::from_x_y_ranges(2.0 * axis - r.max.x..=2.0 * axis - r.min.x, r.y_range()))
+        }
+        None => painter.clone(),
+    };
     for (ch, band) in bands(body, channels.min(audio.peaks.len()).max(1)).enumerate() {
-        channel(painter, s, map, clip, audio, alt, ch, band, wave);
+        channel(&shown, painter, s, map, clip, audio, alt, ch, band, wave, flip);
     }
 }
 
@@ -51,6 +64,7 @@ fn bands(body: Rect, n: usize) -> impl Iterator<Item = Rect> {
 #[allow(clippy::too_many_arguments)]
 fn channel(
     painter: &Painter,
+    out: &Painter,
     s: &Session,
     map: (f32, f64, f64),
     clip: &Clip,
@@ -59,6 +73,7 @@ fn channel(
     ch: usize,
     band: Rect,
     wave: Color32,
+    flip: Option<f32>,
 ) {
     let Some(peaks) = audio.peaks.get(ch) else { return };
     // The cleaned audio's channel (wrapping as playback does), its share and its offset.
@@ -66,10 +81,17 @@ fn channel(
         let n = a.peaks.len().min(a.num_channels());
         (n > 0).then(|| (w, origin as f64, a, ch % n, a.peaks.get(ch % n))).and_then(|(w, o, a, c, p)| Some((w, o, a, c, p?)))
     });
-    let Some(g) = Grid::at(painter, map, band) else { return };
+    let Some(mut g) = Grid::at(painter, map, band) else { return };
+    g.flip = flip;
     let (rectified, power, outlines) = (s.edit.flag("waveform.rectified"), s.edit.flag("waveform.power"), s.edit.flag("waveform.outlines"));
     let origin = clip.start.saturating_sub(clip.source_offset()) as f64;
-    let gain = |pos: f64| clip.gain_at((pos as Samples).saturating_sub(clip.start).min(clip.length).max(0)) * s.edit.zoom.waveform_zoom;
+    // Clip gain and fades stay where they are on the timeline: a flipped column's gain is the
+    // gain where it is drawn.
+    let mirror = (clip.start + clip.end()) as f64;
+    let gain = |pos: f64| {
+        let at = if flip.is_some() { mirror - pos } else { pos };
+        clip.gain_at((at as Samples).saturating_sub(clip.start).min(clip.length).max(0)) * s.edit.zoom.waveform_zoom
+    };
     // The samples shown (positions `first..last` of the source), read around what is visible: a
     // file played from disk is never read whole for its waveform.
     let first = (g.pos_at(g.vis.min.x) - origin).floor().max(0.0) as usize;
@@ -91,9 +113,9 @@ fn channel(
                 Some((w, cv)) => (1.0 - w) * v + w * cv,
                 None => v,
             };
-            pos2(g.x_at(pos), g.cy - level(v * gain(pos)) * g.half)
+            pos2(g.fx(g.x_at(pos)), g.cy - level(v * gain(pos)) * g.half)
         });
-        painter.add(Shape::line(points.collect(), Stroke::new(g.weight, wave)));
+        out.add(Shape::line(points.collect(), Stroke::new(g.weight, wave)));
         return;
     }
     let (start, overlap) = (g.start() - origin, g.overlap());
@@ -132,7 +154,7 @@ fn channel(
             })
         })
         .collect();
-    g.paint(painter, &ys, wave, outlines, rectified);
+    g.paint(out, &ys, wave, outlines, rectified);
 }
 
 /// Samples per column up to which a waveform reads the samples at its columns' edges.
@@ -207,6 +229,8 @@ struct Grid {
     p0: f32,
     k0: f64,
     cols: usize,
+    /// Drawn mirrored about this x (a reversed clip).
+    flip: Option<f32>,
 }
 
 impl Grid {
@@ -229,11 +253,16 @@ impl Grid {
         let k0 = ((scroll + f64::from((p0 + 0.5) * px - tl_x) * spp) / step).floor();
         let cy = ((band.center().y - weight * 0.5) * ppp).round() * px + weight * 0.5;
         let cols = ((vis.max.x * ppp).ceil() - p0).max(0.0) as usize;
-        Some(Grid { vis, tl_x, scroll, spp, step, px, weight, cy, half: band.height() * 0.46, p0, k0, cols })
+        Some(Grid { vis, tl_x, scroll, spp, step, px, weight, cy, half: band.height() * 0.46, p0, k0, cols, flip: None })
     }
 
     fn pos_at(&self, x: f32) -> f64 {
         self.scroll + f64::from(x - self.tl_x) * self.spp
+    }
+
+    /// Where an x is drawn: itself, or mirrored for a reversed clip.
+    fn fx(&self, x: f32) -> f32 {
+        self.flip.map_or(x, |axis| 2.0 * axis - x)
     }
 
     fn x_at(&self, pos: f64) -> f32 {
@@ -286,6 +315,7 @@ impl Grid {
         };
         let push = |mesh: &mut Mesh, prev: &mut Option<u32>, x: f32, (top, bot): (f32, f32)| {
             let i = mesh.vertices.len() as u32;
+            let x = self.fx(x);
             mesh.colored_vertex(pos2(x, top - half), Color32::TRANSPARENT);
             mesh.colored_vertex(pos2(x, top + half), color);
             mesh.colored_vertex(pos2(x, bot - half), color);

@@ -45,7 +45,7 @@ pub const ACCENT: u32 = 0xFFE5_8FA6;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 
 /// The preset catalogue's key. Listen is how you audition, not part of a sound.
-const FAMILY: Family = Family::new("Sift", &["listen"]);
+pub(crate) const FAMILY: Family = Family::new("Sift", &["listen"]);
 
 const FOOT_NOTE: &str = "Sift judges by shape, not level: a quiet take is treated like a loud one \u{00B7} Listen plays one part alone";
 

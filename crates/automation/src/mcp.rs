@@ -70,7 +70,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "bounce_mix",
             "Render the mix to an audio file. Returns peak dBFS and integrated LUFS.",
-            json!({"path": {"type": "string"}, "format": {"type": "string", "enum": ["wav", "aiff", "flac", "mp3", "opus"]}, "bit_depth": {"type": "string"}, "bitrate": {"type": "integer"}, "start": {}, "end": {}, "normalize": {"type": "boolean"}, "fold_down": {"type": "string"}}),
+            json!({"path": {"type": "string"}, "format": {"type": "string", "enum": ["wav", "aiff", "flac", "mp3", "opus"]}, "bit_depth": {"type": "string"}, "bitrate": {"type": "integer"}, "start": {}, "end": {}, "normalize": {"type": "boolean"}, "loudness": {"type": "number"}, "true_peak": {"type": "number"}, "fold_down": {"type": "string"}}),
             &["path"],
         ),
         tool("parity", "Feature-parity report against the incumbent's menu catalog.", json!({}), &[]),

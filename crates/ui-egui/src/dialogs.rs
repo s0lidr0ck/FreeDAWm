@@ -49,6 +49,20 @@ impl BounceRange {
     }
 }
 
+/// What a mix group can link, as `track.group` names it, with the Group dialog's labels.
+pub const GROUP_ATTRIBUTES: [(&str, &str); 7] = [
+    ("volume", "Volume"),
+    ("mute", "Mute"),
+    ("solo", "Solo"),
+    ("record", "Record"),
+    ("pan", "Pan"),
+    ("sends", "Sends"),
+    ("automation", "Automation mode"),
+];
+
+/// What a new group links (as `track.group` without `attributes`).
+const DEFAULT_GROUP_ATTRIBUTES: [&str; 4] = ["volume", "mute", "solo", "record"];
+
 #[derive(Debug, Clone)]
 pub enum Dialog {
     NewTracks {
@@ -84,7 +98,13 @@ pub enum Dialog {
         /// kbps, for MP3 and Opus.
         bitrate: u32,
         normalize: bool,
+        /// A loudness target in LUFS (integrated), when on; it replaces `normalize`.
+        loudness: Option<f32>,
         range: BounceRange,
+        /// What is bounced: "main" or a bus name.
+        source: String,
+        /// Seconds rendered past the range, for a reverb or delay to ring out.
+        tail: f32,
     },
     RenameTrack {
         id: TrackId,
@@ -138,12 +158,16 @@ pub enum Dialog {
     /// The Chords ruler's chord picker (add or edit a chord).
     ChordPicker(crate::band::chord_picker::ChordPicker),
     Spot(crate::spot::Spot),
-    Fades {
-        shape: String,
-    },
+    /// Edit › Fades › Create… (`fade_dialog`).
+    Fades(crate::fade_dialog::FadeDialog),
     /// Event › More MIDI › Change Velocity…: the selected notes in the MIDI Editor, else the
     /// selected MIDI clips.
     ChangeVelocity(VelocityDialog),
+    /// Clip › Quantize Audio…: how far towards the grid, and the swing.
+    QuantizeAudio {
+        strength: f64,
+        swing: f64,
+    },
     StripSilence {
         threshold: f64,
         min_ms: f64,
@@ -157,10 +181,14 @@ pub enum Dialog {
         edit: bool,
         mix: bool,
         members: Vec<(u64, String, bool)>,
+        /// What the members share, one switch per `GROUP_ATTRIBUTES` entry.
+        attributes: Vec<(&'static str, &'static str, bool)>,
     },
     Session {
         frame_rate: String,
         bit_depth: String,
+        /// What takes are recorded as: `wav` (BWF) or `aiff` (`setup.record_format`).
+        file_type: String,
     },
     ScoreSetup {
         title: String,
@@ -274,8 +302,9 @@ impl Dialogs {
             Dialog::KeyPicker { .. } => "key_picker",
             Dialog::ChordPicker(_) => "chord_picker",
             Dialog::Spot(_) => "spot",
-            Dialog::Fades { .. } => "fades",
+            Dialog::Fades(_) => "fades",
             Dialog::StripSilence { .. } => "strip_silence",
+            Dialog::QuantizeAudio { .. } => "quantize_audio",
             Dialog::ChangeVelocity(_) => "change_velocity",
             Dialog::Group { id: None, .. } => "group",
             Dialog::Group { id: Some(_), .. } => "modify_group",
@@ -307,7 +336,8 @@ impl Dialogs {
             n += 1;
         }
         let members = s.tracks.iter().map(|t| (t.id.0, t.name.clone(), members.contains(&t.id))).collect();
-        self.open = Some(Dialog::Group { id: None, name: format!("Group {n}"), edit: true, mix: true, members });
+        let attributes = GROUP_ATTRIBUTES.iter().map(|&(a, l)| (a, l, DEFAULT_GROUP_ATTRIBUTES.contains(&a))).collect();
+        self.open = Some(Dialog::Group { id: None, name: format!("Group {n}"), edit: true, mix: true, members, attributes });
     }
 
     /// Groups list › Modify Group…: the creation dialog, pre-filled from an existing group. False
@@ -316,7 +346,8 @@ impl Dialogs {
         let s = e.session();
         let Some(g) = s.group(id) else { return false };
         let members = s.tracks.iter().map(|t| (t.id.0, t.name.clone(), g.members.contains(&t.id))).collect();
-        self.open = Some(Dialog::Group { id: Some(id), name: g.name.clone(), edit: g.edit, mix: g.mix, members });
+        let attributes = GROUP_ATTRIBUTES.iter().map(|&(a, l)| (a, l, g.attributes.iter().any(|x| x == a))).collect();
+        self.open = Some(Dialog::Group { id: Some(id), name: g.name.clone(), edit: g.edit, mix: g.mix, members, attributes });
         true
     }
 
@@ -394,10 +425,15 @@ impl Dialogs {
                     bit_depth: "24".into(),
                     bitrate: 0,
                     normalize: false,
+                    loudness: None,
                     range: BounceRange::default_for(e.session()),
+                    source: "main".into(),
+                    tail: 0.0,
                 }
             }
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
+            // Not a path: the words to find (the prompt is the same one-line field).
+            "lyrics.find" => Dialog::PathPrompt { cmd: id.into(), title: "Find in Transcript".into(), path: String::new(), key: "text".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
             "session.save" if e.path.is_some() => return false,
@@ -412,6 +448,19 @@ impl Dialogs {
                 },
                 key: "path".into(),
             },
+            "transport.varispeed" => {
+                Dialog::Number { cmd: id.into(), title: "Varispeed (1 is off)".into(), key: "speed".into(), value: 1.0, suffix: "×".into() }
+            }
+            "clip.transpose" => Dialog::Number {
+                cmd: id.into(),
+                title: "Transpose Clip (semitones; 0 is off)".into(),
+                key: "semitones".into(),
+                value: 0.0,
+                suffix: "st".into(),
+            },
+            "clip.loop_in_place" => {
+                Dialog::Number { cmd: id.into(), title: "Loop in Place".into(), key: "count".into(), value: 4.0, suffix: "times".into() }
+            }
             "edit.repeat" => Dialog::Number { cmd: id.into(), title: "Repeat".into(), key: "count".into(), value: 2.0, suffix: "times".into() },
             "edit.shift" => {
                 Dialog::Number { cmd: id.into(), title: "Shift (seconds)".into(), key: "by_seconds".into(), value: 1.0, suffix: "s".into() }
@@ -419,17 +468,23 @@ impl Dialogs {
             "event.transpose" => {
                 Dialog::Number { cmd: id.into(), title: "Transpose".into(), key: "semitones".into(), value: 12.0, suffix: "semitones".into() }
             }
-            "event.quantize" => {
-                Dialog::Number { cmd: id.into(), title: "Quantize strength".into(), key: "strength".into(), value: 100.0, suffix: "%".into() }
-            }
-            "edit.fades_create" => Dialog::Fades { shape: "equal power".into() },
+            "edit.fades_create" => Dialog::Fades(Default::default()),
             "event.change_velocity" => Dialog::ChangeVelocity(VelocityDialog::default()),
             "edit.strip_silence" => Dialog::StripSilence { threshold: -48.0, min_ms: 50.0, pre_ms: 5.0, post_ms: 20.0 },
             "track.group" => {
                 self.open_new_group(e, &e.session().edit.selected_tracks.clone());
                 return true;
             }
-            "setup.session" => Dialog::Session { frame_rate: e.session().frame_rate.label().into(), bit_depth: "24".into() },
+            "setup.session" => {
+                let s = e.session();
+                let bit_depth = match s.bit_depth {
+                    soundcraft_model::BitDepthSetting::Int16 => "16",
+                    soundcraft_model::BitDepthSetting::Int24 => "24",
+                    soundcraft_model::BitDepthSetting::Float32 => "32f",
+                };
+                let file_type = if s.record_file_type == soundcraft_model::RecordFileType::Aiff { "aiff" } else { "wav" };
+                Dialog::Session { frame_rate: s.frame_rate.label().into(), bit_depth: bit_depth.into(), file_type: file_type.into() }
+            }
             "file.score_setup" => {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
                 Dialog::ScoreSetup { title: s.title, composer: s.composer, bars_per_system: s.bars_per_system, show_track_names: s.show_track_names }
@@ -544,7 +599,7 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
     let key = path_key(id)?;
     let importing = id.contains("import") || id.contains("open");
     let ext = match id {
-        "file.export_midi" => ".mid",
+        "file.export_midi" | "file.export_clip_midi" => ".mid",
         "file.export_lyrics" => ".lrc",
         "file.export_lyrics_text" => ".txt",
         "file.export_sibelius" => ".musicxml",
@@ -552,6 +607,7 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
         "file.export_clip_groups" => ".scgrp",
         "file.export_session_text" => ".txt",
         "file.export_dawproject" => ".dawproject",
+        "file.bounce_movie" => ".mov",
         _ if id.contains("session") => ".fdawm",
         _ => "",
     };
@@ -641,6 +697,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     let mut keep = true;
     // The Chords ruler's picker goes on at this tick after adding a chord played in.
     let mut chord_next: Option<i64> = None;
+    // Setup › Session's take file type, set once the session settings are.
+    let mut take_file_type: Option<String> = None;
     let mut action: Option<(String, Value)> = None;
     let mut save_first: Option<(String, Value)> = None;
     let confirmed = matches!(d, Dialog::SaveChanges { .. });
@@ -664,8 +722,9 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::ChordPicker(p) if p.chord.is_some() => "Edit Chord",
         Dialog::ChordPicker(_) => "Add Chord",
         Dialog::Spot(_) => "Spot",
-        Dialog::Fades { .. } => "Fades",
+        Dialog::Fades(_) => "Fades",
         Dialog::StripSilence { .. } => "Strip Silence",
+        Dialog::QuantizeAudio { .. } => "Quantize Audio",
         Dialog::ChangeVelocity(_) => "Change Velocity",
         Dialog::Group { id: None, .. } => "Create Group",
         Dialog::Group { id: Some(_), .. } => "Modify Group",
@@ -692,7 +751,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.add(egui::DragValue::new(count).range(1..=128));
                         ui.label("new");
                         egui::ComboBox::from_id_salt("nt_fmt").selected_text(format.as_str()).show_ui(ui, |ui| {
-                            for f in soundcraft_model::ChannelFormat::ALL {
+                            for f in soundcraft_model::ChannelFormat::ALL.into_iter().filter(|f| f.mixable()) {
                                 ui.selectable_value(format, f.label().to_string(), f.label());
                             }
                         });
@@ -703,6 +762,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                                     if ui.selectable_label(kind == k.id(), k.label()).clicked() {
                                         *kind = k.id().to_string();
                                         *name = k.default_name().to_string();
+                                        // Instruments are stereo (the built-in ones are): mono
+                                        // would fold them, as an Instrument track never wants.
+                                        let mono = soundcraft_model::ChannelFormat::Mono.label();
+                                        if k == soundcraft_model::TrackKind::Instrument && *format == mono {
+                                            *format = soundcraft_model::ChannelFormat::Stereo.label().to_string();
+                                        }
                                     }
                                 }
                             });
@@ -776,7 +841,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, range } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -816,8 +881,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                                 });
                             }
                             None => {
+                                let depths = bounce_bit_depths(format);
+                                if !depths.contains(&bit_depth.as_str()) {
+                                    *bit_depth = "24".into();
+                                }
                                 egui::ComboBox::from_label("Bit Depth").selected_text(format!("{bit_depth}-bit")).show_ui(ui, |ui| {
-                                    for b in ["16", "24", "32f"] {
+                                    for &b in depths {
                                         ui.selectable_value(bit_depth, b.to_string(), format!("{b}-bit"));
                                     }
                                 });
@@ -827,18 +896,59 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
                         ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
                     }
+                    // The source: the main mix or any bus.
+                    let busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    if source != "main" && !busses.iter().any(|(n, _)| n == source) {
+                        *source = "main".into();
+                    }
+                    ui.horizontal(|ui| {
+                        let shown = if source == "main" { "Main Mix".to_string() } else { source.clone() };
+                        egui::ComboBox::from_label("Source").selected_text(shown).show_ui(ui, |ui| {
+                            ui.selectable_value(source, "main".to_string(), "Main Mix");
+                            for (n, _) in &busses {
+                                ui.selectable_value(source, n.clone(), n.as_str());
+                            }
+                        });
+                        ui.add(egui::DragValue::new(tail).range(0.0..=soundcraft_engine::cmd::MAX_BOUNCE_TAIL_SECS as f32).speed(0.1).suffix(" s"));
+                        ui.label("tail");
+                    });
+                    let width = if source == "main" {
+                        app.engine.session().main_format().channels()
+                    } else {
+                        busses.iter().find(|(n, _)| n == source).map_or(2, |(_, c)| *c)
+                    };
+                    let refused = bounce_refusal(format, width);
+                    if let Some(why) = refused {
+                        ui.label(egui::RichText::new(why).color(Tokens::current().text_dim));
+                    }
                     bounce_range_choice(app, ui, range);
-                    crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
+                    ui.horizontal(|ui| {
+                        let mut on = loudness.is_some();
+                        if crate::widgets::checkbox(ui, &mut on, "Loudness target").changed() {
+                            *loudness = on.then_some(-14.0);
+                        }
+                        if let Some(l) = loudness.as_mut() {
+                            ui.add(egui::DragValue::new(l).range(-40.0..=0.0).speed(0.1).fixed_decimals(1).suffix(" LUFS"));
+                            ui.label(egui::RichText::new("true peak at most -1 dBTP; gain only, no limiter").color(Tokens::current().text_dim));
+                        }
+                    });
+                    if loudness.is_none() {
+                        crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
+                    }
                     let chosen = range.range(app.engine.session());
-                    if buttons_enabled(ui, "Bounce", enter, chosen.is_some())
+                    if buttons_enabled(ui, "Bounce", enter, chosen.is_some() && refused.is_none())
                         && let Some(r) = chosen
                     {
                         let p = std::path::Path::new(path.as_str()).with_extension(if format == "aiff" { "aif" } else { format.as_str() });
-                        let mut params =
-                            json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize, "start": r.start, "end": r.end});
+                        let mut params = json!({"path": p.to_string_lossy(), "format": format, "bit_depth": bit_depth, "normalize": normalize,
+                            "start": r.start, "end": r.end, "source": source, "tail": tail});
+                        if let Some(l) = loudness {
+                            params["loudness"] = json!(l);
+                            params["normalize"] = json!(false);
+                        }
                         if matches!(format.as_str(), "mp3" | "opus") {
                             params["bitrate"] = json!(bitrate);
-                            if app.engine.session().main_format().channels() > 2 {
+                            if width > 2 {
                                 params["fold_down"] = json!("stereo");
                             }
                         }
@@ -897,6 +1007,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && cmd != "session.save_copy"
                         && cmd != "file.export_dawproject"
                         && key != "dir"
+                        && key != "text"
                         && ui.button("Browse…").clicked()
                         && let Some(p) = pick(cmd, &[])
                     {
@@ -986,18 +1097,24 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = d.command(app.engine.session());
                     }
                 }
-                Dialog::Fades { shape } => {
-                    for s in soundcraft_model::FadeShape::ALL {
-                        ui.radio_value(shape, s.label().to_lowercase(), s.label());
-                    }
-                    if buttons(ui, "OK", enter) {
-                        action = Some(("edit.fades_create".into(), json!({"shape": shape})));
+                Dialog::Fades(f) => {
+                    let sr = app.engine.session().sample_rate.as_f64();
+                    if crate::fade_dialog::body(ui, f, &mut app.ui.fade_presets, |ui| buttons(ui, "OK", enter)) {
+                        action = Some(("edit.fades_create".into(), f.params(sr)));
                     }
                 }
                 Dialog::ChangeVelocity(d) => {
                     velocity_fields(ui, d);
                     if buttons(ui, "OK", enter) {
                         action = Some(velocity_action(app, d));
+                    }
+                }
+                Dialog::QuantizeAudio { strength, swing } => {
+                    ui.label("Moves each selected clip's sync point (else its start) towards the nearest grid line.");
+                    ui.add(egui::Slider::new(strength, 0.0..=100.0).text("Strength %"));
+                    ui.add(egui::Slider::new(swing, 0.0..=100.0).text("Swing %"));
+                    if buttons(ui, "Quantize", enter) {
+                        action = Some(("clip.quantize_to_grid".into(), json!({"strength": strength, "swing": swing})));
                     }
                 }
                 Dialog::StripSilence { threshold, min_ms, pre_ms, post_ms } => {
@@ -1012,7 +1129,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ));
                     }
                 }
-                Dialog::Group { id, name, edit, mix, members } => {
+                Dialog::Group { id, name, edit, mix, members, attributes } => {
                     ui.horizontal(|ui| {
                         ui.label("Name");
                         ui.text_edit_singleline(name);
@@ -1020,6 +1137,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.horizontal(|ui| {
                         crate::widgets::checkbox(ui, edit, "Edit group");
                         crate::widgets::checkbox(ui, mix, "Mix group");
+                    });
+                    ui.label("Linked in the mix");
+                    ui.horizontal_wrapped(|ui| {
+                        for (_, label, on) in attributes.iter_mut() {
+                            crate::widgets::checkbox(ui, on, *label);
+                        }
                     });
                     ui.label("Tracks");
                     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
@@ -1030,7 +1153,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     let ids: Vec<u64> = members.iter().filter(|m| m.2).map(|m| m.0).collect();
                     // Both commands reject an empty group, so don't offer an OK that can only fail.
                     if buttons_enabled(ui, "OK", enter, !ids.is_empty()) {
-                        let mut params = json!({"name": name, "edit": edit, "mix": mix, "tracks": ids});
+                        let linked: Vec<&str> = attributes.iter().filter(|a| a.2).map(|a| a.0).collect();
+                        let mut params = json!({"name": name, "edit": edit, "mix": mix, "tracks": ids, "attributes": linked});
                         let cmd = match id {
                             Some(g) => {
                                 params["group"] = json!(g.0);
@@ -1041,7 +1165,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), params));
                     }
                 }
-                Dialog::Session { frame_rate, bit_depth } => {
+                Dialog::Session { frame_rate, bit_depth, file_type } => {
                     egui::ComboBox::from_label("Timecode Rate").selected_text(frame_rate.as_str()).show_ui(ui, |ui| {
                         for r in soundcraft_time::FrameRate::ALL {
                             ui.selectable_value(frame_rate, r.label().to_string(), r.label());
@@ -1052,8 +1176,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             ui.selectable_value(bit_depth, b.to_string(), b);
                         }
                     });
+                    egui::ComboBox::from_label("Record Takes As").selected_text(if file_type == "aiff" { "AIFF" } else { "WAV (BWF)" }).show_ui(
+                        ui,
+                        |ui| {
+                            ui.selectable_value(file_type, "wav".to_string(), "WAV (BWF)");
+                            ui.selectable_value(file_type, "aiff".to_string(), "AIFF");
+                        },
+                    );
                     if buttons(ui, "OK", enter) {
                         action = Some(("setup.session".into(), json!({"frame_rate": frame_rate, "bit_depth": bit_depth})));
+                        take_file_type = Some(file_type.clone());
                     }
                 }
                 Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names } => {
@@ -1149,6 +1281,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         action = None;
     }
     let saving = action.as_ref().is_some_and(|(cmd, _)| cmd.starts_with("session.save"));
+    #[cfg(not(target_arch = "wasm32"))]
+    let action = match action {
+        // A movie is written behind the status line's progress, not in one long frame.
+        Some((cmd, params)) if cmd == "file.bounce_movie" => {
+            keep = false;
+            crate::bounce::start_movie(app, &params);
+            None
+        }
+        other => other,
+    };
     if let Some((cmd, params)) = action {
         keep = false;
         match run_then(app, &cmd, params) {
@@ -1164,6 +1306,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         next.from_midi = true;
                         next.held = app.midi_hub.as_ref().map(|h| h.held_notes()).unwrap_or_default();
                     }
+                }
+            }
+            Ok(_) if cmd == "setup.session" => {
+                if let Some(ft) = take_file_type
+                    && let Err(e) = app.run("setup.record_format", json!({"file_type": ft}))
+                {
+                    app.ui.status = e;
                 }
             }
             Ok(v) if cmd == "file.export_clips" => {
@@ -1666,5 +1815,47 @@ pub fn velocity_action(app: &SoundApp, d: &VelocityDialog) -> (String, Value) {
             ("midi.notes_velocity".into(), p)
         }
         _ => ("event.change_velocity".into(), p),
+    }
+}
+
+/// The bit depths the Bounce dialog offers for `format` (a lossless one): FLAC stores no 32-bit
+/// float, so it is not offered there (the writer would refuse it after the render).
+pub(crate) fn bounce_bit_depths(format: &str) -> &'static [&'static str] {
+    if format.eq_ignore_ascii_case("flac") { &["16", "24"] } else { &["16", "24", "32f"] }
+}
+
+/// Why `format` cannot hold a bounce of the main mix's `channels`, when it cannot (the dialog
+/// says so and does not start it). MP3 and Opus fold down instead.
+pub(crate) fn bounce_refusal(format: &str, channels: usize) -> Option<&'static str> {
+    (format.eq_ignore_ascii_case("flac") && channels > 8).then_some("FLAC holds at most 8 channels: choose WAV or AIFF for this mix")
+}
+
+#[cfg(test)]
+mod bounce_options_tests {
+    use super::*;
+
+    /// Mix bug 11: the dialog offered FLAC at 32-bit float and beyond 8 channels, which the
+    /// writer refuses once the render is done.
+    #[test]
+    fn the_bounce_dialog_offers_only_what_the_format_can_write() {
+        assert!(!bounce_bit_depths("flac").contains(&"32f"));
+        assert!(bounce_bit_depths("wav").contains(&"32f"));
+        assert!(bounce_refusal("flac", 12).is_some());
+        assert!(bounce_refusal("flac", 8).is_none());
+        assert!(bounce_refusal("wav", 16).is_none());
+        // Each depth offered is one the writer takes.
+        for f in ["wav", "aiff", "flac"] {
+            for d in bounce_bit_depths(f) {
+                let depth = match *d {
+                    "16" => soundcraft_audio_io::BitDepth::Int16,
+                    "24" => soundcraft_audio_io::BitDepth::Int24,
+                    _ => soundcraft_audio_io::BitDepth::Float32,
+                };
+                let fmt = soundcraft_audio_io::encode_format_for(f).unwrap();
+                let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 16]; 2] };
+                let opts = soundcraft_audio_io::EncodeOptions { format: fmt, bit_depth: depth, ..soundcraft_audio_io::EncodeOptions::default() };
+                assert!(soundcraft_audio_io::encode(&buf, &opts).is_ok(), "{f} {d}");
+            }
+        }
     }
 }

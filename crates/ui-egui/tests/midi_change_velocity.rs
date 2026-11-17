@@ -34,6 +34,57 @@ fn the_menu_item_opens_the_dialog() {
     assert!(matches!(app.dialogs.open, Some(Dialog::ChangeVelocity(_))));
 }
 
+/// Bug 7: Quantize… and Change Duration… from the menu (or their shortcuts) ask first, in the MIDI
+/// Operations window, instead of acting with no values (legato, 16ths).
+#[test]
+fn quantize_and_change_duration_menu_items_ask_before_acting() {
+    let (mut app, clip) = app_with_clip();
+    let lengths = |app: &mut SoundApp| -> Vec<u64> {
+        let n = app.run("midi.notes", json!({"clip": clip.0})).unwrap();
+        n["notes"].as_array().unwrap().iter().map(|x| x["length"].as_u64().unwrap()).collect()
+    };
+    let before = lengths(&mut app);
+    menus::invoke_menu(&mut app, "event.change_duration", "Event > MIDI Operations > Change Duration...");
+    assert!(app.ui.show_midi_ops);
+    assert_eq!(app.ops.midi_op, "change duration");
+    assert_eq!(lengths(&mut app), before, "nothing changes until Apply");
+    app.ui.show_midi_ops = false;
+    assert!(menus::invoke_shortcut_dialog(&mut app, "event.quantize"));
+    assert_eq!(app.ops.midi_op, "quantize");
+    // What the window runs; with notes selected in the editor, on those.
+    app.ops.midi_op = "change duration".into();
+    app.ops.dur_mode = "set".into();
+    app.ops.dur_value = 120.0;
+    let (id, mut p) = soundcraft_ui_egui::ops_windows::midi_op_params(&app.ops).unwrap();
+    p["clips"] = json!([clip.0]);
+    p["indices"] = json!([1]);
+    app.run(id, p).unwrap();
+    assert_eq!(lengths(&mut app), vec![before[0], 120, before[2]]);
+    // Every operation the window offers runs.
+    for op in soundcraft_ui_egui::ops_windows::MIDI_OPS {
+        app.ops.midi_op = op.into();
+        if let Some((id, mut p)) = soundcraft_ui_egui::ops_windows::midi_op_params(&app.ops) {
+            p["clips"] = json!([clip.0]);
+            app.run(id, p).unwrap_or_else(|e| panic!("{op}: {e}"));
+        }
+    }
+    // Every grid the window offers is one the command reads.
+    for g in soundcraft_ui_egui::ops_windows::QUANTIZE_GRIDS {
+        app.run("event.quantize", json!({"grid": g, "clips": [clip.0]})).unwrap();
+    }
+    assert!(app.run("event.quantize", json!({"grid": "1/7", "clips": [clip.0]})).is_err());
+    assert!(app.run("event.change_velocity", json!({"clips": [clip.0]})).is_err());
+    assert!(app.run("event.change_duration", json!({"clips": [clip.0]})).is_err());
+}
+
+/// Bug 17: the browser knows a MIDI file by its extension in any case.
+#[test]
+fn the_browser_knows_midi_files_in_any_case() {
+    use soundcraft_ui_egui::windows::is_midi_file;
+    assert!(is_midi_file("SONG.MID") && is_midi_file("a.midi") && is_midi_file("b.Kar"));
+    assert!(!is_midi_file("mid") && !is_midi_file("x.wav"));
+}
+
 #[test]
 fn it_acts_on_the_selected_clips_with_each_mode() {
     let (mut app, clip) = app_with_clip();

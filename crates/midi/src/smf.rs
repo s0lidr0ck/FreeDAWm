@@ -246,7 +246,7 @@ fn close_note(open: &mut OpenNotes, notes: &mut Vec<Note>, channel: u8, pitch: u
     }
     let Some((start, velocity)) = stack.pop_front() else { return };
     let length = tick.saturating_sub(start).max(1);
-    notes.push(Note { pitch, velocity, release_velocity: release, channel, start, length });
+    notes.push(Note { probability: 100, pitch, velocity, muted: false, release_velocity: release, channel, start, length });
 }
 
 /// Meta-event text: UTF-8 when it is valid UTF-8, else Windows-1252 (a superset of Latin-1 for
@@ -361,14 +361,18 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
                             stack.push_back((tick, d2));
                         }
                     }
-                    0xA0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PolyPressure(d1), value: i32::from(d2) }),
-                    0xB0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Cc(d1), value: i32::from(d2) }),
-                    0xC0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Program, value: i32::from(d1) }),
-                    0xD0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::ChannelPressure, value: i32::from(d1) }),
+                    0xA0 => {
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PolyPressure(d1), value: i32::from(d2), shape: Default::default() })
+                    }
+                    0xB0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Cc(d1), value: i32::from(d2), shape: Default::default() }),
+                    0xC0 => seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::Program, value: i32::from(d1), shape: Default::default() }),
+                    0xD0 => {
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::ChannelPressure, value: i32::from(d1), shape: Default::default() })
+                    }
                     _ => {
                         // 0xE0 pitch bend: LSB then MSB, centred on 8192.
                         let v = (i32::from(d2) << 7 | i32::from(d1)) - 8192;
-                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PitchBend, value: v });
+                        seq.ctrls.push(CtrlEvent { tick, channel, kind: CtrlKind::PitchBend, value: v, shape: Default::default() });
                     }
                 }
             }
@@ -382,7 +386,7 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
         let pitch = u8::try_from(key % 128).unwrap_or(0);
         for (start, velocity) in stack.drain(..) {
             let length = tick.saturating_sub(start).max(1);
-            seq.notes.push(Note { pitch, velocity, release_velocity: DEFAULT_RELEASE, channel, start, length });
+            seq.notes.push(Note { probability: 100, pitch, velocity, muted: false, release_velocity: DEFAULT_RELEASE, channel, start, length });
         }
     }
     seq.sort();

@@ -189,9 +189,10 @@ fn effects_set(e: &mut Engine, p: &Value) -> Result<Value> {
     let vals: Vec<(String, f64)> =
         params.iter().filter_map(|(k, v)| v.as_f64().filter(|x| x.is_finite()).map(|x| (k.chars().take(64).collect(), x))).collect();
     let s = e.session_mut();
-    for c in &ids {
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
         for (k, v) in &vals {
-            s.edit.values.insert(format!("clip_fx.{}.{k}", c.0), *v);
+            c.set_effect(k, *v);
         }
     }
     Ok(json!({"clips": ids.len(), "params": vals.len()}))
@@ -203,10 +204,10 @@ fn effects_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("clip.effects_bypass", "select a clip"));
     }
     let s = e.session_mut();
-    let key = |c: &ClipId| format!("clip_fx.bypass.{}", c.0);
-    let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|c| s.edit.flag(&key(c))));
-    for c in &ids {
-        s.edit.set_flag(&key(c), on);
+    let on = p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|c| s.find_clip(*c).is_some_and(|(_, c)| c.effects_bypass)));
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        c.effects_bypass = on;
     }
     Ok(json!({"bypass": on, "clips": ids.len()}))
 }
@@ -219,10 +220,9 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
             n += 1;
         }
         let s = e.session_mut();
-        let pre = format!("clip_fx.{}.", id.0);
-        s.edit.values.retain(|k, _| !k.starts_with(&pre));
-        s.edit.set_flag(&format!("clip_fx.bypass.{}", id.0), false);
         if let Some(c) = s.find_clip_mut(*id) {
+            c.effects.clear();
+            c.effects_bypass = false;
             c.fade_in.len = c.fade_in.len.min(c.length);
             c.fade_out.len = c.fade_out.len.min(c.length);
         }
@@ -241,11 +241,15 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let s = e.session_mut();
     let mut out = Vec::new();
+    // Clips on an Elastic track (any algorithm but Varispeed) keep their pitch: they are
+    // rendered with the pitch-preserving stretch once the ratios are known.
+    let mut elastic = Vec::new();
     for cid in ids {
-        let Some((_, c)) = s.find_clip(cid).map(|(t, c)| (t, c.clone())) else { continue };
+        let Some((t, c)) = s.find_clip(cid).map(|(t, c)| (t, c.clone())) else { continue };
         if !c.is_audio() || c.edit_locked {
             continue;
         }
+        let keeps_pitch = s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
         let bpm_key = format!("clip.bpm.{}", cid.0);
         let len_key = format!("clip.len0.{}", cid.0);
         let stretch = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
@@ -256,13 +260,20 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         s.edit.values.insert(len_key, len0);
         let ratio = (src_bpm / now).clamp(0.05, 20.0);
         let new_len = ((len0 * ratio).round() as Samples).max(1);
+        out.push(json!({"clip": cid, "source_bpm": src_bpm, "bpm": now, "stretch": ratio}));
+        if keeps_pitch {
+            elastic.push((cid, ratio));
+            continue;
+        }
         if let Some(cl) = s.find_clip_mut(cid) {
             cl.stretch = ratio;
             cl.length = new_len;
             cl.fade_in.len = cl.fade_in.len.min(new_len);
             cl.fade_out.len = cl.fade_out.len.min(new_len);
         }
-        out.push(json!({"clip": cid, "source_bpm": src_bpm, "bpm": now, "stretch": ratio}));
+    }
+    for (cid, ratio) in elastic {
+        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio}))?;
     }
     Ok(json!({"clips": out}))
 }
@@ -315,11 +326,14 @@ fn copy_to(e: &mut Engine, p: &Value) -> Result<Value> {
         .collect();
     let s = e.session_mut();
     let mut new_ids = Vec::new();
+    let mut placed = Vec::with_capacity(copies.len());
     for (t, mut c) in copies {
         c.id = s.new_clip_id();
         new_ids.push(c.id);
-        crate::edit::place_clip(s, t, c);
+        placed.push((t, c));
     }
+    // Together, so copies of a crossfaded pair keep their crossfade.
+    crate::edit::put_clips(s, placed);
     s.edit.selected_clips = new_ids.clone();
     s.edit.selected_tracks = vec![to];
     Ok(json!({"clips": new_ids.iter().map(|c| c.0).collect::<Vec<_>>(), "track": to.0}))
@@ -389,7 +403,16 @@ mod tests {
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Mono, None);
         let id = s.new_clip_id();
         let mut seq = soundcraft_midi::Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 240 });
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 240,
+        });
         crate::edit::place_clip(&mut s, t, Clip::midi(id, "m", 0, 100, seq));
         s.edit.selected_tracks = vec![t];
         (Engine::new(s), t, id)
@@ -435,13 +458,13 @@ mod tests {
         let (mut e, _, ids) = engine_with(&[(0, 100, 0)]);
         e.execute("clip.effects_set", &json!({"clip": ids[0].0, "params": {"eq_gain_db": 3.0}})).unwrap();
         e.execute("clip.effects_bypass", &json!({"clip": ids[0].0})).unwrap();
-        assert!(e.session().edit.flag(&format!("clip_fx.bypass.{}", ids[0].0)));
+        assert!(e.session().find_clip(ids[0]).unwrap().1.effects_bypass);
         e.execute("edit.copy_clip_effects", &json!({"clip": ids[0].0})).unwrap();
         assert_eq!(e.clipboard.clip_effects, vec![("eq_gain_db".to_string(), 3.0)]);
         e.execute("edit.clear_clip_effects", &json!({"clip": ids[0].0})).unwrap();
-        assert!(e.session().edit.values.is_empty());
+        assert!(e.session().find_clip(ids[0]).unwrap().1.effects.is_empty());
         e.execute("edit.paste_clip_effects", &json!({"clip": ids[0].0})).unwrap();
-        assert_eq!(e.session().edit.values.len(), 1);
+        assert_eq!(e.session().find_clip(ids[0]).unwrap().1.effects.len(), 1);
     }
 
     #[test]
@@ -521,7 +544,8 @@ mod tests {
             }
         }
 
-        // Varispeed on a non-elastic track does not change the clip length. Render still matches it.
+        // Varispeed on a non-elastic track plays the whole material at the new speed (half the
+        // length at ratio 0.5). Render still matches it.
         let mut s = Session::default();
         let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
         let tone: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.05).sin() * 0.4).collect();
@@ -537,7 +561,7 @@ mod tests {
         let before = soundcraft_mix::render_clips(e.session(), t, range);
         e.execute("clip.gain_render", &json!({"clip": id.0})).unwrap();
         let c = e.session().find_clip(id).unwrap().1.clone();
-        assert_eq!(c.length, 9_600);
+        assert_eq!(c.length, 4_800);
         assert!((c.stretch - 1.0).abs() < 1e-9);
         let after = soundcraft_mix::render_clips(e.session(), t, range);
         assert!(max_abs_diff(&before, &after) < 1e-5);

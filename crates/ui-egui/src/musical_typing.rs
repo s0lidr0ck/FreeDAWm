@@ -135,18 +135,17 @@ pub fn release_all(app: &mut SoundApp) {
     set_sustain(app, false);
 }
 
-/// Step input: the note at the insertion point (relative to the selected MIDI clip), an eighth
-/// long, then the insertion point moves on.
+/// Step input: the note at the insertion point on the selected MIDI clip's track, an eighth long
+/// at the keys' velocity (`event.step_input`: the clip there grows to hold it, or a new one starts
+/// where there is none), then the insertion point moves on.
 pub fn step_enter(app: &mut SoundApp, note: u8) {
     let Some(cid) = crate::midi_editor::target_clip(app) else { return };
-    let s = app.engine.session();
-    let (clip_start, at) = (s.find_clip(cid).map_or(0, |(_, c)| c.start), s.edit.selection.start);
-    let rel = s.tempo.samples_to_ticks(at, s.sample_rate) - s.tempo.samples_to_ticks(clip_start, s.sample_rate);
-    let len = soundcraft_time::TICKS_PER_QUARTER / 2;
-    let _ = app.run("midi.note_add", json!({"clip": cid.0, "pitch": note, "start_ticks": rel.max(0), "length_ticks": len}));
-    let s = app.engine.session();
-    let next = s.tempo.tick_to_samples(s.tempo.samples_to_ticks(at, s.sample_rate) + len, s.sample_rate);
-    let _ = app.run("transport.locate", json!({"at": next}));
+    let Some(track) = app.engine.session().find_clip(cid).map(|(t, _)| t) else { return };
+    let velocity = app.typing.velocity.clamp(1, 127);
+    let Ok(r) = app.run("event.step_input", json!({"track": track.0, "pitch": note, "velocity": velocity, "duration": "1/8"})) else { return };
+    if let Some(next) = r.get("next").and_then(serde_json::Value::as_i64) {
+        let _ = app.run("transport.locate", json!({"at": next}));
+    }
 }
 
 /// Turns computer-key capture on or off (`ui.musical_typing`).
@@ -319,5 +318,24 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(notes, vec![64, 67]);
         assert!(heard(&app).is_empty(), "step entry plays nothing live");
+    }
+
+    #[test]
+    fn step_mode_uses_the_velocity_and_lengthens_the_clip() {
+        let mut engine = soundcraft_engine::Engine::default();
+        let t = engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        // A clip one eighth long (12,000 samples at 120 bpm).
+        let clip = engine.execute("midi.new_clip", &json!({"track": t, "start": 0, "end": 12_000})).unwrap()["clip"].as_u64().unwrap();
+        engine.execute("edit.select", &json!({"clips": [clip]})).unwrap();
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        app.typing.step = true;
+        app.typing.velocity = 57;
+        for n in [60, 62, 64] {
+            press(&mut app, n);
+        }
+        let (_, c) = app.engine.session().find_clip(soundcraft_model::ClipId(clip)).unwrap();
+        let notes: Vec<(u8, u8, i64)> = c.midi_playing().unwrap().notes.iter().map(|n| (n.pitch, n.velocity, n.start)).collect();
+        assert_eq!(notes, vec![(60, 57, 0), (62, 57, 480), (64, 57, 960)]);
+        assert_eq!(c.length, 36_000, "the clip grew to hold the later notes");
     }
 }

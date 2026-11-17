@@ -68,6 +68,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("clip.loop", "Loop...", ["Clip"], Some("Cmd+Alt+L"), "{clips?, count?: n, length?: samples}", has_selection, loop_clips),
         cmd!("clip.rename", "Rename...", ["Clip"], Some("Cmd+Alt+Shift+R"), "{clip?, name}", has_selection, rename),
         cmd!("clip.gain", "Clip Gain", [], None, "{clips?, db | delta_db}", has_selection, gain),
+        cmd!(
+            "clip.gain_line",
+            "Clip Gain Line",
+            [],
+            None,
+            "{clip, points: [[offset, db], …]} — the clip's gain line: breakpoints at samples from the clip start, in dB over the clip gain (empty: a flat line)",
+            always,
+            gain_line
+        ),
         cmd!("clip.gain_nudge_up", "Nudge Clip Gain Up", [], Some("Ctrl+Shift+Up"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, 1.0)),
         cmd!("clip.gain_nudge_down", "Nudge Clip Gain Down", [], Some("Ctrl+Shift+Down"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, -1.0)),
         cmd!("clip.gain_render", "Render", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
@@ -80,16 +89,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"rendered": n}))
         }),
-        cmd!("clip.gain_bypass", "Bypass", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
+        // A toggle: the gain and its envelope stay on the clip, unheard (it used to erase them).
+        cmd!("clip.gain_bypass", "Bypass", ["Clip", "Clip Gain"], None, "{clips?, value?: bool}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let s = e.session_mut();
+            let on =
+                p.get("value").and_then(Value::as_bool).unwrap_or_else(|| !ids.iter().all(|id| s.find_clip(*id).is_some_and(|(_, c)| c.gain_bypass)));
             for id in &ids {
                 if let Some(c) = s.find_clip_mut(*id) {
-                    c.gain_db = 0.0;
-                    c.gain_env.clear()
+                    c.gain_bypass = on;
                 }
             }
-            Ok(json!({}))
+            Ok(json!({"bypass": on, "clips": ids.len()}))
         }),
         cmd!("clip.identify_sync_point", "Identify Sync Point", ["Clip"], Some("Cmd+,"), "{clip?, at?}", has_selection, |e, p| {
             let at = position_param(e, "clip.identify_sync_point", p, "at")?.unwrap_or(e.session().edit.selection.start);
@@ -103,7 +114,15 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({}))
         }),
         cmd!("clip.remove_sync_point", "Remove Sync Point", ["Clip"], None, "{clips?}", has_sync_point, remove_sync_point),
-        cmd!("clip.quantize_to_grid", "Quantize to Grid", ["Clip"], Some("Cmd+0"), "{clips?}", has_selection, quantize_to_grid),
+        cmd!(
+            "clip.quantize_to_grid",
+            "Quantize to Grid",
+            ["Clip"],
+            Some("Cmd+0"),
+            "{clips?, strength?: 0..100 (100), swing?: 0..100 (0)} — moves each clip's sync point (else its start) that share of the way to the nearest grid line; swing delays every second line of a note grid",
+            has_selection,
+            quantize_to_grid
+        ),
         cmd!("clip.color", "Clip Color", [], None, "{clips?, color: [r,g,b] | null}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let col = p.get("color").and_then(Value::as_array).map(|a| {
@@ -128,6 +147,15 @@ pub fn specs() -> Vec<CommandSpec> {
             elastic
         ),
         cmd!("clip.remove_warp", "Remove Warp", ["Clip"], None, "{clips?}", has_selection, remove_warp),
+        cmd!(
+            "clip.stretch_to",
+            "Stretch Clip",
+            [],
+            None,
+            "{clip, start?: position, end?: position} — stretches an audio clip so its edges reach these points (the other edge stays): by its track's Elastic algorithm, by speed on a Varispeed track, pitch-preserving (polyphonic) on a plain one; a MIDI clip's notes and controllers scale with it",
+            always,
+            stretch_to
+        ),
         cmd!(
             "clip.place_source",
             "Place Audio File",
@@ -181,14 +209,20 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Warp clips. On Elastic tracks the material is rendered with a pitch-preserving time stretch
 /// (the original source is remembered in `edit.values` so Remove Warp restores it).
-fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let ratio = f64_or(p, "ratio", 1.0).clamp(0.05, 20.0);
+    // `render`: a plain (not Elastic) track renders pitch-preserving too, as a stretch trim does.
+    let render = bool_or(p, "render", false);
     let s = e.session_mut();
     let mut rendered = 0;
     for id in &ids {
         let Some((t, c)) = s.find_clip(*id).map(|(t, c)| (t, c.clone())) else { continue };
-        let elastic = s.track(t).and_then(|x| x.elastic.clone()).filter(|a| a != "varispeed");
+        let elastic = match s.track(t).and_then(|x| x.elastic.clone()) {
+            Some(a) if a == "varispeed" => None,
+            Some(a) => Some(a),
+            None => render.then(|| "polyphonic".to_string()),
+        };
         // Start from the unwarped original if this clip was warped before.
         let key = |k: &str| format!("elastic.{}.{k}", id.0);
         let orig = warp_original(s, *id);
@@ -200,9 +234,25 @@ fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
             base.stretch = 1.0;
         }
         if elastic.is_none() || !base.is_audio() {
-            if let Some(cm) = s.find_clip_mut(*id) {
-                cm.stretch = ratio;
+            // Varispeed: the clip plays `ratio` times as long, so its length follows (it used
+            // to keep its length: the tail was cut off, or ran on into silence).
+            let material = base.length as f64 / if base.stretch.is_finite() && base.stretch > 0.0 { base.stretch } else { 1.0 };
+            if !base.is_audio() {
+                if let Some(cm) = s.find_clip_mut(*id) {
+                    cm.stretch = ratio;
+                }
+                continue;
             }
+            let mut nc = base;
+            nc.stretch = ratio;
+            nc.length = soundcraft_time::to_samples(material * ratio).max(1);
+            nc.fade_in.len = nc.fade_in.len.min(nc.length);
+            nc.fade_out.len = nc.fade_out.len.min(nc.length);
+            // Back on the original file (a render from an Elastic track before): its notes go.
+            for k in ["src", "off", "len", "ratio", "start"] {
+                s.edit.values.remove(&key(k));
+            }
+            super::more_util::replace_clip(s, t, *id, nc);
             continue;
         }
         let out_len = soundcraft_time::to_samples(base.length as f64 * ratio).max(1);
@@ -225,6 +275,43 @@ fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"ratio": ratio, "rendered": rendered}))
 }
 
+/// The stretch trim: `clip`'s start or end moves to the point given, the material stretched to
+/// fill it, the other edge staying where it is. The ratio counts from the clip's original
+/// material when it was stretched before, so stretching again does not stretch a stretch.
+fn stretch_to(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.stretch_to";
+    let id = clip_id(p, C)?;
+    let start = position_param(e, C, p, "start")?;
+    let end = position_param(e, C, p, "end")?;
+    let (track, c) = e.session().find_clip(id).map(|(t, c)| (t, c.clone())).ok_or_else(|| bad(C, "no such clip"))?;
+    if matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) {
+        return crate::midi_stretch::stretch(e, id, start, end);
+    }
+    if !c.is_audio() {
+        return Err(bad(C, "only audio and MIDI clips stretch"));
+    }
+    if c.edit_locked {
+        return Err(bad(C, "the clip is edit-locked"));
+    }
+    let (a, b) = (start.unwrap_or(c.start).max(0), end.unwrap_or(c.end()));
+    if b <= a || (start.is_none() && end.is_none()) {
+        return Err(bad(C, "give a start or an end that leaves the clip some length"));
+    }
+    let rel = (b - a) as f64 / c.length.max(1) as f64;
+    let was = e.session().edit.values.get(&format!("elastic.{}.ratio", id.0)).copied().filter(|r| r.is_finite() && *r > 0.0);
+    let varispeed = e.session().track(track).is_some_and(|t| t.elastic.as_deref() == Some("varispeed"));
+    // Varispeed counts from the clip's stretch; a render from its original material's length.
+    let ratio = if varispeed { c.stretch_ratio() * rel } else { was.unwrap_or(1.0) * rel };
+    // The start edge dragged: the clip moves to its new start first, then grows or shrinks to
+    // the end that stays (so it never runs over the clip after it on the way).
+    if a != c.start {
+        crate::edit::move_clips(e.session_mut(), &[id], a - c.start, &[]);
+    }
+    elastic(e, &json!({"clips": [id.0], "ratio": ratio, "render": true}))?;
+    let c = e.session().find_clip(id).map(|(_, x)| (x.start, x.length)).unwrap_or_default();
+    Ok(json!({"start": c.0, "end": c.0 + c.1}))
+}
+
 fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session_mut();
@@ -234,6 +321,13 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
         let orig = warp_original(s, *id);
         let start = s.edit.values.get(&key("start")).map(|v| *v as Samples);
         if let Some(c) = s.find_clip_mut(*id) {
+            // A varispeed clip (no render) goes back to its material's own length.
+            if orig.is_none() && c.is_audio() && c.stretch.is_finite() && c.stretch > 0.0 && (c.stretch - 1.0).abs() > 1e-9 {
+                c.length = soundcraft_time::to_samples(c.length as f64 / c.stretch).max(1);
+                c.fade_in.len = c.fade_in.len.min(c.length);
+                c.fade_out.len = c.fade_out.len.min(c.length);
+                n += 1;
+            }
             c.stretch = 1.0;
             c.warp.clear();
             if let Some((src, off, len)) = orig {
@@ -247,7 +341,7 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
                 n += 1;
             }
         }
-        for k in ["src", "off", "len", "ratio", "start"] {
+        for k in ["src", "off", "len", "ratio", "start", "roff"] {
             s.edit.values.remove(&key(k));
         }
     }
@@ -255,7 +349,7 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 /// The audio a warped clip was rendered from, while that file is still in the session.
-fn warp_original(s: &soundcraft_model::Session, id: ClipId) -> Option<(soundcraft_model::SourceId, Samples, Samples)> {
+pub(crate) fn warp_original(s: &soundcraft_model::Session, id: ClipId) -> Option<(soundcraft_model::SourceId, Samples, Samples)> {
     let v = |k: &str| s.edit.values.get(&format!("elastic.{}.{k}", id.0)).copied();
     let src = soundcraft_model::SourceId(v("src")? as u64);
     s.source(src)?;
@@ -274,22 +368,36 @@ fn flag(e: &mut Engine, p: &Value, get: fn(&soundcraft_model::Clip) -> bool, set
     Ok(json!({"value": v, "clips": ids.len()}))
 }
 
+/// Send to Back / Bring to Front: an audio clip goes above (or below) every clip it overlaps
+/// on its track, by its [`soundcraft_model::Clip::layer`] (Options › Overlap › Layer keeps
+/// clips whole under others). The playlist stays in time order. A clip that overlaps nothing,
+/// or is already in front (at the back), is left as it is.
 fn layer(e: &mut Engine, p: &Value, front: bool) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session_mut();
-    for t in &mut s.tracks {
-        if let Some(pl) = t.playlist_mut() {
-            let (mut sel, mut rest): (Vec<_>, Vec<_>) = pl.clips.drain(..).partition(|c| ids.contains(&c.id));
-            if front {
-                rest.append(&mut sel);
-                pl.clips = rest;
-            } else {
-                sel.append(&mut rest);
-                pl.clips = sel;
-            }
+    let mut changed = 0;
+    for id in &ids {
+        let Some((tid, c)) = s.find_clip(*id).map(|(t, c)| (t, c.clone())) else { continue };
+        if !c.is_audio() {
+            continue;
+        }
+        let others: Vec<i32> = s
+            .track(tid)
+            .map(|t| t.clips().iter().filter(|x| x.id != c.id && x.is_audio() && x.range().overlaps(&c.range())).map(|x| x.layer).collect())
+            .unwrap_or_default();
+        let to = if front {
+            others.iter().max().map(|l| l.saturating_add(1).max(c.layer))
+        } else {
+            others.iter().min().map(|l| l.saturating_sub(1).min(c.layer))
+        };
+        if let Some(to) = to.filter(|l| *l != c.layer)
+            && let Some(x) = s.find_clip_mut(*id)
+        {
+            x.layer = to;
+            changed += 1;
         }
     }
-    Ok(json!({}))
+    Ok(json!({"clips": ids.len(), "changed": changed}))
 }
 
 fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -308,16 +416,33 @@ fn loop_clips(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             c.loop_id = Some(lid);
         }
+        // A MIDI clip on a tick-timebase track loops in bars and beats: each copy starts a whole
+        // clip length in ticks after the one before, so under a changing tempo the copies stay
+        // on their bars (and each is as long as the clip is in ticks there).
+        let musical = matches!(c.content, soundcraft_model::ClipContent::Midi { .. }) && s.track(tid).is_some_and(|t| t.ticks_timebase);
+        let sr = s.sample_rate;
+        let map = s.tempo.clone();
+        let (t0, t1) = (map.samples_to_ticks_f(c.start, sr), map.samples_to_ticks_f(c.end(), sr));
+        let at_tick = |t: f64| {
+            let x = map.ticks_f_to_samples_f(t, sr).round();
+            if x.is_finite() { x.clamp(0.0, i64::MAX as f64 / 2.0) as i64 } else { 0 }
+        };
         let mut copies = Vec::new();
         for k in 1..=reps {
             let mut nc = c.clone();
-            nc.start = 0;
-            copies.push((c.start + c.length * k, nc));
+            nc.id = s.new_clip_id();
+            if musical && t1 > t0 {
+                let span = t1 - t0;
+                let (a, b) = (at_tick(t0 + span * k as f64), at_tick(t0 + span * (k + 1) as f64));
+                nc.start = a;
+                nc.length = b.saturating_sub(a).max(1);
+            } else {
+                nc.start = c.start.saturating_add(c.length.saturating_mul(k));
+            }
+            copies.push((tid, nc));
         }
-        for (at, nc) in copies {
-            let _ = crate::edit::paste(s, tid, at, &[nc], c.length, false);
-            made += 1;
-        }
+        made += copies.len();
+        crate::edit::put_clips(s, copies);
     }
     Ok(json!({"loops": made}))
 }
@@ -332,6 +457,40 @@ fn rename(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"clips": ids.len()}))
+}
+
+/// Most breakpoints one clip-gain line keeps.
+const MAX_GAIN_POINTS: usize = 10_000;
+
+fn gain_line(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.gain_line";
+    let id = p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(C, "`clip` required"))?;
+    let raw = p.get("points").and_then(Value::as_array).ok_or_else(|| bad(C, "`points` required: [[offset, db], …]"))?;
+    if raw.len() > MAX_GAIN_POINTS {
+        return Err(bad(C, format!("at most {MAX_GAIN_POINTS} points")));
+    }
+    let len = e.session().find_clip(id).map(|(_, c)| c.length).ok_or_else(|| bad(C, "no such clip"))?;
+    let mut points = Vec::with_capacity(raw.len());
+    for v in raw {
+        let pair = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(C, "each point is [offset, db]"))?;
+        let at = pair.first().and_then(Value::as_i64).ok_or_else(|| bad(C, "an offset is a whole number of samples"))?;
+        let db = pair.get(1).and_then(Value::as_f64).filter(|d| d.is_finite()).ok_or_else(|| bad(C, "a level is a finite number of dB"))?;
+        points.push((at.clamp(0, len.max(0)), db.clamp(-144.0, 36.0) as f32));
+    }
+    points.sort_by_key(|x| x.0);
+    // One level per offset: the last given wins.
+    let mut line: Vec<(Samples, f32)> = Vec::with_capacity(points.len());
+    for (at, db) in points {
+        match line.last_mut() {
+            Some(last) if last.0 == at => last.1 = db,
+            _ => line.push((at, db)),
+        }
+    }
+    let n = line.len();
+    if let Some(c) = e.session_mut().find_clip_mut(id) {
+        c.gain_env = line;
+    }
+    Ok(json!({"points": n}))
 }
 
 fn gain(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -384,8 +543,10 @@ fn remove_sync_point(e: &mut Engine, p: &Value) -> Result<Value> {
 fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session();
+    let strength = f64_or(p, "strength", 100.0) / 100.0;
+    let swing = f64_or(p, "swing", 0.0) / 100.0;
     let moves: Vec<(soundcraft_model::ClipId, i64)> =
-        ids.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| (*id, crate::edit::grid_delta(s, c, 0, false)))).collect();
+        ids.iter().filter_map(|id| s.find_clip(*id).map(|(_, c)| (*id, crate::edit::quantize_delta(s, c, strength, swing)))).collect();
     let s = e.session_mut();
     for (id, d) in &moves {
         crate::edit::move_clips(s, &[*id], *d, &[]);
@@ -397,6 +558,72 @@ fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
 mod tests {
     use serde_json::json;
     use soundcraft_model::{ClipId, TrackId};
+
+    /// Bug 15: a one-bar MIDI clip looped over a tempo change puts each copy on the next bar.
+    #[test]
+    fn midi_loops_on_a_tick_track_stay_on_the_bars() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        // 120 bpm, then 60 bpm from bar 2: bar 2 starts at 96 000, bar 3 at 288 000.
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("clip.loop", &json!({"clips": [clip], "count": 3})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 192_000), (288_000, 192_000)]);
+    }
+
+    /// Parity section 7, bug 15: Edit › Repeat on a tick track spaces its copies in bars, as
+    /// Loop does; a sample-timebase track keeps spacing them in samples.
+    #[test]
+    fn midi_repeats_on_a_tick_track_stay_on_the_bars() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        e.execute("edit.repeat", &json!({"count": 2})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 192_000), (288_000, 192_000)]);
+        // The same on a sample-timebase track: copies a selection length in samples apart.
+        assert!(e.undo());
+        if let Some(tr) = e.session_mut().track_mut(t) {
+            tr.ticks_timebase = false;
+        }
+        e.execute("edit.repeat", &json!({"count": 2})).unwrap();
+        let spans: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0, 96_000), (96_000, 96_000), (192_000, 96_000)]);
+    }
+
+    /// The stretch trim: the end edge dragged stretches the material to it (pitch-preserving on a
+    /// plain track, rendered); the start edge keeps the end; on a Varispeed track it is the speed.
+    #[test]
+    fn a_stretch_trim_fills_the_new_edges() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
+        let c = e.session().track(pad).unwrap().clips()[0].clone();
+        let (start, len) = (c.start, c.length);
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 3 / 2})).unwrap();
+        let now = e.session().find_clip(c.id).unwrap().1.clone();
+        assert_eq!((now.start, now.stretch), (start, 1.0));
+        assert!((now.length - len * 3 / 2).abs() <= 1, "{} vs {}", now.length, len * 3 / 2);
+        assert_ne!(now.source(), c.source(), "rendered to a new file, pitch kept");
+        // Back to the original length by the start edge: the end stays, it counts from the original.
+        let end = now.end();
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "start": end - len})).unwrap();
+        let back = e.session().find_clip(c.id).unwrap().1.clone();
+        assert_eq!(back.end(), end);
+        assert!((back.length - len).abs() <= 1);
+        // On a Varispeed track it is the speed.
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("track.elastic", &json!({"track": pad.0, "algorithm": "varispeed"})).unwrap();
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 2})).unwrap();
+        let vari = e.session().find_clip(c.id).unwrap().1.clone();
+        assert!((vari.stretch - 2.0).abs() < 1e-6 && vari.length == len * 2 && vari.source() == c.source());
+        assert!(e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start})).is_err(), "no length left");
+    }
 
     #[test]
     fn elastic_warp_renders_and_remove_warp_restores() {
@@ -416,6 +643,38 @@ mod tests {
         assert!((c.length as f64 - len0 as f64 * 0.5).abs() < 2.0);
         e.execute("clip.remove_warp", &json!({"clips": [cid]})).unwrap();
         assert_eq!(e.session().find_clip(ClipId(cid)).unwrap().1.length, len0);
+    }
+
+    /// Parity bug 14: Send to Back / Bring to Front leave the playlist in time order (they
+    /// change only the clips' layers).
+    #[test]
+    fn layer_commands_keep_the_playlist_in_time_order() {
+        let mut e = crate::demo::demo_engine();
+        let t = e.session().tracks.iter().find(|t| t.clips().len() > 1).map(|t| t.id).unwrap();
+        let before = e.session().track(t).unwrap().clips().to_vec();
+        let last = before.last().unwrap().id.0;
+        e.execute("clip.send_to_back", &json!({"clips": [last]})).unwrap();
+        e.execute("clip.bring_to_front", &json!({"clips": [before[0].id.0]})).unwrap();
+        let order = |c: &[soundcraft_model::Clip]| c.iter().map(|c| (c.id, c.start, c.length)).collect::<Vec<_>>();
+        assert_eq!(order(e.session().track(t).unwrap().clips()), order(&before));
+    }
+
+    /// Parity bug 12: Conform to Tempo on an Elastic track keeps the pitch (a rendered,
+    /// pitch-preserving stretch), not a varispeed ratio.
+    #[test]
+    fn conform_on_an_elastic_track_keeps_the_pitch() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id.0).unwrap();
+        e.execute("track.elastic", &json!({"track": pad, "algorithm": "polyphonic"})).unwrap();
+        let cid = e.session().track(TrackId(pad)).unwrap().clips()[0].id.0;
+        let len0 = e.session().find_clip(ClipId(cid)).unwrap().1.length;
+        let src0 = e.session().find_clip(ClipId(cid)).unwrap().1.source();
+        let bpm = e.session().tempo.tempo_at_tick(0);
+        e.execute("clip.conform_to_tempo", &json!({"clip": cid, "source_bpm": bpm * 1.25})).unwrap();
+        let c = e.session().find_clip(ClipId(cid)).unwrap().1.clone();
+        assert_eq!(c.stretch, 1.0, "no varispeed");
+        assert_ne!(c.source(), src0, "rendered to a new file");
+        assert!((c.length as f64 - len0 as f64 * 1.25).abs() < 2.0, "{} vs {}", c.length, len0);
     }
 
     /// A clip on an Elastic track playing `clip_len` samples of a source that is silent before `tone_at`.
@@ -458,6 +717,30 @@ mod tests {
     }
 
     #[test]
+    fn elastic_properties_off_an_elastic_track_changes_length_with_speed() {
+        // Bug: only the speed changed, so the tail was cut (slower) or ran into silence (faster).
+        use soundcraft_model::{ChannelFormat, Clip, Session, TrackKind};
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Plain"));
+        let samples = (0..20_000).map(|i| if i >= 19_000 { 0.5 } else { 0.0 }).collect();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![samples] };
+        let src = crate::io::add_source(&mut s, "Tail", buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let cid = s.new_clip_id();
+        crate::edit::place_clip(&mut s, t, Clip::audio(cid, "Clip", src, 0, 0, 20_000));
+        let mut e = crate::Engine::new(s);
+        e.execute("clip.elastic_properties", &json!({"clips": [cid.0], "ratio": 2.0})).unwrap();
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        assert_eq!((c.stretch, c.length), (2.0, 40_000));
+        assert!(rendered_peak(&e, t, cid) > 0.4, "the tail still plays");
+        // From the material's length, not the stretched one.
+        e.execute("clip.elastic_properties", &json!({"clips": [cid.0], "ratio": 0.5})).unwrap();
+        assert_eq!(e.session().find_clip(cid).unwrap().1.length, 10_000);
+        e.execute("clip.remove_warp", &json!({"clips": [cid.0]})).unwrap();
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        assert_eq!((c.stretch, c.length), (1.0, 20_000));
+    }
+
+    #[test]
     fn remove_warp_keeps_the_audio_when_the_original_file_is_gone() {
         let mut e = crate::demo::demo_engine();
         let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
@@ -469,6 +752,26 @@ mod tests {
         assert_eq!(r["restored"], 0);
         let src = e.session().find_clip(clip.id).and_then(|(_, c)| c.source()).unwrap();
         assert!(e.session().source(src).is_some());
+    }
+
+    #[test]
+    fn clip_gain_bypass_keeps_the_gain_and_toggles() {
+        // Bug: Bypass erased the gain and its envelope.
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        e.execute("clip.gain", &json!({"clips": [kick.0], "db": -9.0})).unwrap();
+        e.session_mut().find_clip_mut(kick).unwrap().gain_env = vec![(0, 0.0), (100, -3.0)];
+        let r = e.execute("clip.gain_bypass", &json!({"clips": [kick.0]})).unwrap();
+        assert_eq!(r["bypass"], true);
+        let c = e.session().find_clip(kick).unwrap().1.clone();
+        assert_eq!((c.gain_db, c.gain_env.len(), c.gain_bypass), (-9.0, 2, true));
+        assert_eq!(c.gain_at(c.length / 2), 1.0, "unheard while bypassed");
+        e.execute("clip.gain_bypass", &json!({"clips": [kick.0]})).unwrap();
+        let c = e.session().find_clip(kick).unwrap().1.clone();
+        assert!(!c.gain_bypass);
+        assert!(c.gain_at(c.length / 2) < 0.4, "heard again");
+        assert!(e.undo());
+        assert!(e.session().find_clip(kick).unwrap().1.gain_bypass);
     }
 
     #[test]

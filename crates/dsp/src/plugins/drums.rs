@@ -76,6 +76,8 @@ const OFF: f32 = 1.0e-4;
 #[derive(Debug, Clone, Copy)]
 struct DrumVoice {
     kind: Option<Kind>,
+    /// What the voice added on its last frame: a stolen voice fades from there (no click).
+    last: f32,
     vel: f32,
     t: usize,
     amp: f32,
@@ -98,6 +100,7 @@ impl DrumVoice {
     fn new(seed: u32) -> Self {
         Self {
             kind: None,
+            last: 0.0,
             vel: 0.0,
             t: 0,
             amp: 0.0,
@@ -131,6 +134,9 @@ pub struct DrumSynth {
     events: EventQueue,
     counter: u64,
     level: Smoother,
+    /// The sound of stolen voices, fading over a few milliseconds (see `last`).
+    declick: f32,
+    declick_coef: f32,
 }
 
 impl Default for DrumSynth {
@@ -145,8 +151,17 @@ impl DrumSynth {
         for (i, v) in voices.iter_mut().enumerate() {
             *v = DrumVoice::new(0xBEEF + i as u32 * 977);
         }
-        let mut d =
-            Self { p: Params::new(&DRUM_PARAMS), sr: 48_000.0, ch: 0, voices, events: EventQueue::new(), counter: 0, level: Smoother::new(0.5) };
+        let mut d = Self {
+            p: Params::new(&DRUM_PARAMS),
+            sr: 48_000.0,
+            ch: 0,
+            voices,
+            events: EventQueue::new(),
+            counter: 0,
+            level: Smoother::new(0.5),
+            declick: 0.0,
+            declick_coef: 0.0,
+        };
         d.update();
         d
     }
@@ -181,6 +196,9 @@ impl DrumSynth {
         let (hat, open, tom_tune, tom_decay, cym) = (v(6), v(7), semis(v(8)), v(9), v(10));
         let counter = self.counter;
         let Some(dv) = self.voices.get_mut(idx) else { return };
+        if dv.kind.is_some() {
+            self.declick += dv.last;
+        }
         let seed = dv.rng.next_u32();
         *dv = DrumVoice::new(seed);
         dv.kind = Some(kind);
@@ -295,9 +313,12 @@ impl DrumSynth {
                     let scale = if matches!(kind, Kind::Crash | Kind::Ride) { 1.0 } else { 1.9 };
                     let mut metal = 0.0;
                     for (m, f) in v.metal.iter_mut().zip(METAL) {
-                        *m += f * scale / sr;
+                        let dt = (f * scale / sr).clamp(0.0, 0.49);
+                        *m += dt;
                         *m -= m.floor();
-                        metal += if *m < 0.5 { 1.0 } else { -1.0 };
+                        // band-limited (PolyBLEP) squares: no aliasing folding down into the band
+                        let half = if *m + 0.5 >= 1.0 { *m - 0.5 } else { *m + 0.5 };
+                        metal += if *m < 0.5 { 1.0 } else { -1.0 } + crate::osc::poly_blep(*m, dt) - crate::osc::poly_blep(half, dt);
                     }
                     let raw = metal / 6.0 * (1.0 - v.noise_amp * 0.5) + v.rng.bipolar() * v.noise_amp;
                     let y = v.filt2.process_sample(v.filt.process_sample(raw)) * v.amp;
@@ -313,9 +334,12 @@ impl DrumSynth {
             if !alive {
                 v.kind = None;
             }
+            v.last = if alive { 0.5 * y * v.vel } else { 0.0 };
             out += y * v.vel;
         }
-        out * 0.5
+        let fade = self.declick;
+        self.declick = if fade.abs() < 1e-7 { 0.0 } else { fade * self.declick_coef };
+        out * 0.5 + fade
     }
 }
 
@@ -326,6 +350,7 @@ impl Plugin for DrumSynth {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
         self.level.set_time(20.0, self.sr);
+        self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
         self.update();
         self.reset();
     }
@@ -373,7 +398,12 @@ impl Plugin for DrumSynth {
     }
 
     fn tail_samples(&self) -> usize {
-        ms_to_samples(self.p.v(10).max(self.p.v(2)), self.sr) as usize
+        // The longest decay of any drum (each is "to -60 dB"), carried on to where a voice stops
+        // (`OFF`, -80 dB): a long open hat or tom outlasted the kick and crash it used to report.
+        let v = |i| self.p.v(i);
+        let longest = [v(2), v(5) * 0.6, v(6), v(7), v(9), v(10), 25.0].into_iter().fold(0.0f32, f32::max);
+        let to_off = OFF.ln() / 0.001f32.ln();
+        ms_to_samples(longest * to_off, self.sr) as usize
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -391,7 +421,7 @@ impl DrumSynth {
     fn apply(&mut self, kind: EventKind) {
         match kind {
             EventKind::On(n, v) => self.trigger(n, v),
-            EventKind::Off(_) | EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
+            EventKind::Off(_) | EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::Mod(_) | EventKind::ResetControllers => {}
             EventKind::AllOff => {
                 let fast = decay60(30.0, self.sr);
                 for v in &mut self.voices {
@@ -400,5 +430,76 @@ impl DrumSynth {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(d: &mut DrumSynth, len: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        let mut buf = vec![vec![0.0f32; 256]];
+        while out.len() < len {
+            d.process(&mut buf, 256);
+            out.extend_from_slice(&buf[0]);
+        }
+        out
+    }
+
+    /// Bug 26 of the MIDI writing parity list: a stolen drum voice stopped dead (a click); it
+    /// now fades out over a few milliseconds.
+    #[test]
+    fn a_stolen_voice_fades_instead_of_clicking() {
+        let mut d = DrumSynth::new();
+        d.prepare(48_000.0, 256, 1);
+        // long kicks fill every voice, then one more takes the oldest
+        d.set_param("kick_decay", 2000.0);
+        for i in 0..VOICES {
+            d.note_on(i, 36, 127);
+        }
+        let _ = run(&mut d, 4800);
+        let before = d.voices.iter().filter(|v| v.kind.is_some()).count();
+        assert_eq!(before, VOICES);
+        let steady = run(&mut d, 256);
+        let slope = steady.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        d.note_on(0, 42, 1);
+        let out = run(&mut d, 256);
+        let jump = out.windows(2).take(8).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 2.0 * slope + 1e-3, "a step of {jump} against the kicks' own {slope}");
+    }
+
+    /// Bug 27: the cymbals' six square waves were naive and folded their harmonics back down;
+    /// they are band-limited now. Measured on the squares alone: the output of a hat compared
+    /// with itself at four times the rate (where little folds), low-passed to the shared band.
+    #[test]
+    fn the_metal_squares_are_band_limited() {
+        let sq = |f: f32, sr: f32, n: usize, blep: bool| -> Vec<f32> {
+            let mut m = 0.0f32;
+            let dt = f / sr;
+            (0..n)
+                .map(|_| {
+                    m += dt;
+                    m -= m.floor();
+                    let half = if m + 0.5 >= 1.0 { m - 0.5 } else { m + 0.5 };
+                    let naive = if m < 0.5 { 1.0 } else { -1.0 };
+                    if blep { naive + crate::osc::poly_blep(m, dt) - crate::osc::poly_blep(half, dt) } else { naive }
+                })
+                .collect()
+        };
+        // the alias of the 7th harmonic of 7.2 kHz (50.4 kHz) lands at 2.4 kHz at 48 kHz, where
+        // the square itself has no partial: compare that bin
+        let bin = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, v) in x.iter().enumerate() {
+                let ph = std::f32::consts::TAU * hz * i as f32 / 48_000.0;
+                re += v * ph.cos();
+                im += v * ph.sin();
+            }
+            (re * re + im * im).sqrt() / x.len() as f32
+        };
+        let naive = bin(&sq(7_200.0, 48_000.0, 48_000, false), 2_400.0);
+        let blep = bin(&sq(7_200.0, 48_000.0, 48_000, true), 2_400.0);
+        assert!(blep < naive * 0.3, "alias at 2.4 kHz: {blep} against {naive}");
     }
 }

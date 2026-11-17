@@ -294,7 +294,9 @@ fn renamed_inputs_and_outputs_take_effect_on_the_next_block() {
 }
 
 #[test]
-fn no_input_route_reads_device_channel_one_on_both_sides() {
+fn no_input_route_reads_the_devices_first_channels_as_its_take_records() {
+    // A stereo track with no input hears In 1-2, the channels `plan_takes` records (it used to
+    // hear In 1 on both sides and record In 1-2).
     let mut s = Session::default();
     let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Mic"));
     let tr = s.track_mut(t).unwrap();
@@ -305,6 +307,13 @@ fn no_input_route_reads_device_channel_one_on_both_sides() {
     let mut eng = MixEngine::new(48_000.0, BLOCK);
     eng.input = device_input(2);
     eng.monitor_only = true;
+    let out = render_blocks(&mut eng, &s, 2);
+    let want = |c: usize| eng.input[soundcraft_model::default_input_channel(c, 2, 2)][100];
+    assert_eq!((soundcraft_model::default_input_channel(0, 2, 2), soundcraft_model::default_input_channel(1, 2, 2)), (0, 1));
+    assert!((out[0][100] - want(0)).abs() < 1e-6 && (out[1][100] - want(1)).abs() < 1e-6, "{} {}", out[0][100], out[1][100]);
+    assert!((out[0][100] - out[1][100]).abs() > 1e-3, "two different channels");
+    // A mono device: its one channel on both sides.
+    eng.input = device_input(1);
     let out = render_blocks(&mut eng, &s, 2);
     assert!(out[0][100] > 0.05 && (out[0][100] - out[1][100]).abs() < 1e-6, "{} {}", out[0][100], out[1][100]);
 }

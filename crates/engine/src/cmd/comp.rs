@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Comp",
             [],
             None,
-            "{track, start?, end? (else the edit selection), dir: up|down} (that comp range switches to the layer above/below with audio there)",
+            "{track, start?, end? (else the edit selection), dir: up|down} (that comp range switches to the layer above/below with a take there)",
             has_tracks,
             cycle
         ),
@@ -87,7 +87,7 @@ fn layer_name(tr: &Track, layer: usize) -> String {
     tr.playlists.get(layer).map_or_else(|| "That take".into(), |p| p.name.clone())
 }
 
-/// Whether layer `layer` has audio (a clip) in `r`.
+/// Whether layer `layer` has a take (an audio or MIDI clip) in `r`.
 pub fn layer_has_audio(tr: &Track, layer: usize, r: Range) -> bool {
     tr.playlists.get(layer).is_some_and(|p| p.clips_in(r).next().is_some())
 }
@@ -137,10 +137,15 @@ fn put(s: &mut Session, t: TrackId, layer: usize, r: Range) -> Vec<ClipId> {
 }
 
 /// The join at `x` on the comp: two pieces of one take that continue each other are healed into
-/// one clip; two different pieces get a short crossfade.
+/// one clip; two different pieces get a short crossfade. MIDI pieces get neither: the copy already
+/// ends the outgoing piece's notes at the join, and a note the incoming take held over it sounds
+/// from the join, as a held note would on an audio take.
 fn join_at(s: &mut Session, t: TrackId, x: Samples) {
     let Some(tr) = s.track(t) else { return };
     let (Some(a), Some(b)) = (tr.clips().iter().find(|c| c.end() == x), tr.clips().iter().find(|c| c.start == x)) else { return };
+    if matches!(a.content, soundcraft_model::ClipContent::Midi { .. }) || matches!(b.content, soundcraft_model::ClipContent::Midi { .. }) {
+        return;
+    }
     let continues = a.from_layer == b.from_layer
         && matches!((&a.content, &b.content), (soundcraft_model::ClipContent::Audio { source: sa, offset: oa }, soundcraft_model::ClipContent::Audio { source: sb, offset: ob }) if sa == sb && oa.saturating_add(a.length) == *ob);
     if continues {
@@ -159,7 +164,7 @@ pub fn swipe_range(s: &mut Session, t: TrackId, layer: usize, r: Range, add: boo
         return Err("give a range (`start` < `end`)".into());
     }
     if !layer_has_audio(tr, layer, r) {
-        return Err(format!("{} has no audio there", layer_name(tr, layer)));
+        return Err(format!("{} has nothing recorded there", layer_name(tr, layer)));
     }
     let parts: Vec<Range> = if add { comp_gaps(tr, r).into_iter().filter(|g| layer_has_audio(tr, layer, *g)).collect() } else { vec![r] };
     if parts.is_empty() {
@@ -215,7 +220,7 @@ fn cycle(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     let tr = e.session().track(t).ok_or_else(|| bad("comp.cycle", "no track"))?;
     let layer =
-        cycle_target(tr, r, down).ok_or_else(|| bad("comp.cycle", format!("no take {} has audio there", if down { "below" } else { "above" })))?;
+        cycle_target(tr, r, down).ok_or_else(|| bad("comp.cycle", format!("no take {} has anything there", if down { "below" } else { "above" })))?;
     let ids = swipe_range(e.session_mut(), t, layer, r, false).map_err(|m| bad("comp.cycle", m))?;
     Ok(json!({"clips": ids, "layer": layer}))
 }
@@ -263,9 +268,10 @@ fn first_take(s: &mut Session, t: TrackId) {
 }
 
 /// Whether recording on the track makes take layers: its layers are open, it has a record target
-/// or take layers. Other tracks record as playlists (a new playlist per loop pass).
+/// or take layers. Other tracks record as playlists (a new playlist per loop pass). Audio, MIDI
+/// and instrument tracks comp (MIDI ones also whenever the MIDI record mode is Keep Takes as Lanes).
 pub fn comping(tr: &Track) -> bool {
-    tr.kind == soundcraft_model::TrackKind::Audio
+    (tr.kind == soundcraft_model::TrackKind::Audio || tr.kind.is_midi())
         && (tr.layers_open || tr.record_layer.is_some() || tr.playlists.iter().any(|p| p.take_color.is_some()))
 }
 

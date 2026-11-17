@@ -20,9 +20,11 @@
 //!   so are the filter designs `prepare` never touches (the output EQ and the colour converters, with
 //!   their `lastLc` / `lastHc` / `coefColor`); the audio state (buffers, filter states, envelopes,
 //!   positions, the RNG) is cleared and the glides start at their targets (a Rust choice: the C++
-//!   leaves them mid-glide), so a reset renders the same whatever came before it. This also reproduces the C++ keeping the
-//!   constructor's 48 kHz output-EQ and colour coefficients at another rate until those knobs move
-//!   (`lastLc` / `lastHc` / `coefColor` already match the defaults), through `prepare` and `reset`.
+//!   leaves them mid-glide), so a reset renders the same whatever came before it. The C++ also
+//!   keeps the constructor's 48 kHz output-EQ coefficients at another rate until those knobs move
+//!   (`lastLc` / `lastHc` already match the defaults); FreeDAWm redesigns them at the rate
+//!   `prepare` is given (see `reverb_engine_dsp`), and [`ReverbEngine::cpp_reference`] keeps the
+//!   C++'s way for the fidelity test.
 //! - The host transport: `processBlock` hands the play head's `(playing, bpm)` to `setHostTransport`
 //!   when the host gives a position; [`ReverbEngine::set_transport`] does the same with the session's
 //!   tempo (20..999 BPM, else "none"). With Tempo Src on Host (the default) a synced pre-delay follows
@@ -175,6 +177,15 @@ impl ReverbEngine {
             in_peak: 0.0,
             out_peak: 0.0,
         }
+    }
+
+    /// The C++'s output-cut designs exactly (made at 48 kHz by the constructor, kept at other
+    /// rates until their knob moves), for the fidelity test.
+    pub fn cpp_reference() -> Self {
+        let mut p = Self::new();
+        p.dsp.set_cpp_designs(true);
+        p.dsp.restore_initial();
+        p
     }
 
     /// The top of `processBlock`: push only what moved (everything after a prepare), in order.

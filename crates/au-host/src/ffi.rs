@@ -44,6 +44,8 @@ const PROP_PARAMETER_VALUE_STRINGS: u32 = 16;
 const PROP_TAIL_TIME: u32 = 20;
 const PROP_SET_RENDER_CALLBACK: u32 = 23;
 const PROP_HOST_CALLBACKS: u32 = 27;
+/// `kAudioUnitProperty_OfflineRender` (UInt32, global): the unit renders faster than real time.
+const PROP_OFFLINE_RENDER: u32 = 37;
 
 const SCOPE_GLOBAL: u32 = 0;
 const SCOPE_INPUT: u32 = 1;
@@ -623,7 +625,11 @@ impl Instance {
     /// (Re)configures and initializes the unit for `sample_rate`, `max_frames`-frame slices and
     /// (preferably) `channels` channels on its main input and output buses. Returns the channel
     /// count it accepted. Not realtime-safe (allocates the buffers).
-    pub fn configure(&mut self, sample_rate: f64, max_frames: usize, channels: usize) -> Result<usize, String> {
+    ///
+    /// `offline` tells the unit whether it renders faster than real time (a bounce, freeze or
+    /// commit); units that care switch to their offline quality. Set while uninitialized, as the
+    /// property asks; a unit that does not support it is not refused.
+    pub fn configure(&mut self, sample_rate: f64, max_frames: usize, channels: usize, offline: bool) -> Result<usize, String> {
         if self.initialized {
             // SAFETY: the unit is live and initialized.
             unsafe { AudioUnitUninitialize(self.unit) };
@@ -632,6 +638,7 @@ impl Instance {
         self.max_frames = 0;
         let mf = max_frames.clamp(1, MAX_SLICE);
         let _ = self.set_property(PROP_MAX_FRAMES, SCOPE_GLOBAL, 0, &(mf as u32));
+        let _ = self.set_property(PROP_OFFLINE_RENDER, SCOPE_GLOBAL, 0, &u32::from(offline));
         if self.has_input {
             let cb = AuRenderCallbackStruct { input_proc: Some(input_callback), input_proc_ref_con: self.input.cast() };
             let st = self.set_property(PROP_SET_RENDER_CALLBACK, SCOPE_INPUT, 0, &cb);

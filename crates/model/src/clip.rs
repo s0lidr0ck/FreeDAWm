@@ -272,7 +272,85 @@ pub struct Clip {
     /// rendered to; empty for every other clip. `clip.remove_warp` clears them with the render.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warp: Vec<(Samples, Samples)>,
+    /// The one source channel this clip plays on every channel of its track (Split into Mono
+    /// makes these); `None` plays the source as it is: channel for channel, or a multichannel
+    /// source on a mono track at equal level ([`Clip::channel_taps`]). A channel the source does
+    /// not have plays as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel: Option<u16>,
+    /// Clip Gain › Bypass: the gain and its envelope are kept but not heard (fades still are).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gain_bypass: bool,
+    /// Clip Effects: the real-time EQ, compressor and gain settings (`eq.<param>`,
+    /// `comp.<param>`, `gain` → value), sorted by key. They belong to the clip, so a split's
+    /// pieces and every copy keep them. Sessions that kept them as `clip_fx.<clip>.*` edit
+    /// values are moved here by [`crate::Session::sanitize`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<(String, f64)>,
+    /// Clip Effects bypassed: kept but not heard.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub effects_bypass: bool,
+    /// A MIDI clip's playback quantize: its notes play quantized and stay where they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_quantize: Option<soundcraft_midi::ops::PlayQuantize>,
+    /// A MIDI clip following the chord lane: the chords its notes were last set against (ticks
+    /// from its start). `None`: it does not follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_chords: Option<Vec<soundcraft_midi::ops::FollowChord>>,
+    /// A MIDI clip's own transpose in semitones, applied as it plays (with its track's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub midi_transpose: i8,
+    /// A MIDI clip's own velocity offset, applied as it plays (with its track's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub midi_velocity: i8,
+    /// The playing notes' index for the scheduler (derived, never saved; refreshed by the engine
+    /// when the notes change, and used only for the notes it was made from).
+    #[serde(skip)]
+    pub midi_index: soundcraft_midi::NoteIndexSlot,
+    /// An audio clip played backwards, in real time (no new file): its window's last sample
+    /// first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reversed: bool,
+    /// An audio clip looped in real time: the first `loop_len` timeline samples of its material
+    /// repeat to fill the clip (dragging its edge with the loop trim repeats it). 0: no loop.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub loop_len: Samples,
+    /// Where in the loop the clip starts (a looped clip trimmed at its start keeps its beat).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub loop_phase: Samples,
+    /// An audio clip's transpose in cents (100 a semitone), heard in real time without changing
+    /// its length.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub transpose_cents: i32,
+    /// A shared (alias) MIDI clip: every clip with the same id plays the same notes and
+    /// controllers, and a note edit in one is made in all. `None`: an independent clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<u64>,
+    /// Where an audio clip sits among overlapping clips (Options › Overlap › Layer): where a
+    /// clip of a higher layer covers it, only the higher one is heard (its fades cross over to
+    /// this one), and this one is heard again where it is uncovered. Clips of the same layer
+    /// overlapping (a crossfade) play together. 0 for every clip placed in the Overwrite mode.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub layer: i32,
 }
+
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+
+fn is_zero_i32(v: &i32) -> bool {
+    *v == 0
+}
+
+/// The widest clip transpose, in cents (two octaves each way).
+pub const MAX_TRANSPOSE_CENTS: i32 = 2400;
+
+fn is_zero(v: &i8) -> bool {
+    *v == 0
+}
+
+/// The most Clip Effects settings a clip keeps (a hostile file is cut down to these).
+pub const MAX_CLIP_EFFECTS: usize = 256;
 
 fn one() -> f64 {
     1.0
@@ -307,7 +385,67 @@ impl Clip {
             tune: None,
             from_layer: None,
             warp: Vec::new(),
+            source_channel: None,
+            gain_bypass: false,
+            effects: Vec::new(),
+            effects_bypass: false,
+            play_quantize: None,
+            follow_chords: None,
+            midi_transpose: 0,
+            midi_velocity: 0,
+            midi_index: soundcraft_midi::NoteIndexSlot(None),
+            reversed: false,
+            loop_len: 0,
+            loop_phase: 0,
+            transpose_cents: 0,
+            shared: None,
+            layer: 0,
         }
+    }
+
+    /// The Clip Effects setting `key` (`eq.<param>`, `comp.<param>` or `gain`).
+    pub fn effect(&self, key: &str) -> Option<f64> {
+        self.effects.binary_search_by(|(k, _)| k.as_str().cmp(key)).ok().and_then(|i| self.effects.get(i)).map(|(_, v)| *v)
+    }
+
+    /// Set Clip Effects setting `key`, keeping them sorted; a non-finite value, or an empty or
+    /// overlong key, is ignored.
+    pub fn set_effect(&mut self, key: &str, value: f64) {
+        if !value.is_finite() || key.is_empty() || key.len() > 64 {
+            return;
+        }
+        match self.effects.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
+            Ok(i) => {
+                if let Some(e) = self.effects.get_mut(i) {
+                    e.1 = value;
+                }
+            }
+            Err(i) if self.effects.len() < MAX_CLIP_EFFECTS => self.effects.insert(i, (key.to_string(), value)),
+            Err(_) => {}
+        }
+    }
+
+    /// The Clip Effects to hear: none when bypassed or not set.
+    pub fn live_effects(&self) -> Option<&[(String, f64)]> {
+        (!self.effects_bypass && !self.effects.is_empty()).then_some(self.effects.as_slice())
+    }
+
+    /// How an audio clip's `nsrc`-channel source feeds a track of `ndst` channels: the number of
+    /// taps, and tap `i` as `(track channel, source channel, gain)`. A chosen
+    /// [`Clip::source_channel`] plays on every track channel; a multichannel source on a mono
+    /// track folds down at equal level (each channel `1/nsrc`, as a mono device folds the main
+    /// mix: `0.5·L + 0.5·R`); otherwise track channel `k` plays source channel `k mod nsrc`.
+    pub fn channel_taps(&self, nsrc: usize, ndst: usize) -> (usize, impl Fn(usize) -> (usize, usize, f32)) {
+        let chosen = self.source_channel.map(usize::from).filter(|c| *c < nsrc);
+        let fold = chosen.is_none() && ndst == 1 && nsrc > 1;
+        let count = if fold { nsrc } else { ndst };
+        let w = if fold { 1.0 / nsrc as f32 } else { 1.0 };
+        let n = nsrc.max(1);
+        (count, move |i: usize| match (chosen, fold) {
+            (Some(c), _) => (i, c, 1.0),
+            (None, true) => (0, i, w),
+            (None, false) => (i, i % n, 1.0),
+        })
     }
 
     pub fn midi(id: ClipId, name: impl Into<String>, start: Samples, length: Samples, sequence: Sequence) -> Clip {
@@ -394,14 +532,17 @@ impl Clip {
         self.gain_at_with_fades(rel, self.fade_in, self.fade_out)
     }
 
-    /// Evaluate temporary fades while retaining clip gain and its envelope.
+    /// Evaluate temporary fades while retaining clip gain and its envelope (unless bypassed).
     /// UI previews can use this without modifying the clip or rebuilding media.
     pub fn gain_at_with_fades(&self, rel: Samples, fade_in: Fade, fade_out: Fade) -> f32 {
-        let mut db = self.gain_db;
-        if !self.gain_env.is_empty() {
-            db += env_value(&self.gain_env, rel);
+        let mut g = 1.0;
+        if !self.gain_bypass {
+            let mut db = self.gain_db;
+            if !self.gain_env.is_empty() {
+                db += env_value(&self.gain_env, rel);
+            }
+            g = db_to_gain(db);
         }
-        let mut g = db_to_gain(db);
         if fade_in.len > 0 && rel < fade_in.len {
             g *= fade_in.gain(rel as f32 / fade_in.len as f32);
         }
@@ -412,12 +553,84 @@ impl Clip {
         g
     }
 
+    /// The clip-gain envelope of this clip followed by `next`'s (which starts where this one
+    /// ends), as one envelope over both that sounds as the two did apart: empty when both are.
+    pub fn joined_env(&self, next: &Clip) -> Vec<(Samples, f32)> {
+        if self.gain_env.is_empty() && next.gain_env.is_empty() {
+            return Vec::new();
+        }
+        let last = self.length.saturating_sub(1).max(0);
+        let mut out: Vec<(Samples, f32)> = self.gain_env.iter().copied().filter(|(t, _)| *t <= last).collect();
+        // Hold this clip's level to its last sample, then step to the next clip's first level.
+        if out.last().is_none_or(|(t, _)| *t < last) {
+            out.push((last, env_value(&self.gain_env, last)));
+        }
+        if next.gain_env.first().is_none_or(|(t, _)| *t > 0) {
+            out.push((self.length, env_value(&next.gain_env, 0)));
+        }
+        out.extend(next.gain_env.iter().map(|(t, v)| (t.saturating_add(self.length), *v)));
+        out
+    }
+
+    /// The stretch ratio playback applies to an audio clip (timeline samples per file sample):
+    /// [`Clip::stretch`] when it is usable, else 1. MIDI and video clips are never stretched.
+    pub fn stretch_ratio(&self) -> f64 {
+        if self.is_audio() && self.stretch.is_finite() && self.stretch > 0.0 { self.stretch } else { 1.0 }
+    }
+
+    /// How many file samples `timeline` samples of this clip play (rounded): the same number
+    /// unless the clip is stretched.
+    pub fn source_span(&self, timeline: Samples) -> Samples {
+        let r = self.stretch_ratio();
+        if (r - 1.0).abs() < 1e-9 { timeline } else { soundcraft_time::to_samples(timeline as f64 / r) }
+    }
+
+    /// How many timeline samples `file` samples of the source take in this clip (rounded): the
+    /// inverse of [`Clip::source_span`].
+    pub fn timeline_span(&self, file: Samples) -> Samples {
+        let r = self.stretch_ratio();
+        if (r - 1.0).abs() < 1e-9 { file } else { soundcraft_time::to_samples(file as f64 * r) }
+    }
+
+    /// Whether the clip reads its window straight through: not reversed, looped or transposed
+    /// (those read sample by sample: [`Clip::material_at`]).
+    pub fn plays_plain(&self) -> bool {
+        !self.reversed && self.loop_len <= 0 && self.transpose_cents == 0
+    }
+
+    /// The file position (fractional for a stretched clip) timeline sample `rel` of the clip
+    /// reads, through its loop and reverse.
+    pub fn material_at(&self, rel: Samples) -> f64 {
+        let looped = self.loop_len > 0 && self.is_audio();
+        let span = if looped { self.loop_len } else { self.length };
+        let mut m = if looped { rel.saturating_add(self.loop_phase).rem_euclid(self.loop_len) } else { rel };
+        if self.reversed && self.is_audio() {
+            m = span.saturating_sub(1).saturating_sub(m);
+        }
+        self.source_offset() as f64 + m as f64 / self.stretch_ratio()
+    }
+
+    /// The clip's transpose as a pitch ratio (1: none).
+    pub fn pitch_ratio(&self) -> f64 {
+        if !self.is_audio() || self.transpose_cents == 0 {
+            return 1.0;
+        }
+        2f64.powf(f64::from(self.transpose_cents.clamp(-MAX_TRANSPOSE_CENTS, MAX_TRANSPOSE_CENTS)) / 1200.0)
+    }
+
     /// Move the start edge to `new_start` keeping material anchored (trim start).
     pub fn trim_start_to(&mut self, new_start: Samples) {
         let new_start = new_start.min(self.end() - 1);
         let delta = new_start - self.start;
-        if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
-            *offset = offset.saturating_add(delta);
+        let file_delta = self.source_span(delta);
+        if self.loop_len > 0 {
+            // A loop keeps its material: the clip starts further into it.
+            self.loop_phase = self.loop_phase.saturating_add(delta).rem_euclid(self.loop_len);
+        } else if self.reversed {
+            // Reversed, the clip's start plays the window's end: the window loses its end, its
+            // start (the offset) stays.
+        } else if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
+            *offset = offset.saturating_add(file_delta);
         }
         // MIDI note ticks are re-anchored by the engine, which knows the tempo map; a MIDI clip's
         // lyrics (time from its start) follow here, the ones before the new start dropped as its
@@ -449,6 +662,14 @@ impl Clip {
     /// Move the end edge to `new_end`.
     pub fn trim_end_to(&mut self, new_end: Samples) {
         let new_end = new_end.max(self.start + 1);
+        if self.reversed
+            && self.loop_len <= 0
+            && let ClipContent::Audio { offset, .. } = &mut self.content
+        {
+            // Reversed, the clip's end plays the window's start: it moves with the end.
+            let file_delta = soundcraft_time::to_samples((self.length - (new_end - self.start)) as f64 / self.stretch.max(1e-6));
+            *offset = offset.saturating_add(file_delta);
+        }
         self.length = new_end - self.start;
         self.drop_stray_sync();
         self.clamp_fades();
@@ -505,6 +726,17 @@ impl Clip {
         if !self.stretch.is_finite() || self.stretch <= 0.0 {
             self.stretch = 1.0;
         }
+        self.loop_len = self.loop_len.clamp(0, MAX_POSITION);
+        self.loop_phase = if self.loop_len > 0 { self.loop_phase.rem_euclid(self.loop_len) } else { 0 };
+        self.transpose_cents = self.transpose_cents.clamp(-MAX_TRANSPOSE_CENTS, MAX_TRANSPOSE_CENTS);
+        if !self.is_audio() {
+            (self.reversed, self.loop_len, self.loop_phase, self.transpose_cents) = (false, 0, 0, 0);
+        }
+        // Clip Effects: finite values, sorted, one per key, a bounded number of short keys.
+        self.effects.retain(|(k, v)| v.is_finite() && !k.is_empty() && k.len() <= 64);
+        self.effects.sort_by(|a, b| a.0.cmp(&b.0));
+        self.effects.dedup_by(|a, b| a.0 == b.0);
+        self.effects.truncate(MAX_CLIP_EFFECTS);
     }
 }
 
@@ -548,7 +780,16 @@ mod tests {
 
     fn cleanup_clip() -> Clip {
         let mut seq = Sequence::default();
-        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 100 });
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 60,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 100,
+        });
         Clip::midi(ClipId(1), "m", 0, 1000, seq)
     }
 
@@ -570,7 +811,16 @@ mod tests {
     fn midi_playing_follows_switch() {
         let mut c = cleanup_clip();
         let mut cleaned = Sequence::default();
-        cleaned.notes.push(soundcraft_midi::Note { pitch: 72, velocity: 90, release_velocity: 64, channel: 0, start: 0, length: 50 });
+        cleaned.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 72,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 50,
+        });
         let preview = std::sync::Arc::new(CleanupPreview {
             inputs: 7,
             out: CleanupOutput { sequence: cleaned.clone(), edits: Vec::new(), report: Default::default() },

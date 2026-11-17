@@ -658,21 +658,22 @@ fn reset_keeps_the_machine_no_flush() {
 }
 
 #[test]
-fn reset_keeps_the_filter_designs_prepare_keeps() {
-    // The C++ `prepare` never redesigns the output EQ or the colour converters: at 44.1 kHz with the
-    // default cuts (and the 1970s colour, designed once its fade allows) the designs in force after
-    // the first prepare and block stay through every reset.
+fn reset_keeps_the_filter_designs() {
+    // A reset keeps the output EQ and colour designs in force (the C++ `prepare` never touches
+    // them): at 44.1 kHz with the default cuts (and the 1970s colour, designed once its fade
+    // allows) the designs after the first prepare and block stay through every reset. They are
+    // 44.1 kHz designs (the C++ would still hold the constructor's 48 kHz ones; see
+    // `filter_responses_are_the_same_at_every_rate`).
     let mut s = ReverbEngine::new();
     s.set_param("color", 0.0);
     s.prepare(44_100.0, 512, 2);
     warm(&mut s, 4096, 0.5);
     let want = s.engine().filter_designs();
-    // They are the constructor's 48 kHz output-EQ designs, not 44.1 kHz ones.
     let mut at48 = ReverbEngine::new();
     at48.set_param("color", 0.0);
     at48.prepare(48_000.0, 512, 2);
     warm(&mut at48, 4096, 0.5);
-    assert_eq!(want[..4], at48.engine().filter_designs()[..4]);
+    assert_ne!(want[..4], at48.engine().filter_designs()[..4]);
     for _ in 0..3 {
         warm(&mut s, 3000, 0.7);
         s.reset();
@@ -684,6 +685,82 @@ fn reset_keeps_the_filter_designs_prepare_keeps() {
     s.set_param("lowCut", 0.5);
     warm(&mut s, 512, 0.7);
     assert_ne!(s.engine().filter_designs()[0], want[0]);
+}
+
+/// The magnitude response in dB of a biquad `[b0, b1, b2, a1, a2]` at `f` Hz and rate `sr`.
+fn biquad_db(c: [f32; 5], f: f64, sr: f64) -> f64 {
+    let [b0, b1, b2, a1, a2] = c.map(f64::from);
+    let w = std::f64::consts::TAU * f / sr;
+    let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());
+    let num = (b0 + b1 * c1 + b2 * c2).hypot(-b1 * s1 - b2 * s2);
+    let den = (1.0 + a1 * c1 + a2 * c2).hypot(-a1 * s1 - a2 * s2);
+    20.0 * (num / den).log10()
+}
+
+/// The output EQ's and the colour converters' responses (dB) at `freqs`, each chain's sections
+/// summed: low cut, high cut, colour in (two sections), colour out.
+fn chains_db(designs: &[[f32; 5]], freqs: &[f64], sr: f64) -> Vec<[f64; 4]> {
+    let d = |i: usize, f: f64| designs.get(i).map_or(f64::NAN, |c| biquad_db(*c, f, sr));
+    freqs.iter().map(|&f| [d(0, f), d(2, f), d(4, f) + d(5, f), d(8, f)]).collect()
+}
+
+/// The designs in force after a prepare at `sr` and a few blocks, with `color` (and the default
+/// cuts, which are what the C++ leaves at their 48 kHz designs).
+fn designs_at(mut s: ReverbEngine, sr: f32, color: f32) -> Vec<[f32; 5]> {
+    s.set_param("color", color);
+    s.prepare(sr, 512, 2);
+    warm(&mut s, 8192, 0.5);
+    s.engine().filter_designs()
+}
+
+#[test]
+fn filter_responses_are_the_same_at_every_rate() {
+    // Regression: the output cuts kept the coefficients the constructor computed for 48 kHz
+    // (until their knob moved), so at 96 kHz they sat at about twice their frequency and at
+    // 44.1 kHz 8% low. Now they are designed at the rate in use: the responses at 44.1 and 96 kHz
+    // match 48 kHz's within 0.25 dB up to 5 kHz and 1 dB up to 10 kHz (the bilinear transform
+    // bends the top octaves differently at each rate), and within 0.05 dB at the corners.
+    let freqs = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 8000.0, 10_000.0];
+    for color in [0.0, 1.0] {
+        let want = chains_db(&designs_at(ReverbEngine::new(), 48_000.0, color), &freqs, 48_000.0);
+        for sr in [44_100.0f32, 96_000.0] {
+            let got = chains_db(&designs_at(ReverbEngine::new(), sr, color), &freqs, f64::from(sr));
+            for ((f, w), g) in freqs.iter().zip(&want).zip(&got) {
+                let tol = if *f <= 5000.0 { 0.25 } else { 1.0 };
+                // the output cuts (the colour converters bend differently near the top at each
+                // rate, in both builds alike: the bilinear transform, not stale coefficients)
+                for (chain, (a, b)) in w.iter().zip(g).enumerate().take(2) {
+                    assert!((a - b).abs() < tol, "colour {color}, {sr} Hz, chain {chain} at {f} Hz: {b:.2} dB vs {a:.2} dB at 48 kHz");
+                }
+            }
+            // the corners: the low cut's, the high cut's, the colour filters'
+            let lc = super::reverb_engine_dsp::knob_to_low_cut_hz(0.3544);
+            let hc = super::reverb_engine_dsp::knob_to_high_cut_hz(0.8295);
+            let corners = [lc, hc, if color == 0.0 { 8000.0 } else { 13_000.0 }, if color == 0.0 { 8000.0 } else { 14_000.0 }];
+            let at = |designs: &[[f32; 5]], rate: f64| -> Vec<f64> {
+                corners.iter().enumerate().map(|(i, &f)| chains_db(designs, &[f], rate)[0][i]).collect()
+            };
+            let w = at(&designs_at(ReverbEngine::new(), 48_000.0, color), 48_000.0);
+            let g = at(&designs_at(ReverbEngine::new(), sr, color), f64::from(sr));
+            for (i, (a, b)) in w.iter().zip(&g).enumerate() {
+                assert!((a - b).abs() < 0.05, "colour {color}, {sr} Hz, corner {i}: {b:.3} vs {a:.3} dB");
+            }
+            // The C++'s way (the fidelity build): its cuts still hold the 48 kHz designs (the bug,
+            // pinned: at 96 kHz its high cut is far off at the corner), while its colour converters
+            // are already this rate's. That half of the old claim did not hold for this port:
+            // Color's default (Now) has none, so they are first made when Color is chosen.
+            let cpp = designs_at(ReverbEngine::cpp_reference(), sr, color);
+            let ours = designs_at(ReverbEngine::new(), sr, color);
+            assert_ne!(cpp[..4], ours[..4], "{sr}");
+            assert_eq!(cpp[4..], ours[4..], "{sr}: the colour converters");
+            let (c, o) = (chains_db(&cpp, &[hc], f64::from(sr))[0][1], chains_db(&ours, &[hc], f64::from(sr))[0][1]);
+            if sr > 90_000.0 {
+                assert!((c - o).abs() > 1.0, "{sr}: the C++'s high cut at its corner {c:.2} dB, ours {o:.2}");
+            }
+        }
+    }
+    // At 48 kHz nothing changes: the designs are the C++'s.
+    assert_eq!(designs_at(ReverbEngine::new(), 48_000.0, 0.0), designs_at(ReverbEngine::cpp_reference(), 48_000.0, 0.0));
 }
 
 #[test]

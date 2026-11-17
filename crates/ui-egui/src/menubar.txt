@@ -46,6 +46,7 @@ File > Export > Lyrics as Text...
 File > Export > Session Info as Text...
 File > Export > Selected Tracks as New Session...
 File > Export > DAWproject...
+File > Export > Movie (ProRes)... = @file.bounce_movie [desktop]
 File > Export > ---
 File > Export > Stems... = @file.bounce_stems
 File > Export > Clips... = @file.export_clips
@@ -96,6 +97,7 @@ Edit > Selection > Change Timeline to Match Edit
 Edit > Selection > Change Edit to Match Timeline
 Edit > Selection > Play Edit
 Edit > Selection > Play Timeline
+Edit > Selection > Pause or Resume = @transport.pause
 Edit > Selection > ---
 Edit > Selection > Move Edit Left
 Edit > Selection > Move Edit Right
@@ -250,6 +252,9 @@ View > Mix Window Views > Minimal
 View > Mix Window Views > ---
 View > Mix Window Views > Plugin Editors as in the VST
 View > Mix Window Views > Slim Plugin Editors
+View > Mix Window Views > Plugin Editors Larger
+View > Mix Window Views > Plugin Editors Smaller
+View > Mix Window Views > Plugin Editors at Actual Size
 View > Narrow Mix
 View > Channel Width > Slim = @ui.mix.width.slim
 View > Channel Width > Wide = @ui.mix.width.wide
@@ -328,10 +333,6 @@ Track > Change Track Width > More > ---
 Track > Change Track Width > More > 1st Order Ambisonics = Track > Change Track Width > 1st Order Ambisonics
 Track > Change Track Width > More > 2nd Order Ambisonics = Track > Change Track Width > 2nd Order Ambisonics
 Track > Change Track Width > More > 3rd Order Ambisonics = Track > Change Track Width > 3rd Order Ambisonics
-Track > Change Track Width > More > 4th Order Ambisonics = Track > Change Track Width > 4th Order Ambisonics
-Track > Change Track Width > More > 5th Order Ambisonics = Track > Change Track Width > 5th Order Ambisonics
-Track > Change Track Width > More > 6th Order Ambisonics = Track > Change Track Width > 6th Order Ambisonics
-Track > Change Track Width > More > 7th Order Ambisonics = Track > Change Track Width > 7th Order Ambisonics
 Track > Split into Mono
 Track > Instrument = !instrument
 Track > ---
@@ -381,6 +382,9 @@ Clip > Capture = Clip > Capture...
 Clip > Rename...
 Clip > Loop = Clip > Loop...
 Clip > Unloop = Clip > Unloop...
+Clip > Duplicate as Shared Copy = @clip.share
+Clip > Make Independent = @clip.make_independent
+Clip > Export Clip as MIDI... = @file.export_clip_midi
 Clip > ---
 Clip > ## Order & groups
 Clip > Send to Back
@@ -408,9 +412,13 @@ Clip > Clip Effects > Render
 Clip > ---
 Clip > ## Timing & pitch
 Clip > Quantize to Grid
+Clip > Quantize Audio... = @ui.quantize_audio
 Clip > Conform to Tempo
 Clip > Identify Sync Point
 Clip > Elastic Properties
+Clip > Real-Time > Transpose... = @clip.transpose
+Clip > Real-Time > Reverse in Place = @clip.play_reversed
+Clip > Real-Time > Loop in Place... = @clip.loop_in_place
 Clip > Remove > Sync Point = Clip > Remove Sync Point
 Clip > Remove > Warp = Clip > Remove Warp
 Clip > Remove > Pitch Shift = Clip > Remove Pitch Shift
@@ -433,7 +441,9 @@ Event > Snap Notes to Scale = @midi.snap_to_scale
 Event > More MIDI > Change Velocity... = @event.change_velocity
 Event > More MIDI > Select/Split Notes = Event > MIDI Operations > Select/Split Notes...
 Event > More MIDI > Input Quantize = Event > MIDI Operations > Input Quantize...
-Event > More MIDI > Step Input = Event > MIDI Operations > Step Input...
+Event > More MIDI > Step Input... = @window.step_input
+Event > More MIDI > Capture MIDI = @ui.capture_midi [desktop]
+Event > More MIDI > Undo Last Pass = @ui.midi_undo_pass [desktop]
 Event > More MIDI > Restore Performance = Event > MIDI Operations > Restore Performance...
 Event > More MIDI > Flatten Performance = Event > MIDI Operations > Flatten Performance...
 Event > More MIDI > ---
@@ -504,6 +514,7 @@ AI > ## Transcribe [desktop]
 AI > Convert to MIDI… [desktop]
 AI > Detect Chords… [desktop]
 AI > Transcribe Lyrics… [desktop]
+AI > Find in Transcript… = @lyrics.find
 AI > MIDI Cleanup…
 AI > --- [desktop]
 AI > ## Generate [desktop]
@@ -514,6 +525,10 @@ Options > ## Recording & playback
 Options > Click
 Options > Loop Playback
 Options > Loop Record
+Options > QuickPunch
+Options > Record Mode > Replace
+Options > Record Mode > Keep Takes as Lanes
+Options > Record Mode > New Playlist per Take
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Monitoring > Ear Correction = @monitor.ear
@@ -538,18 +553,42 @@ Options > Solo Mode > SIP (Solo In Place)
 Options > Solo Mode > X-OR (Cancels Previous Solo)
 Options > ---
 Options > ## Timing & keys
+Options > Snap > Clip Edges = @edit.snap_to_clips
+Options > Snap > Markers = @edit.snap_to_markers
+Options > Snap > Zero Crossings = @edit.snap_to_zero_crossings
+Options > Overlap > Overwrite = @edit.overlap_mode
+Options > Overlap > Layer = @edit.overlap_mode
+Options > Overlap > Crossfade = @edit.overlap_mode
 Options > Delay Compensation
 Options > Edit/Tool Mode Keyboard Lock
 Options > ---
 Options > More > Prepare DPE Tracks = Options > Prepare DPE Tracks
+Options > More > Pre-Fader Metering = Options > Pre-Fader Metering
+Options > More > Pre-Fader Sends Ignore Mute = @mix.pre_sends_ignore_mute
+Options > More > Suspend All Groups = @track.suspend_groups
+Options > More > Default Send Level > Silent = @mix.default_send_level
+Options > More > Default Send Level > 0 dB = @mix.default_send_level
+Options > More > Thin Automation After Pass
+Options > More > Pan Law > 0 dB = @mix.pan_law
+Options > More > Pan Law > -3 dB = @mix.pan_law
+Options > More > Pan Law > -4.5 dB = @mix.pan_law
+Options > More > Pan Law > -6 dB = @mix.pan_law
+Options > More > Automatic Edge Fades = Options > Automatic Edge Fades
+Options > More > Varispeed... = @transport.varispeed
+Options > More > Varispeed Keeps Pitch = @transport.varispeed_keep_pitch
+Options > More > Shuttle > Back = @transport.shuttle_back
+Options > More > Shuttle > Stop = @transport.shuttle_stop
+Options > More > Shuttle > Forward = @transport.shuttle_forward
 
 Setup > ## Audio
 Setup > Playback Engine...
 Setup > I/O...
 Setup > ---
 Setup > ## Recording & MIDI
-Setup > Click/Countoff... = soon
-Setup > MIDI Input Devices... = @window.midi_inputs
+Setup > Click/Countoff... = @window.click_countoff
+Setup > MIDI Input Devices... = @window.midi_inputs [desktop]
+Setup > Control Surfaces... = @window.control_surfaces [desktop]
+Setup > MIDI Mappings... = @window.midi_mappings [desktop]
 Setup > Network... = @window.network [desktop]
 Setup > ---
 Setup > ## Session & keys
@@ -578,11 +617,14 @@ Window > Vocal Editor
 Window > Vocal Studio = @window.vocal_studio
 Window > Score Editor
 Window > MIDI Event List
-Window > Musical Typing
+Window > Musical Typing [desktop]
 Window > ---
 Window > ## Transport & session
 Window > Transport
 Window > Big Counter
+Window > Loudness Meter = @window.loudness
+Window > Mix Snapshots = @window.mix_snapshots
+Window > Control Room = @window.control_room
 Window > Memory Locations
 Window > Notes = @window.notes
 Window > Lyrics = @window.lyrics
@@ -623,4 +665,5 @@ Window > More > ---
 Window > More > Task Manager = Window > Task Manager
 Window > More > Disk Usage = Window > Disk Usage
 Window > More > System Usage = Window > System Usage
+Window > More > Tour of FreeDAWm = Window > Tour of FreeDAWm
 Window > More > Close All Workspaces = Window > Workspaces > Close All Workspaces

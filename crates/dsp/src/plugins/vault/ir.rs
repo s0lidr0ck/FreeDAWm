@@ -134,20 +134,20 @@ impl SpaceIr {
         }
         let cut: Vec<Vec<f32>> = used.iter().map(|c| c.get(..frames).unwrap_or(&[]).to_vec()).collect();
         let mut samples = crate::offline::resample(&cut, file_rate.round() as u32, rate.round() as u32);
-        // Trim what is 80 dB under the peak at both ends (every channel by the same amount).
+        // Trim what is 80 dB under the peak at the end (every channel by the same amount). The
+        // start is kept: the gap before the first reflection is part of the space.
         let peak = samples.iter().flatten().fold(0.0f32, |m, x| m.max(x.abs()));
         if !(peak.is_finite() && peak > 1.0e-9) {
             return Err("the file is silent".into());
         }
         let len = samples.iter().map(Vec::len).min().unwrap_or(0);
         let loud = |i: usize| samples.iter().any(|c| c.get(i).is_some_and(|x| x.abs() >= peak * 1.0e-4));
-        let start = (0..len).find(|&i| loud(i)).unwrap_or(0);
-        let end = (start..len).rev().find(|&i| loud(i)).map_or(start + 1, |i| i + 1);
+        let end = (0..len).rev().find(|&i| loud(i)).map_or(1, |i| i + 1);
         let limit = (MAX_IR_SECONDS * rate).floor() as usize;
-        let keep = (end - start).min(limit).max(1);
-        let fade = if end - start > limit { (0.05 * rate) as usize } else { 0 };
+        let keep = end.min(limit).max(1);
+        let fade = if end > limit { (0.05 * rate) as usize } else { 0 };
         for c in &mut samples {
-            *c = c.get(start..start + keep).unwrap_or(&[]).to_vec();
+            *c = c.get(..keep).unwrap_or(&[]).to_vec();
             let n = c.len();
             for (i, x) in c.iter_mut().enumerate().skip(n.saturating_sub(fade)) {
                 *x *= (n - i) as f32 / (fade + 1) as f32;
@@ -242,7 +242,9 @@ mod tests {
         c.extend(decay(30_000, 0.37));
         c.extend(vec![0.0f32; 5000]);
         let ir = SpaceIr::new(&[c.clone(), c.iter().map(|x| x * 0.5).collect()], 48_000.0, 48_000.0).unwrap();
-        assert!(ir.len() < 30_000 && ir.len() > 20_000, "{}", ir.len());
+        // The 1000 samples before the first reflection stay; the quiet end goes.
+        assert!(ir.len() <= 31_000 && ir.len() > 21_000, "{}", ir.len());
+        assert!(ir.channel(0).unwrap()[..1000].iter().all(|x| *x == 0.0));
         let e: f32 = ir.channel(0).unwrap().iter().map(|x| x * x).sum();
         assert!((e.sqrt() - LEVEL).abs() < 1.0e-3, "the louder channel at the level: {}", e.sqrt());
         let e1: f32 = ir.channel(1).unwrap().iter().map(|x| x * x).sum();

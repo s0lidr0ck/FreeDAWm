@@ -46,7 +46,7 @@ pub const FIXED: &[(&str, &str, &[&str])] = &[
     ("`", "Next Edit mode", &["`"]),
     ("F5–F10", "Tools: Zoom, Trim, Selector, Grabber, Scrubber, Pencil", &["F5", "F6", "F7", "F8", "F9", "F10"]),
     ("Tab / Alt+Tab", "Tab to next / previous (Shift extends)", &["Tab", "Shift+Tab", "Alt+Tab", "Alt+Shift+Tab"]),
-    ("+ / −", "Nudge later / earlier (Edit window)", &["Plus", "Minus"]),
+    ("= or keypad + / −", "Nudge later / earlier (Edit window)", &["=", "Plus", "Minus"]),
     ("Shift+= / Shift+−", "Grid value up / down (Edit window)", &["Shift+=", "Shift+Minus", "Shift+Plus"]),
     ("Alt+Shift+= / Alt+Shift+−", "Nudge value up / down (Edit window)", &["Alt+Shift+=", "Alt+Shift+Minus", "Alt+Shift+Plus"]),
     ("Cmd+=", "Mix / Edit window", &["Cmd+="]),
@@ -480,6 +480,8 @@ fn fixed(app: &mut SoundApp, window: MainWindow, key: Key, m: Modifiers, mac: bo
             let _ = app.run(if m.alt { "view.nudge" } else { "view.grid" }, json!({"step": step}));
             true
         }
+        // Held to talk, while the session has a control room with a talkback input.
+        Key::F11 if plain && crate::control_room::talk_key(app) => true,
         Key::F12 if plain => {
             let _ = app.run("transport.record", json!({}));
             true
@@ -512,6 +514,11 @@ fn fixed(app: &mut SoundApp, window: MainWindow, key: Key, m: Modifiers, mac: bo
                 _ => "pencil",
             };
             let _ = app.run("edit.tool", json!({"tool": tool}));
+            true
+        }
+        // "+" on a US keyboard is Shift+=, the Grid key above, so the unshifted "=" beside "−" nudges later too.
+        Key::Equals if plain && window == MainWindow::Edit => {
+            let _ = app.run("edit.nudge", json!({"direction": 1}));
             true
         }
         Key::Plus | Key::Minus if !m.command && window == MainWindow::Edit => {

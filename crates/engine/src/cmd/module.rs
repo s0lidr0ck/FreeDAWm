@@ -35,6 +35,24 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("mix.module_bypass", "Bypass Module", [], None, "{track?, module: id, value?: bool} → {bypass}", has_selection, module_bypass),
         cmd!(
+            "mix.module_active",
+            "Module Active",
+            [],
+            None,
+            "{track?, module: id, value?: bool} — an inactive module does not run (its CPU is free) and passes the signal through; toggles when omitted → {active}",
+            has_selection,
+            module_active
+        ),
+        cmd!(
+            "mix.module_post_fader",
+            "Post-Fader",
+            [],
+            None,
+            "{track?, module: id, value?: bool} — the module runs after the fader and mute (not in the pre-fader sends; never frozen); toggles when omitted → {post_fader}",
+            has_selection,
+            module_post_fader
+        ),
+        cmd!(
             "mix.module_param",
             "Set Module Parameter",
             [],
@@ -395,6 +413,26 @@ fn module_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
     do_bypass(e, C, t, module_id(C, p)?, p.get("value").and_then(Value::as_bool))
 }
 
+fn module_active(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_active";
+    let t = first_track(e, C, p)?;
+    let ins = find_mut(e, C, t, module_id(C, p)?)?;
+    ins.active = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.active);
+    Ok(json!({"active": ins.active}))
+}
+
+fn module_post_fader(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_post_fader";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    if e.session().track(t).and_then(|tr| tr.mixer.module(id)).is_none() {
+        return Err(bad(C, "only a chain module can run after the fader"));
+    }
+    let ins = find_mut(e, C, t, id)?;
+    ins.post_fader = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.post_fader);
+    Ok(json!({"post_fader": ins.post_fader}))
+}
+
 fn module_param(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "mix.module_param";
     let t = first_track(e, C, p)?;
@@ -553,6 +591,22 @@ mod tests {
 
     fn ids(e: &Engine, i: usize) -> Vec<u64> {
         e.session().tracks[i].mixer.inserts.iter().map(|x| u64::from(x.id.0)).collect()
+    }
+
+    /// Tier 3: a module can be made inactive (it stops running) and active again, one undo step
+    /// each; the mix engine already skips an inactive module.
+    #[test]
+    fn a_module_can_be_made_inactive() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"format": "stereo"})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let a = e.execute("mix.module_add", &json!({"track": t, "plugin": "compressor"})).unwrap()["module"].as_u64().unwrap();
+        assert_eq!(e.execute("mix.module_active", &json!({"track": t, "module": a})).unwrap()["active"], false);
+        assert!(!e.session().tracks[0].mixer.inserts[0].active);
+        assert_eq!(e.execute("mix.module_active", &json!({"track": t, "module": a, "value": true})).unwrap()["active"], true);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!e.session().tracks[0].mixer.inserts[0].active);
+        assert!(e.execute("mix.module_active", &json!({"track": t, "module": 999})).is_err());
     }
 
     #[test]
@@ -1056,8 +1110,12 @@ mod tests {
         assert!(err(&mut e, json!({"track": b, "module": mb, "source": b})).contains("cycle"));
         assert_eq!(sidechain_of(&e, 1), None, "a refused sidechain is not stored");
         assert_eq!(e.undo_history().len(), undo, "and leaves no undo step");
-        // A track can't wait for an aux; an aux can take a key from a track.
-        assert!(err(&mut e, json!({"track": b, "module": mb, "source": x})).contains("aux"));
+        // A track can wait for an aux (it renders after it), unless that closes a loop; an aux
+        // can take a key from a track.
+        e.execute("mix.module_sidechain", &json!({"track": b, "module": mb, "source": x})).unwrap();
+        assert!(err(&mut e, json!({"track": x, "module": mx, "source": b})).contains("cycle"));
+        assert!(err(&mut e, json!({"track": x, "module": mx, "source": a})).contains("cycle"), "A waits for B, which waits for X");
+        e.execute("mix.module_sidechain", &json!({"track": b, "module": mb, "source": null})).unwrap();
         e.execute("mix.module_sidechain", &json!({"track": x, "module": mx, "source": a})).unwrap();
         // Bad parameters.
         assert!(err(&mut e, json!({"track": a, "module": ma})).contains("`source` required"));

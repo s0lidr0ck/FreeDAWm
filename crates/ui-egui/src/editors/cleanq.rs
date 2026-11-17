@@ -630,6 +630,12 @@ fn guides_as_var(g: &Guides) -> Option<Value> {
     (!g.is_empty()).then(|| json!({"guides": g.to_json()}))
 }
 
+/// The extra block a CleanQ user preset carries (its ceiling's guides), as the editor's Save
+/// writes it, for a save from the narrow drawer.
+pub(crate) fn preset_extra(ctx: &egui::Context, track: soundcraft_model::TrackId, ins: &soundcraft_model::Insert) -> Option<(&'static str, Value)> {
+    guides_as_var(&cc::state_of(ctx, track, ins).guides).map(|v| ("cleanq", v))
+}
+
 // ============================================================================ the editor
 fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {
     let ed = host.rect;

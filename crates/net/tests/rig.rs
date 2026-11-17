@@ -327,7 +327,9 @@ impl Rig {
     /// A booth with an armed vocal track and a track on the piano PC's port; a piano PC with
     /// nothing set up (it arms a Piano track itself) whose clock runs `ppm` fast.
     fn new(ppm: f64, outbox: Option<std::path::PathBuf>) -> Rig {
-        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), ..NetConfig::default() }, None);
+        // The rig's PCs follow over the plain link: the booth takes them there (Take PCs over
+        // the encrypted link only, on by default, turned off).
+        let hub = Hub::new(NetConfig { pc_name: "Booth".into(), encrypted_only: false, ..NetConfig::default() }, None);
         let port = hub.listen(0).unwrap();
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let booth_clock = SimClock::new(1.0);
@@ -1112,4 +1114,50 @@ fn two_pcs_meet_through_the_public_relays() {
         }
     }
     hub.stop_internet();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Talkback over the mix stream
+
+#[test]
+fn talkback_reaches_the_performer_while_both_are_stopped_and_the_next_take_still_lands() {
+    let root = std::env::temp_dir().join(format!("freedawm-talkback-{}", std::process::id()));
+    let mut rig = audio_rig(150.0, &root, None);
+    let tap = Arc::new(soundcraft_playback::stream::MixTap::default());
+    let input = Arc::new(soundcraft_playback::stream::StreamIn::default());
+    rig.hub.set_tap(Some(Arc::clone(&tap)), 48_000);
+    rig.follower.set_stream(true, Some(Arc::clone(&input)), 48_000);
+    rig.run_until("connected", Duration::from_secs(20), |r| r.follower.connected());
+    let end = Instant::now() + Duration::from_secs(5);
+    while rig.hub.stream_listeners() == 0 {
+        assert!(Instant::now() < end, "the performer asks for the mix");
+        rig.frame();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The booth is stopped. Silence with no talkback sends nothing; the talk key sends the voice
+    // (a 300 Hz tone here), which the performer hears while he is stopped too.
+    for _ in 0..40 {
+        tap.push_block(&[0.0; 256], &[0.0; 256], 256, 0, 0, false);
+    }
+    let voice: Vec<f32> = (0..256 * 400).map(|i| 0.2 * (std::f32::consts::TAU * 300.0 * i as f32 / 48_000.0).sin()).collect();
+    let (mut heard, mut sent) = (0.0f32, 0);
+    let until = Instant::now() + Duration::from_secs(10);
+    while heard < 0.1 {
+        assert!(Instant::now() < until, "the talkback reached the performer");
+        if let Some(block) = voice.get(sent * 256..(sent + 1) * 256) {
+            tap.push_block_talk(block, block, 256, 0, 0, false, true);
+            sent += 1;
+        }
+        rig.frame();
+        let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+        input.mix_into(&mut l, &mut r, 256, 0, false);
+        heard = heard.max(l.iter().fold(0.0f32, |m, x| m.max(x.abs())));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(heard < 0.3, "the voice at its own level ({heard})");
+    // Talk ends; the next take, heard through the same stream, lands where he played.
+    stream_take(&mut rig, 0, 0);
+    rig.follower.stop();
+    rig.hub.stop();
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -287,8 +287,9 @@ pub fn parse_pitch(text: &str) -> Option<i64> {
 /// "F4 · 34.1.1 · len 1.0.0 · vel 96 · ch 1": a note of the clip starting at session tick `base`.
 pub fn note_details(s: &Session, base: i64, n: &Note) -> String {
     let start = base.saturating_add(n.start);
+    let chance = if n.probability < 100 { format!(" · {} %", n.probability) } else { String::new() };
     format!(
-        "{} · {} · len {} · vel {} · ch {}",
+        "{} · {} · len {} · vel {} · ch {}{chance}",
         soundcraft_midi::note_name(n.pitch),
         position_text(s, start),
         bbt_len(&s.tempo, start, n.length),
@@ -609,7 +610,23 @@ pub fn space(app: &mut SoundApp, cid: ClipId) {
 
 /// Select all: every note of the clip (ghosts never).
 pub fn select_all(app: &mut SoundApp, cid: ClipId) {
-    app.midi.selected = (0..clip_notes(app.engine.session(), cid).len()).collect();
+    let s = app.engine.session();
+    // The notes in the clip's window: not those a start trim hid before it.
+    app.midi.selected = clip_notes(s, cid).iter().enumerate().filter(|(_, n)| n.start >= 0).map(|(i, _)| i).collect();
+}
+
+/// The notes in the clip's window that are not in `selected`.
+pub fn inverted_selection(seq: &soundcraft_midi::Sequence, selected: &[usize]) -> Vec<usize> {
+    seq.notes.iter().enumerate().filter(|(i, n)| n.start >= 0 && !selected.contains(i)).map(|(i, _)| i).collect()
+}
+
+/// `selected` and every other note in the clip's window of a pitch among them (or of `pitch`).
+pub fn same_pitch_selection(seq: &soundcraft_midi::Sequence, selected: &[usize], pitch: Option<u8>) -> Vec<usize> {
+    let pitches: Vec<u8> = match pitch {
+        Some(p) => vec![p],
+        None => selected.iter().filter_map(|i| seq.notes.get(*i)).map(|n| n.pitch).collect(),
+    };
+    seq.notes.iter().enumerate().filter(|(i, n)| selected.contains(i) || (n.start >= 0 && pitches.contains(&n.pitch))).map(|(i, _)| i).collect()
 }
 
 /// Split: the selected notes at `at` (ticks from the clip start), else at the playhead.
@@ -661,7 +678,16 @@ pub fn press_key(app: &mut SoundApp, cid: ClipId, pitch: u8) {
     let Some((_, clip)) = s.find_clip(cid) else { return };
     let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
     let len = s.tempo.samples_to_ticks(clip.end(), s.sample_rate).saturating_sub(base).max(1);
-    let note = Note { pitch: pitch.min(127), velocity: app.midi.last_velocity, release_velocity: 64, channel: 0, start: 0, length: len };
+    let note = Note {
+        probability: 100,
+        pitch: pitch.min(127),
+        velocity: app.midi.last_velocity,
+        muted: false,
+        release_velocity: 64,
+        channel: 0,
+        start: 0,
+        length: len,
+    };
     let Some((copy, from, _)) = crate::midi_editor::audition_session(&s, cid, &[note]) else { return };
     let to = from.saturating_add((KEY_HOLD_S * s.sample_rate.as_f64()) as i64).min(clip.end());
     crate::midi_editor::start_audition(app, copy, from, to);
@@ -674,8 +700,147 @@ pub fn release_key(app: &mut SoundApp) {
     }
 }
 
-/// The piano keys left of the roll: a press plays the key's note until the button goes up;
-/// dragging along the keys glides from note to note.
+/// The drum names of a track's instrument, by pitch: Juke's pads (each pad's name on its trigger
+/// note), the drum synth's General MIDI names; `None` for other instruments (no drum view).
+pub fn drum_names(track: &soundcraft_model::Track) -> Option<Vec<Option<String>>> {
+    let ins = track.instrument.as_ref()?;
+    let mut names: Vec<Option<String>> = vec![None; 128];
+    match ins.plugin.as_str() {
+        "juke" => {
+            for pad in (0..soundcraft_dsp::plugins::juke::PADS).rev() {
+                let note = usize::from(crate::juke_window::pad_note(ins, pad));
+                if let Some(slot) = names.get_mut(note) {
+                    *slot = Some(soundcraft_engine::cmd::juke::pad_layout(ins, pad).name);
+                }
+            }
+        }
+        "drum_synth" => {
+            for (p, slot) in (0u8..).zip(names.iter_mut()) {
+                *slot = soundcraft_midi::gm_drum_name(p).map(str::to_string);
+            }
+        }
+        _ => return None,
+    }
+    Some(names)
+}
+
+/// The rows the drum view keeps: the pitches with notes, and with `all` every named drum.
+pub fn drum_mask(names: &[Option<String>], seq: &soundcraft_midi::Sequence, all: bool) -> u128 {
+    let mut m: u128 = 0;
+    for n in seq.notes.iter().filter(|n| n.start >= 0) {
+        m |= 1u128 << u32::from(n.pitch.min(127));
+    }
+    if all || m == 0 {
+        for (p, name) in (0u32..128).zip(names) {
+            if name.is_some() {
+                m |= 1u128 << p;
+            }
+        }
+    }
+    m
+}
+
+/// A chord the Pencil can stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chord {
+    Major,
+    Minor,
+    Seventh,
+    MajorSeventh,
+    MinorSeventh,
+    Sus4,
+    Diminished,
+    Augmented,
+    /// The triad the key's scale builds on the root (every other scale tone).
+    InKey,
+}
+
+impl Chord {
+    pub const ALL: [Chord; 9] = [
+        Chord::Major,
+        Chord::Minor,
+        Chord::Seventh,
+        Chord::MajorSeventh,
+        Chord::MinorSeventh,
+        Chord::Sus4,
+        Chord::Diminished,
+        Chord::Augmented,
+        Chord::InKey,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Chord::Major => "Major",
+            Chord::Minor => "Minor",
+            Chord::Seventh => "7",
+            Chord::MajorSeventh => "Maj7",
+            Chord::MinorSeventh => "m7",
+            Chord::Sus4 => "Sus4",
+            Chord::Diminished => "Dim",
+            Chord::Augmented => "Aug",
+            Chord::InKey => "Triad in Key",
+        }
+    }
+
+    /// The semitones above the root; `key` (pitch class, scale) for the triad in key.
+    pub fn intervals(self, root: i32, key: Option<(u8, u8)>) -> Vec<i32> {
+        match self {
+            Chord::Major => vec![0, 4, 7],
+            Chord::Minor => vec![0, 3, 7],
+            Chord::Seventh => vec![0, 4, 7, 10],
+            Chord::MajorSeventh => vec![0, 4, 7, 11],
+            Chord::MinorSeventh => vec![0, 3, 7, 10],
+            Chord::Sus4 => vec![0, 5, 7],
+            Chord::Diminished => vec![0, 3, 6],
+            Chord::Augmented => vec![0, 4, 8],
+            Chord::InKey => {
+                let (k, sc) = key.unwrap_or((0, 0));
+                let deg_pitch = |d: i32| i32::from(k) + soundcraft_band::chord_theory::scale_offset(i32::from(sc), d);
+                // The scale degree at or just below the root, then two thirds up.
+                let d0 = (-14..=140).rev().find(|d| deg_pitch(*d) <= root).unwrap_or(0);
+                let base = deg_pitch(d0);
+                vec![0, deg_pitch(d0 + 2) - base, deg_pitch(d0 + 4) - base]
+            }
+        }
+    }
+}
+
+/// The notes the Pencil writes for `note`: it alone, or `chord` built on it (notes off the
+/// keyboard dropped).
+pub fn stamp(chord: Option<Chord>, key: Option<(u8, u8)>, note: Note) -> Vec<Note> {
+    let Some(c) = chord else { return vec![note] };
+    let root = i32::from(note.pitch);
+    c.intervals(root, key).into_iter().filter_map(|i| u8::try_from(root + i).ok().filter(|p| *p <= 127)).map(|pitch| Note { pitch, ..note }).collect()
+}
+
+/// The pitch nearest `p` whose class is in `set` (the lower one on a tie), within the keyboard.
+pub fn nearest_in(set: soundcraft_vocal::PitchClassSet, p: i32) -> i32 {
+    (0..12).flat_map(|d| [p - d, p + d]).find(|q| (0..=127).contains(q) && set.contains(q.rem_euclid(12) as u8)).unwrap_or(p)
+}
+
+/// The rows a roll folded to `set` keeps: the scale's pitches and every pitch a note has.
+pub fn fold_mask(set: soundcraft_vocal::PitchClassSet, seq: &soundcraft_midi::Sequence) -> u128 {
+    let mut m: u128 = 0;
+    for p in 0..=127u32 {
+        if set.contains((p % 12) as u8) {
+            m |= 1u128 << p;
+        }
+    }
+    for n in &seq.notes {
+        m |= 1u128 << u32::from(n.pitch.min(127));
+    }
+    m
+}
+
+/// The selection after a press on the piano key `pitch`: the notes of that pitch (in the clip's
+/// window); added to `selected` with Shift held, or while a press glides on from key to key.
+pub fn key_selection(seq: &soundcraft_midi::Sequence, selected: &[usize], pitch: u8, add: bool) -> Vec<usize> {
+    same_pitch_selection(seq, if add { selected } else { &[] }, Some(pitch))
+}
+
+/// The piano keys left of the roll: a press plays the key's note until the button goes up and
+/// selects the notes of that pitch (Shift: adds them); dragging along the keys glides from note
+/// to note, adding each key's notes.
 pub fn piano_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, keys: Rect, pitch_at: &dyn Fn(f32) -> i32) {
     let resp = ui.interact(keys, ui.id().with(("midi_keys", cid.0)), Sense::click_and_drag());
     let down = resp.is_pointer_button_down_on() || resp.dragged();
@@ -683,6 +848,9 @@ pub fn piano_keys(app: &mut SoundApp, ui: &Ui, cid: ClipId, keys: Rect, pitch_at
         (true, Some(p)) => {
             let pitch = pitch_at(p.y).clamp(0, 127) as u8;
             if app.midi.piano_key != Some(pitch) {
+                let add = app.midi.piano_key.is_some() || ui.input(|i| i.modifiers.shift);
+                let seq = soundcraft_midi::Sequence { notes: clip_notes(app.engine.session(), cid), ctrls: Vec::new() };
+                app.midi.selected = key_selection(&seq, &app.midi.selected, pitch, add);
                 press_key(app, cid, pitch);
             }
         }

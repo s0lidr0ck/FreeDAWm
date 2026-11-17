@@ -38,6 +38,8 @@ pub const IR_KEY: &str = "vaultIr";
 pub const MAX_PREDELAY_MS: f32 = 250.0;
 /// How long the reverb takes to fade out and back in around a new response, in ms.
 const SWAP_FADE_MS: f32 = 15.0;
+/// How long a Pre-delay change crossfades from the old delay to the new one, in ms.
+const PRE_FADE_MS: f32 = 20.0;
 /// Low Cut and High Cut at these ends are out of the path.
 const LOW_CUT_OFF_HZ: f32 = 20.0;
 const HIGH_CUT_OFF_HZ: f32 = 20_000.0;
@@ -112,6 +114,11 @@ pub struct Vault {
     fade: f32,
     decay_set: f32,
     delay: [DelayLine; 2],
+    /// The Pre-delay in samples, the one a change crossfades from, and how far along that is (1:
+    /// done). A change waits for the crossfade before it to finish.
+    pre: usize,
+    pre_from: usize,
+    pre_xf: f32,
     low: [Biquad; 2],
     high: [Biquad; 2],
     cuts: (f32, f32),
@@ -146,6 +153,9 @@ impl Vault {
             fade: 1.0,
             decay_set: f32::NAN,
             delay: Default::default(),
+            pre: 0,
+            pre_from: 0,
+            pre_xf: 1.0,
             low: [flat(), flat()],
             high: [flat(), flat()],
             cuts: (f32::NAN, f32::NAN),
@@ -165,9 +175,21 @@ impl Vault {
         self.out.set(db_to_gain(self.p.v(P_OUT)));
     }
 
+    /// The loaded response, if it is usable here: one made for the rate Vault runs at (a response
+    /// made for another rate would play pitched and stretched; the host hands over one for the
+    /// new rate).
+    fn usable(&self) -> Option<&Arc<dyn SampleSource>> {
+        self.loaded.as_ref().filter(|a| as_space(a.as_ref()).is_some() && (a.sample_rate() - self.sr).abs() < 0.5)
+    }
+
     /// The response in use: the loaded one if it is usable, else the built-in space.
     fn active(&self) -> Option<&Arc<dyn SampleSource>> {
-        self.loaded.as_ref().filter(|a| as_space(a.as_ref()).is_some()).or(self.fallback.as_ref())
+        self.usable().or(self.fallback.as_ref())
+    }
+
+    /// The Pre-delay the knob asks for, in samples (within the line).
+    fn pre_target(&self) -> usize {
+        (ms_to_samples(self.p.v(P_PREDELAY), self.sr).round() as usize).min(self.delay[0].max_delay() as usize)
     }
 
     fn release(&mut self, ir: Arc<dyn SampleSource>) {
@@ -215,6 +237,7 @@ impl Vault {
             self.install();
             self.swap = Swap::In;
         }
+        let target = self.pre_target();
         let Some(active) = self.active().cloned() else { return };
         let Some(ir) = as_space(active.as_ref()) else { return };
         let Some(conv) = self.conv.as_mut() else { return };
@@ -225,15 +248,24 @@ impl Vault {
         }
         // The convolution's input: the mono sum or the two sides, after the Pre-delay.
         let (nin, nout) = (conv.inputs(), conv.outputs());
-        let pre = (ms_to_samples(self.p.v(P_PREDELAY), self.sr).round() as usize).min(self.delay[0].max_delay() as usize);
+        // A Pre-delay change crossfades between the two taps (no click, no pitch sweep).
+        if self.pre_xf >= 1.0 && target != self.pre {
+            (self.pre_from, self.pre, self.pre_xf) = (self.pre, target, 0.0);
+        }
+        let pre_step = 1.0 / (PRE_FADE_MS * 0.001 * self.sr).max(1.0);
         let clean = |x: f32| if x.is_finite() { x } else { 0.0 };
         for i in 0..n {
             let l = clean(io[0][at + i]);
             let r = if ch > 1 { clean(io[1][at + i]) } else { l };
             let feed = if nin == 1 { [0.5 * (l + r), 0.0] } else { [l, r] };
+            let x = self.pre_xf;
             for c in 0..nin {
                 self.delay[c].push(feed[c]);
-                self.input[c][i] = self.delay[c].tap(pre + 1);
+                let now = self.delay[c].tap(self.pre + 1);
+                self.input[c][i] = if x < 1.0 { self.delay[c].tap(self.pre_from + 1) * (1.0 - x) + now * x } else { now };
+            }
+            if x < 1.0 {
+                self.pre_xf = (x + pre_step).min(1.0);
             }
         }
         conv.process(ir, &self.input, &mut self.wet, n);
@@ -307,6 +339,7 @@ impl Plugin for Vault {
         self.install();
         (self.swap, self.fade, self.peak) = (Swap::Steady, 1.0, 0.0);
         self.delay.iter_mut().for_each(DelayLine::clear);
+        (self.pre, self.pre_from, self.pre_xf) = (self.pre_target(), 0, 1.0);
         self.low.iter_mut().chain(&mut self.high).for_each(Biquad::reset);
         for s in [&mut self.mix, &mut self.width, &mut self.out] {
             s.snap();
@@ -338,7 +371,7 @@ impl Plugin for Vault {
         let active = self.active();
         out[0] = active.map_or(0.0, |a| a.frames() as f32 / a.sample_rate().max(1.0));
         out[1] = active.map_or(0.0, |a| a.num_channels() as f32);
-        out[2] = if self.loaded.as_ref().is_some_and(|a| as_space(a.as_ref()).is_some()) { 1.0 } else { 0.0 };
+        out[2] = if self.usable().is_some() { 1.0 } else { 0.0 };
         out[3] = gain_to_db(self.peak);
     }
 
@@ -518,6 +551,67 @@ mod tests {
         v.set_asset(IR_KEY, Some(Arc::clone(&a)));
         v.set_asset(IR_KEY, Some(Arc::clone(&b)));
         assert!(std::ptr::addr_eq(Arc::as_ptr(&v.take_released_asset().unwrap()), Arc::as_ptr(&a)));
+    }
+
+    /// Built-in effects parity, bug 11: after a rate change Vault played the response made for the
+    /// old rate (pitched and stretched) until the host sent one for the new rate.
+    #[test]
+    fn a_response_made_for_another_rate_is_not_played() {
+        let h: Vec<f32> = (0..2000).map(|i| if i == 700 { 1.0 } else { 0.0 }).collect();
+        let a = asset(&[h]);
+        let mut v = vault(&[("mix", 100.0)]);
+        v.set_asset(IR_KEY, Some(Arc::clone(&a)));
+        v.reset();
+        assert_eq!(readouts(&v)[2], 1.0);
+        v.prepare(96_000.0, BLOCK, 2);
+        assert_eq!(readouts(&v)[2], 0.0, "the built-in space until the host sends the 96 kHz one");
+        let x = click(4096);
+        let (l, _) = run(&mut v, &x, &x);
+        assert!(l[700].abs() < 0.1 * l.iter().fold(0.0f32, |m, v| m.max(v.abs())), "not the 48 kHz response's spike");
+        v.prepare(SR, BLOCK, 2);
+        assert_eq!(readouts(&v)[2], 1.0, "back at its rate it plays again");
+    }
+
+    /// Bug 12: Pre-delay moved in whole-sample steps with no smoothing, so automating it clicked.
+    #[test]
+    fn a_predelay_change_crossfades() {
+        let h: Vec<f32> = (0..2000).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+        let a = asset(&[h]);
+        let mut v = vault(&[("mix", 100.0), ("predelay", 10.0)]);
+        v.set_asset(IR_KEY, Some(Arc::clone(&a)));
+        v.reset();
+        let x: Vec<f32> = (0..48_000).map(|i| 0.5 * (i as f32 * 0.02).sin()).collect();
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        for (k, (a, b)) in x.chunks(BLOCK).zip(x.chunks(BLOCK)).enumerate() {
+            // A sweep, one step a block, as automation sends it.
+            v.set_param("predelay", 10.0 + (k as f32 * 1.7) % 40.0);
+            let mut io = vec![a.to_vec(), b.to_vec()];
+            v.process(&mut io, a.len());
+            l.extend_from_slice(&io[0]);
+            r.extend_from_slice(&io[1]);
+        }
+        let jump = l.windows(2).skip(2048).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let smooth = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 2.0 * smooth, "no click: {jump} against the signal's own {smooth}");
+    }
+
+    /// Bug 13: the silence before a response's first reflection was trimmed, so a response that
+    /// holds its own pre-delay lost it.
+    #[test]
+    fn the_gap_before_the_first_reflection_is_kept() {
+        let mut h = vec![0.0f32; 3000];
+        h[1200] = 1.0;
+        h[1800] = 0.5;
+        let a = asset(&[h]);
+        let ir = as_space(a.as_ref()).unwrap().channel(0).unwrap();
+        assert_eq!(ir.iter().position(|x| x.abs() > 0.0), Some(1200));
+        let mut v = vault(&[("mix", 100.0)]);
+        v.set_asset(IR_KEY, Some(Arc::clone(&a)));
+        v.reset();
+        let x = click(4096);
+        let (l, _) = run(&mut v, &x, &x);
+        let first = l.iter().position(|s| s.abs() > 1.0e-3).unwrap();
+        assert_eq!(first, 1200);
     }
 
     #[test]

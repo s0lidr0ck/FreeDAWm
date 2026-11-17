@@ -14,13 +14,21 @@ pub(crate) enum EventKind {
     Off(u8),
     AllOff,
     Sustain(bool),
-    /// Pitch bend as a frequency ratio.
+    /// Pitch bend, -1..1 (the instrument's Bend Range is a full throw).
     Bend(f32),
+    /// The mod wheel (CC 1), 0..1.
+    Mod(f32),
     ResetControllers,
 }
 
-/// Pitch bend range, semitones each way.
-const BEND_RANGE: f32 = 2.0;
+/// A pitch-bend message's position, -1..1 (the centre 0).
+pub(crate) fn bend_of(d1: u8, d2: u8) -> f32 {
+    let v = (i32::from(d2 & 0x7F) << 7 | i32::from(d1 & 0x7F)) - 8192;
+    (v as f32 / 8192.0).clamp(-1.0, 1.0)
+}
+
+/// The vibrato the mod wheel brings in (the synth's; the sampler uses its own LFO), Hz.
+const VIBRATO_HZ: f32 = 5.5;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Event {
@@ -78,7 +86,7 @@ fn wave(i: usize) -> Waveform {
     }
 }
 
-static SYNTH_PARAMS: [ParamInfo; 19] = [
+static SYNTH_PARAMS: [ParamInfo; 21] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
     choice("osc2_wave", "Osc 2", WAVES, 0),
     lin("osc2_semitones", "Osc 2 Pitch", -24.0, 24.0, 0.0, Unit::Semitones),
@@ -98,7 +106,12 @@ static SYNTH_PARAMS: [ParamInfo; 19] = [
     lin("glide", "Glide", 0.0, 1000.0, 0.0, Unit::Ms),
     lin("velocity", "Velocity Sens", 0.0, 100.0, 70.0, Unit::Percent),
     lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
+    // The pitch bend's throw each way, and the vibrato (cents each way) the mod wheel brings in.
+    lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
+    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
 ];
+const BEND_RANGE: usize = 19;
+const MOD_WHEEL: usize = 20;
 
 pub static SYNTH_INFO: PluginInfo = PluginInfo {
     id: "subtractive_synth",
@@ -274,8 +287,19 @@ pub struct SubtractiveSynth {
     counter: u64,
     level: Smoother,
     cutoff: Smoother,
+    /// Oscillator 2's tuning in semitones (with its detune), the oscillator mix, the filter's
+    /// damping (from the resonance) and the filter envelope's amount in octaves: smoothed, so
+    /// moving them does not step.
+    tune2: Smoother,
+    mix: Smoother,
+    damping: Smoother,
+    env_oct: Smoother,
     sustain: bool,
+    /// The bend's position (-1..1) and the mod wheel's (0..1).
     bend: f32,
+    wheel: f32,
+    /// The vibrato's phase (0..1).
+    vib_phase: f32,
 }
 
 impl Default for SubtractiveSynth {
@@ -303,8 +327,14 @@ impl SubtractiveSynth {
             counter: 0,
             level: Smoother::new(0.5),
             cutoff: Smoother::new(2000.0),
+            tune2: Smoother::new(0.0),
+            mix: Smoother::new(0.0),
+            damping: Smoother::new(2.0),
+            env_oct: Smoother::new(0.0),
             sustain: false,
-            bend: 1.0,
+            bend: 0.0,
+            wheel: 0.0,
+            vib_phase: 0.0,
         };
         s.update();
         s
@@ -319,6 +349,10 @@ impl SubtractiveSynth {
         self.glide_coef = if glide < 0.5 { 0.0 } else { crate::util::time_coef(glide / 3.0, sr) };
         self.level.set(db_to_gain(v(18)));
         self.cutoff.set(v(5));
+        self.tune2.set(v(2) + v(3) / 100.0);
+        self.mix.set(v(4) / 100.0);
+        self.damping.set(2.0 - 1.95 * (v(6) / 100.0));
+        self.env_oct.set(v(7) / 100.0 * 6.0);
     }
 
     fn start_note(&mut self, note: u8, vel: u8) {
@@ -407,12 +441,24 @@ impl SubtractiveSynth {
                 }
             }
             EventKind::Sustain(on) => self.set_sustain(on),
-            EventKind::Bend(ratio) => self.bend = ratio,
+            EventKind::Bend(b) => self.bend = if b.is_finite() { b.clamp(-1.0, 1.0) } else { 0.0 },
+            EventKind::Mod(m) => self.wheel = if m.is_finite() { m.clamp(0.0, 1.0) } else { 0.0 },
             EventKind::ResetControllers => {
                 self.set_sustain(false);
-                self.bend = 1.0;
+                self.bend = 0.0;
+                self.wheel = 0.0;
             }
         }
+    }
+
+    /// How far the bend (over Bend Range) and the mod wheel's vibrato move the pitch now, cents.
+    #[inline]
+    fn pitch_cents(&self) -> f32 {
+        let mut cents = self.bend * self.p.v(BEND_RANGE) * 100.0;
+        if self.wheel > 0.0 {
+            cents += self.p.v(MOD_WHEEL) * self.wheel * (std::f32::consts::TAU * self.vib_phase).sin();
+        }
+        cents
     }
 
     #[inline]
@@ -420,13 +466,16 @@ impl SubtractiveSynth {
         let sr = self.sr;
         let w1 = wave(self.p.choice(0));
         let w2 = wave(self.p.choice(1));
-        let ratio2 = 2f32.powf((self.p.v(2) + self.p.v(3) / 100.0) / 12.0);
-        let mix = self.p.v(4) / 100.0;
-        let k = 2.0 - 1.95 * (self.p.v(6) / 100.0);
-        let env_oct = self.p.v(7) / 100.0 * 6.0;
+        let ratio2 = 2f32.powf(self.tune2.next() / 12.0);
+        let mix = self.mix.next();
+        let k = self.damping.next();
+        let env_oct = self.env_oct.next();
         let cutoff = self.cutoff.next();
         let nyq = sr * 0.45;
-        let bend = self.bend;
+        // the bend over its range, and the mod wheel's vibrato, as one frequency ratio
+        let cents = self.pitch_cents();
+        self.vib_phase = (self.vib_phase + VIBRATO_HZ / sr).fract();
+        let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
         let mut out = 0.0;
         for v in &mut self.voices {
             if !v.active() {
@@ -459,6 +508,9 @@ impl Plugin for SubtractiveSynth {
         self.ch = sane_channels(channels);
         self.level.set_time(20.0, self.sr);
         self.cutoff.set_time(20.0, self.sr);
+        for s in [&mut self.tune2, &mut self.mix, &mut self.damping, &mut self.env_oct] {
+            s.set_time(20.0, self.sr);
+        }
         self.update();
         self.reset();
     }
@@ -471,8 +523,13 @@ impl Plugin for SubtractiveSynth {
         self.last_freq = None;
         self.level.snap();
         self.cutoff.snap();
+        for s in [&mut self.tune2, &mut self.mix, &mut self.damping, &mut self.env_oct] {
+            s.snap();
+        }
         self.sustain = false;
-        self.bend = 1.0;
+        self.bend = 0.0;
+        self.wheel = 0.0;
+        self.vib_phase = 0.0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -511,7 +568,8 @@ impl Plugin for SubtractiveSynth {
     }
 
     fn tail_samples(&self) -> usize {
-        ms_to_samples(self.p.v(11), self.sr) as usize
+        // The release is "to -60 dB"; a voice rings on to `SILENT` (-100 dB).
+        ms_to_samples(self.p.v(11) * (SILENT.ln() / 0.001f32.ln()), self.sr) as usize
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -528,10 +586,8 @@ impl Plugin for SubtractiveSynth {
             (0xB0, 64) => EventKind::Sustain(d2 >= 64),
             (0xB0, 120 | 123) => EventKind::AllOff,
             (0xB0, 121) => EventKind::ResetControllers,
-            (0xE0, _) => {
-                let v = (i32::from(d2 & 0x7F) << 7 | i32::from(d1 & 0x7F)) - 8192;
-                EventKind::Bend(2f32.powf(v as f32 / 8192.0 * BEND_RANGE / 12.0))
-            }
+            (0xB0, 1) => EventKind::Mod(f32::from(d2 & 0x7F) / 127.0),
+            (0xE0, _) => EventKind::Bend(bend_of(d1, d2)),
             _ => return,
         };
         self.events.push(offset, kind);
@@ -555,5 +611,81 @@ mod tests {
         }
         assert_eq!((q.ev.len(), q.dropped()), (MAX_EVENTS, 7));
         assert_eq!(q.ev.capacity(), cap, "never reallocated");
+    }
+
+    /// Bug 28: the oscillator mix, resonance, detune and envelope amount glide to a new value
+    /// instead of stepping; once settled they are exactly the parameter's value.
+    #[test]
+    fn mix_resonance_detune_and_envelope_amount_are_smoothed() {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 2);
+        assert_eq!(s.mix.value(), 0.5);
+        assert!(s.set_param("osc_mix", 100.0) && s.set_param("resonance", 100.0));
+        s.note_on(0, 60, 100);
+        let mut io = vec![vec![0.0f32; 64]; 2];
+        s.process(&mut io, 64);
+        assert!(s.mix.value() > 0.5 && s.mix.value() < 0.95, "{}", s.mix.value());
+        for _ in 0..2_000 {
+            s.process(&mut io, 64);
+        }
+        assert_eq!((s.mix.value(), s.damping.value()), (1.0, 2.0 - 1.95));
+    }
+
+    /// Doc 07: Bend Range sets the bend's throw; the mod wheel brings in a vibrato up to Mod Wheel
+    /// Vibrato, none with the wheel down; resetting the controllers centres both.
+    #[test]
+    fn bend_range_and_the_mod_wheel() {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 2);
+        let mut io = vec![vec![0.0f32; 64]; 2];
+        let swing = |s: &mut SubtractiveSynth, io: &mut Vec<Vec<f32>>| {
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            for _ in 0..400 {
+                s.process(io, 64);
+                lo = lo.min(s.pitch_cents());
+                hi = hi.max(s.pitch_cents());
+            }
+            (lo, hi)
+        };
+        s.midi(0, [0xE0, 0x7F, 0x7F]);
+        s.process(&mut io, 64);
+        assert!((s.pitch_cents() - 200.0).abs() < 0.1, "two semitones by default: {}", s.pitch_cents());
+        assert!(s.set_param("bend_range", 12.0));
+        assert!((s.pitch_cents() - 1200.0).abs() < 0.2);
+        s.midi(0, [0xE0, 0x00, 0x40]);
+        assert_eq!(swing(&mut s, &mut io), (0.0, 0.0), "no wheel, no vibrato");
+        s.midi(0, [0xB0, 1, 127]);
+        // Mod Wheel Vibrato starts at 0 (owner's decision): mod-wheel data in a session made
+        // before it brings in no vibrato until the user turns it up.
+        assert_eq!(swing(&mut s, &mut io), (0.0, 0.0), "Mod Wheel Vibrato at 0 by default");
+        assert!(s.set_param("mod_wheel", 50.0));
+        let (lo, hi) = swing(&mut s, &mut io);
+        assert!(lo < -45.0 && hi > 45.0 && lo >= -50.01 && hi <= 50.01, "{lo} {hi}");
+        s.midi(0, [0xB0, 121, 0]);
+        s.process(&mut io, 64);
+        assert_eq!(s.pitch_cents(), 0.0);
+    }
+
+    /// Bug 30: the synth's and the drum synth's reported tails cover the sound after the last
+    /// note-off (a freeze or a bounce stops there).
+    #[test]
+    fn reported_tails_cover_the_release() {
+        for (id, note) in [("subtractive_synth", 60u8), ("drum_synth", 46)] {
+            let Some(mut p) = crate::create(id) else { panic!("{id}") };
+            p.prepare(48_000.0, 512, 2);
+            p.note_on(0, note, 127);
+            let mut io = vec![vec![0.0f32; 512]; 2];
+            p.process(&mut io, 512);
+            p.note_off(0, note);
+            let tail = p.tail_samples();
+            let mut last = 0usize;
+            for b in 0..(tail / 512 + 400) {
+                p.process(&mut io, 512);
+                if io.iter().any(|c| c.iter().any(|x| x.abs() > 1.0e-6)) {
+                    last = (b + 1) * 512;
+                }
+            }
+            assert!(last <= tail + 512, "{id}: sound until {last}, tail {tail}");
+        }
     }
 }

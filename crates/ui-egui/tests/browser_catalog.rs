@@ -50,7 +50,8 @@ fn builtins_and_firestation() {
     let cat = build_catalog(builtins, &[], &[], &[], Vec::new());
     // The hidden stock effects are not offered; every listed built-in is, once.
     assert_eq!(cat.items.len(), builtins.iter().filter(|p| p.listed()).count());
-    assert!(cat.items.iter().all(|i| !["compressor", "eq_7band", "room_reverb", "dither"].contains(&i.id.as_str())));
+    assert!(cat.items.iter().all(|i| !["compressor", "eq_7band", "room_reverb"].contains(&i.id.as_str())));
+    assert!(cat.items.iter().any(|i| i.id == "dither"), "Dither is in the menu");
     for info in builtins.iter().filter(|p| p.listed()) {
         let found: Vec<&BrowserItem> = cat.items.iter().filter(|i| i.id == info.id).collect();
         assert_eq!(found.len(), 1, "{}", info.id);

@@ -222,7 +222,11 @@ pub struct EditState {
     pub click: bool,
     pub countoff: bool,
     pub countoff_bars: u32,
+    /// MIDI Merge: a MIDI take overdubs into the clips under it. On for new sessions.
     pub midi_merge: bool,
+    /// What a take does to the audio it records over (`options.record_mode`): `replace` (the
+    /// default; `normal` in older sessions), `lanes` (each take a take lane, comped) or
+    /// `playlists` (each take on a new playlist that copies the track's).
     pub record_mode: String,
     pub loop_record: bool,
     pub quickpunch: bool,
@@ -296,7 +300,8 @@ impl Default for EditState {
             click: false,
             countoff: false,
             countoff_bars: 2,
-            midi_merge: false,
+            // New sessions overdub (Merge); a saved session keeps the switch it stored.
+            midi_merge: true,
             record_mode: "normal".into(),
             loop_record: false,
             quickpunch: false,
@@ -315,6 +320,16 @@ impl Default for EditState {
     }
 }
 
+/// The file type takes are recorded as (at the session's bit depth).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordFileType {
+    /// Broadcast WAV: a `bext` chunk with the take's originator and time reference.
+    #[default]
+    Wav,
+    Aiff,
+}
+
 /// The document.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Session {
@@ -322,6 +337,9 @@ pub struct Session {
     pub name: String,
     pub sample_rate: SampleRate,
     pub bit_depth: BitDepthSetting,
+    /// What takes are recorded as. Sessions saved before it existed record (BWF) WAV.
+    #[serde(default)]
+    pub record_file_type: RecordFileType,
     pub frame_rate: FrameRate,
     /// Timecode of sample 0 (session start), as a sample count.
     pub timecode_start: Samples,
@@ -358,12 +376,26 @@ pub struct Session {
     /// Session notes (Window › Notes), in list order (omitted from the file while empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::notes::de_notes")]
     pub notes: Vec<crate::Note>,
+    /// Grooves taken from clips (Groove from Clip), for Quantize and playback quantize; the
+    /// built-in ones are made in code and not stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grooves: Vec<soundcraft_midi::ops::Groove>,
     /// The lyric sheet (Window › Lyrics; omitted from the file while empty).
     #[serde(default, skip_serializing_if = "crate::LyricSheet::is_empty", deserialize_with = "crate::sheet::de_sheet")]
     pub lyric_sheet: crate::LyricSheet,
     /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
     #[serde(default, skip_serializing_if = "crate::StudioTuning::is_default")]
     pub studio_tuning: crate::StudioTuning,
+    /// MIDI learn: controllers mapped to this session's mixer and plug-in parameters (omitted
+    /// from the file while empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_maps: Vec<crate::MidiMap>,
+    /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mix_snapshots: Vec<crate::MixSnapshot>,
+    /// The control room (Window › Control Room; omitted from the file while there is none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_room: Option<crate::ControlRoom>,
     #[serde(skip)]
     pub pool: SourcePool,
     /// Module assets made ready for their plugins (`Insert::assets`), by reference and rate.
@@ -376,6 +408,15 @@ pub struct Session {
     /// in the background; the engine carries it across undo and redo.
     #[serde(skip)]
     pub vocal: crate::VocalCache,
+    /// Stretch renders being made, by the source id each render will have: until a render's
+    /// audio is in the pool, the mixer reads its original through the real-time stretcher
+    /// ([`crate::LiveStretch`]). Never saved: a save renders what is still here first.
+    #[serde(skip)]
+    pub live_stretch: std::collections::BTreeMap<SourceId, crate::LiveStretch>,
+    /// Transposed clips' high-quality renders ([`crate::PitchRenders`]): derived, never saved;
+    /// the engine carries them across undo and redo.
+    #[serde(skip)]
+    pub pitch_renders: crate::PitchRenders,
 }
 
 impl Default for Session {
@@ -393,6 +434,7 @@ impl Session {
             name: name.into(),
             sample_rate,
             bit_depth: BitDepthSetting::Int24,
+            record_file_type: RecordFileType::Wav,
             frame_rate: FrameRate::Fps30,
             timecode_start: 0,
             tempo: TempoMap::default(),
@@ -412,12 +454,18 @@ impl Session {
             scout: crate::ScoutState::default(),
             band: crate::BandState::default(),
             notes: Vec::new(),
+            grooves: Vec::new(),
             lyric_sheet: crate::LyricSheet::default(),
             studio_tuning: crate::StudioTuning::default(),
+            midi_maps: Vec::new(),
+            mix_snapshots: Vec::new(),
+            control_room: None,
             pool: SourcePool::default(),
             assets: crate::AssetPool::default(),
             folder: None,
             vocal: crate::VocalCache::default(),
+            live_stretch: std::collections::BTreeMap::new(),
+            pitch_renders: crate::PitchRenders::default(),
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);
@@ -459,6 +507,50 @@ impl Session {
     }
     pub fn bus_by_name(&self, name: &str) -> Option<&Bus> {
         self.busses.iter().find(|b| b.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Whether audio played into a bus in `start` reaches bus `target`: through the tracks that
+    /// take one of them as input and play on through their outputs and sends, transitively.
+    pub fn bus_reaches(&self, start: &[BusId], target: BusId) -> bool {
+        let mut seen: Vec<BusId> = Vec::new();
+        let mut todo: Vec<BusId> = start.to_vec();
+        while let Some(b) = todo.pop() {
+            if b == target {
+                return true;
+            }
+            if seen.contains(&b) {
+                continue;
+            }
+            seen.push(b);
+            for t in self.tracks.iter().filter(|t| t.mixer.input == crate::Route::Bus(b)) {
+                for r in std::iter::once(&t.mixer.output).chain(t.mixer.sends.iter().flatten().map(|x| &x.target)) {
+                    if let crate::Route::Bus(n) = r {
+                        todo.push(*n);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether playing track `t` into `route` (an output or a send) would feed it back into
+    /// itself: the route reaches the bus `t` takes its input from. Such a loop plays silence.
+    pub fn route_loops(&self, t: TrackId, route: &crate::Route) -> bool {
+        match (route, self.track(t).map(|tr| &tr.mixer.input)) {
+            (crate::Route::Bus(b), Some(crate::Route::Bus(input))) => self.bus_reaches(&[*b], *input),
+            _ => false,
+        }
+    }
+
+    /// Whether track `t` taking its input from `route` would feed it back into itself: its
+    /// outputs or sends reach that bus.
+    pub fn input_loops(&self, t: TrackId, route: &crate::Route) -> bool {
+        let (crate::Route::Bus(b), Some(tr)) = (route, self.track(t)) else { return false };
+        let outs: Vec<BusId> = std::iter::once(&tr.mixer.output)
+            .chain(tr.mixer.sends.iter().flatten().map(|x| &x.target))
+            .filter_map(|r| if let crate::Route::Bus(n) = r { Some(*n) } else { None })
+            .collect();
+        self.bus_reaches(&outs, *b)
     }
     pub fn group(&self, id: GroupId) -> Option<&Group> {
         self.groups.iter().find(|g| g.id == id)
@@ -510,6 +602,12 @@ impl Session {
     /// Feet+frames reading of sample 0, in frames (Setup › Current Feet+Frames Position).
     pub fn feet_frames_start(&self) -> i64 {
         self.edit.value(FEET_FRAMES_START, 0.0) as i64
+    }
+
+    /// What this session's grid lines count against: its rate, tempo map, timecode rate and
+    /// timecode start ([`soundcraft_time::GridCtx`]).
+    pub fn grid_ctx(&self) -> soundcraft_time::GridCtx<'_> {
+        soundcraft_time::GridCtx::new(self.sample_rate, &self.tempo, self.frame_rate).with_timecode_start(self.timecode_start)
     }
 
     /// Format a position against this session's timecode and feet+frames references.
@@ -654,6 +752,29 @@ impl Session {
         Ok(s)
     }
 
+    /// Clip Effects used to be kept as `clip_fx.<clip>.<key>` edit values and a
+    /// `clip_fx.bypass.<clip>` flag, which a split's pieces and copies (new ids) lost; they now
+    /// live on the clip ([`Clip::effects`]). Moves them there; those of clips that are gone go.
+    fn migrate_clip_effects(&mut self) {
+        const PRE: &str = "clip_fx.";
+        if !self.edit.values.keys().chain(self.edit.flags.iter()).any(|k| k.starts_with(PRE)) {
+            return;
+        }
+        let (fx, rest): (std::collections::BTreeMap<String, f64>, _) =
+            std::mem::take(&mut self.edit.values).into_iter().partition(|(k, _)| k.starts_with(PRE));
+        self.edit.values = rest;
+        let bypassed: std::collections::BTreeSet<u64> =
+            self.edit.flags.iter().filter_map(|k| k.strip_prefix("clip_fx.bypass.")).filter_map(|id| id.parse().ok()).collect();
+        self.edit.flags.retain(|k| !k.starts_with(PRE));
+        for c in self.tracks.iter_mut().flat_map(|t| t.playlists.iter_mut()).flat_map(|p| p.clips.iter_mut()) {
+            let pre = format!("{PRE}{}.", c.id.0);
+            for (k, v) in fx.range(pre.clone()..).take_while(|(k, _)| k.starts_with(&pre)) {
+                c.set_effect(k.get(pre.len()..).unwrap_or(""), *v);
+            }
+            c.effects_bypass |= bypassed.contains(&c.id.0);
+        }
+    }
+
     /// Repair invariants after loading untrusted data.
     pub fn sanitize(&mut self) {
         let max_id = self
@@ -723,6 +844,7 @@ impl Session {
                 l.points.sort_by_key(|p| p.at);
             }
         }
+        self.migrate_clip_effects();
         for m in &mut self.markers {
             bound(&mut m.start);
             bound(&mut m.end);

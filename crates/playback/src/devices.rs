@@ -373,6 +373,28 @@ pub(crate) fn named_device(host: &cpal::Host, name: &str, output: bool) -> Optio
     named_devices(host, output).into_iter().find(|(n, _)| n == name).map(|(_, d)| d)
 }
 
+/// What the user should be told when the device that opened (`system`, `device`; `silent` when
+/// none did) is not the one `cfg` chose: the chosen audio system or output missing, so the
+/// default plays instead, or no device at all. `None` when it is what was chosen.
+pub fn fallback_notice(cfg: &AudioConfig, system: &str, device: &str, silent: bool) -> Option<String> {
+    if silent {
+        return Some(
+            "No audio output device could be opened: playback is silent. Check the device, then Setup › Playback Engine › Reconnect.".into(),
+        );
+    }
+    if let Some(want) = cfg.system.as_deref().filter(|w| !w.eq_ignore_ascii_case(system)) {
+        return Some(format!(
+            "Audio system “{want}” is not available: playing through {system}, “{device}”. Choose another in Setup › Playback Engine."
+        ));
+    }
+    if let Some(want) = cfg.output.as_deref().filter(|w| *w != device) {
+        return Some(format!(
+            "Audio device “{want}” is not available: playing through “{device}”. Connect it and Reconnect, or choose another in Setup › Playback Engine."
+        ));
+    }
+    None
+}
+
 /// The buffer to request: the chosen size when the device's range allows it, else the default.
 pub(crate) fn buffer_size(want: Option<u32>, supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
     match (want, supported) {
@@ -387,6 +409,20 @@ pub(crate) fn buffer_size(want: Option<u32>, supported: &cpal::SupportedBufferSi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_chosen_device_is_told_not_just_logged() {
+        let cfg = AudioConfig { system: Some("ALSA".into()), output: Some("Interface".into()), ..AudioConfig::default() };
+        assert_eq!(fallback_notice(&cfg, "ALSA", "Interface", false), None);
+        assert_eq!(fallback_notice(&cfg, "alsa", "Interface", false), None, "system names ignore case");
+        let n = fallback_notice(&cfg, "ALSA", "default", false).unwrap();
+        assert!(n.contains("“Interface” is not available") && n.contains("“default”"), "{n}");
+        let n = fallback_notice(&cfg, "JACK", "system", false).unwrap();
+        assert!(n.contains("“ALSA” is not available"), "{n}");
+        assert!(fallback_notice(&cfg, "None", "", true).unwrap().contains("silent"));
+        // Nothing chosen: the default is what was asked for.
+        assert_eq!(fallback_notice(&AudioConfig::default(), "ALSA", "default", false), None);
+    }
 
     #[test]
     fn config_round_trips_and_tolerates_missing_fields() {

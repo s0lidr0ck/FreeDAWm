@@ -1,6 +1,7 @@
 //! Finding FreeDAWm PCs on the local network: each listening PC announces itself as a DNS-SD
-//! service (`_freedawm._tcp`, its PC name as the instance name, its role in the TXT record) over
-//! mDNS; a remote recorder browses for the booth by name. Pure Rust (`mdns-sd`), its own thread.
+//! service (`_freedawm._tcp`, its PC name as the instance name, its role in the TXT record, and
+//! when it offers the encrypted local link its UDP port `q` and key `k` there too) over mDNS; a
+//! remote recorder browses for the booth by name. Pure Rust (`mdns-sd`), its own thread.
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -15,6 +16,8 @@ pub struct Found {
     /// `host:port`, IPv4 first.
     pub addr: String,
     pub role: String,
+    /// Its encrypted local link: `ip:udp port` and its key (hex), when it offers one.
+    pub lan: Option<(String, String)>,
 }
 
 /// The mDNS daemon: announcing this PC and/or browsing for others. Dropped: both stop.
@@ -33,9 +36,20 @@ impl Discovery {
 
     /// Announces this PC as `name` on `port` (role `booth` or `recorder`), replacing an earlier one.
     pub fn announce(&mut self, name: &str, port: u16, role: &str) -> Result<(), String> {
+        self.announce_with(name, port, role, None)
+    }
+
+    /// [`Discovery::announce`], with the encrypted local link's UDP port and key (hex) when this
+    /// PC offers it.
+    pub fn announce_with(&mut self, name: &str, port: u16, role: &str, lan: Option<(u16, &str)>) -> Result<(), String> {
         self.withdraw();
         let host = format!("{}.local.", crate::hub::computer_name().replace([' ', '.'], "-"));
-        let props = [("role", role), ("v", "1")];
+        let q = lan.map(|(p, _)| p.to_string()).unwrap_or_default();
+        let mut props = vec![("role", role), ("v", "1")];
+        if let Some((_, k)) = lan {
+            props.push(("q", q.as_str()));
+            props.push(("k", k));
+        }
         let info = ServiceInfo::new(SERVICE_TYPE, name, &host, "", port, &props[..]).map_err(|e| format!("mDNS: {e}"))?.enable_addr_auto();
         let full = info.get_fullname().to_string();
         self.daemon.register(info).map_err(|e| format!("mDNS: {e}"))?;
@@ -69,7 +83,10 @@ impl Discovery {
                             v4.sort();
                             let Some(ip) = v4.first() else { continue };
                             let role = info.get_property_val_str("role").unwrap_or("").to_string();
-                            let entry = Found { name, addr: format!("{ip}:{}", info.port), role };
+                            let q = info.get_property_val_str("q").and_then(|q| q.parse::<u16>().ok()).filter(|q| *q != 0);
+                            let k = info.get_property_val_str("k").filter(|k| crate::internet::key_from_hex(k).is_some());
+                            let lan = q.zip(k).map(|(q, k)| (format!("{ip}:{q}"), k.to_string()));
+                            let entry = Found { name, addr: format!("{ip}:{}", info.port), role, lan };
                             f.retain(|x| x.name != entry.name);
                             f.push(entry);
                         }

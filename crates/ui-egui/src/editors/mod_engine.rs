@@ -55,7 +55,7 @@ const SWITCH_ROW_PREF_H: f32 = ROW_H + 3.0 + DESC_H;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFF8FD3C6));
 
 /// `getPresetParams`: circuit, variant, the performance dials, the trims and the switches.
-const FAMILY: Family = Family::new("ModEngine", &["level", "trim", "link", "linkLo", "linkHi", "tempo"]);
+pub(crate) const FAMILY: Family = Family::new("ModEngine", &["level", "trim", "link", "linkLo", "linkHi", "tempo"]);
 
 /// The switch rows below the dials (`getSwitches()` without the Circuit row): label, parameter.
 const SWITCH_ROWS: [(&str, usize); 5] =

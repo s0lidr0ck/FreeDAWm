@@ -10,7 +10,17 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 fn hub() -> (Hub, SocketAddr) {
-    let hub = Hub::new(NetConfig::default(), None);
+    hub_with(NetConfig::default())
+}
+
+/// A booth that still takes PCs over the plain link (Take PCs over the encrypted link only,
+/// turned off: on by default).
+fn plain_hub() -> (Hub, SocketAddr) {
+    hub_with(NetConfig { encrypted_only: false, ..NetConfig::default() })
+}
+
+fn hub_with(cfg: NetConfig) -> (Hub, SocketAddr) {
+    let hub = Hub::new(cfg, None);
     let port = hub.listen(0).unwrap();
     (hub, SocketAddr::from(([127, 0, 0, 1], port)))
 }
@@ -137,7 +147,7 @@ fn line(c: &mut TcpStream, r: &mut BufReader<TcpStream>, v: Value) -> Value {
 
 #[test]
 fn a_pc_pairs_over_the_control_channel_and_then_controls() {
-    let (hub, addr) = hub();
+    let (hub, addr) = plain_hub();
     let mut c = TcpStream::connect(addr).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let mut r = BufReader::new(c.try_clone().unwrap());
@@ -193,7 +203,7 @@ fn paired_pc(hub: &Hub, addr: SocketAddr) -> (TcpStream, BufReader<TcpStream>) {
 #[test]
 fn an_audio_transfer_resumes_where_it_was_cut_off() {
     use soundcraft_net::audio::{b64_encode, hash};
-    let (hub, addr) = hub();
+    let (hub, addr) = plain_hub();
     let dir = std::env::temp_dir().join(format!("freedawm-resume-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     hub.set_project(soundcraft_net::hub::ProjectInfo { folder: Some(dir.clone()), rate: 48_000, bits: 24 });

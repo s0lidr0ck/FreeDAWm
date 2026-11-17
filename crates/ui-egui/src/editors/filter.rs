@@ -49,7 +49,7 @@ const SWITCH_ROW_PREF_H: f32 = ROW_H + 4.0 + DESC_H;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(0xFF35E0C2));
 
 /// `getPresetParams`: everything but Level, Input, the tempo source and BPM.
-const FAMILY: Family = Family::new("FilterEngine", &["level", "trim", "tempoSrc", "bpm"]);
+pub(crate) const FAMILY: Family = Family::new("FilterEngine", &["level", "trim", "tempoSrc", "bpm"]);
 
 #[derive(Clone, Default)]
 pub(crate) struct Editor {

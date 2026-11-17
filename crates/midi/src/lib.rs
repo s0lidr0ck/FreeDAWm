@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cleanup;
+mod index;
 mod names;
 pub mod ops;
 pub mod pattern;
@@ -18,9 +19,10 @@ mod rng;
 mod sequence;
 mod smf;
 
+pub use index::{NoteIndex, NoteIndexSlot};
 pub use names::{gm_drum_name, gm_program_name, note_name};
 pub use rng::XorShift;
-pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
+pub use sequence::{CtrlEvent, CtrlKind, CtrlShape, Note, Sequence};
 pub use smf::{MAX_EVENTS, MAX_TRACKS, Smf, SmfTrack, decode_text, read_smf, write_smf};
 
 /// Ticks per quarter note used throughout the model.

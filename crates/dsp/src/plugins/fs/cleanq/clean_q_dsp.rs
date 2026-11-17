@@ -420,6 +420,16 @@ fn clear_band(b: &mut Band) {
 }
 
 pub fn design_filter(type_: i32, order: i32, freq_hz: f64, gain_db: f64, q: f64, fs: f64) -> Design {
+    design(type_, order, freq_hz, gain_db, q, fs, true)
+}
+
+/// [`design_filter`] as the C++ designs it (bilinear bells and shelves): the Ceiling's Conform fit
+/// models its bands with it, so its results match the C++'s to the bit.
+pub fn design_filter_cpp(type_: i32, order: i32, freq_hz: f64, gain_db: f64, q: f64, fs: f64) -> Design {
+    design(type_, order, freq_hz, gain_db, q, fs, false)
+}
+
+fn design(type_: i32, order: i32, freq_hz: f64, gain_db: f64, q: f64, fs: f64, use_matched: bool) -> Design {
     let mut d = Design::default();
 
     let f = freq_hz.min(fs * 0.49);
@@ -427,7 +437,25 @@ pub fn design_filter(type_: i32, order: i32, freq_hz: f64, gain_db: f64, q: f64,
     let c = w0.cos();
     let sn = w0.sin();
 
-    if type_ == TYPE_BELL {
+    // Rust change (built-in effects parity, bug 16): bells and shelves follow their analog shape
+    // up to Nyquist (`biquad::matched`) instead of the C++'s bilinear (RBJ) design, which
+    // narrows them and takes gain off their top side near 20 kHz at 44.1 and 48 kHz. Low down the
+    // two agree; where no matched design exists (a shelf whose poles would pass Nyquist) the
+    // C++'s is used.
+    let matched = |kind, q: f64| {
+        let a = 10.0f64.powf(gain_db / 40.0);
+        if use_matched { crate::biquad::matched(kind, w0, q, a) } else { None }
+    };
+    let shelf = if type_ == TYPE_LOW_SHELF { crate::biquad::Matched::LowShelf } else { crate::biquad::Matched::HighShelf };
+    if type_ == TYPE_BELL
+        && let Some([b0, b1, b2, a1, a2]) = matched(crate::biquad::Matched::Peak, q)
+    {
+        set_bq(&mut d.sec[0], b0, b1, b2, 1.0, a1, a2);
+    } else if (type_ == TYPE_LOW_SHELF || type_ == TYPE_HIGH_SHELF)
+        && let Some([b0, b1, b2, a1, a2]) = matched(shelf, clamp_t(q, 0.1, 4.0))
+    {
+        set_bq(&mut d.sec[0], b0, b1, b2, 1.0, a1, a2);
+    } else if type_ == TYPE_BELL {
         let a = 10.0f64.powf(gain_db / 40.0);
         let alpha = sn / (2.0 * q);
         set_bq(&mut d.sec[0], 1.0 + alpha * a, -2.0 * c, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * c, 1.0 - alpha / a);
@@ -1319,6 +1347,33 @@ mod tests {
                 let db = curve_magnitude_db(t, si, 1000.0, 0.0, std::f64::consts::FRAC_1_SQRT_2, w, fs);
                 assert!((db + 3.0103).abs() < 0.05, "slope {si} type {t}: {db}");
             }
+        }
+    }
+
+    /// Built-in effects parity, bug 16: a 15 kHz bell at 48 kHz was squeezed against Nyquist
+    /// (its top side fell to 0 dB at 24 kHz). It now keeps to the analog bell, far closer than the
+    /// C++'s design does.
+    #[test]
+    fn a_bell_up_high_keeps_its_shape() {
+        let fs = 48_000.0;
+        let (f0, q, db) = (15_000.0, 0.7, 9.0);
+        let a = 10f64.powf(db / 40.0);
+        let analog = |f: f64| {
+            let o = f / f0;
+            let d = (1.0 - o * o).powi(2);
+            10.0 * ((d + (a * o / q).powi(2)) / (d + (o / (a * q)).powi(2))).log10()
+        };
+        let (new, cpp) = (design_filter(TYPE_BELL, 2, f0, db, q, fs), design_filter_cpp(TYPE_BELL, 2, f0, db, q, fs));
+        for f in [10_000.0, 15_000.0, 18_000.0, 20_000.0] {
+            let w = 2.0 * PI * f / fs;
+            let (got, was) = ((magnitude_db(&new, w) - analog(f)).abs(), (magnitude_db(&cpp, w) - analog(f)).abs());
+            assert!(got < 1.0 && got <= was + 0.01, "{f} Hz: {got:.2} dB off (the C++'s {was:.2})");
+        }
+        // Low down, as the C++ (the cookbook's bilinear bell).
+        let (d, cpp) = (design_filter(TYPE_BELL, 2, 300.0, 6.0, 1.0, fs), design_filter_cpp(TYPE_BELL, 2, 300.0, 6.0, 1.0, fs));
+        for f in [100.0, 300.0, 1000.0] {
+            let w = 2.0 * PI * f / fs;
+            assert!((magnitude_db(&d, w) - magnitude_db(&cpp, w)).abs() < 0.05, "{f} Hz");
         }
     }
 }

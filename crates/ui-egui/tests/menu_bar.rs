@@ -8,25 +8,25 @@ use soundcraft_ui_egui::{Services, SoundApp};
 use std::collections::HashMap;
 
 /// Top-level rows per menu, headings and separators not counted: the approved mockups' counts,
-/// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Click/Countoff…,
-/// Preferences…). The FreeDAWm menu (About, Session Info, Session Audio
+/// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Preferences…;
+/// Click/Countoff… has its window now). The FreeDAWm menu (About, Session Info, Session Audio
 /// Health, Quit) is drawn by hand ahead of these.
 const ROWS: [(&str, usize); 11] = [
     ("File", 14),
     ("Edit", 27),
     ("View", 11),
     ("Track", 31),
-    ("Clip", 23),
+    ("Clip", 28),
     ("Event", 15),
     ("Process", 14),
-    ("AI", 13),
-    ("Options", 16),
-    ("Setup", 9),
-    ("Window", 33),
+    ("AI", 14),
+    ("Options", 20),
+    ("Setup", 11),
+    ("Window", 36),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
-const GREYED: [(&str, &str); 3] = [("Change Meter...", menus::SOON), ("Add Key Change...", menus::SOON), ("Click/Countoff...", menus::SOON)];
+const GREYED: [(&str, &str); 2] = [("Change Meter...", menus::SOON), ("Add Key Change...", menus::SOON)];
 
 fn rows(n: &MenuNode) -> usize {
     n.children.iter().filter(|c| !matches!(c.kind, MenuKind::Heading | MenuKind::Separator)).count()
@@ -99,8 +99,12 @@ fn greyed_out_items_say_why() {
 }
 
 /// Ids whose menu item names its parameter in the label (a ruler, a width, a rating…).
-const PARAMETERISED: [&str; 8] = [
+const PARAMETERISED: [&str; 12] = [
+    "options.record_mode",
+    "edit.overlap_mode",
     "view.ruler",
+    "mix.default_send_level",
+    "mix.pan_law",
     "view.main_counter",
     "options.scrolling",
     "options.solo_mode",
@@ -140,7 +144,6 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "event.tempo_linear",
         "event.tempo_scale",
         "automation.write_range",
-        "options.quickpunch",
         "options.trackpunch",
         "options.layered_editing",
         "options.midi_thru",
@@ -196,6 +199,7 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Convert to MIDI…",
             "Detect Chords…",
             "Transcribe Lyrics…",
+            "Find in Transcript…",
             "MIDI Cleanup…",
             "Generate MIDI from Text…",
             "Generate Song…"
@@ -280,8 +284,18 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
     if UI_TOGGLES.contains(&id) || matches!(id, "clip.edit_lock" | "clip.time_lock" | "ui.mix.slim_editors") {
         return Some(Answer::Flips);
     }
-    if matches!(id, "window.mix" | "window.edit" | "window.workspace" | "options.scrolling" | "options.solo_mode" | "view.main_counter")
-        || id.starts_with("view.waveform_p")
+    if matches!(
+        id,
+        "window.mix"
+            | "window.edit"
+            | "window.workspace"
+            | "options.scrolling"
+            | "options.solo_mode"
+            | "mix.pan_law"
+            | "edit.overlap_mode"
+            | "mix.default_send_level"
+            | "view.main_counter"
+    ) || id.starts_with("view.waveform_p")
         || id.starts_with("view.clip_time_")
     {
         return Some(Answer::ComesOn);
@@ -413,9 +427,20 @@ fn every_menubar_line_has_a_known_shape() {
     }
 }
 
+/// Bug 23 of parity section 6: the web build has no live MIDI, so the windows that play or set it
+/// up are left out of its menus.
+#[test]
+fn live_midi_windows_are_desktop_only() {
+    for shown in ["Setup > MIDI Input Devices...", "Window > Musical Typing"] {
+        let line = menus::layout().iter().find(|l| l.display == shown).unwrap_or_else(|| panic!("{shown} is on the menu bar"));
+        assert!(line.desktop, "{shown} is left out of the web build");
+    }
+}
+
 #[test]
 fn greyed_items_are_refused_by_path() {
-    assert_eq!(menus::soon_reason("Setup > Click/Countoff..."), Some(menus::SOON));
+    // Click/Countoff… has its window now.
+    assert_eq!(menus::soon_reason("Setup > Click/Countoff..."), None);
     // MIDI Input Devices… has its window now (hardware MIDI input).
     assert_eq!(menus::soon_reason("Setup > MIDI Input Devices..."), None);
     assert_eq!(menus::soon_reason("Setup > Preferences..."), None);

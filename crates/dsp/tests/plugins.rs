@@ -422,6 +422,105 @@ fn time_shift_delays() {
     assert_eq!(out[0][133], 1.0);
 }
 
+/// Built-in effects parity, bug 17 (hidden stock effects old sessions still load), each part.
+#[test]
+fn hidden_stock_effects_bug_17() {
+    // Limit is a brickwall: a hard-hitting sine at a slow attack stays under the threshold.
+    let mut c = prepared("compressor");
+    for (k, v) in [("limiter", 1.0), ("threshold", -12.0), ("attack", 50.0), ("knee", 0.0)] {
+        assert!(c.set_param(k, v));
+    }
+    let x = sine(440.0, 0.9, 48_000);
+    let out = run(c.as_mut(), &[x.clone(), x.clone()]);
+    assert!(peak(&out[0]) <= db_to_gain(-12.0) + 1e-4, "{}", gain_to_db(peak(&out[0])));
+    // A look-ahead change crossfades instead of jumping.
+    let mut c = prepared("compressor");
+    c.set_param("threshold", 0.0);
+    let x = sine(220.0, 0.5, 48_000);
+    let smooth = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let mut y = Vec::new();
+    let mut buf = vec![vec![0.0f32; BLOCK]; 2];
+    for (k, chunk) in x.chunks(BLOCK).enumerate() {
+        c.set_param("lookahead", if (k / 4) % 2 == 0 { 2.0 } else { 7.0 });
+        for b in &mut buf {
+            b[..chunk.len()].copy_from_slice(chunk);
+        }
+        c.process(&mut buf, chunk.len());
+        y.extend_from_slice(&buf[0][..chunk.len()]);
+    }
+    let jump = y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(jump < 1.5 * smooth, "{jump} against {smooth}");
+    // The Maximizer keeps the true peak (between samples) under its ceiling, not only the samples:
+    // a sine near a quarter of the rate whose samples miss its crests.
+    let mut m = prepared("maximizer");
+    m.set_param("threshold", -12.0);
+    m.set_param("ceiling", -1.0);
+    let x: Vec<f32> = (0..48_000).map(|i| 0.5 * (TAU * 11_990.0 * i as f32 / SR + 0.785).sin()).collect();
+    let out = run(m.as_mut(), &[x.clone(), x.clone()]);
+    let mut meter = soundcraft_dsp::meter::LoudnessMeter::new(SR, 2);
+    let tail: Vec<Vec<f32>> = out.iter().map(|c| c[4800..].to_vec()).collect();
+    meter.process(&tail, tail[0].len());
+    // Within half a dB of the ceiling (this sine's samples miss its crests by up to 3 dB).
+    assert!(meter.true_peak_db() < -0.5, "true peak {}", meter.true_peak_db());
+    // The stock compressor on 5.1: a loud LFE no longer ducks the front pair.
+    let mut c = create("compressor").unwrap();
+    c.set_param("threshold", -30.0);
+    c.set_param("ratio", 20.0);
+    c.prepare(SR, BLOCK, 6);
+    let quiet = sine(440.0, 0.01, 24_000);
+    let loud = sine(60.0, 0.9, 24_000);
+    let out = run(c.as_mut(), &[quiet.clone(), quiet.clone(), quiet.clone(), loud, quiet.clone(), quiet.clone()]);
+    assert!((peak(&out[0][12_000..]) - 0.01).abs() < 1e-3, "{}", peak(&out[0][12_000..]));
+    // Lo-Fi at its top rate leaves a 96 kHz signal's rate alone.
+    let mut l = create("lofi").unwrap();
+    l.set_param("bits", 24.0);
+    l.set_param("sample_rate", 48_000.0);
+    l.prepare(96_000.0, BLOCK, 1);
+    let x = sine(15_000.0, 0.5, 9600);
+    let out = run(l.as_mut(), std::slice::from_ref(&x));
+    let err = out[0].iter().zip(&x).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(err < 1e-3, "{err}");
+    // Channel Strip: the compressor switched back on starts clean.
+    let mut s = prepared("channel_strip");
+    s.set_param("comp_on", 1.0);
+    s.set_param("comp_threshold", -40.0);
+    s.set_param("comp_release", 3000.0);
+    run(s.as_mut(), &[sine(440.0, 0.9, 9600), sine(440.0, 0.9, 9600)]);
+    assert!(s.gain_reduction_db() > 10.0);
+    s.set_param("comp_on", 0.0);
+    run(s.as_mut(), &[vec![0.0; 512], vec![0.0; 512]]);
+    s.set_param("comp_on", 1.0);
+    let quiet = sine(440.0, 0.001, 512);
+    let out = run(s.as_mut(), &[quiet.clone(), quiet.clone()]);
+    assert!((peak(&out[0]) - peak(&quiet)).abs() < 1e-4, "no stale gain reduction");
+}
+
+/// Built-in effects parity, bug 18: a delay change that came while a crossfade ran jumped the
+/// tap it was fading to, which clicked.
+#[test]
+fn time_shift_changes_during_a_crossfade_do_not_click() {
+    let mut p = prepared("time_shift");
+    let x = sine(220.0, 0.5, 48_000);
+    let smooth = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let mut out = Vec::new();
+    let mut buf = vec![vec![0.0f32; 64]];
+    for (k, chunk) in x.chunks(64).enumerate() {
+        // A new delay every 64 samples, well inside the 256-sample crossfade.
+        p.set_param("delay_samples", (k % 7) as f32 * 37.0);
+        buf[0][..chunk.len()].copy_from_slice(chunk);
+        p.process(&mut buf, chunk.len());
+        out.extend_from_slice(&buf[0][..chunk.len()]);
+    }
+    let jump = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(jump < 1.5 * smooth, "largest step {jump} against the signal's {smooth}");
+    // And it settles on the last delay asked for.
+    p.set_param("delay_samples", 100.0);
+    let mut imp = vec![0.0f32; 2000];
+    imp[1000] = 1.0;
+    let out = run(p.as_mut(), &[imp]);
+    assert!((out[0][1100] - 1.0).abs() < 1e-6);
+}
+
 #[test]
 fn dc_removal_removes_dc() {
     let mut p = prepared("dc_offset_removal");

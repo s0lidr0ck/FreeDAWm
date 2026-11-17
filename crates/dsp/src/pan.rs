@@ -265,16 +265,54 @@ pub fn surround_gains(layout: &[SpeakerPos], p: &SurroundParams, out: &mut [f32]
     }
 }
 
-/// First-order Ambisonics (ACN channel order, SN3D) encoding gains for a direction, with the
-/// directional components scaled by `1 - spread`. Higher-order channels get 0.
+/// Highest Ambisonics order [`ambisonic_encode`] fills.
+pub const MAX_AMBISONIC_ORDER: usize = 7;
+
+/// Ambisonics encoding gains (ACN channel order, SN3D, no Condon-Shortley phase) for a direction,
+/// up to the order `out` holds ((n+1)² channels; 7th order at most, channels past it get 0).
+/// Components of order `l` are scaled by `(1 - spread)^l`, so a spread of 1 leaves only W.
+// The Legendre recurrences read neighbouring rows and columns by index: clearer as index loops.
+#[allow(clippy::needless_range_loop)]
 pub fn ambisonic_encode(az: f32, el: f32, spread: f32, out: &mut [f32]) {
     out.iter_mut().for_each(|g| *g = 0.0);
-    let (a, e) = (fin(az, 0.0).to_radians(), fin(el, 0.0).to_radians());
-    let d = 1.0 - fin(spread, 0.0).clamp(0.0, 1.0);
+    const N: usize = MAX_AMBISONIC_ORDER + 1;
     // Ambisonic azimuth is anticlockwise (left positive); ours is clockwise.
-    let vals = [1.0, -a.sin() * e.cos() * d, e.sin() * d, a.cos() * e.cos() * d];
-    for (o, v) in out.iter_mut().zip(vals) {
-        *o = v;
+    let a = -f64::from(fin(az, 0.0)).to_radians();
+    let e = f64::from(fin(el, 0.0)).to_radians();
+    let d = 1.0 - f64::from(fin(spread, 0.0).clamp(0.0, 1.0));
+    let (x, c) = (e.sin(), e.cos());
+    // Associated Legendre functions P_l^m(sin el), without the Condon-Shortley phase.
+    let mut p = [[0.0f64; N]; N];
+    p[0][0] = 1.0;
+    for m in 1..N {
+        p[m][m] = (2 * m - 1) as f64 * c * p[m - 1][m - 1];
+    }
+    for m in 0..N - 1 {
+        p[m + 1][m] = (2 * m + 1) as f64 * x * p[m][m];
+    }
+    for m in 0..N {
+        for l in m + 2..N {
+            p[l][m] = ((2 * l - 1) as f64 * x * p[l - 1][m] - (l + m - 1) as f64 * p[l - 2][m]) / (l - m) as f64;
+        }
+    }
+    // (l - m)! / (l + m)! for the SN3D normalisation.
+    let ratio = |l: usize, m: usize| ((l - m + 1)..=(l + m)).fold(1.0f64, |r, k| r / k as f64);
+    for l in 0..N {
+        let dl = d.powi(l as i32);
+        for m in 0..=l {
+            let norm = if m == 0 { 1.0 } else { (2.0 * ratio(l, m)).sqrt() };
+            let base = norm * p[l][m] * dl;
+            let mf = m as f64;
+            // ACN = l² + l + m, with m negative for the sine terms.
+            if let Some(o) = out.get_mut(l * l + l + m) {
+                *o = (base * (mf * a).cos()) as f32;
+            }
+            if m > 0
+                && let Some(o) = out.get_mut(l * l + l - m)
+            {
+                *o = (base * (mf * a).sin()) as f32;
+            }
+        }
     }
 }
 
@@ -289,6 +327,43 @@ pub fn ambisonic_decode(az: f32, el: f32, n: usize) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::gain_to_db;
+
+    #[test]
+    fn ambisonic_encode_fills_every_order_in_sn3d() {
+        let mut g = [0.0f32; 64];
+        for (az, el) in [(0.0f32, 0.0f32), (37.0, 12.0), (-120.0, -40.0), (90.0, 75.0), (180.0, 0.0)] {
+            ambisonic_encode(az, el, 0.0, &mut g);
+            // SN3D: the components of each order have unit energy in every direction.
+            for l in 0..=MAX_AMBISONIC_ORDER {
+                let e: f32 = g[l * l..(l + 1) * (l + 1)].iter().map(|v| v * v).sum();
+                assert!((e - 1.0).abs() < 1e-4, "order {l} at ({az}, {el}): {e}");
+            }
+            // Closed forms for orders 1 to 3 (ambisonic azimuth anticlockwise).
+            let (a, e) = (-az.to_radians(), el.to_radians());
+            let (s, c) = (e.sin(), e.cos());
+            let want = [
+                (1, a.sin() * c),
+                (2, s),
+                (3, a.cos() * c),
+                (4, 3f32.sqrt() / 2.0 * c * c * (2.0 * a).sin()),
+                (6, 0.5 * (3.0 * s * s - 1.0)),
+                (8, 3f32.sqrt() / 2.0 * c * c * (2.0 * a).cos()),
+                (9, (5.0f32 / 8.0).sqrt() * c * c * c * (3.0 * a).sin()),
+                (12, 0.5 * s * (5.0 * s * s - 3.0)),
+                (15, (5.0f32 / 8.0).sqrt() * c * c * c * (3.0 * a).cos()),
+            ];
+            for (i, v) in want {
+                assert!((g[i] - v).abs() < 1e-4, "ACN {i} at ({az}, {el}): {} vs {v}", g[i]);
+            }
+        }
+        // A 2nd-order output is filled to its last channel; spread 1 leaves only W.
+        let mut g9 = [0.0f32; 9];
+        ambisonic_encode(30.0, 20.0, 0.0, &mut g9);
+        assert!(g9[4..].iter().any(|v| v.abs() > 0.1), "{g9:?}");
+        ambisonic_encode(30.0, 20.0, 1.0, &mut g9);
+        assert_eq!(g9[0], 1.0);
+        assert!(g9[1..].iter().all(|v| v.abs() < 1e-6));
+    }
 
     #[test]
     fn center_levels() {

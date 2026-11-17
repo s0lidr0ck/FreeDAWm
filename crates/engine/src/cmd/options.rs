@@ -33,8 +33,58 @@ pub fn specs() -> Vec<CommandSpec> {
         toggle!("options.click", "Click", ["Options"], None, click),
         toggle!("options.countoff", "Count Off", [], None, countoff),
         toggle!("options.midi_merge", "MIDI Merge", [], None, midi_merge),
+        cmd!(noundo "options.midi_record_mode", "MIDI Record Mode", [], None, "{mode?: replace|merge|new_playlist|take_lanes} — what a MIDI take does to the MIDI under it (merge is the MIDI Merge switch; take_lanes keeps each take on a lane of its own) → {mode}", always, |e, p| {
+            use crate::midi_record::{RecordMode, record_mode, set_record_mode};
+            if let Some(m) = str_param(p, "mode") {
+                let Some((mode, _)) = RecordMode::ALL.iter().find(|(_, n)| *n == m) else {
+                    return Err(bad("options.midi_record_mode", format!("unknown mode `{m}`: replace, merge, new_playlist or take_lanes")));
+                };
+                set_record_mode(e.session_mut(), *mode);
+            }
+            Ok(json!({"mode": record_mode(e.session()).name()}))
+        }),
         toggle!("options.pre_fader_metering", "Pre-Fader Metering", ["Options"], None, pre_fader_metering),
         toggle!("options.delay_compensation", "Delay Compensation", ["Options"], None, delay_compensation),
+        // Short ramps on clip edges without a fade of their own (and across the loop's edges
+        // while looping), so a cut never clicks. On by default at `AUTO_FADE_MS`.
+        cmd!(noundo "options.auto_fades", "Automatic Edge Fades", ["Options"], None, "{value?: bool, ms?: 0.1..100}", always, |e, p| {
+            let s = e.session_mut();
+            let now = s.edit.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS);
+            let ms = match (p.get("ms").and_then(Value::as_f64), p.get("value").and_then(Value::as_bool)) {
+                (Some(ms), _) if ms.is_finite() => ms.clamp(0.1, 100.0),
+                (Some(_), _) => return Err(bad("options.auto_fades", "`ms` must be a number")),
+                (None, Some(false)) => 0.0,
+                (None, Some(true)) => s.edit.value("playback.auto_fade_ms_on", soundcraft_mix::AUTO_FADE_MS),
+                (None, None) if now > 0.0 => 0.0,
+                (None, None) => s.edit.value("playback.auto_fade_ms_on", soundcraft_mix::AUTO_FADE_MS),
+            };
+            if ms > 0.0 {
+                // The length to come back to when it is turned on again.
+                s.edit.values.insert("playback.auto_fade_ms_on".into(), ms);
+            }
+            s.edit.values.insert("playback.auto_fade_ms".into(), ms);
+            Ok(json!({"value": ms > 0.0, "ms": ms}))
+        }),
+        cmd!(
+            noundo "options.record_mode",
+            "Record Mode",
+            ["Options", "Record Mode"],
+            None,
+            "{mode: replace|lanes|playlists}: what a take does to the audio it records over: replaces it, goes on a take lane (comped), or goes on a new playlist each take → {mode}",
+            always,
+            |e, p| {
+                const C: &str = "options.record_mode";
+                let mode = match p.get("mode").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
+                    Some("replace" | "normal") => "replace",
+                    Some("lanes" | "takes" | "keep_takes") => "lanes",
+                    Some("playlists" | "playlist") => "playlists",
+                    Some(other) => return Err(bad(C, format!("unknown mode `{other}` (replace, lanes or playlists)"))),
+                    None => return Err(bad(C, "`mode` required (replace, lanes or playlists)")),
+                };
+                e.session_mut().edit.record_mode = mode.into();
+                Ok(json!({"mode": mode}))
+            }
+        ),
         cmd!(noundo "options.destructive_record", "Destructive Record", ["Options"], None, "{value?: bool}", always, |e, p| record_mode(e, p, "destructive")),
         cmd!(noundo "options.trackpunch", "TrackPunch", ["Options"], Some("Cmd+Shift+T"), "{value?: bool}", always, |e, p| record_mode(e, p, "trackpunch")),
         cmd!(noundo "options.scrolling", "Edit Window Scrolling", ["Options", "Edit Window Scrolling"], None, "{mode: none|after_playback|page|continuous|center}", always, |e, p| {
@@ -102,11 +152,15 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Destructive Record and TrackPunch: a stored flag nothing reads yet (FreeDAWm records
+/// non-destructively, every track at once). Kept apart from `record_mode`, which they used to
+/// overwrite.
 fn record_mode(e: &mut Engine, p: &Value, mode: &str) -> Result<Value> {
     let s = e.session_mut();
-    let on = p.get("value").and_then(Value::as_bool).unwrap_or(s.edit.record_mode != mode);
-    s.edit.record_mode = if on { mode.to_string() } else { "normal".into() };
-    Ok(json!({"record_mode": s.edit.record_mode}))
+    let key = format!("options.{mode}");
+    let on = p.get("value").and_then(Value::as_bool).unwrap_or(!s.edit.flag(&key));
+    s.edit.set_flag(&key, on);
+    Ok(json!({"value": on}))
 }
 
 fn session_setup(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -138,4 +192,24 @@ fn session_setup(e: &mut Engine, p: &Value) -> Result<Value> {
         s.name = n.to_string();
     }
     Ok(json!({"frame_rate": s.frame_rate.label(), "bit_depth": s.bit_depth, "sample_rate": s.sample_rate.hz()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Engine;
+    use serde_json::json;
+
+    #[test]
+    fn automatic_edge_fades_toggle_and_keep_their_length() {
+        let mut e = Engine::default();
+        let fades = |e: &Engine| soundcraft_mix::auto_fade_frames(e.session());
+        assert_eq!(fades(&e), 48, "on by default, 1 ms at 48 kHz");
+        assert_eq!(e.execute("options.auto_fades", &json!({})).unwrap()["value"], false);
+        assert_eq!(fades(&e), 0);
+        e.execute("options.auto_fades", &json!({"ms": 2.0})).unwrap();
+        assert_eq!(fades(&e), 96);
+        e.execute("options.auto_fades", &json!({"value": false})).unwrap();
+        assert_eq!(e.execute("options.auto_fades", &json!({})).unwrap()["ms"], 2.0, "back on at the length it had");
+        assert!(e.execute("options.auto_fades", &json!({"ms": "long"})).is_ok(), "a non-number `ms` is ignored, not stored");
+    }
 }

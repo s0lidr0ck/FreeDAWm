@@ -69,7 +69,7 @@ fn sampled(s: &Session) -> HashSet<SourceId> {
 }
 
 /// A stored source path, relative ones taken from `base`.
-fn resolve(stored: &str, base: &Path) -> PathBuf {
+pub(crate) fn resolve(stored: &str, base: &Path) -> PathBuf {
     let p = Path::new(stored);
     if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
 }
@@ -86,7 +86,7 @@ fn source_paths(text: &str) -> Option<Vec<String>> {
 
 /// Every audio file named by the session files in `project` (its session files, `Backups/`) and
 /// the autosaves under `autosave_root`; `None` when one of them can't be read.
-fn named_on_disk(project: &Path, autosave_root: Option<&Path>) -> Option<Vec<PathBuf>> {
+pub(crate) fn named_on_disk(project: &Path, autosave_root: Option<&Path>) -> Option<Vec<PathBuf>> {
     let mut out = Vec::new();
     let is_session = |f: &Path| {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();

@@ -3,7 +3,6 @@
 
 use super::*;
 use serde_json::json;
-use soundcraft_audio_io::{AudioBuffer, FileFormat};
 use soundcraft_model::{Clip, ClipContent, EditState, Session, SourceId, TrackId};
 use soundcraft_time::Samples;
 
@@ -134,7 +133,7 @@ pub fn set_clip_env(c: &mut Clip, mut pts: Vec<(Samples, f32)>) {
 
 /// Longest audio we render in one stretch: one hour at the session rate, and no more than
 /// `time_stretch` makes.
-fn max_render(s: &Session) -> Samples {
+pub(crate) fn max_render(s: &Session) -> Samples {
     s.sample_rate.samples(3600.0).min(soundcraft_dsp::offline::MAX_OFFLINE_SAMPLES as Samples)
 }
 
@@ -142,6 +141,8 @@ fn max_render(s: &Session) -> Samples {
 /// source. Returns `Ok(None)` for MIDI clips or missing audio.
 pub fn render_stretched(s: &mut Session, cmd: &str, c: &Clip, out_len: Samples) -> Result<Option<SourceId>> {
     let ClipContent::Audio { source, offset } = c.content else { return Ok(None) };
+    // A clip still heard through the live stretcher is stretched again from its render.
+    crate::stretch_jobs::settle(s, source);
     if s.pool.get(source).is_none() {
         return Ok(None);
     }
@@ -157,16 +158,12 @@ pub fn render_stretched(s: &mut Session, cmd: &str, c: &Clip, out_len: Samples) 
         return Err(bad(cmd, format!("stretch ratio {ratio:.3} is outside 0.1..10")));
     }
     let n = src_len as usize;
-    // The clip's material as it plays (Clean Vocal's cleaned alternate mixed in).
-    let Some(ch) = soundcraft_mix::clip_source_window(s, c, offset.max(0), n) else { return Ok(None) };
-    let sr = s.sample_rate;
-    let mut out = soundcraft_dsp::offline::time_stretch(&ch, ratio, sr.as_f64() as f32);
-    let want = usize::try_from(out_len).unwrap_or(0);
-    for o in &mut out {
-        o.resize(want, 0.0);
-    }
-    let buf = AudioBuffer { sample_rate: sr.hz(), channels: out };
-    Ok(Some(crate::io::add_source(s, &format!("{}-TCE", c.name), buf, None, FileFormat::Wav)))
+    // The clip's track's Elastic algorithm chooses how the stretch splices; the clip's material
+    // as it plays (Clean Vocal's cleaned alternate mixed in) is stretched, now or (deferred) by
+    // a worker while the clip is heard through the real-time stretcher.
+    let mode = s.find_clip(c.id).and_then(|(t, _)| s.track(t)).and_then(|t| t.elastic.clone());
+    let kind = soundcraft_model::StretchKind::Ratio { ratio, mode, frames: out_len };
+    Ok(crate::stretch_jobs::stretch_source(s, &format!("{}-TCE", c.name), c, offset.max(0), n, kind))
 }
 
 /// Replace clip `old` on track `t` with `new` (overwriting whatever `new` covers).

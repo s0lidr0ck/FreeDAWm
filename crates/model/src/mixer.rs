@@ -41,6 +41,8 @@ pub enum ChannelFormat {
 }
 
 impl ChannelFormat {
+    /// Most channels one track, bus or output carries through the mixer.
+    pub const MAX_MIX_CHANNELS: usize = 16;
     pub const ALL: [ChannelFormat; 34] = [
         ChannelFormat::Mono,
         ChannelFormat::Stereo,
@@ -185,8 +187,19 @@ impl ChannelFormat {
     pub fn is_ambisonic(self) -> bool {
         matches!(self, ChannelFormat::Ambisonics(_))
     }
+    /// Whether the mixer can carry this format: at most [`ChannelFormat::MAX_MIX_CHANNELS`]
+    /// channels (Ambisonics up to 3rd order; 4th to 7th order are stored but not offered).
+    pub fn mixable(self) -> bool {
+        self.channels() <= Self::MAX_MIX_CHANNELS
+    }
     pub fn has_lfe(self) -> bool {
         self.speakers().contains(&Speaker::Lfe)
+    }
+    /// Each channel's loudness weight ([`Speaker::loudness_weight`]); 1.0 for every channel of
+    /// an Ambisonics format (it has no speakers).
+    pub fn loudness_weights(self) -> Vec<f32> {
+        let sp = self.speakers();
+        if sp.is_empty() { vec![1.0; self.channels()] } else { sp.iter().map(|s| s.loudness_weight()).collect() }
     }
     pub fn has_height(self) -> bool {
         self.speakers().iter().any(|s| s.is_height())
@@ -299,6 +312,16 @@ impl Speaker {
     }
     pub fn is_lfe(self) -> bool {
         self == Speaker::Lfe
+    }
+    /// The channel weight loudness measurement gives this speaker (ITU-R BS.1770-4, table 3):
+    /// 0 for the LFE, 1.41 (+1.5 dB) for a speaker at ear height between 60° and 120° from the
+    /// front, 1.0 for every other.
+    pub fn loudness_weight(self) -> f32 {
+        match self {
+            Speaker::Lfe => 0.0,
+            Speaker::Ls | Speaker::Rs | Speaker::Lss | Speaker::Rss | Speaker::Lw | Speaker::Rw => 1.41,
+            _ => 1.0,
+        }
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -424,6 +447,15 @@ pub fn track_input_channel(k: usize, first: usize, width: usize) -> usize {
     first.saturating_add(k.min(width.saturating_sub(1)))
 }
 
+/// The device input channel that track channel `k` of a `track_channels`-wide track reads when no
+/// hardware input is chosen, on a device with `device_inputs` channels: the device's first
+/// channels in order (a stereo track hears and records In 1-2), and on a device with fewer
+/// channels than the track, its last channel on the remaining sides (a mono device feeds both
+/// sides). Monitoring and recording both use this, so what is heard is what is recorded.
+pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> usize {
+    track_input_channel(k, 0, track_channels.min(device_inputs).max(1))
+}
+
 /// Per-track input monitoring (the strip's "I" button).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -517,6 +549,76 @@ pub struct MidiIn {
     /// 0: Omni (every channel), else 1-16.
     #[serde(default)]
     pub channel: u8,
+    /// What the track does to its input on the way in, before its instrument hears it and
+    /// before a take keeps it.
+    #[serde(default, skip_serializing_if = "MidiTransform::is_identity")]
+    pub transform: MidiTransform,
+}
+
+/// A track's MIDI input transform (Real-Time Properties for the input): applied to what the
+/// instrument hears live (thru) and to what a take records, never to the clips. Note-ons and
+/// note-offs go through the same mapping, so a note always ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MidiTransform {
+    /// Semitones added to every note (and poly pressure key); a note moved past 0..127 is left out.
+    pub transpose: i8,
+    /// Velocity scale in percent (100: as played).
+    pub velocity: u8,
+    /// Velocity curve, -100..100: 0 straight, above 0 harder (soft playing comes out softer),
+    /// below 0 softer (soft playing comes out louder).
+    pub curve: i8,
+    /// Every note-on at this velocity (0: off). Comes after scale and curve.
+    pub fixed_velocity: u8,
+    /// Only the keys from `key_low` to `key_high` (as played, before transposing) pass.
+    pub key_low: u8,
+    pub key_high: u8,
+    /// Every channel message onto this channel, 1-16 (0: as played).
+    pub channel: u8,
+}
+
+impl Default for MidiTransform {
+    fn default() -> Self {
+        MidiTransform { transpose: 0, velocity: 100, curve: 0, fixed_velocity: 0, key_low: 0, key_high: 127, channel: 0 }
+    }
+}
+
+impl MidiTransform {
+    /// Nothing changes.
+    pub fn is_identity(&self) -> bool {
+        *self == MidiTransform::default()
+    }
+
+    /// `msg` as the transform makes it; `None` when it is left out (a key outside the range, or
+    /// moved past 0..127). No allocation.
+    pub fn apply(&self, msg: [u8; 3]) -> Option<[u8; 3]> {
+        if self.is_identity() {
+            return Some(msg);
+        }
+        let [mut status, mut d1, mut d2] = msg;
+        let kind = status & 0xF0;
+        if matches!(kind, 0x80 | 0x90 | 0xA0) {
+            if d1 < self.key_low || d1 > self.key_high {
+                return None;
+            }
+            d1 = u8::try_from(i16::from(d1) + i16::from(self.transpose)).ok().filter(|p| *p <= 127)?;
+        }
+        if kind == 0x90 && d2 > 0 {
+            let mut v = f32::from(d2) / 127.0;
+            if self.curve != 0 {
+                v = v.powf(2f32.powf(f32::from(self.curve.clamp(-100, 100)) / 50.0));
+            }
+            v *= f32::from(self.velocity) / 100.0;
+            d2 = (v * 127.0).round().clamp(1.0, 127.0) as u8;
+            if self.fixed_velocity > 0 {
+                d2 = self.fixed_velocity.min(127);
+            }
+        }
+        if (0x80..0xF0).contains(&status) && (1..=16).contains(&self.channel) {
+            status = kind | (self.channel - 1);
+        }
+        Some([status, d1, d2])
+    }
 }
 
 impl MidiIn {
@@ -664,6 +766,12 @@ pub struct Insert {
     /// group, on any track, shares one value bus. `None`: not linked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_group: Option<u32>,
+    /// The module runs after the fader and mute instead of before them (Cubase's post-fader
+    /// slots; on the master, Pro Tools' place for its inserts): it is not in the pre-fader copy
+    /// (pre-fader sends, keys, meters), is never frozen, and a commit keeps it live on the new
+    /// track.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub post_fader: bool,
     /// Which loading of `state` the running plugin instance should have: a hosted preset loaded
     /// into the module (`mix.module_preset`) changes it, so the instance is created again from
     /// `state`, and undo (which puts the previous value back) does the same with the previous
@@ -744,6 +852,25 @@ pub struct SidechainSource {
 fn yes() -> bool {
     true
 }
+
+fn unity() -> f32 {
+    1.0
+}
+
+fn is_unity(v: &f32) -> bool {
+    *v == 1.0
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// The longest per-track delay, samples (a second at 192 kHz).
+pub const MAX_TRACK_DELAY: u32 = 192_000;
 
 /// A drum family: a pad's colour in the kit view and the step grid.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -896,6 +1023,7 @@ impl Insert {
             kit: None,
             kit_fx: Vec::new(),
             link_group: None,
+            post_fader: false,
             state_load: 0,
             foreign: None,
         }
@@ -948,11 +1076,14 @@ pub struct SendSlot {
     /// Surround position into a multichannel bus (None = follow the track / stereo pan).
     #[serde(default)]
     pub surround: Option<SurroundPan>,
+    /// The send's pan follows the track's main pan (and its automation) instead of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pan_follows_main: bool,
 }
 
 impl SendSlot {
     pub fn new(target: Route) -> Self {
-        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None }
+        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None, pan_follows_main: false }
     }
 }
 
@@ -970,6 +1101,10 @@ pub struct Mixer {
     pub record_arm: bool,
     #[serde(default)]
     pub input_monitor: InputMonitor,
+    /// Record with inserts (print): an armed audio track's take is what its trim, polarity and
+    /// inserts make of the input (after them, before the fader), not the input as it came in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_inserts: bool,
     #[serde(default)]
     pub phase_invert: bool,
     pub input: Route,
@@ -994,6 +1129,18 @@ pub struct Mixer {
     pub next_module: u32,
     #[serde(default)]
     pub strip_size: StripSize,
+    /// Stereo width of a stereo strip, applied before its pans: 1 as it comes, 0 mono, −1 the
+    /// sides swapped (−1..=1). Other formats ignore it.
+    #[serde(default = "unity", skip_serializing_if = "is_unity")]
+    pub width: f32,
+    /// Balance of a stereo strip's output, after its pans: −1 only the left side, +1 only the
+    /// right, 0 both at full level. Other formats ignore it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub balance: f32,
+    /// Delay of the strip's signal, samples (0..=[`MAX_TRACK_DELAY`]), before its inserts. Delay
+    /// compensation leaves it in: it moves the track against the others on purpose.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub delay: u32,
 }
 
 impl Mixer {
@@ -1011,6 +1158,7 @@ impl Mixer {
             solo_safe: false,
             record_arm: false,
             input_monitor: InputMonitor::Auto,
+            record_inserts: false,
             phase_invert: false,
             input: Route::None,
             output: Route::Main,
@@ -1022,6 +1170,9 @@ impl Mixer {
             surround: None,
             next_module: 1,
             strip_size: StripSize::Auto,
+            width: 1.0,
+            balance: 0.0,
+            delay: 0,
         }
     }
 
@@ -1417,6 +1568,20 @@ mod tests {
         assert_eq!(back.inserts.iter().map(|i| i.plugin.as_str()).collect::<Vec<_>>(), ["gain", "trim"]);
     }
 
+    /// Mix bug 9: loudness weighted only a 6-channel layout, as 5.1, whatever it was.
+    #[test]
+    fn loudness_weights_follow_the_speakers() {
+        assert_eq!(ChannelFormat::Surround51.loudness_weights(), [1.0, 1.0, 1.0, 0.0, 1.41, 1.41]);
+        // 7.1: L R C LFE Lrs Rrs Lss Rss: the rears at ±150° are not boosted, the sides are.
+        assert_eq!(ChannelFormat::Surround71.loudness_weights(), [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.41, 1.41]);
+        // 6.0 has six channels but no LFE.
+        assert_eq!(ChannelFormat::Surround60.loudness_weights(), [1.0, 1.0, 1.0, 1.41, 1.41, 1.0]);
+        let w = ChannelFormat::Atmos714.loudness_weights();
+        assert_eq!(w.len(), 12);
+        assert_eq!(&w[8..], [1.0; 4], "heights count once");
+        assert_eq!(ChannelFormat::Ambisonics(1).loudness_weights(), [1.0; 4]);
+    }
+
     #[test]
     fn speaker_layouts_match_channel_counts_and_masks() {
         for f in ChannelFormat::ALL {
@@ -1534,5 +1699,14 @@ mod tests {
         assert_eq!(track_input_channel(1, 6, 2), 7);
         assert_eq!(track_input_channel(5, 6, 2), 7);
         assert_eq!(track_input_channel(1, 3, 0), 3);
+    }
+
+    #[test]
+    fn no_input_is_the_devices_first_channels() {
+        let chans = |track, device| (0..track).map(|k| default_input_channel(k, track, device)).collect::<Vec<_>>();
+        assert_eq!(chans(2, 8), [0, 1]);
+        assert_eq!(chans(2, 1), [0, 0]);
+        assert_eq!(chans(1, 8), [0]);
+        assert_eq!(chans(2, 0), [0, 0], "no device channels: nothing to read, never a panic");
     }
 }

@@ -10,7 +10,7 @@ use soundcraft_time::Range;
 const SR: i64 = 48_000;
 
 fn note(pitch: u8, velocity: u8, start: i64, length: i64) -> Note {
-    Note { pitch, velocity, release_velocity: 64, channel: 0, start, length }
+    Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel: 0, start, length }
 }
 
 /// An instrument track with a synth and one MIDI clip at 0 (4 s at the default 120 bpm, so a beat
@@ -68,8 +68,8 @@ fn pedal_edits_reach_the_instrument() {
     let seq = Sequence {
         notes: vec![note(64, 90, 0, 4800)],
         ctrls: vec![
-            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(64), value: 127 },
-            CtrlEvent { tick: 5000, channel: 0, kind: CtrlKind::Cc(64), value: 0 },
+            CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(64), value: 127, shape: Default::default() },
+            CtrlEvent { tick: 5000, channel: 0, kind: CtrlKind::Cc(64), value: 0, shape: Default::default() },
         ],
     };
     let (mut e, t, id) = setup(seq, &[(0, 3840, 0), (3840, 3840, 3)]);

@@ -7,8 +7,9 @@
 //! [`MidiFilter`]. The buffer is made once with a fixed capacity: full, it drops and counts, and
 //! nothing on the audio thread allocates.
 
-/// Most MIDI input ports open at once (each has its own ring in the host).
-pub const MAX_MIDI_PORTS: usize = 16;
+/// Most MIDI input ports open at once (each has its own ring in the host; the last is Musical
+/// Typing's). Port-slot sets are `u64` bit masks.
+pub const MAX_MIDI_PORTS: usize = 64;
 
 /// Events one block holds, from all ports together.
 pub const LIVE_MIDI_CAPACITY: usize = 2048;
@@ -36,6 +37,9 @@ pub struct LiveMidi {
     pub ports: [u64; MAX_MIDI_PORTS],
     /// MIDI Thru: record-armed tracks play what they are given (input-monitored ones always do).
     pub thru: bool,
+    /// Port slots whose port was unplugged and plugged back in since the last block (bit per
+    /// slot): the notes they held are let go, as for a port that closed.
+    pub reset: u64,
 }
 
 impl Clone for LiveMidi {
@@ -44,7 +48,7 @@ impl Clone for LiveMidi {
     fn clone(&self) -> Self {
         let mut c = LiveMidi::new();
         c.events.extend_from_slice(&self.events);
-        (c.dropped, c.ports, c.thru) = (self.dropped, self.ports, self.thru);
+        (c.dropped, c.ports, c.thru, c.reset) = (self.dropped, self.ports, self.thru, self.reset);
         c
     }
 }
@@ -63,6 +67,7 @@ impl LiveMidi {
             dropped: 0,
             ports: [0; MAX_MIDI_PORTS],
             thru: true,
+            reset: 0,
         }
     }
 
@@ -171,12 +176,23 @@ pub fn port_id(name: &str) -> u64 {
 pub struct MidiFilter {
     pub port: Option<u64>,
     pub channel: u8,
+    /// The track's input transform (applied to what passes).
+    pub transform: soundcraft_model::MidiTransform,
 }
 
 impl MidiFilter {
     /// The filter for a track input on `device` (`None`: all inputs) and `channel`.
     pub fn new(device: Option<&str>, channel: u8) -> MidiFilter {
-        MidiFilter { port: device.map(port_id), channel: if channel > 16 { 0 } else { channel } }
+        MidiFilter {
+            port: device.map(port_id),
+            channel: if channel > 16 { 0 } else { channel },
+            transform: soundcraft_model::MidiTransform::default(),
+        }
+    }
+
+    /// The filter for a track's MIDI input, its transform included.
+    pub fn for_input(m: &soundcraft_model::MidiIn) -> MidiFilter {
+        MidiFilter { transform: m.transform, ..MidiFilter::new(m.device.as_deref(), m.channel) }
     }
 
     /// Whether `e` passes: its port's identity matches (any port for all inputs) and, for a
@@ -266,12 +282,12 @@ impl HeldNotes {
     /// Calls `off` with a note-off for every held note, then a pedal-up for every pedal held
     /// down, and forgets them.
     pub fn release(&mut self, off: impl FnMut([u8; 3])) {
-        self.release_ports(u16::MAX, off);
+        self.release_ports(u64::MAX, off);
     }
 
     /// [`HeldNotes::release`] for what came from the port slots in `slots` (bit per slot).
-    pub fn release_ports(&mut self, slots: u16, mut off: impl FnMut([u8; 3])) {
-        let from = |p: u8| p < 16 && slots & (1 << p) != 0;
+    pub fn release_ports(&mut self, slots: u64, mut off: impl FnMut([u8; 3])) {
+        let from = |p: u8| p < 64 && slots & (1u64 << p) != 0;
         for (w, word) in self.notes.iter_mut().enumerate() {
             let mut left = *word;
             while left != 0 {

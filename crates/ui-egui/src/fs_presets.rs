@@ -17,9 +17,30 @@ pub fn engine_folders() -> Vec<(&'static str, &'static str)> {
 }
 
 /// A preset's values as `mix.module_params` takes them. As FireStation loads a preset, only the
-/// values it lists are set (`loadPreset` sets each of `preset.values`).
-fn params_of(p: &FsPreset) -> Map<String, Value> {
-    p.values.iter().map(|(k, v)| (k.clone(), json!(v))).collect()
+/// values it lists are set (`loadPreset` sets each of `preset.values`), with the exceptions of
+/// [`fill_missing`].
+fn params_of(info: &PluginInfo, p: &FsPreset) -> Map<String, Value> {
+    let mut m = p.values.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+    fill_missing(info, &mut m);
+    m
+}
+
+/// Parameters a preset that does not list them still sets, to their defaults, per plugin: Comp's
+/// presets from before Multiband load in Parallel at the default crossovers, not in whatever split
+/// the module was in. Every recall path (the editor, the drawer's menu, the browser) goes through
+/// here, so a preset sounds the same wherever it is loaded.
+const FILLED: &[(&str, &[&str])] = &[("fs_comp", &["split", "xoverLo", "xoverHi"])];
+
+/// Adds [`FILLED`]'s parameters of `info`'s plugin that `params` does not list, at their defaults.
+pub fn fill_missing(info: &PluginInfo, params: &mut Map<String, Value>) {
+    let Some((_, ids)) = FILLED.iter().find(|(id, _)| *id == info.id) else { return };
+    for id in *ids {
+        if !params.contains_key(*id)
+            && let Some(p) = info.param(id)
+        {
+            params.insert((*id).to_string(), json!(p.default));
+        }
+    }
 }
 
 /// A factory preset of `info`'s plugin: its name and the parameters to set. `None` if the JSON
@@ -27,7 +48,7 @@ fn params_of(p: &FsPreset) -> Map<String, Value> {
 pub fn factory_recall(info: &PluginInfo, list_name: &str, json: &str) -> Option<(String, Map<String, Value>)> {
     let p = FsPreset::parse(json, info)?;
     let name = if p.name.trim().is_empty() { list_name.to_string() } else { p.name.clone() };
-    Some((name, params_of(&p)))
+    Some((name, params_of(info, &p)))
 }
 
 /// A plugin's factory presets in one group: `(group, [(name, json)])`.
@@ -134,7 +155,7 @@ pub fn import_firestation(appdata: &Path, preset_root: &Path, engine: Option<&st
                 n.skipped += 1;
                 continue;
             }
-            let body = json!({"format": "soundcraft-plugin-preset", "plugin": plugin, "params": params_of(&p)});
+            let body = json!({"format": "soundcraft-plugin-preset", "plugin": plugin, "params": params_of(info, &p)});
             match std::fs::create_dir_all(&out_dir).and_then(|()| std::fs::write(&target, body.to_string())) {
                 Ok(()) => n.imported += 1,
                 Err(_) => n.failed += 1,
@@ -180,6 +201,27 @@ mod tests {
         assert_eq!(ins.params["circuit"], 0.0);
         assert_eq!(ins.params["variant"], 2.0);
         assert!((ins.params["drive"] - 0.466_667).abs() < 1e-5);
+    }
+
+    /// Built-in effects parity, bug 10: a Comp preset from before Multiband loaded in Parallel at
+    /// the default crossovers from the wide editor, but kept the module's split from the drawer
+    /// menu and the browser. Every path takes `factory_recall`, which now fills them in.
+    #[test]
+    fn a_comp_preset_without_the_split_loads_in_parallel_everywhere() {
+        let info = soundcraft_dsp::plugin_info("fs_comp").unwrap();
+        let (name, json) = factory_presets("fs_comp")
+            .iter()
+            .find(|(_, j)| FsPreset::parse(j, info).is_some_and(|p| !p.values.contains_key("split")))
+            .expect("a Comp preset that does not list the split");
+        let (_, params) = factory_recall(info, name, json).unwrap();
+        for id in ["split", "xoverLo", "xoverHi"] {
+            assert_eq!(params[id], json!(info.param(id).unwrap().default), "{id}");
+        }
+        // A preset of another engine is left as it lists itself.
+        let sat = soundcraft_dsp::plugin_info("fs_sat").unwrap();
+        let (n, j) = factory_presets("fs_sat")[0];
+        let (_, p) = factory_recall(sat, n, j).unwrap();
+        assert_eq!(p.len(), FsPreset::parse(j, sat).unwrap().values.len());
     }
 
     #[test]

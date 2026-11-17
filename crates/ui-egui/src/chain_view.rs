@@ -876,6 +876,12 @@ fn knob_row(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, knobs
         if !applies {
             c.multiply_opacity(0.4);
         }
+        crate::midi_learn::context_at(
+            app,
+            ui,
+            cell,
+            soundcraft_model::MidiTarget::Param { track, param: soundcraft_model::AutoParam::Plugin { module: ins.id, param: info.id.to_string() } },
+        );
         let out = c.vertical_centered(|ui| knob(ui, info, value, size, accent, KnobStyle::Dark)).inner;
         let busy = ui.id().with(("knob-busy", info.id));
         if let Some(v) = out.changed {

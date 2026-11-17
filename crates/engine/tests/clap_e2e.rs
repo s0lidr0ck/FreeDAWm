@@ -41,7 +41,7 @@ fn install_fixture_now() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::copy(target.join("debug").join(lib), dir.join("Fixture.clap")).unwrap();
-    assert_eq!(soundcraft_clap_host::add_search_dir(&dir), 5);
+    assert_eq!(soundcraft_clap_host::add_search_dir(&dir), 6);
 }
 
 #[test]
@@ -127,4 +127,34 @@ fn clap_state_is_captured_stored_and_restored_before_the_first_block() {
     e.execute("mix.insert_param", &json!({"track": t.0, "slot": 0, "param": "7", "value": 0.5})).unwrap();
     let half = gain_of(e.session());
     assert!((half - reference / 3.0).abs() < 1e-5, "{half} vs {}", reference / 3.0);
+}
+
+/// A CLAP plugin with a sidechain port is keyed from another track through the mixer, like the
+/// built-in keyed modules: chosen with `mix.module_sidechain`, rendered into its key port.
+#[test]
+fn a_clap_sidechain_is_keyed_from_another_track() {
+    install_fixture();
+    let mut e = Engine::default();
+    let s = e.session_mut();
+    let main = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+    let kick = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+    s.pool.insert(SourceId(80), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 4800]] })));
+    s.pool.insert(SourceId(81), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.125; 4800]] })));
+    for (t, src) in [(main, 80), (kick, 81)] {
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "dc", SourceId(src), 0, 0, 4800));
+    }
+    let r = e.execute("mix.insert", &json!({"track": main.0, "plugin": "clap:org.soundcraft.test.keyed"})).unwrap();
+    let module = r["module"].as_u64().unwrap();
+    let mix = |e: &Engine| soundcraft_mix::render_range(e.session(), Range::new(0, 4800), 512)[0][2000];
+    let unkeyed = mix(&e);
+    e.execute("mix.module_sidechain", &json!({"track": main.0, "module": module, "source": kick.0})).unwrap();
+    let keyed = mix(&e);
+    // Unkeyed the mix is 0.25 + 0.125 (one pan law on both centred tracks); keyed, the plugin adds
+    // the kick's 0.125 into the main track as well.
+    assert!(unkeyed.abs() > 0.01);
+    assert!(((keyed - unkeyed) - unkeyed / 3.0).abs() < 1e-4, "unkeyed {unkeyed} keyed {keyed}");
+    // Cleared, the key port is silent again.
+    e.execute("mix.module_sidechain", &json!({"track": main.0, "module": module, "source": null})).unwrap();
+    assert!((mix(&e) - unkeyed).abs() < 1e-5);
 }

@@ -58,12 +58,15 @@ pub static SHIFT_INFO: PluginInfo = PluginInfo {
 };
 
 /// Delays the signal by `delay_ms + delay_samples`; changes crossfade between taps (no clicks).
+/// A change that comes while a crossfade runs waits for it to finish.
 pub struct TimeShift {
     p: Params,
     sr: f32,
     lines: Vec<DelayLine>,
+    /// The tap a crossfade comes from, the one it goes to, and the delay asked for since.
     cur: usize,
     target: usize,
+    want: usize,
     fade: usize,
 }
 
@@ -75,7 +78,7 @@ impl Default for TimeShift {
 
 impl TimeShift {
     pub fn new() -> Self {
-        Self { p: Params::new(&SHIFT_PARAMS), sr: 48_000.0, lines: Vec::new(), cur: 0, target: 0, fade: 0 }
+        Self { p: Params::new(&SHIFT_PARAMS), sr: 48_000.0, lines: Vec::new(), cur: 0, target: 0, want: 0, fade: 0 }
     }
 
     fn delay_samples(&self) -> usize {
@@ -84,12 +87,16 @@ impl TimeShift {
     }
 
     fn update(&mut self) {
-        let d = self.delay_samples();
-        if d != self.target {
-            if self.fade == 0 {
-                self.fade = XFADE;
-            }
-            self.target = d;
+        self.want = self.delay_samples();
+        self.start_fade();
+    }
+
+    /// Starts the crossfade to the delay asked for, unless one is running.
+    fn start_fade(&mut self) {
+        if self.fade == 0 && self.want != self.target {
+            self.cur = self.target;
+            self.target = self.want;
+            self.fade = XFADE;
         }
     }
 }
@@ -114,6 +121,7 @@ impl Plugin for TimeShift {
         self.lines.iter_mut().for_each(DelayLine::clear);
         self.target = self.delay_samples();
         self.cur = self.target;
+        self.want = self.target;
         self.fade = 0;
     }
 
@@ -133,13 +141,14 @@ impl Plugin for TimeShift {
                 self.fade -= 1;
                 if self.fade == 0 {
                     self.cur = self.target;
+                    self.start_fade();
                 }
             }
         }
     }
 
     fn tail_samples(&self) -> usize {
-        self.target
+        self.target.max(self.want)
     }
 }
 

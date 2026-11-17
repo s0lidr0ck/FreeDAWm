@@ -1,7 +1,9 @@
 //! Lift - Sampler (id `sampler`): plays one recorded sample across the keyboard, 32 voices.
 //!
 //! Each note plays the sample pitched from its root note (an octave up plays twice as fast) with
-//! 4-point cubic interpolation, which also converts the sample's own rate to the host's. Key and
+//! 4-point cubic interpolation, which also converts the sample's own rate to the host's; played
+//! faster than recorded it is read through a band-limiting filter instead (`resample`), so a
+//! sample pitched up does not fold its highs back as aliasing. Key and
 //! velocity ranges, an amp ADSR with velocity sensitivity, a start and an end point, forward or
 //! ping-pong loops, gate or one-shot playback, a resonant filter (low-, high- or band-pass) with
 //! its own attack/decay envelope, an LFO on pitch, filter and volume, glide, mono (legato) or
@@ -16,6 +18,7 @@ use std::sync::Arc;
 
 use super::synth::{Adsr, AdsrRates, Event, EventKind, EventQueue, MAX_EVENTS, Stage};
 use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
+use crate::resample;
 use crate::util::{Rng, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, SampleSource, Taper, Transport, Unit, db_to_gain};
 
@@ -70,6 +73,8 @@ const WARP: usize = 100;
 const SAMPLE_BPM: usize = 101;
 const LFO_SYNC: usize = 102;
 const LFO_DIVISION: usize = 103;
+const BEND_RANGE: usize = 104;
+const MOD_WHEEL: usize = 105;
 /// LFO divisions with tempo sync, and the quarter notes one cycle lasts.
 pub const LFO_DIVISIONS: &[&str] = &["2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T"];
 const DIVISION_QUARTERS: [f64; 10] = [8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0];
@@ -105,7 +110,7 @@ fn pan_display(v: f32) -> String {
 
 // New parameters go at the end: sessions and presets store them by id, and the indices above
 // are the order of this table.
-static SAMPLER_PARAMS: [ParamInfo; 104] = [
+static SAMPLER_PARAMS: [ParamInfo; 106] = [
     lin("root_note", "Root Note", 0.0, 127.0, 60.0, Unit::None),
     lin("transpose", "Transpose", -48.0, 48.0, 0.0, Unit::Semitones),
     lin("fine_tune", "Fine Tune", -100.0, 100.0, 0.0, Unit::Cents),
@@ -221,6 +226,10 @@ static SAMPLER_PARAMS: [ParamInfo; 104] = [
     lin("sample_bpm", "Sample Tempo", 40.0, 300.0, 120.0, Unit::None),
     toggle("lfo_sync", "LFO Sync", false),
     choice("lfo_division", "LFO Division", LFO_DIVISIONS, 3),
+    // The pitch bend's throw each way, and the vibrato (cents each way, at the LFO's shape and
+    // rate) the mod wheel brings in.
+    lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
+    lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
 ];
 
 pub static SAMPLER_INFO: PluginInfo = PluginInfo {
@@ -351,9 +360,17 @@ struct Voice {
     target: f64,
     fenv: AdEnv,
     svf: [Svf; 2],
-    /// Filter coefficients for the current control period.
+    /// Filter coefficients for the current control period: `g` the target the control update
+    /// set, `g_now` the value in use, moving to it by `g_inc` a frame (no steps in the sweep).
     g: f32,
     k: f32,
+    g_now: f32,
+    g_inc: f32,
+    /// What the voice added to each of the first two channels on its last frame: a stolen
+    /// voice's sound fades out from there instead of stopping dead.
+    last: [f32; 2],
+    /// Its key was let go while the sustain pedal was down: it is released with the pedal.
+    pedal: bool,
 }
 
 impl Voice {
@@ -377,6 +394,10 @@ impl Voice {
             svf: [Svf { ic1: 0.0, ic2: 0.0 }; 2],
             g: 0.0,
             k: 2.0,
+            g_now: -1.0,
+            g_inc: 0.0,
+            last: [0.0; 2],
+            pedal: false,
         }
     }
 
@@ -432,6 +453,10 @@ struct Derived {
     lfo_sync: bool,
     /// Quarter notes per LFO cycle when synced.
     lfo_quarters: f64,
+    /// Bend Range, semitones each way.
+    bend_range: f64,
+    /// The mod wheel's vibrato at full, semitones each way.
+    wheel_depth: f64,
 }
 
 /// A MIDI key or velocity parameter as a whole number in `lo..=127`.
@@ -441,28 +466,6 @@ fn whole(v: f32, lo: u8) -> u8 {
 
 fn ordered(a: u8, b: u8) -> (u8, u8) {
     (a.min(b), a.max(b))
-}
-
-/// 4-point cubic (Catmull-Rom) interpolation of `x` at fractional frame `pos` (>= 0). Reads
-/// outside the slice are silence.
-#[inline]
-fn hermite(x: &[f32], pos: f64) -> f32 {
-    let i = pos as usize;
-    let t = (pos - i as f64) as f32;
-    let at = |k: usize| x.get(k).copied().unwrap_or(0.0);
-    let x0 = at(i);
-    if t == 0.0 {
-        return if x0.is_finite() { x0 } else { 0.0 };
-    }
-    let xm1 = at(i.saturating_sub(1));
-    let x1 = at(i.saturating_add(1));
-    let x2 = at(i.saturating_add(2));
-    let c1 = 0.5 * (x1 - xm1);
-    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
-    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
-    let y = ((c3 * t + c2) * t + c1) * t + x0;
-    // A float file can hold NaN or infinities; they play as silence.
-    if y.is_finite() { y } else { 0.0 }
 }
 
 /// Plays a sample across the keyboard.
@@ -488,6 +491,19 @@ pub struct Sampler {
     random: f32,
     /// Frames until the voices' pitch and filter are next updated.
     control: usize,
+    /// The sound of voices cut off to make room (a steal, mono mode's retrigger), fading to
+    /// nothing over a few milliseconds, per channel: a steal no longer clicks.
+    declick: [f32; 2],
+    declick_coef: f32,
+    /// The sustain pedal (CC 64) is down.
+    sustain: bool,
+    /// Pitch bend, -1..1 (Bend Range is a full throw), and the mod wheel, 0..1.
+    /// Sounds replaced by `set_sample`, for the host to drop off the audio thread
+    /// (`take_released_asset`); room for a few is made in `new`.
+    released: Vec<Arc<dyn SampleSource>>,
+    overflow: Option<Arc<dyn SampleSource>>,
+    bend: f64,
+    wheel: f64,
     /// The pitch (semitones from the sample's) the last note started at, for glide.
     last_pitch: Option<f64>,
     /// Mono: the keys held, oldest first.
@@ -506,6 +522,8 @@ impl Default for Sampler {
 
 impl Sampler {
     pub fn new() -> Self {
+        // the band-limited reader's table, made here rather than on the first pitched-up note
+        resample::warm();
         let mut s = Self {
             p: Params::new(&SAMPLER_PARAMS),
             d: Derived {
@@ -540,6 +558,8 @@ impl Sampler {
                 sample_bpm: 120.0,
                 lfo_sync: false,
                 lfo_quarters: 1.0,
+                bend_range: 2.0,
+                wheel_depth: 0.0,
             },
             sr: 48_000.0,
             ch: 0,
@@ -556,6 +576,13 @@ impl Sampler {
             rng: Rng::new(0x5A3C_91E7),
             random: 0.0,
             control: 0,
+            declick: [0.0; 2],
+            declick_coef: 0.0,
+            sustain: false,
+            bend: 0.0,
+            wheel: 0.0,
+            released: Vec::with_capacity(4),
+            overflow: None,
             last_pitch: None,
             held: [0; HELD_STACK],
             held_len: 0,
@@ -618,6 +645,8 @@ impl Sampler {
             sample_bpm: f64::from(finite(v(SAMPLE_BPM), 120.0)).clamp(40.0, 300.0),
             lfo_sync: self.p.on(LFO_SYNC),
             lfo_quarters: DIVISION_QUARTERS.get(self.p.choice(LFO_DIVISION)).copied().unwrap_or(1.0),
+            bend_range: f64::from(finite(v(BEND_RANGE), 2.0)).clamp(0.0, 24.0),
+            wheel_depth: f64::from(finite(v(MOD_WHEEL), 0.0)).clamp(0.0, 100.0) / 100.0,
         };
         for (k, x) in self.d.slices.iter_mut().enumerate() {
             *x = f64::from(self.p.v(SLICE_FIRST + k) / 100.0).clamp(0.0, 1.0);
@@ -701,8 +730,11 @@ impl Sampler {
                 self.last_pitch = Some(pitch);
                 return;
             }
-            for v in self.voices.iter_mut().skip(1) {
-                v.stop();
+            for i in 1..self.voices.len() {
+                self.retire(i);
+                if let Some(v) = self.voices.get_mut(i) {
+                    v.stop();
+                }
             }
             self.begin(0, note, gain, pitch, step);
             return;
@@ -751,6 +783,15 @@ impl Sampler {
         self.control = 0;
     }
 
+    /// Voice `idx`'s sound carries on in the de-click fade before the voice is reused or stopped.
+    fn retire(&mut self, idx: usize) {
+        if let Some(v) = self.voices.get(idx).filter(|v| v.active()) {
+            for (d, l) in self.declick.iter_mut().zip(v.last) {
+                *d += l;
+            }
+        }
+    }
+
     /// The voice to steal: a released one before a held one, the quietest first.
     fn quietest(&self) -> Option<usize> {
         self.voices
@@ -768,8 +809,23 @@ impl Sampler {
         let end = self.end_frame();
         let from = if d.glide > 0.0 { self.last_pitch.unwrap_or(pitch) } else { pitch };
         let step = if from == pitch { step } else { self.step_for(from) };
+        self.retire(idx);
         if let Some(v) = self.voices.get_mut(idx) {
-            *v = Voice { note, held: !d.one_shot, gain, pos: start, step, forward: true, looping, end, pitch: from, target: pitch, ..Voice::new() };
+            // A one-shot plays through and ignores its note-off, unless it loops: a loop has no end
+            // to play to, so the note-off releases it (it used to ring until all notes off).
+            *v = Voice {
+                note,
+                held: !d.one_shot || looping,
+                gain,
+                pos: start,
+                step,
+                forward: true,
+                looping,
+                end,
+                pitch: from,
+                target: pitch,
+                ..Voice::new()
+            };
             v.grain_pos = [start; 2];
             v.env.gate_on();
             v.fenv.trigger();
@@ -832,7 +888,22 @@ impl Sampler {
             }
             return;
         }
+        let sustain = self.sustain;
         for v in self.voices.iter_mut().filter(|v| v.held && v.note == note) {
+            if sustain {
+                v.pedal = true;
+            } else {
+                v.held = false;
+                v.env.gate_off();
+            }
+        }
+    }
+
+    /// The pedal goes up (or the controllers reset): every voice it held is released.
+    fn pedal_up(&mut self) {
+        self.sustain = false;
+        for v in self.voices.iter_mut().filter(|v| v.pedal) {
+            v.pedal = false;
             v.held = false;
             v.env.gate_off();
         }
@@ -849,7 +920,15 @@ impl Sampler {
                     v.env.gate_off();
                 }
             }
-            EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
+            EventKind::Sustain(true) => self.sustain = true,
+            EventKind::Sustain(false) => self.pedal_up(),
+            EventKind::Bend(b) => self.bend = if b.is_finite() { f64::from(b).clamp(-1.0, 1.0) } else { 0.0 },
+            EventKind::Mod(m) => self.wheel = if m.is_finite() { f64::from(m).clamp(0.0, 1.0) } else { 0.0 },
+            EventKind::ResetControllers => {
+                self.pedal_up();
+                self.bend = 0.0;
+                self.wheel = 0.0;
+            }
         }
     }
 
@@ -894,7 +973,7 @@ impl Sampler {
             if (v.pitch - v.target).abs() < 1e-4 {
                 v.pitch = v.target;
             }
-            let semis = v.pitch + d.lfo_pitch * f64::from(lfo);
+            let semis = v.pitch + (d.lfo_pitch + d.wheel_depth * self.wheel) * f64::from(lfo) + self.bend * d.bend_range;
             let step = base * 2f64.powf(semis / 12.0);
             let step = if step.is_finite() { step.clamp(0.0, MAX_STEP) } else { 0.0 };
             if d.warp {
@@ -911,6 +990,11 @@ impl Sampler {
                 let g = (PI * hz / self.sr).tan();
                 v.g = if g.is_finite() { g } else { 0.0 };
                 v.k = d.k;
+                // a new voice starts on its value; after that it glides there over the period
+                if v.g_now < 0.0 {
+                    v.g_now = v.g;
+                }
+                v.g_inc = (v.g - v.g_now) / CONTROL as f32;
             }
         }
     }
@@ -945,7 +1029,8 @@ impl Sampler {
             for (c, b) in io.iter_mut().take(ch).enumerate() {
                 let src = if nch == 1 { 0 } else { c };
                 if let (Some(x), Some(data)) = (b.get_mut(n), sample.channel(src)) {
-                    let mut y = if d.warp { grains(data, v) } else { hermite(data, v.pos) };
+                    // band-limited at the step it plays at (pitched up, it would fold back)
+                    let mut y = if d.warp { grains(data, v) } else { resample::read(data, v.pos, v.step) };
                     if !d.warp
                         && v.looping
                         && let Some((len, from, xf)) = fade
@@ -953,20 +1038,27 @@ impl Sampler {
                     {
                         // Equal power: the loop's end fades out as its lead-in fades up.
                         let t = (((v.pos - from) / xf) as f32).clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
-                        y = y * t.cos() + hermite(data, v.pos - len) * t.sin();
+                        y = y * t.cos() + resample::read(data, v.pos - len, v.step) * t.sin();
                     }
                     if d.filter != FilterKind::Off
                         && let Some(f) = v.svf.get_mut(c.min(1))
                     {
-                        y = f.run(y, v.g, v.k, d.filter);
+                        y = f.run(y, v.g_now.max(0.0), v.k, d.filter);
                     }
                     let side = match c {
                         0 if ch >= 2 => pan.0,
                         1 => pan.1,
                         _ => 1.0,
                     };
-                    *x += y * a * side;
+                    let out = y * a * side;
+                    if let Some(l) = v.last.get_mut(c) {
+                        *l = if out.is_finite() { out } else { 0.0 };
+                    }
+                    *x += out;
                 }
+            }
+            if d.filter != FilterKind::Off {
+                v.g_now += v.g_inc;
             }
             if d.warp {
                 advance_grains(v, grain_inc, sample.channel(0).unwrap_or_default(), search);
@@ -983,7 +1075,7 @@ fn grains(data: &[f32], v: &Voice) -> f32 {
     let mut y = 0.0;
     for (pos, ph) in v.grain_pos.iter().zip(v.grain_phase) {
         let w = (std::f32::consts::PI * ph).sin();
-        y += hermite(data, *pos) * w * w;
+        y += resample::read(data, *pos, v.pstep) * w * w;
     }
     y
 }
@@ -1101,6 +1193,9 @@ impl Plugin for Sampler {
     fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
+        // a cut-off voice fades with a 1.5 ms time constant (under -80 dB in 15 ms)
+        self.declick_coef = (-1.0 / (0.0015 * self.sr)).exp();
+        self.declick = [0.0; 2];
         self.level.set_time(20.0, self.sr);
         self.pan.set_time(20.0, self.sr);
         self.update();
@@ -1118,6 +1213,10 @@ impl Plugin for Sampler {
         self.control = 0;
         self.last_pitch = None;
         self.held_len = 0;
+        self.declick = [0.0; 2];
+        self.sustain = false;
+        self.bend = 0.0;
+        self.wheel = 0.0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -1156,6 +1255,17 @@ impl Plugin for Sampler {
             let p = self.pan.next();
             let pan = ((1.0 - p).min(1.0), (1.0 + p).min(1.0));
             self.render_frame(io, ch, n, level, pan);
+            if self.declick != [0.0; 2] {
+                for (b, d) in io.iter_mut().zip(self.declick.iter_mut()) {
+                    if let Some(x) = b.get_mut(n) {
+                        *x += *d;
+                    }
+                    *d *= self.declick_coef;
+                    if d.abs() < 1e-7 {
+                        *d = 0.0;
+                    }
+                }
+            }
         }
         // Events for an empty block take effect immediately.
         for e in evs.iter().take(count).skip(next) {
@@ -1194,6 +1304,22 @@ impl Plugin for Sampler {
         self.events.push(offset, EventKind::Off(note));
     }
 
+    /// The sustain pedal (CC 64), pitch bend (over Bend Range), the mod wheel (CC 1: vibrato at
+    /// the LFO's shape and rate, up to Mod Wheel Vibrato) and the reset of controllers (CC 121);
+    /// all notes off (CC 120, 123).
+    fn midi(&mut self, offset: usize, msg: [u8; 3]) {
+        let [status, d1, d2] = msg;
+        let kind = match (status & 0xF0, d1) {
+            (0xB0, 64) => EventKind::Sustain(d2 >= 64),
+            (0xB0, 120 | 123) => EventKind::AllOff,
+            (0xB0, 121) => EventKind::ResetControllers,
+            (0xB0, 1) => EventKind::Mod(f32::from(d2 & 0x7F) / 127.0),
+            (0xE0, _) => EventKind::Bend(super::synth::bend_of(d1, d2)),
+            _ => return,
+        };
+        self.events.push(offset, kind);
+    }
+
     fn all_notes_off(&mut self) {
         self.events.push(0, EventKind::AllOff);
     }
@@ -1207,8 +1333,21 @@ impl Plugin for Sampler {
         let rate = sample.as_deref().map_or(self.sr, |s| s.sample_rate());
         // An unusable rate plays at the host rate rather than not at all.
         self.sample_sr = if rate.is_finite() && rate > 0.0 { rate.min(1_536_000.0) } else { self.sr };
-        self.sample = sample;
+        // The old sound goes back to the host (`take_released_asset`), so the last reference to a
+        // large sample is never dropped here on the audio thread; past the reserved room it is
+        // kept until the host takes the others.
+        if let Some(old) = std::mem::replace(&mut self.sample, sample) {
+            if self.released.len() < self.released.capacity() {
+                self.released.push(old);
+            } else {
+                self.overflow = Some(old);
+            }
+        }
         true
+    }
+
+    fn take_released_asset(&mut self) -> Option<Arc<dyn SampleSource>> {
+        self.released.pop().or_else(|| self.overflow.take())
     }
 }
 
@@ -1416,6 +1555,22 @@ mod tests {
         assert_eq!(peak(&run(&mut s, 4800)[0][2400..]), 0.0);
     }
 
+    /// Bug 25: a looping one-shot stops at its note-off (with the release) instead of ringing
+    /// until all notes off.
+    #[test]
+    fn a_looping_one_shot_is_released_by_its_note_off() {
+        let mut s = sampler(mono(SR, vec![0.5; 24_000]));
+        s.set_param("release", 1.0);
+        s.set_param("play_mode", 1.0);
+        s.set_param("loop_mode", 1.0);
+        s.note_on(0, 60, 127);
+        let held = run(&mut s, 30_000);
+        assert!(peak(&held[0][24_000..29_000]) > 0.1, "it loops past the sample's end while held");
+        s.note_off(0, 60);
+        let after = run(&mut s, 18_000);
+        assert_eq!(peak(&after[0][1_000..]), 0.0, "and stops at the note-off");
+    }
+
     #[test]
     fn retriggering_a_held_key_releases_the_old_voice() {
         let mut s = sampler(mono(SR, vec![0.25; 48_000]));
@@ -1558,6 +1713,138 @@ mod tests {
         let out = run(&mut s, 512);
         assert!(out[0][..300].iter().all(|&v| v == 0.0));
         assert!(out[0][301..].iter().any(|&v| v != 0.0));
+    }
+
+    /// Bug 26 of the MIDI writing parity list: a stolen voice was cut dead, a click as loud as
+    /// the voice. Its sound now fades out over a few milliseconds while the new note starts.
+    #[test]
+    fn a_stolen_voice_fades_instead_of_clicking() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("velocity", 0.0);
+        s.set_param("attack", 5.0);
+        for n in 0..VOICES as u8 {
+            s.note_on(0, 40 + n, 127);
+        }
+        let _ = run(&mut s, 4800);
+        // every voice is busy: the next note takes one of them
+        s.note_on(100, 90, 127);
+        let out = run(&mut s, 512);
+        let jump = out[0].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 0.02, "the largest step is {jump}");
+        assert!(s.voices.iter().filter(|v| v.active()).count() <= VOICES);
+    }
+
+    /// Bug 28: the filter's cutoff moved in steps every 16 frames; it now glides between them.
+    #[test]
+    fn the_cutoff_glides_between_control_updates() {
+        let mut s = sampler(mono(SR, sine(220.0, SR, 48_000)));
+        s.set_param("filter_type", 1.0);
+        s.set_param("cutoff", 200.0);
+        s.note_on(0, 60, 127);
+        let _ = run(&mut s, 512);
+        let g_low = s.voices.iter().find(|v| v.active()).map(|v| v.g_now).unwrap();
+        s.set_param("cutoff", 8000.0);
+        // The next frame is a control update (512 frames are a whole number of periods): half a
+        // period on, the cutoff is half way there, well clear of both ends.
+        let _ = run(&mut s, CONTROL / 2);
+        let v = s.voices.iter().find(|v| v.active()).unwrap();
+        let (span, at) = (v.g - g_low, v.g_now - g_low);
+        assert!(at > 0.25 * span && at < 0.75 * span, "{g_low} < {} < {}", v.g_now, v.g);
+        let _ = run(&mut s, 4 * CONTROL);
+        let v = s.voices.iter().find(|v| v.active()).unwrap();
+        assert!((v.g_now - v.g).abs() <= 1e-4 * v.g, "settles on the value");
+    }
+
+    /// The sampler answers the sustain pedal and pitch bend (the MIDI writing parity list).
+    #[test]
+    fn the_pedal_holds_released_notes_and_the_bend_moves_the_pitch() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("release", 10.0);
+        s.midi(0, [0xB0, 64, 127]);
+        s.note_on(0, 60, 127);
+        s.note_off(100, 60);
+        let _ = run(&mut s, 4800);
+        assert!(s.voices.iter().any(|v| v.active()), "held by the pedal");
+        s.midi(0, [0xB0, 64, 0]);
+        let _ = run(&mut s, 4800);
+        assert!(!s.voices.iter().any(|v| v.active()), "released with it");
+
+        s.note_on(0, 60, 127);
+        let _ = run(&mut s, 512);
+        let plain = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        s.midi(0, [0xE0, 0x7F, 0x7F]);
+        let _ = run(&mut s, 512);
+        let bent = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        assert!((bent / plain - 2f64.powf(2.0 / 12.0)).abs() < 1e-3, "a whole tone up: {}", bent / plain);
+    }
+
+    /// Doc 07: Bend Range sets the bend's throw; the mod wheel brings in vibrato at the LFO's rate,
+    /// up to Mod Wheel Vibrato, and none with the wheel down.
+    #[test]
+    fn bend_range_and_the_mod_wheel() {
+        let mut s = sampler(mono(SR, vec![0.5; 96_000]));
+        s.set_param("bend_range", 12.0);
+        s.note_on(0, 60, 127);
+        let _ = run(&mut s, 512);
+        let plain = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        s.midi(0, [0xE0, 0x7F, 0x7F]);
+        let _ = run(&mut s, 512);
+        let bent = s.voices.iter().find(|v| v.active()).map(|v| v.step).unwrap();
+        assert!((bent / plain - 2.0).abs() < 2e-3, "an octave up: {}", bent / plain);
+        s.midi(0, [0xE0, 0x00, 0x40]);
+        // the wheel: the step swings by up to the vibrato's depth
+        let swing = |s: &mut Sampler| {
+            let (mut lo, mut hi) = (f64::MAX, 0.0f64);
+            for _ in 0..200 {
+                let _ = run(s, 64);
+                let st = s.voices.iter().find(|v| v.active()).map_or(plain, |v| v.step);
+                lo = lo.min(st);
+                hi = hi.max(st);
+            }
+            12.0 * (hi / lo).log2() * 100.0
+        };
+        assert!(swing(&mut s) < 0.5, "no wheel, no vibrato");
+        // Mod Wheel Vibrato starts at 0 (owner's decision), so a session made before it plays
+        // its mod-wheel data as it always did: no vibrato until the user turns it up.
+        s.midi(0, [0xB0, 1, 127]);
+        assert!(swing(&mut s) < 0.5, "Mod Wheel Vibrato at 0 by default");
+        s.set_param("mod_wheel", 50.0);
+        let cents = swing(&mut s);
+        assert!(cents > 80.0 && cents < 101.0, "{cents} cents peak to peak");
+        s.midi(0, [0xB0, 121, 0]);
+        assert!(swing(&mut s) < 0.5, "reset controllers lowers the wheel");
+    }
+
+    /// Doc 07 bug 27: a sample pitched up an octave is read band-limited, so a tone near its top
+    /// does not fold back under the output's Nyquist.
+    #[test]
+    fn a_pitched_up_sample_does_not_alias() {
+        let tone: Vec<f32> = (0..96_000).map(|i| (std::f32::consts::TAU * 0.4 * i as f32).sin() * 0.5).collect();
+        let mut s = sampler(mono(SR, tone));
+        s.note_on(0, 72, 127);
+        let out = run(&mut s, 9600);
+        assert!(peak(&out[0][1000..]) < 1e-3, "folded back at {}", peak(&out[0][1000..]));
+    }
+
+    /// Doc 07 bug 29: a replaced sound goes back to the host instead of being dropped here.
+    #[test]
+    fn a_replaced_sample_goes_back_to_the_host() {
+        let mut s = sampler(mono(SR, vec![0.5; 100]));
+        assert!(s.take_released_asset().is_none());
+        let a: Arc<dyn SampleSource> = Arc::new(mono(SR, vec![0.1; 10]));
+        assert!(s.set_sample(Some(Arc::clone(&a))));
+        assert!(s.take_released_asset().is_some(), "the first sound");
+        assert!(s.set_sample(None));
+        let back = s.take_released_asset().unwrap();
+        assert!(Arc::ptr_eq(&back, &a));
+        for _ in 0..10 {
+            s.set_sample(Some(Arc::new(mono(SR, vec![0.1; 10]))));
+        }
+        let mut n = 0;
+        while s.take_released_asset().is_some() {
+            n += 1;
+        }
+        assert!(n >= 5, "kept for the host: {n}");
     }
 
     #[test]

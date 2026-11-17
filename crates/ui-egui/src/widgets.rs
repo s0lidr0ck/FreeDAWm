@@ -442,6 +442,103 @@ pub fn pan_text(v: f32) -> String {
     }
 }
 
+/// What the track and master meters show (Preferences › Metering › Scale; this computer's
+/// choice, `UiState::meter_scale`). The bar always spans the same dBFS range; an RMS scale
+/// averages the level over 300 ms instead of following the peak, and a scale with a reference
+/// level (VU, K-system) numbers its marks from that reference and turns yellow there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeterScale {
+    /// Sample peak, numbered in dBFS.
+    #[default]
+    Peak,
+    /// RMS (300 ms), numbered in dBFS.
+    Rms,
+    /// Peak bar with the RMS level drawn inside it.
+    PeakRms,
+    /// RMS with VU ballistics, 0 VU at −18 dBFS.
+    Vu,
+    /// K-system: RMS, 0 at −20, −14 or −12 dBFS.
+    K20,
+    K14,
+    K12,
+}
+
+impl MeterScale {
+    /// Every scale: (id, label).
+    pub const ALL: [(MeterScale, &'static str, &'static str); 7] = [
+        (MeterScale::Peak, "peak", "Peak (dBFS)"),
+        (MeterScale::Rms, "rms", "RMS (dBFS)"),
+        (MeterScale::PeakRms, "peak_rms", "Peak + RMS"),
+        (MeterScale::Vu, "vu", "VU (0 VU = −18 dBFS)"),
+        (MeterScale::K20, "k20", "K-20"),
+        (MeterScale::K14, "k14", "K-14"),
+        (MeterScale::K12, "k12", "K-12"),
+    ];
+
+    pub fn from_id(id: &str) -> Option<MeterScale> {
+        Self::ALL.iter().find(|(_, i, _)| i.eq_ignore_ascii_case(id)).map(|(s, _, _)| *s)
+    }
+
+    pub fn id(self) -> &'static str {
+        Self::ALL.iter().find(|(s, _, _)| *s == self).map_or("peak", |(_, i, _)| i)
+    }
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(s, _, _)| *s == self).map_or("Peak (dBFS)", |(_, _, l)| l)
+    }
+
+    /// The bar follows the RMS level, not the peak.
+    pub fn rms_bar(self) -> bool {
+        !matches!(self, MeterScale::Peak | MeterScale::PeakRms)
+    }
+
+    /// Where the scale's 0 sits, dBFS (`None`: numbered in dBFS).
+    pub fn reference_db(self) -> Option<f32> {
+        match self {
+            MeterScale::Peak | MeterScale::Rms | MeterScale::PeakRms => None,
+            MeterScale::Vu => Some(-18.0),
+            MeterScale::K20 => Some(-20.0),
+            MeterScale::K14 => Some(-14.0),
+            MeterScale::K12 => Some(-12.0),
+        }
+    }
+
+    /// Where the bar turns yellow and red, dBFS.
+    fn zones(self) -> (f32, f32) {
+        match self.reference_db() {
+            Some(r) => (r, (r + 4.0).min(-1.0)),
+            None => (-12.0, -3.0),
+        }
+    }
+
+    /// The marks: (dBFS, the number written there).
+    fn marks(self) -> Vec<(f32, f32)> {
+        match self.reference_db() {
+            None => METER_MARKS.iter().map(|&d| (d, d)).collect(),
+            Some(r) => [20.0, 12.0, 8.0, 4.0, 0.0, -4.0, -10.0, -20.0, -40.0]
+                .into_iter()
+                .map(|l| (r + l, l))
+                .filter(|(d, _)| *d <= 0.0 && *d >= -80.0)
+                .collect(),
+        }
+    }
+}
+
+/// The scale the meters draw with this frame (set once a frame from the preferences).
+static METER_SCALE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Sets the scale every meter draws with from now on.
+pub fn set_meter_scale(s: MeterScale) {
+    let i = MeterScale::ALL.iter().position(|(x, _, _)| *x == s).unwrap_or(0);
+    METER_SCALE.store(u8::try_from(i).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The scale the meters draw with.
+pub fn meter_scale_now() -> MeterScale {
+    let i = usize::from(METER_SCALE.load(std::sync::atomic::Ordering::Relaxed));
+    MeterScale::ALL.get(i).map_or(MeterScale::Peak, |(s, _, _)| *s)
+}
+
 /// The dB marks of a meter's scale, also ruled across its bar.
 const METER_MARKS: [f32; 8] = [0.0, -5.0, -10.0, -15.0, -20.0, -30.0, -40.0, -60.0];
 
@@ -451,15 +548,28 @@ fn meter_bar(r: Rect) -> Rect {
 }
 
 /// The marks that fit on `bar`, at least 9 pt apart from the top down, with their heights.
+/// Each is `(label, y)`: the number written there (dBFS, or from the scale's reference).
 fn meter_marks(bar: Rect) -> impl Iterator<Item = (f32, f32)> {
     let mut last = f32::NEG_INFINITY;
-    METER_MARKS.into_iter().filter_map(move |db| {
+    meter_scale_now().marks().into_iter().filter_map(move |(db, label)| {
         let y = bar.max.y - bar.height() * meter_pos(db);
         (y - last >= 9.0).then(|| {
             last = y;
-            (db, y)
+            (label, y)
         })
     })
+}
+
+/// [`meter`] for one channel of a strip's display: with the Peak + RMS scale the RMS level is
+/// drawn as a bright line inside the peak bar.
+pub fn meter_of(ui: &Ui, r: Rect, md: &crate::MeterDisplay, c: usize) {
+    let (level, hold, rms) = (md.level.get(c).copied().unwrap_or(0.0), md.hold.get(c).copied().unwrap_or(0.0), md.rms.get(c).copied().unwrap_or(0.0));
+    meter(ui, r, level, hold, md.clip);
+    if meter_scale_now() == MeterScale::PeakRms && rms > 1e-6 {
+        let bar = meter_bar(r);
+        let y = bar.max.y - bar.height() * level_pos(rms);
+        ui.painter().hline(bar.x_range(), y, Stroke::new(2.0, Color32::from_white_alpha(200)));
+    }
 }
 
 /// Vertical peak meter as Pro Tools draws it: a clip light above a bar that lights green, yellow
@@ -471,7 +581,8 @@ pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
     p.rect_filled(Rect::from_min_max(pos2(r.min.x, r.min.y + 4.0), r.max), 0.0, t.meter_bg);
     let bar = meter_bar(r);
     let y = |pos: f32| bar.max.y - bar.height() * pos;
-    let (amber, red) = (meter_pos(-12.0), meter_pos(-3.0));
+    let (a, rd) = meter_scale_now().zones();
+    let (amber, red) = (meter_pos(a), meter_pos(rd));
     let zones = [(0.0, amber, t.meter_green), (amber, red, t.meter_yellow), (red, 1.0, t.meter_red)];
     let lit = level_pos(level);
     let unlit = if t.meter_bg.intensity() > 0.5 { 0.08 } else { 0.18 };
@@ -495,8 +606,16 @@ pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
 /// The dB scale of a [`meter`] drawn in `r`, its numbers ending at `x`.
 pub fn meter_scale(p: &Painter, r: Rect, x: f32) {
     let t = Tokens::current();
+    let signed = meter_scale_now().reference_db().is_some();
     for (db, y) in meter_marks(meter_bar(r)) {
-        p.text(pos2(x - 3.0, y), Align2::RIGHT_CENTER, format!("{}", db.abs()), regular(8.0), t.text_dim);
+        let text = if signed && db > 0.0 {
+            format!("+{db}")
+        } else if signed {
+            format!("{db}")
+        } else {
+            format!("{}", db.abs())
+        };
+        p.text(pos2(x - 3.0, y), Align2::RIGHT_CENTER, text, regular(8.0), t.text_dim);
         p.hline(x - 2.0..=x, y, Stroke::new(1.0, t.text_dim.gamma_multiply(0.7)));
     }
 }
@@ -1286,6 +1405,15 @@ fn knob_inner(
     if resp.double_clicked() {
         out.changed = Some(info.default);
         out.reset = true;
+    }
+    // Ctrl+click (Cmd+click): type the value.
+    if enabled && crate::value_entry::wants_entry(ui, &resp) {
+        crate::value_entry::open(ui, resp.id, &info.format(value));
+    }
+    if let Some(v) = crate::value_entry::show(ui, resp.id, r).and_then(|text| crate::value_entry::parse(info, &text))
+        && (v - value).abs() > f32::EPSILON
+    {
+        out.changed = Some(v);
     }
 
     let shown = out.changed.unwrap_or(value);

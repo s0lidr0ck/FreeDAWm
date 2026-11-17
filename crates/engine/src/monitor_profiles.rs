@@ -195,11 +195,13 @@ mod tests {
         assert!(s.width < 0.1);
         assert!(s.curve.magnitude_db(80.0, 48_000.0) < -35.0 && s.curve.magnitude_db(4000.0, 48_000.0) > -6.0);
         assert!(plan(48_000.0, None, true, None, true).is_idle());
-        // Every embedded file reads, and none boosts the mix.
+        // Every embedded file reads, and none boosts the mix. (The bells are designed to keep
+        // their analogue shape near the top of the band, which lets the fit follow a measured
+        // rise at 15 kHz a little more closely than a squeezed bell did: 0.61 dB at most.)
         assert_eq!(builtin_devices().len(), MEASURED.len() + 1);
         for d in builtin_devices() {
             let c = plan(48_000.0, None, false, Some(&d), true).sim.unwrap().curve;
-            assert!((0..120).all(|i| c.magnitude_db(20.0 * 2f32.powf(i as f32 / 12.0), 48_000.0) < 0.6), "{}", d.name);
+            assert!((0..120).all(|i| c.magnitude_db(20.0 * 2f32.powf(i as f32 / 12.0), 48_000.0) < 0.75), "{}", d.name);
         }
     }
 }

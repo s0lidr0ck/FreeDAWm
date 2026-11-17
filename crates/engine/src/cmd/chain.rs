@@ -226,7 +226,11 @@ fn load_chain(e: &mut Engine, p: &Value) -> Result<Value> {
     for t in &tracks {
         let Some(tr) = s.track_mut(*t) else { continue };
         if !append {
-            tr.mixer.inserts.clear();
+            // Module by module, so their automation lanes go with them.
+            let old: Vec<_> = tr.mixer.inserts.iter().map(|i| i.id).collect();
+            for id in old {
+                super::module::chain_remove(tr, id);
+            }
         }
         for ins in &inserts {
             if tr.mixer.add_module(ins.clone(), None).is_ok() {
@@ -241,7 +245,7 @@ fn load_chain(e: &mut Engine, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soundcraft_model::TrackKind;
+    use soundcraft_model::{AutoParam, TrackKind};
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("fd-chain-{tag}-{}", std::process::id()));
@@ -279,6 +283,30 @@ mod tests {
         assert_eq!(both.mixer.inserts.len(), bass.len() * 2);
         let ids: BTreeSet<u32> = both.mixer.inserts.iter().map(|i| i.id.0).collect();
         assert_eq!(ids.len(), both.mixer.inserts.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Built-in effects parity, bug 14: replacing a chain cleared the inserts directly and left the
+    /// old modules' automation lanes behind, pointing at modules that no longer exist.
+    #[test]
+    fn a_replaced_chain_takes_its_automation_lanes_with_it() {
+        let dir = scratch("lanes");
+        let path = dir.join("one.json").to_string_lossy().into_owned();
+        let mut e = crate::demo::demo_engine();
+        e.execute("track.save_chain", &json!({"path": path, "tracks": ["Bass"]})).unwrap();
+        let t = e.session().track_by_name("Hats").unwrap().id;
+        let m = e.execute("mix.module_add", &json!({"track": t.0, "plugin": "gain"})).unwrap()["module"].as_u64().unwrap() as u32;
+        let param = AutoParam::Plugin { module: soundcraft_model::ModuleId(m), param: "gain".into() };
+        let tr = e.session_mut().track_mut(t).unwrap();
+        let mut lane = soundcraft_model::AutomationLane::new(param.clone());
+        lane.points.push(soundcraft_model::AutomationPoint { at: 0, value: -6.0, curve: 0.0 });
+        tr.automation.push(lane);
+        tr.auto_lanes.push(param.id());
+        e.execute("track.load_chain", &json!({"path": path, "tracks": ["Hats"]})).unwrap();
+        let tr = e.session().track(t).unwrap();
+        let stale = |p: &AutoParam| matches!(p, AutoParam::Plugin { module, .. } if tr.mixer.module(*module).is_none());
+        assert!(!tr.automation.iter().any(|l| stale(&l.param)), "no lane left for a module that is gone");
+        assert!(!tr.auto_lanes.iter().any(|v| AutoParam::parse(v).is_some_and(|p| stale(&p))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
