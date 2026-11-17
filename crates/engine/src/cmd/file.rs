@@ -174,7 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Score Setup...",
             ["File"],
             None,
-            "{title?, composer?, bars_per_system?: 1..16, show_track_names?: bool} — returns the current setup",
+            "{title?, composer?, bars_per_system?: 1..16, show_track_names?: bool, staff_percent?: 70..150, part_pages?: bool (Print Score writes a page per track)} — returns the current setup",
             always,
             |e, p| {
                 let mut setup = crate::score::ScoreSetup::from_session(e.session());
@@ -190,9 +190,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(b) = p.get("show_track_names").and_then(serde_json::Value::as_bool) {
                     setup.show_track_names = b;
                 }
+                if let Some(v) = p.get("staff_percent").and_then(serde_json::Value::as_f64) {
+                    setup.staff_percent = if v.is_finite() { v.clamp(70.0, 150.0) as u32 } else { 100 };
+                }
+                if let Some(b) = p.get("part_pages").and_then(serde_json::Value::as_bool) {
+                    setup.part_pages = b;
+                }
                 setup.store(e.session_mut());
                 Ok(
-                    json!({"title": setup.title, "composer": setup.composer, "bars_per_system": setup.bars_per_system, "show_track_names": setup.show_track_names}),
+                    json!({"title": setup.title, "composer": setup.composer, "bars_per_system": setup.bars_per_system, "show_track_names": setup.show_track_names, "staff_percent": setup.staff_percent, "part_pages": setup.part_pages}),
                 )
             }
         ),
@@ -582,6 +588,22 @@ fn write_score(e: &mut Engine, p: &Value, id: &str, svg: bool) -> Result<Value> 
         return Err(bad(id, "no MIDI or instrument tracks to notate"));
     }
     let setup = crate::score::ScoreSetup::from_session(e.session());
+    if svg && setup.part_pages && parts.len() > 1 {
+        // A page per part: `<name>-<n> <part>.svg` beside the path asked for.
+        let base = match str_param(p, "path") {
+            Some(p) => p.trim_end_matches(".svg").to_string(),
+            None => std::env::temp_dir().join(crate::io::sanitize_name(&setup.title)).to_string_lossy().to_string(),
+        };
+        let mut paths = Vec::new();
+        for (k, part) in parts.iter().enumerate() {
+            let one = crate::score::ScoreSetup { title: format!("{} — {}", setup.title, part.name), ..setup.clone() };
+            let path = format!("{base}-{} {}.svg", k + 1, crate::io::sanitize_name(&part.name));
+            crate::io::write_file(&path, crate::score::svg(std::slice::from_ref(part), &one).as_bytes())?;
+            paths.push(path);
+        }
+        let measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
+        return Ok(json!({"path": paths.first(), "paths": paths, "parts": parts.len(), "measures": measures}));
+    }
     let (text, ext) = if svg { (crate::score::svg(&parts, &setup), "svg") } else { (crate::score::musicxml(&parts, &setup), "musicxml") };
     let path = match str_param(p, "path") {
         Some(p) => p.to_string(),
@@ -606,6 +628,35 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// Parts: with Score Setup's part pages on, Print Score writes a page per track, each titled
+    /// with its name; the staff size scales the page.
+    #[test]
+    fn print_score_writes_a_page_per_part() {
+        let mut e = Engine::default();
+        for name in ["Flute", "Cello"] {
+            e.execute("track.new", &json!({"name": name, "kind": "midi"})).unwrap();
+            let c = e.execute("midi.new_clip", &json!({"track": name, "start": 0, "end": 96_000})).unwrap()["clip"].clone();
+            e.execute("midi.note_add", &json!({"clip": c, "pitch": 60, "start_ticks": 0, "length_ticks": 960})).unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("sc-parts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("song.svg").to_string_lossy().into_owned();
+        let one = e.execute("file.print_score", &json!({"path": path})).unwrap();
+        assert_eq!(one["path"], json!(path));
+        let page = std::fs::read_to_string(&path).unwrap();
+        assert!(page.contains("width=\"794\""), "100 %");
+        let r = e.execute("file.score_setup", &json!({"part_pages": true, "staff_percent": 125})).unwrap();
+        assert_eq!((r["part_pages"].as_bool(), r["staff_percent"].as_u64()), (Some(true), Some(125)));
+        let r = e.execute("file.print_score", &json!({"path": path})).unwrap();
+        let paths: Vec<String> = r["paths"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_string()).collect();
+        assert_eq!(paths.len(), 2);
+        let cello = std::fs::read_to_string(&paths[1]).unwrap();
+        assert!(paths[1].ends_with("-2 Cello.svg"), "{paths:?}");
+        assert!(cello.contains("Cello") && !cello.contains("Flute"), "one part a page");
+        assert!(cello.contains("width=\"99"), "125 %: {}", &cello[..200]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Tier 2: a bounce can take a tail past its range (a reverb rings out), at most 30 s.

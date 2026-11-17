@@ -320,6 +320,8 @@ pub enum Dialog {
         composer: String,
         bars_per_system: u32,
         show_track_names: bool,
+        staff_percent: u32,
+        part_pages: bool,
     },
     /// Options › Pre/Post-Roll…: on/off and both amounts, in seconds.
     PrePostRoll {
@@ -625,7 +627,14 @@ impl Dialogs {
             }
             "file.score_setup" => {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
-                Dialog::ScoreSetup { title: s.title, composer: s.composer, bars_per_system: s.bars_per_system, show_track_names: s.show_track_names }
+                Dialog::ScoreSetup {
+                    title: s.title,
+                    composer: s.composer,
+                    bars_per_system: s.bars_per_system,
+                    show_track_names: s.show_track_names,
+                    staff_percent: s.staff_percent,
+                    part_pages: s.part_pages,
+                }
             }
             "track.rename" => {
                 let Some(t) = e.target_tracks().first().and_then(|id| e.session().track(*id)) else { return false };
@@ -1371,7 +1380,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         take_file_type = Some(file_type.clone());
                     }
                 }
-                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names } => {
+                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names, staff_percent, part_pages } => {
                     egui::Grid::new("score_setup").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                         ui.label("Title");
                         ui.text_edit_singleline(title);
@@ -1382,12 +1391,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label("Bars per system");
                         ui.add(egui::DragValue::new(bars_per_system).range(1..=16));
                         ui.end_row();
+                        ui.label("Staff size");
+                        ui.add(egui::DragValue::new(staff_percent).range(70..=150).suffix(" %"));
+                        ui.end_row();
                     });
                     crate::widgets::checkbox(ui, show_track_names, "Show track names");
+                    crate::widgets::checkbox(ui, part_pages, "Print each track as a part on its own page");
                     if buttons(ui, "OK", enter) {
                         action = Some((
                             "file.score_setup".into(),
-                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names}),
+                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names, "staff_percent": staff_percent, "part_pages": part_pages}),
                         ));
                     }
                 }

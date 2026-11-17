@@ -24,6 +24,11 @@ pub struct ScoreSetup {
     pub composer: String,
     pub bars_per_system: u32,
     pub show_track_names: bool,
+    /// The staff size, percent of the standard (70-150): the whole page is drawn larger or
+    /// smaller.
+    pub staff_percent: u32,
+    /// Print Score writes each track as its own part, on its own page, titled with its name.
+    pub part_pages: bool,
     /// The key signature at the start: sharps (above 0) or flats (below 0), and minor or not.
     pub fifths: i32,
     pub minor: bool,
@@ -66,6 +71,11 @@ impl ScoreSetup {
             composer: text(COMPOSER_KEY).unwrap_or_default(),
             bars_per_system: if bars.is_finite() { bars.clamp(1.0, 16.0) as u32 } else { 4 },
             show_track_names: !s.edit.flag("score.hide_names"),
+            staff_percent: {
+                let v = s.edit.value("score.staff_percent", 100.0);
+                if v.is_finite() { v.clamp(70.0, 150.0) as u32 } else { 100 }
+            },
+            part_pages: s.edit.flag("score.part_pages"),
             fifths: key_fifths(tonic, scale),
             minor: scale == 1,
         }
@@ -78,6 +88,8 @@ impl ScoreSetup {
         s.edit.flags.insert(format!("{COMPOSER_KEY}{}", clean(&self.composer)));
         s.edit.values.insert("score.bars_per_system".into(), f64::from(self.bars_per_system.clamp(1, 16)));
         s.edit.set_flag("score.hide_names", !self.show_track_names);
+        s.edit.values.insert("score.staff_percent".into(), f64::from(self.staff_percent.clamp(70, 150)));
+        s.edit.set_flag("score.part_pages", self.part_pages);
     }
 }
 
@@ -450,8 +462,14 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
     let top = 110.0;
     let h = top + systems as f64 * sys_h + MARGIN;
     let mut o = String::new();
-    let _ =
-        writeln!(o, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{W}\" height=\"{h:.0}\" viewBox=\"0 0 {W} {h:.0}\" font-family=\"serif\">");
+    // A staff size other than 100 % scales the page (the drawing keeps its proportions).
+    let k = f64::from(setup.staff_percent.clamp(70, 150)) / 100.0;
+    let _ = writeln!(
+        o,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{:.0}\" height=\"{:.0}\" viewBox=\"0 0 {W} {h:.0}\" font-family=\"serif\">",
+        W * k,
+        h * k
+    );
     let _ = writeln!(o, "<rect width=\"100%\" height=\"100%\" fill=\"white\"/>");
     let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", W / 2.0, xml_escape(&setup.title));
     if !setup.composer.is_empty() {
@@ -712,7 +730,16 @@ mod tests {
         let sung: Vec<Option<&str>> = m[0].items.iter().map(|i| i.lyric.as_deref()).collect();
         assert_eq!(sung, vec![Some("Hel"), Some("lo"), None, None]);
         let part = Part { name: "Voice".into(), bass: false, measures: m };
-        let setup = ScoreSetup { title: "T".into(), composer: String::new(), bars_per_system: 4, show_track_names: true, fifths: 0, minor: false };
+        let setup = ScoreSetup {
+            title: "T".into(),
+            composer: String::new(),
+            bars_per_system: 4,
+            show_track_names: true,
+            staff_percent: 100,
+            part_pages: false,
+            fifths: 0,
+            minor: false,
+        };
         let x = musicxml(std::slice::from_ref(&part), &setup);
         assert_eq!(x.matches("<lyric ").count(), 2);
         assert!(x.contains("<lyric number=\"1\"><syllabic>single</syllabic><text>Hel</text></lyric>"));
