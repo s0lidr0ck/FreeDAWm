@@ -1154,6 +1154,55 @@ pub struct Mixer {
     /// compensation leaves it in: it moves the track against the others on purpose.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub delay: u32,
+    /// How a stereo track's two pans move together when one is moved.
+    #[serde(default, skip_serializing_if = "PanLink::is_off")]
+    pub pan_link: PanLink,
+}
+
+/// How a stereo track's left and right pans follow each other (Pro Tools' link and inverse link).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanLink {
+    /// Each pan moves alone.
+    #[default]
+    Off,
+    /// Moving one moves the other by as much, the same way: the pair keeps its spread.
+    Link,
+    /// Moving one moves the other by as much the other way: the image widens or narrows about
+    /// its centre.
+    Mirror,
+}
+
+impl PanLink {
+    pub fn is_off(&self) -> bool {
+        *self == PanLink::Off
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            PanLink::Off => "off",
+            PanLink::Link => "link",
+            PanLink::Mirror => "mirror",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<PanLink> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "independent" => Some(PanLink::Off),
+            "link" | "linked" => Some(PanLink::Link),
+            "mirror" | "mirrored" | "inverse" => Some(PanLink::Mirror),
+            _ => None,
+        }
+    }
+
+    /// Where the other pan goes when one moves by `d` from where it was.
+    pub fn follow(self, other: f32, d: f32) -> f32 {
+        match self {
+            PanLink::Off => other,
+            PanLink::Link => (other + d).clamp(-1.0, 1.0),
+            PanLink::Mirror => (other - d).clamp(-1.0, 1.0),
+        }
+    }
 }
 
 impl Mixer {
@@ -1187,6 +1236,7 @@ impl Mixer {
             width: 1.0,
             balance: 0.0,
             delay: 0,
+            pan_link: PanLink::Off,
         }
     }
 

@@ -29,6 +29,15 @@ pub fn specs() -> Vec<CommandSpec> {
             balance
         ),
         cmd!(
+            "mix.pan_link",
+            "Link Pans",
+            [],
+            None,
+            "{tracks?, link: off|link|mirror — a stereo track's two pans: moving one moves the other by as much, the same way (link) or the other (mirror)} → {link}",
+            has_selection,
+            pan_link
+        ),
+        cmd!(
             "mix.track_delay",
             "Track Delay",
             [],
@@ -84,6 +93,18 @@ fn balance(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"balance": v}))
 }
 
+fn pan_link(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.pan_link";
+    let link =
+        p.get("link").and_then(Value::as_str).and_then(soundcraft_model::PanLink::parse).ok_or_else(|| bad(C, "`link` is off, link or mirror"))?;
+    for t in stereo_targets(e, C, p, "pan")? {
+        if let Some(tr) = e.session_mut().track_mut(t) {
+            tr.mixer.pan_link = link;
+        }
+    }
+    Ok(json!({"link": link.id()}))
+}
+
 fn track_delay(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "mix.track_delay";
     let sr = e.session().sample_rate.as_f64();
@@ -125,5 +146,32 @@ mod tests {
         assert_eq!(back.track(mono).unwrap().mixer.delay, MAX_TRACK_DELAY);
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().track(mono).unwrap().mixer.delay, 480);
+    }
+
+    /// Linked pans move together; mirrored ones move apart about the centre; the link is saved.
+    #[test]
+    fn linked_and_mirrored_pans_follow_each_other() {
+        let mut e = Engine::default();
+        let st = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Pad"));
+        let mono = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        let pans = |e: &Engine| e.session().track(st).unwrap().mixer.pan.clone();
+        e.execute("mix.pan", &json!({"track": st.0, "pan": -0.8, "index": 0})).unwrap();
+        assert_eq!(pans(&e), vec![-0.8, 1.0], "independent by default");
+        assert_eq!(e.execute("mix.pan_link", &json!({"track": st.0, "link": "link"})).unwrap()["link"], "link");
+        e.execute("mix.pan", &json!({"track": st.0, "pan": -0.5, "index": 0})).unwrap();
+        let p = pans(&e);
+        assert!((p[0] + 0.5).abs() < 1e-6 && (p[1] - 1.0).abs() < 1e-6, "the right one is at the edge: {p:?}");
+        e.execute("mix.pan", &json!({"track": st.0, "pan": 0.6, "index": 1})).unwrap();
+        let p = pans(&e);
+        assert!((p[0] + 0.9).abs() < 1e-5 && (p[1] - 0.6).abs() < 1e-6, "linked: {p:?}");
+        e.execute("mix.pan_link", &json!({"track": st.0, "link": "mirror"})).unwrap();
+        e.execute("mix.pan", &json!({"track": st.0, "pan": -0.5, "index": 0})).unwrap();
+        let p = pans(&e);
+        assert!((p[0] + 0.5).abs() < 1e-6 && (p[1] - 0.2).abs() < 1e-5, "mirrored: {p:?}");
+        assert!(e.execute("mix.pan_link", &json!({"track": mono.0, "link": "link"})).is_err(), "a mono track has one pan");
+        assert!(e.execute("mix.pan_link", &json!({"track": st.0, "link": "sideways"})).is_err());
+        let saved = serde_json::to_string(e.session()).unwrap();
+        let back: soundcraft_model::Session = serde_json::from_str(&saved).unwrap();
+        assert_eq!(back.track(st).unwrap().mixer.pan_link, soundcraft_model::PanLink::Mirror);
     }
 }

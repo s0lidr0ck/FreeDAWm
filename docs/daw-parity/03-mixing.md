@@ -31,7 +31,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
-| B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
+| B. Panning | Four pan laws, dual pan with link and mirror, width and balance for stereo | Small: no binaural |
 | C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
@@ -67,8 +67,8 @@ K-system scales, and the master a loudness meter.
 | Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Options › More › Pan Law, `mix.pan_law`) |
 | Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
 | Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; automatable (width and balance lanes, on the pan's 64-sample grid; moving the controls counts as a touch for writing, not yet tried in a writing pass) |
-| Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
-| Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height; centre % and LFE have no control; mono and stereo tracks only |
+| Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Works**: Track › Strip › Pans: Independent, Linked (the other pan moves by as much, the same way) or Mirrored (the other way, about the centre) (`mix.pan_link`), for every way a pan moves (knobs, surfaces, MIDI learn, groups); saved with the session |
+| Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height on the panner, centre % and LFE level in the strip name's menu (Surround ›); mono and stereo tracks only (a wider track is not panned) |
 | Binaural pan | ● | ● | ● | ● | **Not planned here**: needs a measured head-related impulse response set, content the owner sources |
 
 ## C. Inserts and sidechains
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | linked and mirrored pans; the surround panner's centre % and LFE level get controls |
 | 2026-11-17 | minor | find and spill in the Mix window |
 | 2026-11-17 | minor | the Touch return time is set in the Automation window; Write on Stop; Show Last Touched |
 | 2026-11-17 | minor | Bounce Mix converts the rate, shapes its dither, writes mono or split files and several formats in one pass, tags its files and adds them to the session; stems of chosen tracks and busses |

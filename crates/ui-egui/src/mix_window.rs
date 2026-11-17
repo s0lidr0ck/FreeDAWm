@@ -353,6 +353,41 @@ pub(crate) fn route_popup(app: &mut SoundApp, resp: &egui::Response, id: TrackId
     egui::Popup::menu(resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| route_menu(app, ui, id, input));
 }
 
+/// The surround panner's other controls, in the strip name's menu: how much of the centre
+/// speaker the pan uses (the rest goes to the left and right) and the level sent to the LFE.
+fn surround_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track, lfe: bool) {
+    let id = track.id;
+    let sp = track
+        .mixer
+        .surround
+        .unwrap_or_else(|| SurroundPan::from_stereo(if track.mixer.pan.len() == 1 { track.mixer.pan.first().copied().unwrap_or(0.0) } else { 0.0 }));
+    ui.menu_button("Surround", |ui| {
+        let mut c = sp.center;
+        let r = ui.add(egui::Slider::new(&mut c, 0.0..=100.0).text("Centre %").max_decimals(0)).on_hover_text(
+            "How much of the centre speaker the pan uses: 0 sends the centre's share to the left and right instead (a phantom centre)",
+        );
+        if r.changed() {
+            let _ = app.engine.execute_merged("mix.surround_pan", &json!({"track": id.0, "center": c}), &format!("span_c:{}", id.0));
+        }
+        if r.drag_stopped() || r.lost_focus() {
+            app.engine.end_merge();
+        }
+        if lfe {
+            let mut db = sp.lfe_db.max(-60.0);
+            let r = ui
+                .add(egui::Slider::new(&mut db, -60.0..=12.0).text("LFE dB").max_decimals(1))
+                .on_hover_text("The level sent to the LFE channel (-60: none)");
+            if r.changed() {
+                let v = if db <= -59.9 { -144.0 } else { db };
+                let _ = app.engine.execute_merged("mix.surround_pan", &json!({"track": id.0, "lfe_db": v}), &format!("span_l:{}", id.0));
+            }
+            if r.drag_stopped() || r.lost_focus() {
+                app.engine.end_merge();
+            }
+        }
+    });
+}
+
 /// The strip's polarity (Ø) button: lit when any channel is inverted; a click inverts every
 /// channel (or puts them all back), a right-click on a wider track picks single channels.
 fn polarity_button(app: &mut SoundApp, ui: &mut Ui, track: &soundcraft_model::Track, r: Rect, frozen: bool) {
@@ -885,7 +920,14 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         app.dialogs.open_rename_track(id, &track.name);
     }
     let spills = crate::mix_find::spills(track);
+    let out_fmt = output_format(app, track);
+    let surround_out =
+        out_fmt.channels() > 2 && !out_fmt.is_ambisonic() && !matches!(track.kind, TrackKind::Master | TrackKind::Vca) && track.channels() <= 2;
     nresp.context_menu(|ui| {
+        if surround_out {
+            surround_menu(app, ui, track, out_fmt.has_lfe());
+            ui.separator();
+        }
         if spills && ui.button("Spill").on_hover_text("Show only this strip and what it controls or sums").clicked() {
             crate::mix_find::spill(ui.ctx(), id);
             ui.close();

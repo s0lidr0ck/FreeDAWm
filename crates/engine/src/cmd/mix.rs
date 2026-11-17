@@ -357,6 +357,7 @@ fn pan(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session_mut();
     // A group linking pan moves its members by as much, keeping their offsets.
     let mut moved: Vec<TrackId> = Vec::new();
+    let mut linked: Vec<TrackId> = Vec::new();
     for t in &tracks {
         if moved.contains(t) {
             continue;
@@ -370,12 +371,26 @@ fn pan(e: &mut Engine, p: &Value) -> Result<Value> {
             if let Some(tr) = s.track_mut(id)
                 && let Some(slot) = tr.mixer.pan.get_mut(idx)
             {
+                let old = *slot;
                 *slot = if id == *t { v } else { (*slot + d).clamp(-1.0, 1.0) };
+                let step = *slot - old;
+                // A stereo track's linked pans: the other one follows.
+                let link = tr.mixer.pan_link;
+                if !link.is_off()
+                    && tr.mixer.pan.len() == 2
+                    && let Some(other) = tr.mixer.pan.get_mut(1 - idx)
+                {
+                    *other = link.follow(*other, step);
+                    linked.push(id);
+                }
             }
         }
     }
     for t in &moved {
         e.automation_changed(*t, AutoParam::Pan(idx as u8));
+    }
+    for t in &linked {
+        e.automation_changed(*t, AutoParam::Pan(1 - idx as u8));
     }
     Ok(json!({"pan": v}))
 }

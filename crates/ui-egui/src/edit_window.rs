@@ -1958,6 +1958,18 @@ fn strip_shape_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u
             app.engine.end_merge();
         }
         if m.pan.len() == 2 {
+            ui.horizontal(|ui| {
+                ui.label("Pans");
+                for (link, label, tip) in [
+                    (soundcraft_model::PanLink::Off, "Independent", "Each pan moves alone"),
+                    (soundcraft_model::PanLink::Link, "Linked", "Moving one pan moves the other by as much"),
+                    (soundcraft_model::PanLink::Mirror, "Mirrored", "Moving one pan moves the other by as much the other way"),
+                ] {
+                    if ui.selectable_label(m.pan_link == link, label).on_hover_text(tip).clicked() {
+                        let _ = app.run("mix.pan_link", json!({"tracks": selection, "link": link.id()}));
+                    }
+                }
+            });
             let mut w = m.width;
             let resp =
                 ui.add(egui::Slider::new(&mut w, -1.0..=1.0).text("Width")).on_hover_text("1: as it comes · 0: mono · -1: left and right swapped");
