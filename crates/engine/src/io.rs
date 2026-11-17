@@ -296,6 +296,12 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     if let (Some(bwf), Some(sx)) = (info.bwf.as_ref(), s.sources.last_mut()) {
         sx.time_reference = stamp_at_rate(bwf.time_reference, file_rate, session_rate);
     }
+    // A field recorder's iXML (scene, take, tape, channel names), kept with the session.
+    if info.format == FileFormat::Wav
+        && let Some(x) = soundcraft_audio_io::ixml::ixml_of_bytes(bytes)
+    {
+        s.field_info.insert(src.0, x);
+    }
     let frames = s.source(src).map_or(0, |x| i64::try_from(x.frames).unwrap_or(0));
     let track = match target {
         Some(t) => t,
@@ -5684,5 +5690,27 @@ mod smf_tempo_tests {
         assert_eq!((pickup, d), (0, 4));
         assert_eq!(smf.meters[1].0, i64::from(n) * 960);
         assert!((file_secs(&smf.tempos, smf.meters[1].0) - 1.5).abs() < 1e-3);
+    }
+
+    /// A field recording's iXML (scene, take, channel names) is kept with the session when the
+    /// file is imported, and saved with it.
+    #[test]
+    fn an_imported_field_recording_keeps_its_ixml() {
+        let mut e = Engine::default();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 480], vec![0.5; 480]] };
+        let mut bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).unwrap();
+        let xml = "<BWFXML><SCENE>14</SCENE><TAKE>2</TAKE><TRACK_LIST><TRACK><CHANNEL_INDEX>1</CHANNEL_INDEX><NAME>Boom</NAME></TRACK><TRACK><CHANNEL_INDEX>2</CHANNEL_INDEX><NAME>Lav</NAME></TRACK></TRACK_LIST></BWFXML>";
+        bytes.extend_from_slice(b"iXML");
+        bytes.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(xml.as_bytes());
+        let riff = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        import_audio_bytes(&mut e, "sc14.wav", &bytes, None, None, 0).unwrap();
+        let src = e.session().sources.last().unwrap().id;
+        let f = e.session().field_info.get(&src.0).expect("kept").clone();
+        assert_eq!((f.scene.as_str(), f.take.as_str(), f.label().as_str()), ("14", "2", "Scene 14 Take 2"));
+        assert_eq!(f.channels, vec!["Boom".to_string(), "Lav".to_string()]);
+        let back: Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+        assert_eq!(back.field_info.get(&src.0), Some(&f));
     }
 }

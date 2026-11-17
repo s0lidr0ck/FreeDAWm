@@ -274,12 +274,15 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
         // instrument (a rendered kit brings dozens): they are not listed.
         let pads: std::collections::HashSet<SourceId> =
             s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
+        // A field recording's scene and take (its iXML) beside its name, so a search finds them.
+        let field =
+            |id: SourceId| s.field_info.get(&id.0).map(|f| f.label()).filter(|l| !l.is_empty()).map(|l| format!(" · {l}")).unwrap_or_default();
         for src in s.sources.iter().filter(|src| !pads.contains(&src.id)) {
             // A file the session could not find says so (Relink… in its menu finds it).
             let missing = if s.pool.get(src.id).is_none() { " — missing" } else { "" };
             v.push((
                 src.id.0,
-                format!("{} ({}ch){missing}", src.name, src.channels),
+                format!("{} ({}ch){}{missing}", src.name, src.channels, field(src.id)),
                 true,
                 [150, 150, 150],
                 s.edit.selected_sources.contains(&src.id),
@@ -288,7 +291,8 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
         }
         for tr in &s.tracks {
             for c in tr.clips() {
-                v.push((c.id.0, c.name.clone(), false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id), false));
+                let name = format!("{}{}", c.name, c.source().map(field).unwrap_or_default());
+                v.push((c.id.0, name, false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id), false));
             }
         }
         // Clips captured into the list (Clip › Capture), on no track.
