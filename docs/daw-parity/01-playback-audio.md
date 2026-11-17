@@ -151,8 +151,8 @@ Varispeed is the only whole-project speed control among the four.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Missing**: stretch is rendered offline (WSOLA); the real-time path is varispeed, read through the band-limited reader (design below) |
-| Audio follows tempo changes | ● | ● | ● | ● | **Partial**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, renders them to the new length (offline, not in real time) |
+| Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Works** in the app: a pitch-preserving stretch (Elastic Properties, Conform, TCE, a tempo edit on an Elastic tick track, a warp-marker move) is heard at once through a granular reader in the clip read (no latency) while the offline WSOLA render is made in the background, which then replaces it; grainier than the render on sustained notes. The CLI and scripts still render in place |
+| Audio follows tempo changes | ● | ● | ● | ● | **Works**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, gives them the new length, heard at once through the real-time stretcher until the render is in |
 | Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
 | Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
@@ -240,7 +240,9 @@ stateless, as the search only reads the file). Built so far: the stretcher itsel
 pitch-preserving stretch can instead reserve the render's source and record how to hear it
 meanwhile (`Session::live_stretch`), the mixer reading the original through the stretcher until
 the render's audio is in (`engine::stretch_jobs`: the job, `install`, renders kept for undo and
-redo, a save renders what is still live). Left: the worker that makes the render in the app.
+redo, a save renders what is still live). The app's worker (`ui-egui/src/stretch_worker.rs`) makes the render on a thread and swaps it in; the
+app turns deferral on (not the web build, which has no threads, nor the CLI). Left: grain
+alignment (point 4); hearing a warp marker while it is dragged (it is heard from the release).
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
@@ -267,6 +269,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | the real-time stretch is heard at once in the app; a background worker swaps in the render |
 | 2026-11-16 | minor | the real-time stretcher in the clip read, behind the Elastic and warp paths |
 | 2026-11-16 | minor | the real-time stretcher (not wired to clips yet) |
 | 2026-11-16 | minor | layered overlapping clips and crossfade on overlap (section 4, D) |

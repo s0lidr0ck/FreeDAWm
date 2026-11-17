@@ -42,7 +42,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
-| I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag | Medium: stretching is rendered offline, not heard while dragging |
+| I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag, stretches heard at once | Small: not heard while a marker is still being dragged |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
 | L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
@@ -192,7 +192,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). The re-render happens on release, not while dragging |
+| Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). On release the new warp is heard at once through the real-time stretcher while its render is made in the background (not while dragging) |
 | Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Works** offline: the track's algorithm sets how the stretch splices (Rhythmic short and tight, Monophonic searching wide, Polyphonic general, X-Form long and smooth); varispeed plays in real time through the band-limited resampler (section 1). Not real-time |
 | Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
 | Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
@@ -386,3 +386,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Processing with handles keeps the clip's sound inside its edges (a Clean Vocal mix is no longer faded back to the original at the old edges) |
 | 2026-11-16 | minor | Tier 2: overlap modes (overwrite, layer, crossfade) with a front/back order |
 | 2026-11-16 | minor | Tier 2: edit groups move, trim, fade, separate and cut together |
+| 2026-11-16 | minor | Stretches and warp-marker moves are heard at once through the real-time stretcher while the render is made |

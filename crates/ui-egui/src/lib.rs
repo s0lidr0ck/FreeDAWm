@@ -101,6 +101,7 @@ pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
 pub mod step_input;
+pub mod stretch_worker;
 pub mod surfaces;
 pub mod swale_ui;
 pub mod teleprompter;
@@ -895,6 +896,8 @@ pub struct SoundApp {
     pub point_readout: Option<String>,
     /// Vocal tuning's background analyses and renders (polled once per frame).
     pub vocal_worker: vocal_worker::VocalWorker,
+    /// Stretch renders made in the background while the stretch is heard live.
+    pub stretch_worker: stretch_worker::StretchWorker,
     /// The session path as of the last frame, and whether the recent list changed since the host
     /// last saved it (see `recent`).
     recent_seen: Option<String>,
@@ -1166,6 +1169,7 @@ impl SoundApp {
             recent_checked: None,
             engine,
             vocal_worker: vocal_worker::VocalWorker::new(),
+            stretch_worker: stretch_worker::StretchWorker::default(),
             player,
             #[cfg(not(target_arch = "wasm32"))]
             midi_hub: Some(soundcraft_playback::midi_in::MidiHub::new()),
@@ -2874,6 +2878,13 @@ impl SoundApp {
             ctx.request_repaint();
         }
         if self.vocal_worker.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        // Stretches heard live get their offline render in the background.
+        if self.stretch_worker.poll(&mut self.engine) {
+            ctx.request_repaint();
+        }
+        if self.stretch_worker.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if !ctx.input(|i| i.pointer.any_down()) {

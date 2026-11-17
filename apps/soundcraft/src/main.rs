@@ -976,6 +976,8 @@ fn loaders(launch: Launch) -> (Prepare, Audio, Finish) {
             player.update_session(engine.session_arc());
         }
         let mut app = SoundApp::new(engine, player.map(|p| *p), services());
+        // Stretches are heard at once and rendered in the background.
+        app.engine.defer_stretch = soundcraft_ui_egui::stretch_worker::StretchWorker::available();
         if opened_before {
             app.note_session_opened_before();
         }

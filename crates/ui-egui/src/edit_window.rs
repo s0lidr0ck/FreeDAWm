@@ -2361,6 +2361,9 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
                         painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, body.gamma_multiply(0.7)));
                     }
                 }
+            } else if s.live_stretch.contains_key(source) {
+                // Heard through the real-time stretcher while its render is made.
+                painter.text(body_r.center(), Align2::CENTER_CENTER, "stretching…", regular(10.0), body.gamma_multiply(1.6));
             } else {
                 painter.text(body_r.center(), Align2::CENTER_CENTER, "media offline", regular(10.0), Color32::from_rgb(220, 120, 120));
             }
