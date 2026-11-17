@@ -9,13 +9,13 @@ use std::collections::HashMap;
 
 /// Top-level rows per menu, headings and separators not counted: the approved mockups' counts,
 /// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Click/Countoff…,
-/// Preferences…). The FreeDAWm menu (About, Session Info, Session Audio
+/// Preferences…), plus Track › Capture to Pantry… (2026-11-17, `docs/pantry.md`). The FreeDAWm menu (About, Session Info, Session Audio
 /// Health, Quit) is drawn by hand ahead of these.
 const ROWS: [(&str, usize); 11] = [
     ("File", 14),
     ("Edit", 27),
     ("View", 11),
-    ("Track", 31),
+    ("Track", 32),
     ("Clip", 23),
     ("Event", 15),
     ("Process", 14),
