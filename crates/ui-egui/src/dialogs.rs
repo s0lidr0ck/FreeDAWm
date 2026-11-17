@@ -625,6 +625,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::bounce::show(app, ctx);
     crate::render::show(app, ctx);
     crate::split_progress::show(app, ctx);
+    crate::capture_progress::show(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     crate::ml_ui::show(app, ctx);
     crate::tempo_ui::show(app, ctx);
@@ -1491,7 +1492,6 @@ fn capture_fields(ui: &mut egui::Ui, c: &mut CapturePantry) {
     let (notes, samples, secs) = c.size();
     let secs = secs.round() as u64;
     ui.label(format!("{notes} notes, {samples} samples: up to {}:{:02} of audio to render.", secs / 60, secs % 60));
-    ui.label("The app waits while it renders.");
 }
 
 /// The status line after `track.capture_multisample` returned `v`.

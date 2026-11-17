@@ -1,7 +1,7 @@
 # Pantry: the multisampler, and capturing instruments into it
 
-> **Status:** the instrument, SFZ loading and capture are built; capture is on the Track menu
-> with a settings dialog; no window of the instrument's own yet · **Written:** 2026-11-17 · **Owner decisions (2026-11-17):** a separate instrument
+> **Status:** the instrument with its own window, SFZ loading and capture (on the Track menu,
+> with a settings dialog and a progress window) are built · **Written:** 2026-11-17 · **Owner decisions (2026-11-17):** a separate instrument
 > from Lift; the name Pantry; twelve velocity layers by default; velocity layers that blend;
 > capture done inside the app, each note rendered on its own, with the settings below
 
@@ -33,6 +33,18 @@ of its own.
   semitones. 96 voices (a blended hit uses two).
 - Level, Pan, Transpose and Fine Tune.
 
+## The window
+
+Pantry opens in its own window from the track's instrument slot: the wordmark and what is on the
+shelves (samples, notes, layers, seconds, megabytes), **Load SFZ…** and **Clear**
+(`mix.multisample_clear`); the **Shelves**, every sample as a block over the keys it plays (left
+to right) and the velocities it answers (bottom to top), brighter the harder it was played, the
+part of a layer that blends with the one below shaded, a dot per take when a layer has several,
+and a strip of keys underneath with the recorded notes in amber; and knobs for Dynamics (Velocity
+Curve, Layer Blend), Envelope, Pitch and Output. Pressing the shelves plays the key under the
+pointer at the velocity under it on the Musical Typing port, so a track that hears the keyboard
+sounds.
+
 ## Capture
 
 **Track › Capture to Pantry…** (`track.capture_multisample`) plays the track's instrument a note
@@ -53,6 +65,10 @@ Pantry plays the result. The source track is not changed.
 | `mono` | false | keeps one channel (half the memory) |
 | `name` | the track's, with "Pantry" | the new track's name |
 
+From the menu the notes render a slice per frame behind a progress window that names the note
+being played, with Cancel (or Esc), which leaves the session untouched; `engine.execute` runs the
+capture at once.
+
 Each recorded note is one render: half a second of silence (the chain's own noise is measured
 there, so a hissing amp still ends its notes), then its strikes one after another. A strike is
 cut from its note-on to where it last rose above the silence level, plus a short fade. Notes that
@@ -71,9 +87,8 @@ controls shape the sound. `tools/sampling/sampling.py split` writes files it rea
 
 ## Not built yet
 
-- A window of its own (the keyboard map, the layers of a note), and a menu entry for loading an
-  SFZ file (`mix.multisample_load` runs from the control channel and Scout).
-- A progress bar for capture: it runs as one blocking command, and the app waits.
+- A menu entry for loading an SFZ file outside Pantry's window, and its browser thumbnail.
+- Editing on the shelves: moving, replacing or removing a single sample, per-layer levels.
 - Capturing only down to a chosen module (Freeze's "up to here").
 - Third-party instruments as capture sources are untested: capture renders through instances of
   its own, as an engine-side Freeze does.

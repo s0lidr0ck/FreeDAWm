@@ -238,6 +238,8 @@ pub struct Engine {
     /// Pieces Edit › Split into Files copied ahead of the command ([`split_files::SplitJob`]),
     /// for the next command to use instead of copying; cleared by the command that runs.
     split_pieces: Vec<split_files::Piece>,
+    /// A capture made ahead of `track.capture_multisample` (see [`Engine::offer_capture`]).
+    capture: Option<cmd::multisample::Captured>,
     /// Live automation writing: what is touched, what this pass wrote ([`cmd::auto_write`]).
     pub(crate) auto_write: cmd::auto_write::AutoWriter,
     /// Imported audio is copied into the project's `Audio Files` when the session is saved (the
@@ -303,6 +305,7 @@ impl Engine {
             prepared: Vec::new(),
             prepared_rev: 0,
             split_pieces: Vec::new(),
+            capture: None,
             auto_write: cmd::auto_write::AutoWriter::new(),
             copy_imported_audio: true,
             unsaved_audio_root: None,
@@ -371,6 +374,17 @@ impl Engine {
     /// (each is found by its source and window, so a session changed meanwhile is no matter).
     pub fn offer_split_pieces(&mut self, pieces: Vec<split_files::Piece>) {
         self.split_pieces = pieces;
+    }
+
+    /// Keeps what a [`cmd::multisample::CaptureJob`] made for the next `track.capture_multisample`
+    /// (the command takes it when it is run with the job's parameters).
+    pub fn offer_capture(&mut self, made: cmd::multisample::Captured) {
+        self.capture = Some(made);
+    }
+
+    /// The capture offered for `track.capture_multisample` (see [`Engine::offer_capture`]).
+    pub(crate) fn take_capture(&mut self) -> Option<cmd::multisample::Captured> {
+        self.capture.take()
     }
 
     /// The pieces offered for `edit.split_into_files` (see [`Engine::offer_split_pieces`]).
@@ -690,6 +704,7 @@ impl Engine {
         // Whatever the command did not use is of no use to the next.
         self.prepared.clear();
         self.split_pieces.clear();
+        self.capture = None;
         let result = match result {
             Ok(r) => r,
             Err(p) => {

@@ -1,0 +1,432 @@
+//! Pantry - Multisampler's editor, in the Juke family's look (see [`crate::lift`]): a walnut
+//! ground, tobacco cards, cream knobs and one amber accent.
+//!
+//! The page: a title bar (the Pantry wordmark, what is on the shelves, Load SFZ… and Clear); the
+//! shelves (every sample as a block over the keys it plays, left to right, and the velocities it
+//! answers, bottom to top, the part of a layer that blends with the one below shaded; press a
+//! block to hear that key at that velocity on the Musical Typing port); and a side card with the
+//! Dynamics, Envelope, Pitch and Output knobs. Every control runs `mix.instrument_param` or a
+//! multisample command, so it undoes and scripts like any edit.
+
+use crate::SoundApp;
+use crate::lift::{AMBER, CREAM, DIM, INK, TEXT, TOBACCO_HI, WALNUT, WELL, WELL_GRID, button, card, paint_knob, section};
+use crate::theme::{bold, regular};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use serde_json::json;
+use soundcraft_dsp::ParamInfo;
+use soundcraft_dsp::plugins::multisampler::parse_sample_key;
+use soundcraft_model::{Insert, TrackId};
+use std::collections::BTreeMap;
+
+/// The Multisampler's plugin id.
+pub const PANTRY: &str = "multisampler";
+
+/// The editor's size: the window opens at this width.
+pub const W: f32 = 1000.0;
+const H: f32 = 600.0;
+
+fn info_of(id: &str) -> Option<&'static ParamInfo> {
+    soundcraft_dsp::plugin_info(PANTRY).and_then(|i| i.param(id))
+}
+
+fn param(ins: &Insert, id: &str) -> f32 {
+    ins.params.get(id).copied().unwrap_or_else(|| info_of(id).map_or(0.0, |p| p.default))
+}
+
+/// Sets one parameter (merged into one undo step while dragging).
+fn set(app: &mut SoundApp, tid: TrackId, id: &str, value: f32) {
+    if let Err(e) = app.engine.execute_merged(
+        "mix.instrument_param",
+        &json!({"track": tid.0, "param": id, "value": value}),
+        &format!("instrument_param:{}:{id}", tid.0),
+    ) {
+        app.ui.status = e.to_string();
+    }
+}
+
+/// A recorded note's velocity layers, softest first: the velocity each was played at and how
+/// many takes it holds.
+pub type Layers = Vec<(u8, usize)>;
+
+/// What is on the shelves: each recorded note with its layers, lowest note first.
+pub fn shelves(ins: &Insert) -> BTreeMap<u8, Layers> {
+    let mut takes: BTreeMap<(u8, u8), usize> = BTreeMap::new();
+    for (note, velocity, _) in ins.samples.keys().filter_map(|k| parse_sample_key(k)) {
+        *takes.entry((note as u8, velocity)).or_default() += 1;
+    }
+    let mut out: BTreeMap<u8, Layers> = BTreeMap::new();
+    for ((note, velocity), n) in takes {
+        out.entry(note).or_default().push((velocity, n));
+    }
+    out
+}
+
+/// The keys each recorded note plays: the nearest one's, the lower of two as near (the
+/// instrument's own rule).
+pub fn key_spans(notes: &[u8]) -> Vec<(u8, u8, u8)> {
+    notes
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| {
+            let lo = if i == 0 { 0 } else { notes.get(i - 1).map_or(0, |&p| ((u16::from(p) + u16::from(n)) / 2 + 1) as u8) };
+            let hi = notes.get(i + 1).map_or(127, |&next| ((u16::from(n) + u16::from(next)) / 2) as u8);
+            (n, lo, hi)
+        })
+        .collect()
+}
+
+/// The whole editor.
+pub fn editor(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
+    let (outer, _) = ui.allocate_exact_size(vec2(W - 16.0, H), Sense::hover());
+    let p = ui.painter_at(outer);
+    p.rect_filled(outer, CornerRadius::same(6), WALNUT);
+    let (x0, x1) = (outer.min.x + 12.0, outer.max.x - 12.0);
+    let title = Rect::from_min_max(pos2(x0, outer.min.y + 8.0), pos2(x1, outer.min.y + 50.0));
+    let shelves = shelves(ins);
+    title_bar(app, ui, &p, title, tid, ins, &shelves);
+    let side_w = 300.0;
+    let (top, bottom) = (title.max.y + 10.0, outer.max.y - 12.0);
+    let main = Rect::from_min_max(pos2(x0, top), pos2(x1 - side_w - 12.0, bottom));
+    let side = Rect::from_min_max(pos2(x1 - side_w, top), pos2(x1, bottom));
+    map_card(app, ui, &p, main, tid, ins, &shelves);
+    side_card(app, ui, &p, side, tid, ins);
+}
+
+/// The top bar: the wordmark, what the instrument holds, and its buttons.
+fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, shelves: &BTreeMap<u8, Layers>) {
+    let g = p.layout_no_wrap("Pantry".into(), bold(30.0), AMBER);
+    let w = g.size().x;
+    p.galley(pos2(r.min.x, r.center().y - g.size().y * 0.5), g, AMBER);
+    p.text(pos2(r.min.x + w + 10.0, r.center().y + 4.0), Align2::LEFT_CENTER, "Multisampler", regular(14.0), DIM);
+    let s = app.engine.session();
+    let (mut values, mut secs) = (0usize, 0.0f64);
+    for a in ins.samples.values().filter_map(|id| s.pool.get(*id)) {
+        values += a.frames() * a.num_channels();
+        secs += a.frames() as f64 / f64::from(a.sample_rate().max(1));
+    }
+    let layers = shelves.values().map(Vec::len).max().unwrap_or(0);
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let (name, facts) = if ins.samples.is_empty() {
+        ("Empty".to_string(), "capture a track or load an SFZ file".to_string())
+    } else {
+        (
+            format!("{} sample{}", ins.samples.len(), plural(ins.samples.len())),
+            format!(
+                "{} note{} · {layers} layer{} · {:.0} s · {:.0} MB",
+                shelves.len(),
+                plural(shelves.len()),
+                plural(layers),
+                secs,
+                values as f64 * 4.0 / 1.0e6
+            ),
+        )
+    };
+    let mid = Rect::from_center_size(pos2(r.center().x - 20.0, r.center().y), vec2(320.0, 44.0));
+    p.rect_filled(mid, CornerRadius::same(22), Color32::from_rgb(0x22, 0x1D, 0x19));
+    p.rect_stroke(mid, CornerRadius::same(22), Stroke::new(1.0, Color32::from_rgb(0x48, 0x3F, 0x37)), StrokeKind::Inside);
+    p.text(pos2(mid.center().x, mid.min.y + 15.0), Align2::CENTER_CENTER, name, bold(15.0), TEXT);
+    p.text(pos2(mid.center().x, mid.min.y + 32.0), Align2::CENTER_CENTER, facts, regular(11.5), DIM);
+    let mut x = r.max.x;
+    let mut next = |w: f32| {
+        let b = Rect::from_min_max(pos2(x - w, r.center().y - 17.0), pos2(x, r.center().y + 17.0));
+        x -= w + 8.0;
+        b
+    };
+    let clear_r = next(70.0);
+    if !ins.samples.is_empty()
+        && button(ui, p, clear_r, "Clear", true, "pantry-clear").clicked()
+        && let Err(e) = app.run("mix.multisample_clear", json!({"track": tid.0}))
+    {
+        app.ui.status = e;
+    }
+    let can_pick = app.services.pick_open.is_some();
+    let load_r = next(110.0);
+    let load = button(ui, p, load_r, "Load SFZ…", can_pick, "pantry-load").on_disabled_hover_text("Loading a file needs the desktop app");
+    if load.clicked()
+        && let Some(pick) = &app.services.pick_open
+        && let Some(path) = pick("mix.multisample_load", &["sfz"])
+    {
+        match app.run("mix.multisample_load", json!({"track": tid.0, "path": path})) {
+            Ok(v) => {
+                let n = |k: &str| v[k].as_u64().unwrap_or(0);
+                app.ui.status = format!("Loaded {} samples of {} notes", n("samples"), n("notes"));
+                if n("skipped") > 0 {
+                    app.ui.status.push_str(&format!("; {} skipped (16 layers a note, 4 takes a layer)", n("skipped")));
+                }
+            }
+            Err(e) => app.ui.status = e,
+        }
+    }
+}
+
+/// A layer's colour: warmer and brighter the harder it was played.
+fn layer_colour(velocity: u8) -> Color32 {
+    let t = f32::from(velocity) / 127.0;
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
+    let dark = Color32::from_rgb(0x6A, 0x52, 0x34);
+    Color32::from_rgb(mix(dark.r(), AMBER.r()), mix(dark.g(), AMBER.g()), mix(dark.b(), AMBER.b()))
+}
+
+/// The shelves: every sample over its keys and velocities, with a strip of keys underneath.
+fn map_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert, shelves: &BTreeMap<u8, Layers>) {
+    card(p, r);
+    section(p, pos2(r.min.x + 16.0, r.min.y + 22.0), "Shelves");
+    p.text(
+        pos2(r.min.x + 92.0, r.min.y + 23.0),
+        Align2::LEFT_CENTER,
+        "keys left to right, velocity bottom to top · press a block to hear it",
+        regular(12.0),
+        DIM,
+    );
+    let gutter = 30.0;
+    let keys_h = 34.0;
+    let map = Rect::from_min_max(pos2(r.min.x + 16.0 + gutter, r.min.y + 44.0), pos2(r.max.x - 16.0, r.max.y - 16.0 - keys_h - 6.0));
+    p.rect_filled(map, CornerRadius::same(6), WELL);
+    let notes: Vec<u8> = shelves.keys().copied().collect();
+    // The keys shown: the recorded notes with a little room each side (a piano's, when empty).
+    let (first, last) = match (notes.first(), notes.last()) {
+        (Some(&a), Some(&b)) => (a.saturating_sub(6), b.saturating_add(6).min(127)),
+        _ => (21, 108),
+    };
+    let (first, last) = if last - first < 24 { (first.saturating_sub(12), last.saturating_add(12).min(127)) } else { (first, last) };
+    let key_w = map.width() / f32::from(last - first + 1);
+    let key_x = |k: u8| map.min.x + f32::from(k.clamp(first, last) - first) * key_w;
+    let vel_y = |v: f32| map.max.y - (v / 127.0).clamp(0.0, 1.0) * map.height();
+    for v in [1u8, 32, 64, 96, 127] {
+        let y = vel_y(f32::from(v));
+        p.line_segment([pos2(map.min.x, y), pos2(map.max.x, y)], Stroke::new(1.0, WELL_GRID));
+        p.text(pos2(map.min.x - 6.0, y.clamp(map.min.y + 6.0, map.max.y - 6.0)), Align2::RIGHT_CENTER, v.to_string(), regular(10.5), DIM);
+    }
+    let blend = param(ins, "layer_blend") / 100.0;
+    let pointer = ui.input(|i| i.pointer.latest_pos()).filter(|pos| map.contains(*pos));
+    let mut hovered: Option<String> = None;
+    for (note, lo, hi) in key_spans(&notes) {
+        if hi < first || lo > last {
+            continue;
+        }
+        let (xa, xb) = (key_x(lo.max(first)), key_x(hi.min(last)) + key_w);
+        let mut below = 0u8;
+        for (i, &(velocity, takes)) in shelves.get(&note).map(Vec::as_slice).unwrap_or(&[]).iter().enumerate() {
+            let cell = Rect::from_min_max(pos2(xa + 0.5, vel_y(f32::from(velocity)) + 0.5), pos2(xb - 0.5, vel_y(f32::from(below)) - 0.5));
+            let colour = layer_colour(velocity);
+            p.rect_filled(cell, CornerRadius::same(2), colour);
+            // The bottom of a layer's range mixes with the layer below it.
+            if i > 0 && blend > 0.0 {
+                let mixed = Rect::from_min_max(pos2(cell.min.x, cell.max.y - cell.height() * blend), cell.max);
+                p.rect_filled(mixed, CornerRadius::same(2), layer_colour(below).gamma_multiply(0.55));
+            }
+            if takes > 1 && cell.width() >= 8.0 && cell.height() >= 8.0 {
+                for t in 0..takes.min(4) {
+                    p.circle_filled(pos2(cell.min.x + 4.0 + t as f32 * 5.0, cell.min.y + 4.0), 1.5, INK);
+                }
+            }
+            if pointer.is_some_and(|pos| cell.contains(pos)) {
+                p.rect_stroke(cell, CornerRadius::same(2), Stroke::new(1.5, CREAM), StrokeKind::Inside);
+                let name = soundcraft_midi::note_name;
+                hovered = Some(format!(
+                    "{} · keys {} to {} · velocity {} to {velocity} · {takes} take{}",
+                    name(note),
+                    name(lo),
+                    name(hi),
+                    u16::from(below) + 1,
+                    if takes == 1 { "" } else { "s" }
+                ));
+            }
+            below = velocity;
+        }
+    }
+    p.rect_stroke(map, CornerRadius::same(6), Stroke::new(1.0, Color32::from_black_alpha(120)), StrokeKind::Inside);
+    if notes.is_empty() {
+        p.text(map.center() - vec2(0.0, 10.0), Align2::CENTER_CENTER, "Nothing on the shelves yet", bold(15.0), TEXT);
+        p.text(
+            map.center() + vec2(0.0, 12.0),
+            Align2::CENTER_CENTER,
+            "Select an instrument track and choose Track › Capture to Pantry…, or load an SFZ file",
+            regular(12.5),
+            DIM,
+        );
+    }
+    // The keys, a column each: white keys cream, black keys dark, recorded notes amber.
+    let strip = Rect::from_min_max(pos2(map.min.x, map.max.y + 6.0), pos2(map.max.x, map.max.y + 6.0 + keys_h));
+    let black = |n: u8| matches!(n % 12, 1 | 3 | 6 | 8 | 10);
+    for k in first..=last {
+        let x = key_x(k);
+        let recorded = shelves.contains_key(&k);
+        let h = if black(k) { keys_h * 0.62 } else { keys_h };
+        let fill = if recorded {
+            AMBER
+        } else if black(k) {
+            Color32::from_rgb(0x1A, 0x15, 0x11)
+        } else {
+            CREAM
+        };
+        p.rect_filled(
+            Rect::from_min_size(pos2(x + 0.5, strip.min.y), vec2((key_w - 1.0).max(1.0), h)),
+            CornerRadius { nw: 0, ne: 0, sw: 2, se: 2 },
+            fill,
+        );
+        if k % 12 == 0 && key_w * 12.0 >= 30.0 {
+            p.text(
+                pos2(x + key_w * 0.5, strip.max.y - 2.0),
+                Align2::CENTER_BOTTOM,
+                soundcraft_midi::note_name(k),
+                regular(9.0),
+                INK.gamma_multiply(0.8),
+            );
+        }
+    }
+    // Pressing the map plays the key under the pointer at the velocity under it, until let go.
+    let resp = ui.interact(map, ui.id().with(("pantry-map", tid.0)), Sense::click_and_drag());
+    let held_id = egui::Id::new(("pantry-held", tid.0));
+    let held: Option<u8> = ui.ctx().data(|d| d.get_temp(held_id));
+    let at = resp.interact_pointer_pos().or(pointer);
+    let under = at.map(|pos| {
+        let key = first.saturating_add(((pos.x - map.min.x) / key_w).floor().clamp(0.0, f32::from(last - first)) as u8);
+        let velocity = (((map.max.y - pos.y) / map.height()) * 127.0).round().clamp(1.0, 127.0) as u8;
+        (key, velocity)
+    });
+    let down = resp.is_pointer_button_down_on();
+    match (held, under.filter(|_| down && !notes.is_empty())) {
+        (None, Some((key, velocity))) => {
+            send(app, [0x90, key, velocity]);
+            ui.ctx().data_mut(|d| d.insert_temp(held_id, key));
+        }
+        (Some(key), None) => {
+            send(app, [0x80, key, 0]);
+            ui.ctx().data_mut(|d| d.remove::<u8>(held_id));
+        }
+        _ => {}
+    }
+    if resp.hovered() && !notes.is_empty() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    if let Some(text) = hovered {
+        resp.on_hover_text_at_pointer(text);
+    }
+}
+
+/// Sends a live message on the Musical Typing port (nothing where there is no MIDI hub).
+fn send(app: &SoundApp, msg: [u8; 3]) {
+    if let Some(h) = &app.midi_hub {
+        h.typing().send(&msg);
+    }
+}
+
+/// Parameters whose knob lights its ring from the centre.
+fn bipolar(id: &str) -> bool {
+    matches!(id, "transpose" | "fine_tune" | "pan")
+}
+
+fn value_text(ins: &Insert, id: &str) -> String {
+    let Some(info) = info_of(id) else { return String::new() };
+    let v = param(ins, id);
+    if info.unit == soundcraft_dsp::Unit::Ms && v >= 1000.0 {
+        return format!("{:.2} s", v / 1000.0);
+    }
+    if info.unit == soundcraft_dsp::Unit::Ms && v >= 100.0 {
+        return format!("{v:.0} ms");
+    }
+    if id == "velocity_curve" {
+        return format!("{v:.2}");
+    }
+    info.format(v)
+}
+
+/// A small knob with its name and value to its right: drag up and down (Shift for fine), wheel,
+/// double-click resets.
+fn knob(app: &mut SoundApp, ui: &mut Ui, p: &Painter, at: Pos2, tid: TrackId, ins: &Insert, id: &str, name: &str) {
+    let Some(info) = info_of(id) else { return };
+    let rad = 15.0;
+    let c = pos2(at.x + rad + 6.0, at.y + 22.0);
+    let v = param(ins, id);
+    let resp = ui.interact(
+        Rect::from_center_size(c, vec2(rad * 2.0 + 10.0, rad * 2.0 + 10.0)),
+        ui.id().with(("pantry-knob", tid.0, id)),
+        Sense::click_and_drag(),
+    );
+    resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(v), name));
+    let hot = resp.hovered() || resp.dragged();
+    if hot {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+    }
+    let fine = ui.input(|i| i.modifiers.shift);
+    if resp.double_clicked() {
+        set(app, tid, id, info.default);
+    } else if resp.dragged() {
+        let dy = resp.drag_delta().y;
+        if dy != 0.0 {
+            set(app, tid, id, crate::widgets::knob_drag(info, v, dy, fine));
+        }
+    } else if resp.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > 0.5 {
+            set(app, tid, id, crate::widgets::knob_scroll(info, v, scroll / 50.0));
+        }
+    }
+    paint_knob(p, c, rad, info.to_normalized(v), false, bipolar(id), hot);
+    p.text(pos2(c.x + rad + 10.0, c.y - 8.0), Align2::LEFT_CENTER, name, regular(12.0), DIM);
+    p.text(pos2(c.x + rad + 10.0, c.y + 8.0), Align2::LEFT_CENTER, value_text(ins, id), bold(13.5), TEXT);
+}
+
+/// The side card's sections, top to bottom: a name, a note, and its knobs (parameter, label).
+const SECTIONS: [(&str, &str, &[(&str, &str)]); 4] = [
+    ("Dynamics", "how the layers meet", &[("velocity_curve", "Velocity Curve"), ("layer_blend", "Layer Blend")]),
+    ("Envelope", "", &[("attack", "Attack"), ("decay", "Decay"), ("sustain", "Sustain"), ("release", "Release")]),
+    ("Pitch", "", &[("transpose", "Transpose"), ("fine_tune", "Fine Tune")]),
+    ("Output", "", &[("level", "Level"), ("pan", "Pan")]),
+];
+
+/// The side card: Dynamics, Envelope, Pitch and Output.
+fn side_card(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId, ins: &Insert) {
+    card(p, r);
+    let col = (r.width() - 24.0) / 2.0;
+    let mut y = r.min.y + 22.0;
+    for (i, (name, note, knobs)) in SECTIONS.iter().enumerate() {
+        if i > 0 {
+            p.line_segment([pos2(r.min.x + 12.0, y - 14.0), pos2(r.max.x - 12.0, y - 14.0)], Stroke::new(1.0, TOBACCO_HI));
+        }
+        section(p, pos2(r.min.x + 16.0, y), name);
+        if !note.is_empty() {
+            p.text(pos2(r.max.x - 16.0, y + 1.0), Align2::RIGHT_CENTER, *note, regular(12.0), DIM);
+        }
+        y += 14.0;
+        for (k, (id, label)) in knobs.iter().enumerate() {
+            let at = pos2(r.min.x + 12.0 + (k % 2) as f32 * col, y + (k / 2) as f32 * 50.0);
+            knob(app, ui, p, at, tid, ins, id, label);
+        }
+        y += knobs.len().div_ceil(2) as f32 * 50.0 + 26.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_shelves_list_each_notes_layers_and_takes() {
+        let mut ins = Insert::new(PANTRY);
+        for key in ["n60.v127.r1", "n60.v64.r1", "n60.v64.r2", "n48.v100.r1", "not a key"] {
+            ins.samples.insert(key.into(), soundcraft_model::SourceId(1));
+        }
+        let s = shelves(&ins);
+        assert_eq!(s.keys().copied().collect::<Vec<_>>(), [48, 60]);
+        assert_eq!((s[&48].as_slice(), s[&60].as_slice()), (&[(100, 1)][..], &[(64, 2), (127, 1)][..]));
+    }
+
+    #[test]
+    fn each_note_takes_the_keys_nearest_it() {
+        assert_eq!(key_spans(&[48, 51, 60]), [(48, 0, 49), (51, 50, 55), (60, 56, 127)]);
+        // Halfway between two goes to the lower one, as the instrument plays it.
+        assert_eq!(key_spans(&[48, 50]), [(48, 0, 49), (50, 50, 127)]);
+        assert_eq!(key_spans(&[60]), [(60, 0, 127)]);
+        assert!(key_spans(&[]).is_empty());
+    }
+
+    #[test]
+    fn every_knob_is_a_parameter_of_the_instrument() {
+        let info = soundcraft_dsp::plugin_info(PANTRY).unwrap();
+        let shown: Vec<&str> = SECTIONS.iter().flat_map(|s| s.2.iter().map(|k| k.0)).collect();
+        assert_eq!(shown.len(), info.params.len(), "every parameter has a knob");
+        assert!(shown.iter().all(|id| info.param(id).is_some()));
+    }
+}

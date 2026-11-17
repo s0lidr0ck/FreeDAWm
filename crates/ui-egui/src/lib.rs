@@ -9,6 +9,7 @@ pub mod band;
 pub mod bounce;
 pub mod brand_art;
 pub mod browser;
+pub mod capture_progress;
 pub mod chain_view;
 pub mod chamber_plan;
 pub mod channel_width;
@@ -74,6 +75,7 @@ pub mod open_progress;
 pub mod ops_windows;
 pub mod palette;
 pub mod panels;
+pub mod pantry;
 pub mod plugin_titles;
 pub mod preferences;
 mod recent;
@@ -949,6 +951,8 @@ pub struct SoundApp {
     pub(crate) track_render: Option<soundcraft_engine::render_job::RenderJob>,
     /// Edit › Split into Files copying behind its progress window (see [`split_progress`]).
     pub(crate) split: Option<split_progress::Running>,
+    /// Track › Capture to Pantry rendering behind its progress window (see [`capture_progress`]).
+    pub(crate) capture: Option<capture_progress::Running>,
     /// The player's live instances on their way to the running render (see [`render::lend`]).
     pub(crate) lending: Option<soundcraft_playback::LendingInstances>,
     /// The project opening behind the progress window (see [`open_progress`]).
@@ -1102,6 +1106,7 @@ impl SoundApp {
             bounce: None,
             track_render: None,
             split: None,
+            capture: None,
             lending: None,
             open: None,
             dawproject_report: None,
@@ -1184,6 +1189,10 @@ impl SoundApp {
             && let Some(r) = split_progress::start(self, &params)
         {
             return r;
+        }
+        // Capture to Pantry from the app renders behind a progress window first.
+        if id == capture_progress::ID && open_behind_window {
+            return capture_progress::start(self, &params);
         }
         if id.starts_with("session.save")
             || id.starts_with("file.bounce")
@@ -2379,6 +2388,7 @@ impl SoundApp {
         bounce::step(self, ctx);
         render::step(self, ctx);
         split_progress::step(self, ctx);
+        capture_progress::step(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         ml_ui::step(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
