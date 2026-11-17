@@ -3640,6 +3640,20 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             Tool::Pencil if auto_view.is_none() && track.kind.is_midi() => {
                 hit.is_none().then_some(Gesture::MidiClip { track: track.id, from: at_origin, to: at_origin })
             }
+            Tool::Pencil
+                if auto_view.is_none()
+                    && s.edit.zoom.samples_per_px <= crate::waveform::PENCIL_SAMPLES_PER_POINT
+                    && hit.as_ref().is_some_and(|c| c.is_audio() && c.stretch == 1.0 && c.warp.is_empty() && c.loop_len == 0 && !c.reversed) =>
+            {
+                // At sample zoom the Pencil redraws the clip's samples (`clip.draw_samples` on release).
+                hit.as_ref().map(|c| {
+                    let top = lane.min.y + 1.0 + clip_name_height(&s, lane);
+                    let body = Rect::from_min_max(pos2(lane.min.x, top), pos2(lane.max.x, (lane.max.y - 1.0).max(top)));
+                    let channels = track.channels();
+                    let (ch, v) = crate::waveform::pencil_value(&s, c, channels, body, at_origin, origin.y);
+                    Gesture::DrawWave { clip: c.id, ch, channels, body: (body.min.y, body.max.y), points: vec![(at_origin, v)] }
+                })
+            }
             Tool::Pencil => {
                 // The press is the series' first point (egui reports the drag once the pointer moved).
                 let first = auto_view.as_ref().map(|param| (at_origin, auto_value(lane, lane_range(track, param), origin.y)));
@@ -4095,6 +4109,19 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.auto_sel = (!points.is_empty()).then(|| crate::AutoSelection { track: *track, param: param.clone(), points });
             }
         }
+        Some(Gesture::DrawWave { clip, ch, channels, body, points }) => {
+            if let Some((_, c)) = s.find_clip(*clip) {
+                // Every point keeps to the band the stroke started in.
+                let n = (*channels).max(1);
+                let h = (body.1 - body.0) / n as f32;
+                let band = Rect::from_min_max(pos2(tl.min.x, body.0 + h * *ch as f32), pos2(tl.max.x, body.0 + h * (*ch + 1) as f32));
+                let y = p.y.clamp(band.min.y, band.max.y);
+                let (_, v) = crate::waveform::pencil_value(&s, c, 1, band, at, y);
+                if points.last().is_none_or(|(a, _)| *a != at) {
+                    points.push((at, v));
+                }
+            }
+        }
         Some(Gesture::Pencil { track, param: Some(param), points, line }) => {
             if let Some(t) = s.track(*track)
                 && let Some((_, row)) = rows.iter().find(|(i, _)| *i == t.id.0)
@@ -4243,6 +4270,14 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, .. }) => trim_clip(app, clip, to, false),
         Some(Gesture::MidiClip { track, from, to }) => new_midi_clip(app, s, track, from, to),
+        Some(Gesture::DrawWave { clip, ch, points, .. }) => {
+            // One "Draw Samples" step for the whole stroke.
+            if let Some((from, values)) = crate::sample_editor::stroke_values(&points)
+                && let Err(e) = app.run("clip.draw_samples", json!({"clip": clip.0, "at": from, "values": values, "channel": ch}))
+            {
+                app.ui.status = e;
+            }
+        }
         Some(Gesture::Pencil { track, param, points, line }) => {
             // One "Draw Automation" step that replaces what was under the drag (no sawtooth).
             if let Some(param) = param.filter(|_| s.track(track).is_some())

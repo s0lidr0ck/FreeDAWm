@@ -107,6 +107,24 @@ fn draw_one(
     }
 }
 
+/// The Pencil at sample level: the channel band of `body` (one band per channel, `channels` of
+/// them) that `y` is in, and the file sample value a point drawn there stands for at timeline
+/// `pos` (the inverse of the sample-level line: the clip's gain and the waveform zoom taken off).
+pub fn pencil_value(s: &Session, clip: &Clip, channels: usize, body: Rect, pos: Samples, y: f32) -> (usize, f32) {
+    let n = channels.max(1);
+    let h = body.height() / n as f32;
+    let ch = if h > 0.0 { (((y - body.min.y) / h).floor().max(0.0) as usize).min(n - 1) } else { 0 };
+    let band = bands(body, n).nth(ch).unwrap_or(body);
+    let half = band.height() * 0.46;
+    let shown = if half > 0.0 { ((band.center().y - y) / half).clamp(-1.0, 1.0) } else { 0.0 };
+    let gain = clip.gain_at(pos.saturating_sub(clip.start).clamp(0, clip.length)) * s.edit.zoom.waveform_zoom;
+    let v = if gain.abs() > 1e-6 { shown / gain } else { shown };
+    (ch, if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 })
+}
+
+/// Samples per point up to which the Pencil redraws an audio clip's samples.
+pub const PENCIL_SAMPLES_PER_POINT: f64 = 1.0;
+
 /// `(1 - w) * a + w * b` over two optional spans; the original alone where the cleaned audio has none.
 fn blend_span(a: Option<(f32, f32)>, b: Option<(f32, f32)>, w: f32) -> Option<(f32, f32)> {
     match (a, b) {

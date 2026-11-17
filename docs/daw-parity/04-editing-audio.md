@@ -34,7 +34,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Tools | Selector, Grabber (with separation grab), Trimmer, Smart Tool (with crossfades at joins), Zoomer, Scrubber, Scissors, Mute; fade handles on clips | Small: no waveform pencil |
+| A. Tools | Selector, Grabber (with separation grab), Trimmer, Smart Tool (with crossfades at joins), Zoomer, Scrubber, Scissors, Mute; fade handles on clips | **Level** |
 | B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid for moves and trims; an adaptive grid; snap to clip edges, markers, the playhead and zero crossings | Small |
 | C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups, typed selection numbers | Small |
 | D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
@@ -45,7 +45,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
-| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Medium: no sample editor |
+| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Small: the sample editor has no cut, copy or paste inside the file |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
@@ -67,7 +67,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Works**: the Smart Tool's lower corners where two clips meet (within 8 points of the join) draw a crossfade centred on the join, as wide as the drag either way, through `edit.fades_create` (its short-audio warning included) |
 | Scissors / split tool | ◐ | ● | ● | ● | **Works**: the Scissors tool (toolbar) separates the clip under a click there (snapped as edit points are), on the tracks an active edit group spreads the point to; Separate is still a key (B, Cmd+E) |
 | Mute tool | ◐ | ● | ● | ● | **Works**: the Mute tool (toolbar) mutes or unmutes the clip under a click, with its clip group and the clips an edit group brings along; Mute Clips is still a key |
-| Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
+| Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Works**: zoomed in to a sample or less per point, a Pencil drag on an audio clip redraws its samples on the channel where the stroke starts (`clip.draw_samples`; the clip gain and waveform zoom are taken off what is drawn, the stroke blends in and out over 8 samples). The change goes to a copy of the file the clip then plays, so other clips of the file are untouched; one undo step per stroke. Stretched, looped or reversed clips are left alone (consolidate first). The same pencil is in the Sample Editor |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
 | Scrub tool with audio | ● | ◐ | ● | ● | **Works**: plays what it passes, both ways, at the drag's speed, through the track's built-in inserts and fader; on a ruler it scrubs every audible track (section 1) |
 | Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Works**: F6+F7 or F7+F8 held together, in either order, choose the Smart Tool |
@@ -246,7 +246,7 @@ why they score ◐ for "built-in".
 | Relink missing audio files | ● | ● | ● | ● | **Works**: the Clip List marks a file the session could not find as missing, and Relink… in a file's menu reads it from another file (`file.relink_audio`), its clips playing again from where they were; a file of another length or width is taken with a warning. One file at a time; no search of a folder |
 | Compact files to what is used | ● | ● | ● | ● | **Works**: Compact in the Clip List (`file.compact`, `sources?`, `handle_ms?` 1000): each audio file is made again holding only the parts its clips use (every playlist, the Clip List's captured clips and the clips process histories keep) and a second either side, the clips point at the new file and the old one leaves the session (it stays on disk; written at the next save). One undo step brings the old file back. Files of stretched, looped, reversed, tuned, cleaned or lyric clips, frozen tracks, inserts and instruments are left whole, and a file that would shrink by less than 10% is left. Runs on the UI thread (a long file pauses the window briefly) |
 | "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Works**: Clip › Capture… (Cmd+R) keeps the selection's clips on each selected track in the Clip List as new clips, the track untouched; a captured clip drags onto a track (or Place on Selected Track from its menu) as a copy, and Remove from List takes it out. Saved with the session; its file counts as used |
-| Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
+| Audio file / sample editor window | ○ | ● | ● | ● | **Partial**: Process › More › Sample Editor shows the selected audio clip's samples with its own zoom (wheel scrolls, Ctrl/Cmd+wheel zooms): drag to select samples and Silence, Reverse, Invert or Gain them (`clip.sample_edit`), or turn on Pencil and draw them when zoomed in; each edit writes a copy of the file the clip plays, one undo step. Left: cut, copy and paste inside the file, a loop of the selection, and editing the whole file beyond the clip's window |
 | Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn stretched, as it plays |
 
 ## M. Undo and keyboard
@@ -502,3 +502,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | round three follow-up: Show Only Takes Matching Selection |
 | 2026-11-17 | minor | round three follow-up: process history (bypass, move, remove a step); Compact |
 | 2026-11-17 | minor | round three follow-up: Beat Detective conform and smoothing; groove from audio applied through it |
+| 2026-11-17 | minor | round three follow-up: waveform pencil at sample zoom; a basic Sample Editor |

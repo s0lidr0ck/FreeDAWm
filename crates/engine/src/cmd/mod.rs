@@ -13,6 +13,8 @@ pub use auto_write::{
     write_disabled_flag,
 };
 mod audiosuite;
+mod sample_edit;
+pub use sample_edit::MAX_DRAWN as MAX_DRAWN_SAMPLES;
 mod automation_edit;
 pub use automation_edit::current_pencil_shape;
 mod band;
@@ -274,6 +276,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_more::specs());
         v.extend(warp::specs());
         v.extend(clip_list::specs());
+        v.extend(sample_edit::specs());
         v.extend(event_more::specs());
         v.extend(tempo::specs());
         v.extend(setup_more::specs());

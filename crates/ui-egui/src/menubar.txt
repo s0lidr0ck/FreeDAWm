@@ -526,6 +526,7 @@ Process > More > Duplicate = AudioSuite > Other > Duplicate
 Process > More > Signal Generator = AudioSuite > Other > Signal Generator
 Process > More > ---
 Process > More > Process History
+Process > More > Sample Editor
 
 AI > ## Separate [desktop]
 AI > Separate Stems… [desktop]

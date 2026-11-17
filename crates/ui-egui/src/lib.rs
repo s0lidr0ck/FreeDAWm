@@ -95,6 +95,7 @@ pub mod record_offset;
 pub mod recovery;
 pub mod render;
 pub mod ruler_items;
+pub mod sample_editor;
 pub mod sampler_window;
 pub mod scope;
 pub mod score_editor;
@@ -468,6 +469,7 @@ pub struct UiState {
     pub show_clip_effects: bool,
     pub show_beat_detective: bool,
     pub show_process_history: bool,
+    pub show_sample_editor: bool,
     pub show_tempo_ops: bool,
     pub show_time_ops: bool,
     pub show_midi_ops: bool,
@@ -684,6 +686,7 @@ impl Default for UiState {
             show_clip_effects: false,
             show_beat_detective: false,
             show_process_history: false,
+            show_sample_editor: false,
             show_tempo_ops: false,
             show_time_ops: false,
             show_midi_ops: false,
@@ -954,6 +957,15 @@ pub enum Gesture {
         track: TrackId,
         from: Samples,
         to: Samples,
+    },
+    /// The Pencil on an audio clip at sample zoom: the points drawn (position, file value) on
+    /// channel `ch`, whose band in the clip's body is `body` (top, bottom) with `channels` bands.
+    DrawWave {
+        clip: soundcraft_model::ClipId,
+        ch: usize,
+        channels: usize,
+        body: (f32, f32),
+        points: Vec<(Samples, f32)>,
     },
     ZoomBox {
         start: f32,
@@ -3288,6 +3300,7 @@ impl SoundApp {
         windows::show(self, &ctx);
         video_window::show(self, &ctx);
         ops_windows::show(self, &ctx);
+        sample_editor::show(self, &ctx);
         step_input::show(self, &ctx);
         extra_windows::show(self, &ctx);
         recovery::show(self, &ctx);
