@@ -491,6 +491,8 @@ struct PluginSlot {
     /// [`Insert::mix`]: soundcraft_model::Insert::mix
     wet: f32,
     wet_to: f32,
+    /// Frames in a row both its input and its output were silent (Suspend Plug-ins on Silence).
+    quiet: usize,
 }
 
 struct Strip {
@@ -649,6 +651,14 @@ const TAIL_QUIET_SECS: f64 = 0.05;
 
 /// Below this peak a release counts as silent.
 const TAIL_SILENCE: f32 = 1e-5;
+
+/// Options › More › Suspend Plug-ins on Silence: an insert whose input and output have both been
+/// silent (below [`TAIL_SILENCE`]) for [`SUSPEND_AFTER_SECS`] is not run while its input stays
+/// silent, so it costs nothing; the first sound in wakes it in the same block. Off by default
+/// (a suspended module's state, a compressor's release, holds where it was).
+pub const SUSPEND_ON_SILENCE: &str = "options.suspend_on_silence";
+/// How long an insert's input and output are silent before it is suspended, in seconds.
+pub const SUSPEND_AFTER_SECS: f64 = 1.0;
 
 /// Events a strip's merged module MIDI holds per block (several sources' rings).
 const STRIP_MIDI: usize = 256;
@@ -1119,6 +1129,7 @@ impl SlotCtx<'_> {
             midi: MidiOut::new(),
             wet: 1.0,
             wet_to: 1.0,
+            quiet: 0,
         })
     }
 }
@@ -1650,6 +1661,7 @@ impl MixEngine {
                 p.llm_pos = LLM_SETTLED;
                 p.llm_fresh = true;
                 p.dry.clear();
+                p.quiet = 0;
             }
             if let Some(i) = &mut s.instrument {
                 i.plugin.all_notes_off();
@@ -3467,6 +3479,8 @@ fn process_strip(
     // The pre-fader modules, then the fader section, then the post-fader modules
     // (`Insert::post_fader`) on what the fader left. A post-fader module is never frozen.
     let mut pre_latency = 0usize;
+    // Suspend Plug-ins on Silence: what counts as long enough, 0 when off.
+    let suspend_after = if s.edit.flag(SUSPEND_ON_SILENCE) { (s.sample_rate.as_f64() * SUSPEND_AFTER_SECS).max(1.0) as usize } else { 0 };
     for post in [false, true] {
         if post {
             pre_latency = latency.min(MAX_LATENCY);
@@ -3521,7 +3535,15 @@ fn process_strip(
                 if live_mod && run == LlmRun::Skip {
                     latency = latency.saturating_add(insert_latency(slot, run, on_llm));
                 }
-                if run != LlmRun::Skip {
+                // Suspended: its input is silent and its output has been a while; a keyed module
+                // or one that sends MIDI always runs. It keeps its latency (the sound is silence).
+                let quiet_in = level < TAIL_SILENCE;
+                let rest =
+                    suspend_after > 0 && run == LlmRun::Run && quiet_in && slot.quiet >= suspend_after && ins.sidechain.is_none() && !slot.emits;
+                if rest {
+                    latency = latency.saturating_add(insert_latency(slot, run, on_llm));
+                }
+                if run != LlmRun::Skip && !rest {
                     slot.plugin.set_transport(&transport);
                     let t0 = load_clock();
                     match strip.keys.iter_mut().find(|k| k.module == ins.id).filter(|_| ins.sidechain.is_some()) {
@@ -3568,6 +3590,7 @@ fn process_strip(
                     }
                     level = chain_peak(&strip.buf, frames);
                     meter.out_peak = level;
+                    slot.quiet = if quiet_in && level < TAIL_SILENCE { slot.quiet.saturating_add(frames) } else { 0 };
                 }
             }
             // `sync` sized `mods` to the chain; never grow it here.
@@ -7107,6 +7130,7 @@ mod tests {
             midi: MidiOut::new(),
             wet: 1.0,
             wet_to: 1.0,
+            quiet: 0,
         };
         (slot, ins, tr)
     }
@@ -7225,6 +7249,7 @@ mod tests {
             midi: MidiOut::new(),
             wet: 1.0,
             wet_to: 1.0,
+            quiet: 0,
         };
         apply_params(&mut slot, &ins, &tr, Some(ins.id), 0);
         assert_eq!(slot.plugin.param("outGain"), Some(0.25));
@@ -7319,6 +7344,7 @@ mod tests {
             midi: MidiOut::new(),
             wet: 1.0,
             wet_to: 1.0,
+            quiet: 0,
         };
         run_blocks(&mut slot, &ins, &tr);
         assert_eq!(slot.plugin.param("depth"), Some(0.9));
@@ -8058,6 +8084,74 @@ mod tests {
         assert_eq!((t0.tempo, t0.numerator, t0.denominator, t0.samples, t0.bar), (90.0, 3, 4, 96_000, 1));
         assert!((t0.seconds - 2.0).abs() < 1e-9 && (t0.quarters - 3.0).abs() < 1e-9 && (t0.bar_start - 3.0).abs() < 1e-9);
         assert!(!seen[1].playing);
+    }
+
+    /// A built-in gain that counts its `process` calls.
+    struct Counting {
+        inner: Box<dyn Plugin>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Plugin for Counting {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            self.inner.info()
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.inner.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.inner.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.inner.param(id)
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.process(io, frames);
+        }
+    }
+
+    /// Suspend Plug-ins on Silence: after a second of silence in and out an insert stops being
+    /// run (off, it runs every block), and the first sound runs it again in the same block, which
+    /// sounds as it would have.
+    #[test]
+    fn silent_inserts_are_suspended_and_wake_with_the_first_sound() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let blocks = 3 * 48_000 / 512;
+        let mut heard = Vec::new();
+        for on in [false, true] {
+            let (mut s, t) = session_with_dc(0.5, 48_000);
+            s.edit.set_flag(SUSPEND_ON_SILENCE, on);
+            s.track_mut(t).unwrap().mixer.add_module(Insert::new("clap:test.count"), None).unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counting = Counting { inner: soundcraft_dsp::create("gain").unwrap(), calls: Arc::clone(&calls) };
+            let mut eng = MixEngine::new(48_000.0, 512);
+            eng.set_external_instances(true);
+            eng.adopt(vec![PreparedInstance {
+                track: t,
+                slot: SlotKey::Module(ModuleId(1)),
+                id: "clap:test.count".into(),
+                ch: 1,
+                plugin: Box::new(counting),
+            }]);
+            // Three seconds of silence after the clip.
+            for b in 0..blocks {
+                render_block(&mut eng, &s, 48_000 + b as i64 * 512);
+            }
+            let n = calls.load(Ordering::Relaxed);
+            if on {
+                let after = (48_000.0 * SUSPEND_AFTER_SECS / 512.0).ceil() as usize;
+                assert!((after..=after + 1).contains(&n), "ran {n} blocks, then rested");
+            } else {
+                assert_eq!(n, blocks, "off: every block runs");
+            }
+            heard.push(render_block(&mut eng, &s, 0));
+            assert_eq!(calls.load(Ordering::Relaxed), n + 1, "sound runs it at once");
+        }
+        assert!(heard[0] > 0.1 && heard[0] == heard[1], "{heard:?}");
     }
 
     struct Ears {

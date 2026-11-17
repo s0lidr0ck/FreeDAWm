@@ -469,6 +469,9 @@ impl Session {
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);
+        // Imported loops follow the session's tempo and key (the engine's `io::LOOPS_FOLLOW`):
+        // on in new sessions; sessions saved without it keep importing loops as they are.
+        s.edit.set_flag("import.loops_follow", true);
         s
     }
 

@@ -1081,6 +1081,38 @@ mod tests {
         assert_eq!(e.session().tracks[0].clips().len(), 1);
     }
 
+    /// A loop that says its tempo and key in its name is stretched to the session tempo (pitch
+    /// kept) and transposed to the session key; with the option off it comes in as it is, its
+    /// tempo still recorded for Conform to Tempo.
+    #[test]
+    fn an_imported_loop_follows_the_session_tempo_and_key() {
+        let tone: Vec<f32> = (0..96_000).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5).collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![tone] };
+        let bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).unwrap();
+        let mut e = Engine::default();
+        assert!(e.session().edit.flag(crate::io::LOOPS_FOLLOW), "on in a new session");
+        e.session_mut().key_signatures.push((0, "D minor".into()));
+        let now = e.session().tempo.tempo_at_tick(0);
+        let v = crate::io::import_audio_bytes(&mut e, "Keys 60bpm Am.wav", &bytes, None, None, 0).unwrap();
+        assert_eq!(v["loop"]["bpm"], 60.0);
+        assert_eq!(v["loop"]["semitones"], 5, "A minor up a fourth to D minor");
+        let cid = soundcraft_model::ClipId(v["clip"].as_u64().unwrap());
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        let want = 96_000.0 * 60.0 / now;
+        assert!((c.length as f64 - want).abs() < 4.0, "{} vs {want}", c.length);
+        assert_eq!(c.transpose_cents, 500);
+        // Off: as recorded, the tempo kept for later.
+        e.execute("options.loops_follow", &json!({"value": false})).unwrap();
+        let v = crate::io::import_audio_bytes(&mut e, "Keys 60bpm Am.wav", &bytes, None, None, 0).unwrap();
+        let cid = soundcraft_model::ClipId(v["clip"].as_u64().unwrap());
+        let c = e.session().find_clip(cid).unwrap().1.clone();
+        assert_eq!((c.length, c.transpose_cents), (96_000, 0));
+        assert_eq!(e.session().edit.value(&format!("clip.bpm.{}", cid.0), 0.0), 60.0);
+        // A file that says nothing.
+        let v = crate::io::import_audio_bytes(&mut e, "Take 1.wav", &bytes, None, None, 0).unwrap();
+        assert!(v["loop"].is_null());
+    }
+
     #[test]
     fn repeated_consolidate_keeps_distinct_audio_files() {
         let (mut e, track) = tone_engine();

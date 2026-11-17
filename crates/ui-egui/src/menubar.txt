@@ -98,6 +98,12 @@ Edit > Selection > Change Edit to Match Timeline
 Edit > Selection > Play Edit
 Edit > Selection > Play Timeline
 Edit > Selection > Pause or Resume = @transport.pause
+Edit > Selection > Audition > Play to Start = @transport.play_to_start
+Edit > Selection > Audition > Play from Start = @transport.play_from_start
+Edit > Selection > Audition > Play to End = @transport.play_to_end
+Edit > Selection > Audition > Play from End = @transport.play_from_end
+Edit > Selection > Set Play Start = @transport.set_play_start
+Edit > Selection > Set Loop to Selection = @loop.set
 Edit > Selection > ---
 Edit > Selection > Move Edit Left
 Edit > Selection > Move Edit Right
@@ -601,6 +607,9 @@ Options > More > Varispeed Keeps Pitch = @transport.varispeed_keep_pitch
 Options > More > Shuttle > Back = @transport.shuttle_back
 Options > More > Shuttle > Stop = @transport.shuttle_stop
 Options > More > Shuttle > Forward = @transport.shuttle_forward
+Options > More > Dynamic Transport = @options.dynamic_transport
+Options > More > Suspend Plug-ins on Silence = @options.suspend_on_silence
+Options > More > Imported Loops Follow Tempo and Key = @options.loops_follow
 
 Setup > ## Audio
 Setup > Playback Engine...

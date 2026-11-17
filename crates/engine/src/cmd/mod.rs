@@ -20,7 +20,7 @@ mod clap;
 pub(crate) mod clip;
 mod clip_clean;
 mod clip_list;
-mod clip_more;
+pub(crate) mod clip_more;
 mod clip_props;
 pub mod comp;
 mod discard_take;

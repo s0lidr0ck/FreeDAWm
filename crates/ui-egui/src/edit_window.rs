@@ -720,7 +720,32 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         }
                         crate::menus::ruler_context_menu(app, ui, id);
                     });
+                    let dynamic = s.edit.flag(soundcraft_engine::cmd::transport::DYNAMIC);
+                    if dynamic && let Some(x) = soundcraft_engine::cmd::transport::play_start(&s).map(|at| x_of(&s, tl, at)) {
+                        // The play start marker: a small green triangle on the ruler's lower edge.
+                        let y = row.max.y;
+                        let green = Color32::from_rgb(0x4c, 0xc3, 0x5a);
+                        painter.add(Shape::convex_polygon(vec![pos2(x - 5.0, y), pos2(x + 5.0, y), pos2(x, y - 7.0)], green, Stroke::NONE));
+                    }
                     if !handled
+                        && dynamic
+                        && s.edit.tool != Tool::Scrubber
+                        && (resp.clicked() || resp.dragged())
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        // Dynamic Transport: a click moves the play start marker, a drag sets the
+                        // loop range; the edit selection stays as it is.
+                        let at = snap(&s, sample_at(&s, tl, p.x).max(0));
+                        let origin = ui.input(|i| i.pointer.press_origin()).map(|o| snap(&s, sample_at(&s, tl, o.x).max(0)));
+                        match origin.filter(|o| resp.dragged() && *o != at) {
+                            Some(o) => {
+                                let _ = app.run("loop.set", json!({"start": o.min(at), "end": o.max(at)}));
+                            }
+                            None => {
+                                let _ = app.run("transport.set_play_start", json!({"at": at}));
+                            }
+                        }
+                    } else if !handled
                         && (resp.clicked() || resp.dragged())
                         && let Some(p) = resp.interact_pointer_pos()
                     {

@@ -71,6 +71,11 @@ fn select(e: &mut Engine, _: &Value) -> Result<Value> {
 /// after every command. The loop set this way does not mark the session modified (selecting
 /// never does), so the saved snapshot takes it too.
 pub(crate) fn sync_loop(e: &mut Engine, before: &Session) {
+    // Dynamic Transport keeps the loop apart from the selection: it is set on the ruler or by
+    // Set Loop.
+    if e.session().edit.flag(super::transport::DYNAMIC) {
+        return;
+    }
     let new = e.session().edit.selection;
     if new.is_empty() || new == before.edit.selection || e.session().edit.loop_range == Some(new) {
         return;

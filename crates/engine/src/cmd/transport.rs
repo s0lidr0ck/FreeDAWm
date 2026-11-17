@@ -13,6 +13,56 @@ fn shuttle(e: &mut Engine, step: i8, speed: Option<f32>) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// Which side of the selection an audition plays around ([`audition`]).
+#[derive(Clone, Copy)]
+enum Around {
+    ToStart,
+    FromStart,
+    ToEnd,
+    FromEnd,
+}
+
+/// Audition around an edit: plays up to the selection's start or end from the pre-roll before
+/// it, or from it through the post-roll, once, whatever Loop Playback says. The pre- and post-roll
+/// amounts are used even with Pre/Post-Roll off (2 s where one is zero). An insertion point is
+/// both start and end.
+fn audition(e: &mut Engine, at: Around, cmd: &str) -> Result<Value> {
+    if e.transport.recording {
+        return Err(bad(cmd, "not while recording"));
+    }
+    let s = e.session();
+    let sel = s.edit.selection;
+    let two = s.sample_rate.samples(2.0);
+    let pre = if s.edit.pre_roll > 0 { s.edit.pre_roll } else { two };
+    let post = if s.edit.post_roll > 0 { s.edit.post_roll } else { two };
+    let (from, end) = match at {
+        Around::ToStart => (sel.start.saturating_sub(pre).max(0), sel.start),
+        Around::FromStart => (sel.start, sel.start.saturating_add(post)),
+        Around::ToEnd => (sel.end.saturating_sub(pre).max(0), sel.end),
+        Around::FromEnd => (sel.end, sel.end.saturating_add(post)),
+    };
+    if end <= from {
+        return Err(bad(cmd, "nothing to play before the session start"));
+    }
+    e.transport_requests.push(TransportRequest::PlayRange { from, end: Some(end), looped: None });
+    Ok(json!({"from": from, "end": end}))
+}
+
+/// Options › Dynamic Transport: Play starts at the play start marker, not the edit selection,
+/// and a range selection no longer sets the loop.
+pub const DYNAMIC: &str = "options.dynamic_transport";
+/// The play start marker's position (an edit value, in samples).
+pub const PLAY_START: &str = "transport.play_start";
+
+/// Where Play starts under Dynamic Transport: the play start marker; `None` with Dynamic
+/// Transport off or no marker set (Play then starts from the selection).
+pub fn play_start(s: &soundcraft_model::Session) -> Option<Samples> {
+    if !s.edit.flag(DYNAMIC) {
+        return None;
+    }
+    s.edit.values.get(PLAY_START).copied().filter(|v| v.is_finite()).map(|v| (v.max(0.0).min(MAX_POSITION as f64)) as Samples)
+}
+
 /// The edit flag that makes Varispeed keep the pitch.
 pub const KEEP_PITCH: &str = "transport.varispeed_keep_pitch";
 
@@ -56,6 +106,18 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(noundo "transport.half_speed", "Half-Speed Playback", [], Some("Shift+Space"), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::HalfSpeed); Ok(json!({})) }),
         cmd!(noundo "transport.play_selection", "Play Edit", ["Edit", "Selection"], Some("Alt+["), "{}", always, |e, _| { e.transport_requests.push(TransportRequest::PlaySelection); Ok(json!({})) }),
+        cmd!(noundo "transport.play_to_start", "Play to Start", [], None, "{} — audition: plays the pre-roll up to the selection's start (2 s with no pre-roll set) → {from, end}", always, |e, _| audition(e, Around::ToStart, "transport.play_to_start")),
+        cmd!(noundo "transport.play_from_start", "Play from Start", [], None, "{} — audition: plays from the selection's start through the post-roll (2 s with none set) → {from, end}", always, |e, _| audition(e, Around::FromStart, "transport.play_from_start")),
+        cmd!(noundo "transport.play_to_end", "Play to End", [], None, "{} — audition: plays the pre-roll up to the selection's end (2 s with no pre-roll set) → {from, end}", always, |e, _| audition(e, Around::ToEnd, "transport.play_to_end")),
+        cmd!(noundo "transport.play_from_end", "Play from End", [], None, "{} — audition: plays from the selection's end through the post-roll (2 s with none set) → {from, end}", always, |e, _| audition(e, Around::FromEnd, "transport.play_from_end")),
+        cmd!(noundo "transport.set_play_start", "Set Play Start", [], None, "{at?: position} — moves the play start marker (Dynamic Transport) to `at`, else to the selection's start; the playhead goes there when stopped → {at}", always, |e, p| {
+            let at = position_param(e, "transport.set_play_start", p, "at")?.unwrap_or(e.session().edit.selection.start).max(0);
+            e.session_mut().edit.values.insert(PLAY_START.into(), at as f64);
+            if !e.transport.playing {
+                e.transport.position = at;
+            }
+            Ok(json!({"at": at}))
+        }),
         cmd!(noundo "transport.rtz", "Return to Zero", [], Some("Home"), "{}", always, |e, _| locate(e, 0)),
         cmd!(noundo "transport.go_to_end", "Go to End", [], Some("End"), "{}", always, |e, _| { let end = e.session().content_end(); locate(e, end) }),
         cmd!(noundo "transport.rewind", "Rewind", [], None, "{seconds?: 1}", always, |e, p| {

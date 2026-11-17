@@ -58,9 +58,9 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Counter formats (bars, time, timecode, samples) | ● | ● | ● | ● | **Works**: five formats, main and sub counter |
 | Markers, recall while playing | ● | ● | ● | ● | **Works**, five marker rulers |
 | Pre-roll and post-roll on playback | ● | ● | ◐ | ● | **Works** (not when looping) |
-| Play start separate from the selection | ● | ● | ● | ● | **Flag only**: Dynamic Transport stores a flag; the timeline selection is never drawn or played |
+| Play start separate from the selection | ● | ● | ● | ● | **Works**: Options › More › Dynamic Transport: Play starts at the play start marker (a green triangle on the main timebase ruler, moved by a click there or Edit › Selection › Set Play Start), whatever the edit selection; off, Play starts from the selection as before |
 | Return to start on stop, or stay | ● | ● | ● | ● | **Works** (Insertion Follows Playback) |
-| Audition around an edit (play up to / from the start or end) | ● | ◐ | ◐ | ● | **Missing** |
+| Audition around an edit (play up to / from the start or end) | ● | ◐ | ◐ | ● | **Works**: Edit › Selection › Audition › Play to Start, Play from Start, Play to End, Play from End: the pre-roll up to the edge or the post-roll after it (2 s where none is set), once, whatever Loop Playback says (`transport.play_to_start` …) |
 | Follow modes: none, page, continuous, centred | ● | ● | ● | ● | **Works**: five modes, pauses when you scroll by hand |
 | Keep playing while you edit | ● | ● | ● | ● | **Works**: a new session snapshot is swapped in without a gap |
 | Click during playback | ● | ● | ● | ● | **Works**: synthesized, accent on beat 1; no sample sounds, no separate click output |
@@ -71,7 +71,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Gapless loop | ● | ● | ● | ● | **Works**: wraps inside the audio callback on the exact sample, disk cache pre-reads the loop start |
-| Loop range separate from the selection | ● | ● | ● | ● | **Partial**: a sticky loop range exists, used when the insertion point is inside it |
+| Loop range separate from the selection | ● | ● | ● | ● | **Works**: with Dynamic Transport a range selection no longer sets the loop; a drag along the main timebase ruler does, as do Edit › Selection › Set Loop to Selection and the loop strip's end drags, and Loop Playback loops it (from the play start marker when it is inside). Without it the sticky loop follows the selection as before |
 | Move or resize the loop while playing | ● | ● | ● | ● | **Works**: a new range selection or loop-end drag moves the loop under way, without a jump |
 | Turn looping on or off while playing | ● | ● | ● | ● | **Works**: off plays on; on loops the loop range (a loop behind the playhead waits for the next Play or locate); not while recording |
 | Loop follows the selection | ● | ● | ● | ● | **Works** (it is the default behaviour) |
@@ -98,13 +98,13 @@ Varispeed is the only whole-project speed control among the four.
 | Choose device, sample rate and buffer | ● | ● | ● | ● | **Works** (Playback Engine window) |
 | ASIO on Windows | ● | ● | n/a | ● | **Not planned here**: Steinberg's licensed SDK cannot be shipped; a personal build has it (`cargo xtask build-asio`) |
 | Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected |
-| Recover when the device disappears | ● | ● | ● | ● | **Partial**: detected and reported; reconnect is a manual button |
+| Recover when the device disappears | ● | ● | ● | ● | **Works**: when the output device goes away it is looked for every 2 s (on a worker thread) and the app reconnects by itself when it is back (`ui-egui/src/device_return.rs`); ASIO is never probed while a driver may be loaded, so it keeps the manual Reconnect button. Not tried with a real unplug |
 | Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
 | Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel; aux, folder and master strips are serial; worker threads have no realtime priority |
 | Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
 | Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer |
 | Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
-| Skip plug-ins on silent tracks | ● | ● | ● | ● | **Missing**: every active strip runs every block |
+| Skip plug-ins on silent tracks | ● | ● | ● | ● | **Works**: Options › More › Suspend Plug-ins on Silence (off by default, so sessions sound as they did): an insert whose input and output have both been below −100 dBFS for a second is not run while its input stays silent, and the first sound runs it again in the same block; keyed modules and modules that send MIDI always run, and the strip's delay compensation is unchanged. A suspended module's state (a compressor's release) holds where it was |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
 | No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
 | Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: plug-ins (built-in and hosted) and Clip Effects modules are made on the UI thread and handed over with the session; a new track's own buffers and delay lines are still sized on the audio thread |
@@ -156,20 +156,20 @@ Varispeed is the only whole-project speed control among the four.
 | Choice of stretch algorithm | ● | ● | ● | ● | **Works**: polyphonic, rhythmic, monophonic and X-Form each splice differently in the background render, which replaces the one real-time grain stretcher heard while it is made |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
 | Quantize audio to the grid | ● | ● | ● | ● | **Works**: Clip › Quantize Audio… moves clips by their sync points with a strength and swing; Straighten conforms whole tracks (section 4, I) |
-| Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |
+| Tempo detection | ● | ● | ● | ● | **Partial**: a loop's own tempo is read at import (its `acid` chunk or name); tempo is detected from audio by command (Detect Tempo), not at import, as detecting every imported file would hold up the import for long files |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving stretch on an Elastic one (section 4, bug 12) |
-| Loops that match tempo when dropped in | ● | ● | ● | ● | **Missing** |
-| Loops that match key | ○ | ◐ | ● | ◐ | **Missing** |
+| Loops that match tempo when dropped in | ● | ● | ● | ● | **Works**: a file that says its tempo (a WAV `acid` chunk, or "120bpm" in its name; `audio-io/src/loop_info.rs`) is stretched to the session tempo with its pitch kept as it is imported (Options › More › Imported Loops Follow Tempo and Key, on in new sessions; sessions saved before keep importing as they did). Its tempo is recorded on the clip either way, so Conform to Tempo uses it later. Nothing is guessed from audio that says no tempo |
+| Loops that match key | ○ | ◐ | ● | ◐ | **Works**: with the same option, a loop that says its key (the `acid` chunk's root note, or a key word such as "Am" beside a tempo in its name) is transposed in real time (Clip › Real-Time › Transpose) to the session's key at that point, by at most a tritone; a minor loop goes to the relative minor of a major key and the other way. Only when the session sets a key |
 
 ## H. Auditioning
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Preview a file before importing | ● | ● | ● | ● | **Works** in the Workspace window: a click plays the file (read on a worker thread), again stops it; not in the import dialog |
-| Preview in time with the session tempo | ● | ● | ● | ● | **Missing** |
-| Preview while the session plays, in sync | ● | ● | ● | ● | **Missing** |
+| Preview in time with the session tempo | ● | ● | ● | ● | **Works** for files that say their tempo: the Workspace's In tempo box (on by default) stretches the file, pitch kept, to the tempo at the playhead on the audition worker |
+| Preview while the session plays, in sync | ● | ● | ● | ● | **Works**: the Workspace's In sync box (on by default): while the session plays, a file repeats in time with it from the start of the bar the playhead was in, each output frame read from the playhead, so locates, loop wraps and speed changes keep it in step (`PreviewSync` in `playback`); stopped, it plays once from its start |
 | Audition a clip from the clip list or pool | ● | ● | ● | ● | **Works**: Alt-click or Audition in the Clip List, with its clip gain |
-| Preview volume and output | ● | ● | ● | ● | **Partial**: a preview level (Workspace window); always the first two outputs |
+| Preview volume and output | ● | ● | ● | ● | **Works**: a preview level and an output pair (Workspace window), used by file and Clip List auditions |
 
 The player already has a raw preview voice (`Player::preview`, used only by Juke's hit picker), so
 the engine side of H is partly there.
@@ -269,6 +269,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: audition around an edit, Dynamic Transport's play start and separate loop, automatic device return, suspend plug-ins on silence, loops that follow tempo and key at import, preview in tempo, in sync and on a chosen output |
 | 2026-11-17 | minor | Round three reconciliation: crossfade shapes, audio quantize, conform and the stretch algorithms were already built; ASIO and ARA not planned here |
 | 2026-11-16 | minor | clip transpose: a background high-quality render replaces the live shifter |
 | 2026-11-16 | minor | the real-time stretch is heard at once in the app; a background worker swaps in the render |

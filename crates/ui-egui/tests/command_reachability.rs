@@ -43,7 +43,6 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("options.calibration_mode", "stored flag nothing reads"),
     ("options.destructive_punch", "stored flag nothing reads"),
     ("options.destructive_record", "stored flag nothing reads"),
-    ("options.dynamic_transport", "stored flag nothing reads"),
     ("options.layered_editing", "stored flag nothing reads"),
     ("options.marker_target_follows_selection", "stored flag nothing reads"),
     ("options.markers_follow_edit", "stored flag nothing reads"),

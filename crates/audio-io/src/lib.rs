@@ -21,6 +21,7 @@ mod buffer;
 mod caf;
 pub mod export;
 mod flac;
+pub mod loop_info;
 mod mp3;
 mod mp4;
 mod ogg;

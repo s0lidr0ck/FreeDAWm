@@ -19,6 +19,7 @@ pub mod control_room;
 pub mod credits;
 pub mod curve_worker;
 pub mod dawproject_report;
+pub mod device_return;
 pub mod dialogs;
 pub mod docking;
 pub mod edit_window;
@@ -477,6 +478,13 @@ pub struct UiState {
     pub workspace_dir: String,
     /// The level files and clips are auditioned at (Workspace, Clip List), in dB.
     pub preview_db: f32,
+    /// The device output pair files and clips are auditioned on: its first channel (0: outputs
+    /// 1–2).
+    pub preview_output: usize,
+    /// Files are auditioned at the session tempo when they say their own (Workspace).
+    pub preview_tempo: bool,
+    /// Files are auditioned in sync with the session while it plays (Workspace).
+    pub preview_sync: bool,
     /// The user's fade presets (Edit › Fades › Create…).
     pub fade_presets: Vec<fade_dialog::FadePreset>,
     pub configurations: Vec<(String, Value)>,
@@ -683,6 +691,9 @@ impl Default for UiState {
             video_burn_in: false,
             workspace_dir: String::new(),
             preview_db: 0.0,
+            preview_output: 0,
+            preview_tempo: true,
+            preview_sync: true,
             fade_presets: Vec::new(),
             configurations: Vec::new(),
             theme: theme::ThemeMode::Dark,
@@ -1030,6 +1041,8 @@ pub struct SoundApp {
     /// A player was (re)opened and whether it opened the chosen device is still to be told
     /// (checked once in `logic`, with the audio settings loaded by then).
     device_notice_pending: bool,
+    /// The output device that went away, watched for so the app reconnects when it is back.
+    device_return: Option<device_return::Returning>,
     /// Input this take lost to a slow disk, as last reported (ms).
     lost_shown: u64,
     /// Where the takes being recorded go, autosaved with the session so a crash can't lose them.
@@ -1267,6 +1280,7 @@ impl SoundApp {
             punch: None,
             recorder_failed: false,
             device_notice_pending: true,
+            device_return: None,
             lost_shown: 0,
             take_plan: None,
             ui: UiState::default(),
@@ -2463,7 +2477,14 @@ impl SoundApp {
                 "Use Reconnect audio device in Setup ▸ Playback Engine, or restart FreeDAWm.",
             ),
             OutputTrouble::Gone => {
-                (format!("“{name}” was disconnected"), "Plug it back in, then use Reconnect audio device in Setup ▸ Playback Engine.")
+                let system = self.player.as_ref().map(|p| p.system.clone()).unwrap_or_default();
+                self.device_return = device_return::Watch::new(&system, &name, std::time::Instant::now()).map(device_return::Returning::new);
+                let then = if self.device_return.is_some() {
+                    "Plug it back in: FreeDAWm reconnects when it returns."
+                } else {
+                    "Plug it back in, then use Reconnect audio device in Setup ▸ Playback Engine."
+                };
+                (format!("“{name}” was disconnected"), then)
             }
             OutputTrouble::Stalled => (format!("“{name}” stopped asking for audio"), "Use Reconnect audio device in Setup ▸ Playback Engine."),
         };
@@ -2480,6 +2501,19 @@ impl SoundApp {
         } else {
             format!("Audio output: {cause}. {then}")
         };
+    }
+
+    /// Reconnect by itself when the output device that went away is listed again.
+    fn watch_device_return(&mut self) {
+        let Some(r) = &mut self.device_return else { return };
+        if !r.poll(std::time::Instant::now()) {
+            return;
+        }
+        let name = r.watch.device.clone();
+        self.reconnect_audio();
+        if self.player.as_ref().is_some_and(|p| p.device_name == name) {
+            self.ui.status = format!("“{name}” is back: reconnected.");
+        }
     }
 
     /// Stop recording, keeping the take, when the input device or the disk fails, and say as soon
@@ -2523,6 +2557,7 @@ impl SoundApp {
         if open_progress::refuses(self) {
             return;
         }
+        self.device_return = None;
         if self.is_playing() || self.engine.transport.recording {
             self.stop_play();
         }
@@ -2747,7 +2782,14 @@ impl SoundApp {
         let sel = s.edit.selection;
         let preroll = if s.edit.pre_post_roll { s.edit.pre_roll } else { 0 };
         let postroll = if s.edit.pre_post_roll { s.edit.post_roll } else { 0 };
-        if s.edit.loop_playback && !sel.is_empty() {
+        if let Some(at) = soundcraft_engine::cmd::transport::play_start(s) {
+            // Dynamic Transport: from the play start marker, whatever the selection; with Loop
+            // Playback on, the loop range loops (from the marker when it is inside the loop).
+            match s.edit.loop_range.filter(|lp| s.edit.loop_playback && !lp.is_empty()) {
+                Some(lp) => self.start_play(if lp.contains(at) { at } else { lp.start }, None, Some(lp)),
+                None => self.start_play((at - preroll).max(0), None, None),
+            }
+        } else if s.edit.loop_playback && !sel.is_empty() {
             self.start_play(sel.start, None, Some(sel));
         } else if s.edit.loop_playback
             && sel.is_empty()
@@ -3029,6 +3071,7 @@ impl SoundApp {
             }
         }
         self.watch_output();
+        self.watch_device_return();
         self.watch_bridged_plugins();
         self.watch_input();
         if self.engine.transport.recording {
@@ -3472,6 +3515,30 @@ mod tests {
         app.handle_transport(0.0);
         assert_eq!(app.sim.map(|s| s.2), Some(None), "off: plays on");
         assert!(app.is_playing());
+    }
+
+    #[test]
+    fn dynamic_transport_plays_from_the_play_start_marker() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("options.dynamic_transport", json!({"value": true})).unwrap();
+        app.run("edit.select", json!({"start": 48_000, "end": 96_000})).unwrap();
+        app.run("transport.set_play_start", json!({"at": 10_000})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((10_000, None, None)), "from the marker, not the selection, and on past its end");
+        app.stop_play();
+        // Loop Playback loops the loop range, from the marker when it is inside it.
+        app.run("loop.set", json!({"start": 5_000, "end": 20_000})).unwrap();
+        app.run("options.loop_playback", json!({"value": true})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        let lp = soundcraft_time::Range::new(5_000, 20_000);
+        assert_eq!(app.sim, Some((10_000, None, Some(lp))));
+        app.stop_play();
+        app.run("transport.set_play_start", json!({"at": 30_000})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((5_000, None, Some(lp))), "a marker outside the loop starts at the loop");
     }
 
     #[test]

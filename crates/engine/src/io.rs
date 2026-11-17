@@ -302,7 +302,56 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     let cid = s.new_clip_id();
     let stem = s.source(src).map(|x| x.name.clone()).unwrap_or_default();
     crate::edit::place_clip(s, track, Clip::audio(cid, stem, src, 0, at, frames));
-    Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels}))
+    let matched = match_loop(e, cid, &soundcraft_audio_io::loop_info::loop_info(bytes, name))?;
+    Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels, "loop": matched}))
+}
+
+/// Options › More › Imported Loops Follow Tempo and Key (`import.loops_follow`, on in new
+/// sessions): a file that says its tempo (an `acid` chunk, "120bpm" in its name) is stretched to
+/// the session tempo with its pitch kept, and one that says its key is transposed (by at most a
+/// tritone) to the session's key when the session sets one. The tempo is recorded on the clip
+/// either way, so Conform to Tempo knows it later.
+pub const LOOPS_FOLLOW: &str = "import.loops_follow";
+
+/// What [`LOOPS_FOLLOW`] did to imported clip `cid`: `{bpm?, stretch?, semitones?}`, or null
+/// when the file said nothing.
+fn match_loop(e: &mut Engine, cid: soundcraft_model::ClipId, info: &soundcraft_audio_io::loop_info::LoopInfo) -> Result<Value> {
+    if info.bpm.is_none() && info.root.is_none() {
+        return Ok(Value::Null);
+    }
+    let mut out = serde_json::Map::new();
+    let on = e.session().edit.flag(LOOPS_FOLLOW);
+    let Some(start) = e.session().find_clip(cid).map(|(_, c)| c.start) else { return Ok(Value::Null) };
+    if let Some(bpm) = info.bpm {
+        out.insert("bpm".into(), json!(bpm));
+        let s = e.session_mut();
+        s.edit.values.insert(format!("clip.bpm.{}", cid.0), bpm);
+        let now = s.tempo.tempo_at_tick(s.tempo.samples_to_ticks(start, s.sample_rate));
+        if on && (bpm - now).abs() > 0.01 {
+            crate::cmd::clip_more::conform(e, &json!({"clips": [cid.0], "source_bpm": bpm, "keep_pitch": true}))?;
+            out.insert("stretch".into(), json!(bpm / now));
+        }
+    }
+    if let Some(root) = info.root.filter(|_| on && crate::vocal::has_key(e.session())) {
+        let (tonic, scale) = crate::vocal::key_pc_at(e.session(), start);
+        // A minor loop goes to the session key's relative minor in a major key, and the other way.
+        let target = match (info.minor, scale) {
+            (Some(true), 0) => tonic + 9,
+            (Some(false), 1) => tonic + 3,
+            _ => tonic,
+        };
+        let mut shift = (i32::from(target) - i32::from(root)).rem_euclid(12);
+        if shift > 6 {
+            shift -= 12;
+        }
+        if shift != 0
+            && let Some(c) = e.session_mut().find_clip_mut(cid)
+        {
+            c.transpose_cents = shift * 100;
+            out.insert("semitones".into(), json!(shift));
+        }
+    }
+    Ok(Value::Object(out))
 }
 
 /// Loads an audio file's bytes into an instrument track's Sampler as one undo step ("Load

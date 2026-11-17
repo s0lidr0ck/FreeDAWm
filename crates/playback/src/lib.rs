@@ -102,6 +102,22 @@ pub type EditorEdit = (TrackId, SlotKey, String, f32);
 pub struct PreviewAudio {
     pub channels: Vec<Vec<f32>>,
     pub rate: u32,
+    /// The first of the two device channels it plays on (0: outputs 1–2); a pair the device does
+    /// not have falls back to the first two.
+    pub first: usize,
+    /// In sync with the session: while the transport plays, the preview is heard where the
+    /// playhead is, repeating (see [`PreviewSync`]); stopped, it plays once from its start.
+    pub sync: Option<PreviewSync>,
+}
+
+/// Where a synced preview sits on the timeline: its first frame at session position `origin`
+/// and again every `period` session samples, before and after (a loop that repeats in time with
+/// the session). Each output frame is read from the playhead, so a locate, a loop wrap or a
+/// speed change keeps it in step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewSync {
+    pub origin: Samples,
+    pub period: Samples,
 }
 
 // `Taps` is the largest: a fixed array, so the audio thread takes it without freeing anything.
@@ -1479,7 +1495,55 @@ impl AudioState {
     /// so switching paths plays out what the other rendered rather than dropping it.
     fn fill(&mut self, out: &mut [f32], channels: usize) {
         self.fill_mix(out, channels);
-        self.add_preview(out, channels);
+        if !self.add_synced_preview(out, channels) {
+            self.add_preview(out, channels);
+        }
+    }
+
+    /// A synced preview while the transport rolls: each device frame reads the preview where
+    /// the playhead puts it (counted back from the render position at the device's step, a loop
+    /// wrap taken back over the loop). False when there is none to play this way.
+    fn add_synced_preview(&mut self, out: &mut [f32], channels: usize) -> bool {
+        let Some((audio, _)) = self.preview.as_ref() else { return false };
+        let Some(sync) = audio.sync else { return false };
+        if !self.playing || self.countoff.is_some() {
+            return false;
+        }
+        let channels = channels.max(1);
+        let frames = out.len() / channels;
+        let first = if audio.first.saturating_add(2) <= channels { audio.first } else { 0 };
+        let len = audio.channels.iter().map(Vec::len).min().unwrap_or(0);
+        let sr = self.session.sample_rate.as_f64().max(1.0);
+        let speed = f64::from(self.shared.speed.load(Ordering::Relaxed)) / 1000.0;
+        let step = sr / self.device_rate.max(1.0) * if speed.is_finite() && speed > 0.0 { speed } else { 1.0 };
+        let to_preview = f64::from(audio.rate.max(1)) / sr;
+        let period = sync.period as f64;
+        let looped = self.looped.filter(|l| self.loop_armed && l.end > l.start);
+        let end = self.pos as f64;
+        for n in 0..frames {
+            let mut p = end - (frames - n) as f64 * step;
+            if let Some(l) = looped
+                && p < l.start as f64
+                && end >= l.start as f64
+            {
+                p += (l.end - l.start) as f64;
+            }
+            let x = (p - sync.origin as f64).rem_euclid(period) * to_preview;
+            let i = x as usize;
+            if i + 1 >= len {
+                continue;
+            }
+            let f = (x - i as f64) as f32;
+            for c in 0..channels.min(2) {
+                let ch = audio.channels.get(c).or_else(|| audio.channels.first());
+                let a = ch.and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+                let b = ch.and_then(|v| v.get(i + 1)).copied().unwrap_or(a);
+                if let Some(o) = out.get_mut(n * channels + first + c) {
+                    *o += a + (b - a) * f;
+                }
+            }
+        }
+        true
     }
 
     /// Adds the preview playing, if any, to the first two device channels (a mono preview to
@@ -1488,6 +1552,7 @@ impl AudioState {
         let Some((audio, pos)) = self.preview.as_mut() else { return };
         let channels = channels.max(1);
         let frames = out.len() / channels;
+        let first = if audio.first.saturating_add(2) <= channels { audio.first } else { 0 };
         let len = audio.channels.iter().map(Vec::len).min().unwrap_or(0);
         let step = f64::from(audio.rate.max(1)) / self.device_rate.max(1.0);
         let at = |c: usize, x: f64| -> f32 {
@@ -1503,7 +1568,7 @@ impl AudioState {
                 break;
             }
             for c in 0..channels.min(2) {
-                if let Some(o) = out.get_mut(n * channels + c) {
+                if let Some(o) = out.get_mut(n * channels + first + c) {
                     *o += at(c, *pos);
                 }
             }
@@ -3131,11 +3196,22 @@ impl Player {
     /// the transport runs: a preview of audio that is not in the session (Juke's hit picker).
     /// A new preview replaces the one playing; an empty one stops it.
     pub fn preview(&self, channels: Vec<Vec<f32>>, rate: u32) {
+        self.preview_on(channels, rate, 0);
+    }
+
+    /// [`Player::preview`] on the device channel pair starting at `first` (0: outputs 1–2).
+    pub fn preview_on(&self, channels: Vec<Vec<f32>>, rate: u32, first: usize) {
+        self.preview_synced(channels, rate, first, None);
+    }
+
+    /// [`Player::preview_on`], in time with the playing session when `sync` is given.
+    pub fn preview_synced(&self, channels: Vec<Vec<f32>>, rate: u32, first: usize, sync: Option<PreviewSync>) {
         if channels.iter().all(Vec::is_empty) {
             let _ = self.tx.send(Cmd::Preview(None));
             return;
         }
-        let audio = Arc::new(PreviewAudio { channels, rate });
+        let sync = sync.filter(|s| s.period > 0);
+        let audio = Arc::new(PreviewAudio { channels, rate, first, sync });
         let mut side = self.side();
         // The audio thread drops the preview it replaces: the two latest stay held here.
         side.previews.push(audio.clone());
@@ -6045,6 +6121,46 @@ mod tests {
         player.preview(Vec::new(), 48_000);
         st.fill(&mut out, 2);
         assert!(out.iter().all(|x| *x == 0.0));
+    }
+
+    /// A synced preview follows the playhead: what is heard at a session position is the
+    /// preview's frame for that position (repeating every period), wherever play started.
+    #[test]
+    fn a_synced_preview_is_heard_where_the_playhead_is() {
+        let (player, mut st) = Player::offline(Arc::new(Session::default()), 48_000, 256, 2);
+        // A 1000-frame ramp repeating every 1000 samples from 0: frame k plays k / 1000.
+        let ramp: Vec<f32> = (0..1000).map(|i| i as f32 / 1000.0).collect();
+        player.preview_synced(vec![ramp], 48_000, 0, Some(PreviewSync { origin: 0, period: 1000 }));
+        player.play(10_250, None, None);
+        let mut out = vec![0.0f32; 2 * 256];
+        st.fill(&mut out, 2);
+        st.fill(&mut out, 2);
+        // The session is silent: what sounds is the preview. The callback's last frame is just
+        // behind the render position, which is past 10_250 by two callbacks.
+        let p = st.pos as f64 - 1.0;
+        let want = (p.rem_euclid(1000.0)) / 1000.0;
+        assert!((f64::from(out[2 * 255]) - want).abs() < 2e-3, "{} vs {want}", out[2 * 255]);
+        // Stopped, it is not heard in sync.
+        player.stop();
+        for _ in 0..8 {
+            st.fill(&mut out, 2);
+        }
+        assert!(!st.playing);
+    }
+
+    #[test]
+    fn a_preview_plays_on_the_chosen_output_pair() {
+        let (player, mut st) = Player::offline(Arc::new(Session::default()), 48_000, 256, 4);
+        let mut out = vec![0.0f32; 4 * 256];
+        // Outputs 3–4: channels 2 and 3 of each frame, never 0 and 1.
+        player.preview_on(vec![vec![0.25; 4_800]], 48_000, 2);
+        st.fill(&mut out, 4);
+        assert!(out.chunks(4).all(|f| f[0] == 0.0 && f[1] == 0.0 && (f[2] - 0.25).abs() < 1e-6 && (f[3] - 0.25).abs() < 1e-6));
+        // A pair the device does not have plays on the first two.
+        player.preview_on(vec![vec![0.25; 4_800]], 48_000, 6);
+        out.fill(0.0);
+        st.fill(&mut out, 4);
+        assert!(out.chunks(4).all(|f| (f[0] - 0.25).abs() < 1e-6 && f[2] == 0.0));
     }
 
     /// Realtime safety: the player makes built-in inserts and Clip Effects modules on the UI

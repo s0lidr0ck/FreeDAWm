@@ -568,6 +568,17 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.label("Preview level");
             ui.add(egui::Slider::new(&mut app.ui.preview_db, -40.0..=6.0).suffix(" dB"));
+            let pairs = app.player.as_ref().map_or(1, |p| usize::from(p.device_channels / 2).max(1));
+            let name = |first: usize| format!("Out {}–{}", first + 1, first + 2);
+            ui.checkbox(&mut app.ui.preview_tempo, "In tempo")
+                .on_hover_text("A loop that says its tempo (in its file or name) is heard at the session's");
+            ui.checkbox(&mut app.ui.preview_sync, "In sync")
+                .on_hover_text("While the session plays, the file repeats in time with it from the playhead's bar");
+            egui::ComboBox::from_id_salt("preview_output").selected_text(name(app.ui.preview_output)).show_ui(ui, |ui| {
+                for k in 0..pairs.min(32) {
+                    ui.selectable_value(&mut app.ui.preview_output, 2 * k, name(2 * k));
+                }
+            });
             if (app.audition.playing.is_some() || crate::audition::loading(app)) && ui.button("■ Stop").clicked() {
                 crate::audition::stop(app);
             }

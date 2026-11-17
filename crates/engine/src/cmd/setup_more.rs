@@ -46,6 +46,9 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.set_flag(soundcraft_mix::NO_FEEDBACK_PROTECTION, !on);
             Ok(json!({"value": on}))
         }),
+        // Inserts whose input and output stay silent are not run (`soundcraft_mix::SUSPEND_ON_SILENCE`).
+        option!("options.suspend_on_silence", "Suspend Plug-ins on Silence", "options.suspend_on_silence"),
+        option!("options.loops_follow", "Imported Loops Follow Tempo and Key", "import.loops_follow"),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",

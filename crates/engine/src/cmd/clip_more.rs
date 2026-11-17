@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conform to Tempo",
             ["Clip"],
             None,
-            "{clips?, source_bpm?} — stretches audio clips so their length in bars follows the session tempo; the first conform records the clip's tempo",
+            "{clips?, source_bpm?, keep_pitch?: bool} — stretches audio clips so their length in bars follows the session tempo (keeping the pitch on an Elastic track, or anywhere with keep_pitch); the first conform records the clip's tempo (an imported loop's tempo is recorded at import)",
             has_selection,
             conform
         ),
@@ -230,9 +230,11 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"rendered": n}))
 }
 
-fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(crate) fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "clip.conform_to_tempo";
     let ids = clip_ids_param(e, p);
+    // A pitch-preserving stretch on any track, not only an Elastic one (an imported loop).
+    let force = bool_or(p, "keep_pitch", false);
     let given = p.get("source_bpm").and_then(Value::as_f64).filter(|b| b.is_finite());
     if let Some(b) = given
         && !(5.0..=1000.0).contains(&b)
@@ -249,7 +251,7 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         if !c.is_audio() || c.edit_locked {
             continue;
         }
-        let keeps_pitch = s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
+        let keeps_pitch = force || s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
         let bpm_key = format!("clip.bpm.{}", cid.0);
         let len_key = format!("clip.len0.{}", cid.0);
         let stretch = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
@@ -273,7 +275,7 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     for (cid, ratio) in elastic {
-        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio}))?;
+        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio, "render": force}))?;
     }
     Ok(json!({"clips": out}))
 }
