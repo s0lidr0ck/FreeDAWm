@@ -256,7 +256,7 @@ fn insert_source(s: &mut Session, name: &str, audio: Arc<SourceAudio>, path: Opt
 }
 
 /// A BWF time stamp (samples at the file's rate) at the session's rate, as the audio is resampled.
-fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u64 {
+pub(crate) fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u64 {
     if file_rate == 0 || file_rate == session_rate {
         return stamp;
     }

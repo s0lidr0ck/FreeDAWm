@@ -152,9 +152,118 @@ pub fn read_ixml(path: &Path) -> Option<IxmlInfo> {
     None
 }
 
+/// What a location recorder's WAV says about itself, read from its headers only (the audio is
+/// not read): enough to match it to a clip by timecode, scene and take.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldHeader {
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// Frames of audio (the `data` chunk's size over the frame size).
+    pub frames: u64,
+    /// The BWF `bext` time reference: samples since midnight at the file's rate (0 without one).
+    pub time_reference: u64,
+    pub ixml: Option<IxmlInfo>,
+}
+
+/// Reads `n` little-endian bytes at `at` of `f` (at most 8).
+fn le_at(f: &mut std::fs::File, at: u64, n: usize) -> Option<u64> {
+    let mut b = [0u8; 8];
+    f.seek(SeekFrom::Start(at)).ok()?;
+    f.read_exact(b.get_mut(..n.min(8))?).ok()?;
+    Some(u64::from_le_bytes(b))
+}
+
+/// The header of the WAV (or RF64/BW64) file at `path`: format, length, BWF time reference and
+/// iXML, found by walking its chunk headers (the audio is skipped). `None` for another kind of
+/// file or one without a format chunk.
+pub fn read_field_header(path: &Path) -> Option<FieldHeader> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    if !matches!(head.get(0..4), Some(b"RIFF" | b"RF64" | b"BW64")) || head.get(8..12) != Some(b"WAVE") {
+        return None;
+    }
+    let len = f.metadata().ok()?.len();
+    let (mut out, mut block, mut data_size, mut ds64_data, mut fmt) = (FieldHeader::default(), 0u64, None, None, false);
+    let mut pos = 12u64;
+    for _ in 0..10_000 {
+        if pos.saturating_add(8) > len {
+            break;
+        }
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        let mut ch = [0u8; 8];
+        f.read_exact(&mut ch).ok()?;
+        let [a, b, c, d, e, g, h, i] = ch;
+        let id = [a, b, c, d];
+        let mut size = u64::from(u32::from_le_bytes([e, g, h, i]));
+        let body = pos.saturating_add(8);
+        match &id {
+            b"ds64" if size >= 16 => ds64_data = le_at(&mut f, body.saturating_add(8), 8),
+            b"fmt " if size >= 16 => {
+                out.channels = u16::try_from(le_at(&mut f, body.saturating_add(2), 2)?).unwrap_or(0);
+                out.sample_rate = u32::try_from(le_at(&mut f, body.saturating_add(4), 4)?).unwrap_or(0);
+                block = le_at(&mut f, body.saturating_add(12), 2)?;
+                fmt = true;
+            }
+            b"bext" if size >= 346 => out.time_reference = le_at(&mut f, body.saturating_add(338), 8)?,
+            b"iXML" => {
+                let mut buf = Vec::new();
+                f.seek(SeekFrom::Start(body)).ok()?;
+                (&mut f).take(size.min(MAX_IXML)).read_to_end(&mut buf).ok()?;
+                out.ixml = parse_ixml(&String::from_utf8_lossy(&buf));
+            }
+            b"data" => {
+                // An RF64 data chunk's size is in ds64.
+                if size == u64::from(u32::MAX) {
+                    size = ds64_data?;
+                }
+                data_size = Some(size.min(len.saturating_sub(body)));
+            }
+            _ => {}
+        }
+        pos = body.saturating_add(size).saturating_add(size & 1);
+    }
+    if !fmt || out.channels == 0 || out.sample_rate == 0 {
+        return None;
+    }
+    out.frames = data_size.unwrap_or(0).checked_div(block).unwrap_or(0);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_field_files_header_says_its_length_timecode_and_ixml() {
+        let dir = std::env::temp_dir().join(format!("ixml-head-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("take.wav");
+        // Two channels of 16-bit at 48 kHz: 10 frames.
+        let mut b = b"RIFF\0\0\0\0WAVE".to_vec();
+        b.extend_from_slice(b"fmt \x10\0\0\0\x01\0\x02\0\x80\xbb\0\0\0\xee\x02\0\x04\0\x10\0");
+        let mut bext = vec![0u8; 602];
+        bext[338..346].copy_from_slice(&(48_000u64 * 3600).to_le_bytes());
+        b.extend_from_slice(b"bext");
+        b.extend_from_slice(&(bext.len() as u32).to_le_bytes());
+        b.extend_from_slice(&bext);
+        b.extend_from_slice(b"data\x28\0\0\0");
+        b.extend_from_slice(&[0u8; 40]);
+        b.extend_from_slice(b"iXML");
+        b.extend_from_slice(&(SAMPLE.len() as u32).to_le_bytes());
+        b.extend_from_slice(SAMPLE.as_bytes());
+        std::fs::write(&path, &b).unwrap();
+        let h = read_field_header(&path).unwrap();
+        assert_eq!((h.sample_rate, h.channels, h.frames, h.time_reference), (48_000, 2, 10, 48_000 * 3600));
+        assert_eq!(h.ixml.unwrap().take, "3");
+        // Cut short inside the data: the frames that are there.
+        std::fs::write(&path, &b[..b.len() - SAMPLE.len() - 8 - 20]).unwrap();
+        let h = read_field_header(&path).unwrap();
+        assert_eq!((h.frames, h.ixml), (5, None));
+        std::fs::write(&path, b"RIFF\0\0\0\0WAVEdata\xff\xff\xff\x7f").unwrap();
+        assert!(read_field_header(&path).is_none(), "no format");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     const SAMPLE: &str = "<?xml version=\"1.0\"?><BWFXML><IXML_VERSION>1.61</IXML_VERSION><PROJECT>Night Shoot</PROJECT><SCENE>12A</SCENE><TAKE>3</TAKE><TAPE>D04</TAPE><NOTE>plane &amp; wind</NOTE><TRACK_LIST><TRACK_COUNT>2</TRACK_COUNT><TRACK><CHANNEL_INDEX>2</CHANNEL_INDEX><NAME>Lav Anna</NAME></TRACK><TRACK><CHANNEL_INDEX>1</CHANNEL_INDEX><NAME>Boom</NAME></TRACK></TRACK_LIST></BWFXML>";
 

@@ -34,6 +34,7 @@ mod edit_more;
 pub mod editor_link;
 pub mod event;
 pub(crate) mod event_more;
+mod field;
 mod file;
 pub(crate) mod freeze;
 pub mod mix_snapshot;
@@ -280,6 +281,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip_more::specs());
         v.extend(warp::specs());
         v.extend(clip_list::specs());
+        v.extend(field::specs());
         v.extend(arrangement::specs());
         v.extend(sample_edit::specs());
         v.extend(event_more::specs());

@@ -552,13 +552,20 @@ fn split_mono(e: &mut Engine, p: &Value) -> Result<Value> {
         if src.channels() < 2 || src.kind != TrackKind::Audio {
             continue;
         }
+        // A field recorder's names for the channels (iXML), when its file is on the track.
+        let named: Vec<String> =
+            src.clips().iter().find_map(|c| c.source()).and_then(|f| s.field_info.get(&f.0)).map(|f| f.channels.clone()).unwrap_or_default();
         for ch in 0..src.channels() {
             let suffix = match (src.channels(), ch) {
                 (2, 0) => "L".to_string(),
                 (2, 1) => "R".to_string(),
                 _ => format!("{}", ch + 1),
             };
-            let id = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("{}.{suffix}", src.name)));
+            let track_name = match named.get(ch).map(|n| n.trim()).filter(|n| !n.is_empty()) {
+                Some(n) => n.to_string(),
+                None => format!("{}.{suffix}", src.name),
+            };
+            let id = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&track_name));
             let mut clips = src.clips().to_vec();
             for c in &mut clips {
                 c.id = s.new_clip_id();
