@@ -81,7 +81,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Shuffle lock | ● | — | — | — | **Works** |
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
 | Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
-| Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; "1/4 dotted" typed as a command fails to parse |
+| Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; typed values read "1/4.", "1/4 dotted", "1/8t" and "1/8 triplet" alike |
 | Grid in time, frames and samples | ● | ● | ● | ● | **Works**: lines do not drift and count from the session's timecode start (bug 18, fixed) |
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
 | Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
@@ -390,3 +390,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | A reversed clip's waveform is drawn reversed |
 | 2026-11-16 | minor | Clip transpose gets a high-quality background render |
 | 2026-11-17 | minor | Round three reconciliation: transient sensitivity and edge fades in exports were already built; ARA 2 and real-time pitch correction not planned here |
+| 2026-11-17 | minor | Typed grid values such as "1/4 dotted" and "1/8 triplet" parse |

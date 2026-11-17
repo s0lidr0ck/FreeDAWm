@@ -144,8 +144,10 @@ pub fn grid_param(p: &Value, key: &str) -> Option<GridValue> {
     let s = v.as_str()?.trim().to_ascii_lowercase();
     let triplet = s.ends_with('t') || s.contains("triplet");
     let dotted = s.ends_with('.') || s.contains("dotted");
-    let core: String = s.chars().take_while(|c| c.is_ascii_digit() || *c == '/' || *c == ' ' || c.is_ascii_alphabetic() && *c != 't').collect();
-    let value = match core.trim() {
+    // The note value without its "dotted" / "triplet" words or "." / "t" marks.
+    let core = s.replace("dotted", "").replace("triplet", "");
+    let core = core.trim().trim_end_matches(['.', 't']).trim();
+    let value = match core {
         "1 bar" | "bar" | "1/1" | "1" => NoteValue::Bar,
         "1/2" => NoteValue::Half,
         "1/4" => NoteValue::Quarter,
@@ -168,6 +170,12 @@ mod tests {
         assert_eq!(grid_param(&json!({"v": "1/8t"}), "v"), Some(GridValue::Note { value: NoteValue::Eighth, dotted: false, triplet: true }));
         assert_eq!(grid_param(&json!({"v": "1/4."}), "v"), Some(GridValue::Note { value: NoteValue::Quarter, dotted: true, triplet: false }));
         assert_eq!(grid_param(&json!({"v": {"seconds": 0.5}}), "v"), Some(GridValue::Seconds(0.5)));
+        let dotted_quarter = Some(GridValue::Note { value: NoteValue::Quarter, dotted: true, triplet: false });
+        assert_eq!(grid_param(&json!({"v": "1/4 dotted"}), "v"), dotted_quarter);
+        assert_eq!(grid_param(&json!({"v": "1/4 Dotted"}), "v"), dotted_quarter);
+        let eighth_triplet = Some(GridValue::Note { value: NoteValue::Eighth, dotted: false, triplet: true });
+        assert_eq!(grid_param(&json!({"v": "1/8 triplet"}), "v"), eighth_triplet);
+        assert_eq!(grid_param(&json!({"v": "1 bar"}), "v"), Some(GridValue::Note { value: NoteValue::Bar, dotted: false, triplet: false }));
         assert_eq!(grid_param(&json!({"v": "nonsense"}), "v"), None);
     }
 
