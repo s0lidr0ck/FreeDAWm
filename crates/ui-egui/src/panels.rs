@@ -1227,6 +1227,18 @@ fn preset_housekeeping(
         ph::ab_toggle(app, ui.ctx(), tid, ins, info);
         ui.close();
     }
+    // Copy and paste settings between instances of the plug-in, on any track.
+    if ui.button("Copy Settings").on_hover_text("For Paste Settings on another instance").clicked() {
+        ph::copy_settings(ui.ctx(), ins, info);
+        app.ui.status = format!("Copied the {} settings", info.name);
+        ui.close();
+    }
+    if ui.add_enabled(ph::can_paste(ui.ctx(), info.id), egui::Button::new("Paste Settings")).clicked() {
+        if let Err(e) = ph::paste_settings(app, ui.ctx(), tid, ins.id) {
+            app.ui.status = e;
+        }
+        ui.close();
+    }
 }
 
 /// Where a plugin window of `size` opens: around `anchor` (the pointer when it was opened), moved

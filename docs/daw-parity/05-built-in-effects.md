@@ -222,7 +222,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Step to next and previous | ● | ● | ● | ● | **Works** in the wide editors |
 | Default preset for new instances | ● | ● | ● | ● | **Works**: Presets menu › Start New Inserts From (a factory or user preset), loaded when the insert menu adds the plug-in |
 | A/B compare | ● | ● | ● | ● | **Works**: the wide editors' A/B, and Compare in every narrow drawer's and plug-in window's Presets menu |
-| Copy settings to another instance | ● | ● | ● | ● | **Partial**: by clipboard, wide editors only |
+| Copy settings to another instance | ● | ● | ● | ● | **Works**: the wide editors' Copy and Paste (clipboard), and Copy Settings / Paste Settings in every narrow drawer's and plug-in window's Presets menu (onto the same plug-in on any track, one undo step; what a preset holds). Test: `preset_house` `settings_copy_to_another_instance` |
 | Chain presets and track presets | ● | ● | ● | ● | **Works** |
 | Favourites and recents in the insert menu | ◐ | ● | ◐ | ● | **Works**: the browser's stars and the last inserted, first in the insert menu |
 | Hide effects you do not use | ● | ● | ● | ● | **Works**: insert menu › Show or Hide Effects (search still finds a hidden one) |
@@ -374,3 +374,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Comp gets a look-ahead |
 | 2026-11-17 | minor | Lo-Fi offered under Utilities: bit and sample-rate reduction in the menu |
 | 2026-11-17 | minor | CleanQ factory preset Tilt |
+| 2026-11-17 | minor | Copy Settings and Paste Settings in every drawer and plug-in window |
