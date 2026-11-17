@@ -235,6 +235,8 @@ pub struct StripMeter {
     /// The instrument's readouts of the last block (`Plugin::readouts`; what each means is the
     /// plugin's, e.g. Juke's pad levels); NaN where it gives none, and on non-instrument strips.
     pub instrument: [f32; 8],
+    /// Feedback protection silenced this strip's monitored input (see [`FEEDBACK_SECONDS`]).
+    pub feedback: bool,
 }
 
 /// Live values of one chain module for the last block. A module with no instance (missing, not
@@ -304,6 +306,7 @@ impl StripMeter {
         self.analysis.clone_from(&o.analysis);
         self.llm_bypassed = o.llm_bypassed;
         self.instrument = o.instrument;
+        self.feedback = o.feedback;
     }
 
     /// Measures one block. With `hold`, the peaks and gain reduction are the maxima of this block
@@ -367,6 +370,7 @@ impl StripMeter {
         self.analysis.clone_from(&o.analysis);
         self.llm_bypassed = o.llm_bypassed;
         self.instrument = o.instrument;
+        self.feedback = o.feedback;
     }
 
     /// Forgets the peaks and gain reduction (after a reader took them), keeping the storage.
@@ -560,6 +564,10 @@ struct Strip {
     /// The strip heard live input in its last render (monitored audio input, or live MIDI into
     /// its instrument): the mix's tail must not cut what is still being played.
     hears_live: bool,
+    /// Feedback protection: frames in a row the monitored input has been at or above
+    /// [`FEEDBACK_LEVEL`], and whether it has been silenced for it (until it stops being heard).
+    fb_hot: usize,
+    fb_muted: bool,
     /// On the low-latency monitoring path this block (`llm_scope`, and the mode is on).
     llm: bool,
     /// The modules low-latency monitoring bypasses (`StripMeter::llm_bypassed`), last block.
@@ -737,6 +745,8 @@ impl Strip {
             in_span: None,
             in_default: false,
             hears_live: false,
+            fb_hot: 0,
+            fb_muted: false,
             llm: false,
             llm_bits: 0,
             llm_latency: 0,
@@ -1979,6 +1989,12 @@ impl MixEngine {
         }
     }
 
+    /// Feedback protection's length in frames ([`FEEDBACK_SECONDS`]); 0 offline or when
+    /// Options › Recording › Feedback Protection is off.
+    fn feedback_frames(&self, s: &Session) -> usize {
+        if self.offline || s.edit.flag(NO_FEEDBACK_PROTECTION) { 0 } else { (self.sample_rate * FEEDBACK_SECONDS).max(1.0) as usize }
+    }
+
     /// Whether record-armed tracks on auto input hear their input in the block of `frames` at
     /// `pos`: recording, and (with a punch range) the block touches it.
     fn auto_input(&self, pos: Samples, frames: usize) -> bool {
@@ -2110,6 +2126,7 @@ impl MixEngine {
             midi: &self.live_midi,
             ports_gone: self.ports_gone,
             looping: self.looping,
+            feedback_frames: self.feedback_frames(s),
         };
         // In levels (`order` sorts them): a strip keyed by another renders after it, each level in
         // parallel. Without sidechains there is one level.
@@ -2268,6 +2285,7 @@ impl MixEngine {
                 midi: &self.live_midi,
                 ports_gone: self.ports_gone,
                 looping: self.looping,
+                feedback_frames: self.feedback_frames(s),
             };
             // An aux reads busses that already carry the tracks' compensation delay. An aux
             // without a bus input hears nothing but its own modules; it is compensated as if its
@@ -2600,6 +2618,7 @@ impl MixEngine {
         let metered = if s.edit.pre_fader_metering && strip.pre.len() == strip.buf.len() { &strip.pre } else { &strip.buf };
         m.measure(metered, frames, strip.gr, self.meters_held);
         m.llm_bypassed = strip.llm_bits;
+        m.feedback = strip.fb_muted;
         m.plugin_failures = strip.failures;
         m.modules.clone_from(&strip.mods);
         m.analysis.clone_from(&strip.analysis);
@@ -2985,6 +3004,8 @@ struct LiveInput<'a> {
     ports_gone: u64,
     /// The loop being played ([`MixEngine::looping`]).
     looping: Option<Range>,
+    /// Feedback protection: frames of hot input that silence a monitored input; 0 when it is off.
+    feedback_frames: usize,
 }
 
 fn process_strip(
@@ -3124,6 +3145,10 @@ fn process_strip(
     // heard or not (`silent_print`: not heard, so the strip's output is silence).
     let input_only = t.mixer.record_arm && t.mixer.input_monitor == soundcraft_model::InputMonitor::Auto && s.edit.flag(INPUT_ONLY_MONITORING);
     let hears = input_only || t.mixer.hears_input(live.monitor_only, live.auto_input);
+    if !hears {
+        // Feedback protection lets go once the input is no longer heard (its I key turned off).
+        (strip.fb_hot, strip.fb_muted) = (0, false);
+    }
     let prints = !strip.print.is_empty() && frozen.is_none() && t.mixer.record_arm && live.auto_input && !live.monitor_only;
     let silent_print = prints && !hears;
     let hears = hears || prints;
@@ -3162,6 +3187,7 @@ fn process_strip(
                     }
                 }
             }
+            feedback_guard(strip, frames, live.feedback_frames);
         }
         TrackKind::Audio if live.monitor_only => {}
         // Recording over them (input monitoring Off, or no input to hear): the clips under the
@@ -4177,6 +4203,34 @@ mod click {
     /// Click pitch for a MIDI note setting (clamped to the MIDI range).
     fn note_hz(note: f64) -> f64 {
         soundcraft_dsp::midi_to_hz(note.clamp(0.0, 127.0))
+    }
+}
+
+/// Feedback protection (as in Logic Pro): a monitored hardware input that stays at or above
+/// [`FEEDBACK_LEVEL`] for this long, every block, is taken for feedback through the speakers
+/// and silenced on its track until its monitoring is turned off and on again. The take records on.
+pub const FEEDBACK_SECONDS: f32 = 1.0;
+/// The block peak (linear, about -3 dBFS) feedback protection counts as hot.
+pub const FEEDBACK_LEVEL: f32 = 0.7;
+/// The flag that turns feedback protection off (it is on unless this is set).
+pub const NO_FEEDBACK_PROTECTION: &str = "options.no_feedback_protection";
+
+/// Feedback protection on a strip that has just taken its monitored input into `buf`: counts
+/// the hot frames and, past `limit` (0: off), silences the input from then on. No allocation.
+fn feedback_guard(strip: &mut Strip, frames: usize, limit: usize) {
+    if limit == 0 {
+        (strip.fb_hot, strip.fb_muted) = (0, false);
+        return;
+    }
+    if !strip.fb_muted {
+        let peak = strip.buf.iter().flat_map(|c| c.iter().take(frames)).fold(0.0f32, |m, x| m.max(x.abs()));
+        strip.fb_hot = if peak >= FEEDBACK_LEVEL { strip.fb_hot.saturating_add(frames) } else { 0 };
+        strip.fb_muted = strip.fb_hot >= limit;
+    }
+    if strip.fb_muted {
+        for c in &mut strip.buf {
+            c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+        }
     }
 }
 
@@ -10120,6 +10174,42 @@ mod tests {
         s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Auto;
         eng.render(&s, 1024, 512, &mut out);
         assert!(out[0][100].abs() < 1e-6, "stopped, unmonitored: silence");
+    }
+
+    /// Feedback protection: a monitored input held near full scale for a second is silenced on
+    /// its track (and reported) until its monitoring is turned off and on; a loud but varying
+    /// input is not, and with the protection off nothing is.
+    #[test]
+    fn feedback_protection_silences_a_howling_input() {
+        let (mut s, t) = session_with_dc(0.0, 4800);
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::On;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let mut out = vec![vec![0.0; 512]; 2];
+        let run = |eng: &mut MixEngine, s: &Session, blocks: usize, level: f32, out: &mut Vec<Vec<f32>>| {
+            for b in 0..blocks {
+                // Every fifth block quieter when `level` is negative: loud, but not held.
+                let l = if level < 0.0 && b % 5 == 0 { 0.2 } else { level.abs() };
+                eng.input = vec![vec![l; 512]];
+                eng.render(s, (b * 512) as i64, 512, out);
+            }
+        };
+        run(&mut eng, &s, 200, -0.9, &mut out);
+        assert!(out[0][100] > 0.1 && !eng.meters[&t].feedback, "a loud, varying input plays");
+        run(&mut eng, &s, 1, 0.1, &mut out);
+        run(&mut eng, &s, 90, 0.9, &mut out);
+        assert!(out[0][100] > 0.1, "under a second: still heard");
+        run(&mut eng, &s, 10, 0.9, &mut out);
+        assert!(out[0][100].abs() < 1e-6 && eng.meters[&t].feedback, "a second held: silenced");
+        run(&mut eng, &s, 5, 0.1, &mut out);
+        assert!(out[0][100].abs() < 1e-6, "stays silent once it is quiet");
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::Off;
+        run(&mut eng, &s, 1, 0.1, &mut out);
+        s.track_mut(t).unwrap().mixer.input_monitor = soundcraft_model::InputMonitor::On;
+        run(&mut eng, &s, 1, 0.1, &mut out);
+        assert!(out[0][100] > 0.01 && !eng.meters[&t].feedback, "monitoring off and on: heard again");
+        s.edit.set_flag(NO_FEEDBACK_PROTECTION, true);
+        run(&mut eng, &s, 200, 0.9, &mut out);
+        assert!(out[0][100] > 0.1, "protection off");
     }
 
     /// Options › Recording › Input Only Monitoring: an armed track on Auto hears its input in

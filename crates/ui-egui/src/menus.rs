@@ -854,6 +854,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("options.click") => e.click,
         Some("options.delay_compensation") => e.delay_compensation,
         Some("options.pre_fader_metering") => e.pre_fader_metering,
+        Some("options.feedback_protection") => !e.flag(soundcraft_mix::NO_FEEDBACK_PROTECTION),
         Some("automation.thin_after_pass") => !e.flag(soundcraft_engine::cmd::KEEP_PASS_POINTS),
         Some("options.auto_fades") => e.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS) > 0.0,
         // `video.online` keeps the opposite flag (the engine's `OFFLINE_FLAG`).

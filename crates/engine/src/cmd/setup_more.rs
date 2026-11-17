@@ -39,6 +39,13 @@ pub fn specs() -> Vec<CommandSpec> {
         option!("options.arm_follows_selection", "Arm Follows Selection", "options.arm_follows_selection"),
         // Every armed track on Auto hears its input in playback too (`soundcraft_mix::INPUT_ONLY_MONITORING`).
         option!("options.input_only_monitoring", "Input Only Monitoring", "options.input_only_monitoring"),
+        // On unless turned off: the flag is the opposite (`soundcraft_mix::NO_FEEDBACK_PROTECTION`).
+        cmd!(noundo "options.feedback_protection", "Feedback Protection", ["Options"], None, "{value?: bool} (toggles when omitted) — a monitored input held near full scale for a second is taken for feedback and silenced", always, |e, p| {
+            let s = e.session_mut();
+            let on = p.get("value").and_then(Value::as_bool).unwrap_or(s.edit.flag(soundcraft_mix::NO_FEEDBACK_PROTECTION));
+            s.edit.set_flag(soundcraft_mix::NO_FEEDBACK_PROTECTION, !on);
+            Ok(json!({"value": on}))
+        }),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",

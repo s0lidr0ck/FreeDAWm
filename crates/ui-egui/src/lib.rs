@@ -771,6 +771,8 @@ pub struct MeterDisplay {
     pub gr: f32,
     /// [`soundcraft_mix::PluginFailures::count`] as last seen.
     pub plugin_failures: u32,
+    /// Feedback protection silenced the track's monitored input (`StripMeter::feedback`).
+    pub feedback: bool,
 }
 
 /// An in-progress mouse gesture in the Edit window.
@@ -2882,6 +2884,13 @@ impl SoundApp {
             for (id, m) in &snap.tracks {
                 let d = self.meters.entry(*id).or_default();
                 feed_meter(d, m.peak, m.mean_square(), m.gain_reduction_db, dt, ballistics);
+                if m.feedback != d.feedback {
+                    d.feedback = m.feedback;
+                    if m.feedback {
+                        let name = self.engine.session().track(*id).map_or_else(String::new, |t| t.name.clone());
+                        self.ui.status = format!("Feedback protection silenced {name}'s input: turn its monitoring (I) off and on to hear it again");
+                    }
+                }
                 if m.plugin_failures.count != d.plugin_failures {
                     d.plugin_failures = m.plugin_failures.count;
                     if let Some(msg) = failed_plugin_status(self.engine.session(), *id, m.plugin_failures.last) {

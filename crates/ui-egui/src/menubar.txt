@@ -548,6 +548,7 @@ Options > Record Mode > New Playlist per Take
 Options > Recording > Arm Follows Selection = @options.arm_follows_selection
 Options > Recording > Lock Record = @options.record_lock
 Options > Recording > Input Only Monitoring = @options.input_only_monitoring
+Options > Recording > Feedback Protection = @options.feedback_protection
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Monitoring > Ear Correction = @monitor.ear
