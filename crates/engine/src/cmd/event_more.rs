@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select/Split Notes...",
             ["Event", "MIDI Operations"],
             None,
-            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, channel_from?, channel_to?: 1..16, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
+            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, channel_from?, channel_to?: 1..16, action?: select|split|delete|mute|unmute|change, velocity_add?: -127..127, velocity_scale?: percent, transpose?: -127..127, length_scale?: percent, length_set?: ticks, channel_set?: 1..16} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track, delete removes them, mute and unmute mute them, change applies the given changes to them (a rule-based transformer)",
             has_selection,
             select_split
         ),
@@ -316,11 +316,15 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     let ch = |k: &str, d: i64| p.get(k).and_then(Value::as_i64).unwrap_or(d).clamp(1, 16) as u8 - 1;
     let (c0, c1) = (ch("channel_from", 1), ch("channel_to", 16));
     let channels = c0.min(c1)..=c0.max(c1);
-    let split = match str_param(p, "action") {
-        None | Some("select") => false,
-        Some("split") => true,
-        Some(a) => return Err(bad(id, format!("unknown action `{a}`"))),
-    };
+    let action = str_param(p, "action").unwrap_or("select");
+    if !matches!(action, "select" | "split" | "delete" | "mute" | "unmute" | "change") {
+        return Err(bad(id, format!("unknown action `{action}`")));
+    }
+    let split = action == "split";
+    let change = NoteChange::of(p);
+    if action == "change" && change.is_none() {
+        return Err(bad(id, "give a change: velocity_add, velocity_scale, transpose, length_scale, length_set or channel_set"));
+    }
     let clips = midi_clip_ids(e, p);
     if clips.is_empty() {
         return Err(bad(id, "select MIDI clips"));
@@ -346,6 +350,28 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         matched += hit.len();
         found.push(json!({"clip": cid.0, "indices": picked}));
+        if matches!(action, "delete" | "mute" | "unmute" | "change") && !hit.is_empty() {
+            if let Some(cl) = s.find_clip_mut(cid)
+                && let ClipContent::Midi { sequence } = &mut cl.content
+            {
+                match action {
+                    "delete" => sequence.notes = rest,
+                    _ => {
+                        for i in &picked {
+                            if let Some(n) = sequence.notes.get_mut(*i) {
+                                match action {
+                                    "mute" => n.muted = true,
+                                    "unmute" => n.muted = false,
+                                    _ => change.apply(n),
+                                }
+                            }
+                        }
+                        sequence.sort();
+                    }
+                }
+            }
+            continue;
+        }
         if !split || hit.is_empty() {
             continue;
         }
@@ -368,14 +394,64 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new() } };
         crate::edit::place_clip(s, nt, nc);
     }
-    let mut out = json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()});
-    if !split {
+    let mut out = json!({"matched": matched, "split": split, "action": action, "tracks": new_tracks.values().collect::<Vec<_>>()});
+    if action == "select" {
         if let [one] = found.as_slice() {
             out["indices"] = one["indices"].clone();
         }
         out["clips"] = Value::Array(found);
     }
     Ok(out)
+}
+
+/// What `event.select_split_notes` with `action: change` does to each matching note.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct NoteChange {
+    velocity_add: i64,
+    /// Percent.
+    velocity_scale: Option<f64>,
+    transpose: i64,
+    /// Percent.
+    length_scale: Option<f64>,
+    length_set: Option<i64>,
+    /// 0..15.
+    channel_set: Option<u8>,
+}
+
+impl NoteChange {
+    fn of(p: &Value) -> NoteChange {
+        let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+        NoteChange {
+            velocity_add: num("velocity_add").map_or(0, |v| v.round().clamp(-127.0, 127.0) as i64),
+            velocity_scale: num("velocity_scale").map(|v| v.clamp(0.0, 1000.0)),
+            transpose: num("transpose").map_or(0, |v| v.round().clamp(-127.0, 127.0) as i64),
+            length_scale: num("length_scale").map(|v| v.clamp(1.0, 10_000.0)),
+            length_set: num("length_set").map(|v| v.round().clamp(1.0, 1e9) as i64),
+            channel_set: num("channel_set").map(|v| (v.round().clamp(1.0, 16.0) as u8) - 1),
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        *self == NoteChange::default()
+    }
+
+    fn apply(&self, n: &mut soundcraft_midi::Note) {
+        let mut v = f64::from(n.velocity);
+        if let Some(k) = self.velocity_scale {
+            v = v * k / 100.0;
+        }
+        n.velocity = (v.round() as i64 + self.velocity_add).clamp(1, 127) as u8;
+        n.pitch = (i64::from(n.pitch) + self.transpose).clamp(0, 127) as u8;
+        if let Some(l) = self.length_set {
+            n.length = l;
+        }
+        if let Some(k) = self.length_scale {
+            n.length = ((n.length as f64 * k / 100.0).round() as i64).max(1);
+        }
+        if let Some(c) = self.channel_set {
+            n.channel = c;
+        }
+    }
 }
 
 /// The rule `event.select_split_notes` picks notes by (see its parameters).
@@ -1038,6 +1114,41 @@ mod tests {
             ClipContent::Midi { sequence } => assert_eq!(sequence.notes[0].pitch, 72),
             _ => panic!(),
         }
+    }
+
+    /// Parity section 7: a rule-based transformer: the notes matching a rule are deleted, muted
+    /// or changed (velocity, transpose, length, channel), one undo step each.
+    #[test]
+    fn matching_notes_are_deleted_muted_or_changed() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "velocity": 120},
+            {"pitch": 60, "start_ticks": 240, "velocity": 30},
+            {"pitch": 62, "start_ticks": 480, "velocity": 100, "length_ticks": 480},
+            {"pitch": 64, "start_ticks": 720, "velocity": 20}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let notes_of = |e: &Engine| match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.notes.iter().map(|n| (n.pitch, n.velocity, n.length, n.muted, n.channel)).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        // Quiet notes go.
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid], "velocity_to": 40, "action": "delete"})).unwrap();
+        assert_eq!(r["matched"], 2);
+        assert_eq!(notes_of(&e).iter().map(|n| n.0).collect::<Vec<_>>(), vec![36, 62]);
+        assert!(e.undo());
+        // Mute them instead.
+        e.execute("event.select_split_notes", &json!({"clips": [cid], "velocity_to": 40, "action": "mute"})).unwrap();
+        assert_eq!(notes_of(&e).iter().map(|n| n.3).collect::<Vec<_>>(), vec![false, true, false, true]);
+        assert!(e.undo());
+        // Change the notes of C4 and up: half as loud plus 10, up an octave, twice as long, channel 2.
+        let change = json!({"clips": [cid], "pitch_from": 60, "action": "change", "velocity_scale": 50, "velocity_add": 10, "transpose": 12, "length_scale": 200, "channel_set": 2});
+        e.execute("event.select_split_notes", &change).unwrap();
+        let after = notes_of(&e);
+        assert_eq!((after[0].0, after[0].1, after[0].4), (36, 120, 0), "the kick is untouched");
+        assert_eq!(after[2], (74, 60, 960, false, 1));
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "action": "change"})).is_err(), "no change given");
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "action": "explode"})).is_err());
     }
 
     /// Parity section 7: notes picked by rule (pitch, velocity, length, start, place in the bar),

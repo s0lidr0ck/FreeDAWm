@@ -857,9 +857,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.selected = tools::same_pitch_selection(sequence, &app.midi.selected, None);
             ui.close();
         }
-        if ui.button("Select by Rule…").on_hover_text("Select the notes in pitch, velocity, length and beat ranges").clicked() {
+        if ui.button("Select by Rule…").on_hover_text("Select, delete, mute or change the notes in pitch, velocity, length and beat ranges").clicked()
+        {
             app.ops.midi_op = "select notes".into();
-            app.ops.rule_split = false;
+            app.ops.rule_action = "select";
             app.ui.show_midi_ops = true;
             ui.close();
         }

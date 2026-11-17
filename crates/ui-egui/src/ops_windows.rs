@@ -55,12 +55,16 @@ pub struct OpsState {
     pub flam_ticks: i64,
     pub flam_velocity: f64,
     /// Select Notes: pitch, velocity and length (ticks) ranges, the beats of the bar a note
-    /// starts in (1-based, fractional), and whether matching notes move to a new track instead.
+    /// starts in (1-based, fractional), and what is done to the matching notes: select, split
+    /// (to a new track), delete, mute, unmute or change.
     pub rule_pitch: (i64, i64),
     pub rule_velocity: (i64, i64),
     pub rule_length: (i64, i64),
     pub rule_beats: Option<(f64, f64)>,
-    pub rule_split: bool,
+    pub rule_action: &'static str,
+    /// Select Notes › Change them: velocity added, velocity scaled (percent), transpose
+    /// (semitones), length scaled (percent).
+    pub rule_change: (i64, f64, i64, f64),
     /// Select Notes: the channels (from 1).
     pub rule_channel: (i64, i64),
     pub rtp_velocity: i64,
@@ -116,7 +120,8 @@ impl Default for OpsState {
             rule_velocity: (1, 127),
             rule_length: (1, 15_360),
             rule_beats: None,
-            rule_split: false,
+            rule_action: "select",
+            rule_change: (0, 100.0, 0, 100.0),
             rule_channel: (1, 16),
             rtp_velocity: 0,
             rtp_transpose: 0,
@@ -616,8 +621,15 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
                 "pitch_from": o.rule_pitch.0, "pitch_to": o.rule_pitch.1,
                 "velocity_from": o.rule_velocity.0, "velocity_to": o.rule_velocity.1,
                 "length_from": o.rule_length.0, "length_to": o.rule_length.1,
-                "action": if o.rule_split { "split" } else { "select" },
+                "action": o.rule_action,
             });
+            if o.rule_action == "change" {
+                let (va, vs, tr, ls) = o.rule_change;
+                p["velocity_add"] = json!(va);
+                p["velocity_scale"] = json!(vs);
+                p["transpose"] = json!(tr);
+                p["length_scale"] = json!(ls);
+            }
             if o.rule_channel != (1, 16) {
                 p["channel_from"] = json!(o.rule_channel.0);
                 p["channel_to"] = json!(o.rule_channel.1);
@@ -742,11 +754,13 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             _ => {}
         }
         // Select Notes picks from every note of the clip open in the MIDI Editor.
-        let rule_clip = (app.ops.midi_op == "select notes" && !app.ops.rule_split && app.ui.show_midi_editor)
+        let rule_clip = (app.ops.midi_op == "select notes" && app.ops.rule_action != "split" && app.ui.show_midi_editor)
             .then(|| crate::midi_editor::target_clip(app))
             .flatten();
         let picked = if app.ops.midi_op == "select notes" { None } else { editor_selection(app) };
-        let whom = if rule_clip.is_some() {
+        let whom = if rule_clip.is_some() && app.ops.rule_action != "select" {
+            "Acts on the matching notes of the clip in the MIDI Editor."
+        } else if rule_clip.is_some() {
             "Selects the matching notes in the MIDI Editor."
         } else if picked.is_some() {
             "Applies to the notes selected in the MIDI Editor."
@@ -759,10 +773,14 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                 Some((id, mut p)) if rule_clip.is_some() => {
                     p["clips"] = json!([rule_clip.map(|c| c.0)]);
                     let r = app.run(id, p);
-                    if let Ok(v) = &r
-                        && let Some(a) = v.get("indices").and_then(|x| x.as_array())
-                    {
-                        app.midi.selected = a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
+                    if let Ok(v) = &r {
+                        // Select picks them; the other actions leave no selection (the notes
+                        // may have moved or gone).
+                        app.midi.selected = v
+                            .get("indices")
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect())
+                            .unwrap_or_default();
                         app.midi.clip = rule_clip;
                     }
                     r
@@ -847,10 +865,29 @@ fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
             ui.add(egui::DragValue::new(b).range(1.0..=64.0).speed(0.25));
         }
     });
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut o.rule_split, false, "Select them");
-        ui.radio_value(&mut o.rule_split, true, "Move them to a new track");
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut o.rule_action, "select", "Select them");
+        ui.radio_value(&mut o.rule_action, "split", "Move them to a new track");
+        ui.radio_value(&mut o.rule_action, "delete", "Delete them");
+        ui.radio_value(&mut o.rule_action, "mute", "Mute them");
+        ui.radio_value(&mut o.rule_action, "unmute", "Unmute them");
+        ui.radio_value(&mut o.rule_action, "change", "Change them");
     });
+    if o.rule_action == "change" {
+        let (va, vs, tr, ls) = &mut o.rule_change;
+        ui.horizontal(|ui| {
+            ui.label("Velocity ×");
+            ui.add(egui::DragValue::new(vs).range(0.0..=1000.0).suffix(" %"));
+            ui.label("+");
+            ui.add(egui::DragValue::new(va).range(-127..=127));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Transpose");
+            ui.add(egui::DragValue::new(tr).range(-127..=127).suffix(" st"));
+            ui.label("Length ×");
+            ui.add(egui::DragValue::new(ls).range(1.0..=10_000.0).suffix(" %"));
+        });
+    }
 }
 
 fn rtp(app: &mut SoundApp, ctx: &egui::Context) {

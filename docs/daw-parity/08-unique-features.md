@@ -127,7 +127,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths, and a chord stamp for the Pencil ([section 7](07-midi-writing.md)); no pads, no suggestions |
 | Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
 | Mixer undo history and mixer snapshots | **Works** | Mixer moves are ordinary undo steps; Window › Mix Snapshots stores and recalls the whole mix or parts of it ([section 3](03-mixing.md)) |
-| Logical Editor, Project Logical Editor, macros | **Missing** | |
+| Logical Editor, Project Logical Editor, macros | **Partial** | For notes: MIDI Operations › Select Notes picks notes by pitch, velocity, length, position, beats of the bar and channel ranges and selects, deletes, mutes, moves or changes them (velocity, transpose, length, channel) in one step ([section 7](07-midi-writing.md), D). No controller events, no saved rules, no Project Logical Editor (tracks and plug-ins) and no macros |
 | MIDI Remote: scripted controller support with a mapping assistant | **Partial** | MIDI learn for faders, pan, sends and plug-in knobs, Mackie Control and HUI ([section 6](06-midi-recording.md), K); no scripts for other controllers |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
@@ -426,6 +426,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Logical Editor: Partial, for notes (the rule-based transformer of section 7) |
 | 2026-11-17 | minor | Plug-ins in their own process: VST3 plug-ins run there too (the option is now for CLAP and VST3) |
 | 2026-11-17 | minor | Plug-ins in their own process: the plug-in's own presets listed and loaded through its process |
 | 2026-11-17 | minor | Plug-ins in their own process: a crashed plug-in says so on its tile, and Restart Plug-in brings it back with its last state |

@@ -128,7 +128,7 @@ The gaps are of four kinds:
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
 | Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Works**: strum (up or down), flam (a grace note of the same pitch a set number of ticks before each note, at a share of its velocity; `event.flam`), reverse, invert pitches (mirrored around the middle of their range, or a given pitch; `event.invert_pitch`), half and double time in the MIDI Operations window |
 | Split notes out by pitch or channel | ● | ● | ● | ● | **Works**: MIDI Operations › Select Notes picks notes by pitch, velocity, length, place in the bar and channel, and Move Them to a New Track splits them out (`event.select_split_notes` `action: split`, `channel_from`, `channel_to`); the first version of this page said Flag only, but the pitch split was already built |
-| Rule-based transformer | ◐ | ◐ | ● | ● | **Missing** |
+| Rule-based transformer | ◐ | ◐ | ● | ● | **Partial**: for notes. MIDI Operations › Select Notes is a transformer: the notes matching every condition (pitch, velocity, length, start, beats of the bar, channel ranges) are selected, moved to a new track, deleted, muted or unmuted, or changed (velocity scaled and offset, transposed, length scaled or set, channel set): `event.select_split_notes` `action: select|split|delete|mute|unmute|change`, one undo step, on the editor's clip or the selected clips. Not for controller events, no conditions other than ranges (no "not", no either/or), and rules are not saved by name |
 
 ## E. Scales and chords
 
@@ -448,3 +448,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Drum maps: name a track's drums (or fill in General MIDI names) for any instrument |
 | 2026-11-17 | minor | MusicXML import: a track per part, with meters, tempo, keys and lyrics |
 | 2026-11-17 | minor | Arranger: copy, move and remove a section with the song's clips and automation |
+| 2026-11-17 | minor | A rule-based transformer for notes: the matching notes deleted, muted or changed |
