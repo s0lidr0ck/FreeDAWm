@@ -146,7 +146,7 @@ K-system scales, and the master a loudness meter.
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
 | Write from a MIDI controller or control surface | ● | ● | ● | ● | **Works**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
-| Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
+| Automation follows tempo changes | ● | ● | ● | ● | **Works** on tracks kept in bars and beats (tick timebase, the default for MIDI and instrument tracks): a tempo edit moves each lane it left alone to the same ticks in the new map, as their clips move (`tick_clips::follow_tempo`); a sample-timebase track's points stay on their samples |
 
 ### Editing it
 
@@ -406,6 +406,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | automation on tick-timebase tracks follows tempo changes |
 | 2026-11-17 | minor | copy a strip's settings onto the selected tracks |
 | 2026-11-17 | minor | send controls and built-in module controls follow their automation |
 | 2026-11-17 | minor | a PPM scale and the loudness range |

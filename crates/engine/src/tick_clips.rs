@@ -16,7 +16,11 @@
 //! ([`follow_tempo`] returns those for the engine to render, as Elastic Properties does).
 //! Edit- or time-locked audio clips stay where they are.
 //!
-//! What does not move: clips on sample-timebase tracks; clips the command moved itself (Insert Time, Cut Time and Move Song Start place the clips
+//! A tick-timebase track's automation follows the same way: each lane the command left as it was
+//! has its points moved from their ticks in the old map to the same ticks in the new one, so a
+//! ride stays on its beat (the "automation follows tempo" of the four reference DAWs).
+//!
+//! What does not move: clips and automation on sample-timebase tracks; clips the command moved itself (Insert Time, Cut Time and Move Song Start place the clips
 //! after the edit point as they shift the map). Undo and redo restore whole documents and a
 //! loaded session is taken as saved, so neither moves anything: an old session opens and sounds
 //! as it was saved, and its clips start to follow the tempo at the first tempo edit. A frozen MIDI
@@ -105,6 +109,19 @@ pub fn follow_tempo(before: &Session, after: &mut Session) -> Followed {
                 pl.sort();
             }
         }
+        // Its automation: each lane the command left as it was keeps its points on their ticks
+        // (the map is monotonic, so their order holds).
+        for lane in tr.automation.iter_mut() {
+            if !was.automation.iter().any(|l| l.param == lane.param && l.points == lane.points) {
+                continue;
+            }
+            for p in lane.points.iter_mut() {
+                let a = place(p.at);
+                if a.is_finite() && a <= i64::MAX as f64 / 2.0 {
+                    p.at = (a as i64).max(0);
+                }
+            }
+        }
     }
     out
 }
@@ -149,6 +166,25 @@ mod tests {
         // Back to 120 bpm: back to the sample it started on.
         e.execute("event.tempo_remove", &json!({"at": 96_000})).unwrap();
         assert_eq!(clip_at(&e, clip), (192_000, 96_000));
+    }
+
+    /// A tick-timebase track's automation stays on its bars when the tempo changes; a sample
+    /// track's stays on its samples.
+    #[test]
+    fn automation_on_tick_tracks_follows_the_tempo() {
+        let mut e = Engine::default();
+        let keys = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let fixed = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Fixed"));
+        e.session_mut().track_mut(fixed).unwrap().ticks_timebase = false;
+        for t in [keys, fixed] {
+            e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": 192_000, "value": -6.0})).unwrap();
+        }
+        let at = |e: &Engine, t| e.session().track(t).unwrap().lane(&soundcraft_model::AutoParam::Volume).unwrap().points[0].at;
+        e.execute("event.tempo", &json!({"bpm": 60.0, "at": 96_000})).unwrap();
+        assert_eq!(at(&e, keys), 96_000 + 192_000, "bar 3 moved with the tempo");
+        assert_eq!(at(&e, fixed), 192_000);
+        e.execute("event.tempo_remove", &json!({"at": 96_000})).unwrap();
+        assert_eq!(at(&e, keys), 192_000, "and back");
     }
 
     /// An audio track kept in bars and beats: a plain track's clip moves to its bar and keeps its
