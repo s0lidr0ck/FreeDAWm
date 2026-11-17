@@ -4893,6 +4893,32 @@ mod strip_tests {
         assert!(e.session().track(t).unwrap().clips().iter().any(|c| c.start >= far));
     }
 
+    /// Relink: a file the session lost is read from where it is now, and its clips play again.
+    #[test]
+    fn a_missing_file_is_relinked_and_its_clips_play() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-relink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let frames = 4_800usize;
+        let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, frames as u64).unwrap();
+        bytes.extend((0..frames).flat_map(|_| 0.25f32.to_le_bytes()));
+        let file = dir.join("found.wav");
+        std::fs::write(&file, bytes).unwrap();
+        let (mut e, t) = tones(&[0], 4_800);
+        let src = e.session().track(t).unwrap().clips()[0].source().unwrap();
+        // Lost: the pool has no audio for it.
+        let mut pool = soundcraft_model::SourcePool::default();
+        std::mem::swap(&mut e.session_mut().pool, &mut pool);
+        assert!(soundcraft_mix::render_clips(e.session(), t, Range::new(0, 4_800))[0].iter().all(|x| *x == 0.0));
+        let v = e.execute("file.relink_audio", &json!({"source": src.0, "path": file.to_string_lossy()})).unwrap();
+        assert!(v["warning"].as_str().is_some_and(|w| w.contains("1 channels")), "a stereo file relinked to a mono one warns: {v}");
+        let out = soundcraft_mix::render_clips(e.session(), t, Range::new(0, 4_800));
+        assert!(out[0][100] > 0.1, "plays the found file: {}", out[0][100]);
+        assert!(e.session().source(src).unwrap().path.ends_with("found.wav"));
+        assert!(e.execute("file.relink_audio", &json!({"source": src.0, "path": dir.join("nope.wav").to_string_lossy()})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Strip Silence's preview says what would stay, changing nothing; stripping keeps just that.
     #[test]
     fn strip_silence_preview_matches_what_strip_keeps() {

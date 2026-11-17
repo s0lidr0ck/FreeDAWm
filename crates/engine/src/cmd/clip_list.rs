@@ -9,15 +9,57 @@ use std::collections::BTreeSet;
 const CLEAR: &str = "clip.clear";
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(
-        "clip.clear",
-        "Clear Clips",
-        [],
-        Some("Cmd+Shift+B"),
-        "{clips?: [id], sources?: [id], with_clips?: bool} — removes clips and audio files from the session (files stay on disk); default: the Clip List selection. A file still used on the timeline needs `with_clips: true`, which removes those clips too",
-        has_list_selection,
-        clear
-    )]
+    vec![
+        cmd!(
+            "file.relink_audio",
+            "Relink Audio File...",
+            [],
+            None,
+            "{source: id, path} — the session's audio file `source` (a missing one, or any) is read from `path` instead; its clips play it from where they were -> {frames, warning?}",
+            always,
+            relink
+        ),
+        cmd!(
+            "clip.clear",
+            "Clear Clips",
+            [],
+            Some("Cmd+Shift+B"),
+            "{clips?: [id], sources?: [id], with_clips?: bool} — removes clips and audio files from the session (files stay on disk); default: the Clip List selection. A file still used on the timeline needs `with_clips: true`, which removes those clips too",
+            has_list_selection,
+            clear
+        ),
+    ]
+}
+
+/// Relink: the file at `path` stands in for source `source`, decoded at the session rate, so
+/// every clip of it plays again. A file of another length or width is taken, with a warning.
+fn relink(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "file.relink_audio";
+    let id = p.get("source").and_then(Value::as_u64).map(SourceId).ok_or_else(|| bad(C, "`source` id required"))?;
+    let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "`path` required"))?.to_string();
+    let old = e.session().source(id).cloned().ok_or_else(|| bad(C, "no such audio file"))?;
+    let bytes = crate::io::read_file(&path)?;
+    let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
+    let rate = e.session().sample_rate.hz();
+    let buf = crate::io::decode_buffer(&bytes, ext.as_deref(), rate).map_err(|err| bad(C, format!("{path}: {err}")))?;
+    if buf.frames() == 0 {
+        return Err(bad(C, format!("{path}: no audio")));
+    }
+    let (frames, channels) = (buf.frames() as u64, u16::try_from(buf.num_channels()).unwrap_or(u16::MAX));
+    let s = e.session_mut();
+    if let Some(src) = s.sources.iter_mut().find(|x| x.id == id) {
+        src.path = path;
+        (src.frames, src.channels, src.unsaved) = (frames, channels, false);
+    }
+    s.pool.insert(id, std::sync::Arc::new(soundcraft_model::SourceAudio::new(buf)));
+    let mut out = json!({"frames": frames});
+    if frames != old.frames || channels != old.channels {
+        out["warning"] = json!(format!(
+            "Relinked `{}`, but the new file has {frames} frames in {channels} channels (the old one {} in {})",
+            old.name, old.frames, old.channels
+        ));
+    }
+    Ok(out)
 }
 
 fn has_list_selection(e: &Engine) -> std::result::Result<(), String> {

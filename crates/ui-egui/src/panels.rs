@@ -275,7 +275,15 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
         let pads: std::collections::HashSet<SourceId> =
             s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
         for src in s.sources.iter().filter(|src| !pads.contains(&src.id)) {
-            v.push((src.id.0, format!("{} ({}ch)", src.name, src.channels), true, [150, 150, 150], s.edit.selected_sources.contains(&src.id)));
+            // A file the session could not find says so (Relink… in its menu finds it).
+            let missing = if s.pool.get(src.id).is_none() { " — missing" } else { "" };
+            v.push((
+                src.id.0,
+                format!("{} ({}ch){missing}", src.name, src.channels),
+                true,
+                [150, 150, 150],
+                s.edit.selected_sources.contains(&src.id),
+            ));
         }
         for tr in &s.tracks {
             for c in tr.clips() {
@@ -313,6 +321,16 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                         && ui.button("Place on Selected Track").clicked()
                     {
                         let _ = app.run("clip.place_source", json!({"source": id, "track": t}));
+                        ui.close();
+                    }
+                    if app.services.pick_open.is_some() && ui.button("Relink…").on_hover_text("Play this file's clips from another file").clicked()
+                    {
+                        let picked = app.services.pick_open.as_ref().and_then(|pick| pick("file.relink_audio", &[]));
+                        if let Some(path) = picked
+                            && let Err(e) = app.run("file.relink_audio", json!({"source": id, "path": path}))
+                        {
+                            app.ui.status = e;
+                        }
                         ui.close();
                     }
                     ui.separator();

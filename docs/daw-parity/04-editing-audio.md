@@ -45,7 +45,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
-| L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
+| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Medium: no sample editor, no compacting |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
@@ -243,7 +243,7 @@ why they score ◐ for "built-in".
 | List of clips and files with a search | ● | ● | ● | ● | **Works**; shows the active playlists only |
 | Audition, rename and locate from the list | ● | ● | ● | ● | **Works**: a click selects the clip and scrolls to it when off screen; Alt-click or Audition plays it; Rename… from its menu |
 | Select and remove unused clips | ● | ● | ● | ● | **Works**: Select Unused Files picks the files no clip plays; Clear removes them |
-| Relink missing audio files | ● | ● | ● | ● | **Missing** (video can be relinked) |
+| Relink missing audio files | ● | ● | ● | ● | **Works**: the Clip List marks a file the session could not find as missing, and Relink… in a file's menu reads it from another file (`file.relink_audio`), its clips playing again from where they were; a file of another length or width is taken with a warning. One file at a time; no search of a folder |
 | Compact files to what is used | ● | ● | ● | ● | **Missing** |
 | "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Missing**: the command only renames the clip "Captured" |
 | Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
@@ -410,3 +410,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Transposed clips with Clean Vocal get the background render too |
 | 2026-11-17 | minor | A warp marker is heard while it is dragged |
 | 2026-11-17 | minor | Strip Silence previews what it would remove |
+| 2026-11-17 | minor | Relink a missing audio file from the Clip List |
