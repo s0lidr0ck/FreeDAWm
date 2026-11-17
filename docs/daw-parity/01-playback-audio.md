@@ -119,7 +119,7 @@ Varispeed is the only whole-project speed control among the four.
 | WAV, BWF, RF64, AIFF | ● | ● | ● | ● | **Works** |
 | FLAC, MP3, AAC/M4A, Ogg, Opus, CAF | ◐ | ● | ● | ● | **Works** (more than Pro Tools reads) |
 | Files at another sample rate | ● | ● | ● | ● | **Works**: converted with a high-quality sinc at import or open |
-| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only). Only Studio Pro does this; it would mean sources kept at their own rate and every clip read, waveform and source edit converting positions; the converted copy sounds the same. Not reached; no design yet |
+| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only; the converted copy sounds the same). Designed below (Mixed rates without converting): files kept at their own rate and read through the varispeed reader, positions staying in session samples; 8–12 h, not built: it saves disk space and import time only, so it waits for the owner's call |
 | Compressed and long files without filling memory | ● | ● | ● | ● | **Works** from the second open: a file that is not WAV at the session rate is decoded into memory once and kept as a float WAV in the project's `Decoded` folder, which later opens stream; a session never saved still decodes every time |
 | Waveform cache | ● | ● | ● | ● | **Works** |
 
@@ -259,6 +259,24 @@ and every stored position lands within one sample of its time. The risk is compl
 position field missed plays in the wrong place, so the step that scales them must be one
 function over `Session` with a test that fails when a new `Samples` field is added without it.
 
+**Mixed rates without converting: the design (round three, not built).** Studio Pro alone
+plays files at their own rate in a session at another. (1) *Kept as is.* With "Keep files at
+their own rate" (Setup › Session, off by default) an import at another rate is stored as it is,
+with no converted copy; `SourceAudio::sample_rate` already records the file's rate. (2) *Positions
+stay in session samples.* A clip's start, length and source offset stay in samples at the session
+rate, so every edit, the waveform's horizontal scale and the Clip List are unchanged; only the
+reads convert. (3) *The read.* The clip reader turns a timeline sample into the file's frame by
+the ratio file ÷ session and reads through the band-limited varispeed reader the clips already
+use for real-time transpose and varispeed (fractional positions, a kernel whose cut-off follows
+the ratio), so a 44.1 kHz file in a 48 kHz session plays as varispeed at 0.91875 with no pitch
+change; the disk streamer reads ahead in file frames. (4) *What converts.* Everything that writes
+audio (Process, Consolidate, bounce, freeze) writes at the session rate, as now; the waveform
+overview is read at the file's rate and scaled. (5) *Tests.* A 44.1 kHz file played in a
+48 kHz session renders within −60 dB of the same file converted at import, and a clip edited
+(trimmed, split, moved) plays the same audio at the same times either way. (6) *Size and worth.*
+8–12 h; the converted copy sounds the same, so this saves disk space and import time only. Not
+built: the owner's call whether it is worth it.
+
 **Busses on the worker pool: the design (round three, not built).** Tracks already render in
 parallel by the planner's levels (`sidechain::resolve` gives every strip a level: a strip waits
 only for strips of lower levels: its key sources and the busses it reads). Aux, folder and master
@@ -331,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: a design for playing files at their own rate (mixed rates) |
 | 2026-11-17 | minor | Round three: designs for busses on the worker pool, reverse playback through the mixer and the large playback buffer; the processing stack row points at section 4 |
 | 2026-11-17 | minor | Round three: a new track's strip and a new bus's buffers are made off the audio thread |
 | 2026-11-17 | minor | Round three: a short import's tempo is detected and recorded |
