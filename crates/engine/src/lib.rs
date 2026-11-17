@@ -595,6 +595,10 @@ impl Engine {
     pub fn undo_history(&self) -> Vec<String> {
         self.undo.iter().map(|h| h.label.clone()).collect()
     }
+    /// The steps Redo would bring back, the next one first.
+    pub fn redo_history(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|h| h.label.clone()).collect()
+    }
 
     pub fn undo(&mut self) -> bool {
         self.merge_redo = None;

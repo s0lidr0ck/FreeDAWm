@@ -46,7 +46,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
 | L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
-| M. Undo and keys | 200 levels, history window, single-key editing, a key editor | Small: redo by clicking in the history |
+| M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
 (a clip edge or a warp marker), with a real choice of algorithm; **edits that respect groups and
@@ -255,7 +255,7 @@ why they score ◐ for "built-in".
 |---|:-:|:-:|:-:|:-:|---|
 | Multi-level undo and redo, every edit covered | ● | ● | ● | ● | **Works** (200 levels) |
 | Undo leaves zoom, scroll and the current tool alone | ● | ● | ● | ● | **Works**: undo and redo keep the zoom, scroll, waveform height and tool, as they keep the Edit mode |
-| Undo history list | ● | ● | ● | ● | **Works**; redo by clicking is not offered |
+| Undo history list | ● | ● | ● | ● | **Works**: the undone steps are listed after the current one, dimmed; a click on any step undoes or redoes to it |
 | Single-key editing commands | ● | ● | ● | ● | **Works** |
 | Editable key bindings | ● | ● | ● | ● | **Works**; a few fixed keys cannot be changed |
 
@@ -392,3 +392,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Round three reconciliation: transient sensitivity and edge fades in exports were already built; ARA 2 and real-time pitch correction not planned here |
 | 2026-11-17 | minor | Typed grid values such as "1/4 dotted" and "1/8 triplet" parse |
 | 2026-11-17 | minor | F6+F7 and F7+F8 choose the Smart Tool |
+| 2026-11-17 | minor | The Undo History lists undone steps and redoes to one by clicking |

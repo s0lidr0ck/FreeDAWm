@@ -843,3 +843,21 @@ fn an_edit_on_one_track_of_an_edit_group_applies_to_the_others() {
     assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000));
     let _ = rc;
 }
+
+// ---- round three: the open rows ----------------------------------------------------------
+
+#[test]
+fn redo_history_lists_the_undone_steps_next_first() {
+    let mut e = engine("slip");
+    for _ in 0..3 {
+        run(&mut e, "track.new", json!({"count": 1}));
+    }
+    let labels = e.undo_history();
+    assert!(e.redo_history().is_empty());
+    e.undo();
+    e.undo();
+    let n = labels.len();
+    assert_eq!(e.redo_history(), vec![labels[n - 2].clone(), labels[n - 1].clone()]);
+    e.redo();
+    assert_eq!(e.redo_history(), vec![labels[n - 1].clone()]);
+}

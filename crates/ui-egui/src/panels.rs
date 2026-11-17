@@ -590,19 +590,32 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
 
 pub(crate) fn undo_history(app: &mut SoundApp, ui: &mut Ui) {
     let hist = app.engine.undo_history();
+    let redo = app.engine.redo_history();
     let n = hist.len();
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, h) in hist.iter().enumerate() {
             if ui.selectable_label(i + 1 == n, format!("{}  {h}", i + 1)).clicked() {
-                for _ in 0..(n - i - 1) {
-                    let _ = app.run("edit.undo", json!({}));
-                }
+                history_go(app, n - i - 1, 0);
             }
         }
-        if let Some(r) = app.engine.redo_label() {
-            ui.label(egui::RichText::new(format!("(redo) {r}")).italics().color(Tokens::current().text_dim));
+        // The undone steps, dimmed: a click redoes up to and including that one.
+        for (i, r) in redo.iter().enumerate() {
+            let text = egui::RichText::new(format!("{}  {r}", n + i + 1)).italics().color(Tokens::current().text_dim);
+            if ui.selectable_label(false, text).on_hover_text("Redo to here").clicked() {
+                history_go(app, 0, i + 1);
+            }
         }
     });
+}
+
+/// Undoes `undo` steps, then redoes `redo`: a click in the Undo History moves to that step.
+pub(crate) fn history_go(app: &mut SoundApp, undo: usize, redo: usize) {
+    for _ in 0..undo {
+        let _ = app.run("edit.undo", json!({}));
+    }
+    for _ in 0..redo {
+        let _ = app.run("edit.redo", json!({}));
+    }
 }
 
 /// The plugin windows drawn in `ctx`'s viewport: each over the window that opened it.
