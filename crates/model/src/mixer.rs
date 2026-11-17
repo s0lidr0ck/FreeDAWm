@@ -430,15 +430,23 @@ pub struct OutputPath {
     pub format: ChannelFormat,
 }
 
-/// Physical input paths (from the I/O setup): a named mono or stereo pair of device input
-/// channels. A channel the open device lacks is kept and shown "(not available)".
+/// Physical input paths (from the I/O setup): named device input channels, mono, stereo or a
+/// multichannel (surround) group of up to [`ChannelFormat::MAX_MIX_CHANNELS`] channels. A channel
+/// the open device lacks is kept and shown "(not available)".
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InputPath {
     pub name: String,
     /// First hardware channel (0-based).
     pub first_channel: u16,
-    /// Mono or Stereo.
+    /// Mono, stereo or a multichannel format (up to 16 channels).
     pub format: ChannelFormat,
+}
+
+impl InputPath {
+    /// How many device channels the input takes (1 to [`ChannelFormat::MAX_MIX_CHANNELS`]).
+    pub fn width(&self) -> usize {
+        self.format.channels().clamp(1, ChannelFormat::MAX_MIX_CHANNELS)
+    }
 }
 
 /// The device input channel that track channel `k` reads from an input of `width` channels

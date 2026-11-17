@@ -704,7 +704,7 @@ impl Session {
     /// audio thread calls it).
     pub fn input_channels(&self, name: &str) -> Option<(usize, usize)> {
         if let Some(i) = self.inputs.iter().find(|i| same_name(&i.name, name)) {
-            return Some((usize::from(i.first_channel), i.format.channels().clamp(1, 2)));
+            return Some((usize::from(i.first_channel), i.width()));
         }
         let rest = name.get(..3).filter(|p| p.eq_ignore_ascii_case("in ")).and_then(|_| name.get(3..))?;
         let digits = |t: &str| -> Option<usize> { if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) { t.parse().ok() } else { None } };

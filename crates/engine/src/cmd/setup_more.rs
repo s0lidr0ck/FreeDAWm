@@ -262,8 +262,8 @@ fn first_channel(p: &Value) -> u16 {
 /// An input's format: mono or stereo.
 fn input_format(id: &str, f: Option<&str>) -> Result<ChannelFormat> {
     match f.and_then(ChannelFormat::from_id) {
-        Some(f @ (ChannelFormat::Mono | ChannelFormat::Stereo)) => Ok(f),
-        _ => Err(bad(id, "inputs are mono or stereo")),
+        Some(f) if f.mixable() => Ok(f),
+        _ => Err(bad(id, "inputs are mono, stereo or a multichannel format of up to 16 channels")),
     }
 }
 
@@ -738,8 +738,12 @@ mod tests {
         assert_eq!(r["inputs"][0]["first_channel"], 4);
         assert!(r.get("busses").is_some() && r.get("outputs").is_some());
         assert!(io(&mut e, json!({"action": "create_input", "name": "vox mic"})).is_err(), "names are unique");
-        let err = io(&mut e, json!({"action": "create_input", "name": "Room", "format": "5.1"})).unwrap_err().to_string();
-        assert!(err.contains("inputs are mono or stereo"), "{err}");
+        // A multichannel input: a 5.1 microphone on six device inputs.
+        io(&mut e, json!({"action": "create_input", "name": "Room", "format": "5.1", "first_channel": 8})).unwrap();
+        assert_eq!(e.session().input_channels("Room"), Some((8, 6)));
+        io(&mut e, json!({"action": "delete_input", "name": "Room"})).unwrap();
+        let err = io(&mut e, json!({"action": "create_input", "name": "Huge", "format": "nonsense"})).unwrap_err().to_string();
+        assert!(err.contains("inputs are mono, stereo or a multichannel"), "{err}");
         e.execute("track.input", &json!({"tracks": [vox], "input": "Vox Mic"})).unwrap();
 
         io(&mut e, json!({"action": "rename_input", "name": "Vox Mic", "new_name": "Lead"})).unwrap();
@@ -879,7 +883,7 @@ mod tests {
         io(&mut e, json!({"action": "create_output", "name": "Mon", "first_channel": 4})).unwrap();
         io(&mut e, json!({"action": "set_input_format", "name": "keys", "format": "stereo"})).unwrap();
         assert_eq!(e.session().inputs[0].format, ChannelFormat::Stereo);
-        assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys", "format": "5.1"})).is_err());
+        assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys", "format": "5.1"})).is_ok(), "multichannel inputs");
         assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys"})).is_err());
         assert!(io(&mut e, json!({"action": "set_input_format", "name": "Nope", "format": "mono"})).is_err());
         io(&mut e, json!({"action": "set_output_format", "name": "Mon", "format": "mono"})).unwrap();
@@ -888,6 +892,8 @@ mod tests {
         assert!(io(&mut e, json!({"action": "set_output_format", "name": "Mon"})).is_err());
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().outputs[1].format, ChannelFormat::Stereo);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().inputs[0].format, ChannelFormat::Stereo);
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().inputs[0].format, ChannelFormat::Mono);
     }

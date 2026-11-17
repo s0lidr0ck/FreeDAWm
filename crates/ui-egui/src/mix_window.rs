@@ -2307,7 +2307,7 @@ pub fn input_choices(s: &soundcraft_model::Session, device_inputs: Option<usize>
         let n = device_inputs.filter(|n| *n > 0).unwrap_or(8).min(64);
         return (1..=n).map(|k| (format!("In {k}"), true)).collect();
     }
-    s.inputs.iter().map(|i| (i.name.clone(), path_fits(usize::from(i.first_channel), i.format.channels().clamp(1, 2), device_inputs))).collect()
+    s.inputs.iter().map(|i| (i.name.clone(), path_fits(usize::from(i.first_channel), i.width(), device_inputs))).collect()
 }
 
 /// The hardware outputs an output menu offers: the main, then the session's other outputs, each

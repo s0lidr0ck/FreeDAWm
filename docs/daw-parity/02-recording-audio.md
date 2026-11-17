@@ -52,7 +52,7 @@ depth and write a timestamp into it**, and **smooth the punch points**.
 | Record-safe (a track that cannot be armed) | ● | ○ | ○ | ◐ | **Works**: Record Safe on the R key's right-click menu, or Cmd-click (macOS) / Ctrl+Shift-click: a padlock on the key, the track is disarmed and cannot be armed until it is turned off (`mix.record_safe`); saved with the session |
 | Arm or disarm during a take | ● | ◐ | ◐ | ● | **Partial**: allowed, but the set of recorded tracks is fixed when Record is pressed |
 | Named hardware inputs, mono and stereo | ● | ● | ● | ● | **Works** (Setup › I/O) |
-| Multichannel (surround) inputs | ● | ● | ● | ● | **Missing**: inputs are one or two channels wide |
+| Multichannel (surround) inputs | ● | ● | ● | ● | **Works**: an input in Setup › I/O can be any format up to 16 channels (LCR, quad, 5.1, 7.1, Ambisonics…); a track of that width hears and records every channel. A track wider than its input still repeats the input's last channel (bug 10) |
 | One input on several tracks | ● | ● | ● | ● | **Works** |
 | A bus or another track's output as the input | ● | ● | ● | ● | **Works** for a bus: the track hears and records it as the mix renders it, with no input device needed, placed by the bus's delay compensation; a track's output is recorded by routing it (or a send) to a bus, as in Pro Tools |
 | Record with effects (print) | ◐ | ● | ◐ | ● | **Works**: a per-track Record with inserts switch (input menu, `mix.record_inserts`) takes the strip after trim, polarity and inserts, before the fader, heard or not; placed by the round trip plus the inserts' latency. A bus can be printed the same way |
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |

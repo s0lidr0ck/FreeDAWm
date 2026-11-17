@@ -1166,8 +1166,14 @@ fn io_channel_menu(
 /// Mono or stereo, for an input or a hardware output: the new format when one is picked.
 fn io_format_combo(ui: &mut egui::Ui, kind: &str, name: &str, format: ChannelFormat) -> Option<ChannelFormat> {
     let mut picked = None;
+    // Inputs can be multichannel (a surround microphone or a group of interface inputs).
+    let offered: Vec<ChannelFormat> = if kind == "input" {
+        ChannelFormat::ALL.into_iter().filter(|f| f.mixable()).collect()
+    } else {
+        vec![ChannelFormat::Mono, ChannelFormat::Stereo]
+    };
     egui::ComboBox::from_id_salt((kind, "format", name.to_string())).width(72.0).selected_text(format.label()).show_ui(ui, |ui| {
-        for f in [ChannelFormat::Mono, ChannelFormat::Stereo] {
+        for f in offered {
             if ui.selectable_label(f == format, f.label()).clicked() && f != format {
                 picked = Some(f);
             }
@@ -1240,7 +1246,7 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
     egui::Grid::new("io_inputs").num_columns(5).striped(true).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         io_headings(ui, &["Name", "Format", "Device input", "", ""]);
         for i in &rows {
-            let width = i.format.channels().clamp(1, 2);
+            let width = i.width();
             if let Some(to) = io_name_field(ui, "input", &i.name) {
                 change = Some(json!({"action": "rename_input", "name": i.name, "new_name": to}));
             }
@@ -1277,7 +1283,7 @@ fn io_inputs(app: &mut SoundApp, ui: &mut egui::Ui, device: Option<usize>) {
                 n += 1;
             }
             // The channel after the last one used.
-            let next = s.inputs.iter().map(|i| usize::from(i.first_channel) + i.format.channels().clamp(1, 2)).max().unwrap_or(0);
+            let next = s.inputs.iter().map(|i| usize::from(i.first_channel) + i.width()).max().unwrap_or(0);
             let _ = app.run("setup.io", json!({"action": "create_input", "name": format!("Input {n}"), "format": "mono", "first_channel": next}));
         }
         if defaults.is_none() {
