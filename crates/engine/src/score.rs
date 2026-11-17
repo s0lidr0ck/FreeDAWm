@@ -23,6 +23,32 @@ pub struct ScoreSetup {
     pub composer: String,
     pub bars_per_system: u32,
     pub show_track_names: bool,
+    /// The key signature at the start: sharps (above 0) or flats (below 0), and minor or not.
+    pub fifths: i32,
+    pub minor: bool,
+}
+
+/// A key's signature: its tonic pitch class and scale (0 major, 1 minor) as sharps (above 0)
+/// or flats (below 0), the way the key is usually written (F# major has six sharps, Db major
+/// five flats).
+pub fn key_fifths(tonic: u8, scale: u8) -> i32 {
+    // The relative major's tonic.
+    let major = if scale == 1 { (tonic + 3) % 12 } else { tonic % 12 };
+    const FIFTHS: [i32; 12] = [0, -5, 2, -3, 4, -1, 6, 1, -4, 3, -2, 5];
+    FIFTHS[usize::from(major)]
+}
+
+/// The alteration the signature `fifths` gives the note letter `step`.
+fn key_alter(fifths: i32, step: char) -> i32 {
+    const SHARPS: [char; 7] = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+    let n = fifths.unsigned_abs().min(7) as usize;
+    if fifths > 0 && SHARPS[..n].contains(&step) {
+        1
+    } else if fifths < 0 && SHARPS[7 - n..].contains(&step) {
+        -1
+    } else {
+        0
+    }
 }
 
 const TITLE_KEY: &str = "score.title=";
@@ -30,6 +56,8 @@ const COMPOSER_KEY: &str = "score.composer=";
 
 impl ScoreSetup {
     pub fn from_session(s: &Session) -> Self {
+        // The key at the start: the Key ruler's, else the band's.
+        let (tonic, scale) = crate::vocal::key_pc_at(s, 0);
         let text = |key: &str| s.edit.flags.iter().find_map(|f| f.strip_prefix(key)).map(str::to_string);
         let bars = s.edit.value("score.bars_per_system", 4.0);
         Self {
@@ -37,6 +65,8 @@ impl ScoreSetup {
             composer: text(COMPOSER_KEY).unwrap_or_default(),
             bars_per_system: if bars.is_finite() { bars.clamp(1.0, 16.0) as u32 } else { 4 },
             show_track_names: !s.edit.flag("score.hide_names"),
+            fifths: key_fifths(tonic, scale),
+            minor: scale == 1,
         }
     }
 
@@ -207,9 +237,17 @@ fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure>
 
 /// (step, alter, octave) spelled with sharps.
 fn spell(pitch: u8) -> (char, i32, i32) {
-    const STEPS: [(char, i32); 12] =
+    spell_in(pitch, 0)
+}
+
+/// (step, alter, octave) spelled for the signature `fifths`: black keys as flats in a flat key,
+/// else as sharps.
+fn spell_in(pitch: u8, fifths: i32) -> (char, i32, i32) {
+    const SHARP: [(char, i32); 12] =
         [('C', 0), ('C', 1), ('D', 0), ('D', 1), ('E', 0), ('F', 0), ('F', 1), ('G', 0), ('G', 1), ('A', 0), ('A', 1), ('B', 0)];
-    let (step, alter) = STEPS[usize::from(pitch % 12)];
+    const FLAT: [(char, i32); 12] =
+        [('C', 0), ('D', -1), ('D', 0), ('E', -1), ('E', 0), ('F', 0), ('G', -1), ('G', 0), ('A', -1), ('A', 0), ('B', -1), ('B', 0)];
+    let (step, alter) = if fifths < 0 { FLAT } else { SHARP }[usize::from(pitch % 12)];
     (step, alter, i32::from(pitch / 12) - 1)
 }
 
@@ -254,7 +292,12 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
             if mi == 0 || meter != (m.numerator, m.denominator) {
                 x.push_str("      <attributes>");
                 if mi == 0 {
-                    x.push_str("<divisions>4</divisions><key><fifths>0</fifths></key>");
+                    let _ = write!(
+                        x,
+                        "<divisions>4</divisions><key><fifths>{}</fifths><mode>{}</mode></key>",
+                        setup.fifths,
+                        if setup.minor { "minor" } else { "major" }
+                    );
                 }
                 let _ = write!(x, "<time><beats>{}</beats><beat-type>{}</beat-type></time>", m.numerator, m.denominator);
                 if mi == 0 {
@@ -275,7 +318,7 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                     continue;
                 }
                 for (k, pitch) in it.pitches.iter().enumerate() {
-                    let (step, alter, octave) = spell(*pitch);
+                    let (step, alter, octave) = spell_in(*pitch, setup.fifths);
                     x.push_str("      <note>");
                     if k > 0 {
                         x.push_str("<chord/>");
@@ -295,8 +338,13 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                     if dot {
                         x.push_str("<dot/>");
                     }
-                    if alter != 0 {
-                        x.push_str("<accidental>sharp</accidental>");
+                    // Shown where the note differs from the signature (no courtesy accidentals).
+                    if alter != key_alter(setup.fifths, step) {
+                        x.push_str(match alter {
+                            1 => "<accidental>sharp</accidental>",
+                            -1 => "<accidental>flat</accidental>",
+                            _ => "<accidental>natural</accidental>",
+                        });
                     }
                     if it.tie_stop || it.tie_start {
                         x.push_str("<notations>");
@@ -521,6 +569,42 @@ mod tests {
         assert_eq!(split_units(5), vec![4, 1]);
         assert_eq!(split_units(7), vec![6, 1]);
         assert!(split_units(0).is_empty());
+    }
+
+    /// Parity section 7: the key on the Key ruler becomes the export's key signature, notes are
+    /// spelled for it and only those outside it carry an accidental.
+    #[test]
+    fn the_key_signature_is_exported_and_spells_the_notes() {
+        assert_eq!(key_fifths(7, 0), 1); // G major
+        assert_eq!(key_fifths(5, 0), -1); // F major
+        assert_eq!(key_fifths(0, 1), -3); // C minor
+        assert_eq!(key_fifths(9, 1), 0); // A minor
+        assert_eq!(key_fifths(6, 0), 6); // F# major
+        assert_eq!(spell_in(70, -1), ('B', -1, 4));
+        assert_eq!(key_alter(-1, 'B'), -1);
+        assert_eq!(key_alter(2, 'C'), 1);
+        let mut s = Session::default();
+        s.key_signatures.push((0, "F major".into()));
+        let setup = ScoreSetup::from_session(&s);
+        assert_eq!((setup.fifths, setup.minor), (-1, false));
+        let part = Part {
+            name: "Keys".into(),
+            bass: false,
+            measures: vec![Measure {
+                numerator: 4,
+                denominator: 4,
+                items: vec![
+                    Item { pitches: vec![70], units: 8, tie_start: false, tie_stop: false },
+                    Item { pitches: vec![71], units: 8, tie_start: false, tie_stop: false },
+                ],
+            }],
+        };
+        let x = musicxml(&[part], &setup);
+        assert!(x.contains("<key><fifths>-1</fifths><mode>major</mode></key>"), "{x}");
+        // Bb is in the key: no accidental; B natural is not: a natural sign.
+        assert!(x.contains("<step>B</step><alter>-1</alter>"));
+        assert_eq!(x.matches("<accidental>").count(), 1);
+        assert!(x.contains("<accidental>natural</accidental>"));
     }
 
     #[test]
