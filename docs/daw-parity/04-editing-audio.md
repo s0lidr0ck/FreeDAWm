@@ -86,7 +86,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
 | Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
-| Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
+| Modifier to suspend snap while dragging | ● | ● | ● | ● | **Works** for moves, trims and selecting: held through a Selector drag, the selection's end goes free of the grid, clip edges and markers |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
 | Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Works**: Clip › Real-Time › Nudge Contents Earlier / Later moves the audio inside the selected clips by the nudge value while they stay put (a loop turns, a reversed clip moves the way it sounds), stopping at the file's ends; a warped clip is left alone |
 | Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Works**: Edit › Selection › Nudge Edit Start / End Earlier / Later, by the nudge value; the edges never cross |
@@ -490,3 +490,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Strip Silence previews what it would remove |
 | 2026-11-17 | minor | Relink a missing audio file from the Clip List |
 | 2026-11-17 | minor | Round three: status, and designs for the rows too large for one step |
+| 2026-11-17 | minor | The snap-suspend modifier works while selecting |

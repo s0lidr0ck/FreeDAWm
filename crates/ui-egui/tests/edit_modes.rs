@@ -226,6 +226,40 @@ fn f6_with_f7_or_f7_with_f8_chooses_the_smart_tool() {
 }
 
 #[test]
+fn the_suspend_modifier_lets_a_selection_go_off_the_grid() {
+    let (mut app, ctx, t, _) = app("grid", "selector", &[]);
+    let s = app.engine.session();
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
+    let (from, to) = (point(&app, t, step), point(&app, t, 3 * step + step / 3));
+    // Cmd (Ctrl off macOS) held through the drag.
+    let held = |ctx: &egui::Context, app: &mut SoundApp, e: Event| {
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))),
+            events: vec![Event::ModifiersChanged(Modifiers::COMMAND), e],
+            ..Default::default()
+        };
+        ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        })
+        .textures_delta
+        .clear();
+    };
+    held(&ctx, &mut app, Event::PointerMoved(from));
+    held(&ctx, &mut app, button(from, true));
+    for k in 1..=5 {
+        held(&ctx, &mut app, Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
+    }
+    let end = app.engine.session().edit.selection.end;
+    held(&ctx, &mut app, button(to, false));
+    frame(&ctx, &mut app, vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_ne!(end % step, 0, "held: off the grid ({end})");
+    // Without it the end snaps to the grid.
+    drag_between(&ctx, &mut app, from, to);
+    assert_eq!(app.engine.session().edit.selection.end % step, 0);
+}
+
+#[test]
 fn mode_keys_add_snap_to_grid_and_cycle_past_a_locked_shuffle() {
     let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
     let state = |app: &SoundApp| (app.engine.session().edit.edit_mode, app.engine.session().edit.flag(SNAP_TO_GRID));

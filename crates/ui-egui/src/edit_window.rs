@@ -3950,7 +3950,9 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     }
     if let Some(Gesture::Select { track, anchor, tracks }) = &app.gesture {
         let (track, anchor, tracks) = (*track, *anchor, tracks.clone());
-        let r = Range::new(anchor, snap_on(&s, at, track));
+        // The suspend modifier lets the selection's end go free of the grid, clips and markers.
+        let end = if ctx.input(|i| i.modifiers.command) { at } else { snap_on(&s, at, track) };
+        let r = Range::new(anchor, end);
         if tracks != s.edit.selected_tracks || r != s.edit.selection {
             let ids: Vec<u64> = tracks.iter().map(|x| x.0).collect();
             let _ = app.run("edit.select", json!({"tracks": ids, "start": r.start, "end": r.end}));
