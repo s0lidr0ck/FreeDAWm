@@ -188,6 +188,23 @@ fn snap_to_grid_snaps_the_edit_cursor_while_slip_moves_stay_free() {
 }
 
 #[test]
+fn f6_with_f7_or_f7_with_f8_chooses_the_smart_tool() {
+    let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
+    let tool = |app: &SoundApp| app.engine.session().edit.tool;
+    let down = |k, pressed| key_event(k, pressed, Modifiers::NONE);
+    for (held, pressed) in [(Key::F7, Key::F6), (Key::F6, Key::F7), (Key::F8, Key::F7), (Key::F7, Key::F8)] {
+        frame(&ctx, &mut app, key(Key::F5));
+        frame(&ctx, &mut app, vec![down(held, true)]);
+        frame(&ctx, &mut app, vec![down(pressed, true)]);
+        frame(&ctx, &mut app, vec![down(pressed, false), down(held, false)]);
+        assert_eq!(format!("{:?}", tool(&app)), "Smart", "{held:?} then {pressed:?}");
+    }
+    // Alone, each key still chooses its own tool.
+    frame(&ctx, &mut app, key(Key::F7));
+    assert_eq!(format!("{:?}", tool(&app)), "Selector");
+}
+
+#[test]
 fn mode_keys_add_snap_to_grid_and_cycle_past_a_locked_shuffle() {
     let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
     let state = |app: &SoundApp| (app.engine.session().edit.edit_mode, app.engine.session().edit.flag(SNAP_TO_GRID));

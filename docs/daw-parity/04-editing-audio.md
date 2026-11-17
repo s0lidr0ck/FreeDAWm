@@ -70,7 +70,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
 | Scrub tool with audio | ● | ◐ | ● | ● | **Works**: plays what it passes, both ways, at the drag's speed, through the track's built-in inserts and fader; on a ruler it scrubs every audible track (section 1) |
-| Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Missing**: the tooltip promises it |
+| Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Works**: F6+F7 or F7+F8 held together, in either order, choose the Smart Tool |
 
 ## B. Edit modes, grid and nudge
 
@@ -391,3 +391,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Clip transpose gets a high-quality background render |
 | 2026-11-17 | minor | Round three reconciliation: transient sensitivity and edge fades in exports were already built; ARA 2 and real-time pitch correction not planned here |
 | 2026-11-17 | minor | Typed grid values such as "1/4 dotted" and "1/8 triplet" parse |
+| 2026-11-17 | minor | F6+F7 and F7+F8 choose the Smart Tool |
