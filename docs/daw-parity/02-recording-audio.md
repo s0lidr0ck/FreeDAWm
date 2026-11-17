@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (discard take) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three: reconciled) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -112,13 +112,13 @@ what a user can do, apart from punch out on the fly.
 | Monitor through the track's inserts | ● | ● | ● | ● | **Works** |
 | Low-latency mode that bypasses slow plug-ins | ● | ● | ● | ● | **Works**: only inserts with latency, only on live paths, crossfaded |
 | Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything |
-| Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Missing** |
+| Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Not planned here**: the only general route is ASIO's input-monitor call, which needs Steinberg's licensed SDK (a personal build only) and an interface that supports it to develop and test at all; Core Audio and ALSA have no common call for it |
 | Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Works**: silent within the take, heard in the pre- and post-roll |
 | Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Works**: Window › Control Room's cue mixes, fed by pre-fader sends to a hardware output, with a level and mute each (section 3) |
 | Click on its own output | ● | ● | ● | ● | **Missing**: the click is summed into the main mix |
 | Talkback | ◐ | ◐ | ○ | ● | **Works**: a talkback input into the cues, held (Talk button or F11) or latched, dimming the monitor (Control Room) |
-| Input meters before the fader | ● | ● | ● | ● | **Flag only**: meters are always post-fader, so the clip light does not show a clipped input |
-| Tuner | ● | ● | ● | ● | **Missing** |
+| Input meters before the fader | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering makes every strip's meter, and so its clip light, read the level after the inserts and before the fader and mute (0.10.0; `pre_fader_metering_reads_the_level_before_the_fader`) |
+| Tuner | ● | ● | ● | ● | **Works**: the Chromatic Tuner plug-in (Insert › Utilities), which reads the note and cents and can mute the output while tuning (0.10.0) |
 
 ## F. Latency and placement
 
@@ -129,7 +129,7 @@ what a user can do, apart from punch out on the fly.
 | Measure the round trip with a loopback | ○ | ○ | ◐ | ○ | **Works**, stored per interface, buffer and rate |
 | Placement independent of plug-in delay and of low-latency mode | ● | ● | ● | ● | **Works**, tested |
 | Input and output on different devices | ● | ● | ● | ◐ | **Works**: drift-corrected, by linear interpolation without a filter |
-| Device rate differs from the session rate | n/a | ● | ● | n/a | **Partial**: allowed with a warning; the same unfiltered conversion, which aliases |
+| Device rate differs from the session rate | n/a | ● | ● | n/a | **Partial**: playback goes through section 1's band-limited resampler; the input feed (what is monitored and recorded) still converts by linear interpolation, which aliases |
 
 ## G. Capture and files
 
@@ -220,6 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |
 | 2026-11-15 | major | First version: recording audio against Pro Tools, Studio Pro, Logic Pro and Cubase |
