@@ -86,7 +86,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Options › More › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
 | Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Options › More › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
-| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Partial**: Shuttle Back plays backwards through each track's strip as the Scrubber hears it (clips, built-in inserts, fader, mute). Left: sends, busses, the master and third-party inserts, which would need the audio thread's mixer to run backwards; not reached in round three |
+| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Partial**: Shuttle Back plays backwards through each track's strip as the Scrubber hears it (clips, built-in inserts, fader, mute). Left: sends, busses, the master and third-party inserts; designed below (Reverse playback through the mixer: the player renders reversed blocks), not built |
 
 Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
 Varispeed is the only whole-project speed control among the four.
@@ -100,9 +100,9 @@ Varispeed is the only whole-project speed control among the four.
 | Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected. Left: several output devices at once, not planned here: it needs two output devices to develop and to tune the drift correction between them |
 | Recover when the device disappears | ● | ● | ● | ● | **Works**: when the output device goes away it is looked for every 2 s (on a worker thread) and the app reconnects by itself when it is back (`ui-egui/src/device_return.rs`); ASIO is never probed while a driver may be loaded, so it keeps the manual Reconnect button. Not tried with a real unplug |
 | Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
-| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel; aux, folder and master strips are serial; worker threads have no realtime priority. Left: busses in parallel by dependency level (each waits for its sources: a change to the render order in `mix`); realtime priority for the workers needs a new dependency (`audio_thread_priority` or `thread-priority`) or `unsafe` outside the FFI crates, not added without the owner |
+| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel by level on the worker pool; aux, folder and master strips are serial; worker threads have no realtime priority. Left: busses in parallel by level, designed below (Busses on the worker pool), not built; realtime priority for the workers needs a new dependency (`audio_thread_priority` or `thread-priority`) or `unsafe` outside the FFI crates: not planned here until the owner approves one |
 | Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
-| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer. Left: rendering the strips that only play back ahead of time at a larger buffer and merging them with the live strips each callback; a rework of the player's render loop, not reached |
+| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer. Left: rendering the playback-only strips ahead at a larger buffer and adding them to the live strips each callback; designed below (Large playback buffer with a small live path; the same item as section 2's small-buffer row), not built: the largest engine item, 15–22 h |
 | Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
 | Skip plug-ins on silent tracks | ● | ● | ● | ● | **Works**: Options › More › Suspend Plug-ins on Silence (off by default, so sessions sound as they did): an insert whose input and output have both been below −100 dBFS for a second is not run while its input stays silent, and the first sound runs it again in the same block; keyed modules and modules that send MIDI always run, and the strip's delay compensation is unchanged. A suspended module's state (a compressor's release) holds where it was |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
@@ -119,7 +119,7 @@ Varispeed is the only whole-project speed control among the four.
 | WAV, BWF, RF64, AIFF | ● | ● | ● | ● | **Works** |
 | FLAC, MP3, AAC/M4A, Ogg, Opus, CAF | ◐ | ● | ● | ● | **Works** (more than Pro Tools reads) |
 | Files at another sample rate | ● | ● | ● | ● | **Works**: converted with a high-quality sinc at import or open |
-| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only). Only Studio Pro does this; it would mean sources kept at their own rate and every clip read, waveform and source edit converting positions. Not reached |
+| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only). Only Studio Pro does this; it would mean sources kept at their own rate and every clip read, waveform and source edit converting positions; the converted copy sounds the same. Not reached; no design yet |
 | Compressed and long files without filling memory | ● | ● | ● | ● | **Works** from the second open: a file that is not WAV at the session rate is decoded into memory once and kept as a float WAV in the project's `Decoded` folder, which later opens stream; a session never saved still decodes every time |
 | Waveform cache | ● | ● | ● | ● | **Works** |
 
@@ -133,8 +133,8 @@ Varispeed is the only whole-project speed control among the four.
 | Crossfades | ● | ● | ● | ● | **Works**: Edit › Fades › Create… gives each side its own shape and bend (`b6812b6`, section 4, F) |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
 | Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
-| Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in. Left: a chain of any module per clip (instances per clip made in `BuiltinPrep`, latency per clip); not reached |
-| Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file. The same work as section 4's process history (G), designed there |
+| Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in. Left: a chain of any module per clip (instances per clip made in `BuiltinPrep` as the EQ and compressor are now, latency per clip, a drawer per clip); not reached |
+| Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing** here: Process writes a new file. Not built in this section: it is section 4's process history (G), designed there, and is tracked on that row |
 | Mute a clip | ● | ● | ● | ● | **Works** |
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
 | Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, heard at once in real time, then (in the app) by a background Pitch Shift render (section 4, E) |
@@ -259,6 +259,54 @@ and every stored position lands within one sample of its time. The risk is compl
 position field missed plays in the wrong place, so the step that scales them must be one
 function over `Session` with a test that fails when a new `Samples` field is added without it.
 
+**Busses on the worker pool: the design (round three, not built).** Tracks already render in
+parallel by the planner's levels (`sidechain::resolve` gives every strip a level: a strip waits
+only for strips of lower levels: its key sources and the busses it reads). Aux, folder and master
+strips are run afterwards one by one because each reads a bus that the earlier strips summed into
+(`MixEngine::busses`, written by every source). (1) *Order.* The planner already knows which
+strips feed which bus; an aux's level becomes one more than the highest level of the strips that
+feed its input bus, so all strips of one level read only busses that are complete. (2) *Summing.*
+The worker pool (the rayon pool the tracks already use: no new dependency)
+renders a level's strips into their own buffers; the summing into busses and the main stays on
+the audio thread between levels, in strip order, so the sum (and every bounce) is bit-identical
+to the serial render. (3) *Tests.* A session of three nested aux levels renders sample-identical
+with one worker and with four; a counter shows aux strips of one level ran on more than one
+worker. (4) *Not in it.* Realtime priority for the workers: it needs the `audio_thread_priority`
+or `thread-priority` crate (or `unsafe` outside the FFI crates), which the owner has not approved.
+
+**Reverse playback through the mixer: the design (round three, not built).** Shuttle Back plays
+each track's strip backwards on the UI side (the Scrubber's voice). To take sends, busses, the
+master and hosted inserts along, the audio thread's player renders the block backwards instead:
+(1) the clip read already takes a negative speed for varispeed; a block at speed −1 reads clips
+from `pos` down, reversed per block; (2) automation is read at the reversed positions (the
+lanes are read per position already); (3) the strips, busses and master process the reversed
+audio forwards in time (effects ring "into" the past, as tape reversed through a desk does,
+which is what Pro Tools and Logic do); (4) the transport moves backwards, and Stop, loop and
+locate treat the block's end as its start. The Scrubber's own reverse voice is removed then.
+Tests: a reversed render of a dry impulse track is the forward render reversed sample for
+sample; a reverb send's tail comes before the impulse. About 8–12 h.
+
+**Large playback buffer with a small live path: the design (round three, not built; shared with
+section 2's "small buffer for live tracks, large for playback").** (1) *Split.* Each block, the
+planner marks the strips that hear live input (record-armed, input monitoring, live MIDI, a
+track whose key comes from one of those) and everything they feed, down to the master: the
+*live* set; the rest is *playback*. (2) *Ahead.* A worker renders the playback set ahead of the
+transport, `N` device blocks at a time (a "playback buffer" setting, 1024–8192 frames), into a
+ring per bus input and per main contribution, timestamped; it takes session updates as the audio
+thread does now and drops what it rendered ahead when a locate, an edit to a playback strip or a
+loop wrap invalidates it (the ring is refilled from the new position: an edit is heard after one
+large buffer, as in Pro Tools' and Cubase's large-buffer modes). (3) *Each callback.* The audio
+thread renders only the live set at the device's small block and adds the playback set's samples
+for the same timeline position from the rings, at the busses and the main. Delay compensation is
+unchanged: both sets use the same per-strip latencies. (4) *Plug-ins.* A strip moving between
+sets (armed, disarmed) is rendered by one side only from a block boundary, with its instances
+handed over (they are never run by two threads). (5) *Tests.* Playback with the split on is
+sample-identical to the serial render for a session without live input; with one armed track,
+its input reaches the output within the small block while the rest of the session is rendered
+ahead. (6) *Risk.* It is the largest engine item (15–22 h): instance hand-over between threads
+and invalidation on edits are where it can go wrong, so it should be built behind an option,
+off by default, and compared sample for sample with the present render in the tests.
+
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
 keeping the pitch; shuttle forwards through the mixer and backwards through the preview voice); per-clip transpose and non-destructive
@@ -283,6 +331,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: designs for busses on the worker pool, reverse playback through the mixer and the large playback buffer; the processing stack row points at section 4 |
 | 2026-11-17 | minor | Round three: a new track's strip and a new bus's buffers are made off the audio thread |
 | 2026-11-17 | minor | Round three: a short import's tempo is detected and recorded |
 | 2026-11-17 | minor | Round three: skip ranges; the open rows say what is left and why; a design for changing the session rate |

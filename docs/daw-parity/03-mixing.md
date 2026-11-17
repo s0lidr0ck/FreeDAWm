@@ -85,8 +85,8 @@ K-system scales, and the master a loudness meter.
 | Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
-| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** (not reached in round three): a module slot holding one mono instance per channel of the track, linked by default (one parameter set) or unlinked, each fed and writing its own channel; about 6–10 h |
-| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** (not reached in round three): an insert module that sends its input to a hardware output and returns a hardware input, delay-compensated by a measured round trip; the ping and its detection can be built and tested against a loopback in code, the real round trip needs an interface with a cable from output to input; about 6–10 h |
+| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** (not reached in round three): designed below (Design: multi-mono processing): one mono instance per channel in a slot, linked by default, each channel its own lanes when unlinked; about 6–10 h |
+| Hardware inserts with latency measurement | ● | ● | ● | ● | **Missing** (not reached in round three): designed below (Design: hardware inserts with a latency ping). The ping exists: `Player::measure_latency` takes any output and input channel and `measure::detect` finds the onset, tested in code; the insert module that sends to a hardware output and returns from an input, compensated by the measured round trip, is not built; hearing it needs an interface with a cable or outboard unit from output to input; about 6–10 h |
 
 ## D. Sends and routing
 
@@ -158,7 +158,7 @@ K-system scales, and the master a loudness meter.
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Options › More › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
-| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** (not reached in round three): lanes stored on the clip and played on top of (or instead of) the track's while it plays; needs a design for how the two combine and how copies share them; about 10–16 h |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** (not reached in round three): designed below (Design: automation inside a clip): lanes stored on the clip, dB lanes adding to the track's and the others replacing it over the clip, played from a flattened lane through `Track::played_lane` so the mixer needs no change; about 10–16 h |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
 | Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
@@ -182,7 +182,7 @@ K-system scales, and the master a loudness meter.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
-| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** (not reached in round three): Bounce with "in real time" plays the range through the live player and writes the main output (or a bus) as it is heard, so outboard gear on hardware inserts or sends is printed; the internal-recording taps already record busses as the mix renders them; about 4–6 h, needs an audio device to try for real |
+| Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** (not reached in round three): designed below (Design: real-time bounce): plays the range through the live player and records the main mix or a bus from a new record tap, then runs the file through the offline bounce's writer; testable against the silent clock, outboard gear needs hardware; about 4–6 h |
 | Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: the main mix and busses, in the dialog; hardware outputs are not offered. Left: a bounce source that taps a hardware output's buffer (`RangeRender` takes a bus only) with that output's latency, about 3–4 h |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
@@ -273,7 +273,7 @@ one a mix engineer would not forgive.
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Done** (2026-11-17); tags in FLAC, AIFF and Opus remain |
-| Real-time bounce | 4–6 | |
+| Real-time bounce | 4–6 | Designed (below), not built |
 | Group attributes, suspend all, VCA assignment in the mixer, nested VCAs | 6–10 | **Done** |
 | Atmos: objects, a renderer of our own, binaural monitoring, ADM BWF | 50–80 | Is G-12; listed here because all four now have it, sized there |
 
@@ -281,6 +281,97 @@ one a mix engineer would not forgive.
 AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**done**), 5–8; hardware
 inserts with a latency ping, 6–10, hardware needed; multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
+
+### Design: automation inside a clip (round three, not built)
+
+Logic's region automation and Studio Pro's part envelopes, for audio and MIDI clips.
+
+- **Stored on the clip.** `Clip::automation: Vec<AutomationLane>`, points in samples from the
+  clip's start (moved, trimmed, copied and pasted with the clip; a copy is independent, as loops
+  are by owner decision; a shared clip's copies share it as they share notes). Saved only when
+  not empty, so existing sessions do not change.
+- **How the two combine.** While a clip with a lane for a parameter plays (its range on the
+  timeline), the clip's lane is heard: a dB lane (volume, trim, send level) adds to the track's
+  lane, any other lane replaces it there. Outside the clip the track's lane plays as now; at the
+  clip's edges the value steps (an automatic 64-sample ramp, as mute ramps, avoids a click).
+- **Played from a flattened lane.** The mixer is not taught about clips: after each edit that
+  touches a clip's automation or a lane it overlays, the engine computes the track's *played*
+  lanes (`Track::played`, not saved): the track lane with each clip's points laid over its range
+  as above. `Track::played_lane` (already the mixer's only way to read a lane, with the Preview
+  suspension) returns the flattened lane when there is one. A bounce, a freeze and playback then
+  hear the same thing with no new code on the audio thread.
+- **Editing.** Commands `clip.automation_point`, `clip.automation_clear` and two conversions,
+  as Logic has: *Move Track Automation into Clip* (the track lane's points under the clip move
+  into the clip, as offsets for dB lanes) and *Move Clip Automation to Track*. The clip shows its
+  lanes as a line over its waveform (the clip-gain line's drawing); points dragged there.
+- **Tests.** A clip lane replaces the track's pan over its range only; a dB lane adds; moving
+  the clip moves its automation; the flattened lane is identical in playback and bounce.
+- **Size.** 10–16 h, most of it the clip-lane drawing and the editing commands.
+
+### Design: real-time bounce (round three, not built)
+
+- **The switch.** "In real time" in the Bounce dialog (`bounce` `realtime: true`). Only the main
+  mix or a bus as the source; stems and Add to Session as for an offline bounce.
+- **Playing.** The UI thread locates to the range's start (pre-roll none) and plays to its end
+  plus the tail through the live player, so hardware inserts and sends to outboard gear are
+  heard and printed as they sound. Editing is locked for the pass (the transport bar shows
+  "Bouncing"); Stop cancels.
+- **Capturing.** The record taps (`playback::record`) gain a tap on the main mix (or the bus)
+  after the master's chain, written by the audio thread into the capture ring each callback
+  exactly as the internal-recording taps write busses; the take writer on the disk thread writes
+  a float WAV. Positions come from the callback's frame counter, so the file starts at the range's
+  first sample whatever the device latency (the mix's own delay compensation is subtracted, as for
+  an offline bounce).
+- **After.** The float file is fed through the existing bounce writer (rate conversion, dither,
+  formats, tags, normalize), so every option of the offline bounce applies unchanged.
+- **Tests.** With the silent clock (no device) a real-time bounce of the demo is sample-identical
+  to the offline bounce. What needs hardware: outboard gear on a hardware insert or send.
+- **Size.** 4–6 h.
+
+### Design: multi-mono processing (round three, not built)
+
+- **A slot of instances.** An insert whose plug-in is mono-only on a wider track (or any insert
+  with "Multi-mono" chosen) holds one mono instance per channel: `PluginSlot::plugin` becomes the
+  first instance and `PluginSlot::more: Vec<Box<dyn Plugin>>` the rest, made off the audio thread
+  by `BuiltinPrep` and the hosted-instance preparation like any instance.
+- **Process.** Each instance is fed its channel and writes it (the strip's buffers are already
+  per channel, so this is a slice per instance, no copy); latency is the instances' maximum, the
+  others delayed to it in the slot's bypass line.
+- **Linked or not.** `Insert::multi_mono: Option<MultiMono { linked: bool, params: Vec<..> }>`:
+  linked (the default), every instance takes the insert's parameters and its automation; unlinked,
+  each channel has its own parameter set (`Insert::channel_params`) and its own lanes
+  (`plugin:m<id>.c<n>:<param>`). The drawer and the plug-in window get a channel picker and a Link
+  button, as Pro Tools has.
+- **State.** A hosted plug-in's state is saved per instance.
+- **Tests.** A linked multi-mono EQ on a stereo track sounds as the stereo instance on identical
+  material; unlinked with different gains, each channel takes its own.
+- **Size.** 6–10 h.
+
+### Design: hardware inserts with a latency ping (round three, not built)
+
+- **The module.** A built-in insert "Hardware Insert" (`hw_insert`) with an output pair and an
+  input pair (Setup › I/O names). The mixer special-cases it in the chain: it writes its input
+  into that hardware output's buffer (`MixEngine::hw`, already summed for sends to outputs) and
+  reads its return from the device input the mix has (`MixEngine::input`, as tracks hear inputs),
+  so the return is the previous callbacks' send by exactly the device round trip.
+- **Latency.** The module reports a fixed latency: the measured round trip (a stored parameter,
+  samples at the session rate), so delay compensation lines the return up with everything else.
+  Without a measurement it uses the round-trip estimate the record offset uses
+  (`measure::estimate`).
+- **The ping.** "Ping" in the module's drawer runs the existing loopback measurement
+  (`Player::measure_latency`, which writes a click into one device output and records one input in
+  the same callbacks; `measure::detect` finds the onset) on the insert's own output and input
+  and stores the result. The onset detection is already tested in code on synthetic loopback
+  recordings (`playback::measure` tests); the new part is choosing the channels from the insert,
+  with a test that feeds the insert's output back to its input in code and checks the stored
+  round trip.
+- **Offline.** A bounce cannot play through outboard gear: offline, the insert passes its input
+  through (bypassed, with its latency kept) and the Bounce dialog warns; the real-time bounce
+  (above) prints it.
+- **What needs hardware.** Everything after the code-level loopback: an interface with a cable
+  (or outboard unit) from the insert's output to its input, to hear the return and check the
+  ping lines it up.
+- **Size.** 6–10 h.
 
 ### Design: sample-accurate plug-in automation (built 2026-11-17, first step)
 
@@ -406,6 +497,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | designs for automation inside a clip, real-time bounce, multi-mono processing and hardware inserts |
 | 2026-11-17 | minor | several outputs from one track (additional outputs) |
 | 2026-11-17 | minor | automation Preview and Punch Preview |
 | 2026-11-17 | minor | surround pan lanes; pencil shapes; basic folders; a stop lets the mix ring out with its meters; the wet/dry Mix of an insert is automatable (section 5); what is left stated on every open row |
