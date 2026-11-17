@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (rows reconciled with the code) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (an ordinary track can be keyed from an aux) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Channels and the strip | Every channel type, formats to 9.1.6, +12 dB faders | Small |
 | B. Panning | Four pan laws, dual pan, width and balance for stereo | Small: no binaural or linked pans |
-| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on VST3 or AU |
+| C. Inserts and sidechains | 32 modules, drag to reorder and copy, chain presets, CLAP key inputs | Medium: no key on the stock compressor, VST3 or AU |
 | D. Sends and routing | 10 sends to busses, tracks or outputs, busses of any format, routing folders | Small: one output per track |
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, relative groups with a choice of attributes, nested VCAs | Small: no momentary solo |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated; faders follow | **Large**: plug-in values block-rate |
@@ -42,8 +42,8 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots | Small: no mixer search or spill |
 
 Two things every one of the four does and FreeDAWm does not yet: **plug-in automation that is
-sample-accurate** (the fader section's now is, and the faders follow it; plug-in values are delay-compensated but block-rate); and **a key input on
-VST3 and AU plug-ins** (CLAP plug-ins and the stock compressor and gates take one). Meters now have RMS, VU and
+sample-accurate** (the fader section's now is, and the faders follow it; plug-in values are delay-compensated but block-rate); and **a key input on the stock
+compressor and on VST3 and AU plug-ins** (CLAP plug-ins take one). Meters now have RMS, VU and
 K-system scales, and the master a loudness meter.
 
 ## A. Channels and the strip
@@ -69,7 +69,7 @@ K-system scales, and the master a loudness meter.
 | Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; automatable (width and balance lanes, on the pan's 64-sample grid; moving the controls counts as a touch for writing, not yet tried in a writing pass) |
 | Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Missing** |
 | Surround panner | ● | ● | ● | ● | **Partial**: position, divergence and height; centre % and LFE have no control; mono and stereo tracks only |
-| Binaural pan | ● | ● | ● | ● | **Not planned here**: needs a measured head-related impulse response set, content the owner sources |
+| Binaural pan | ● | ● | ● | ● | **Missing** |
 
 ## C. Inserts and sidechains
 
@@ -82,7 +82,7 @@ K-system scales, and the master a loudness meter.
 | Post-fader inserts | ◐ | ◐ | ○ | ● | **Works**: Post-Fader in an insert's menu (`mix.module_post_fader`): the module runs after the fader and mute, on any track and on the master (after the master fader, where Pro Tools runs the master's inserts); it is not in the pre-fader copy (pre-fader sends, keys, meters), delay compensation counts it and holds the pre-fader sends back for it, a freeze leaves it live and a commit moves it, with its lanes, onto the new track |
 | Chain presets | ● | ● | ● | ● | **Works** |
 | Compare (A/B) in every plug-in window | ● | ● | ● | ● | **Partial**: in the built-in editors, not for hosted plug-ins |
-| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
+| Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Partial**: Lull, Rez and Shale take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track), so Comp is keyed as soon as its detector takes one (the effects work); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port are keyed (from the insert header, delay-compensated); VST3 aux buses and Audio Units are not |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
 | Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Missing** |
@@ -140,12 +140,12 @@ K-system scales, and the master a loudness meter.
 | Faders, knobs and plug-in controls move with automation | ● | ● | ● | ● | **Partial**: the Mix window's faders and pan knobs follow their lanes; plug-in controls and send knobs do not |
 | You hear the control you are moving | ● | ● | ● | ● | **Partial**: in Touch and Latch you hear what was written up to 20 ms earlier, now at the position you heard it |
 | Sample-accurate, or at least block-independent | ● | ● | ● | ● | **Partial**: volume, trim, VCA and mute are read sample by sample where a lane bends or breaks inside a block, sends and pan on a 64-sample timeline grid, so playback and bounce match; plug-in values still change once per block |
-| Automation delay-compensated | ● | ● | ● | ● | **Works**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
+| Automation delay-compensated | ● | ● | ● | ● | **Partial**: fader, mute, pan and send automation play where their audio is (behind by the strip's plug-in delay), and a module's parameters where its input is (behind by the modules before it), in playback and bounce alike; moves are written where they were heard (the mix delay and output latency behind the transport) |
 | Glide back to the old curve on release (return time) | ● | ● | ● | ● | **Partial**: Touch glides back over 250 ms; the time is fixed |
 | Write to start, end or the whole selection on stop | ● | ○ | ○ | ● | **Missing** |
 | Preview a value before committing it | ● | ○ | ○ | ● | **Missing** |
 | Enable or suspend by parameter type | ● | ◐ | ◐ | ● | **Works**: the Automation window's switches (`automation.enable`) stop a type being written; its lanes still play |
-| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Works**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
+| Write from a MIDI controller or control surface | ● | ● | ● | ● | **Partial**: a Mackie Control or HUI surface's touch-sensitive faders write as the on-screen fader held does (Touch, Latch), its V-Pots write pan (section 6, K); MIDI learn maps a controller to a fader, pan, send level or plug-in knob, written as the on-screen control moved |
 | Automation follows tempo changes | ● | ● | ● | ● | **Missing**: points are in samples |
 
 ### Editing it
@@ -173,7 +173,7 @@ K-system scales, and the master a loudness meter.
 | RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Works**: Preferences › Metering › Scale: peak, RMS (300 ms), peak with RMS inside, VU (0 VU = −18 dBFS), K-20, K-14, K-12, numbered from their reference; release and peak hold beside it; saved with this computer's settings. No PPM ballistics |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
 | Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, maximum momentary and true peak, with Reset; no loudness range |
-| Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Works**: the Spectrum and Phase Meter plug-ins (Utilities in the insert menu), as well as inside the Sprawl and CleanQ modules and Scout |
+| Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Partial**: inside the Sprawl and CleanQ modules and Scout; no meter module of its own |
 | Output meter free of the click | ● | ● | ● | ● | **Works** |
 | Meters while stopped | ● | ● | ● | ● | **Partial**: only for armed or monitored tracks |
 
@@ -184,13 +184,13 @@ K-system scales, and the master a loudness meter.
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
 | Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Missing** |
 | Choose the source: any bus or output | ● | ● | ● | ● | **Works** for the main mix and busses, in the dialog; hardware outputs are not offered |
-| Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
+| Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**, except the selection |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
 | WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
 | Convert sample rate on export | ● | ● | ● | ● | **Missing** for WAV, AIFF and FLAC |
 | Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Partial**: TPDF, always on, no control in the dialog |
 | Mono, and one file per channel | ● | ● | ● | ● | **Missing** |
-| Normalize on export | ○ | ◐ | ● | ◐ | **Works**: to sample peak (−0.1 dBFS) or to a loudness target in LUFS held under a true-peak ceiling, by rendering twice |
+| Normalize on export | ○ | ◐ | ● | ◐ | **Partial**: to sample peak, by rendering twice |
 | Tags and broadcast metadata in the file | ● | ● | ● | ● | **Missing** |
 | Add the bounce back to the session | ● | ● | ● | ● | **Missing** |
 | Several formats in one pass | ● | ◐ | ● | ● | **Missing** |
@@ -205,9 +205,9 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Surround tracks, busses and bounce | ● | ● | ● | ● | **Works** up to 16 channels, correct channel order |
 | Fold-down to stereo | ● | ● | ● | ● | **Works**: fixed ITU gains |
-| Dolby Atmos objects with a built-in renderer | ● | ● | ● | ● | **Not planned here** (the owner's call); the object switch stays a label |
-| Binaural monitoring | ● | ● | ● | ● | **Not planned here**: needs a measured head-related impulse response set, content the owner sources |
-| ADM BWF export | ● | ● | ● | ● | **Not planned here**: ADM BWF is the Atmos master's container and carries objects; with Atmos objects and a renderer not planned it has nothing to carry beyond a bed, which a WAV with a speaker mask already does |
+| Dolby Atmos objects with a built-in renderer | ● | ● | ● | ● | **Flag only**: the object switch is a label |
+| Binaural monitoring | ● | ● | ● | ● | **Missing** |
+| ADM BWF export | ● | ● | ● | ● | **Missing** |
 | Surround pan automation | ● | ● | ● | ● | **Missing** |
 | Ambisonics | ● | ○ | ○ | ● | **Partial**: first order only |
 | Correct loudness for 7.1 and wider | ● | ● | ● | ● | **Works**: every layout weighted by its speakers |
@@ -383,7 +383,6 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | rows reconciled with the code: the stock compressor's key, delay-compensated automation, surface writing, the meter plug-ins, the bounce range and normalising were already built; Atmos objects, binaural and ADM marked not planned here |
 | 2026-11-16 | minor | an ordinary track can be keyed from an aux or bus return (owner decision 5), built from the design |
 | 2026-11-16 | minor | stems ignore an AFL or PFL solo, as a bounce does (owner's decision) |
 | 2026-11-16 | minor | width and balance lanes; a design for keying an ordinary track from an aux |

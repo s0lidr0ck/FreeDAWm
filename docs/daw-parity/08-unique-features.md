@@ -42,8 +42,9 @@ about 28, and none to about 20.
   summing folders, and remote recording over the internet.
 - **Where it has nothing:** a clip launcher (Pro Tools Sketch, Studio Pro Launcher, Logic Live
   Loops: three of the four now have one), a mastering or release page, a live-show page,
-  Dolby Atmos objects and renderer, AAF/OMF exchange, a control room with cue mixes, modulators,
-  articulation maps, a loop library, control surfaces, ARA.
+  Dolby Atmos objects and renderer, AAF/OMF exchange, modulators, articulation maps, a loop
+  library, ARA. (A control room with cue mixes, mixer snapshots and Mackie/HUI surfaces have
+  since been built in sections 3 and 6.)
 - **What it has that none of the four does:** an interface for scripts and AI agents that reaches
   every command; a mix analyser that asks an AI model for advice and draws it on the EQ; local
   models for karaoke, drum splitting, text-to-MIDI and whole-song generation; a build-your-own
@@ -57,40 +58,40 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
-| Hardware DSP mixing with near-zero monitoring latency (HDX, Carbon) | **Missing** | A software low-latency monitoring path, for audio tracks |
-| AAF and OMF exchange with video editors | **Missing** | DAWproject both ways instead |
+| Hardware DSP mixing with near-zero monitoring latency (HDX, Carbon) | **Not planned here** | Needs one maker's DSP hardware. A software low-latency monitoring path, for audio tracks |
+| AAF and OMF exchange with video editors | **Not planned here** | DAWproject both ways instead. Large formats with little public documentation, and no AAF or OMF files from Pro Tools or a video editor here to build and test against (the owner's call whether to source some) |
 | Import chosen tracks and settings from another session | **Works** | Import Session Data, with audio and sampler samples |
 | Field-recorder workflow: match and expand location recordings by metadata | **Missing** | Broadcast WAV description is read and written; no iXML, no matching |
 | Clip effects: EQ and dynamics per clip, live | **Works** | Per-clip EQ, compressor and gain, with copy, paste and render |
 | Beat Detective across many tracks, phase kept | **Partial** | Finds hits across selected tracks and cuts all at the same points; conforming is done by Detect Tempo › Straighten; no trigger editing or edit smoothing |
-| Sketch: a clip-launcher window, also on a tablet | **Missing** | DAWproject import drops launcher clips and says so |
-| Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is a mark that says it is one; no renderer, no ADM |
+| Sketch: a clip-launcher window, also on a tablet | **Not planned here** | The clip launcher is skipped by the owner. DAWproject import drops launcher clips and says so |
+| Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is a mark that says it is one; no renderer, no ADM. Dolby's renderer needs a licence (not planned); a renderer of FreeDAWm's own is [section 3](03-mixing.md)'s work |
 | Speech-to-text on dialogue with text search | **Partial** | Lyric transcription with word times, searchable (AI › Find in Transcript…); no dialogue-specific lane |
 | Video: several tracks, editing, satellite link, pull up and down | **Partial** | One video track with H.264, ProRes and Motion JPEG playback, timecode and feet+frames; export to a ProRes movie with the mix; no editing |
-| Destructive record, QuickPunch, TrackPunch | **Flag only** | Ordinary range punch works; the three modes are stored and unread |
-| EUCON control surfaces | **Missing** | No control-surface protocol of any kind |
+| Destructive record, QuickPunch, TrackPunch | **Partial** | QuickPunch works (punch in and out on the fly, several punches in one pass: [section 2](02-recording-audio.md)); TrackPunch and the destructive modes stay off the menus, stored and unread (section 2's rows) |
+| EUCON control surfaces | **Not planned here** | Needs Avid's licensed SDK. Mackie Control and HUI surfaces and MIDI learn work instead ([section 6](06-midi-recording.md), K) |
 | Scripting SDK | **Works** | Every command, from a script, a command line or an agent (section F) |
-| Cloud collaboration on one project | **Missing** | |
-| AudioSuite with handles; commit, freeze, bounce | **Partial** | Process renders a new clip without handles; freeze (also up to a chosen insert), commit and bounce work |
-| Track Pin, batch rename and other large-session aids | **Partial** | Not checked item by item; no pinned tracks |
+| Cloud collaboration on one project | **Not planned here** | Needs a hosted service and a second machine to develop at all |
+| AudioSuite with handles; commit, freeze, bounce | **Works** | Process keeps up to 1 s of handles each side for processes that keep the length ([section 4](04-editing-audio.md)); freeze (also up to a chosen insert), commit and bounce work |
+| Track Pin, batch rename and other large-session aids | **Partial** | Not checked item by item; Pin Track (`track.pin`) is stored and nothing reads it yet; no batch rename |
 
 ## B. Studio Pro (Studio One)
 
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
-| Project page: master an album in the same app, songs update from their mixes, DDP and digital release | **Missing** | Bounce normalises to peak and reports loudness |
+| Project page: master an album in the same app, songs update from their mixes, DDP and digital release | **Not planned here** | The mastering page is tabled by the owner (design below). Bounce to a loudness target with a true-peak ceiling |
 | Show page: set lists for playing live | **Missing** | |
 | Scratch pads: try another arrangement beside the song | **Missing** | Playlists per track are the nearest thing |
 | Arranger track: drag sections to reorder the song | **Partial** | Sections exist for the Band; moving one does not move track audio or MIDI |
-| Chord track that re-pitches audio as well as MIDI | **Partial** | Chords drive the Band and re-pitch single-line vocals (Fit to Lead, Make Harmony); existing MIDI clips and chordal audio do not follow |
+| Chord track that re-pitches audio as well as MIDI | **Partial** | Chords drive the Band and re-pitch single-line vocals (Fit to Lead, Make Harmony); MIDI clips follow the chord lane, per clip, opt in ([section 7](07-midi-writing.md)); chordal audio does not |
 | Mix Engine FX: one console model across every channel of a bus | **Missing** | |
-| Splitter and extended chains: parallel and band-split routing inside the inserts, macro knobs | **Missing** | Inserts are a straight chain; linked plug-ins share values, which is not a macro |
+| Splitter and extended chains: parallel and band-split routing inside the inserts, macro knobs | **Not planned here** | Skipped by the owner (rack and macros). Inserts are a straight chain; linked plug-ins share values, which is not a macro |
 | Sound variations (articulations for orchestral libraries) | **Missing** | Keyswitches exist only inside the Band's instrument profiles |
-| Launcher: clips and scenes tied to the arrangement | **Missing** | |
+| Launcher: clips and scenes tied to the arrangement | **Not planned here** | The clip launcher is skipped by the owner |
 | Lyrics track, lyrics in the score and on a display | **Partial** | Lyrics lane and sheet, a teleprompter for the singer, rhymes and word tools; no lyrics in the score |
 | Drag and drop for everything | **Partial** | Plug-in to track or to empty space, audio to sampler, files from the system; nothing drags out |
 | Global transpose; audio follows tempo by default | **Partial** | No global transpose; tempo-following is a per-clip choice |
-| Listen bus with room correction | **Missing** | |
+| Listen bus with room correction | **Partial** | An AFL/PFL listen bus in the Control Room, and the monitor stage's ear correction from the Hearing Test (on this computer, never in a bounce); no room measurement or correction |
 | Amp and pedal models from a guitar-amp maker | **Works** (unbranded) | Seven amps solved from schematics, cabinets, pedal circuits |
 | Tablet remote app | **Partial** | A phone web page on the local network: transport, record, arm, markers; no mixing |
 | Built-in assistant, stem separation and vocal tuning (8.1), MIDI 2.0 (8.2) | **Partial** | Stem separation and vocal tuning work; assistant: see Scout (section F); no MIDI 2.0 |
@@ -100,9 +101,9 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
 | Session Players: drummer, bass and keyboard players that follow chords | **Works** | The Band: six players chosen from 152 styles of player, following sections and chords, printable to MIDI. Sounds come from the track's instrument, and FreeDAWm ships few |
-| Live Loops grid | **Missing** | |
+| Live Loops grid | **Not planned here** | The clip launcher is skipped by the owner |
 | Smart Tempo: record without a click, then fit project or audio | **Works** | Detect Tempo (constant, follow, smooth) writes the tempo map; Straighten conforms audio; no free-tempo record mode as such |
-| Flex Time and Flex Pitch on the track | **Partial** | Pitch in a separate vocal editor; time by clip stretch and by markers that Straighten writes; no hand-placed flex markers |
+| Flex Time and Flex Pitch on the track | **Partial** | Pitch in a separate vocal editor; time by clip stretch and by warp markers placed by hand or by Straighten, heard at once (`warp.*`); no pitch editing on the track itself |
 | Stem Splitter, now down to single drums | **Works** | Four or six stems, lead and backing vocals, and drums into kick, snare, toms, hat, ride, crash. Models are downloaded |
 | Mastering Assistant | **Partial** | Scout measures the mix and returns advice, and applies it a step at a time when asked; no single-press mastering chain |
 | Drum Machine Designer, Alchemy, Sculpture and the rest of the instrument set | **Partial** | A capable drum machine and a one-sample sampler; nothing like the synths ([section 7](07-midi-writing.md#l-instruments-in-the-box)) |
@@ -110,10 +111,10 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Track Stacks and patches | **Works** | Routing folders sum their tracks; track and chain presets carry their samples |
 | Scripter and the Environment | **Missing** | Scripting is from outside the app only |
 | Spatial audio with binaural monitoring and head tracking | **Partial** | Surround panning; no binaural path |
-| A very large sound and loop library; loops follow tempo and key; one browser for everything | **Missing** | The browser lists plug-ins and presets; shipped content is about 20 MB |
-| Round trip with the tablet edition and with MainStage | **Missing** | |
+| A very large sound and loop library; loops follow tempo and key; one browser for everything | **Not planned here** | Content and licences, the owner's call. The browser lists plug-ins and presets; shipped content is about 20 MB |
+| Round trip with the tablet edition and with MainStage | **Not planned here** | Apple's own apps and formats |
 | Chord ID from audio | **Works** | Detect Chords writes the chord lane |
-| Flashback capture | **Flag only** | See [section 6](06-midi-recording.md#g-punch-count-in-and-capture) |
+| Flashback capture | **Partial** | MIDI: Capture MIDI makes a take of what was just played ([section 6](06-midi-recording.md#g-punch-count-in-and-capture)); audio played before Record is not kept ([section 2](02-recording-audio.md)) |
 | Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer; no automation rows, no articulations |
 | Assistant that operates the app from a prompt (13, by subscription) | **Partial** | No assistant inside the app; an outside agent can operate every command (section F) |
 
@@ -124,21 +125,21 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Expression Maps and Note Expression | **Missing** | |
 | VariAudio: pitch and formant editing, harmonies from the chord track | **Works** | Note-based tuning with formant-preserving resynthesis; Make Harmony follows the chords; a view of every vocal track with clashes marked |
 | Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths; no pads, no suggestions |
-| Control Room: cue mixes, talkback, monitor sets | **Missing** | |
-| Mixer undo history and mixer snapshots | **Partial** | Mixer moves are ordinary undo steps; no snapshots |
+| Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
+| Mixer undo history and mixer snapshots | **Works** | Mixer moves are ordinary undo steps; Window › Mix Snapshots stores and recalls the whole mix or parts of it ([section 3](03-mixing.md)) |
 | Logical Editor, Project Logical Editor, macros | **Missing** | |
-| MIDI Remote: scripted controller support with a mapping assistant | **Missing** | |
+| MIDI Remote: scripted controller support with a mapping assistant | **Partial** | MIDI learn for faders, pan, sends and plug-in knobs, Mackie Control and HUI ([section 6](06-midi-recording.md), K); no scripts for other controllers |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
-| Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform; no free warp tool |
+| Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform, and warp markers placed by hand; no Time Warp of the tempo map by dragging |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
 | Modulators for any parameter | **Missing** | |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (4d3e275); no video |
-| ARA 2 and spectral editing | **Missing** | A view flag exists and is unread |
+| ARA 2 and spectral editing | **Not planned here** | ARA needs its SDK, which is not in the tree; spectral editing is [section 4](04-editing-audio.md)'s. A view flag exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | A read-only score with print and MusicXML export; drum step sequencer only |
 | Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; export to a ProRes movie; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
-| Vocal synthesis (Omnivocal, beta) | **Missing** | Song generation produces finished audio, not an editable sung part |
+| Vocal synthesis (Omnivocal, beta) | **Not planned here** | Needs a singing-voice model, and no third-party models are added here. Song generation produces finished audio, not an editable sung part |
 
 ## E. Where three or four now agree
 
@@ -147,13 +148,13 @@ noticed, and the ones sections 1–7 did not already list:
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Clip launcher | ● | ● | ● | ○ | **Missing** |
+| Clip launcher | ● | ● | ● | ○ | **Not planned here** (skipped by the owner) |
 | Stem separation | ● | ● | ● | ● | **Works** |
-| Sound and loop service or library in the browser (Splice or the maker's own) | ● | ● | ● | ● | **Missing** |
+| Sound and loop service or library in the browser (Splice or the maker's own) | ● | ● | ● | ● | **Not planned here** (content, the owner's call) |
 | Dolby Atmos mixing with a renderer | ● | ● | ● | ● | **Partial** (see A) |
 | Arranger sections that move the song | ○ | ● | ● | ● | **Partial** (Band only) |
-| Chord track that existing clips follow | ◐ | ● | ● | ● | **Partial** |
-| ARA 2 | ● | ● | ● | ● | **Missing** |
+| Chord track that existing clips follow | ◐ | ● | ● | ● | **Partial** (MIDI clips, opt in; not audio) |
+| ARA 2 | ● | ● | ● | ● | **Not planned here** (no SDK in the tree) |
 | An assistant inside the app | ○ | ● | ● | ○ | **Partial** (Scout advises on the mix only) |
 | Tablet or phone remote | ● | ● | ● | ● | **Partial** |
 
@@ -174,7 +175,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
-| Browser build | **Partial** | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
+| Browser build | **Not planned here** (the owner: no further work) | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in still runs inside the app and can bring it down |
@@ -205,17 +206,17 @@ local link allows in the Network window (row 6).
 
 | Work | Est. (h) | Why | Status |
 |---|---:|---|---|
-| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) | **Not started here**: section 7's work (its rows are still Missing); not begun so as not to cross it |
+| Arranger sections that move everything, and clips that follow the chord track | 14–22 | Sections and chords already exist for the Band; this makes them act on the user's own tracks. Also in [section 7](07-midi-writing.md) | **Section 7's**: MIDI clips follow the chord lane there (per clip, opt in); arranger sections that move clips are still Missing there |
 | Bounce to a loudness target; video export | 10–16 | Both have their parts already (loudness meter; muxer and encoder) | **Loudness target done** (ca44ec5): Bounce Mix takes a target in LUFS (integrated, BS.1770) with a true-peak ceiling (default -1 dBTP), measured in a first pass; gain only, so a mix that would pass the ceiling stops short and says by how much. Video export **done** (3b781d6): File › Export › Movie (ProRes)… writes the Video tracks' picture and the main mix as a QuickTime movie, ProRes 422 (proxy, LT, standard or HQ) at the first movie's size and frame rate, with 24-bit PCM stereo |
 | Scout builds a starting chain from its advice, with the user's consent per step | 8–12 | Turns advice into Logic's Mastering Assistant, on any channel | **Done** (06244b1): each suggestion of an answer has an Apply button; `scout.plan` says what each would do, `scout.apply` does one, as one undo step. An EQ guide becomes a band on the track's Clean Q (one is added if missing); a module suggestion sets its parameter to the middle of the suggested range when that range is in the parameter's own units, and is refused otherwise. Uses the answer already received: nothing more is sent |
 | Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (aee379b): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
-| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Another section's** ([section 5](05-built-in-effects.md)) |
+| Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Not planned here**: rack and macros skipped by the owner |
 | Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)) |
-| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback | **Not started**: section 3 has it not started; left for later, after this section's own items |
-| Mixer snapshots | 6–10 | | **Not started**: as the control room |
+| Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback | **Done** in [section 3](03-mixing.md) (ec5efc3) |
+| Mixer snapshots | 6–10 | | **Done** in [section 3](03-mixing.md) (Window › Mix Snapshots) |
 | Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first | **Deferred by the owner** (2026-11-16): not to be built for now |
-| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it | **Not started**: design below |
+| A mastering page: several songs in order, loudness per song, export a release | 24–36 | Only Studio Pro has it; a strong reason people choose it | **Not planned here**: tabled by the owner (design below, kept) |
 | Atmos: objects and beds routed for real, ADM export, a binaural monitor | 30–50 | A renderer of FreeDAWm's own; Dolby's needs a licence. Also in [section 3](03-mixing.md) | **Another section's** ([section 3](03-mixing.md)) |
 | ARA 2 hosting | 30–45 | Also in [section 4](04-editing-audio.md) | **Another section's** ([section 4](04-editing-audio.md)) |
 
@@ -376,6 +377,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Rows reconciled with the code: control room, mixer snapshots, handles, QuickPunch, Capture MIDI, clips following chords, warp markers and Mackie/HUI built elsewhere; launcher, mastering page, rack and macros, browser build, EUCON, ARA, hardware DSP, cloud, loop library and vocal synthesis not planned here, with the reason |
 | 2026-11-17 | minor | Plug-ins in their own process, first step: CLAP, opt-in, a crash silences the plug-in; browser recording dropped by the owner |
 | 2026-11-16 | minor | Take PCs over the encrypted link only is on by default (owner); a saved choice is kept |
 | 2026-11-16 | minor | Plug-ins in their own process: the design refined (not built) |
