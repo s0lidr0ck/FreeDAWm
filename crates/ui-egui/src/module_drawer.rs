@@ -1633,7 +1633,7 @@ mod tests {
         let lane: Vec<&ParamInfo> = comp.params.iter().filter(|p| p.group == "Lane B").collect();
         assert_eq!(tab_names(&lane)[..3], ["On", "Level", "Style"]);
         let global: Vec<&ParamInfo> = comp.params.iter().filter(|p| p.group == "Global").collect();
-        assert_eq!(tab_names(&global), ["Dry", "Channels", "Dry On", "Listen", "Link All Channels"], "no shared word: names kept");
+        assert_eq!(tab_names(&global), ["Dry", "Channels", "Dry On", "Listen", "Link All Channels", "Look-ahead"], "no shared word: names kept");
     }
 
     #[test]
