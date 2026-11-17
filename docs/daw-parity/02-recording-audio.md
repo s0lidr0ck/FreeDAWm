@@ -32,7 +32,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | A. Arming and inputs | Arming, record safe, arm follows selection; inputs of up to 16 channels, or a bus | Small: tracks cannot join or leave a take under way |
 | B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard and restart take, record lock | Small: no recording at another speed |
 | C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
-| D. Loop recording and takes | Takes to layers, swipe comping, three record modes | Small: no audition of a take that is not active |
+| D. Loop recording and takes | Takes to layers, swipe comping, three record modes, a take soloed in place of the comp | Small: no stacked "layer" record mode |
 | E. Monitoring | Auto / On / Off through the strip, input-only mode, low-latency mode, cue mixes, click on its own output, a tuner | Medium: no dual buffer; no hardware direct monitoring (not planned) |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
 | G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float; per-track record folders | **Level** |
@@ -100,7 +100,7 @@ what a user can do, apart from punch out on the fly.
 | Loop record on a track without lanes | ● | ● | ● | ● | **Works**: each pass goes to a new playlist that copies the track's playlist, so only the loop differs |
 | Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Works** |
 | Take names and numbers per track | ● | ● | ● | ● | **Works**: `Vox_01`, `Vox_02`… per track, skipping files already there |
-| Audition a take without making it active | ● | ● | ● | ● | **Missing** (also in section 1, where the take lanes' playback is). Left: a solo on a take lane that plays that lane in place of the comp until it is let go |
+| Audition a take without making it active | ● | ● | ● | ● | **Works**: the S in a take layer's header (or Solo Take in its menu, `comp.audition`) plays that take in place of the comp, its clip effects included, until it is clicked again; the comp is untouched and nothing is saved or undone |
 
 ## E. Monitoring
 
@@ -220,6 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | round three follow-up: feedback protection trips only at clipping; a track wider than its input is silent past it (bug 10 fixed); an input at another rate is read band-limited; Solo Take auditions a take in place of the comp |
 | 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation; what is left written into the open rows; summary and suggested order brought up to date |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |

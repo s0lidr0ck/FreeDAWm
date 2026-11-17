@@ -117,6 +117,16 @@ pub(super) fn layer_lanes(app: &mut SoundApp, ui: &mut Ui, track: &Track, row: R
         let hresp = ui.interact(head, ui.id().with(("layer-head", track.id.0, l)), Sense::click());
         hresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{} layer {}", track.name, pl.name)));
         hresp.context_menu(|ui| layer_menu(app, ui, track, l));
+        // Solo Take: this take heard in place of the comp until the S is let go.
+        let solo = Rect::from_center_size(pos2(head.max.x - 26.0, head.center().y), vec2(16.0, 14.0));
+        let on = track.audition_layer == Some(l);
+        let sresp = ui.interact(solo, ui.id().with(("layer-solo", track.id.0, l)), Sense::click());
+        sresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, format!("Solo take {}", pl.name)));
+        painter.rect_filled(solo, 2.0, if on { Color32::from_rgb(226, 190, 60) } else { shade(t.panel_bg, 0.12) });
+        painter.text(solo.center(), Align2::CENTER_CENTER, "S", bold(10.0), if on { Color32::BLACK } else { t.text });
+        if sresp.on_hover_text("Solo Take: hear this take in place of the comp").clicked() {
+            let _ = app.run("comp.audition", json!({"track": track.id.0, "layer": l}));
+        }
         let lp = ui.painter().with_clip_rect(lane.intersect(ui.clip_rect()));
         draw_layer(&lp, &s, track, l, tl, lane, color);
         if let Some(resp) = swipe(app, ui, track, l, &pl.name, tl, lane) {
@@ -350,6 +360,10 @@ pub fn layer_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track, layer: usize) 
         }
     } else if ui.button("Delete Take").clicked() {
         let _ = app.run("comp.layer_delete", json!({"track": id, "layer": layer}));
+    }
+    let soloed = track.audition_layer == Some(layer);
+    if ui.add(egui::Button::new("Solo Take").selected(soloed)).on_hover_text("Hear this take in place of the comp").clicked() {
+        let _ = app.run("comp.audition", json!({"track": id, "layer": layer}));
     }
     if ui.button("Make Comp from This Take").clicked() {
         let _ = app.run("comp.layer_make_comp", json!({"track": id, "layer": layer}));

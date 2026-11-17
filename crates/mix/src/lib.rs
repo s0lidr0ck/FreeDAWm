@@ -3448,12 +3448,14 @@ fn process_strip(
             if live.monitor_only && musician.is_none() && !module_in && !routed && live_filter.is_none() && strip.live_tail == 0 => {}
         TrackKind::Audio => {
             let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
-            for clip in t.clips() {
+            // An auditioned take layer plays in place of the comp (`Track::heard_clips`).
+            let clips = t.heard_clips();
+            for clip in clips {
                 if clip.muted || !clip.is_audio() || !clip.range().overlaps(&block) {
                     continue;
                 }
-                let edges = Edges::of(s, t.clips(), clip, block, live.looping);
-                let cover = Cover::of(t.clips(), clip, block, auto_fade_frames(s));
+                let edges = Edges::of(s, clips, clip, block, live.looping);
+                let cover = Cover::of(clips, clip, block, auto_fade_frames(s));
                 // The effects and the buffer were made by `sync` when the session changed: here
                 // nothing is allocated. Effects not prepared yet (never the case after a sync)
                 // are skipped for this block rather than made on the audio thread.
@@ -4156,7 +4158,7 @@ fn sync_clip_fx(
     made: &mut u64,
 ) {
     let ch = strip.buf.len();
-    let live = || t.clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p)));
+    let live = || t.heard_clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p)));
     strip.clip_fx.retain(|id, fx| {
         let keep = fx.ch == ch && live().any(|(c, _)| c == *id);
         if !keep {
@@ -4212,7 +4214,7 @@ fn structure_fingerprint(s: &Session) -> usize {
             }
         }
         // Which clips have Clip Effects and which modules they need (`sync` makes them).
-        for c in t.clips() {
+        for c in t.heard_clips() {
             if let Some(p) = clip_fx_params(c) {
                 (c.id.0, ClipFx::needs(p)).hash(&mut h);
             }

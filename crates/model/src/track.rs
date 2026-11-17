@@ -310,6 +310,10 @@ pub struct Track {
     /// (Insert and Cut Time still move them); recording into it is refused too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub edit_locked: bool,
+    /// Comping: the take layer (playlist index) auditioned in place of the comp, its solo on
+    /// in the layer's header, until it is let go. Not saved.
+    #[serde(skip)]
+    pub audition_layer: Option<usize>,
 }
 
 fn yes() -> bool {
@@ -376,6 +380,7 @@ impl Track {
             midi_fx_record: false,
             instrument_outs: Vec::new(),
             edit_locked: false,
+            audition_layer: None,
         }
     }
 
@@ -419,6 +424,16 @@ impl Track {
 
     pub fn clips(&self) -> &[Clip] {
         self.playlist().map_or(&[], |p| p.clips.as_slice())
+    }
+
+    /// The clips playback hears: an auditioned take layer's ([`Track::audition_layer`]) in
+    /// place of the comp, else the active playlist's ([`Track::clips`]). Editing always works
+    /// on [`Track::clips`].
+    pub fn heard_clips(&self) -> &[Clip] {
+        match self.audition_layer.filter(|l| self.is_layer(*l)).and_then(|l| self.playlists.get(l)) {
+            Some(p) => p.clips.as_slice(),
+            None => self.clips(),
+        }
     }
 
     /// The module automation lanes and mappings name by `id`: a chain module, or the

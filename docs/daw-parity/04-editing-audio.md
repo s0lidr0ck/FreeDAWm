@@ -185,8 +185,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Automatic crossfades at comp joins | ◐ | ● | ● | ● | **Works** (10 ms equal power) |
 | Name and rate takes | ● | ● | ● | ● | **Works** |
 | Flatten a comp | ● | ● | ● | ● | **Works**: Flatten Comp in a take layer's menu keeps the comp as plain clips, crossfades and all, and deletes the take layers (one undo step); Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
-| Show only takes that match the selection | ● | ○ | ○ | ○ | **Missing** |
-| Comp grouped tracks together (drums) | ● | ● | ● | ● | **Missing** |
+| Show only takes that match the selection | ● | ○ | ○ | ○ | **Partial**: cycling takes over the selection (Up/Down, `comp.cycle`) already offers only the layers with audio there. Left: hiding the other layer lanes while a selection is made, which needs the lane layout (`layer_rows`, `layers_height`) to see the selection |
+| Comp grouped tracks together (drums) | ● | ● | ● | ● | **Works**: a swipe (or click) on one track of an active edit group comps the same take layer over the same range on the group's other tracks where that layer has audio, in one undo step (`comp.swipe` `alone` for one track; not while groups are suspended). Takes are matched by layer number, as tracks recorded together number them |
 
 ## I. Timing
 

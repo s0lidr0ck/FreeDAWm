@@ -276,3 +276,20 @@ fn an_instrument_tracks_midi_takes_show_as_lanes_and_swipe() {
     assert_eq!(comp.first().copied().flatten(), Some(first), "{comp:?}");
     assert_eq!(h.state().engine.undo_label(), Some("Comp"));
 }
+
+/// The S in a take layer's header solos that take (heard in place of the comp) until it is
+/// clicked again; the comp is untouched.
+#[test]
+fn the_solo_key_auditions_a_take() {
+    let (mut h, _t) = harness();
+    let comp_before = comp(&h);
+    let key = h.get_by_label("Solo take Take 3").rect().center();
+    click(&mut h, key, Modifiers::NONE);
+    let tr = vox(&h);
+    assert_eq!(tr.audition_layer, Some(3));
+    assert_eq!(tr.heard_clips()[0].name, "take3", "take 3 is heard");
+    assert_eq!(comp(&h), comp_before, "the comp is untouched");
+    let key = h.get_by_label("Solo take Take 3").rect().center();
+    click(&mut h, key, Modifiers::NONE);
+    assert_eq!(vox(&h).audition_layer, None, "clicked again: let go");
+}
