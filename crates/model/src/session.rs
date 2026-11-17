@@ -686,6 +686,7 @@ impl Session {
             color: None,
             ruler: 1,
             track: None,
+            view: None,
         });
         self.markers.sort_by_key(|m| m.start);
         id
@@ -850,6 +851,12 @@ impl Session {
             bound(&mut m.end);
             truncate_chars(&mut m.name, MAX_NAME_CHARS);
             truncate_chars(&mut m.comments, MAX_COMMENT_CHARS);
+            if let Some(v) = &mut m.view {
+                v.samples_per_px = if v.samples_per_px.is_finite() { v.samples_per_px.clamp(0.25, 1_000_000.0) } else { 1024.0 };
+                bound(&mut v.scroll);
+                v.scroll = v.scroll.max(0);
+                v.tracks.truncate(10_000);
+            }
         }
         for (at, key) in &mut self.key_signatures {
             bound(at);

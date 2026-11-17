@@ -539,6 +539,9 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
         if ui.button("+ Selection").clicked() {
             let _ = app.run("markers.add", json!({"kind": "selection"}));
         }
+        if ui.button("+ View").on_hover_text("A location that recalls this zoom, scroll, the track heights and which tracks are shown").clicked() {
+            let _ = app.run("markers.add", json!({"kind": "none", "view": true}));
+        }
     });
     let rows: Vec<(u32, String, String, String, String)> = {
         let s = app.engine.session();
@@ -549,10 +552,12 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
                 let kind = match m.kind {
                     soundcraft_model::MarkerKind::Marker => "marker",
                     soundcraft_model::MarkerKind::Selection => "selection",
-                    soundcraft_model::MarkerKind::None => "none",
+                    soundcraft_model::MarkerKind::None => "view",
                 };
+                // A location that also recalls the view says so.
+                let kind = if m.view.is_some() && m.kind != soundcraft_model::MarkerKind::None { format!("{kind} + view") } else { kind.to_string() };
                 let len = if m.kind == soundcraft_model::MarkerKind::Selection { f(m.end - m.start) } else { String::new() };
-                (m.number, m.name.clone(), f(m.start), len, kind.to_string())
+                (m.number, m.name.clone(), f(m.start), len, kind)
             })
             .collect()
     };

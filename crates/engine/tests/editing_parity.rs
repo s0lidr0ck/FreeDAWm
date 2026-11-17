@@ -885,3 +885,32 @@ fn a_locked_track_refuses_edits_to_its_clips_and_takes_none_new() {
     run(&mut e, "edit.clear", json!({}));
     assert_eq!(clips(&e, t).len(), 1, "unlocked, it edits again");
 }
+
+#[test]
+fn a_view_location_recalls_the_zoom_heights_and_shown_tracks() {
+    let mut e = engine("slip");
+    let a = new_track(&mut e);
+    let b = new_track(&mut e);
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 300.0}));
+    run(&mut e, "view.scroll", json!({"to": 48_000}));
+    run(&mut e, "track.height", json!({"tracks": [a.0], "height": "large"}));
+    let n = run(&mut e, "markers.add", json!({"kind": "none", "name": "Drums view"}))["number"].clone();
+    let view = |e: &Engine| {
+        let s = e.session();
+        (s.edit.zoom.samples_per_px, s.edit.zoom.scroll, s.track(a).unwrap().height, s.track(b).unwrap().hidden)
+    };
+    let kept = view(&e);
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 4000.0}));
+    run(&mut e, "view.scroll", json!({"to": 0}));
+    run(&mut e, "track.height", json!({"tracks": [a.0], "height": "small"}));
+    run(&mut e, "track.hide", json!({"tracks": [b.0], "hidden": true}));
+    let playhead = e.session().edit.playhead;
+    run(&mut e, "markers.recall", json!({"number": n}));
+    assert_eq!(view(&e), kept);
+    assert_eq!(e.session().edit.playhead, playhead, "a view location leaves the playhead");
+    // A plain marker keeps no view unless asked to.
+    let m = run(&mut e, "markers.add", json!({"at": 1000}))["number"].clone();
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 4000.0}));
+    run(&mut e, "markers.recall", json!({"number": m}));
+    assert_eq!(e.session().edit.zoom.samples_per_px, 4000.0);
+}

@@ -108,7 +108,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; zoom-to-selection and fit size to the timeline on screen (bug 23, fixed) |
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
 | Markers on several rulers, a marker list | ● | ● | ● | ● | **Works** |
-| A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Missing** |
+| A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Works**: Memory Locations' + View keeps the zoom, scroll, track heights and which tracks are shown, and recalling it puts them back without moving the playhead; any marker made with `view` recalls them too |
 | Markers attached to a track | ● | ○ | ○ | ◐ | **Flag only**: the field exists, nothing sets it |
 | Session overview strip | ● | ● | ◐ | ● | **Works** |
 
@@ -400,3 +400,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Clip notes |
 | 2026-11-17 | minor | Trim clips to close gaps |
 | 2026-11-17 | minor | Consolidate keeps the automatic edge fades, as playback does |
+| 2026-11-17 | minor | Memory locations that recall the view |

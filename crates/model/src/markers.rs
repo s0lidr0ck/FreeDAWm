@@ -34,6 +34,19 @@ pub struct MemoryLocation {
     /// Track-lane marker on this track, if any.
     #[serde(default)]
     pub track: Option<TrackId>,
+    /// The Edit window's view this location recalls (zoom, scroll, track heights and which
+    /// tracks are shown), if it keeps one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<LocationView>,
+}
+
+/// What a memory location keeps of the Edit window's view.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LocationView {
+    pub samples_per_px: f64,
+    pub scroll: Samples,
+    /// Each track there was then: its height and whether it was hidden.
+    pub tracks: Vec<(TrackId, crate::TrackHeight, bool)>,
 }
 
 fn one() -> u8 {
