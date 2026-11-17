@@ -1987,6 +1987,7 @@ impl SoundApp {
             latency,
             loop_from,
             punches: Vec::new(),
+            pre: 0,
         });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
@@ -2003,6 +2004,10 @@ impl SoundApp {
         // Each internal take's delay, in tap order (the order the plan lists them).
         let mut changed = (plan.start, plan.latency) != (start, latency);
         let rec = self.recorder.as_ref();
+        // Pre-record: known once the writer has put it in (so a recovered take is placed right).
+        let pre = rec.map_or(0, |r| i64::try_from(r.pre_frames()).unwrap_or(0));
+        changed |= plan.pre != pre;
+        plan.pre = pre;
         for (k, t) in plan.takes.iter_mut().filter(|t| t.internal).enumerate() {
             let tap = rec.and_then(|r| r.start_tap_latency(k)).map_or(0, i64::from);
             changed |= t.tap_latency != tap;
@@ -2709,16 +2714,16 @@ impl SoundApp {
         midi_devices::lift_preview(self);
         let plan = self.take_plan.take();
         let latency = self.take_latency();
-        let (takes, problem, start) = match &mut self.recorder {
+        let (takes, problem, start, pre) = match &mut self.recorder {
             Some(r) => {
                 let (takes, problem) = r.finish();
                 let start = r.start_pos().unwrap_or(self.record_start);
-                (takes, problem, start)
+                (takes, problem, start, i64::try_from(r.pre_frames()).unwrap_or(0))
             }
-            None => (Vec::new(), None, self.record_start),
+            None => (Vec::new(), None, self.record_start, 0),
         };
         let tracks = takes.len().max(1);
-        let plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
+        let mut plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
             start,
             pass: None,
             punch: self.punch,
@@ -2727,7 +2732,10 @@ impl SoundApp {
             latency,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         });
+        // Pre-record: the input kept from before Record leads each take file (the clips' handle).
+        plan.pre = pre;
         self.punch = None;
         self.autosaved_rev = 0;
         // A remote recorder sends these to the booth (`net_ui`).
@@ -3182,6 +3190,11 @@ impl SoundApp {
             && self.engine.session().tracks.iter().any(|t| t.mixer.record_arm || t.mixer.may_hear_input())
         {
             self.ensure_input();
+        }
+        // Options › Recording › Pre-Record: the input keeps its last seconds while it is open.
+        if let Some(r) = &self.recorder {
+            let on = self.engine.session().edit.flag(soundcraft_engine::cmd::PRE_RECORD);
+            r.set_pre_record(if on { soundcraft_playback::record::PRE_RECORD_SECONDS } else { 0 });
         }
         // Autosave and the macOS menu bar only run on frames, and plugin editors are native windows egui never hears from.
         // egui takes its predicted frame time off every delay, so add it back.

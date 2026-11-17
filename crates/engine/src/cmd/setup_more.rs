@@ -15,6 +15,9 @@ macro_rules! option {
     };
 }
 
+/// The flag of Options › Recording › Pre-Record.
+pub const PRE_RECORD: &str = "options.pre_record";
+
 const MIDI_FILTER_KINDS: [&str; 8] = ["notes", "pitch_bend", "mono_aftertouch", "poly_aftertouch", "program", "cc", "sysex", "realtime"];
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -64,6 +67,9 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.set_flag(soundcraft_mix::NO_FEEDBACK_PROTECTION, !on);
             Ok(json!({"value": on}))
         }),
+        // Pre-record: the input of the last seconds before Record leads each take, as the clip's
+        // handle (`soundcraft_playback::record::Recorder::set_pre_record`).
+        cmd!(noundo "options.pre_record", "Pre-Record", ["Options"], None, "{value?: bool} (toggles when omitted) — while the input is open, the last 10 seconds before Record are kept and put in front of each take, as a handle the clip can be trimmed out over", always, |e, p| toggle_flag(e, p, PRE_RECORD)),
         // Inserts whose input and output stay silent are not run (`soundcraft_mix::SUSPEND_ON_SILENCE`).
         option!("options.suspend_on_silence", "Suspend Plug-ins on Silence", "options.suspend_on_silence"),
         option!("options.loops_follow", "Imported Loops Follow Tempo and Key", "import.loops_follow"),

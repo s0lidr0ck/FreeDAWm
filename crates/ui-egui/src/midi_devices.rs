@@ -1150,6 +1150,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let ids = finish_take(&mut app, &plan, 48_000);
         assert_eq!(ids.len(), 2);
@@ -1229,6 +1230,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: None,
             punches: vec![soundcraft_time::Range::new(0, 20_000), soundcraft_time::Range::new(30_000, soundcraft_time::Samples::MAX)],
+            pre: 0,
         };
         let ids = finish_take(&mut app, &plan, 48_000);
         assert_eq!(ids.len(), 2, "a clip per punch");
@@ -1261,6 +1263,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: Some(0),
             punches: Vec::new(),
+            pre: 0,
         };
         app.take_plan = Some(plan.clone());
         let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass };
@@ -1327,6 +1330,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: Some(0),
             punches: Vec::new(),
+            pre: 0,
         };
         app.take_plan = Some(plan.clone());
         let ev = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };

@@ -96,7 +96,84 @@ pub(crate) struct Capture {
     /// (frames, see [`soundcraft_mix::MixEngine::record_tap`]), once `started`.
     pub(crate) start_tap: [AtomicU32; MAX_TAPS],
     pub(crate) started: AtomicBool,
+    /// Pre-record (Options › Recording › Pre-Record): the last seconds of device input heard
+    /// while no take records, kept by the output callback ([`History::push`], under `try_lock`:
+    /// a block it cannot take is skipped) and put before the take's first frame by the writer.
+    pub(crate) history: Mutex<History>,
+    /// `history` has room: the callback keeps it.
+    pub(crate) pre_on: AtomicBool,
+    /// `history`'s size in samples (the UI thread's, to tell a change).
+    pre_len: AtomicUsize,
+    /// The take started with what `history` holds: the callback leaves it alone until the writer
+    /// has put it into the take.
+    pub(crate) pre_ready: AtomicBool,
+    /// Frames the writer put before the current take's first frame.
+    pre_frames: AtomicU64,
 }
+
+/// Pre-record's ring of the device input's last frames ([`Capture::history`]), interleaved.
+#[derive(Debug, Default)]
+pub(crate) struct History {
+    buf: Vec<f32>,
+    /// Channels per frame (the input's), set by the first block pushed.
+    width: usize,
+    /// The frame the next push writes.
+    at: usize,
+    /// Frames that hold input (at most the ring's).
+    filled: usize,
+}
+
+impl History {
+    fn frames(&self) -> usize {
+        self.buf.len().checked_div(self.width).unwrap_or(0)
+    }
+
+    /// Keep `n` frames of `input` (one buffer per channel). Never allocates.
+    pub(crate) fn push(&mut self, input: &[Vec<f32>], n: usize) {
+        if input.is_empty() || self.buf.is_empty() {
+            return;
+        }
+        if self.width != input.len() {
+            (self.width, self.at, self.filled) = (input.len(), 0, 0);
+        }
+        let (cap, width) = (self.frames(), self.width);
+        if cap == 0 {
+            return;
+        }
+        for f in 0..n {
+            let at = self.at % cap;
+            for (c, ch) in input.iter().enumerate() {
+                if let Some(o) = self.buf.get_mut(at * width + c) {
+                    *o = crate::feed::finite(ch.get(f).copied().unwrap_or(0.0));
+                }
+            }
+            self.at = (at + 1) % cap;
+        }
+        self.filled = self.filled.saturating_add(n).min(cap);
+    }
+
+    /// Append what it holds, oldest first, to `out` as frames `channels` wide (channels past the
+    /// input's are silence), and empty it. Returns the frames appended.
+    fn drain(&mut self, channels: usize, out: &mut Vec<f32>) -> usize {
+        let (cap, width, n) = (self.frames(), self.width, self.filled);
+        if cap == 0 || n == 0 || channels == 0 {
+            return 0;
+        }
+        let first = (self.at + cap - n % cap) % cap;
+        out.reserve(n.saturating_mul(channels));
+        for k in 0..n {
+            let f = (first + k) % cap;
+            out.extend((0..channels).map(|c| if c < width { self.buf.get(f * width + c).copied().unwrap_or(0.0) } else { 0.0 }));
+        }
+        self.filled = 0;
+        n
+    }
+}
+
+/// Seconds of input pre-record keeps (Options › Recording › Pre-Record).
+pub const PRE_RECORD_SECONDS: u32 = 10;
+/// Samples pre-record keeps at most, whatever the channel count (128 MB of f32).
+const PRE_RECORD_MAX_SAMPLES: usize = 1 << 25;
 
 /// Bus-input tracks recorded at most at once (internal recording).
 pub const MAX_TAPS: usize = 32;
@@ -168,6 +245,11 @@ impl Capture {
             start_mix: AtomicU32::new(0),
             start_tap: std::array::from_fn(|_| AtomicU32::new(0)),
             started: AtomicBool::new(false),
+            history: Mutex::new(History::default()),
+            pre_on: AtomicBool::new(false),
+            pre_len: AtomicUsize::new(0),
+            pre_ready: AtomicBool::new(false),
+            pre_frames: AtomicU64::new(0),
         }
     }
 
@@ -241,11 +323,31 @@ struct Steps {
     block: Vec<f32>,
     channels: usize,
     reported: bool,
+    /// The pre-recorded input went into the takes (or there was none).
+    pre_done: bool,
 }
 
 impl Steps {
     fn new(takes: Vec<TakeWriter>, channels: usize) -> Steps {
-        Steps { takes, block: Vec::new(), channels, reported: false }
+        Steps { takes, block: Vec::new(), channels, reported: false, pre_done: false }
+    }
+
+    /// Once the take has started, what pre-record kept goes first into every take, once. The
+    /// callback sets `pre_ready` before it queues the take's first frame, so a pop that got any
+    /// frame sees it.
+    fn put_pre_record(&mut self, shared: &Capture) {
+        if self.pre_done || !shared.pre_ready.load(Ordering::Acquire) {
+            return;
+        }
+        self.pre_done = true;
+        let mut pre = Vec::new();
+        let frames = shared.history.lock().unwrap_or_else(PoisonError::into_inner).drain(self.channels, &mut pre);
+        shared.pre_ready.store(false, Ordering::Release);
+        for t in &mut self.takes {
+            t.pre = t.frames.saturating_add(frames as u64);
+            t.write(&pre, self.channels);
+        }
+        shared.pre_frames.store(frames as u64, Ordering::Release);
     }
 
     /// Write what the ring holds; the first failure is reported to `shared` once.
@@ -253,6 +355,7 @@ impl Steps {
         // The ring holds interleaved samples and a pop can end mid-frame: write whole frames and
         // keep the remainder for the next pop, so channels never shift.
         shared.ring.pop_all(&mut self.block);
+        self.put_pre_record(shared);
         let whole = self.block.len() - self.block.len() % self.channels.max(1);
         let (block, channels) = (&self.block[..whole], self.channels);
         self.takes.iter_mut().for_each(|t| t.write(block, channels));
@@ -617,6 +720,8 @@ impl Recorder {
         self.capture.ring.clear();
         *self.capture.failed.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.capture.started.store(false, Ordering::Release);
+        self.capture.pre_ready.store(false, Ordering::Release);
+        self.capture.pre_frames.store(0, Ordering::Release);
         self.capture.armed.store(true, Ordering::Release);
         self.taps = taps;
         self.memory.clear();
@@ -633,6 +738,31 @@ impl Recorder {
             }
         }
         Ok(())
+    }
+
+    /// Pre-record: keep the last `seconds` of input heard while no take records, and start each
+    /// take with them (0 turns it off and frees the memory). Cheap when nothing changes, so it
+    /// can be called every frame.
+    pub fn set_pre_record(&self, seconds: u32) {
+        let want = (self.sample_rate as usize).saturating_mul(seconds as usize).saturating_mul(self.channels).min(PRE_RECORD_MAX_SAMPLES);
+        let want = if self.internal { 0 } else { want };
+        if self.capture.pre_len.load(Ordering::Relaxed) == want {
+            return;
+        }
+        // Made here, swapped under the lock, the old one freed here: the callback never waits.
+        let mut fresh = History { buf: vec![0.0; want], ..History::default() };
+        {
+            let mut h = self.capture.history.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::swap(&mut *h, &mut fresh);
+        }
+        self.capture.pre_len.store(want, Ordering::Relaxed);
+        self.capture.pre_on.store(want > 0, Ordering::Release);
+    }
+
+    /// Frames of pre-recorded input before the current (or last) take's first frame: the take
+    /// file's frame `k` belongs at `start_pos + k - pre_frames` (less the input latency).
+    pub fn pre_frames(&self) -> u64 {
+        self.capture.pre_frames.load(Ordering::Acquire)
     }
 
     /// The timeline position of the current take's first frame, once it has one.
@@ -722,6 +852,8 @@ impl Recorder {
             }
             None => Takes::default(),
         };
+        // A take too short for the writer to see: what pre-record kept is the next take's.
+        self.capture.pre_ready.store(false, Ordering::Release);
         let lost = self.capture.dropped.swap(0, Ordering::Relaxed) / self.width();
         let slow =
             (lost > 0).then(|| format!("{} ms of input lost: the disk was too slow", lost.saturating_mul(1000) / self.sample_rate.max(1) as usize));
@@ -792,6 +924,9 @@ struct TakeWriter {
     rate: u32,
     format: TakeFormat,
     frames: u64,
+    /// Frames of pre-recorded input at the file's start (not drawn: the live take starts at the
+    /// take's first frame).
+    pre: u64,
     error: Option<String>,
     live: Arc<Mutex<LiveTake>>,
 }
@@ -819,7 +954,7 @@ impl TakeWriter {
         if let Some(b) = &mut format.bwf {
             b.description = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         }
-        let mut take = TakeWriter { id, inputs, path, file, rate, format, frames: 0, error: None, live };
+        let mut take = TakeWriter { id, inputs, path, file, rate, format, frames: 0, pre: 0, error: None, live };
         take.write_header();
         take.error.take().map_or(Ok(take), Err)
     }
@@ -851,6 +986,8 @@ impl TakeWriter {
     fn summarize(&self, block: &[f32], channels: usize) {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         for (f, n) in block.chunks_exact(channels).zip(self.frames..) {
+            // Pre-recorded frames come before `pre`: none are drawn.
+            let Some(n) = n.checked_sub(self.pre) else { continue };
             let at = (n / LIVE_BLOCK as u64) as usize;
             for (blocks, &i) in live.iter_mut().zip(&self.inputs) {
                 let v = f.get(i).copied().unwrap_or(0.0);
@@ -1231,6 +1368,50 @@ mod tests {
     /// Block `b` of a stereo input: 128 interleaved frames, every sample distinct and non-zero.
     fn input_block(b: usize) -> Vec<f32> {
         (0..256).map(|i| 1e-4 * (b * 256 + i + 1) as f32).collect()
+    }
+
+    #[test]
+    fn pre_record_history_keeps_the_last_frames_oldest_first() {
+        let mut h = History { buf: vec![0.0; 6], ..History::default() };
+        let input = vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![-1.0, -2.0, -3.0, -4.0, -5.0]];
+        h.push(&input, 5);
+        let mut out = Vec::new();
+        assert_eq!(h.drain(3, &mut out), 3, "three frames of two channels fit");
+        assert_eq!(out, [3.0, -3.0, 0.0, 4.0, -4.0, 0.0, 5.0, -5.0, 0.0], "a wider frame's extra channel is silence");
+        assert_eq!(h.drain(2, &mut out), 0, "drained once");
+    }
+
+    #[test]
+    fn pre_record_puts_the_input_heard_before_record_at_the_takes_front() {
+        let (feed, capture) = (InputFeed::fixed(2, 256), Capture::for_rate(48_000, 2));
+        let r = Recorder::attached(Arc::clone(&capture), "Mic In".into(), 48_000, 48_000, 2);
+        r.set_pre_record(1);
+        capture.armed.store(true, Ordering::Release);
+        let (mut st, _shared, tx) = counted_recording_state(&feed, &capture, 0, None);
+        tx.send(crate::Cmd::Recording(false)).unwrap();
+        let mut out = vec![0.0f32; 2 * 128];
+        let mut want = Vec::new();
+        for b in 0..8 {
+            if b == 4 {
+                tx.send(crate::Cmd::Recording(true)).unwrap();
+            }
+            let block = input_block(b);
+            feed.push(&block);
+            want.extend_from_slice(&block);
+            st.fill(&mut out, 2);
+        }
+        let take = TakeWriter::in_memory(TrackId(1), vec![0, 1], "Vox_01.wav".into(), 48_000, &TakeFormat::default()).unwrap();
+        let live = Arc::clone(&take.live);
+        let mut steps = Steps::new(vec![take], 2);
+        steps.run(&capture);
+        assert_eq!(r.pre_frames(), 4 * 128, "the four blocks before Record");
+        assert!(!capture.pre_ready.load(Ordering::Acquire), "the callback may keep the history again");
+        assert_eq!(live.lock().unwrap()[0].len(), 4 * 128 / LIVE_BLOCK, "the live take is drawn from the take's first frame");
+        let ((takes, problem), memory) = steps.finish();
+        assert_eq!((takes.len(), problem), (1, None));
+        let chans = soundcraft_audio_io::decode(&memory[0].1, None).unwrap().1.channels;
+        let left: Vec<f32> = want.iter().step_by(2).copied().collect();
+        assert_eq!(chans[0], left, "the file holds the pre-recorded frames, then the take");
     }
 
     #[test]

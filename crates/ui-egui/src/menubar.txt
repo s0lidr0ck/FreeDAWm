@@ -561,6 +561,7 @@ Options > Record Mode > Keep Takes as Lanes
 Options > Record Mode > New Playlist per Take
 Options > Recording > Arm Follows Selection = @options.arm_follows_selection
 Options > Recording > Lock Record = @options.record_lock
+Options > Recording > Pre-Record = @options.pre_record
 Options > Recording > Wait for Note = @options.wait_for_note
 Options > Recording > Input Only Monitoring = @options.input_only_monitoring
 Options > Recording > Feedback Protection = @options.feedback_protection

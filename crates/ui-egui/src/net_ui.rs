@@ -459,7 +459,12 @@ impl RigHost for AppHost<'_> {
                 (id, input, path)
             })
             .collect();
-        Some(FinishedAudio { start: plan.start, latency: plan.latency, rate: if plan.rate > 0 { plan.rate } else { s.sample_rate.hz() }, takes })
+        Some(FinishedAudio {
+            start: plan.start,
+            latency: plan.latency.saturating_add(plan.pre),
+            rate: if plan.rate > 0 { plan.rate } else { s.sample_rate.hz() },
+            takes,
+        })
     }
     fn live_audio(&self, from: &[(TrackId, usize)]) -> Vec<LiveAudio> {
         let app = &*self.0;

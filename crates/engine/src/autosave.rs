@@ -780,6 +780,7 @@ mod tests {
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let clips = |e: &Engine| e.session().track(track).unwrap().clips().iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
         let w = Autosaver::new(root.clone());
@@ -818,6 +819,7 @@ mod tests {
             latency: 0,
             loop_from: Some(0),
             punches: Vec::new(),
+            pre: 0,
         };
         let ev = |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass };
         let w = Autosaver::new(root.clone());
@@ -888,6 +890,7 @@ mod tests {
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan));

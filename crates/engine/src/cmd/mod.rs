@@ -124,6 +124,7 @@ pub use mix::{ARM_FOLLOWS_SELECTION, GROUPS_SUSPENDED, default_send_db};
 pub use more_util::env_db;
 /// What the UI needs of Scout: the store refusal for a capture no longer pending, and "same section".
 pub use scout::{NOT_PENDING as SCOUT_NOT_PENDING, same_as as scout_same_as};
+pub use setup_more::PRE_RECORD;
 
 pub(crate) use edit::remember_selection;
 pub(crate) use looping::sync_loop;

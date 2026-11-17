@@ -1278,6 +1278,7 @@ impl AudioState {
     fn capture_block(&mut self, n: usize) -> bool {
         let Some(cap) = self.capture.as_ref().filter(|c| self.recording && self.playing && c.armed.load(Ordering::Acquire)) else {
             self.owed = 0;
+            self.remember_input(n);
             return false;
         };
         let first = !cap.started.load(Ordering::Relaxed);
@@ -1295,6 +1296,11 @@ impl AudioState {
             cap.start_pos.store(self.pos, Ordering::Relaxed);
             // The feed's latency now, at the take's start (a drift feed's moves).
             cap.start_feed.store(self.feed.as_ref().map_or(0, |f| f.extra_latency()), Ordering::Relaxed);
+            // Pre-record: what the history holds goes before this frame (the writer puts it
+            // there before anything it pops after this).
+            if cap.pre_on.load(Ordering::Relaxed) {
+                cap.pre_ready.store(true, Ordering::Release);
+            }
         }
         let input = &self.mix.input;
         // Without taps the frame is the input as it is (its width is the device's).
@@ -1320,7 +1326,20 @@ impl AudioState {
         while left > 0 {
             let n = left.min(self.max_block);
             feed.pop_into(&mut self.mix.input, n);
+            self.remember_input(n);
             left -= n;
+        }
+    }
+
+    /// Pre-record: the `n` input frames just popped into the mix's input, kept while no take
+    /// records (see [`record::History`]). A block the history is busy for is skipped. No
+    /// allocation.
+    fn remember_input(&self, n: usize) {
+        let Some(cap) = self.capture.as_ref().filter(|c| c.pre_on.load(Ordering::Relaxed) && !c.pre_ready.load(Ordering::Acquire)) else {
+            return;
+        };
+        if let Ok(mut h) = cap.history.try_lock() {
+            h.push(&self.mix.input, n);
         }
     }
 

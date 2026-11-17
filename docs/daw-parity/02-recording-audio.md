@@ -36,7 +36,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Monitoring | Auto / On / Off through the strip, input-only mode, low-latency mode, cue mixes, click on its own output, a tuner | Medium: no dual buffer; no hardware direct monitoring (not planned) |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
 | G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float; per-track record folders | **Level** |
-| H. Safety and feedback | Device and disk trouble keep the take, remaining record time, record lock, feedback protection | Small: no audio pre-record |
+| H. Safety and feedback | Device and disk trouble keep the take, remaining record time, record lock, feedback protection | **Level** |
 | I. Remote recording | LAN and internet recorders with clock alignment | **Ahead**: none of the four has it built in |
 
 Three things every one of the four does and FreeDAWm does not: **record from a bus or another
@@ -151,7 +151,7 @@ what a user can do, apart from punch out on the fly.
 | Waveform drawn while recording | ● | ● | ● | ● | **Works**, at the place the take will land |
 | Record time counter | ● | ● | ● | ● | **Works** |
 | Remaining record time or disk space | ● | ◐ | ◐ | ● | **Works**: the counter reads `● REC 1:23 · 2 h 05 min left` while recording, and the Record button's tooltip gives the room for the armed tracks: the free space on the takes' disk over their channels at the session's bit depth and rate, read every 5 seconds |
-| Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Missing** (MIDI has Retrospective Record). Left: while tracks are armed, the output callback keeps the last few seconds of their inputs in a second lock-free ring; at Record the writer drains it into the take first and the clip starts at the Record point with those seconds as a handle before it |
+| Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Works**: Options › Recording › Pre-Record keeps the last 10 seconds of input while the input is open (the output callback writes it into a ring it never waits for: a block the ring is busy for is skipped); at Record the take writer puts them at the front of every take file, and the clip still starts at the Record point with those seconds as a handle before it to trim open. Off by default. Recovered takes are placed the same way. Not for internal (bus) recording only |
 | A lost device or a full disk keeps the take | ● | ● | ● | ● | **Works** |
 | Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Works**: Options › Recording › Lock Record: while recording, the first Stop (Space, the button, a controller) is refused with a message and a second within 2 s stops; Discard Take and Restart Take are not locked |
 | Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Options › Recording › Feedback Protection, on by default: a monitored hardware input that clips (every block peaking at -0.1 dBFS or above) for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. A loud sustained source just under clipping is never silenced. Not yet tried against real feedback through speakers |
@@ -221,6 +221,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-17 | minor | round three follow-up: feedback protection trips only at clipping; a track wider than its input is silent past it (bug 10 fixed); an input at another rate is read band-limited; Solo Take auditions a take in place of the comp |
+| 2026-11-17 | minor | round three follow-up: audio pre-record (Options › Recording › Pre-Record) |
 | 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation; what is left written into the open rows; summary and suggested order brought up to date |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |

@@ -3420,6 +3420,10 @@ pub struct Recording {
     /// the takes are kept to them instead of `punch`, with crossfades at each punch point.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub punches: Vec<Range>,
+    /// Pre-record: frames of input from before Record was pressed at the front of every take
+    /// file. They become the clip's handle: the clip still starts at the record point.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pre: Samples,
 }
 
 /// QuickPunch: Record pressed at `at` while a take that started at `start` records. Punched in
@@ -3587,7 +3591,7 @@ pub fn place_recording_with(
                 Some(x) => plan.placement_for(x.tap_latency.saturating_add(if x.from_device { plan.latency } else { 0 })).1,
                 None => latency,
             };
-            (t, p, l)
+            (t, p, l.saturating_add(plan.pre.max(0)))
         })
         .collect::<Vec<_>>();
     // Each take's BWF time reference: where its first frame belongs, from the timecode start.
@@ -4006,6 +4010,7 @@ mod record_tests {
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &plan, vec![(vox, take)]);
         let clips: Vec<_> = e.session().track(vox).unwrap().clips().iter().map(|c| (c.start, c.length, c.source_offset())).collect();
@@ -4024,7 +4029,24 @@ mod record_tests {
             latency: 0,
             loop_from: rs.loop_from,
             punches: Vec::new(),
+            pre: 0,
         }
+    }
+
+    #[test]
+    fn pre_recorded_frames_become_the_clips_handle() {
+        let dir = test_dir("pre-record");
+        let take = dir.join("Audio Files/Vox_01.wav");
+        write_take(&take, 1_500);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let mut plan = plan_of(2_000, &record_start(&e.session().edit, Some((2_000, None))), &take, vox);
+        (plan.pre, plan.latency) = (500, 20);
+        place_recording(&mut e, &plan, vec![(vox, take.clone())]);
+        // The clip starts at the record point; the 500 frames from before Record (and the
+        // latency) lie before it in the file, a handle to trim out over.
+        assert_eq!(clip_rows(&e, vox), vec![(2_000, 980, 520)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4171,6 +4193,7 @@ mod record_tests {
             latency: 300,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, hw), (print, bus)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 700, 300)]);
@@ -4204,6 +4227,7 @@ mod record_tests {
             latency: 300,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 636, 364)]);
@@ -4248,6 +4272,7 @@ mod record_tests {
             latency: 100,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, path.clone())]);
         let info = soundcraft_audio_io::probe(&std::fs::read(&path).unwrap(), None).unwrap();
@@ -4281,6 +4306,7 @@ mod record_tests {
             latency: 0,
             loop_from: None,
             punches,
+            pre: 0,
         };
         let ids = place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(ids.len(), 3, "a clip per punch");
@@ -4488,8 +4514,17 @@ mod record_tests {
         let path = PathBuf::from("Audio Files/Vox_01.wav");
         let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, 4_800).unwrap();
         bytes.extend((0..4_800).flat_map(|i| (i as f32 / 4_800.0).to_le_bytes()));
-        let plan =
-            Recording { start: 1_000, pass: None, punch: None, rate: 48_000, takes: Vec::new(), latency: 100, loop_from: None, punches: Vec::new() };
+        let plan = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: Vec::new(),
+            latency: 100,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 0,
+        };
         let mut handed = 0;
         let mut memory = |p: &Path| {
             handed += 1;
