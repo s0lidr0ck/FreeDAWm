@@ -53,6 +53,21 @@ fn dynamic_transport_keeps_the_loop_and_play_start_apart_from_the_selection() {
 }
 
 #[test]
+fn skip_ranges_join_and_clear() {
+    let mut engine = Engine::default();
+    assert!(engine.execute("transport.skip_add", &json!({})).is_err(), "an insertion point is no range");
+    engine.execute("transport.skip_add", &json!({"start": 1_000, "end": 2_000})).unwrap();
+    engine.execute("transport.skip_add", &json!({"start": 5_000, "end": 6_000})).unwrap();
+    // Touching the first: joined with it.
+    engine.execute("transport.skip_add", &json!({"start": 2_000, "end": 3_000})).unwrap();
+    assert_eq!(engine.session().edit.skips, vec![Range::new(1_000, 3_000), Range::new(5_000, 6_000)]);
+    engine.execute("transport.skip_clear", &json!({"at": 5_500})).unwrap();
+    assert_eq!(engine.session().edit.skips, vec![Range::new(1_000, 3_000)]);
+    engine.execute("transport.skip_clear", &json!({})).unwrap();
+    assert!(engine.session().edit.skips.is_empty());
+}
+
+#[test]
 fn audition_plays_around_the_selection_edges_once() {
     let mut engine = Engine::default();
     let sr = engine.session().sample_rate;

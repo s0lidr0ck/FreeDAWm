@@ -104,6 +104,8 @@ Edit > Selection > Audition > Play to End = @transport.play_to_end
 Edit > Selection > Audition > Play from End = @transport.play_from_end
 Edit > Selection > Set Play Start = @transport.set_play_start
 Edit > Selection > Set Loop to Selection = @loop.set
+Edit > Selection > Skip Range = @transport.skip_add
+Edit > Selection > Clear Skip Ranges = @transport.skip_clear
 Edit > Selection > ---
 Edit > Selection > Move Edit Left
 Edit > Selection > Move Edit Right

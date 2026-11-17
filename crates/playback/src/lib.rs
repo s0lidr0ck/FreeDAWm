@@ -1050,6 +1050,30 @@ impl AudioState {
         true
     }
 
+    /// Skip ranges (`EditState::skips`): playing (not recording or counting off), the next skip
+    /// ahead is jumped over as a locate is, ramped out just before its start and in at its end;
+    /// the block is cut to end where that ramp must begin. A play that starts inside one plays
+    /// it. Returns the block length to render. Never allocates.
+    fn skip_ahead(&mut self, n: usize) -> usize {
+        if !self.playing || self.recording || self.countoff.is_some() || self.deferred.is_some() || self.lent {
+            return n;
+        }
+        let lead = if self.declick { self.ramp_frames() as i64 } else { 0 };
+        let pos = self.pos;
+        let Some(next) = self.session.edit.skips.iter().filter(|k| k.end > k.start && k.start > pos).min_by_key(|k| k.start).copied() else {
+            return n;
+        };
+        let to = next.start - lead;
+        if to > pos {
+            return n.min(usize::try_from(to - pos).unwrap_or(n)).max(1);
+        }
+        if !self.defer(Deferred::Locate(next.end)) {
+            self.apply(Deferred::Locate(next.end));
+            self.mix.reset_at(&self.session, self.pos);
+        }
+        n
+    }
+
     /// Ramp the output in from silence (a start, or the far side of a jump).
     fn ramp_in(&mut self) {
         self.ramp = if self.declick { 0.0 } else { 1.0 };
@@ -1297,6 +1321,7 @@ impl AudioState {
             self.midi_pass = self.midi_pass.saturating_add(1);
         }
         self.shared.midi_pass.store(u32::from(self.midi_pass), Ordering::Relaxed);
+        n = self.skip_ahead(n);
         if let Some(c) = &self.countoff {
             // The count-off ends on a block edge: the take's first block starts at the record point.
             n = n.min(usize::try_from((c.len() - self.countoff_at).max(1)).unwrap_or(mb));
@@ -6146,6 +6171,30 @@ mod tests {
             st.fill(&mut out, 2);
         }
         assert!(!st.playing);
+    }
+
+    /// Playback jumps over a skip range: what is played of it is at most the declick ramp, and
+    /// the playhead lands at its end. A play started inside one plays it.
+    #[test]
+    fn playback_jumps_over_a_skip_range() {
+        let mut s = Session::default();
+        s.edit.skips = vec![Range::new(4_000, 40_000)];
+        let (player, mut st) = Player::offline(Arc::new(s), 48_000, 256, 2);
+        player.play(0, None, None);
+        let mut out = vec![0.0f32; 2 * 256];
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            st.fill(&mut out, 2);
+            seen.push(st.pos);
+        }
+        let ramp = st.ramp_frames() as i64;
+        assert!(seen.iter().all(|p| *p <= 4_000 + ramp + 256 || *p >= 40_000), "{seen:?}");
+        assert!(*seen.last().unwrap() > 40_000 + 256 * 40, "played on past it");
+        player.play(10_000, None, None);
+        for _ in 0..8 {
+            st.fill(&mut out, 2);
+        }
+        assert!(st.pos > 10_000 && st.pos < 40_000, "started inside: plays it ({})", st.pos);
     }
 
     #[test]

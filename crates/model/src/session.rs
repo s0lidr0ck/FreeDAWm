@@ -188,6 +188,10 @@ pub struct EditState {
     /// range is selected or `loop.set` runs; old sessions load with none.
     #[serde(default, rename = "loop")]
     pub loop_range: Option<Range>,
+    /// Ranges playback jumps over (Logic's skip cycle, Cubase's skip): sorted by start, not
+    /// overlapping. Recording plays through them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skips: Vec<Range>,
     /// Clips explicitly selected (Grabber selection).
     #[serde(default)]
     pub selected_clips: Vec<ClipId>,
@@ -274,6 +278,7 @@ impl Default for EditState {
             selection: Range::default(),
             selected_tracks: Vec::new(),
             loop_range: None,
+            skips: Vec::new(),
             selected_clips: Vec::new(),
             selected_sources: Vec::new(),
             playhead: 0,

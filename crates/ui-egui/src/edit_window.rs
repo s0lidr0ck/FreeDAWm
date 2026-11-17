@@ -720,6 +720,14 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         }
                         crate::menus::ruler_context_menu(app, ui, id);
                     });
+                    // Skip ranges: a red band along the ruler's lower half.
+                    for k in &s.edit.skips {
+                        let (x0, x1) = (x_of(&s, tl, k.start).max(row.min.x), x_of(&s, tl, k.end).min(row.max.x));
+                        if x1 > x0 {
+                            let band = Rect::from_min_max(pos2(x0, row.center().y), pos2(x1, row.max.y));
+                            painter.rect_filled(band, 0.0, Color32::from_rgba_unmultiplied(0xd0, 0x40, 0x40, 0x50));
+                        }
+                    }
                     let dynamic = s.edit.flag(soundcraft_engine::cmd::transport::DYNAMIC);
                     if dynamic && let Some(x) = soundcraft_engine::cmd::transport::play_start(&s).map(|at| x_of(&s, tl, at)) {
                         // The play start marker: a small green triangle on the ruler's lower edge.
