@@ -4927,7 +4927,9 @@ mod tests {
         let tl = timeline(&h);
         let (clip, lane) = clip_on_screen(&h, |a, b| b - a > 120.0 && a > tl.min.x + 10.0 && b < tl.max.x - 200.0);
         let s = h.state().engine.session().clone();
-        let edge = pos2(x_of(&s, tl, clip.end()) - 2.0, lane.center().y + lane.height() / 4.0);
+        // Mid-height: the clip ends where the next begins, and the lower corner of a join is the
+        // Smart Tool's crossfade zone.
+        let edge = pos2(x_of(&s, tl, clip.end()) - 2.0, lane.center().y);
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
         drag(&mut h, edge, edge + vec2(80.0, 0.0));
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
@@ -5218,7 +5220,9 @@ mod tests {
         let mut h = smart_demo();
         let tl = timeline(&h);
         let (clip, lane) = clip_on_screen(&h, |xs, xe| xe > tl.min.x + 100.0 && xe < tl.max.x - 20.0 && xe - xs > 100.0);
-        let press = pos2(x_of(h.state().engine.session(), tl, clip.end()) - 2.0, lane.min.y + lane.height() * 0.75);
+        // Mid-height: below it, at a join (this clip ends where the next begins), the Smart Tool
+        // draws a crossfade instead.
+        let press = pos2(x_of(h.state().engine.session(), tl, clip.end()) - 2.0, lane.center().y);
         quick_drag(&mut h, press, press - vec2(40.0, 0.0));
         let after = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
         assert_eq!(after.start, clip.start, "the clip moved instead of being trimmed");
