@@ -51,7 +51,7 @@ pub const HELPER_NAME: &str = "freedawm-plugin-host";
 /// A helper behind for this long without a break counts as hung: its plug-in is given up.
 pub const HANG_SECONDS: u64 = 5;
 
-/// The app's setting (Setup › Preferences › Mixing › Run CLAP plug-ins in their own process).
+/// The app's setting (Setup › Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process).
 static SETTING: AtomicBool = AtomicBool::new(false);
 
 /// Sets this computer's choice (the app's Preferences); [`enabled`] follows it unless
@@ -89,13 +89,18 @@ pub fn helper_path() -> Result<std::path::PathBuf, String> {
     Err("plug-ins in their own process need the desktop app".into())
 }
 
-/// A `clap:` plug-in in its own process, when that is [`enabled`]. `None` when it is not for the
-/// bridge (turned off, not a `clap:` id, or no helper next to the app): the caller then creates it
+/// Whether `id` is a plug-in the bridge can run: a CLAP (`clap:`) or VST3 (`vst3:`) one.
+pub fn bridgeable(id: &str) -> bool {
+    soundcraft_clap_host::parse_id(id).is_some() || soundcraft_vst3_host::parse_id(id).is_some()
+}
+
+/// A CLAP or VST3 plug-in in its own process, when that is [`enabled`]. `None` when it is not for
+/// the bridge (turned off, not such an id, or no helper next to the app): the caller then creates it
 /// as before. `Some(None)` when the helper could not make it (it crashed, hung or the plug-in
 /// refused, said once): the caller must not then load it in its own process, where the same crash
 /// would take the app down.
 pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
-    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+    if !enabled() || !bridgeable(id) {
         return None;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -110,7 +115,7 @@ pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
         match BridgedPlugin::spawn_from(&exe, id) {
             Ok(p) => Some(Some(Box::new(p))),
             Err(e) => {
-                report(format!("{id} could not be loaded in its own process: {e}"));
+                report(format!("{} could not be loaded in its own process: {e}", host::scanned_name(id).unwrap_or_else(|| id.to_string())));
                 Some(None)
             }
         }
@@ -119,15 +124,15 @@ pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
     None
 }
 
-/// The description of a `clap:` plug-in, read in a helper of its own when plug-ins run in their
-/// own process ([`enabled`]), so a plug-in that crashes or hangs while being described cannot
-/// take the app down. `None` when it is not for the bridge (turned off, not a `clap:` id, or no
+/// The description of a CLAP or VST3 plug-in, read in a helper of its own when plug-ins run in
+/// their own process ([`enabled`]), so a plug-in that crashes or hangs while being described cannot
+/// take the app down. `None` when it is not for the bridge (turned off, not such an id, or no
 /// helper): the caller reads the description as before. `Some(None)` when the helper could not
 /// describe it (it crashed, hung or the plug-in refused; a crash or hang is said once, see
 /// [`take_crash_reports`]); that answer is kept for the rest of the run. Blocks for as long as the
 /// helper takes, at most [`HANG_SECONDS`]; later calls answer from memory.
 pub fn plugin_info(id: &str) -> Option<Option<&'static soundcraft_dsp::PluginInfo>> {
-    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+    if !enabled() || !bridgeable(id) {
         return None;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -309,6 +314,15 @@ mod tests {
         assert!(!enabled());
         assert!(create("clap:org.soundcraft.test.gain").is_none());
         assert!(create("eq_7band").is_none());
+    }
+
+    #[test]
+    fn clap_and_vst3_ids_are_bridgeable() {
+        assert!(bridgeable("clap:org.soundcraft.test.gain"));
+        assert!(bridgeable("vst3:5C0A1D00111122223333444455556666"));
+        assert!(!bridgeable("au:aufx:bpas:appl"), "Audio Units are not yet");
+        assert!(!bridgeable("eq_7band"));
+        assert!(!bridgeable("vst3:nonsense"));
     }
 
     #[test]

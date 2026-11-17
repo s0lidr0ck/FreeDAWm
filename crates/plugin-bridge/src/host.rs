@@ -163,7 +163,7 @@ pub(crate) fn describe(id: &str) -> Option<Option<&'static PluginInfo>> {
     match describe_with(&exe, id, dir.as_deref(), &[]) {
         Ok(info) => Some(Some(leaked_info(id, &info))),
         Err(e) => {
-            let name = soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map_or_else(|| id.to_string(), |d| d.name);
+            let name = scanned_name(id).unwrap_or_else(|| id.to_string());
             match e {
                 DescribeError::Crashed => crate::report(format!("{name} crashed while it was being loaded in its own process: it is not offered")),
                 DescribeError::Hung => {
@@ -177,9 +177,21 @@ pub(crate) fn describe(id: &str) -> Option<Option<&'static PluginInfo>> {
     }
 }
 
-/// The folder of a `clap:` plug-in's bundle, as the scan cache knows it.
+/// The folder of a CLAP or VST3 plug-in's bundle, as the scan cache knows it.
 fn bundle_dir(id: &str) -> Option<PathBuf> {
-    soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).and_then(|d| d.path.parent().map(Path::to_path_buf))
+    let bundle = match soundcraft_clap_host::parse_id(id) {
+        Some(_) => soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map(|d| d.path),
+        None => soundcraft_vst3_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map(|d| d.path),
+    };
+    bundle.and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// A CLAP or VST3 plug-in's name, as the scan cache knows it.
+pub(crate) fn scanned_name(id: &str) -> Option<String> {
+    match soundcraft_clap_host::parse_id(id) {
+        Some(_) => soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map(|d| d.name),
+        None => soundcraft_vst3_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map(|d| d.name),
+    }
 }
 
 /// What the audio thread, the pipe's reader and the watchdog share.

@@ -6558,11 +6558,12 @@ pub fn take_plugin_crash_reports() -> Vec<String> {
 /// helper, Restart and the descriptions read there.
 pub use soundcraft_plugin_bridge as plugin_bridge;
 
-/// A `clap:` plug-in's description: read in a helper process while plug-ins run in their own
-/// process (so a plug-in that crashes as it loads cannot take the app down; one that did is
-/// described as nothing), else in this process as before.
-pub fn clap_plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
-    soundcraft_plugin_bridge::plugin_info(id).unwrap_or_else(|| soundcraft_clap_host::plugin_info(id))
+/// A CLAP or VST3 plug-in's description: read in a helper process while plug-ins run in their
+/// own process (so a plug-in that crashes as it loads cannot take the app down; one that did is
+/// described as nothing, never read here instead), else in this process as before.
+pub fn hosted_plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
+    soundcraft_plugin_bridge::plugin_info(id)
+        .unwrap_or_else(|| soundcraft_clap_host::plugin_info(id).or_else(|| soundcraft_vst3_host::plugin_info(id)))
 }
 
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
@@ -6584,7 +6585,7 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     {
         return Some(p);
     }
-    // A CLAP plug-in in a process of its own when that is turned on (Preferences › Mixing): one
+    // A CLAP or VST3 plug-in in a process of its own when that is turned on (Preferences › Mixing): one
     // the helper could not make is not then made here, where its crash would take the app down.
     if let Some(bridged) = soundcraft_plugin_bridge::create(id) {
         return bridged;

@@ -206,6 +206,71 @@ fn a_crashed_plug_in_keeps_its_last_state_and_a_restart_brings_it_back() {
     assert!(!again.crashed());
 }
 
+/// The VST3 test plug-in of `soundcraft-vst3-host` (`tests/fixture`), built once and installed
+/// as a bundle (`<dir>/vendor/Fixture.vst3`) in a folder of its own.
+fn vst3_fixture() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vst3-host/tests/fixture/Cargo.toml");
+        let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vst3-fixture-target");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let st = Command::new(cargo)
+            .args(["build", "--quiet", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--target-dir")
+            .arg(&target)
+            .env_remove("RUSTFLAGS")
+            .status()
+            .unwrap();
+        assert!(st.success(), "building the VST3 fixture failed");
+        let (lib, folder, exe) = if cfg!(target_os = "macos") {
+            ("libvst3_fixture.dylib", "MacOS", "Fixture")
+        } else if cfg!(windows) {
+            ("vst3_fixture.dll", "x86_64-win", "Fixture.vst3")
+        } else {
+            ("libvst3_fixture.so", if cfg!(target_arch = "aarch64") { "aarch64-linux" } else { "x86_64-linux" }, "Fixture.so")
+        };
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bridge-vst3-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir.join("vendor/Fixture.vst3/Contents").join(folder);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(target.join("debug").join(lib), bin.join(exe)).unwrap();
+        dir
+    })
+}
+
+#[test]
+fn a_vst3_plug_in_runs_in_its_own_process_too() {
+    // `uid()` lays out the first 8 bytes differently on Windows (COM GUID order).
+    let id = if cfg!(windows) { "vst3:001D0A5C111122223333444455556666" } else { "vst3:5C0A1D00111122223333444455556666" };
+    assert!(soundcraft_plugin_bridge::bridgeable(id));
+    // Described in a helper: this process never loads the plug-in's binary.
+    let info = soundcraft_plugin_bridge::describe_with(exe(), id, Some(vst3_fixture()), &[]).unwrap();
+    assert_eq!(info.name, "Fixture Gain");
+    assert_eq!(info.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["7", "3", "12", "13", "14"]);
+    let mut p = BridgedPlugin::spawn_with(exe(), id, Some(vst3_fixture())).unwrap();
+    p.prepare(48_000.0, 128, 2);
+    assert_eq!(p.latency(), 3 + 128, "its own latency and the bridge's block");
+    // The fixture starts at gain 0.5 (its component state), one block late.
+    let (sent, heard) = play(&mut p, 0, 30);
+    eprintln!("blocks not back in time: {}", p.overruns());
+    if p.overruns() == 0 {
+        for b in 2..30 {
+            assert!(heard[b].iter().zip(&sent[b - 1]).all(|(h, s)| (h - s * 0.5).abs() < 1e-6), "block {b}");
+        }
+    }
+    // Its state crosses the pipe, and a crash only silences it.
+    let state = p.save_state().expect("every VST3 component has a state");
+    assert!(p.load_state(&state));
+    p.kill_helper();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !p.crashed() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(p.crashed());
+    assert_eq!(p.save_state(), Some(state), "the state it last had, for Restart");
+}
+
 #[test]
 fn a_clap_plug_ins_own_presets_are_listed_and_loaded_through_its_process() {
     use soundcraft_plugin_bridge::{preset_state_with, presets_with};

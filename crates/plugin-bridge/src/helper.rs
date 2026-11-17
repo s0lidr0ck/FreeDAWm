@@ -155,17 +155,24 @@ fn values_of(s: &Served) -> Vec<Option<f32>> {
     s.ids.iter().map(|id| s.plugin.param(id).filter(|v| v.is_finite())).collect()
 }
 
-/// Makes plug-in `id`: a `clap:` one (the bundles in `dir` made known first), or for tests a
-/// built-in one.
+/// Makes plug-in `id`: a `clap:` or `vst3:` one (the bundles in `dir` made known first), or for
+/// tests a built-in one.
 fn open(id: &str, dir: Option<String>) -> Result<Box<dyn Plugin>, String> {
-    if let Some(d) = dir.filter(|_| soundcraft_clap_host::parse_id(id).is_some()) {
-        soundcraft_clap_host::add_search_dir(std::path::Path::new(&d));
+    let dir = dir.as_deref().map(std::path::Path::new);
+    if soundcraft_clap_host::parse_id(id).is_some() {
+        if let Some(d) = dir {
+            soundcraft_clap_host::add_search_dir(d);
+        }
+        return soundcraft_clap_host::instantiate(id).map_err(|e| e.to_string());
     }
-    match soundcraft_clap_host::parse_id(id) {
-        Some(_) => soundcraft_clap_host::instantiate(id).map_err(|e| e.to_string()),
-        // Built-in plug-ins: the tests' stand-ins.
-        None => soundcraft_dsp::create(id).ok_or_else(|| format!("no plug-in `{id}`")),
+    if soundcraft_vst3_host::parse_id(id).is_some() {
+        if let Some(d) = dir {
+            soundcraft_vst3_host::add_search_dir(d);
+        }
+        return soundcraft_vst3_host::instantiate(id).map_err(|e| e.to_string());
     }
+    // Built-in plug-ins: the tests' stand-ins.
+    soundcraft_dsp::create(id).ok_or_else(|| format!("no plug-in `{id}`"))
 }
 
 fn prepare_with(s: &mut Served, p: &Prepare) -> Reply {

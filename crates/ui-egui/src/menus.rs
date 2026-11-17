@@ -120,7 +120,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.preferences", "Preferences", "", None),
     ("ui.meter_ballistics", "Meter Ballistics", "", None),
     ("ui.copy_imported_audio", "Copy Imported Audio into the Project", "", None),
-    ("ui.plugin_process", "Run CLAP Plug-ins in Their Own Process", "", None),
+    ("ui.plugin_process", "Run CLAP and VST3 Plug-ins in Their Own Process", "", None),
     ("ui.plugin_restart", "Restart Plug-in", "", None),
     // The monitor stage (`monitor_ui`): heard on this computer, never in a bounce.
     ("monitor.ear", "Ear Correction", "", None),

@@ -81,7 +81,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 |---|---|---|
 | Project page: master an album in the same app, songs update from their mixes, DDP and digital release | **Not planned here** | The mastering page is tabled by the owner (design below). Bounce to a loudness target with a true-peak ceiling |
 | Show page: set lists for playing live | **Missing** | |
-| Scratch pads: try another arrangement beside the song | **Missing** | Playlists per track are the nearest thing |
+| Scratch pads: try another arrangement beside the song | **Missing** | Playlists per track are the nearest thing. [Section 4](04-editing-audio.md)'s row (alternative arrangements); not reached here |
 | Arranger track: drag sections to reorder the song | **Partial** | Sections exist for the Band; moving one does not move track audio or MIDI |
 | Chord track that re-pitches audio as well as MIDI | **Partial** | Chords drive the Band and re-pitch single-line vocals (Fit to Lead, Make Harmony); MIDI clips follow the chord lane, per clip, opt in ([section 7](07-midi-writing.md)); chordal audio does not |
 | Mix Engine FX: one console model across every channel of a bus | **Missing** | |
@@ -124,7 +124,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 |---|---|---|
 | Expression Maps and Note Expression | **Missing** | |
 | VariAudio: pitch and formant editing, harmonies from the chord track | **Works** | Note-based tuning with formant-preserving resynthesis; Make Harmony follows the chords; a view of every vocal track with clashes marked |
-| Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths; no pads, no suggestions |
+| Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths, and a chord stamp for the Pencil ([section 7](07-midi-writing.md)); no pads, no suggestions |
 | Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
 | Mixer undo history and mixer snapshots | **Works** | Mixer moves are ordinary undo steps; Window › Mix Snapshots stores and recalls the whole mix or parts of it ([section 3](03-mixing.md)) |
 | Logical Editor, Project Logical Editor, macros | **Missing** | |
@@ -133,7 +133,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
 | Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform, and warp markers placed by hand; no Time Warp of the tempo map by dragging |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
-| Modulators for any parameter | **Missing** | |
+| Modulators for any parameter | **Missing** | [Section 5](05-built-in-effects.md)'s row; not reached here |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (4d3e275); no video |
 | ARA 2 and spectral editing | **Not planned here** | ARA needs its SDK, which is not in the tree; spectral editing is [section 4](04-editing-audio.md)'s. A view flag exists and is unread |
@@ -178,7 +178,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Browser build | **Not planned here** (the owner: no further work) | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
 | Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
-| Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in runs inside the app and can bring it down, unless it is a CLAP plug-in and Preferences › Mixing › Run CLAP plug-ins in their own process is on (off by default; see the design notes) |
+| Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in runs inside the app and can bring it down, unless it is a CLAP or VST3 plug-in and Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process is on (off by default; see the design notes) |
 
 ## Things that promise more than they do
 
@@ -212,7 +212,7 @@ local link allows in the Network window (row 6).
 | Timing alignment of stacked vocals | 10–16 | The pitch half is done; the command already has the option | **Done** (aee379b): `vocal.fit_to_lead {align_timing: true}` (the studio bar's Align timing, which leaves pitch alone with `fit_pitch: false`). Each backing note is paired with the lead note it overlaps most; its start and end move `strength` (default 100 %) of the way to the lead's, at most `max_shift_ms` (default 100). Where a note starts out of silence or stops into it the edge is read from the audio (within 25 ms of the tracker's), so edges land closer than the tracker's 5 ms hop. The clip is rendered again with Straighten's pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), its tuning carried through the warp and re-matched to an analysis run before the command returns: one undo step. Test: a double sung 17 to 41 ms off lands every start and end within 3 ms of the lead's, pitch within 8 cents, a fitted note keeps its fit. Limits: Remove Warp goes back to the original audio without the tuning; Clean Vocal's amount at the time is baked into the render; timed lyrics on the clip are not moved |
 | Search the transcript; transcript lane | 6–10 | Whisper output is there; Pro Tools' dialogue workflow | **Search done** (ade867d): `lyrics.search` lists every place a phrase is sung or spoken across the tracks' timed lyrics (case, punctuation and line breaks ignored); AI › Find in Transcript… selects the next one and moves the playhead there. The lane is the lyric strip each track already draws; a separate taller dialogue lane is not built |
 | Macro knobs and a splitter in the insert chain | 14–22 | Also in [section 5](05-built-in-effects.md)'s list; count once | **Not planned here**: rack and macros skipped by the owner |
-| Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)) |
+| Modulators for any parameter | 10–16 | Also in section 5's list | **Another section's** ([section 5](05-built-in-effects.md)); still Missing there |
 | Control room: cue mixes from sends, talkback, monitor sets, listen bus | 14–22 | Pairs with remote recording, which has no talkback | **Done** in [section 3](03-mixing.md) (ec5efc3) |
 | Mixer snapshots | 6–10 | | **Done** in [section 3](03-mixing.md) (Window › Mix Snapshots) |
 | Clip launcher: cells, scenes, record the performance to the timeline | 40–60 | Three of the four have one. The largest item; needs a design first | **Deferred by the owner** (2026-11-16): not to be built for now |
@@ -316,7 +316,7 @@ same pass as the items above; these are the starting points.
   (output equal to the input times its gain, one block late; latency its own plus one block); the
   helper killed mid-render: every block still returns at once, the plug-in passes audio through,
   the crash is reported by name, later requests fail at once. *Second step (round three):*
-  Setup › Preferences › Mixing › Run CLAP plug-ins in their own process (`ui.plugin_process`,
+  Setup › Preferences › Mixing › Run CLAP (and, since below, VST3) plug-ins in their own process (`ui.plugin_process`,
   this computer's, off by default; it applies to plug-ins loaded from then on and when a session
   opens; `FREEDAWM_PLUGIN_PROCESS=1` or `0` overrides it for a run, and the window says so, and
   says when the helper is missing); the helper is built with the workspace and every package
@@ -330,7 +330,7 @@ same pass as the items above; these are the starting points.
   yet:* a per-insert choice,
   the editor window,
   latency, tail and parameter changes the plug-in makes itself, the transport for the
-  plug-in (tempo, position), VST3 and AU. The scan itself already ran in `freedawm-scan`.
+  plug-in (tempo, position), VST3 presets and programs (a .vstpreset still loads, as a state), and AU. The scan itself already ran in `freedawm-scan`. *VST3 (round three):* the helper makes `vst3:` plug-ins too (with `vst3-host`, its bundle's folder from the scan cache), so a VST3 plug-in is described, played, saved and restarted through its own process exactly as a CLAP one (the option is now "Run CLAP and VST3 plug-ins in their own process"); its own editor is not offered while it runs there (no editors through the bridge yet; turn the option off to use one).
   The design as written: Behind an
   option (Setup › Plug-ins › Run plug-ins in their own process, off by default; per insert too),
   CLAP first, VST3 and AU after on the same bridge.
@@ -406,7 +406,7 @@ same pass as the items above; these are the starting points.
   exactly as it does CLAP now; the bridge, the exchange and the crash handling do not change;
   the scan's VST3 results already carry the bundle path for `dir`. *AU:* the same with
   `soundcraft-au-host` on macOS; an AU's out-of-process loading by the system (AUv3 extensions)
-  is left to the system. *Order:* VST3 first (its test plug-in is in the tree, so it is a
+  is left to the system. *Order:* VST3 first (built in round three; its test plug-in is in the tree, so it was a
   tested step), then the CLAP editor (needs a desktop session to test), then AU (needs a Mac).
 
 ## Sources
@@ -426,6 +426,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Plug-ins in their own process: VST3 plug-ins run there too (the option is now for CLAP and VST3) |
 | 2026-11-17 | minor | Plug-ins in their own process: the plug-in's own presets listed and loaded through its process |
 | 2026-11-17 | minor | Plug-ins in their own process: a crashed plug-in says so on its tile, and Restart Plug-in brings it back with its last state |
 | 2026-11-17 | minor | Designs: the first pairing by a password-authenticated key exchange (the crate named, not added), and editor windows, VST3 and AU through the plug-in bridge |

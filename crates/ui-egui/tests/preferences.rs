@@ -81,7 +81,7 @@ fn plug_ins_in_their_own_process_is_this_computers_setting_off_by_default() {
     assert!(!soundcraft_mix::plugin_bridge::enabled());
     a.run("window.preferences", json!({"tab": "mixing"})).unwrap();
     let mut h = harness(a);
-    h.get_by_label("Run CLAP plug-ins in their own process").click();
+    h.get_by_label("Run CLAP and VST3 plug-ins in their own process").click();
     steps(&mut h);
     assert!(h.state().ui.plugin_process);
     assert!(soundcraft_mix::plugin_bridge::enabled(), "plug-ins loaded from now on are bridged");

@@ -303,7 +303,7 @@ fn mixing(app: &mut SoundApp, ui: &mut Ui) {
     flag(app, ui, "Sync track visibility", "window.sync_visibility", sync.visibility, "");
 }
 
-/// Preferences › Mixing › Run CLAP plug-ins in their own process, with what overrides it and
+/// Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process, with what overrides it and
 /// whether the helper is there.
 #[cfg(not(target_arch = "wasm32"))]
 fn plugin_process(app: &mut SoundApp, ui: &mut Ui) {
@@ -312,10 +312,10 @@ fn plugin_process(app: &mut SoundApp, ui: &mut Ui) {
     flag(
         app,
         ui,
-        "Run CLAP plug-ins in their own process",
+        "Run CLAP and VST3 plug-ins in their own process",
         "ui.plugin_process",
         on,
-        "A CLAP plug-in that crashes or hangs then silences only itself (an effect passes its input through) instead of taking FreeDAWm down. Each such plug-in adds one block of latency, which delay compensation lines up. Applies to plug-ins loaded from now on (and when a session is opened); not yet their own editor windows.",
+        "A CLAP or VST3 plug-in that crashes or hangs then silences only itself (an effect passes its input through) instead of taking FreeDAWm down. Each such plug-in adds one block of latency, which delay compensation lines up. Applies to plug-ins loaded from now on (and when a session is opened); not yet their own editor windows.",
     );
     let dim = Tokens::current().text_dim;
     if let Some(forced) = bridge::env_override() {
