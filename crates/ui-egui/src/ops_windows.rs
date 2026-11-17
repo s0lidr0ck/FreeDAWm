@@ -61,6 +61,8 @@ pub struct OpsState {
     pub rule_length: (i64, i64),
     pub rule_beats: Option<(f64, f64)>,
     pub rule_split: bool,
+    /// Select Notes: the channels (from 1).
+    pub rule_channel: (i64, i64),
     pub rtp_velocity: i64,
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
@@ -115,6 +117,7 @@ impl Default for OpsState {
             rule_length: (1, 15_360),
             rule_beats: None,
             rule_split: false,
+            rule_channel: (1, 16),
             rtp_velocity: 0,
             rtp_transpose: 0,
             rtp_duration: 100.0,
@@ -529,6 +532,10 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
                 "length_from": o.rule_length.0, "length_to": o.rule_length.1,
                 "action": if o.rule_split { "split" } else { "select" },
             });
+            if o.rule_channel != (1, 16) {
+                p["channel_from"] = json!(o.rule_channel.0);
+                p["channel_to"] = json!(o.rule_channel.1);
+            }
             // Beats of the bar (1-based) as ticks from the bar line; the end beat's whole length.
             if let Some((a, b)) = o.rule_beats {
                 let q = soundcraft_midi::PPQ as f64;
@@ -741,6 +748,7 @@ fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
         ui.add(egui::DragValue::new(&mut o.rule_pitch.1).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)));
     });
     range(ui, "Velocity", &mut o.rule_velocity, 1, 127);
+    range(ui, "Channel", &mut o.rule_channel, 1, 16);
     range(ui, "Length (ticks)", &mut o.rule_length, 1, 1_000_000);
     let mut beats = o.rule_beats.is_some();
     ui.horizontal(|ui| {

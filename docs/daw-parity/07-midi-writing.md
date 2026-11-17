@@ -128,7 +128,7 @@ The gaps are of four kinds:
 | Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Works**: legato, set, add and scale length (bug 7, fixed) and Fix Overlaps in the MIDI Operations window, on the selected notes |
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
 | Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Works**: strum (up or down), flam (a grace note of the same pitch a set number of ticks before each note, at a share of its velocity; `event.flam`), reverse, invert pitches (mirrored around the middle of their range, or a given pitch; `event.invert_pitch`), half and double time in the MIDI Operations window |
-| Split notes out by pitch or channel | ● | ● | ● | ● | **Flag only** |
+| Split notes out by pitch or channel | ● | ● | ● | ● | **Works**: MIDI Operations › Select Notes picks notes by pitch, velocity, length, place in the bar and channel, and Move Them to a New Track splits them out (`event.select_split_notes` `action: split`, `channel_from`, `channel_to`); the first version of this page said Flag only, but the pitch split was already built |
 | Rule-based transformer | ◐ | ◐ | ● | ● | **Missing** |
 
 ## E. Scales and chords
@@ -434,3 +434,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Transpose within the key, by steps of the key on the Key ruler |
 | 2026-11-17 | minor | Flam and pitch inversion in the MIDI Operations window |
 | 2026-11-17 | minor | The release velocity shown and set in the note bar |
+| 2026-11-17 | minor | Notes split out by channel too (the pitch split was already built) |

@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select/Split Notes...",
             ["Event", "MIDI Operations"],
             None,
-            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
+            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, channel_from?, channel_to?: 1..16, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
             has_selection,
             select_split
         ),
@@ -312,6 +312,10 @@ fn midi_clip_ids(e: &Engine, p: &Value) -> Vec<(TrackId, ClipId)> {
 fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.select_split_notes";
     let rule = note_rule(p);
+    // Channels from 1, as shown.
+    let ch = |k: &str, d: i64| p.get(k).and_then(Value::as_i64).unwrap_or(d).clamp(1, 16) as u8 - 1;
+    let (c0, c1) = (ch("channel_from", 1), ch("channel_to", 16));
+    let channels = c0.min(c1)..=c0.max(c1);
     let split = match str_param(p, "action") {
         None | Some("select") => false,
         Some("split") => true,
@@ -334,7 +338,7 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
         let picked: Vec<usize> = soundcraft_midi::ops::select_matching(&sequence.notes, &rule, bar_start)
             .into_iter()
-            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0))
+            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0 && channels.contains(&(n.channel & 0x0F))))
             .collect();
         let (mut hit, mut rest) = (Vec::new(), Vec::new());
         for (i, n) in sequence.notes.iter().enumerate() {
@@ -990,6 +994,29 @@ mod tests {
         assert!((e.session().tempo.tempo_at_tick(0) - 120.0).abs() < 1e-9);
         e.execute("event.identify_beat", &json!({"start": 0, "end": 192_000, "bars": 1})).unwrap();
         assert!((e.session().tempo.tempo_at_tick(0) - 60.0).abs() < 1e-9);
+    }
+
+    /// Parity section 7: notes split out by channel.
+    #[test]
+    fn notes_are_picked_and_split_by_channel() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "channel": 9},
+            {"pitch": 60, "start_ticks": 0},
+            {"pitch": 64, "start_ticks": 480, "channel": 1}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid], "channel_from": 2, "channel_to": 10})).unwrap();
+        let picked: Vec<u64> = r["indices"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect();
+        assert_eq!(picked.len(), 2, "channels 2 and 10: {r}");
+        e.execute("edit.select", &json!({"clips": [cid]})).unwrap();
+        let r = e.execute("event.select_split_notes", &json!({"channel_from": 10, "channel_to": 10, "action": "split"})).unwrap();
+        assert_eq!(r["matched"], 1);
+        let nt = e.session().tracks.iter().find(|x| x.id != t).unwrap();
+        match &nt.clips()[0].content {
+            ClipContent::Midi { sequence } => assert_eq!((sequence.notes[0].pitch, sequence.notes[0].channel), (36, 9)),
+            _ => panic!(),
+        }
     }
 
     #[test]
