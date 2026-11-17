@@ -60,6 +60,56 @@ pub enum DescribeError {
 /// `env` added to its environment (tests), and stops it again.
 #[doc(hidden)]
 pub fn describe_with(exe: &Path, id: &str, dir: Option<&Path>, env: &[(&str, &str)]) -> Result<Info, DescribeError> {
+    let req = Request::Describe { id: id.into(), dir: dir.map(|d| d.to_string_lossy().into_owned()) };
+    let reply = one_shot(exe, &req, env)?;
+    match (reply.ok, reply.info) {
+        (true, Some(info)) => Ok(info),
+        _ => Err(DescribeError::Refused(reply.error.unwrap_or_else(|| "no description".into()))),
+    }
+}
+
+/// Starts helper `exe` to list the presets plug-in `id` in the bundle at `bundle` reports, and
+/// stops it again.
+#[doc(hidden)]
+pub fn presets_with(exe: &Path, id: &str, bundle: &Path) -> Result<Vec<soundcraft_clap_host::ClapPreset>, DescribeError> {
+    let reply = one_shot(exe, &Request::Presets { id: id.into(), path: bundle.to_string_lossy().into_owned() }, &[])?;
+    if reply.ok { Ok(reply.presets) } else { Err(DescribeError::Refused(reply.error.unwrap_or_else(|| "no presets".into()))) }
+}
+
+/// Starts helper `exe` to make plug-in `id` (its bundle's folder `dir`) with `preset` loaded and
+/// read its state, and stops it again.
+#[doc(hidden)]
+pub fn preset_state_with(exe: &Path, id: &str, dir: Option<&Path>, preset: &soundcraft_clap_host::ClapPreset) -> Result<Vec<u8>, DescribeError> {
+    let req = Request::PresetState { id: id.into(), dir: dir.map(|d| d.to_string_lossy().into_owned()), preset: preset.clone() };
+    let reply = one_shot(exe, &req, &[])?;
+    match (reply.ok, reply.state.as_deref().and_then(unhex)) {
+        (true, Some(state)) => Ok(state),
+        _ => Err(DescribeError::Refused(reply.error.unwrap_or_else(|| "the plug-in gave no state".into()))),
+    }
+}
+
+/// [`crate::presets`] once the bridge is known to be on and `id` a `clap:` id.
+pub(crate) fn presets(id: &str) -> Option<Vec<soundcraft_clap_host::ClapPreset>> {
+    let exe = helper_exe().ok()?;
+    let bundle = soundcraft_clap_host::cached().and_then(|all| all.into_iter().find(|d| d.id == id)).map(|d| d.path)?;
+    Some(presets_with(&exe, id, &bundle).unwrap_or_else(|e| {
+        log::warn!("{id}: its presets could not be listed in its own process: {e:?}");
+        Vec::new()
+    }))
+}
+
+/// [`crate::preset_state`] once the bridge is known to be on and `id` a `clap:` id.
+pub(crate) fn preset_state(id: &str, preset: &soundcraft_clap_host::ClapPreset) -> Option<Result<Vec<u8>, String>> {
+    let exe = helper_exe().ok()?;
+    Some(preset_state_with(&exe, id, bundle_dir(id).as_deref(), preset).map_err(|e| match e {
+        DescribeError::Crashed => format!("the plug-in crashed in its own process loading the preset {}", preset.name),
+        DescribeError::Hung => format!("the plug-in stopped answering in its own process loading the preset {}", preset.name),
+        DescribeError::Start(e) | DescribeError::Refused(e) => e,
+    }))
+}
+
+/// Starts helper `exe` (with `env` added), sends it `req`, takes its one reply, and stops it.
+fn one_shot(exe: &Path, req: &Request, env: &[(&str, &str)]) -> Result<Reply, DescribeError> {
     let mut cmd = helper_command(exe);
     cmd.envs(env.iter().copied());
     let mut child = cmd.spawn().map_err(|e| DescribeError::Start(format!("cannot start {}: {e}", exe.display())))?;
@@ -75,8 +125,7 @@ pub fn describe_with(exe: &Path, id: &str, dir: Option<&Path>, env: &[(&str, &st
             let _ = tx.send(line);
         }
     });
-    let req = Request::Describe { id: id.into(), dir: dir.map(|d| d.to_string_lossy().into_owned()) };
-    let sent = serde_json::to_string(&req).map(|mut l| {
+    let sent = serde_json::to_string(req).map(|mut l| {
         l.push('\n');
         stdin.write_all(l.as_bytes()).and_then(|()| stdin.flush())
     });
@@ -96,11 +145,7 @@ pub fn describe_with(exe: &Path, id: &str, dir: Option<&Path>, env: &[(&str, &st
     drop(stdin);
     let _ = child.kill();
     let _ = child.wait();
-    let reply = answer?;
-    match (reply.ok, reply.info) {
-        (true, Some(info)) => Ok(info),
-        _ => Err(DescribeError::Refused(reply.error.unwrap_or_else(|| "no description".into()))),
-    }
+    answer
 }
 
 /// [`crate::plugin_info`] once the bridge is known to be on and `id` a `clap:` id.
@@ -599,6 +644,11 @@ impl soundcraft_dsp::PluginStateReader for Reader {
 
     fn load_state(&mut self, data: &[u8]) -> bool {
         self.0.put_state(data).is_some()
+    }
+
+    fn load_preset(&mut self, kind: u32, location: Option<&str>, load_key: Option<&str>) -> bool {
+        let req = Request::LoadPreset { kind, location: location.map(str::to_string), load_key: load_key.map(str::to_string) };
+        self.0.call(&req).is_ok()
     }
 
     fn crashed(&self) -> bool {

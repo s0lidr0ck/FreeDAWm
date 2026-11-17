@@ -324,12 +324,12 @@ same pass as the items above; these are the starting points.
   app (a test reads the scripts). With the option on, a CLAP plug-in's description (name,
   parameters, group) is read in a helper of its own too, so one that crashes or hangs as it
   loads only costs that helper: it is not offered, the status line says so once, and it is never
-  then loaded in the app's own process (nor is one the helper could not make for an insert). A crashed or hung plug-in's tile says "crashed" (red mark, as a failed module), the status line says Restart brings it back, and Restart Plug-in on its menu (in the chain, the Mix window's inserts and the instrument slot; `ui.plugin_restart`, `mix.module_restart`, not an undo step) makes it again in a new process from the state it last had (read from it whenever the app reads states, or loaded into it; a crashed one answers that) and the parameter values the session holds. A loaded state now also sets the host's copy of the parameters, and only values the host set go to a new exchange (before, a re-prepare sent every default over a loaded state). Not built: an automatic restart, and a state fetched after each edit in the plug-in's own editor (it has none through the bridge yet). *Differs from the design:* the
+  then loaded in the app's own process (nor is one the helper could not make for an insert). A crashed or hung plug-in's tile says "crashed" (red mark, as a failed module), the status line says Restart brings it back, and Restart Plug-in on its menu (in the chain, the Mix window's inserts and the instrument slot; `ui.plugin_restart`, `mix.module_restart`, not an undo step) makes it again in a new process from the state it last had (read from it whenever the app reads states, or loaded into it; a crashed one answers that) and the parameter values the session holds. A loaded state now also sets the host's copy of the parameters, and only values the host set go to a new exchange (before, a re-prepare sent every default over a loaded state). Not built: an automatic restart, and a state fetched after each edit in the plug-in's own editor (it has none through the bridge yet). The plug-in's own presets go through the bridge too: the browser lists them from a helper (the binary is not loaded in the app for it, so they no longer wait for the plug-in to be inserted once), a preset is loaded into the running instance in its process, and a module started from a preset gets its state from a helper. *Differs from the design:* the
   unsafe code is the crate's own private `shm` module (the mapping and its view as atomics); the
   helper waits by spinning, yielding, then 200 µs sleeps (no futex or named event). *Not built
   yet:* a per-insert choice,
-  the editor window, the plug-in's own
-  presets, latency, tail and parameter changes the plug-in makes itself, the transport for the
+  the editor window,
+  latency, tail and parameter changes the plug-in makes itself, the transport for the
   plug-in (tempo, position), VST3 and AU. The scan itself already ran in `freedawm-scan`.
   The design as written: Behind an
   option (Setup › Plug-ins › Run plug-ins in their own process, off by default; per insert too),
@@ -426,6 +426,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Plug-ins in their own process: the plug-in's own presets listed and loaded through its process |
 | 2026-11-17 | minor | Plug-ins in their own process: a crashed plug-in says so on its tile, and Restart Plug-in brings it back with its last state |
 | 2026-11-17 | minor | Designs: the first pairing by a password-authenticated key exchange (the crate named, not added), and editor windows, VST3 and AU through the plug-in bridge |
 | 2026-11-17 | minor | Plug-ins in their own process: a CLAP plug-in's description is read in a helper too, and one that crashed there is never loaded in the app |

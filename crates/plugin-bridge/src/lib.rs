@@ -40,7 +40,7 @@ mod shm;
 #[cfg(not(target_arch = "wasm32"))]
 pub use helper::serve;
 #[cfg(not(target_arch = "wasm32"))]
-pub use host::{BridgedPlugin, DescribeError, describe_with};
+pub use host::{BridgedPlugin, DescribeError, describe_with, preset_state_with, presets_with};
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -136,6 +136,33 @@ pub fn plugin_info(id: &str) -> Option<Option<&'static soundcraft_dsp::PluginInf
     None
 }
 
+/// The presets a `clap:` plug-in's own binary reports, listed in a helper of its own while
+/// plug-ins run in their own process (the binary is never loaded in the app for it). `None`
+/// when it is not for the bridge (turned off, not a `clap:` id, no helper, or the scan does not
+/// know the plug-in's bundle): the caller lists them as before. Empty when the helper could not.
+pub fn presets(id: &str) -> Option<Vec<soundcraft_clap_host::ClapPreset>> {
+    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    return host::presets(id);
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+/// The state of a fresh instance of `clap:` plug-in `id` with `preset` loaded, made in a helper
+/// while plug-ins run in their own process. `None` when it is not for the bridge (the caller
+/// makes it as before).
+pub fn preset_state(id: &str, preset: &soundcraft_clap_host::ClapPreset) -> Option<Result<Vec<u8>, String>> {
+    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    return host::preset_state(id, preset);
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
 static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Says (once) that a bridged plug-in crashed or hung and was silenced.
@@ -178,6 +205,26 @@ pub mod proto {
             id: String,
             dir: Option<String>,
         },
+        /// Load one of the open plug-in's own presets into it (CLAP `preset-load`: location kind
+        /// 0 a file, 1 the plug-in; the file and the key within it). The reply has its values.
+        LoadPreset {
+            kind: u32,
+            location: Option<String>,
+            load_key: Option<String>,
+        },
+        /// The presets the plug-in `id` in the bundle at `path` reports (its binary's preset
+        /// discovery), in the reply's `presets`; the helper loads the binary for it.
+        Presets {
+            id: String,
+            path: String,
+        },
+        /// The state of a fresh instance of `id` (its bundle's folder `dir`) with `preset` loaded:
+        /// what a module stores to start with that preset.
+        PresetState {
+            id: String,
+            dir: Option<String>,
+            preset: soundcraft_clap_host::ClapPreset,
+        },
         Quit,
     }
 
@@ -208,6 +255,9 @@ pub mod proto {
         /// The plug-in's parameter values by index, after a state is loaded (`None`: not said).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub values: Vec<Option<f32>>,
+        /// The plug-in's own presets (`presets`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub presets: Vec<soundcraft_clap_host::ClapPreset>,
     }
 
     /// The plug-in as the helper loaded it.

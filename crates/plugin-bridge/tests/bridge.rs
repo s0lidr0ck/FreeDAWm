@@ -207,6 +207,36 @@ fn a_crashed_plug_in_keeps_its_last_state_and_a_restart_brings_it_back() {
 }
 
 #[test]
+fn a_clap_plug_ins_own_presets_are_listed_and_loaded_through_its_process() {
+    use soundcraft_plugin_bridge::{preset_state_with, presets_with};
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let bundle = clap_fixture().join("Fixture.clap");
+    // Listed by a helper: this process never loads the binary.
+    let listed = presets_with(exe(), GAIN, &bundle).unwrap();
+    let mut keys: Vec<&str> = listed.iter().filter_map(|p| p.load_key.as_deref()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["loud", "quiet", "shared"], "{listed:?}");
+    assert!(presets_with(exe(), "clap:org.soundcraft.test.none", &bundle).is_err());
+    let loud = listed.iter().find(|p| p.load_key.as_deref() == Some("loud")).unwrap().clone();
+    // A module that starts with the preset: its state, made in a helper.
+    let state = preset_state_with(exe(), GAIN, Some(clap_fixture()), &loud).unwrap();
+    let mut fresh = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(fresh.load_state(&state));
+    assert_eq!(fresh.param("7"), Some(2.0), "loud is gain 2");
+    // Loaded into a running instance, in place (the app's preset browser does this).
+    let mut p = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    let mut reader = p.state_reader().unwrap();
+    let quiet = listed.iter().find(|p| p.load_key.as_deref() == Some("quiet")).unwrap();
+    assert!(reader.load_preset(quiet.kind(), quiet.location.as_deref(), quiet.load_key.as_deref()));
+    let after = reader.save_state().unwrap();
+    assert!(fresh.load_state(&after));
+    assert_eq!(fresh.param("7"), Some(0.5), "quiet is gain 0.5");
+    assert!(!reader.load_preset(1, None, Some("no-such-preset")));
+    assert!(!p.crashed());
+    drop(p);
+}
+
+#[test]
 fn a_clap_plug_in_runs_in_its_own_process() {
     // Loaded only in the helper: this process never loads the plug-in's binary.
     let mut p = BridgedPlugin::spawn_with(exe(), "clap:org.soundcraft.test.gain", Some(clap_fixture())).unwrap();

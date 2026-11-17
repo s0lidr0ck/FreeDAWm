@@ -110,7 +110,8 @@ fn user_presets(preset_dir: Option<&Path>, plugin: &str) -> Vec<(String, String,
 fn knowable(item: &BrowserItem, clap_path: Option<&Path>) -> bool {
     match item.format {
         Format::Vst3 => soundcraft_vst3_host::programs_known(&item.id),
-        Format::Clap => clap_path.is_some_and(soundcraft_clap_host::binary_loaded),
+        // In their own process the presets are listed by a helper, all at once.
+        Format::Clap => soundcraft_mix::plugin_bridge::enabled() || clap_path.is_some_and(soundcraft_clap_host::binary_loaded),
         _ => true,
     }
 }
@@ -158,10 +159,13 @@ fn listing(preset_dir: Option<&Path>, item: &BrowserItem) -> Listing {
         }
         Format::Clap => {
             let Some(d) = clap_desc(&item.id) else { return (out, None) };
-            if !soundcraft_clap_host::bundle_loaded(&d) {
-                return (out, Some("Insert the plugin once to list its presets".into()));
-            }
-            for p in soundcraft_clap_host::presets(&d) {
+            // Plug-ins in their own process: a helper lists them (the binary is never loaded here).
+            let listed = match soundcraft_mix::plugin_bridge::presets(&item.id) {
+                Some(listed) => listed,
+                None if !soundcraft_clap_host::bundle_loaded(&d) => return (out, Some("Insert the plugin once to list its presets".into())),
+                None => soundcraft_clap_host::presets(&d),
+            };
+            for p in listed {
                 let group = p.location.as_deref().and_then(|l| Path::new(l).parent()?.file_name()).map(|f| f.to_string_lossy().into_owned());
                 let preset = PresetRef::Clap { location: p.location.unwrap_or_default(), load_key: p.load_key };
                 out.push((group.unwrap_or_else(|| "Presets".into()), p.name, preset));
@@ -316,7 +320,10 @@ pub(crate) fn resolve(app: &SoundApp, plugin: &str, preset: &PresetRef) -> Resul
 /// instance (made now for a module just placed), else (no audio engine) into a fresh instance.
 fn clap_state(app: &mut SoundApp, t: TrackId, slot: SlotKey, plugin: &str, preset: &soundcraft_clap_host::ClapPreset) -> Result<Vec<u8>, String> {
     app.sync_player();
-    let Some(p) = &app.player else { return soundcraft_clap_host::preset_state(plugin, preset) };
+    let Some(p) = &app.player else {
+        // No audio engine: a fresh instance, in a helper when plug-ins run in their own process.
+        return soundcraft_mix::plugin_bridge::preset_state(plugin, preset).unwrap_or_else(|| soundcraft_clap_host::preset_state(plugin, preset));
+    };
     if !p.load_preset(t, slot, preset.kind(), preset.location.as_deref(), preset.load_key.as_deref()) {
         return Err(format!("the plugin did not load the preset {}", preset.name));
     }
