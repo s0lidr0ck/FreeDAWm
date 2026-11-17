@@ -45,8 +45,7 @@ pub enum SoloClick {
 impl SoloClick {
     /// `mac`: Cmd-click is Solo Safe there (Pro Tools); elsewhere it is Ctrl+Shift-click.
     pub fn of(m: Modifiers, mac: bool) -> SoloClick {
-        let safe = if mac { m.mac_cmd } else { m.ctrl && m.shift && !m.alt };
-        if safe {
+        if safe_click(m, mac) {
             // Alt+Shift with Cmd: the selected tracks; Alt: every track.
             SoloClick::Safe(Scope::of(m))
         } else if m.ctrl {
@@ -98,8 +97,29 @@ pub fn toggle(app: &mut SoundApp, window: MainWindow, id: TrackId, cmd: &str, m:
         "mix.solo" => (track.mixer.solo, mixes),
         _ => return,
     };
+    // The R key with the Solo Safe modifier (Cmd on macOS, Ctrl+Shift elsewhere): Record Safe.
+    if cmd == "mix.record_arm" && safe_click(m, cfg!(target_os = "macos")) {
+        let tracks = tracks(app, window, id, Scope::of(m), records);
+        run(app, "mix.record_safe", json!({"tracks": tracks, "value": !track.mixer.record_safe}));
+        return;
+    }
     let tracks = tracks(app, window, id, Scope::of(m), fits);
     run(app, cmd, json!({"tracks": tracks, "value": !now}));
+}
+
+/// Whether the modifiers are the safe click (Cmd on macOS, Ctrl+Shift elsewhere).
+fn safe_click(m: Modifiers, mac: bool) -> bool {
+    if mac { m.mac_cmd } else { m.ctrl && m.shift && !m.alt }
+}
+
+/// The R key's right-click menu: Record Safe, reachable without modifiers.
+pub fn rec_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let Some(track) = app.engine.session().track(id).cloned() else { return };
+    let key = if ui.ctx().os().is_mac() { "⌘-click" } else { "Ctrl+Shift-click" };
+    if ui.add(egui::Button::selectable(track.mixer.record_safe, "Record Safe").shortcut_text(key)).clicked() {
+        run(app, "mix.record_safe", json!({"tracks": [id.0], "value": !track.mixer.record_safe}));
+        ui.close();
+    }
 }
 
 /// A click on track `id`'s I key: the clicked track's next monitoring state goes to the scope.

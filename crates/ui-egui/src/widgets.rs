@@ -278,11 +278,20 @@ pub fn solo_key(ui: &mut Ui, size: Vec2, look: &SoloLook, label: &str) -> Respon
 /// Marks a solo-safe track's S key (Solo Safe: its solo never mutes it out): a small padlock in
 /// the key's top-right corner, so it reads at a glance in both windows.
 pub fn paint_solo_safe(p: &Painter, r: Rect) {
+    paint_padlock(p, r, Tokens::current().solo);
+}
+
+/// Marks a record-safe track's R key (it cannot be armed): the same padlock, in the record colour.
+pub fn paint_record_safe(p: &Painter, r: Rect) {
+    paint_padlock(p, r, Tokens::current().rec);
+}
+
+fn paint_padlock(p: &Painter, r: Rect, colour: Color32) {
     let t = Tokens::current();
     let c = pos2(r.max.x - 5.5, r.min.y + 6.0);
     let body = Rect::from_center_size(c + vec2(0.0, 1.5), vec2(6.0, 4.5));
-    p.circle_stroke(c + vec2(0.0, -0.75), 2.0, Stroke::new(1.0, t.solo));
-    p.rect_filled(body, 1.0, t.solo);
+    p.circle_stroke(c + vec2(0.0, -0.75), 2.0, Stroke::new(1.0, colour));
+    p.rect_filled(body, 1.0, colour);
     p.rect_stroke(body, 1.0, Stroke::new(0.75, t.text_dark), StrokeKind::Outside);
 }
 

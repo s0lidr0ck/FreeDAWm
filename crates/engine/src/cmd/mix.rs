@@ -56,11 +56,34 @@ pub fn specs() -> Vec<CommandSpec> {
             e,
             p,
             "mix.record_arm",
-            |s, t, v| set_grouped(s, t, "record", |tr| if tr.kind.has_playlist() {
+            // A record-safe track is never armed (it can still be disarmed).
+            |s, t, v| set_grouped(s, t, "record", |tr| if tr.kind.has_playlist() && !(v && tr.mixer.record_safe) {
                 tr.mixer.record_arm = v
             }),
             |tr| tr.mixer.record_arm
         )),
+        cmd!(
+            "mix.record_safe",
+            "Record Safe",
+            [],
+            None,
+            "{tracks?, value?: bool} — a record-safe track cannot be armed; making one safe disarms it",
+            has_selection,
+            |e, p| toggle(
+                e,
+                p,
+                "mix.record_safe",
+                |s, t, v| {
+                    if let Some(tr) = s.track_mut(t).filter(|tr| tr.kind.has_playlist()) {
+                        tr.mixer.record_safe = v;
+                        if v {
+                            tr.mixer.record_arm = false;
+                        }
+                    }
+                },
+                |tr| tr.mixer.record_safe
+            )
+        ),
         cmd!(
             "mix.input_monitor",
             "Input Monitoring",
@@ -1716,5 +1739,27 @@ mod tests {
         assert!(!params.iter().any(|p| matches!(p, AutoParam::Plugin { param, .. } if param == "ceilon" || param == "outgain")));
         assert_eq!(tr.view, format!("plugin:m{}:outGain", m.0));
         assert_eq!(tr.lane(&AutoParam::Plugin { module: m, param: "outGain".into() }).map(|l| l.value_at(0, 0.5)), Some(0.25));
+    }
+
+    /// Record safe: a safe track is disarmed and cannot be armed, alone or with others, until
+    /// the safe is turned off; it is saved with the session.
+    #[test]
+    fn a_record_safe_track_cannot_be_armed() {
+        let mut s = Session::default();
+        let a = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("A"));
+        let b = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("B"));
+        let mut e = Engine::new(s);
+        e.execute("mix.record_arm", &json!({"tracks": [a.0], "value": true})).unwrap();
+        e.execute("mix.record_safe", &json!({"tracks": [a.0], "value": true})).unwrap();
+        assert!(!e.session().track(a).unwrap().mixer.record_arm, "making it safe disarms it");
+        e.execute("mix.record_arm", &json!({"tracks": [a.0, b.0], "value": true})).unwrap();
+        assert!(!e.session().track(a).unwrap().mixer.record_arm);
+        assert!(e.session().track(b).unwrap().mixer.record_arm, "the other track arms");
+        let saved = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&saved).unwrap();
+        assert!(back.track(a).unwrap().mixer.record_safe && !back.track(b).unwrap().mixer.record_safe);
+        e.execute("mix.record_safe", &json!({"tracks": [a.0], "value": false})).unwrap();
+        e.execute("mix.record_arm", &json!({"tracks": [a.0], "value": true})).unwrap();
+        assert!(e.session().track(a).unwrap().mixer.record_arm);
     }
 }

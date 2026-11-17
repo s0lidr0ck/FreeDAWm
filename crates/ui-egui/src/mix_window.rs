@@ -737,8 +737,14 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             crate::scope::input_monitor(app, crate::MainWindow::Mix, id, m);
         }
         // A frozen track is not recorded on: its R key is greyed until it is unfrozen.
-        let rec = row.add_enabled_ui(!frozen, |ui| rec_toggle(ui, vec2(kw, 18.0), track.mixer.record_arm, "Record enable")).inner;
-        if rec.on_disabled_hover_text("Unfreeze the track to record on it").clicked() {
+        let tip = if track.mixer.record_safe { "Record safe: cannot be armed (right-click to change)" } else { "Record enable" };
+        let rec = row.add_enabled_ui(!frozen, |ui| rec_toggle(ui, vec2(kw, 18.0), track.mixer.record_arm, tip)).inner;
+        if track.mixer.record_safe {
+            crate::widgets::paint_record_safe(row.painter(), rec.rect);
+        }
+        let rec = rec.on_disabled_hover_text("Unfreeze the track to record on it");
+        rec.context_menu(|ui| crate::scope::rec_menu(app, ui, id));
+        if rec.clicked() {
             let m = row.input(|i| i.modifiers);
             crate::scope::toggle(app, crate::MainWindow::Mix, id, "mix.record_arm", m);
         }

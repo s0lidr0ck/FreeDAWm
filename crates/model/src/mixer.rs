@@ -1107,6 +1107,9 @@ pub struct Mixer {
     pub solo_safe: bool,
     #[serde(default)]
     pub record_arm: bool,
+    /// Record safe: the track cannot be record-armed until this is turned off (Pro Tools).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_safe: bool,
     #[serde(default)]
     pub input_monitor: InputMonitor,
     /// Record with inserts (print): an armed audio track's take is what its trim, polarity and
@@ -1218,6 +1221,7 @@ impl Mixer {
             mute: false,
             solo: false,
             solo_safe: false,
+            record_safe: false,
             record_arm: false,
             input_monitor: InputMonitor::Auto,
             record_inserts: false,

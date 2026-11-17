@@ -1396,6 +1396,12 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
                 let resp = resp.on_hover_text(crate::scope::solo_hint(mac));
                 resp.context_menu(|ui| crate::scope::solo_menu(app, ui, id));
                 resp
+            } else if key == HeaderKey::Rec {
+                if m.record_safe {
+                    crate::widgets::paint_record_safe(ui.painter(), r);
+                }
+                resp.context_menu(|ui| crate::scope::rec_menu(app, ui, id));
+                resp
             } else {
                 resp
             };
