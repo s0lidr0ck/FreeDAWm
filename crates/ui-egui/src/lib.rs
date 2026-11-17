@@ -62,6 +62,7 @@ pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;
 pub mod midi_sync_in;
+pub mod midi_wide_lanes;
 pub mod mix_find;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]

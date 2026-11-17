@@ -317,6 +317,12 @@ pub struct MidiEditorState {
     pub pending_zoom: Option<f32>,
     /// The zoom factor the view is at, if it is at one.
     pub zoom_factor: Option<f32>,
+    /// The 14-bit and RPN/NRPN lanes shown under the controller lanes.
+    pub wide_lanes: Vec<soundcraft_engine::cmd::midi_wide::WideLane>,
+    /// A freehand drag in one of them: its lane and the (tick, value) points so far.
+    pub wide_draw: Option<(soundcraft_engine::cmd::midi_wide::WideLane, Vec<(i64, i32)>)>,
+    /// The 14-bit and RPN lanes as last drawn.
+    pub drawn_wide: Vec<(soundcraft_engine::cmd::midi_wide::WideLane, Rect)>,
 }
 
 impl Default for MidiEditorState {
@@ -368,6 +374,9 @@ impl Default for MidiEditorState {
             hover: None,
             pending_zoom: None,
             zoom_factor: None,
+            wide_lanes: Vec::new(),
+            wide_draw: None,
+            drawn_wide: Vec::new(),
         }
     }
 }
@@ -715,7 +724,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui.checkbox(&mut on, "Audition").on_hover_text("Play a note when it is clicked, moved or drawn").changed() {
             app.midi.audition = on;
         }
-        let lanes_text = if app.midi.lanes.is_empty() { "Lanes".to_string() } else { format!("Lanes ({})", app.midi.lanes.len()) };
+        let shown_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len();
+        let lanes_text = if shown_lanes == 0 { "Lanes".to_string() } else { format!("Lanes ({shown_lanes})") };
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
             .on_hover_text("Show CC, pitch bend, aftertouch, poly pressure and program lanes under the velocity lane");
@@ -1047,9 +1057,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         for k in crate::midi_lanes::lanes_with_data(sequence) {
             crate::midi_lanes::toggle(app, k, true);
         }
+        for l in soundcraft_engine::cmd::midi_wide::lanes_of(sequence) {
+            crate::midi_wide_lanes::toggle(app, l, true);
+        }
     }
-    // Controller lanes under the velocity lane, shrunk (not below 18 points) to leave the roll 80.
-    let n_lanes = app.midi.lanes.len();
+    // Controller lanes under the velocity lane, shrunk (not below 18 points) to leave the roll 80;
+    // the 14-bit and RPN lanes after them.
+    let n_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len();
     let room = bottom - top - VEL_H - 4.0 - BAR_H - 80.0;
     let lane_h = crate::midi_lanes::lane_height(n_lanes, room);
     let lanes_h = n_lanes as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
@@ -1068,7 +1082,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         })
         .collect();
     app.midi.drawn_lanes = lane_rects.clone();
-    let lanes_area = lane_rects.iter().fold(Rect::NOTHING, |a, l| a.union(l.rect));
+    let first_wide = app.midi.lanes.len();
+    let wide_rects: Vec<(soundcraft_engine::cmd::midi_wide::WideLane, Rect)> = (first_wide..)
+        .zip(app.midi.wide_lanes.iter())
+        .map(|(i, l)| {
+            let y = vel.max.y + crate::midi_lanes::LANE_GAP + i as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
+            (*l, Rect::from_min_max(pos2(roll.min.x, y), pos2(roll.max.x, y + lane_h)))
+        })
+        .collect();
+    app.midi.drawn_wide = wide_rects.clone();
+    let lanes_area = lane_rects.iter().map(|l| l.rect).chain(wide_rects.iter().map(|w| w.1)).fold(Rect::NOTHING, |a, r| a.union(r));
     // The clip's view: fitted, and centred on its notes, the first time it opens.
     // Views of clips gone from the session go too.
     app.midi.views.retain(|id, _| s.find_clip(*id).is_some());
@@ -1759,6 +1782,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     velocity_lane(app, ui, cid, &sequence.notes, vel, full.min.x, base, &x_of);
     crate::midi_lanes::lanes(app, ui, cid, sequence, &lane_rects, full.min.x, &geo, grid_ticks, len_ticks);
+    for (l, r) in &wide_rects {
+        crate::midi_wide_lanes::lane(app, ui, cid, sequence, *l, *r, full.min.x, &geo, grid_ticks, len_ticks);
+    }
     tools::note_bar(app, ui, cid, Rect::from_min_max(pos2(full.min.x, bottom), pos2(right, full.max.y)), alt);
     if cleanup {
         let rect = Rect::from_min_max(pos2(full.max.x - midi_cleanup_panel::PANEL_W, header.max.y), full.max);

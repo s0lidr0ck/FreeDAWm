@@ -272,6 +272,9 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     })
     .response
     .on_hover_text("Polyphonic aftertouch: a lane per key");
+    ui.menu_button("14-bit and RPN", |ui| crate::midi_wide_lanes::menu(app, ui, seq))
+        .response
+        .on_hover_text("A 14-bit controller pair or an RPN/NRPN parameter as one value, 0 to 16383");
     ui.separator();
     ui.label(egui::RichText::new("A drag on empty lane space").small());
     for (tool, name, tip) in [
@@ -307,10 +310,14 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
         for k in lanes_with_data(seq) {
             toggle(app, k, true);
         }
+        for l in soundcraft_engine::cmd::midi_wide::lanes_of(seq) {
+            crate::midi_wide_lanes::toggle(app, l, true);
+        }
         ui.close();
     }
-    if ui.add_enabled(!app.midi.lanes.is_empty(), egui::Button::new("Hide All Lanes")).clicked() {
+    if ui.add_enabled(!app.midi.lanes.is_empty() || !app.midi.wide_lanes.is_empty(), egui::Button::new("Hide All Lanes")).clicked() {
         app.midi.lanes.clear();
+        app.midi.wide_lanes.clear();
         ui.close();
     }
 }
