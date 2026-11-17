@@ -136,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Beat Detective",
             ["Event"],
             None,
-            "{tracks?, start?, end?, sensitivity?: 0.5, separate?: false, set_tempo?: false}",
+            "{tracks?, start?, end?, sensitivity?: 0.5, separate?: false, set_tempo?: false, conform?: false, strength?: 100, groove?: name, smooth?: false} — finds the hits; `separate` cuts at them; `conform` (cuts first) moves each piece that share of the way to the grid, or to `groove`; `smooth` (cuts first) runs each piece on to the next and crossfades the joins",
             has_range,
             beat_detective
         ),
@@ -830,8 +830,14 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         (b * 100.0).round() / 100.0
     });
-    let separate = bool_or(p, "separate", false);
+    let (conform, smooth) = (bool_or(p, "conform", false), bool_or(p, "smooth", false));
+    let separate = bool_or(p, "separate", false) || conform || smooth;
     let set_tempo = bool_or(p, "set_tempo", false);
+    let strength = (f64_or(p, "strength", 100.0) / 100.0).clamp(0.0, 1.0);
+    let groove = match str_param(p, "groove").map(str::trim).filter(|g| !g.is_empty()) {
+        Some(name) => Some(super::groove::groove_named(e.session(), name).ok_or_else(|| bad(id, format!("no groove called '{name}'")))?),
+        None => None,
+    };
     let s = e.session_mut();
     let mut separated = 0;
     if separate {
@@ -839,6 +845,14 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
             for b in &beats {
                 separated += crate::edit::separate_at(s, *t, *b);
             }
+        }
+    }
+    let (mut conformed, mut smoothed) = (0, 0);
+    if conform || smooth {
+        for t in &tracks {
+            let (c, m) = conform_pieces(s, *t, r, &beats, conform.then_some((strength, groove.as_ref())), smooth);
+            conformed += c;
+            smoothed += m;
         }
     }
     if set_tempo && let Some(b) = bpm {
@@ -851,7 +865,83 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         s.tempo.set_span(t0, t1, len, b).map_err(|err| bad(id, err.to_string()))?;
     }
     let shown: Vec<Samples> = beats.iter().take(2000).copied().collect();
-    Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated}))
+    Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated, "conformed": conformed, "smoothed": smoothed}))
+}
+
+/// Crossfade Beat Detective's smoothing puts at each join.
+const SMOOTH_CROSSFADE_SECONDS: f64 = 0.005;
+
+/// Beat Detective's conform and smoothing on `track` after it was cut at `beats`: the pieces
+/// starting at a hit inside `r` move that share of the way (`conform`: strength, groove) to the
+/// grid line or groove point nearest, a later piece winning where two then overlap (the earlier
+/// one's end is trimmed to it); `smooth` runs each piece's end on to the next piece, as far as its
+/// file goes, and crossfades every join. Edit-locked clips stay. Returns (moved, joins smoothed).
+fn conform_pieces(
+    s: &mut Session,
+    track: TrackId,
+    r: Range,
+    beats: &[Samples],
+    conform: Option<(f64, Option<&soundcraft_midi::ops::Groove>)>,
+    smooth: bool,
+) -> (usize, usize) {
+    let Some(tr) = s.track(track) else { return (0, 0) };
+    let inside = |c: &Clip| c.is_audio() && c.start >= r.start && c.start < r.end;
+    let mut moves: Vec<(ClipId, Samples)> = Vec::new();
+    if let Some((strength, groove)) = conform {
+        for c in tr.clips().iter().filter(|c| inside(c) && !c.edit_locked && beats.binary_search(&c.start).is_ok()) {
+            let full = match groove {
+                Some(g) => {
+                    let (map, sr) = (&s.tempo, s.sample_rate);
+                    let t = map.samples_to_ticks(c.start, sr);
+                    let bar = map.bar_start_tick(map.bar_beat_at_tick(t).bar);
+                    map.tick_to_samples(g.nearest(t, bar), sr).saturating_sub(c.start)
+                }
+                None => crate::edit::quantize_delta(s, c, 1.0, 0.0),
+            };
+            let d = soundcraft_time::to_samples(full as f64 * strength);
+            if d != 0 {
+                moves.push((c.id, d));
+            }
+        }
+    }
+    let moved = moves.len();
+    if let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) {
+        for c in &mut pl.clips {
+            if let Some((_, d)) = moves.iter().find(|(id, _)| *id == c.id) {
+                c.start = c.start.saturating_add(*d);
+            }
+        }
+        pl.sort();
+        // A piece moved over the end of the one before it: the later start wins.
+        let starts: Vec<(ClipId, Samples)> = pl.clips.iter().filter(|c| inside(c)).map(|c| (c.id, c.start)).collect();
+        for w in starts.windows(2) {
+            let (Some((a, _)), Some((_, next))) = (w.first(), w.get(1)) else { continue };
+            if let Some(c) = pl.clips.iter_mut().find(|c| c.id == *a)
+                && c.end() > *next
+                && *next > c.start
+            {
+                c.trim_end_to(*next);
+            }
+        }
+    }
+    if !smooth {
+        return (moved, 0);
+    }
+    let pieces: Vec<ClipId> = s.track(track).map(|t| t.clips().iter().filter(|c| inside(c)).map(|c| c.id).collect()).unwrap_or_default();
+    super::edit::close_gaps_of(s, pieces);
+    let joins: Vec<Samples> = s
+        .track(track)
+        .map(|t| {
+            let mut v: Vec<&Clip> = t.clips().iter().filter(|c| inside(c)).collect();
+            v.sort_by_key(|c| c.start);
+            v.windows(2).filter_map(|w| Some((w.first()?, w.get(1)?))).filter(|(a, b)| a.end() == b.start).map(|(_, b)| b.start).collect()
+        })
+        .unwrap_or_default();
+    let half = s.sample_rate.samples(SMOOTH_CROSSFADE_SECONDS / 2.0).max(1);
+    for j in &joins {
+        crate::edit::create_fades(s, track, Range::new(j - half, j + half), soundcraft_model::FadeShape::EqualPower);
+    }
+    (moved, joins.len())
 }
 
 fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1211,6 +1301,76 @@ mod tests {
         }
         let r = e.execute("event.extract_chords", &json!({"tracks": [keys.0], "start": 0, "end": far + 48_000 * 600})).unwrap();
         assert!(!r["chords"].as_array().unwrap().is_empty(), "{r}");
+    }
+
+    /// A mono track holding one 96 000-frame clip (a 4/4 bar at 120 bpm) with noise hits at `hits`.
+    fn hits_session(hits: &[usize]) -> (Engine, TrackId) {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let mut buf = vec![0.0f32; 96_000];
+        let mut seed = 0x2545_f491_u32;
+        for &h in hits {
+            for (i, x) in buf.iter_mut().skip(h).take(3_000).enumerate() {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                *x = (seed as f32 / u32::MAX as f32 - 0.5) * 1.6 * (-(i as f32) / 400.0).exp();
+            }
+        }
+        let audio = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: vec![buf] };
+        let src = crate::io::add_source(&mut s, "hits", audio, None, soundcraft_audio_io::FileFormat::Wav);
+        let id = s.new_clip_id();
+        crate::edit::place_clip(&mut s, t, Clip::audio(id, "hits", src, 0, 0, 96_000));
+        (Engine::new(s), t)
+    }
+
+    fn spans(e: &Engine, t: TrackId) -> Vec<(Samples, Samples)> {
+        e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect()
+    }
+
+    #[test]
+    fn beat_detective_conforms_the_hits_to_the_grid_and_smooths_the_gaps() {
+        // Hits a little off the sixteenths at 6 000, 24 000, 48 000 and 72 000.
+        let (mut e, t) = hits_session(&[7_000, 25_500, 46_800, 72_800]);
+        let r = e.execute("event.beat_detective", &json!({"tracks": [t.0], "start": 0, "end": 96_000, "conform": true})).unwrap();
+        assert_eq!(r["conformed"], 4, "{r}");
+        let starts: Vec<Samples> = spans(&e, t).iter().map(|x| x.0).collect();
+        assert_eq!(starts, vec![0, 6_000, 24_000, 48_000, 72_000], "each piece starts on the grid line nearest its hit");
+        let gaps = spans(&e, t).windows(2).filter(|w| w[0].1 < w[1].0).count();
+        assert_eq!(gaps, 1, "the piece moved earlier leaves a gap before the next");
+        assert!(e.undo());
+        // Half way, then smoothed: no gaps, a crossfade at every join.
+        let r = e
+            .execute("event.beat_detective", &json!({"tracks": [t.0], "start": 0, "end": 96_000, "conform": true, "strength": 50, "smooth": true}))
+            .unwrap();
+        assert_eq!(r["smoothed"], 4, "{r}");
+        let sp = spans(&e, t);
+        assert!((sp[1].0 - 6_500).abs() < 300 && (sp[2].0 - 24_750).abs() < 300, "half way: {sp:?}");
+        assert!(sp.windows(2).all(|w| w[0].1 >= w[1].0), "no gaps: {sp:?}");
+        let fades = e.session().track(t).unwrap().clips().iter().filter(|c| c.fade_in.len > 0).count();
+        assert_eq!(fades, 4, "a crossfade at each join");
+    }
+
+    #[test]
+    fn a_groove_comes_from_an_audio_clips_hits_and_beat_detective_follows_it() {
+        let (mut e, t) = hits_session(&[7_000, 25_500, 46_800, 72_800]);
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        let r = e.execute("event.groove_from_clip", &json!({"clip": clip.0, "name": "Drums", "grid": "1/16"})).unwrap();
+        // Each sixteenth is a point; the four with a hit sit where the hit is (960 ticks a beat).
+        let points: Vec<i64> = r["points"].as_array().unwrap().iter().filter_map(serde_json::Value::as_i64).collect();
+        assert_eq!(points.len(), 16, "{r}");
+        for hit in [280, 1_020, 1_872, 2_912] {
+            assert!(points.iter().any(|p| (p - hit).abs() <= 4), "{hit}: {r}");
+        }
+        // Hits on the grid, conformed to that groove, land where the first clip's hits were.
+        let (mut e2, t2) = hits_session(&[6_000, 24_000, 48_000, 72_000]);
+        let g = crate::cmd::groove::groove_named(e.session(), "Drums").unwrap();
+        e2.session_mut().grooves.push(g);
+        e2.execute("event.beat_detective", &json!({"tracks": [t2.0], "start": 0, "end": 96_000, "conform": true, "groove": "Drums"})).unwrap();
+        let starts: Vec<Samples> = spans(&e2, t2).iter().map(|x| x.0).collect();
+        for (got, want) in starts.iter().skip(1).zip([7_000, 25_500, 46_800, 72_800]) {
+            assert!((got - want).abs() < 400, "{starts:?}");
+        }
     }
 
     #[test]

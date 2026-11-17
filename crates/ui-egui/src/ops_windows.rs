@@ -12,6 +12,12 @@ pub struct OpsState {
     pub beat_sensitivity: f32,
     pub beat_separate: bool,
     pub beat_set_tempo: bool,
+    /// Beat Detective's conform: the pieces move to the grid (or `beat_groove`) by `beat_strength` %.
+    pub beat_conform: bool,
+    pub beat_strength: f32,
+    pub beat_groove: String,
+    /// Beat Detective's smoothing: each piece runs on to the next, the joins crossfaded.
+    pub beat_smooth: bool,
     pub beat_result: String,
     pub tempo_curve: String,
     /// Tap Tempo's taps (seconds of egui time); not saved.
@@ -84,6 +90,10 @@ impl Default for OpsState {
             beat_sensitivity: 0.5,
             beat_separate: true,
             beat_set_tempo: false,
+            beat_conform: false,
+            beat_strength: 100.0,
+            beat_groove: String::new(),
+            beat_smooth: false,
             beat_result: String::new(),
             tempo_curve: "linear".into(),
             tap_times: Vec::new(),
@@ -456,6 +466,12 @@ fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
         ui.add(egui::Slider::new(&mut app.ops.beat_sensitivity, 0.0..=1.0).text("Sensitivity"));
         crate::widgets::checkbox(ui, &mut app.ops.beat_separate, "Separate clips at detected beats");
         crate::widgets::checkbox(ui, &mut app.ops.beat_set_tempo, "Set the session tempo from the beats");
+        crate::widgets::checkbox(ui, &mut app.ops.beat_conform, "Conform: move each piece to the grid or groove");
+        ui.add_enabled_ui(app.ops.beat_conform, |ui| {
+            ui.add(egui::Slider::new(&mut app.ops.beat_strength, 0.0..=100.0).text("Strength %"));
+            groove_combo(app, ui, "Groove", |o| &mut o.beat_groove);
+        });
+        crate::widgets::checkbox(ui, &mut app.ops.beat_smooth, "Smooth: fill the gaps and crossfade the joins");
         ui.horizontal(|ui| {
             if ui.button("Analyze").clicked() {
                 let r = app.run("event.beat_detective", json!({"sensitivity": app.ops.beat_sensitivity, "separate": false, "set_tempo": false}));
@@ -464,8 +480,25 @@ fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
             if ui.button(egui::RichText::new("Apply").strong()).clicked() {
                 let r = app.run(
                     "event.beat_detective",
-                    json!({"sensitivity": app.ops.beat_sensitivity, "separate": app.ops.beat_separate, "set_tempo": app.ops.beat_set_tempo}),
+                    json!({
+                        "sensitivity": app.ops.beat_sensitivity,
+                        "separate": app.ops.beat_separate,
+                        "set_tempo": app.ops.beat_set_tempo,
+                        "conform": app.ops.beat_conform,
+                        "strength": app.ops.beat_strength,
+                        "groove": app.ops.beat_groove,
+                        "smooth": app.ops.beat_smooth,
+                    }),
                 );
+                app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
+            }
+            if ui.button("Groove from Selected Clip").on_hover_text("Take the selected audio clip's hits as a groove (sixteenths)").clicked() {
+                let r = app.run("event.groove_from_clip", json!({"grid": "1/16", "sensitivity": app.ops.beat_sensitivity}));
+                if let Ok(v) = &r
+                    && let Some(name) = v.get("name").and_then(|n| n.as_str())
+                {
+                    app.ops.beat_groove = name.to_string();
+                }
                 app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
             }
             if ui.button("Write MIDI").on_hover_text("A kick note for each hit, in a new MIDI clip on a new drum-synth track").clicked() {

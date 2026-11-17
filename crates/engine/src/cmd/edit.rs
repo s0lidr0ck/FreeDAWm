@@ -1084,7 +1084,11 @@ fn trim_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn close_gaps(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
-    let s = e.session_mut();
+    Ok(json!({"trimmed": close_gaps_of(e.session_mut(), ids)}))
+}
+
+/// Trim each of `ids`' ends on to the next clip, as far as its file goes: how many changed.
+pub(crate) fn close_gaps_of(s: &mut Session, ids: Vec<ClipId>) -> usize {
     let mut n = 0;
     for id in ids {
         let Some((frames, _, hi)) = trim_limits(s, id) else { continue };
@@ -1108,7 +1112,7 @@ fn close_gaps(e: &mut Engine, p: &Value) -> Result<Value> {
             n += 1;
         }
     }
-    Ok(json!({"trimmed": n}))
+    n
 }
 
 /// How far a trim may extend an audio clip: its source length in frames, and the earliest
