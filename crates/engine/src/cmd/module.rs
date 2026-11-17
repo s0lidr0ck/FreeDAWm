@@ -1110,8 +1110,12 @@ mod tests {
         assert!(err(&mut e, json!({"track": b, "module": mb, "source": b})).contains("cycle"));
         assert_eq!(sidechain_of(&e, 1), None, "a refused sidechain is not stored");
         assert_eq!(e.undo_history().len(), undo, "and leaves no undo step");
-        // A track can't wait for an aux; an aux can take a key from a track.
-        assert!(err(&mut e, json!({"track": b, "module": mb, "source": x})).contains("aux"));
+        // A track can wait for an aux (it renders after it), unless that closes a loop; an aux
+        // can take a key from a track.
+        e.execute("mix.module_sidechain", &json!({"track": b, "module": mb, "source": x})).unwrap();
+        assert!(err(&mut e, json!({"track": x, "module": mx, "source": b})).contains("cycle"));
+        assert!(err(&mut e, json!({"track": x, "module": mx, "source": a})).contains("cycle"), "A waits for B, which waits for X");
+        e.execute("mix.module_sidechain", &json!({"track": b, "module": mb, "source": null})).unwrap();
         e.execute("mix.module_sidechain", &json!({"track": x, "module": mx, "source": a})).unwrap();
         // Bad parameters.
         assert!(err(&mut e, json!({"track": a, "module": ma})).contains("`source` required"));
