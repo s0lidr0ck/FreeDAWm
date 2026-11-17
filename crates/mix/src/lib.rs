@@ -4317,8 +4317,14 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let i1 = usize::try_from(isect.end - pos).unwrap_or(0).min(frames);
     // Gain is evaluated every 32 samples and interpolated (fades and envelopes stay smooth).
     const STEP: usize = 32;
-    // Clean Vocal's cleaned alternate, mixed in sample for sample before gain and fades.
-    let alt = clip.clean_alt().filter(|k| k.wet() > 0.0 && live.is_none()).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
+    // A transposed clip's high-quality render, once made, plays in place of the live shifter.
+    let hq = pitch_render(s, clip).filter(|_| live.is_none());
+    // Clean Vocal's cleaned alternate, mixed in sample for sample before gain and fades (a
+    // transpose render has it mixed in already).
+    let alt = clip
+        .clean_alt()
+        .filter(|k| k.wet() > 0.0 && live.is_none() && hq.is_none())
+        .and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, a)));
     let edges = alt.map(|(_, origin, a)| CleanEdges::new(s, clip, origin, a.frames()));
     // Vocal tuning's render replaces the heard audio inside its spans (looked up once per block).
     // A plain clip reads its window in runs; a stretched, reversed, looped or transposed one
@@ -4327,8 +4333,6 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let pitch = clip.pitch_ratio();
     let grain = (s.sample_rate.as_f64() * TRANSPOSE_GRAIN_SECS).max(64.0);
     let live_grain = (s.sample_rate.as_f64() * soundcraft_dsp::live_stretch::GRAIN_SECS).max(64.0);
-    // A transposed clip's high-quality render, once made, plays in place of the live shifter.
-    let hq = pitch_render(s, clip).filter(|_| live.is_none());
     let tuned = tuned_spans(s, clip);
     // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
     let (taps, tap) = clip.channel_taps(nsrc, buf.len());
