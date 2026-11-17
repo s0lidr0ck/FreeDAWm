@@ -222,6 +222,14 @@ fn apply(f: &mut Fx, h: &clap_event_header) {
                 f.level = 0.0;
             }
         }
+        CLAP_EVENT_MIDI_SYSEX => {
+            // A non-commercial SysEx `F0 7D <level> F7` sets the synth's level.
+            let e = unsafe { &*(h as *const clap_event_header as *const clap_event_midi_sysex) };
+            let b = unsafe { std::slice::from_raw_parts(e.buffer, e.size as usize) };
+            if let [0xF0, 0x7D, v, 0xF7] = b {
+                f.level = f64::from(*v) / 127.0;
+            }
+        }
         CLAP_EVENT_MIDI => {
             let e = unsafe { &*(h as *const clap_event_header as *const clap_event_midi) };
             if e.data[0] & 0xF0 == 0xB0 && e.data[1] == 7 {
@@ -257,7 +265,8 @@ unsafe extern "C" fn process(p: *const clap_plugin, pr: *const clap_process) -> 
         }
         return CLAP_PROCESS_CONTINUE;
     }
-    if pr.audio_outputs_count != 1 {
+    // The synth has a second stereo output, "Aux", at half its level.
+    if pr.audio_outputs_count != if f.synth { 2 } else { 1 } {
         return CLAP_PROCESS_ERROR;
     }
     let out: &clap_audio_buffer = unsafe { &*pr.audio_outputs };
@@ -350,6 +359,12 @@ unsafe extern "C" fn process(p: *const clap_plugin, pr: *const clap_process) -> 
             };
             unsafe { *o.add(i) = v };
         }
+        if f.synth {
+            let aux = unsafe { &*pr.audio_outputs.add(1) };
+            for c in 0..aux.channel_count as usize {
+                unsafe { *(*aux.data32.add(c)).add(i) = 0.5 * f.level as f32 };
+            }
+        }
     }
     CLAP_PROCESS_CONTINUE
 }
@@ -436,7 +451,10 @@ unsafe extern "C" fn ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
     if is_input && unsafe { fx(p) }.keyed {
         return 2;
     }
-    if is_input && unsafe { fx(p) }.synth { 0 } else { 1 }
+    if unsafe { fx(p) }.synth {
+        return if is_input { 0 } else { 2 };
+    }
+    1
 }
 
 unsafe extern "C" fn ports_get(p: *const clap_plugin, index: u32, is_input: bool, info: *mut clap_audio_port_info) -> bool {
@@ -457,6 +475,16 @@ unsafe extern "C" fn ports_get(p: *const clap_plugin, index: u32, is_input: bool
         let info = unsafe { &mut *info };
         info.id = 4;
         write_name(&mut info.name, c"sidechain");
+        info.flags = 0;
+        info.channel_count = 2;
+        info.port_type = CLAP_PORT_STEREO.as_ptr();
+        info.in_place_pair = clap_sys::id::CLAP_INVALID_ID;
+        return true;
+    }
+    if !is_input && index == 1 && unsafe { fx(p) }.synth {
+        let info = unsafe { &mut *info };
+        info.id = 3;
+        write_name(&mut info.name, c"Aux");
         info.flags = 0;
         info.channel_count = 2;
         info.port_type = CLAP_PORT_STEREO.as_ptr();

@@ -54,6 +54,13 @@ pub struct ClapPlugin {
     transport: Option<Transport>,
     /// Set for an offline render (`clap.render`) at the next `prepare`.
     offline: bool,
+    /// The auxiliary output ports an instrument offers a mixer channel: (port, name), the ports
+    /// with channels after the main one, as they were when it was made.
+    extra: Vec<(usize, String)>,
+    /// Which of `extra` the host takes (bit per entry).
+    taken: u32,
+    /// Each extra output's block (two channels), copied out after each `process` while taken.
+    extra_bufs: Vec<[Vec<f32>; 2]>,
 }
 
 impl ClapPlugin {
@@ -88,7 +95,32 @@ impl ClapPlugin {
             steady: 0,
             transport: None,
             offline: false,
+            extra: Vec::new(),
+            taken: 0,
+            extra_bufs: Vec::new(),
         }
+        .with_extra_outputs()
+    }
+
+    /// Finds the auxiliary outputs an instrument declares (off the audio thread, when made).
+    fn with_extra_outputs(mut self) -> ClapPlugin {
+        if self.info.is_instrument
+            && let Ok(outs) = self.inst.audio_ports(false)
+        {
+            let names = self.inst.output_port_names();
+            let main = pick_main(&outs);
+            self.extra = outs
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| Some(*i) != main && p.channels > 0)
+                .take(32)
+                .map(|(i, _)| {
+                    let name = names.get(i).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Out {}", i + 1));
+                    (i, name)
+                })
+                .collect();
+        }
+        self
     }
 
     /// Re-reads every parameter value from the plugin (after a state load).
@@ -204,6 +236,21 @@ impl ClapPlugin {
             let r = self.inst.process(n, self.steady, &mut self.inputs, &mut self.outputs, events, offset, self.transport.as_ref());
             self.queue.drain(..k);
             self.steady = self.steady.saturating_add(i64::try_from(n).unwrap_or(0));
+            if r.is_ok() && self.taken != 0 {
+                // The taken auxiliary outputs, as they came (mono to both sides).
+                for (k, ((port, _), bufs)) in self.extra.iter().zip(self.extra_bufs.iter_mut()).enumerate() {
+                    if self.taken & (1 << k) == 0 {
+                        continue;
+                    }
+                    let oc = self.outputs.channels(*port);
+                    for (c, dst) in bufs.iter_mut().enumerate() {
+                        let src = self.outputs.channel(*port, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n));
+                        if let (Some(src), Some(dst)) = (src, dst.get_mut(start..start + n)) {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+            }
             match (r, self.out_main) {
                 (Ok(_), Some(p)) => {
                     let oc = self.outputs.channels(p);
@@ -306,6 +353,7 @@ impl Plugin for ClapPlugin {
         };
         self.in_main = pick_main(&ins);
         self.out_main = pick_main(&outs);
+        self.extra_bufs = self.extra.iter().map(|_| [vec![0.0; mb], vec![0.0; mb]]).collect();
         self.in_key = key_port(&ins);
         self.inputs = PortBuffers::new(&ins.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
         self.outputs = PortBuffers::new(&outs.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
@@ -335,6 +383,28 @@ impl Plugin for ClapPlugin {
 
     fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
+    }
+
+    fn extra_outputs(&self) -> Vec<String> {
+        self.extra.iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.taken = mask;
+    }
+
+    /// The auxiliary port's block of the last `process` (silence while it was not taken then).
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        let Some(src) = self.extra_bufs.get(index) else { return false };
+        if self.taken & (1 << index.min(31)) == 0 {
+            return false;
+        }
+        for (o, c) in out.iter_mut().zip(src.iter()) {
+            for (d, s) in o.iter_mut().zip(c.iter()).take(frames) {
+                *d = *s;
+            }
+        }
+        true
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {

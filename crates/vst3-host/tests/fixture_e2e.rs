@@ -195,6 +195,27 @@ fn synth_plays_notes_at_their_offsets() {
     assert!(mono[0].iter().all(|&x| (x - 1.0).abs() < 1e-6), "the note is still held");
 }
 
+/// The synth's auxiliary output bus ("Aux", half its level) is an extra output a mixer channel
+/// can take: active, read after `process` while taken, nothing while not.
+#[test]
+fn synth_aux_output_bus_is_read_when_taken() {
+    let id = id_of("Fixture Synth");
+    let mut p = soundcraft_vst3_host::create(&id).unwrap();
+    assert_eq!(p.extra_outputs(), vec!["Aux".to_string()]);
+    p.prepare(48_000.0, 64, 2);
+    let mut io = vec![vec![0.0f32; 64], vec![0.0f32; 64]];
+    let mut aux = vec![vec![9.0f32; 64], vec![9.0f32; 64]];
+    p.note_on(0, 60, 127);
+    p.process(&mut io, 64);
+    assert!(!p.read_output(0, &mut aux, 64), "not taken: not read");
+    p.set_outputs_taken(1);
+    p.process(&mut io, 64);
+    assert!(p.read_output(0, &mut aux, 64));
+    assert!(aux.iter().flatten().all(|x| (x - 0.5).abs() < 1e-6), "{:?}", &aux[0][..4]);
+    assert!(io[0].iter().all(|x| (x - 1.0).abs() < 1e-6), "the main output as before");
+    assert!(soundcraft_vst3_host::create(&id_of("Fixture Gain")).unwrap().extra_outputs().is_empty(), "an effect offers none");
+}
+
 #[test]
 fn many_instances_create_and_drop_cleanly() {
     let (g, s) = (id_of("Fixture Gain"), id_of("Fixture Synth"));

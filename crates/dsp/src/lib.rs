@@ -435,10 +435,10 @@ pub trait Plugin: Send {
     /// laned one alone: the lane wins. Must not allocate.
     fn set_param_automated(&mut self, _id: &str, _automated: bool) {}
     /// Instruments: the names of the stereo outputs it has besides its main one (Juke's
-    /// "Out 2" to "Out 8"), each one a mixer channel can take (`Track::instrument_outs`). Empty
-    /// by default. Read off the audio thread.
-    fn extra_outputs(&self) -> &'static [&'static str] {
-        &[]
+    /// "Out 2" to "Out 8", a hosted plug-in's auxiliary output ports), each one a mixer channel
+    /// can take (`Track::instrument_outs`). Empty by default. Read off the audio thread.
+    fn extra_outputs(&self) -> Vec<String> {
+        Vec::new()
     }
     /// Which of [`Plugin::extra_outputs`] the host takes (bit `n`: output `n`). A plugin sends
     /// to an output only while it is taken, and to its main output otherwise, so nothing goes

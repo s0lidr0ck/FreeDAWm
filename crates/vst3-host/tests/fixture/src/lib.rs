@@ -604,7 +604,8 @@ impl IComponentTrait for Synth {
     unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
         let out = dir == BusDirections_::kOutput as BusDirection;
         if media == MediaTypes_::kAudio as MediaType && out {
-            1
+            // The main output and "Aux" (half the level).
+            2
         } else if media == MediaTypes_::kEvent as MediaType && !out {
             1
         } else {
@@ -612,6 +613,13 @@ impl IComponentTrait for Synth {
         }
     }
     unsafe fn getBusInfo(&self, media: MediaType, dir: BusDirection, index: i32, bus: *mut BusInfo) -> tresult {
+        if index == 1 && media == MediaTypes_::kAudio as MediaType && dir == BusDirections_::kOutput as BusDirection {
+            audio_bus(bus, dir, "Aux");
+            let b = unsafe { &mut *bus };
+            b.busType = BusTypes_::kAux as BusType;
+            b.flags = 0;
+            return kResultOk;
+        }
         if index != 0 {
             return kInvalidArgument;
         }
@@ -650,10 +658,10 @@ impl IComponentTrait for Synth {
 
 impl IAudioProcessorTrait for Synth {
     unsafe fn setBusArrangements(&self, _i: *mut SpeakerArrangement, n_in: i32, outputs: *mut SpeakerArrangement, n_out: i32) -> tresult {
-        if n_in == 0 && n_out == 1 && unsafe { *outputs } == SpeakerArr::kStereo { kResultTrue } else { kResultFalse }
+        if n_in == 0 && n_out == 2 && unsafe { *outputs } == SpeakerArr::kStereo { kResultTrue } else { kResultFalse }
     }
     unsafe fn getBusArrangement(&self, dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
-        if dir != BusDirections_::kOutput as BusDirection || index != 0 {
+        if dir != BusDirections_::kOutput as BusDirection || !(0..=1).contains(&index) {
             return kInvalidArgument;
         }
         unsafe { *arr = SpeakerArr::kStereo };
@@ -673,7 +681,7 @@ impl IAudioProcessorTrait for Synth {
     }
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let d = unsafe { &*data };
-        if d.numOutputs != 1 {
+        if d.numOutputs != 2 {
             return kResultOk;
         }
         let frames = d.numSamples.max(0) as usize;
@@ -731,6 +739,11 @@ impl IAudioProcessorTrait for Synth {
         self.level.store(level.to_bits(), Ordering::Relaxed);
         for ch in outs {
             ch.copy_from_slice(&out);
+        }
+        for ch in unsafe { channels(&*d.outputs.add(1), frames) } {
+            for (o, x) in ch.iter_mut().zip(&out) {
+                *o = 0.5 * x;
+            }
         }
         kResultOk
     }

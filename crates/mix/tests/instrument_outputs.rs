@@ -38,8 +38,8 @@ impl Plugin for TwoOuts {
             c.iter_mut().take(frames).for_each(|x| *x = v);
         }
     }
-    fn extra_outputs(&self) -> &'static [&'static str] {
-        &["Out 2"]
+    fn extra_outputs(&self) -> Vec<String> {
+        vec!["Out 2".into()]
     }
     fn set_outputs_taken(&mut self, mask: u32) {
         self.taken = mask;

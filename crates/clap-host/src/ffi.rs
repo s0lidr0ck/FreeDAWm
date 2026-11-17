@@ -1813,6 +1813,24 @@ impl Instance {
         Ok(out)
     }
 
+    /// The names of the plugin's audio output ports (empty for one it does not name), in port
+    /// order.
+    pub fn output_port_names(&self) -> Vec<String> {
+        // SAFETY: see `params`.
+        let Some(p) = (unsafe { self.ports.as_ref() }) else { return Vec::new() };
+        let (Some(count), Some(get)) = (p.count, p.get) else { return Vec::new() };
+        // SAFETY: vtable call with its instance.
+        let n = unsafe { count(self.plugin, false) }.min(MAX_PORTS);
+        (0..n)
+            .map(|i| {
+                // SAFETY: plain data; all-zero (null port_type pointer) is valid.
+                let mut info: clap_audio_port_info = unsafe { std::mem::zeroed() };
+                // SAFETY: index below the count; `info` is writable.
+                if unsafe { get(self.plugin, i, false, &mut info) } { read_name(&info.name) } else { String::new() }
+            })
+            .collect()
+    }
+
     pub fn note_port(&self) -> Option<NotePort> {
         // SAFETY: see `params`.
         let p = unsafe { self.notes.as_ref() }?;

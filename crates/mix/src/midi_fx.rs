@@ -835,7 +835,7 @@ impl Plugin for MidiFxHost {
     fn midi_out(&mut self, out: &mut MidiOut) {
         self.inner.midi_out(out);
     }
-    fn extra_outputs(&self) -> &'static [&'static str] {
+    fn extra_outputs(&self) -> Vec<String> {
         self.inner.extra_outputs()
     }
     fn set_outputs_taken(&mut self, mask: u32) {

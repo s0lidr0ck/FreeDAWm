@@ -110,6 +110,34 @@ fn synth_plays_notes_at_their_offsets() {
     assert!(io[0][19].abs() < 1e-6 && (io[0][20] - 64.0 / 127.0).abs() < 1e-6, "controllers arrive as MIDI at their offset");
 }
 
+/// The synth's second stereo output port ("Aux", half its level) is an extra output a mixer
+/// channel can take: read after `process` while taken, nothing while not. A SysEx reaches it
+/// whole at its offset.
+#[test]
+fn synth_aux_output_is_read_and_sysex_reaches_it() {
+    fixture_dir();
+    let mut p = soundcraft_clap_host::create(SYNTH).unwrap();
+    assert_eq!(p.extra_outputs(), vec!["Aux".to_string()]);
+    p.prepare(48_000.0, 64, 2);
+    let mut io = vec![vec![0.0f32; 64], vec![0.0f32; 64]];
+    let mut aux = vec![vec![9.0f32; 64], vec![9.0f32; 64]];
+    p.note_on(0, 60, 127);
+    p.process(&mut io, 64);
+    assert!(!p.read_output(0, &mut aux, 64), "not taken: not read");
+    p.set_outputs_taken(1);
+    p.process(&mut io, 64);
+    assert!(p.read_output(0, &mut aux, 64));
+    assert!(aux.iter().flatten().all(|x| (x - 0.5).abs() < 1e-6), "{:?}", &aux[0][..4]);
+    assert!(io[0].iter().all(|x| (x - 1.0).abs() < 1e-6), "the main output as before");
+    assert!(!p.read_output(1, &mut aux, 64), "no second extra output");
+    // `F0 7D 40 F7` sets the level at frame 32.
+    p.sysex(32, &[0xF0, 0x7D, 0x40, 0xF7]);
+    p.process(&mut io, 64);
+    assert!((io[0][31] - 1.0).abs() < 1e-6 && (io[0][32] - 64.0 / 127.0).abs() < 1e-6, "{} {}", io[0][31], io[0][32]);
+    // The effect has no extra outputs.
+    assert!(soundcraft_clap_host::create(GAIN).unwrap().extra_outputs().is_empty());
+}
+
 #[test]
 fn layouts_beyond_the_host_limits_are_rejected_not_truncated() {
     fixture_dir();

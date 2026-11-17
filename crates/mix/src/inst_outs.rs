@@ -20,6 +20,30 @@
 //! Freezing and bouncing a track follow its main output only.
 
 use crate::delay_line::DelayLine;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
+/// The extra outputs of each instrument the mix has made, by plug-in id: what a hosted plug-in
+/// declared when it was made (a built-in one's are known without one).
+static KNOWN: Mutex<BTreeMap<String, Vec<String>>> = Mutex::new(BTreeMap::new());
+
+/// Notes the extra outputs `p` (made for `id`) declares. Off the audio thread.
+pub(crate) fn remember(id: &str, p: &dyn Plugin) {
+    let names = p.extra_outputs();
+    if let Ok(mut k) = KNOWN.lock() {
+        if names.is_empty() {
+            k.remove(id);
+        } else {
+            k.insert(id.to_string(), names);
+        }
+    }
+}
+
+/// The extra outputs of the instrument `id` as it declared them when the mix last made it
+/// (empty: none, or never made).
+pub fn known_outputs(id: &str) -> Vec<String> {
+    KNOWN.lock().ok().and_then(|k| k.get(id).cloned()).unwrap_or_default()
+}
 use soundcraft_dsp::Plugin;
 use soundcraft_model::{BusId, Track};
 

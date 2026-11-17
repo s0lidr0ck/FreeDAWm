@@ -1763,6 +1763,32 @@ impl Instance {
         })
     }
 
+    /// The auxiliary audio output buses an instrument (a plugin with an event input) offers a
+    /// mixer channel: (bus index, name), every one after the main bus with channels. Empty for an
+    /// effect.
+    pub fn aux_outputs(&self) -> Vec<(usize, String)> {
+        let (dout, din) = (sv::BusDirections_::kOutput, sv::BusDirections_::kInput);
+        if self.bus_count(sv::MediaTypes_::kEvent, din) == 0 {
+            return Vec::new();
+        }
+        let n = self.bus_count(sv::MediaTypes_::kAudio, dout);
+        (1..n)
+            .filter_map(|i| {
+                // SAFETY: plain data; all-zero is valid.
+                let mut info: sv::BusInfo = unsafe { std::mem::zeroed() };
+                // SAFETY: valid component; index below the bus count; `info` is writable.
+                let got = ok(unsafe { self.component.getBusInfo(sv::MediaTypes_::kAudio as sv::MediaType, dout as sv::BusDirection, i, &mut info) });
+                if !got || info.channelCount <= 0 {
+                    return None;
+                }
+                let name = read_c16(&info.name);
+                let name = if name.is_empty() { format!("Out {}", i + 1) } else { name };
+                Some((usize::try_from(i).ok()?, name))
+            })
+            .take(32)
+            .collect()
+    }
+
     fn bus_channels(&self, dir: sv::BusDirections, index: i32) -> u32 {
         if let Some(arr) = self.arrangement(dir, index) {
             return arr.count_ones().min(MAX_BUS_CHANNELS);
@@ -1820,6 +1846,8 @@ impl Instance {
             log::debug!("vst3: plugin refused mono/stereo bus arrangements; using its own");
         }
         let key_bus = self.key_bus();
+        // An instrument's auxiliary outputs are on, so a mixer channel can take them.
+        let aux_out: Vec<usize> = self.aux_outputs().into_iter().map(|(i, _)| i).collect();
         let layout = Layout {
             inputs: (0..nin).map(|i| self.bus_channels(din, i)).collect(),
             outputs: (0..nout).map(|i| self.bus_channels(dout, i)).collect(),
@@ -1830,7 +1858,9 @@ impl Instance {
         // for every bus).
         for (dir, n) in [(din, nin), (dout, nout)] {
             for i in 0..n {
-                let on = i == 0 || (dir == din && usize::try_from(i).ok() == key_bus);
+                let on = i == 0
+                    || (dir == din && usize::try_from(i).ok() == key_bus)
+                    || (dir == dout && usize::try_from(i).is_ok_and(|i| aux_out.contains(&i)));
                 // SAFETY: valid component; index below the bus count.
                 unsafe { self.component.activateBus(audio as sv::MediaType, dir as sv::BusDirection, i, u8::from(on)) };
             }

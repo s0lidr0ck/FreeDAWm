@@ -72,6 +72,12 @@ pub struct Vst3Plugin {
     transport: Option<Transport>,
     /// Set up for an offline render (`kOffline` process mode) at the next `prepare`.
     offline: bool,
+    /// An instrument's auxiliary output buses a mixer channel can take: (bus, name).
+    extra: Vec<(usize, String)>,
+    /// Which of `extra` the host takes (bit per entry).
+    taken: u32,
+    /// Each extra output's block (two channels), copied out after `process` while taken.
+    extra_bufs: Vec<[Vec<f32>; 2]>,
 }
 
 impl Vst3Plugin {
@@ -122,10 +128,14 @@ impl Vst3Plugin {
             position: 0,
             transport: None,
             offline: false,
+            extra: Vec::new(),
+            taken: 0,
+            extra_bufs: Vec::new(),
             ids,
             maps,
             inst,
         };
+        p.extra = p.inst.aux_outputs();
         let values: Vec<f32> = (0..p.ids.len())
             .map(|i| {
                 let (Some(pi), Some(&id)) = (p.info.params.get(i), p.ids.get(i)) else { return 0.0 };
@@ -266,6 +276,7 @@ impl Plugin for Vst3Plugin {
             Ok(layout) => {
                 self.inputs = BusBuffers::new(&layout.inputs, mb);
                 self.outputs = BusBuffers::new(&layout.outputs, mb);
+                self.extra_bufs = self.extra.iter().map(|_| [vec![0.0; mb], vec![0.0; mb]]).collect();
                 self.has_input = layout.inputs.first().is_some_and(|&c| c > 0);
                 self.has_output = layout.outputs.first().is_some_and(|&c| c > 0);
                 self.key_bus = layout.key_bus.filter(|&b| layout.inputs.get(b).is_some_and(|&c| c > 0));
@@ -402,6 +413,21 @@ impl Plugin for Vst3Plugin {
             self.pending.clear();
             self.notes.drain(..k);
             self.position = self.position.saturating_add(i64::try_from(n).unwrap_or(0));
+            if r.is_ok() && self.taken != 0 {
+                // The taken auxiliary outputs, as they came (mono to both sides).
+                for (k, ((bus, _), bufs)) in self.extra.iter().zip(self.extra_bufs.iter_mut()).enumerate() {
+                    if self.taken & (1 << k) == 0 {
+                        continue;
+                    }
+                    let oc = self.outputs.channels(*bus);
+                    for (c, dst) in bufs.iter_mut().enumerate() {
+                        let src = self.outputs.channel(*bus, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n));
+                        if let (Some(src), Some(dst)) = (src, dst.get_mut(start..start + n)) {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+            }
             match r {
                 Ok(()) if self.has_output => {
                     let oc = self.outputs.channels(0);
@@ -424,6 +450,28 @@ impl Plugin for Vst3Plugin {
             start += n;
         }
         self.controls.clear();
+    }
+
+    fn extra_outputs(&self) -> Vec<String> {
+        self.extra.iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.taken = mask;
+    }
+
+    /// The auxiliary bus's block of the last `process` (none while it was not taken then).
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        let Some(src) = self.extra_bufs.get(index) else { return false };
+        if self.taken & (1 << index.min(31)) == 0 {
+            return false;
+        }
+        for (o, c) in out.iter_mut().zip(src.iter()) {
+            for (d, s) in o.iter_mut().zip(c.iter()).take(frames) {
+                *d = *s;
+            }
+        }
+        true
     }
 
     fn latency(&self) -> usize {

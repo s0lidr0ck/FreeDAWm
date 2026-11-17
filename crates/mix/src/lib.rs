@@ -75,7 +75,7 @@ pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
 pub mod external_midi;
 pub mod hw_insert;
-mod inst_outs;
+pub mod inst_outs;
 pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
@@ -7226,13 +7226,18 @@ fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
     if let Some(bridged) = soundcraft_plugin_bridge::create(id) {
         return bridged;
     }
-    external_midi::create(id)
+    let p = external_midi::create(id)
         .or_else(|| track_midi::create(id))
         .or_else(|| hw_insert::create(id))
         .or_else(|| soundcraft_dsp::create(id))
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
-        .or_else(|| soundcraft_au_host::create(id))
+        .or_else(|| soundcraft_au_host::create(id))?;
+    // A hosted instrument's auxiliary outputs, for the track's output menu.
+    if is_third_party(id) {
+        inst_outs::remember(id, p.as_ref());
+    }
+    Some(p)
 }
 
 #[cfg(test)]

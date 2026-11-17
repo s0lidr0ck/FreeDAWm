@@ -1241,8 +1241,8 @@ impl Plugin for Juke {
         }
     }
 
-    fn extra_outputs(&self) -> &'static [&'static str] {
-        &EXTRA_OUTPUTS
+    fn extra_outputs(&self) -> Vec<String> {
+        EXTRA_OUTPUTS.iter().map(|s| (*s).to_string()).collect()
     }
 
     fn set_outputs_taken(&mut self, mask: u32) {

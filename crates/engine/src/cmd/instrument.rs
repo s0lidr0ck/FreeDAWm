@@ -48,14 +48,18 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// The names of the extra outputs `ins` has (built-in instruments only: Juke's Out 2-8); empty
-/// for one without any or one hosted from a plug-in format.
-pub fn output_names(ins: &Insert) -> Vec<&'static str> {
-    soundcraft_dsp::create(&ins.plugin).map(|p| p.extra_outputs().to_vec()).unwrap_or_default()
+/// The names of the extra outputs `ins` has: a built-in instrument's (Juke's Out 2-8), or the
+/// auxiliary output ports a hosted CLAP or VST3 instrument declared when the mix made it. Empty
+/// for one without any.
+pub fn output_names(ins: &Insert) -> Vec<String> {
+    match soundcraft_dsp::create(&ins.plugin) {
+        Some(p) => p.extra_outputs(),
+        None => soundcraft_mix::inst_outs::known_outputs(&ins.plugin),
+    }
 }
 
 /// The instrument track and output a command names, checked.
-fn output_of(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, u8, &'static str)> {
+fn output_of(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, u8, String)> {
     let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
     let ins = e.session().track(t).and_then(|tr| tr.instrument.as_ref()).ok_or_else(|| bad(id, "the track has no instrument"))?;
     let names = output_names(ins);
@@ -65,7 +69,7 @@ fn output_of(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, u8, &'static s
     let output = p.get("output").and_then(Value::as_u64).ok_or_else(|| bad(id, "`output`: which extra output (0 first)"))?;
     let name = usize::try_from(output)
         .ok()
-        .and_then(|i| names.get(i).copied())
+        .and_then(|i| names.get(i).cloned())
         .ok_or_else(|| bad(id, format!("`{}` has {} extra outputs; no index {output}", ins.plugin, names.len())))?;
     Ok((t, u8::try_from(output).unwrap_or(0), name))
 }
