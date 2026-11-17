@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Notes",
             [],
             None,
-            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, channel?: 0..15, muted?: bool, probability?: 0..100} — the same value on every picked note (a muted note does not play; one with a probability plays on that share of passes) -> {indices}",
+            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, release_velocity?: 0..127 (note-off velocity), channel?: 0..15, muted?: bool, probability?: 0..100} — the same value on every picked note (a muted note does not play; one with a probability plays on that share of passes) -> {indices}",
             always,
             notes_set
         ),
@@ -474,8 +474,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
     let (pitch, start, length, velocity, channel) = (int("pitch"), int("start"), int("length"), int("velocity"), int("channel"));
     let muted = p.get("muted").and_then(Value::as_bool);
     let probability = int("probability");
-    if [pitch, start, length, velocity, channel, probability].iter().all(Option::is_none) && muted.is_none() {
-        return Err(bad(C, "give pitch, start, length, velocity, channel, muted or probability"));
+    let release = int("release_velocity");
+    if [pitch, start, length, velocity, channel, probability, release].iter().all(Option::is_none) && muted.is_none() {
+        return Err(bad(C, "give pitch, start, length, velocity, release_velocity, channel, muted or probability"));
     }
     let seq = seq_mut(e, id, C)?;
     let idx = picked(p, seq.notes.len());
@@ -501,6 +502,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             if let Some(v) = probability {
                 n.probability = v.clamp(0, 100) as u8;
+            }
+            if let Some(v) = release {
+                n.release_velocity = v.clamp(0, 127) as u8;
             }
         }
     }

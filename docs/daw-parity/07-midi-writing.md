@@ -102,7 +102,7 @@ The gaps are of four kinds:
 | Velocity lane; drag one or many; draw a ramp | ● | ● | ● | ● | **Works**; stacked notes are spread so each can be grabbed |
 | Velocity shown as note colour | ● | ● | ● | ● | **Works** |
 | Scale, compress, limit, randomise velocity | ● | ● | ● | ● | **Works**: Event › More MIDI › Change Velocity… sets, adds, scales, ramps, limits to a range, randomises (± an amount, a new seed each time) and compresses or expands (a percent of each velocity's distance from the notes' average), on the editor's selected notes or the selected clips (`event.change_velocity` and `midi.notes_velocity` `min`, `max`, `random`, `compress`, `center`) |
-| Release velocity | ● | ◐ | ● | ● | **Flag only**: stored; every edit writes the middle value |
+| Release velocity | ● | ◐ | ● | ● | **Works**: the note bar's Release field shows and sets the selected notes' note-off velocity (`midi.notes_set` `release_velocity`); recorded notes keep theirs, drawn notes take 64, and it goes out with the note-off |
 | Per-note probability | ○ | ● | ◐ | ◐ | **Works**: MIDI Editor › More › Probability (0-100 %) on the selected notes (`midi.notes_set` `probability`; the hover shows it). Each pass the clip plays from somewhere new (a start, a locate, a loop turn) rolls every such note again with a generator seeded from the note, its clip and the pass, so a bounce or freeze plays the same notes each time. Sessions saved before load at 100 %, and notes at 100 % save as before. MIDI export writes every note. Pattern steps keep their own |
 | Lanes for any controller, pitch bend, channel pressure; several at once | ● | ● | ● | ● | **Works**, per MIDI channel or every channel with a line each (bug 20, fixed) |
 | Lanes for poly aftertouch and program change | ● | ● | ● | ● | **Works**: a Program Change lane and a Poly Pressure lane per key (Lanes › Poly Pressure lists the keys with data and the selected notes' keys first); a clip with such data opens with them shown |
@@ -433,3 +433,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Notes entered and edited in the score (click, keys, step entry), spelled in the key |
 | 2026-11-17 | minor | Transpose within the key, by steps of the key on the Key ruler |
 | 2026-11-17 | minor | Flam and pitch inversion in the MIDI Operations window |
+| 2026-11-17 | minor | The release velocity shown and set in the note bar |

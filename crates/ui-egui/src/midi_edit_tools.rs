@@ -305,11 +305,13 @@ pub enum Field {
     Start,
     Length,
     Velocity,
+    /// Note-off (release) velocity.
+    Release,
     Channel,
 }
 
 impl Field {
-    pub const ALL: [Field; 5] = [Field::Pitch, Field::Start, Field::Length, Field::Velocity, Field::Channel];
+    pub const ALL: [Field; 6] = [Field::Pitch, Field::Start, Field::Length, Field::Velocity, Field::Release, Field::Channel];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -317,6 +319,7 @@ impl Field {
             Field::Start => "start",
             Field::Length => "length",
             Field::Velocity => "velocity",
+            Field::Release => "release",
             Field::Channel => "channel",
         }
     }
@@ -331,6 +334,7 @@ impl Field {
             Field::Start => "START",
             Field::Length => "LENGTH",
             Field::Velocity => "VELOCITY",
+            Field::Release => "RELEASE",
             Field::Channel => "CHANNEL",
         }
     }
@@ -345,6 +349,7 @@ pub struct Summary {
     pub start: (i64, i64),
     pub length: (i64, i64),
     pub velocity: (i64, i64),
+    pub release: (i64, i64),
     pub channel: (i64, i64),
 }
 
@@ -362,6 +367,7 @@ impl Summary {
             start: span(&|n| n.start),
             length: span(&|n| n.length),
             velocity: span(&|n| i64::from(n.velocity)),
+            release: span(&|n| i64::from(n.release_velocity)),
             channel: span(&|n| i64::from(n.channel) + 1),
         })
     }
@@ -372,6 +378,7 @@ impl Summary {
             Field::Start => self.start,
             Field::Length => self.length,
             Field::Velocity => self.velocity,
+            Field::Release => self.release,
             Field::Channel => self.channel,
         }
     }
@@ -383,7 +390,7 @@ fn value_text(s: &Session, base: i64, f: Field, v: i64, start: i64) -> String {
         Field::Pitch => soundcraft_midi::note_name(v.clamp(0, 127) as u8),
         Field::Start => position_text(s, base.saturating_add(v)),
         Field::Length => bbt_len(&s.tempo, base.saturating_add(start), v),
-        Field::Velocity | Field::Channel => v.to_string(),
+        Field::Velocity | Field::Release | Field::Channel => v.to_string(),
     }
 }
 
@@ -403,6 +410,7 @@ pub fn parse_field(s: &Session, base: i64, f: Field, at: i64, text: &str) -> Opt
         Field::Start => parse_position_text(s, text).map(|t| t.saturating_sub(base).max(0)),
         Field::Length => parse_bbt_len(&s.tempo, base.saturating_add(at), text).filter(|l| *l > 0),
         Field::Velocity => text.parse::<i64>().ok().filter(|v| (1..=127).contains(v)),
+        Field::Release => text.parse::<i64>().ok().filter(|v| (0..=127).contains(v)),
         Field::Channel => text.parse::<i64>().ok().filter(|v| (1..=16).contains(v)),
     }
 }
@@ -440,6 +448,7 @@ pub fn apply_value(app: &mut SoundApp, cid: ClipId, f: Field, v: i64, merge: Opt
         Field::Start => ("midi.notes_move", json!({"clip": cid.0, "indices": sel, "ticks": v.max(0) - sum.start.0})),
         Field::Length => ("midi.notes_set", json!({"clip": cid.0, "indices": sel, "length": v.max(1)})),
         Field::Velocity => ("midi.notes_set", json!({"clip": cid.0, "indices": sel, "velocity": v.clamp(1, 127)})),
+        Field::Release => ("midi.notes_set", json!({"clip": cid.0, "indices": sel, "release_velocity": v.clamp(0, 127)})),
         Field::Channel => ("midi.notes_set", json!({"clip": cid.0, "indices": sel, "channel": v.clamp(1, 16) - 1})),
     };
     let unchanged = match f {
@@ -511,6 +520,7 @@ pub fn note_bar(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, rect: Rect, alt: b
             Field::Start => (0.0..=1e12, (grid.max(1) as f64 / 6.0).max(1.0)),
             Field::Length => (1.0..=1e12, (grid.max(1) as f64 / 6.0).max(1.0)),
             Field::Velocity => (1.0..=127.0, 0.4),
+            Field::Release => (0.0..=127.0, 0.4),
             Field::Channel => (1.0..=16.0, 0.05),
         };
         let r = bar.add(
