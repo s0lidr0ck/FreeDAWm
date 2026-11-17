@@ -202,7 +202,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Detect tempo from audio and build a tempo map | ◐ | ● | ● | ● | **Works**: constant, follow and smooth modes |
 | Audio on a musical-time track follows tempo edits | ● | ● | ● | ● | **Works**: on a tick track a clip moves to its bar; on an Elastic one it also takes the new length (Varispeed by its stretch, the others by a pitch-preserving render from the original) |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving render on an Elastic one (bug 12, fixed) |
-| Re-stretch after trimming | ● | ● | ● | ● | **Partial**: a second stretch rebuilds from the first-stretch length and discards later trims |
+| Re-stretch after trimming | ● | ● | ● | ● | **Works**: a second stretch renders from the window of the original the trimmed clip still plays (its render offset and length mapped back through the first ratio), so trims are kept |
 
 ## J. Pitch and spectral editing
 

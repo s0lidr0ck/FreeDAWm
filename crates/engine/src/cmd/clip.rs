@@ -228,7 +228,19 @@ pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
         let orig = warp_original(s, *id);
         let mut base = c.clone();
         base.warp.clear();
-        if let Some((src, off, len)) = orig {
+        // The window of the original the clip plays now: a clip trimmed since its render plays
+        // less of it, and stretching again keeps the trim (it is not rebuilt from the whole).
+        let mut window = orig;
+        if let Some((src, off, len)) = orig
+            && let soundcraft_model::ClipContent::Audio { source, offset } = c.content
+            && source != src
+            && let Some(old) = s.edit.values.get(&key("ratio")).copied().filter(|r| r.is_finite() && *r > 0.0)
+        {
+            let o = off.saturating_add(soundcraft_time::to_samples(offset.max(0) as f64 / old)).min(off.saturating_add(len));
+            let l = soundcraft_time::to_samples(c.length as f64 / old).clamp(1, off.saturating_add(len).saturating_sub(o).max(1));
+            window = Some((src, o, l));
+        }
+        if let Some((src, off, len)) = window {
             base.content = soundcraft_model::ClipContent::Audio { source: src, offset: off };
             base.length = len.max(1);
             base.stretch = 1.0;
@@ -257,9 +269,7 @@ pub(crate) fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         let out_len = soundcraft_time::to_samples(base.length as f64 * ratio).max(1);
         let Some(src) = super::more_util::render_stretched(s, "clip.elastic_properties", &base, out_len)? else { continue };
-        if orig.is_none()
-            && let soundcraft_model::ClipContent::Audio { source, offset } = base.content
-        {
+        if let soundcraft_model::ClipContent::Audio { source, offset } = base.content {
             s.edit.values.insert(key("src"), source.0 as f64);
             s.edit.values.insert(key("off"), offset as f64);
             s.edit.values.insert(key("len"), base.length as f64);
@@ -623,6 +633,24 @@ mod tests {
         let vari = e.session().find_clip(c.id).unwrap().1.clone();
         assert!((vari.stretch - 2.0).abs() < 1e-6 && vari.length == len * 2 && vari.source() == c.source());
         assert!(e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start})).is_err(), "no length left");
+    }
+
+    /// Re-stretch after trimming: a stretched clip trimmed to half and stretched again plays the
+    /// half it kept, not the whole original rebuilt.
+    #[test]
+    fn a_second_stretch_keeps_the_trim() {
+        let mut e = crate::demo::demo_engine();
+        e.execute("edit.mode", &json!({"mode": "slip"})).unwrap();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
+        let c = e.session().track(pad).unwrap().clips()[0].clone();
+        let (start, len) = (c.start, c.length);
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 2})).unwrap();
+        e.execute("edit.trim_clip", &json!({"clip": c.id.0, "end": start + len, "alone": true})).unwrap();
+        e.execute("clip.stretch_to", &json!({"clip": c.id.0, "end": start + len * 2})).unwrap();
+        let now = e.session().find_clip(c.id).unwrap().1.clone();
+        assert!((now.length - len * 2).abs() <= 2, "{} vs {}", now.length, len * 2);
+        let kept = e.session().edit.values.get(&format!("elastic.{}.len", c.id.0)).copied().unwrap();
+        assert!((kept - (len / 2) as f64).abs() <= 2.0, "half the original is played: {kept} of {len}");
     }
 
     #[test]
