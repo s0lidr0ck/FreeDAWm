@@ -233,6 +233,8 @@ struct Shared {
     speed: AtomicU32,
     /// Varispeed keeps the pitch ([`Player::set_keep_pitch`]).
     keep_pitch: AtomicBool,
+    /// The transport plays backwards ([`Player::set_reverse`]): Shuttle Back through the mixer.
+    reverse: AtomicBool,
     meters: Mutex<MeterSnapshot>,
     /// `meters` holds peaks [`Player::copy_meters`] has not taken yet: the callback folds each
     /// block's peaks into them (the maximum) instead of replacing them, so a peak or clip between
@@ -282,6 +284,7 @@ impl Shared {
             countoff_at: AtomicI64::new(0),
             speed: AtomicU32::new(1000),
             keep_pitch: AtomicBool::new(false),
+            reverse: AtomicBool::new(false),
             meters: Mutex::new(MeterSnapshot::default()),
             meters_unread: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
@@ -1343,6 +1346,30 @@ impl AudioState {
         }
     }
 
+    /// The length of the next block played backwards (at most `n`): it wraps round a loop being
+    /// played (from its start to its end) and stops the transport at the session start, where 0
+    /// is left (the mix rings out, as after a Stop).
+    fn reverse_block_len(&mut self, n: usize) -> usize {
+        if let Some(l) = self.looped.filter(|l| self.loop_armed && l.end > l.start) {
+            if self.pos <= l.start && self.pos > l.start.saturating_sub(n as i64) {
+                self.pos = l.end;
+                self.midi_pass = self.midi_pass.saturating_add(1);
+            }
+            if self.pos > l.start {
+                return n.min(usize::try_from(self.pos - l.start).unwrap_or(n)).max(1);
+            }
+        }
+        if self.pos <= 0 {
+            self.playing = false;
+            self.end = None;
+            self.mix.stop_scout();
+            self.shared.playing.store(false, Ordering::Relaxed);
+            self.mix.ring_out();
+            return if self.monitoring { n } else { 0 };
+        }
+        n.min(usize::try_from(self.pos).unwrap_or(n))
+    }
+
     /// Render the next block at the session rate into `pending`.
     fn render_next(&mut self, quantum: usize) {
         let mb = self.max_block;
@@ -1371,15 +1398,24 @@ impl AudioState {
                 n = n.min(left.max(1));
             }
         }
-        if let Some(l) = self.looped.filter(|_| self.loop_armed)
-            && self.pos >= l.end
-        {
-            self.pos = l.start;
-            self.midi_pass = self.midi_pass.saturating_add(1);
+        // Backwards (Shuttle Back): the block is the one before `pos`, heard turned round; never
+        // while a take records or counts off.
+        let reverse = self.playing && !self.recording && self.countoff.is_none() && self.shared.reverse.load(Ordering::Relaxed);
+        if reverse {
+            n = self.reverse_block_len(n);
+        } else {
+            if let Some(l) = self.looped.filter(|_| self.loop_armed)
+                && self.pos >= l.end
+            {
+                self.pos = l.start;
+                self.midi_pass = self.midi_pass.saturating_add(1);
+            }
+            self.shared.midi_pass.store(u32::from(self.midi_pass), Ordering::Relaxed);
+            n = self.skip_ahead(n);
         }
-        self.shared.midi_pass.store(u32::from(self.midi_pass), Ordering::Relaxed);
-        n = self.skip_ahead(n);
-        if let Some(c) = &self.countoff {
+        if reverse {
+            // `reverse_block_len` stopped the transport at the session start.
+        } else if let Some(c) = &self.countoff {
             // The count-off ends on a block edge: the take's first block starts at the record point.
             n = n.min(usize::try_from((c.len() - self.countoff_at).max(1)).unwrap_or(mb));
         } else if let Some(l) = self.looped.filter(|_| self.loop_armed) {
@@ -1414,7 +1450,11 @@ impl AudioState {
         }
         self.mix.monitor_only = !self.playing;
         // Clips running across the loop's edges ramp there (`MixEngine::looping`).
-        self.mix.looping = if self.declick && self.loop_armed { self.looped } else { None };
+        self.mix.looping = if self.declick && self.loop_armed && !reverse { self.looped } else { None };
+        let reverse = reverse && self.playing;
+        self.mix.reverse = reverse;
+        // The block heard backwards is the one before the playhead.
+        let at = if reverse { self.pos.saturating_sub(n as i64) } else { self.pos };
         self.mix.recording = self.recording;
         self.mix.punch = self.punch;
         self.mix.countoff = self.countoff.map(|c| (c, self.countoff_at));
@@ -1472,7 +1512,7 @@ impl AudioState {
         }
         let width = self.main_width.min(self.main.len());
         let main = self.main.get_mut(..width).unwrap_or_default();
-        self.mix.render(&self.session, self.pos, n, main);
+        self.mix.render(&self.session, at, n, main);
         // A real-time bounce: the source as rendered, before the monitor stage (no allocation).
         if let Some(p) = self.print.as_ref().filter(|_| self.playing) {
             let (src, latency) = match p.bus() {
@@ -1554,7 +1594,16 @@ impl AudioState {
         // The live MIDI clock runs on whether the timeline moved or not: an event played during
         // a count-off block lands before the record point (and is not taken).
         self.midi_lead = self.midi_lead.saturating_add(n as i64);
-        if self.playing {
+        if self.playing && reverse {
+            self.pos = at;
+            self.shared.position.store(self.pos, Ordering::Relaxed);
+            // The disk thread reads ahead after the point it is given: backwards, from the
+            // seconds before the playhead.
+            let ahead = (soundcraft_model::disk::READ_AHEAD_SECS * self.session.sample_rate.as_f64()) as i64;
+            soundcraft_model::disk::set_playhead(self.pos.saturating_sub(ahead).max(0), true);
+            self.shared.rolled.fetch_add(n as i64, Ordering::Relaxed);
+            self.shared.rolled_at_ns.store(clock_ns(), Ordering::Relaxed);
+        } else if self.playing {
             self.pos += n as i64;
             self.shared.position.store(self.pos, Ordering::Relaxed);
             // Where the disk thread reads ahead from (atomic stores only).
@@ -3371,6 +3420,19 @@ impl Player {
             return;
         }
         self.shared.speed.store(v, Ordering::Relaxed);
+    }
+
+    /// Plays backwards (Shuttle Back, on) or forwards (off, the default): the transport moves
+    /// back from where it is at the speed set, and the whole mix (sends, busses, the master,
+    /// hosted plug-ins) hears the clips backwards ([`soundcraft_mix::MixEngine::reverse`]).
+    /// Not taken while a take records.
+    pub fn set_reverse(&self, on: bool) {
+        self.shared.reverse.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether the transport plays backwards ([`Player::set_reverse`]).
+    pub fn reverse(&self) -> bool {
+        self.shared.reverse.load(Ordering::Relaxed)
     }
 
     /// Varispeed keeps the pitch (on) or moves it with the speed as tape does (off, the default).
@@ -5384,6 +5446,27 @@ mod tests {
         assert!(r.playing);
         // The old pass ramps out first (declick), then the new Play takes and the clock restarts.
         assert_eq!(r.rolled, 256 - st.ramp_frames() as i64, "counted from the new Play");
+    }
+
+    /// Shuttle Back through the mixer: from 2048 the player plays the session backwards (the
+    /// offline render turned round, the position moving back) and stops at the start.
+    #[test]
+    fn reverse_plays_the_mix_backwards_and_stops_at_the_start() {
+        let s = clip_session(4800, &["gain"]);
+        let (st, shared, _tx) = playing_from(&s, 48_000.0, 256, Cmd::Play { from: 2048, end: None, looped: None, countoff: None });
+        let mut st = exact(st);
+        shared.reverse.store(true, Ordering::Relaxed);
+        let got = callbacks(&mut st, &[256, 128, 128, 512, 1024]);
+        assert_eq!(shared.position.load(Ordering::Relaxed), 0);
+        let want = offline(&s, 0..2048);
+        for c in 0..2 {
+            let turned: Vec<f32> = want[c].iter().rev().copied().collect();
+            assert_bits(&got[c], &turned, "backwards");
+        }
+        // At the start the transport stops: what follows is silence.
+        let more = callbacks(&mut st, &[256]);
+        assert!(!shared.playing.load(Ordering::Relaxed));
+        assert!(more[0].iter().all(|x| *x == 0.0));
     }
 
     #[test]

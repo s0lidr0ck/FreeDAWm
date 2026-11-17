@@ -86,7 +86,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Options › More › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
 | Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Options › More › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
-| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Partial**: Shuttle Back plays backwards through each track's strip as the Scrubber hears it (clips, built-in inserts, fader, mute). Left: sends, busses, the master and third-party inserts; designed below (Reverse playback through the mixer: the player renders reversed blocks), not built |
+| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Works** (2026-11-17, @@REVERSE@@, to the design below): Shuttle Back plays the session backwards through the whole mixer (`Player::set_reverse`, `MixEngine::reverse`): each block before the playhead is read forwards and turned round, so every strip, send, bus, the master and hosted plug-ins process the reversed audio forwards in time (a reverb on a send rings into the past, as tape reversed through a desk does); fader automation turns round with the audio; a loop being played wraps from its start to its end; it stops at the session start. Up to 4× (the 8× step plays at 4×). Not backwards: MIDI clips (silent), the click, and a take (refused while recording). Plug-in parameter automation is read once per block, and clip modules' latency is not taken off backwards. Without an audio device (the simulated transport) the old frame-by-frame preview voice still plays it |
 
 Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
 Varispeed is the only whole-project speed control among the four.
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: reverse playback through sends, busses and the master |
 | 2026-11-17 | minor | Round three: Clip Effects take any built-in effect as a chain of modules per clip |
 | 2026-11-17 | minor | Round three: the session's sample rate can be changed later |
 | 2026-11-17 | minor | Round three: a design for playing files at their own rate (mixed rates) |

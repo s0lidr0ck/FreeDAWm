@@ -1019,6 +1019,13 @@ pub struct MixEngine {
     /// its edges ramp out before its end and in after its start, so the wrap does not click.
     /// Offline renders leave it `None`.
     pub looping: Option<Range>,
+    /// Reverse playback (Shuttle Back): the block `pos..pos + frames` is heard backwards. The
+    /// clips (and frozen tracks) are read forwards and turned round per block, so every strip,
+    /// send, bus and the master process the reversed audio forwards in time (a reverb rings
+    /// before what it follows, as tape played backwards through a desk does); fader automation
+    /// is turned round with them. MIDI clips and the click are not played backwards (silent).
+    /// Set by the audio host each block; offline renders leave it off.
+    pub reverse: bool,
     /// Mix the metronome (Options > Click) into the output. Playback turns this on; offline renders
     /// (bounces, stems, exports) leave it off so the click is never printed into a file.
     pub metronome: bool,
@@ -1294,6 +1301,7 @@ impl MixEngine {
             punch: None,
             metronome: false,
             looping: None,
+            reverse: false,
             countoff: None,
             external: false,
             adopt: HashMap::new(),
@@ -2293,7 +2301,9 @@ impl MixEngine {
         // Stopped, the transport stays where it is: the same block again is no seek (a held live
         // note would be cut every block). A Locate resets the engine itself (`reset_at`).
         let still = stopped && self.last_stopped && pos == self.last_start;
-        let seek = pos != self.last_end && !still;
+        // Backwards, the next block ends where the last one started.
+        let follows = if self.reverse && !stopped { pos.saturating_add(frames as i64) == self.last_start } else { pos == self.last_end };
+        let seek = !follows && !still;
         if seek {
             // Seek (a locate, a loop wrap): silence held notes and ringing plugins. A strip a
             // live input holds notes on lets go of its clips' notes only: the player's keys
@@ -2410,6 +2420,7 @@ impl MixEngine {
             midi: &self.live_midi,
             ports_gone: self.ports_gone,
             looping: self.looping,
+            reverse: self.reverse,
             feedback_frames: self.feedback_frames(s),
             hw_inserts: !self.offline,
         };
@@ -2575,6 +2586,7 @@ impl MixEngine {
                 midi: &self.live_midi,
                 ports_gone: self.ports_gone,
                 looping: self.looping,
+                reverse: self.reverse,
                 feedback_frames: self.feedback_frames(s),
                 hw_inserts: !self.offline,
             };
@@ -2838,7 +2850,7 @@ impl MixEngine {
             Some(h) => h,
             None => &mut self.main,
         };
-        if self.metronome && !self.monitor_only && s.edit.click && (!s.edit.flag("click.only_during_record") || self.recording) {
+        if self.metronome && !self.monitor_only && !self.reverse && s.edit.click && (!s.edit.flag("click.only_during_record") || self.recording) {
             click::render(s, pos, frames, clicks);
         }
         // The count-off before a take: its own clicks, counted from its start (the transport
@@ -3373,6 +3385,8 @@ struct LiveInput<'a> {
     ports_gone: u64,
     /// The loop being played ([`MixEngine::looping`]).
     looping: Option<Range>,
+    /// Reverse playback ([`MixEngine::reverse`]).
+    reverse: bool,
     /// Feedback protection: frames of hot input that silence a monitored input; 0 when it is off.
     feedback_frames: usize,
     /// Hardware Inserts play through the device (a live engine), else pass through.
@@ -3541,6 +3555,9 @@ fn process_strip(
         _ if frozen.is_some() => {
             if let Some(fz) = frozen.filter(|_| !live.monitor_only) {
                 play_frozen(s, fz, pos, frames, &mut strip.buf);
+                if live.reverse {
+                    reverse_block(&mut strip.buf, frames);
+                }
             }
         }
         TrackKind::Audio if !strip.bus_in.is_empty() && hears => {
@@ -3586,7 +3603,8 @@ fn process_strip(
                 }
                 // Clip Effects modules: the clip is read their latency ahead (so it is heard in
                 // place) and their tail rings on after it ends. Neither is there without modules.
-                let (lat, tail) = match strip.clip_fx.get(&clip.id.0).filter(|_| !clip.live_modules().is_empty()) {
+                // (Backwards, the clip is read in place: the modules' latency is not taken off.)
+                let (lat, tail) = match strip.clip_fx.get(&clip.id.0).filter(|_| !clip.live_modules().is_empty() && !live.reverse) {
                     Some(fx) => (fx.mod_latency(), fx.mod_tail()),
                     None => (0, 0),
                 };
@@ -3617,7 +3635,15 @@ fn process_strip(
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
                         render_clip(s, clip, at, frames, &mut strip.clipbuf, edges, cover);
-                        fx.process(&mut strip.clipbuf, frames);
+                        if live.reverse {
+                            // The effects hear the clip backwards; turned round again here, it
+                            // comes round once more with the track's other clips below.
+                            reverse_block(&mut strip.clipbuf, frames);
+                            fx.process(&mut strip.clipbuf, frames);
+                            reverse_block(&mut strip.clipbuf, frames);
+                        } else {
+                            fx.process(&mut strip.clipbuf, frames);
+                        }
                         for (d, c) in strip.buf.iter_mut().zip(strip.clipbuf.iter()) {
                             for (x, y) in d.iter_mut().zip(c.iter()).take(frames) {
                                 *x += *y;
@@ -3625,6 +3651,9 @@ fn process_strip(
                         }
                     }
                 }
+            }
+            if live.reverse {
+                reverse_block(&mut strip.buf, frames);
             }
         }
         TrackKind::Aux | TrackKind::Folder => {
@@ -3699,7 +3728,8 @@ fn process_strip(
                     None if module_in => deliver_module_midi(&strip.midi_in, inst, &mut strip.midi_held),
                     None => {
                         // An armed MIDI track plays its clips and what is played in.
-                        if !live.monitor_only {
+                        // (Not backwards: MIDI clips are not played in reverse.)
+                        if !live.monitor_only && !live.reverse {
                             schedule_notes(s, t, pos, frames, inst, &mut strip.held, chased && s.edit.flag("midi.note_chase"), strip.pass);
                         }
                         if let Some(f) = live_filter {
@@ -3999,6 +4029,12 @@ fn fader_section(s: &Session, t: &Track, strip: &mut Strip, live: &LiveInput<'_>
     let held_mute = t.mixer.mute || solo_muted || vcas.iter().flatten().any(|v| v.mixer.mute);
     strip.muted = strip.muted || held_mute;
     fader_gains(t, &vcas, apos, frames, &mut strip.fader_gain);
+    if live.reverse
+        && let Some(g) = strip.fader_gain.get_mut(..frames)
+    {
+        // The audio runs backwards through the block: so does its fader automation.
+        g.reverse();
+    }
     // The mute: from where the last block left it, ramping (never switching) to what the mute,
     // the solo, the VCA and the mute lane ask, sample by sample.
     if !strip.mute_settled {
@@ -4176,6 +4212,16 @@ fn contain_failure(slot: &mut PluginSlot, buf: &mut [Vec<f32>], frames: usize) -
     }
     slot.failed = true;
     true
+}
+
+/// Turns the first `frames` of every channel round (reverse playback). Allocates nothing.
+fn reverse_block(buf: &mut [Vec<f32>], frames: usize) {
+    for ch in buf.iter_mut() {
+        let n = frames.min(ch.len());
+        if let Some(b) = ch.get_mut(..n) {
+            b.reverse();
+        }
+    }
 }
 
 /// Clip-effect parameters of a clip ([`Clip::effects`]), or None when it has no Clip Effects
@@ -11086,6 +11132,105 @@ mod tests {
         let mut bare = realtime();
         bare.render(&s, 0, 512, &mut out);
         assert_eq!(bare.made_in_sync(), 6, "two inserts, an instrument and three Clip Effects modules");
+    }
+
+    /// Renders `blocks` blocks of 512 backwards from `end` (play order: the first block is the
+    /// one before `end`), as the player does in reverse.
+    fn render_backwards(s: &Session, eng: &mut MixEngine, end: i64, blocks: usize) -> Vec<Vec<f32>> {
+        eng.reverse = true;
+        let mut out = vec![Vec::new(); 2];
+        let mut buf = vec![vec![0.0f32; 512]; 2];
+        for k in 1..=blocks as i64 {
+            eng.render(s, end - k * 512, 512, &mut buf);
+            for (o, b) in out.iter_mut().zip(&buf) {
+                o.extend_from_slice(b);
+            }
+        }
+        out
+    }
+
+    /// Reverse playback goes through the whole mixer: a dry track sent to an aux and both to
+    /// the master plays, backwards, the forward render turned round sample for sample.
+    #[test]
+    fn reverse_playback_is_the_forward_render_backwards_through_sends_and_busses() {
+        let mut s = Session::default();
+        s.edit.click = false;
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        let ramp: Vec<f32> = (0..48_000).map(|i| ((i % 700) as f32 / 700.0) - 0.4).collect();
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![ramp] })));
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let cid = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(cid, "r", SourceId(900), 0, 1000, 20_000));
+        let bus = s.add_bus("fx", ChannelFormat::Stereo);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        s.track_mut(aux).unwrap().mixer.volume_db = -4.0;
+        s.track_mut(t).unwrap().mixer.sends[0] =
+            Some(soundcraft_model::SendSlot { level_db: -6.0, ..soundcraft_model::SendSlot::new(Route::Bus(bus)) });
+        let blocks = 48;
+        let mut fwd = MixEngine::new(48_000.0, 512);
+        let mut forward = vec![Vec::new(); 2];
+        let mut buf = vec![vec![0.0f32; 512]; 2];
+        for k in 0..blocks as i64 {
+            fwd.render(&s, k * 512, 512, &mut buf);
+            for (o, b) in forward.iter_mut().zip(&buf) {
+                o.extend_from_slice(b);
+            }
+        }
+        let mut back = MixEngine::new(48_000.0, 512);
+        let heard = render_backwards(&s, &mut back, blocks as i64 * 512, blocks);
+        for c in 0..2 {
+            let turned: Vec<f32> = forward[c].iter().rev().copied().collect();
+            let worst = turned.iter().zip(&heard[c]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            assert!(worst < 1e-5, "channel {c}: off by {worst}");
+        }
+        assert!(heard[0].iter().any(|x| x.abs() > 0.1), "something is heard");
+        // Fader automation runs backwards with the audio.
+        s.track_mut(t).unwrap().lane_mut(&AutoParam::Volume).set_point(0, 0.0);
+        s.track_mut(t).unwrap().lane_mut(&AutoParam::Volume).set_point(24_000, -20.0);
+        let mut fwd = MixEngine::new(48_000.0, 512);
+        let mut forward = vec![Vec::new(); 2];
+        for k in 0..blocks as i64 {
+            fwd.render(&s, k * 512, 512, &mut buf);
+            for (o, b) in forward.iter_mut().zip(&buf) {
+                o.extend_from_slice(b);
+            }
+        }
+        let mut back = MixEngine::new(48_000.0, 512);
+        let heard = render_backwards(&s, &mut back, blocks as i64 * 512, blocks);
+        let turned: Vec<f32> = forward[0].iter().rev().copied().collect();
+        let worst = turned.iter().zip(&heard[0]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-4, "automated: off by {worst}");
+    }
+
+    /// Backwards, a reverb on a send rings on after the impulse in the order it is heard: before
+    /// it on the timeline, as tape reversed through a desk does.
+    #[test]
+    fn reverse_playback_rings_a_send_reverb_into_the_past() {
+        let mut s = Session::default();
+        s.edit.click = false;
+        s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+        let mut imp = vec![0.0f32; 48_000];
+        imp[24_000] = 1.0;
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![imp] })));
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let cid = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(cid, "i", SourceId(900), 0, 0, 48_000));
+        let bus = s.add_bus("verb", ChannelFormat::Stereo);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        s.track_mut(aux).unwrap().mixer.add_module(Insert::new("fs_reverb"), None).unwrap();
+        s.track_mut(t).unwrap().mixer.sends[0] =
+            Some(soundcraft_model::SendSlot { level_db: 0.0, ..soundcraft_model::SendSlot::new(Route::Bus(bus)) });
+        s.track_mut(t).unwrap().mixer.mute = false;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        let heard = render_backwards(&s, &mut eng, 48_000, 90);
+        // The impulse (timeline 24 000) is heard 24 000 frames into the backwards play.
+        let at = 48_000 - 24_000 - 1;
+        let before: f32 = heard[0][..at - 64].iter().map(|x| x.abs()).sum();
+        let after: f32 = heard[0][at + 64..].iter().map(|x| x.abs()).sum();
+        assert!(before < 1e-4, "nothing before the impulse in play order: {before}");
+        assert!(after > 1e-2, "the reverb rings on (into the timeline's past): {after}");
     }
 
     /// Clip Effects take any built-in effect: a Gain module turns the clip down, after the

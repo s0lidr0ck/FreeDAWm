@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(noundo "transport.varispeed_keep_pitch", "Varispeed Keeps Pitch", [], None, "{value?: bool} (toggles when omitted) — Varispeed and Shuttle play at their speed with the pitch kept, rather than moving with it as tape does", always, |e, p| super::more_util::toggle_flag(e, p, KEEP_PITCH)),
         cmd!(noundo "transport.shuttle_forward", "Shuttle Forward", [], None, "{} — plays forwards at 1×; again doubles the speed (to 4×). Bind it to L for J/K/L shuttle", always, |e, _| shuttle(e, 1, None)),
-        cmd!(noundo "transport.shuttle_back", "Shuttle Back", [], None, "{} — plays backwards at 1× (heard); again doubles the speed (to 8×). Bind it to J for J/K/L shuttle", always, |e, _| shuttle(e, -1, None)),
+        cmd!(noundo "transport.shuttle_back", "Shuttle Back", [], None, "{} — plays backwards at 1× through the whole mix (sends, busses, the master); again doubles the speed (to 8×, heard at most 4×). Bind it to J for J/K/L shuttle", always, |e, _| shuttle(e, -1, None)),
         cmd!(noundo "transport.shuttle_stop", "Shuttle Stop", [], None, "{} — stops a shuttle. Bind it to K for J/K/L shuttle", always, |e, _| shuttle(e, 0, None)),
         cmd!(noundo "transport.shuttle", "Shuttle", [], None, "{speed: -8..4} — plays at this speed from the playhead, backwards when negative (heard); 0 stops", always, |e, p| {
             let v = p.get("speed").and_then(Value::as_f64).filter(|x| x.is_finite() && (-8.0..=4.0).contains(x)).ok_or_else(|| bad("transport.shuttle", "speed must be a number from -8 to 4"))?;

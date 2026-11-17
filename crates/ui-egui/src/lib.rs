@@ -1738,6 +1738,8 @@ impl SoundApp {
         self.midi_capture.clear();
         self.countoff = countoff.filter(|_| self.player.is_some());
         if let Some(p) = &self.player {
+            // A play goes forwards (Shuttle Back turns it round after this).
+            p.set_reverse(false);
             p.set_band_library(self.engine.band_library());
             p.update_session(self.player_session());
             p.play_counted(from, end, looped, countoff);
@@ -1774,12 +1776,26 @@ impl SoundApp {
                 self.start_play(at, None, None);
             }
             if let Some(p) = &self.player {
+                p.set_reverse(false);
                 p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
                 p.set_speed(next.max(0.1));
             }
             self.ui.status = format!("Shuttle {next}×");
+        } else if next < 0.0 && self.player.is_some() && !self.engine.transport.recording {
+            // Backwards through the mixer: the player plays the session in reverse (sends,
+            // busses, the master and hosted plug-ins included), at most 4×.
+            if !self.is_playing() {
+                let at = self.engine.transport.position;
+                self.start_play(at, None, None);
+            }
+            if let Some(p) = &self.player {
+                p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
+                p.set_speed((-next).min(4.0));
+                p.set_reverse(true);
+            }
+            self.ui.status = format!("Shuttle {next}×");
         } else {
-            if self.is_playing() && was > 0.0 || next < 0.0 && self.is_playing() {
+            if self.is_playing() && was != 0.0 || next < 0.0 && self.is_playing() {
                 self.stop_play();
             }
             if let Some(p) = &self.player {
