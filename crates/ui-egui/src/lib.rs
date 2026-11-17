@@ -1118,6 +1118,8 @@ pub struct SoundApp {
     /// Options › Recording › Lock Record: when a Stop was refused while a locked take records (a
     /// second Stop within [`RECORD_LOCK_SECONDS`] stops it).
     record_lock_stop: Option<f64>,
+    /// The free space on the takes' disk and when it was read (`None` inside: unknown).
+    disk_free: Option<(f64, Option<u64>)>,
     /// The record offset key a loopback measurement out there was started with.
     measuring: Option<String>,
     /// The latencies of the take recording now, snapshotted at its first frame.
@@ -1312,6 +1314,7 @@ impl SoundApp {
             sim: None,
             record_hint: None,
             record_lock_stop: None,
+            disk_free: None,
             measuring: None,
             take_reported: None,
             quit_requested: false,
@@ -2533,6 +2536,24 @@ impl SoundApp {
 
     /// Discard Take: stop, and throw the take away. Nothing is placed, the take files go, and
     /// the MIDI heard is dropped.
+    /// Reads the free space on the disk the takes go to, at most every few seconds.
+    pub(crate) fn refresh_disk_free(&mut self) {
+        let now = self.last_frame.unwrap_or_default();
+        if self.disk_free.is_some_and(|(at, _)| (at..at + 5.0).contains(&now)) {
+            return;
+        }
+        let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
+        let unsaved = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
+        let dir = soundcraft_engine::io::record_dir(&self.engine, &unsaved);
+        self.disk_free = Some((now, soundcraft_engine::io::disk_free(&dir)));
+    }
+
+    /// How long the armed tracks can still record on the takes' disk (`2 h 05 min`), when known.
+    pub(crate) fn record_time_left(&self) -> Option<String> {
+        let free = self.disk_free.and_then(|(_, b)| b)?;
+        soundcraft_engine::io::record_seconds_left(self.engine.session(), free).map(soundcraft_engine::io::time_left_text)
+    }
+
     /// Options › Recording › Lock Record: whether this Stop is refused because a locked take is
     /// recording. The first Stop only says so; a second within [`RECORD_LOCK_SECONDS`] stops.
     /// Discard Take and Restart Take are deliberate and are not locked.

@@ -3057,6 +3057,54 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
     Ok(TakePlan { takes: plan, taps, from_device })
 }
 
+/// Bytes a second the armed audio tracks' takes add to the disk: their channels at the session's
+/// bit depth and rate (a remote recorder's takes land later and are not counted).
+pub fn record_bytes_per_second(s: &Session) -> u64 {
+    let bytes: u64 = match s.bit_depth {
+        soundcraft_model::BitDepthSetting::Int16 => 2,
+        soundcraft_model::BitDepthSetting::Int24 => 3,
+        soundcraft_model::BitDepthSetting::Float32 => 4,
+    };
+    let channels: u64 = s
+        .tracks
+        .iter()
+        .filter(|t| t.mixer.record_arm && t.kind == TrackKind::Audio && !t.inactive)
+        .filter(|t| !matches!(&t.mixer.input, soundcraft_model::Route::Hardware(n) if is_remote_input(n)))
+        .map(|t| u64::try_from(t.channels()).unwrap_or(0))
+        .sum();
+    channels.saturating_mul(bytes).saturating_mul(u64::from(s.sample_rate.hz()))
+}
+
+/// How long the armed tracks can record into `free` bytes, in seconds; `None` when nothing is
+/// armed to record audio.
+pub fn record_seconds_left(s: &Session, free: u64) -> Option<u64> {
+    let bps = record_bytes_per_second(s);
+    (bps > 0).then(|| free / bps)
+}
+
+/// The folder a session's takes go into: `Audio Files` beside the session file, or in
+/// `unsaved_dir` for a session never saved (as [`plan_recording`] puts them).
+pub fn record_dir(e: &Engine, unsaved_dir: &Path) -> PathBuf {
+    e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir).join("Audio Files")
+}
+
+/// Bytes free on the disk that holds `dir` (or, before it exists, its nearest existing parent).
+pub fn disk_free(dir: &Path) -> Option<u64> {
+    dir.ancestors().find(|p| p.is_dir()).and_then(soundcraft_sysmem::free_disk_space)
+}
+
+/// A length of time for the remaining-record-time display: `2 h 05 min`, `12 min`, `40 s`.
+pub fn time_left_text(secs: u64) -> String {
+    let (h, m) = (secs / 3600, (secs / 60) % 60);
+    if h > 0 {
+        format!("{h} h {m:02} min")
+    } else if m > 0 {
+        format!("{m} min")
+    } else {
+        format!("{secs} s")
+    }
+}
+
 /// Tracks that can record busses at once (the player's limit, `soundcraft_playback::record::MAX_TAPS`).
 pub const MAX_BUS_TAKES: usize = 32;
 
@@ -4546,6 +4594,31 @@ mod save_tests {
         let b = std::fs::read(dir.join(&paths[1])).unwrap();
         assert_ne!(a, b);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod time_left_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The remaining record time: the armed tracks' channels at the session's bit depth and rate.
+    #[test]
+    fn remaining_record_time_follows_the_armed_channels_and_bit_depth() {
+        let mut e = Engine::default();
+        assert_eq!(record_seconds_left(e.session(), 1 << 30), None, "nothing armed");
+        let mono = e.execute("track.new", &json!({"name": "Vox", "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let stereo = e.execute("track.new", &json!({"name": "Keys", "format": "stereo"})).unwrap()["tracks"][0].as_u64().unwrap();
+        e.execute("mix.record_arm", &json!({"tracks": [mono, stereo], "value": true})).unwrap();
+        e.session_mut().bit_depth = soundcraft_model::BitDepthSetting::Int24;
+        let rate = u64::from(e.session().sample_rate.hz());
+        assert_eq!(record_bytes_per_second(e.session()), 3 * 3 * rate);
+        assert_eq!(record_seconds_left(e.session(), 3 * 3 * rate * 3600), Some(3600));
+        e.session_mut().bit_depth = soundcraft_model::BitDepthSetting::Float32;
+        assert_eq!(record_bytes_per_second(e.session()), 3 * 4 * rate);
+        assert_eq!(time_left_text(7500), "2 h 05 min");
+        assert_eq!(time_left_text(720), "12 min");
+        assert_eq!(time_left_text(40), "40 s");
     }
 }
 

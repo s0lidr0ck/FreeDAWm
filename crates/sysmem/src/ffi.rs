@@ -42,3 +42,39 @@ pub(crate) fn total_memory() -> Option<u64> {
 pub(crate) fn total_memory() -> Option<u64> {
     None
 }
+
+/// Bytes free for this user on the file system holding `path` (`statvfs`'s `f_bavail` blocks).
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // the field types differ between platforms
+pub(crate) fn free_disk_space(path: &std::path::Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    // SAFETY: `c` is a NUL-terminated path that lives across the call and `st` is writable
+    // memory of the size statvfs fills; it writes only into `st`.
+    let rc = unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    // SAFETY: statvfs returned 0, so it filled `st` (and it was zeroed before).
+    let st = unsafe { st.assume_init() };
+    (st.f_bavail as u64).checked_mul(st.f_frsize as u64)
+}
+
+/// Bytes free for this user on the volume holding `path` (`GetDiskFreeSpaceExW`).
+#[cfg(windows)]
+pub(crate) fn free_disk_space(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut free: u64 = 0;
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that lives across the call; `free` is a
+    // writable u64; the two other outputs are optional and passed as null.
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn free_disk_space(_path: &std::path::Path) -> Option<u64> {
+    None
+}

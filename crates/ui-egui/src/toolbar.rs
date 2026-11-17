@@ -239,6 +239,9 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
     let lp = app.engine.session().edit.loop_range.filter(|r| !r.is_empty());
     // Recording: `REC m:ss` (the take's length so far) in the record colour, and the booth when
     // this PC records with one.
+    if app.engine.transport.recording {
+        app.refresh_disk_free();
+    }
     let rec_line = (counting.is_none() && app.engine.transport.recording).then(|| record_line(app, pos));
     let main_y = if lp.is_some() || counting.is_some() || rec_line.is_some() { main_r.center().y - 4.0 } else { main_r.center().y };
     let main_col = if counting.is_some() { t.rec } else { t.counter_text };
@@ -435,7 +438,11 @@ pub fn record_line(app: &SoundApp, pos: soundcraft_time::Samples) -> String {
     if let Some(soundcraft_net::glue::FollowBadge::Recording(booth)) = crate::net_ui::badge(app) {
         return format!("● REC with {booth} · {clock}");
     }
-    format!("● REC {clock}")
+    match app.record_time_left() {
+        // The remaining record time on the takes' disk, as Pro Tools and Cubase show it.
+        Some(left) => format!("● REC {clock} · {left} left"),
+        None => format!("● REC {clock}"),
+    }
 }
 
 /// While following a booth (Setup › Network): what this PC is doing for it, in the record colour
@@ -517,8 +524,14 @@ fn transport(app: &mut SoundApp, ui: &mut Ui) {
                 key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
                 icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
                 // The offset text is built only while the tooltip shows.
+                if resp.hovered() {
+                    app.refresh_disk_free();
+                }
                 let resp = resp.on_hover_ui(|ui| {
                     ui.label(format!("Record (Cmd+Space) · {}", app.record_offset_summary()));
+                    if let Some(left) = app.record_time_left() {
+                        ui.label(format!("Room on disk for {left} of the armed tracks"));
+                    }
                 });
                 if let Some(why) = app.record_hint() {
                     // Below the whole group, so the hint covers none of its buttons.
@@ -744,8 +757,14 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, recording, "Record"));
     key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
     icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
+    if resp.hovered() {
+        app.refresh_disk_free();
+    }
     let resp = resp.on_hover_ui(|ui| {
         ui.label(format!("Record (Cmd+Space) · {}", app.record_offset_summary()));
+        if let Some(left) = app.record_time_left() {
+            ui.label(format!("Room on disk for {left} of the armed tracks"));
+        }
         if let Some(why) = app.record_hint() {
             ui.label(why);
         }
