@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three: reconciled) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -29,14 +29,14 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Arming and inputs | Arming works; inputs are mono or stereo hardware, or a bus | Medium: wrong channels with more than two (bug 10) |
-| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard take | Small: no stop-and-restart in one step |
+| A. Arming and inputs | Arming, record safe, arm follows selection; inputs of up to 16 channels, or a bus | Small: tracks cannot join or leave a take under way |
+| B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard and restart take, record lock | Small: no recording at another speed |
 | C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
 | D. Loop recording and takes | Takes to layers, swipe comping, three record modes | Small: no audition of a take that is not active |
-| E. Monitoring | Auto / On / Off through the strip, low-latency mode | Medium: no hardware direct monitoring, no dual buffer, thin cue mixes |
+| E. Monitoring | Auto / On / Off through the strip, input-only mode, low-latency mode, cue mixes, click on its own output, a tuner | Medium: no dual buffer; no hardware direct monitoring (not planned) |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
-| G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float | Small: no per-track record folders |
-| H. Safety and feedback | Device and disk trouble keep the take | Small: no pre-record, no remaining-time display |
+| G. Capture and files | Lock-free capture to disk, crash recovery, RF64; BWF or AIFF at 16, 24 or 32-bit float; per-track record folders | **Level** |
+| H. Safety and feedback | Device and disk trouble keep the take, remaining record time, record lock, feedback protection | Small: no audio pre-record |
 | I. Remote recording | LAN and internet recorders with clock alignment | **Ahead**: none of the four has it built in |
 
 Three things every one of the four does and FreeDAWm does not: **record from a bus or another
@@ -50,7 +50,7 @@ depth and write a timestamp into it**, and **smooth the punch points**.
 | Arm one, several or all tracks | ● | ● | ● | ● | **Works**; arming is an undo step, which the four do not do |
 | Arming follows the selected track | ○ | ● | ● | ● | **Works**: Options › Recording › Arm Follows Selection: selecting tracks arms them (not a record-safe one) and disarms the others; not while a take records, and clicking off every track leaves the arms alone |
 | Record-safe (a track that cannot be armed) | ● | ○ | ○ | ◐ | **Works**: Record Safe on the R key's right-click menu, or Cmd-click (macOS) / Ctrl+Shift-click: a padlock on the key, the track is disarmed and cannot be armed until it is turned off (`mix.record_safe`); saved with the session |
-| Arm or disarm during a take | ● | ◐ | ◐ | ● | **Partial**: allowed, but the set of recorded tracks is fixed when Record is pressed |
+| Arm or disarm during a take | ● | ◐ | ◐ | ● | **Partial**: allowed, but the set of recorded tracks is fixed when Record is pressed. Left: the recorder opens one file per armed track and sizes its lock-free ring for their inputs at Record; a track armed mid-take needs a file opened then and a ring with room for it, and a disarmed track's take should end at the disarm point |
 | Named hardware inputs, mono and stereo | ● | ● | ● | ● | **Works** (Setup › I/O) |
 | Multichannel (surround) inputs | ● | ● | ● | ● | **Works**: an input in Setup › I/O can be any format up to 16 channels (LCR, quad, 5.1, 7.1, Ambisonics…); a track of that width hears and records every channel. A track wider than its input still repeats the input's last channel (bug 10) |
 | One input on several tracks | ● | ● | ● | ● | **Works** |
@@ -72,7 +72,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Discard the take in progress | ● | ◐ | ● | ● | **Works**: `transport.discard_take` (Cmd+Alt+.) stops and deletes the take's files; nothing is placed |
 | Undo a take | ● | ● | ● | ● | **Works**: the file goes when no undo step, session file or autosave names it any more (on save or close) |
 | Stop and start the take again in one step | ○ | ○ | ◐ | ● | **Works**: Restart Take (Cmd+Alt+Space, `transport.restart_take`) throws the take and its files away and records again as Record would, count-off and pre-roll included |
-| Recording at another speed | ● | ○ | ● | ○ | **Missing**: refused (half-speed record is a Pro Tools and Logic feature) |
+| Recording at another speed | ● | ○ | ● | ○ | **Missing**: refused (half-speed record is a Pro Tools and Logic feature). Left: Varispeed (section 1) plays at any speed, but the input is then read elastically and a take would lose input; recording needs the input converted into the take at the session rate and the take placed at the session's speed |
 
 ## C. Punching
 
@@ -83,7 +83,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Punch in on the fly | ● | ● | ● | ● | **Works** |
 | Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Works** with Options › QuickPunch: Record while recording punches out (playback goes on, the clips are heard again) and in again, any number of times; the take records throughout, so each punch has handles. Without QuickPunch Record stops, as before. MIDI takes ignore the punches |
 | Crossfades at the punch points | ● | ● | ● | ● | **Works**: 10 ms, centred on each punch point, out of the take's and the old audio's handles (at most half a short punch) |
-| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Partial**: QuickPunch works (above, back on the Options menu); TrackPunch, DestructivePunch and Destructive Record stay off the menus and store a value nothing reads |
+| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Partial**: QuickPunch works (above, back on the Options menu); TrackPunch, DestructivePunch and Destructive Record stay off the menus and store a value nothing reads. Left, and of little use: TrackPunch (QuickPunch armed per track) and recording over the file in place; the other three DAWs record non-destructively with handles, as FreeDAWm does |
 
 The four Pro Tools modes exist there for historical reasons; the others record non-destructively
 with handles all the time, as FreeDAWm already does. They are worth hiding or wiring, not a gap in
@@ -100,7 +100,7 @@ what a user can do, apart from punch out on the fly.
 | Loop record on a track without lanes | ● | ● | ● | ● | **Works**: each pass goes to a new playlist that copies the track's playlist, so only the loop differs |
 | Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Works** |
 | Take names and numbers per track | ● | ● | ● | ● | **Works**: `Vox_01`, `Vox_02`… per track, skipping files already there |
-| Audition a take without making it active | ● | ● | ● | ● | **Missing** (also in section 1) |
+| Audition a take without making it active | ● | ● | ● | ● | **Missing** (also in section 1, where the take lanes' playback is). Left: a solo on a take lane that plays that lane in place of the comp until it is let go |
 
 ## E. Monitoring
 
@@ -111,7 +111,7 @@ what a user can do, apart from punch out on the fly.
 | Global input-only mode | ● | ◐ | ◐ | ● | **Works**: Options › Recording › Input Only Monitoring: every armed track on Auto hears its input in playback too, as in Pro Tools' Input Only mode; a track set to On or Off keeps its setting. Track › Set Record Tracks to Input Only still sets each armed track to On |
 | Monitor through the track's inserts | ● | ● | ● | ● | **Works** |
 | Low-latency mode that bypasses slow plug-ins | ● | ● | ● | ● | **Works**: only inserts with latency, only on live paths, crossfaded |
-| Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything |
+| Small buffer for live tracks, large for playback | ● | ● | ● | ● | **Missing**: one buffer for everything; low-latency monitoring (above) is the nearest. Left (large, with section 1's engine): render playback ahead in a large buffer and run the strips hearing live input at the device's small callback, summed at the output |
 | Control the interface's own direct monitoring | ◐ | ● | ○ | ● | **Not planned here**: the only general route is ASIO's input-monitor call, which needs Steinberg's licensed SDK (a personal build only) and an interface that supports it to develop and test at all; Core Audio and ALSA have no common call for it |
 | Existing audio muted under a take when monitoring is off | ● | ● | ● | ● | **Works**: silent within the take, heard in the pre- and post-roll |
 | Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Works**: Window › Control Room's cue mixes, fed by pre-fader sends to a hardware output, with a level and mute each (section 3) |
@@ -151,7 +151,7 @@ what a user can do, apart from punch out on the fly.
 | Waveform drawn while recording | ● | ● | ● | ● | **Works**, at the place the take will land |
 | Record time counter | ● | ● | ● | ● | **Works** |
 | Remaining record time or disk space | ● | ◐ | ◐ | ● | **Works**: the counter reads `● REC 1:23 · 2 h 05 min left` while recording, and the Record button's tooltip gives the room for the armed tracks: the free space on the takes' disk over their channels at the session's bit depth and rate, read every 5 seconds |
-| Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Missing** |
+| Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Missing** (MIDI has Retrospective Record). Left: while tracks are armed, the output callback keeps the last few seconds of their inputs in a second lock-free ring; at Record the writer drains it into the take first and the clip starts at the Record point with those seconds as a handle before it |
 | A lost device or a full disk keeps the take | ● | ● | ● | ● | **Works** |
 | Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Works**: Options › Recording › Lock Record: while recording, the first Stop (Space, the button, a controller) is refused with a message and a second within 2 s stops; Discard Take and Restart Take are not locked |
 | Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Options › Recording › Feedback Protection, on by default: a monitored hardware input held at -3 dBFS or above for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. Not yet tried against real feedback through speakers |
@@ -179,7 +179,7 @@ Lines move while section 1's work is in progress, so functions are named.
 | 7 | **Fixed:** with monitoring Off, an armed track played its old clips under the take being recorded; inside the take (the punch range) they are silent now | clip branch of the strip render in `crates/mix/src/lib.rs` |
 | 8 | **Fixed:** take numbers started at the session's source count plus one; they now count each track's takes | `plan_takes` |
 | 9 | **Not a bug:** Clear Clip Indicators does nothing in the engine because the clip lights are the app's meters: the app clears them after the command runs, from the menu, Alt+C, the control channel and MCP alike (tested); a headless engine has none | `track.clear_clip_indicators` in `crates/engine/src/cmd/track.rs` |
-| 10 | A track with more than two channels repeats the last input channel | `track_input_channel` in `crates/model/src/mixer.rs` |
+| 10 | **Partly fixed:** inputs can now be as wide as a surround track, so a 5.1 track on a 5.1 input hears and records all six; a track wider than its input still repeats the input's last channel | `track_input_channel` in `crates/model/src/mixer.rs` |
 
 ## Suggested order of work
 
@@ -198,14 +198,14 @@ Hours are agent-hours on this repo's calibration ([`target-app-parity.md`](../ta
 | Record mode setting: replace, keep takes as lanes, layer; loop record from the loop range | 6–10 | **Done** (replace, lanes, playlists) |
 | Discard take; delete files of undone takes when the session closes | 3–5 | **Done** (undone takes: bug 6) |
 | A small buffer for live tracks and a large one for playback | 15–22 | The largest item; shared with section 1's engine work |
-| Cue mixes: sends to hardware outputs, click to its own output | 6–10 | Shared with the mixing section |
-| Input meters before the fader, multichannel inputs, a tuner | 6–10 | Closes bug 10 |
+| Cue mixes: sends to hardware outputs, click to its own output | 6–10 | **Done** (Control Room cues; click output) |
+| Input meters before the fader, multichannel inputs, a tuner | 6–10 | **Done**; bug 10 partly (a track wider than its input) |
 
-**3. What most have (≈ 25–40 h).** Arming follows selection, 2–3; audio pre-record buffer
-(Studio Pro, Cubase, and Pro Tools in QuickPunch), 5–8; remaining record time, 2–3; band-limited
+**3. What most have (≈ 25–40 h).** Arming follows selection, 2–3 (**done**); audio pre-record buffer
+(Studio Pro, Cubase, and Pro Tools in QuickPunch), 5–8; remaining record time, 2–3 (**done**); band-limited
 conversion on the input feed (shared with section 1's resampler), 4–6; control of the interface's
-direct monitoring with ASIO, 6–10, hardware needed; record-safe and record lock, 2–4; talkback,
-4–6.
+direct monitoring with ASIO, 6–10, hardware needed (not planned here); record-safe and record lock, 2–4
+(**done**); talkback, 4–6 (**done**).
 
 **Where FreeDAWm is already level or ahead:** take placement (measured round trip, stored per
 interface, independent of plug-in delay), the lock-free capture path with crash recovery, the
@@ -220,7 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation |
+| 2026-11-17 | minor | round three: built record safe; arm follows selection; restart take; lock record; input only monitoring; feedback protection; click on its own output; multichannel inputs; remaining record time; disk allocation; what is left written into the open rows; summary and suggested order brought up to date |
 | 2026-11-17 | minor | round three reconciled: pre-fader metering and the tuner were already built; direct monitoring not planned here (ASIO SDK, hardware); playback's side of a rate difference is band-limited |
 | 2026-11-16 | minor | cue mixes and talkback in the Control Room |
 | 2026-11-16 | minor | bug 1 fixed; bugs 3 and 5 fixed; bug 4 fixed; bug 6 fixed; bug 7 fixed; bug 8 fixed; bug 9 was not a bug; internal recording from a bus; bug 2 fixed; record with inserts; take bit depth, file type and BWF timestamp; QuickPunch punches out and in on the fly; crossfades at punch points; record modes; loop record from the loop range; discard take |
