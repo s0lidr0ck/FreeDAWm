@@ -38,6 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Free disk space
+        # The workspace's test binaries (over 200 UI test files, each its own binary) no longer
+        # fit in what a hosted runner leaves free: the linker ran out of space mid-build. These
+        # preinstalled toolchains are not used here and give back some 25 GB.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: System packages
         # ALSA (cpal, MIDI), PipeWire (cpal's PipeWire host, All sources), the JACK headers (cpal's JACK host; libjack itself loads at run time), CMake + libclang (whisper.cpp for Transcribe Lyrics), OpenSSL,
         # the X11/Wayland headers the window layer links against, and Mesa's software Vulkan
