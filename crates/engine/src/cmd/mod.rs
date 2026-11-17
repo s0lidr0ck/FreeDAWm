@@ -111,6 +111,7 @@ mod zoom_toggle;
 
 pub use clap::plugin_info;
 pub use discard_take::RECORD_LOCK;
+pub(crate) use edit::clip_origin;
 pub use file::{MAX_TAIL_SECS as MAX_BOUNCE_TAIL_SECS, bounce_job, stems_job};
 pub(crate) use mix::arm_follows_selection;
 pub use mix::{ARM_FOLLOWS_SELECTION, GROUPS_SUSPENDED, default_send_db};

@@ -481,10 +481,67 @@ fn cut_track(s: &mut Session, t: TrackId, r: soundcraft_time::Range, sh: bool, f
     ops::clear_range(s, t, r, sh);
 }
 
+/// Where `cb`'s clips come from: the session `s` (load `load`) and the files its audio clips
+/// play, with their audio as loaded now.
+pub(crate) fn clip_origin(s: &soundcraft_model::Session, cb: &crate::Clipboard, load: u64) -> crate::ClipOrigin {
+    let mut sources: Vec<(soundcraft_model::Source, Option<crate::SharedAudio>)> = Vec::new();
+    for c in cb.tracks.iter().flatten() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content
+            && !sources.iter().any(|(x, _)| x.id == *source)
+            && let Some(src) = s.sources.iter().find(|x| x.id == *source)
+        {
+            sources.push((src.clone(), s.pool.get(*source).cloned().map(crate::SharedAudio)));
+        }
+    }
+    crate::ClipOrigin { load, rate: s.sample_rate.hz(), sources }
+}
+
+/// The clipboard as `id` pastes it into this session. Clips copied in another session play
+/// files this one lacks: each such file's audio comes along as a new source of this session
+/// (written to its Audio Files on save, as an import is; one already brought is reused) and the
+/// clips are pointed at it. Refused, with the file named, when that audio was never loaded or
+/// is at another sample rate.
+fn clipboard_here(e: &mut Engine, id: &str) -> Result<crate::Clipboard> {
+    let mut cb = e.clipboard.clone();
+    let Some(origin) = cb.origin.clone().filter(|o| o.load != e.loads) else { return Ok(cb) };
+    let mut map: Vec<(soundcraft_model::SourceId, soundcraft_model::SourceId)> = Vec::new();
+    for (src, audio) in &origin.sources {
+        let s = e.session();
+        let Some(audio) = audio else {
+            return Err(bad(id, format!("the audio of “{}”, copied from another session, was not loaded: import the file instead", src.name)));
+        };
+        if origin.rate != s.sample_rate.hz() {
+            return Err(bad(
+                id,
+                format!(
+                    "“{}” was copied from a session at {} Hz; this one is at {} Hz: import the file instead",
+                    src.name,
+                    origin.rate,
+                    s.sample_rate.hz()
+                ),
+            ));
+        }
+        let have = s.sources.iter().find(|x| s.pool.get(x.id).is_some_and(|a| std::sync::Arc::ptr_eq(a, &audio.0))).map(|x| x.id);
+        let new = match have {
+            Some(x) => x,
+            None => crate::io::add_source_audio(e.session_mut(), &src.name, std::sync::Arc::clone(&audio.0), src.format),
+        };
+        map.push((src.id, new));
+    }
+    for c in cb.tracks.iter_mut().flatten() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &mut c.content
+            && let Some((_, new)) = map.iter().find(|(old, _)| old == source)
+        {
+            *source = *new;
+        }
+    }
+    Ok(cb)
+}
+
 fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "edit.paste", p)?;
     let given = position_param(e, "edit.paste", p, "at")?;
-    let cb = e.clipboard.clone();
+    let cb = clipboard_here(e, "edit.paste")?;
     let s = e.session();
     let at = match given {
         Some(at) => at,
@@ -584,7 +641,7 @@ fn repeat_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
     let range = range_param(e, "edit.paste_repeat_to_fill", p)?;
     let len = e.clipboard.length.max(1);
     let tracks = tracks_required(e, "edit.paste_repeat_to_fill", p)?;
-    let cb = e.clipboard.clone();
+    let cb = clipboard_here(e, "edit.paste_repeat_to_fill")?;
     let s = e.session_mut();
     let mut at = range.start;
     let mut n = 0;
@@ -1434,6 +1491,39 @@ mod tests {
             _ => None,
         });
         assert_eq!(pasted, Some((48_000, vec![(64, 480)])));
+    }
+
+    /// An audio clip copied in one session and pasted into another brings its audio along as
+    /// a new source of that session (once, however often it is pasted); a clip whose audio was
+    /// never loaded is refused with the file named.
+    #[test]
+    fn an_audio_clip_pasted_into_another_session_brings_its_audio() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 48_000]] };
+        let src = crate::io::add_source(e.session_mut(), "Vox_01", buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let s = e.session_mut();
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "Vox_01", src, 0, 0, 48_000));
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 48_000})).unwrap();
+        e.execute("session.new", &json!({"name": "Second"})).unwrap();
+        let t2 = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Dbl"));
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 0})).unwrap();
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 96_000})).unwrap();
+        let s = e.session();
+        assert_eq!(s.sources.len(), 1, "one source brought along, reused by the second paste");
+        let new = s.sources[0].id;
+        assert!(s.sources[0].unsaved, "written to this session's Audio Files on save");
+        assert!(s.pool.get(new).is_some(), "its audio plays");
+        let clips = s.track(t2).unwrap().clips();
+        assert_eq!(clips.len(), 2);
+        assert!(clips.iter().all(|c| matches!(c.content, ClipContent::Audio { source, .. } if source == new)));
+        // Audio that was never loaded cannot come along: refused, naming the file.
+        if let Some(o) = e.clipboard.origin.as_mut() {
+            o.sources[0].1 = None;
+        }
+        let err = e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 200_000})).unwrap_err().to_string();
+        assert!(err.contains("Vox_01"), "{err}");
     }
 
     #[test]

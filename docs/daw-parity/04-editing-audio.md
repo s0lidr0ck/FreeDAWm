@@ -116,7 +116,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it |
+| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it. Audio clips pasted into another session bring their audio along as new sources of that session (written to its Audio Files on save; reused by later pastes); refused, naming the file, when that audio was never loaded or is at another sample rate |
 | Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; the fill is exactly the selection's length, so in Shuffle too nothing after it moves |
 | Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Works**: every playlist and take layer, automation, markers, key changes and the tempo and meter map move (bug 7, fixed); refused inside a tempo ramp |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
@@ -342,6 +342,13 @@ markers, clip notes, track lock, tap tempo, Flatten Comp, Strip Silence preview,
 short-crossfade warning, the Smart Tool chord, redo from the history, the looped clip's waveform,
 warp markers heard while dragged, and Clean Vocal clips' transpose render. Not done: every item
 in the designs below.
+
+**Status after the round-three follow-up (2026-11-17).** Built: Scissors and Mute tools, the
+Smart Tool's crossfade at a join (by dragging), separation grab, snap to the playhead, an adaptive
+grid, relative-grid trims, dragging a clip from the Clip List, comping grouped tracks together,
+soloing a take in place of the comp, and audio clips pasted into another session bringing their
+audio along. Decided: nudge in Shuffle does not ripple, and the track and edit selections are
+always linked (both as designed). Not done: the designs below that are not marked built.
 
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,

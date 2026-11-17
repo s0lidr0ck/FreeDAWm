@@ -196,6 +196,28 @@ pub struct Clipboard {
     /// from (`automation.paste` takes a lane of the same kind).
     pub auto_points: Vec<soundcraft_model::AutomationPoint>,
     pub auto_param: Option<soundcraft_model::AutoParam>,
+    /// Where the clips came from: set once the copying command returns ([`Engine::execute`]),
+    /// so a paste into another session can bring their audio along ([`ClipOrigin`]).
+    pub origin: Option<ClipOrigin>,
+}
+
+/// The session a clipboard's clips were copied in: its load ([`Engine`]'s count of sessions
+/// loaded), its rate, and the files its audio clips play with their audio as decoded then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipOrigin {
+    pub load: u64,
+    pub rate: u32,
+    pub sources: Vec<(soundcraft_model::Source, Option<SharedAudio>)>,
+}
+
+/// A source's audio held by the clipboard (equal when it is the same audio).
+#[derive(Debug, Clone)]
+pub struct SharedAudio(pub Arc<soundcraft_model::SourceAudio>);
+
+impl PartialEq for SharedAudio {
+    fn eq(&self, other: &SharedAudio) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Clipboard {
@@ -929,6 +951,11 @@ impl Engine {
                     && let Some(g) = edit::adapted_grid(&self.doc).filter(|g| *g != self.doc.edit.grid)
                 {
                     Arc::make_mut(&mut self.doc).edit.grid = g;
+                }
+                // A clipboard just filled learns where its clips came from (pasting into another
+                // session brings their audio along).
+                if self.clipboard.origin.is_none() && !self.clipboard.tracks.is_empty() {
+                    self.clipboard.origin = Some(cmd::clip_origin(&self.doc, &self.clipboard, self.loads));
                 }
                 cmd::remember_selection(self, &before);
                 if self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") {
