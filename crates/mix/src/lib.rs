@@ -4753,19 +4753,32 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             let off = at_tick(n.start.saturating_add(n.length)).min(clip.end()).max(on);
             (n, on, off)
         };
+        // The notes that can sound in `a..=b` (samples), by their written starts: playback quantize
+        // moves a start by up to a grid step or a groove's period, the delay moves it, and a note
+        // lasts at most the longest. The clip's index finds them by binary search; without one
+        // (or for other notes than it was made from) every note is looked at, as before.
+        let index = soundcraft_midi::NoteIndex::usable(clip.midi_index.0.as_deref(), &sequence.notes);
+        let longest = index.map_or(0, |ix| ((ix.longest() as f64 * dur) as i64).max(1));
+        let qmove = pq.as_ref().map_or(0, |q| q.groove.as_ref().map_or(q.grid, |g| g.period).max(0));
+        let near_notes = |a: Samples, b: Samples| {
+            let from = s.tempo.samples_to_ticks(a, sr).saturating_sub(base).saturating_sub(delay).saturating_sub(longest).saturating_sub(qmove);
+            let to = s.tempo.samples_to_ticks(b, sr).saturating_sub(base).saturating_sub(delay).saturating_add(qmove);
+            let r = soundcraft_midi::NoteIndex::window(index, &sequence.notes, from.saturating_sub(2), to.saturating_add(2));
+            sequence.notes.get(r).unwrap_or(&[])
+        };
         // Another note of this pitch (and channel, when channels are kept) of the clip sounding
         // across `at`: started before it, ending after it. Overlapping notes of one pitch share one
         // voice: a note starting over it retriggers it (its note-off first, so every note-on has
         // its own note-off), and only the last to end closes it.
         let sounding_across = |me: &soundcraft_midi::Note, pitch: u8, ch: u8, at: Samples| {
-            sequence.notes.iter().filter(|m| m.start >= 0 && !m.muted && m.plays_on(clip.id.0, pass) && !std::ptr::eq(*m, me)).any(|m| {
+            near_notes(at, at).iter().filter(|m| m.start >= 0 && !m.muted && m.plays_on(clip.id.0, pass) && !std::ptr::eq(*m, me)).any(|m| {
                 let (x, on, off) = shaped(m);
                 x.pitch == pitch && (!chans || x.channel & 0x0F == ch) && on < at && off > at && on < clip.end()
             })
         };
         // Notes before tick 0 are what a start trim hid: they don't play; nor do muted notes.
         // A note with a probability plays on this pass or not, as its roll says.
-        for n0 in sequence.notes.iter().filter(|n| n.start >= 0 && !n.muted && n.plays_on(clip.id.0, pass)) {
+        for n0 in near_notes(pos, end).iter().filter(|n| n.start >= 0 && !n.muted && n.plays_on(clip.id.0, pass)) {
             let (n, on, off) = shaped(n0);
             if on >= clip.end() {
                 continue;
@@ -7926,6 +7939,95 @@ mod tests {
 
     /// What [`Tape`] records for an `all_notes_off` call.
     const ALL_OFF: (bool, usize, [u8; 3]) = (true, usize::MAX, [0xFF; 3]);
+
+    /// The note index changes nothing that plays: random dense clips (overlapping notes of one
+    /// pitch, muted and hidden notes, channels, probabilities, playback quantize by grid, swing and
+    /// groove, Real-Time delay and length, a start trim, locates with Note Chase) played block by
+    /// block with and without their indexes give every message at the same offset.
+    #[test]
+    fn indexed_clips_play_event_for_event_as_before() {
+        use soundcraft_midi::ops::{Groove, PlayQuantize};
+        let mut rng = soundcraft_midi::XorShift::new(7);
+        let mut pick = |n: u64| rng.next_u64() % n.max(1);
+        for round in 0..12 {
+            let mut s = Session::default();
+            let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+            s.track_mut(t).unwrap().instrument = Some(Insert::new("clap:test.tape"));
+            if round % 3 == 1 {
+                s.edit.values.insert(format!("rtp.{}.delay", t.0), pick(400) as f64 - 200.0);
+                s.edit.values.insert(format!("rtp.{}.duration", t.0), 50.0 + pick(200) as f64);
+            }
+            if round % 2 == 0 {
+                s.edit.set_flag("midi.note_chase", true);
+            }
+            let mut at = 0i64;
+            for k in 0..3 {
+                let mut seq = soundcraft_midi::Sequence::default();
+                let channels = pick(3) == 0;
+                for _ in 0..(200 + pick(400)) {
+                    seq.notes.push(soundcraft_midi::Note {
+                        probability: if pick(4) == 0 { 50 } else { 100 },
+                        pitch: 48 + pick(12) as u8,
+                        velocity: 1 + pick(127) as u8,
+                        muted: pick(10) == 0,
+                        release_velocity: 64,
+                        channel: if channels { pick(4) as u8 } else { 0 },
+                        start: pick(30_000) as i64 - 1_000,
+                        length: 1 + if pick(20) == 0 { pick(20_000) } else { pick(600) } as i64,
+                    });
+                }
+                seq.sort();
+                let len = 600_000 + pick(400_000) as i64;
+                let cid = s.new_clip_id();
+                let mut c = Clip::midi(cid, "dense", at, len, seq);
+                c.play_quantize = match (round + k) % 4 {
+                    0 => None,
+                    1 => Some(PlayQuantize { grid: 240, strength: 0.8, swing: 0.0, groove: None }),
+                    2 => Some(PlayQuantize { grid: 480, strength: 1.0, swing: 0.6, groove: None }),
+                    _ => Some(PlayQuantize { grid: 240, strength: 1.0, swing: 0.0, groove: Groove::new("g", 960, &[0, 300, 620]) }),
+                };
+                s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+                at += len - pick(200_000) as i64;
+            }
+            let indexed = {
+                let mut s = s.clone();
+                for c in s.track_mut(t).unwrap().playlist_mut().unwrap().clips.iter_mut() {
+                    c.midi_index.0 = c.midi_playing().map(|q| Arc::new(soundcraft_midi::NoteIndex::of(&q.notes)));
+                    let notes = &c.midi_playing().unwrap().notes;
+                    assert!(soundcraft_midi::NoteIndex::usable(c.midi_index.0.as_deref(), notes).is_some());
+                }
+                s
+            };
+            // Blocks in order, with a locate now and then.
+            let mut blocks = Vec::new();
+            let mut pos = 0i64;
+            for b in 0..900 {
+                if b % 150 == 149 {
+                    pos = pick(2_000_000) as i64;
+                }
+                blocks.push(pos);
+                pos += 512;
+            }
+            let play = |s: &Session| {
+                let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let tape = Tape { inner: soundcraft_dsp::create("gain").unwrap(), heard: Arc::clone(&heard) };
+                let mut eng = MixEngine::new(48_000.0, 512);
+                eng.set_external_instances(true);
+                eng.adopt(vec![PreparedInstance { track: t, slot: SlotKey::Instrument, id: "clap:test.tape".into(), ch: 2, plugin: Box::new(tape) }]);
+                for &p in &blocks {
+                    render_block(&mut eng, s, p);
+                    heard.lock().unwrap().push((true, usize::MAX - 1, [0; 3]));
+                }
+                heard.lock().unwrap().clone()
+            };
+            let (a, b) = (play(&s), play(&indexed));
+            assert!(a.iter().filter(|e| e.2[0] & 0xF0 == 0x90).count() > 100, "round {round}: notes play");
+            assert_eq!(a.len(), b.len(), "round {round}");
+            for (k, (x, y)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(x, y, "round {round}, event {k}");
+            }
+        }
+    }
 
     #[test]
     fn channel_1_clips_play_exactly_as_before() {

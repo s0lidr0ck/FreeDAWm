@@ -57,8 +57,7 @@ The gaps are of four kinds:
    grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
    in the editor, controller ramps and a full event list; the third round editing across
    clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
-   probability (the rows below say how far each goes). Still absent: an index for dense clips,
-   chord pads, editable drum maps and note entry in the score.
+   probability (the rows below say how far each goes). Still absent: chord pads, editable drum maps and note entry in the score.
 4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
    filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
    automated, instrument latency is not compensated, and notes from clips reach the instrument
@@ -202,7 +201,7 @@ The gaps are of four kinds:
 | Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
 | Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties), undoable; a negative delay plays early notes before the clip (bug 10, fixed) |
 | MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Partial**: on a track (arpeggiator, chord, scale, note repeat; section 6, H), played live; not on a clip, and not rendered to notes |
-| Dense clips play without cost growing | ● | ● | ● | ● | **Partial**: every block scans every note of each clip under the playhead and walks the tempo map for each. Design (not built): beside each MIDI clip's notes the engine keeps a derived index, made off the audio thread whenever they change (where MIDI Cleanup previews are refreshed), of the notes in start order and the longest note's length; the scheduler binary-searches the first note that can sound in the block (start at least the block's first tick less the longest length, less the largest playback-quantize move) and stops at the first start past the block's end. It is checked by playing random clips (overlaps, mutes, channels, delays, playback quantize, start trims) block by block through the current scheduler and the indexed one and comparing every message and offset |
+| Dense clips play without cost growing | ● | ● | ● | ● | **Works**: beside each MIDI clip's notes the session keeps a derived index (`Clip::midi_index`, never saved: whether the notes are in start order, the longest note), made by the engine after every command and undo step and when a session is opened, from the notes as they then are (`engine/src/note_index.rs`). The scheduler binary-searches the notes that can sound in the block (start at least the block's first tick less the longest length, the delay and the largest playback-quantize move, a grid step or a groove's period) and stops past its end; the retrigger check looks only at the notes that can sound across that point. The index is used only for the very notes it was made from (their address and count; a hash when it is refreshed), so a copy, a cleanup's output or notes edited outside a command are searched whole, as before. Checked by playing random dense clips (overlaps, mutes, channels, probabilities, delays and lengths, playback quantize by grid, swing and groove, start trims, locates with Note Chase) block by block with and without their indexes and comparing every message and offset (`indexed_clips_play_event_for_event_as_before`). Controllers are still scanned whole each block |
 
 ## J. Tempo and arrangement
 
@@ -400,3 +399,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Owner's decision: DAWproject export leaves muted notes out (the format cannot mark them) |
 | 2026-11-16 | minor | Owner's decision: Export Clip as MIDI starts the file at the clip's start (several clips: the earliest's) |
 | 2026-11-16 | minor | Grooves from a clip keep velocity accents; the drawing grid swings with a clip's playback quantize; notes playback quantize moves are outlined where they play |
+| 2026-11-16 | minor | Dense clips: an index of each clip's notes lets the scheduler look only at the notes near the playhead; played event for event as before |

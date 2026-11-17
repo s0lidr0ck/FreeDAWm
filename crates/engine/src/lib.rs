@@ -37,6 +37,7 @@ pub mod ml;
 pub mod module_record;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod movie_export;
+pub mod note_index;
 pub mod open_job;
 pub mod pattern;
 pub mod peak_cache;
@@ -445,6 +446,8 @@ impl Engine {
         let thawed = crate::io::thaw_missing_renders(&mut s);
         // MIDI Cleanup previews are derived, not saved.
         crate::midi_cleanup::refresh(&mut s);
+        // So are the notes' playback indexes (after the previews they index).
+        crate::note_index::refresh(&mut s);
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
@@ -697,12 +700,22 @@ impl Engine {
         self.refresh_vocal_fingerprints();
         // Audio this step made goes to disk now, so neither the session nor its history holds it.
         spill::spill(self, label);
+        // The notes' playback indexes, from the notes this step leaves.
+        self.refresh_note_index();
         self.undo.push(HistoryEntry { label: label.to_string(), doc: before });
         self.redo.clear();
         self.merge_redo = None;
         if self.undo.len() > self.history_limit {
             let excess = self.undo.len() - self.history_limit;
             self.undo.drain(..excess);
+        }
+    }
+
+    /// Re-derives every MIDI clip's playback index made from other notes (`note_index`); a scan
+    /// first, so a session whose indexes are current is not copied.
+    pub(crate) fn refresh_note_index(&mut self) {
+        if crate::note_index::any_stale(&self.doc) {
+            crate::note_index::refresh(Arc::make_mut(&mut self.doc));
         }
     }
 
@@ -863,8 +876,13 @@ impl Engine {
                 cmd::remember_selection(self, &before);
                 cmd::sync_loop(self, &before);
                 let label = self.step_label.take().unwrap_or(spec.label);
-                if spec.undoable && !Arc::ptr_eq(&before, &self.doc) {
+                let changed = !Arc::ptr_eq(&before, &self.doc);
+                if spec.undoable && changed {
                     self.push_undo(label, before);
+                }
+                // Last: the notes' playback indexes, made from the notes as this step leaves them.
+                if changed {
+                    self.refresh_note_index();
                 }
                 if spec.journal {
                     self.journal.push((id.to_string(), params.clone()));

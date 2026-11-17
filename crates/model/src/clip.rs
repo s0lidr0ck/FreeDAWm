@@ -303,6 +303,10 @@ pub struct Clip {
     /// A MIDI clip's own velocity offset, applied as it plays (with its track's).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub midi_velocity: i8,
+    /// The playing notes' index for the scheduler (derived, never saved; refreshed by the engine
+    /// when the notes change, and used only for the notes it was made from).
+    #[serde(skip)]
+    pub midi_index: soundcraft_midi::NoteIndexSlot,
     /// An audio clip played backwards, in real time (no new file): its window's last sample
     /// first.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -389,6 +393,7 @@ impl Clip {
             follow_chords: None,
             midi_transpose: 0,
             midi_velocity: 0,
+            midi_index: soundcraft_midi::NoteIndexSlot(None),
             reversed: false,
             loop_len: 0,
             loop_phase: 0,
