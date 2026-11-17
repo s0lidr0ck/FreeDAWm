@@ -1744,10 +1744,12 @@ mod tests {
         let _ = run(&mut s, 512);
         let g_low = s.voices.iter().find(|v| v.active()).map(|v| v.g_now).unwrap();
         s.set_param("cutoff", 8000.0);
-        // a control update, then half a period
-        let _ = run(&mut s, CONTROL + CONTROL / 2);
+        // The next frame is a control update (512 frames are a whole number of periods): half a
+        // period on, the cutoff is half way there, well clear of both ends.
+        let _ = run(&mut s, CONTROL / 2);
         let v = s.voices.iter().find(|v| v.active()).unwrap();
-        assert!(v.g_now > g_low && v.g_now < v.g, "{g_low} < {} < {}", v.g_now, v.g);
+        let (span, at) = (v.g - g_low, v.g_now - g_low);
+        assert!(at > 0.25 * span && at < 0.75 * span, "{g_low} < {} < {}", v.g_now, v.g);
         let _ = run(&mut s, 4 * CONTROL);
         let v = s.voices.iter().find(|v| v.active()).unwrap();
         assert!((v.g_now - v.g).abs() <= 1e-4 * v.g, "settles on the value");
