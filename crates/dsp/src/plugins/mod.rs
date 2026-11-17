@@ -23,6 +23,7 @@ pub mod strip;
 pub mod synth;
 #[cfg(feature = "test-plugins")]
 pub mod test_link;
+mod timed;
 pub mod utility;
 pub mod vault;
 
@@ -101,10 +102,12 @@ pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[&test_link::TEST_LINK_INFO, 
 pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[];
 
 /// Constructs an (unprepared) plugin by id. A stereo-only plugin comes wrapped so it processes
-/// every channel of a wider track ([`per_channel::PerChannel`]).
+/// every channel of a wider track ([`per_channel::PerChannel`]), and one that takes
+/// sample-accurate parameter changes so it runs in pieces split at them ([`timed::Timed`]).
 pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
     let p = instantiate_one(id)?;
-    Some(if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p })
+    let p: Box<dyn Plugin> = if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p };
+    Some(if timed::takes(id) { Box::new(timed::Timed::new(p)) } else { p })
 }
 
 /// One instance of a plugin by id, never wrapped.
