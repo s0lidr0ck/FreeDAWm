@@ -184,6 +184,9 @@ Edit > Automation > Convert Volume Automation to Clip Gain
 Edit > Automation > Convert Clip Gain to Volume Automation
 Edit > Automation > Coalesce Volume Automation to Clip Gain
 Edit > Automation > Coalesce Clip Gain to Volume Automation
+Edit > Automation > Move Track Automation into Clips
+Edit > Automation > Move Clip Automation to Track
+Edit > Automation > Clear Clip Automation
 Edit > Automation > ---
 Edit > Automation > Copy to Send = Edit > Automation > Copy to Send...
 Edit > ---

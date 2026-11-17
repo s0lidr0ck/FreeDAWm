@@ -287,6 +287,10 @@ pub struct Clip {
     /// values are moved here by [`crate::Session::sanitize`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<(String, f64)>,
+    /// Automation inside the clip ([`crate::clip_automation`]): lanes with points in samples from
+    /// the clip's start, heard while the clip plays. A copy has its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<crate::AutomationLane>,
     /// Clip Effects bypassed: kept but not heard.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub effects_bypass: bool,
@@ -396,6 +400,7 @@ impl Clip {
             source_channel: None,
             gain_bypass: false,
             effects: Vec::new(),
+            automation: Vec::new(),
             effects_bypass: false,
             play_quantize: None,
             follow_chords: None,
@@ -667,6 +672,16 @@ impl Clip {
         }
         self.gain_env.retain(|&(t, _)| t >= delta);
         self.gain_env.iter_mut().for_each(|(t, _)| *t = t.saturating_sub(delta));
+        // The clip's automation stays on the audio it was written against.
+        for l in &mut self.automation {
+            let def = l.param.range().2;
+            if l.points.iter().any(|q| q.at < delta) && l.points.iter().all(|q| q.at != delta) {
+                let v = l.value_at(delta, def);
+                l.points.insert(0, crate::AutomationPoint::new(delta, v));
+            }
+            l.points.retain(|q| q.at >= delta);
+            l.points.iter_mut().for_each(|q| q.at = q.at.saturating_sub(delta));
+        }
     }
 
     /// Move the end edge to `new_end`.
@@ -708,6 +723,10 @@ impl Clip {
         }
         bound(&mut self.sync_point);
         self.gain_env.iter_mut().for_each(|(at, _)| bound(at));
+        for l in &mut self.automation {
+            l.points.iter_mut().for_each(|q| bound(&mut q.at));
+            l.points.sort_by_key(|q| q.at);
+        }
         match &mut self.content {
             ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } => bound(offset),
             ClipContent::Midi { sequence } => bound_sequence(sequence),

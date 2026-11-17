@@ -5938,7 +5938,7 @@ fn apply_params(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, t: &Track
         return apply_values(slot, ins, |_, v| (v, false));
     };
     let automated = t.mixer.automation_mode.reads()
-        && t.automation
+        && t.played_lanes()
             .iter()
             .any(|l| matches!(&l.param, AutoParam::Plugin { module: m, .. } if *m == module) && !l.points.is_empty() && !l.suspended);
     apply_values(slot, ins, |k, val| {
@@ -6002,7 +6002,7 @@ fn plugin_lane<'a>(t: &'a Track, module: ModuleId, param: &str) -> Option<&'a so
     if !t.mixer.automation_mode.reads() {
         return None;
     }
-    t.automation
+    t.played_lanes()
         .iter()
         .find(|l| matches!(&l.param, AutoParam::Plugin { module: m, param: p } if *m == module && p == param))
         .filter(|l| !l.points.is_empty() && !l.suspended)
@@ -6119,7 +6119,7 @@ fn pan_at(t: &Track, idx: usize, pos: Samples) -> f32 {
 fn surround_at(t: &Track, pos: Samples) -> Option<SurroundPan> {
     let mut sp = t.mixer.surround?;
     if t.mixer.automation_mode.reads() {
-        for l in &t.automation {
+        for l in t.played_lanes() {
             if let AutoParam::Surround(i) = l.param
                 && !l.points.is_empty()
                 && !l.suspended
@@ -6139,7 +6139,7 @@ const PAN_STEP: Samples = 64;
 /// of the frames that share it. Without pan automation the whole block shares one pan.
 fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
     let automated = t.mixer.automation_mode.reads()
-        && t.automation.iter().any(|l| {
+        && t.played_lanes().iter().any(|l| {
             matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_))
                 && !l.points.is_empty()
                 && !l.suspended
@@ -6168,7 +6168,7 @@ fn shape_at(t: &Track, p: AutoParam, base: f32, pos: Samples) -> f32 {
 fn send_segment(t: &Track, i: usize, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
     let k = u8::try_from(i).unwrap_or(0);
     let automated = t.mixer.automation_mode.reads()
-        && t.automation.iter().any(|l| {
+        && t.played_lanes().iter().any(|l| {
             matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k)
                 && !l.points.is_empty()
                 && !l.suspended
@@ -7032,6 +7032,7 @@ impl TrackRender {
                 i.active = false;
             }
             t.automation.retain(|l| !matches!(&l.param, AutoParam::Plugin { module, .. } if after.contains(module)));
+            t.refresh_played();
         }
         let mono = s.track(track).is_some_and(|t| t.channels() == 1);
         let nch = source_channels(&solo, None);
@@ -7162,6 +7163,7 @@ fn pre_fader_session(s: &Session, track: TrackId, trim_automation: bool) -> Sess
                 _ => vec![-1.0, 1.0],
             };
             t.automation.retain(|l| matches!(l.param, AutoParam::Plugin { .. }) || (trim_automation && l.param == AutoParam::Trim));
+            t.refresh_played();
             t.mixer.sends.iter_mut().for_each(|x| *x = None);
             t.mixer.surround = None;
             t.mixer.vca = None;
@@ -7951,6 +7953,25 @@ mod tests {
         assert_eq!(first(&s), Some(0));
         s.track_mut(st).unwrap().mixer.delay = 100;
         assert_eq!(first(&s), Some(100));
+    }
+
+    /// A clip's own automation is heard while it plays, in a render as in playback: here its pan
+    /// lane hard left over the clip, the track's lane centred outside it.
+    #[test]
+    fn a_clips_own_pan_lane_is_heard_over_the_clip() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        let tr = s.track_mut(t).unwrap();
+        let mut centre = soundcraft_model::AutomationLane::new(AutoParam::Pan(0));
+        centre.set_point(0, 0.0);
+        tr.automation.push(centre);
+        let mut left = soundcraft_model::AutomationLane::new(AutoParam::Pan(0));
+        left.set_point(0, -1.0);
+        tr.playlist_mut().unwrap().clips[0].automation.push(left);
+        let before = render_range(&s, Range::new(0, 4800), 512);
+        assert!(before[1][2000] > 0.3, "not refreshed: the track's lane plays");
+        assert!(s.track_mut(t).unwrap().refresh_played());
+        let out = render_range(&s, Range::new(0, 4800), 512);
+        assert!(out[0][2000] > 0.45 && out[1][2000].abs() < 1e-3, "hard left: {} {}", out[0][2000], out[1][2000]);
     }
 
     /// A Hardware Insert live: the strip's audio goes out of its output path, and what comes back

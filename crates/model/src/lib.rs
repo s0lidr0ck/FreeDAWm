@@ -9,6 +9,7 @@ mod automation;
 pub mod b64;
 mod band;
 mod clip;
+pub mod clip_automation;
 mod control_room;
 pub mod disk;
 mod ids;

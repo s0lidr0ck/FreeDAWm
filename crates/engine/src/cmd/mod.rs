@@ -19,6 +19,7 @@ mod band;
 pub mod chord_lane;
 mod clap;
 pub(crate) mod clip;
+mod clip_automation;
 mod clip_clean;
 mod clip_list;
 pub(crate) mod clip_more;
@@ -231,6 +232,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(juke::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
+        v.extend(clip_automation::specs());
         v.extend(event::specs());
         v.extend(mix::specs());
         v.extend(mix_view::specs());

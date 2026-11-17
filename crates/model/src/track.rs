@@ -236,6 +236,11 @@ pub struct Track {
     pub active_playlist: usize,
     pub mixer: Mixer,
     pub automation: Vec<AutomationLane>,
+    /// The lanes playback reads when a clip on the track has automation of its own: these lanes
+    /// with the clips' laid over their ranges ([`crate::clip_automation`], made by
+    /// [`Track::refresh_played`]). Empty otherwise. Not saved.
+    #[serde(skip)]
+    pub played: Vec<AutomationLane>,
     /// Which lane the track shows: `waveform`/`blocks`/`notes`/`regions` or an automation param id.
     pub view: String,
     /// The automation lanes shown under the track's main lane, top to bottom, by param id
@@ -374,6 +379,7 @@ impl Track {
             active_playlist: 0,
             mixer: Mixer::new(format),
             automation: Vec::new(),
+            played: Vec::new(),
             view: view.into(),
             auto_lanes: Vec::new(),
             hidden: false,
@@ -475,8 +481,31 @@ impl Track {
     }
 
     /// The lane of `p` as playback reads it: `None` while it is suspended (automation Preview).
+    /// With clips that have automation, the lane with theirs laid over it.
     pub fn played_lane(&self, p: &AutoParam) -> Option<&AutomationLane> {
-        self.lane(p).filter(|l| !l.suspended)
+        self.played_lanes().iter().find(|l| &l.param == p).filter(|l| !l.suspended)
+    }
+
+    /// Every lane as playback reads it: [`Track::played`] when a clip has automation, else
+    /// [`Track::automation`].
+    pub fn played_lanes(&self) -> &[AutomationLane] {
+        if self.played.is_empty() { &self.automation } else { &self.played }
+    }
+
+    /// Makes [`Track::played`] again from the lanes and the active clips. True when it changed.
+    pub fn refresh_played(&mut self) -> bool {
+        let next = crate::clip_automation::played(&self.automation, self.clips());
+        if next == self.played {
+            return false;
+        }
+        self.played = next;
+        true
+    }
+
+    /// Whether [`Track::refresh_played`] has anything to do: a clip has automation, or played
+    /// lanes are left from before.
+    pub fn needs_played(&self) -> bool {
+        !self.played.is_empty() || self.clips().iter().any(|c| !c.automation.is_empty())
     }
 
     pub fn lane_mut(&mut self, p: &AutoParam) -> &mut AutomationLane {

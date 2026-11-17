@@ -858,6 +858,14 @@ impl Engine {
         }
         match result {
             Ok(mut v) => {
+                // Clips' own automation is laid over their tracks' lanes for playback.
+                if !Arc::ptr_eq(&before, &self.doc) && self.doc.tracks.iter().any(soundcraft_model::Track::needs_played) {
+                    for t in &mut Arc::make_mut(&mut self.doc).tracks {
+                        if t.needs_played() {
+                            t.refresh_played();
+                        }
+                    }
+                }
                 // MIDI clips on tick-timebase tracks stay on their bars when an edit changes the
                 // tempo map (undo and redo restore whole documents; a loaded session is as saved).
                 if !Arc::ptr_eq(&before, &self.doc)

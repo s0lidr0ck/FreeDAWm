@@ -158,7 +158,7 @@ K-system scales, and the master a loudness meter.
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Options › More › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
-| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Missing** (not reached in round three): designed below (Design: automation inside a clip): lanes stored on the clip, dB lanes adding to the track's and the others replacing it over the clip, played from a flattened lane through `Track::played_lane` so the mixer needs no change; about 10–16 h |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Partial** (2026-11-17, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation; `clip.automation_point` adds points. Left: the clip's lanes are not drawn over it in the Edit window, so points are added by command or by moving track automation in (about 6–10 h of drawing and dragging) |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
 | Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
@@ -282,7 +282,7 @@ AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fade
 inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10; write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
-### Design: automation inside a clip (round three, not built)
+### Design: automation inside a clip (round three, built 2026-11-17 but for the clip-lane drawing)
 
 Logic's region automation and Studio Pro's part envelopes, for audio and MIDI clips.
 
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | automation inside clips (moved in and out of the track's lanes; the clip-lane drawing is left) |
 | 2026-11-17 | minor | hardware inserts with a ping for their round trip |
 | 2026-11-17 | minor | real-time bounce (Bounce Mix › In real time) |
 | 2026-11-17 | minor | designs for automation inside a clip, real-time bounce, multi-mono processing and hardware inserts |
