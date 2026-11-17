@@ -111,6 +111,18 @@ Edit > Selection > Extend Edit Up to Members
 Edit > Selection > Extend Edit Down to Members
 Edit > Selection > Remove Edit from Top
 Edit > Selection > Remove Edit from Bottom
+Edit > Selection > Extend Edit to Session Start = @edit.extend_to_start
+Edit > Selection > Extend Edit to Session End = @edit.extend_to_end
+Edit > Selection > Nudge Edit Start Earlier = @edit.nudge_start_earlier
+Edit > Selection > Nudge Edit Start Later = @edit.nudge_start_later
+Edit > Selection > Nudge Edit End Earlier = @edit.nudge_end_earlier
+Edit > Selection > Nudge Edit End Later = @edit.nudge_end_later
+Edit > Selection > ---
+Edit > Selection > Select All Clips on Track = @edit.select_track_clips
+Edit > Selection > Select All Following = @edit.select_following
+Edit > Selection > Select Clips with Same Name = @edit.select_same_name
+Edit > Selection > Select Clips with Same Color = @edit.select_same_color
+Edit > Selection > Select Muted Clips = @edit.select_muted_clips
 Edit > Selection > ---
 Edit > Selection > Move Edit Selection To Marker Lane Above
 Edit > Selection > Move Edit Selection To Marker Lane Below

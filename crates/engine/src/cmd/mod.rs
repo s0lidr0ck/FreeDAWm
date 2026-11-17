@@ -35,6 +35,7 @@ pub mod overlap;
 pub mod pan_law;
 mod record_format;
 mod record_print;
+pub mod select_more;
 pub mod strip_shape;
 pub use freeze::all_frozen;
 pub use freeze::{UNFREEZE_TO_EDIT, cannot_freeze, cannot_freeze_now};
@@ -221,6 +222,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(monitor::specs());
         v.extend(strip_shape::specs());
         v.extend(mix_snapshot::specs());
+        v.extend(select_more::specs());
         v.extend(transport::specs());
         v.extend(tab::specs());
         v.extend(query::specs());

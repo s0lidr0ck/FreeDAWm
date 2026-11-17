@@ -89,7 +89,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
 | Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Missing** |
-| Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Missing** |
+| Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Works**: Edit › Selection › Nudge Edit Start / End Earlier / Later, by the nudge value; the edges never cross |
 
 ## C. Selection and navigation
 
@@ -98,8 +98,8 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Range across several tracks | ● | ● | ● | ● | **Works** |
 | Select several clips as objects and act on only those | ● | ● | ● | ● | **Works**: Delete, Cut and Copy act on the selected clips only (bug 1, fixed) |
 | Rubber-band selection of clips | ◐ | ● | ● | ● | **Works**: a Grabber drag from empty space selects the clips the box touches across tracks (Shift adds) |
-| Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Missing** except Select All |
-| Extend selection to session start or end | ● | ● | ● | ● | **Missing** |
+| Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Works**: Edit › Selection › Select All Clips on Track, Select All Following (from the insertion, the selected tracks or every track), Select Clips with Same Name, with Same Color, Select Muted Clips |
+| Extend selection to session start or end | ● | ● | ● | ● | **Works**: Edit › Selection › Extend Edit to Session Start / End (the end of the last clip) |
 | Type the selection's start, end and length | ● | ● | ● | ● | **Missing**: the numbers are display only |
 | Tab to clip boundaries, Tab to Transient | ● | ● | ● | ● | **Works** |
 | Link timeline and edit selection | ● | — | — | — | **Works** |
@@ -393,3 +393,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Typed grid values such as "1/4 dotted" and "1/8 triplet" parse |
 | 2026-11-17 | minor | F6+F7 and F7+F8 choose the Smart Tool |
 | 2026-11-17 | minor | The Undo History lists undone steps and redoes to one by clicking |
+| 2026-11-17 | minor | Selection commands: extend to the session start or end, select clips on a track, following, by name, colour or mute; nudge one edge of the selection |
