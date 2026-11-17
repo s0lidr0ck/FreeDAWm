@@ -60,6 +60,7 @@ mod midi_fx_menu;
 pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;
+pub mod mix_find;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;

@@ -91,9 +91,18 @@ pub fn separate_closed(app: &mut SoundApp) {
 
 pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     let sync = app.ui.sync;
+    // Find and spill narrow the strips (a spilled folder's members show even when it is closed).
+    let find = crate::mix_find::get(ui.ctx());
     let ids: Vec<TrackId> = {
         let s = app.engine.session();
-        s.tracks.iter().filter(|x| crate::window_sync::mix_shows(s, x, sync)).map(|x| x.id).collect()
+        let spilled = |x: &Track| find.spill.is_some_and(|sp| x.id == sp || crate::mix_find::spill_members(s, sp).contains(&x.id));
+        s.tracks
+            .iter()
+            .filter(|x| {
+                (crate::window_sync::mix_shows(s, x, sync) || (spilled(x) && x.kind != TrackKind::Video)) && crate::mix_find::keeps(s, &find, x)
+            })
+            .map(|x| x.id)
+            .collect()
     };
     // Per-channel peaks for multichannel meters (read once per frame).
     let snap = app.preview_meters.clone().or_else(|| app.player.as_ref().filter(|_| app.meters_live()).map(|p| p.meters()));
@@ -112,6 +121,7 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     // The strips and drawers scroll: there the wheel scrolls, and knobs ignore it.
     crate::widgets::begin_wheel_scrolls(ui.ctx());
     crate::channel_width::bar(app, ui);
+    crate::mix_find::bar(app, ui);
     egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
@@ -874,7 +884,12 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if nresp.double_clicked() {
         app.dialogs.open_rename_track(id, &track.name);
     }
+    let spills = crate::mix_find::spills(track);
     nresp.context_menu(|ui| {
+        if spills && ui.button("Spill").on_hover_text("Show only this strip and what it controls or sums").clicked() {
+            crate::mix_find::spill(ui.ctx(), id);
+            ui.close();
+        }
         crate::edit_window::track_context_menu(app, ui, id, crate::MainWindow::Mix);
         ui.separator();
         crate::channel_width::menu(app, ui, id);

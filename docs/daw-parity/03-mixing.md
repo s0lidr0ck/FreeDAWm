@@ -39,7 +39,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K scales, a master loudness meter | Small: no PPM, no loudness range |
 | H. Mixdown and export | Offline bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no real-time bounce, AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
-| J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots | Small: no mixer search or spill |
+| J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots, find and spill | Small |
 
 Two things every one of the four does and FreeDAWm does not yet: **plug-in automation that is
 sample-accurate** (the fader section's now is, and the faders follow it; plug-in values are delay-compensated but block-rate); and **a key input on
@@ -226,8 +226,8 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 | Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Partial**: imports whole tracks; groups, VCA and folder assignments are dropped |
 | Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
 | Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
-| Find and filter tracks in the mixer | ● | ● | ● | ● | **Missing** |
-| Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Missing** |
+| Find and filter tracks in the mixer | ● | ● | ● | ● | **Works**: a Find field above the Mix window's strips keeps those whose name holds the text (this window's view: not saved, not undone) |
+| Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Works**: Spill in a VCA's, folder's or aux's strip menu shows only it and what it controls or sums (a VCA's members, nested VCAs' too; a folder's tracks at every depth, closed or not; what feeds an aux's bus by output or send), Unspill above the strips puts the rest back |
 | Several mixer windows | ○ | ● | ● | ● | **Partial**: one, detachable |
 
 ## Bugs found on the way
@@ -383,6 +383,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | find and spill in the Mix window |
 | 2026-11-17 | minor | the Touch return time is set in the Automation window; Write on Stop; Show Last Touched |
 | 2026-11-17 | minor | Bounce Mix converts the rate, shapes its dither, writes mono or split files and several formats in one pass, tags its files and adds them to the session; stems of chosen tracks and busses |
 | 2026-11-17 | minor | VST3 plug-ins take a key on their auxiliary input |
