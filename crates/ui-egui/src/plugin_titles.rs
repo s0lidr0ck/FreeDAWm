@@ -50,6 +50,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "invert" => "Polarity Flip",
         "dc_offset_removal" => "",
         "signal_generator" => "Test Tones & Noise",
+        "lofi" => "Bit & Sample-Rate Reducer",
         _ => "",
     }
 }
