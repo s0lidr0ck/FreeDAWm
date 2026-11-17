@@ -94,7 +94,7 @@ pub fn purpose(id: &str) -> &'static str {
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
         "multisampler" => {
-            "Instrument: plays an instrument recorded note by note at several velocities (velocity layers that blend, round-robins, sustain pedal); `mix.multisample_load` loads an SFZ file's samples."
+            "Instrument: Pantry multisampler, an instrument recorded note by note at several velocities (velocity layers that blend, round-robins, sustain pedal); `track.capture_multisample` makes one from any instrument track through its modules, `mix.multisample_load` loads an SFZ file (`docs/pantry.md`)."
         }
         "juke" => {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."

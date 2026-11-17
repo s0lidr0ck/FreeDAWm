@@ -1,5 +1,9 @@
-//! The Multisampler: instruments recorded note by note on instrument tracks.
+//! Pantry, the multisampler: instruments recorded note by note on instrument tracks.
 //!
+//! `track.capture_multisample` makes one from any instrument track: it plays the track's
+//! instrument a note at a time, at several velocities, through the track's module chain
+//! (offline, as Freeze renders it), cuts each note where it has died away, and puts the notes in
+//! a new track's Pantry.
 //! `mix.multisample_load` reads an SFZ file's key-down regions into the track's Multisampler.
 //! Each sample is a session source (`Insert::samples`, keyed `n{note}.v{velocity}.r{robin}`: the
 //! note it was recorded at, the top of its velocity range and its round-robin take), saved in
@@ -11,8 +15,10 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
+use soundcraft_audio_io::{AudioBuffer, FileFormat};
 use soundcraft_dsp::plugins::multisampler::{LAYERS, NOTES, ROBINS, sample_key};
-use soundcraft_model::Insert;
+use soundcraft_midi::{Note, Sequence};
+use soundcraft_model::{ChannelFormat, Clip, Insert, Route, TrackKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -24,16 +30,212 @@ const MAX_SFZ_BYTES: usize = 8 << 20;
 /// Largest single sample (frames × channels): two minutes of 192 kHz stereo.
 const MAX_SAMPLE_VALUES: usize = 192_000 * 120 * 2;
 
+/// Silence rendered before a captured note's first strike: the chain's own noise is measured there.
+const CAPTURE_LEAD_SECS: f64 = 0.5;
+/// A captured note ends this long after its last sound above the silence level, in a fade.
+const CAPTURE_AFTER_SECS: f64 = 0.05;
+const CAPTURE_FADE_SECS: f64 = 0.02;
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(
-        "mix.multisample_load",
-        "Load Multisample",
-        [],
-        None,
-        "{track?, path: an .sfz file} -> {track, name, samples, notes, layers, skipped}: the track's Multisampler plays the file's samples in place of its own (the mapping only: recorded note, velocity layer and round-robin of each key-down region; at most 16 layers a note and 4 round-robins a layer, the rest skipped)",
-        has_selection,
-        load
-    )]
+    vec![
+        cmd!(
+            "track.capture_multisample",
+            "Capture to Pantry",
+            [],
+            None,
+            "{track?, low?: 21, high?: 108 (MIDI notes), step?: 3 (semitones between captured notes, 1-12), layers?: 12 (evenly spaced velocities up to 127, 1-16) or velocities?: [1-127…], robins?: 1 (strikes of each, 1-4), hold?: 8 (seconds the lowest note is held), hold_high?: 3 (the highest; the ones between shorten evenly), tail?: 4 (seconds left to ring after each), silence?: -72 (dBFS a note has died away at), mono?: false, name?} -> {track, samples, notes, layers, seconds, silent, ringing}: plays the track's instrument a note at a time through its modules (pre-fader, offline) and makes a new instrument track whose Pantry plays the captured notes; `silent` notes made no sound and are left out, `ringing` ones were still sounding when the next began",
+            has_selection,
+            capture
+        ),
+        cmd!(
+            "mix.multisample_load",
+            "Load Multisample",
+            [],
+            None,
+            "{track?, path: an .sfz file} -> {track, name, samples, notes, layers, skipped}: the track's Multisampler plays the file's samples in place of its own (the mapping only: recorded note, velocity layer and round-robin of each key-down region; at most 16 layers a note and 4 round-robins a layer, the rest skipped)",
+            has_selection,
+            load
+        ),
+    ]
+}
+
+/// A Pantry with every parameter at its default.
+fn pantry_insert() -> Insert {
+    let mut ins = Insert::new(MULTISAMPLER);
+    if let Some(info) = soundcraft_dsp::plugin_info(MULTISAMPLER) {
+        for p in info.params {
+            ins.params.insert(p.id.to_string(), p.default);
+        }
+    }
+    ins
+}
+
+/// A note's name as the app shows it (60 is C3).
+fn note_name(note: u8) -> String {
+    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    format!("{}{}", NAMES.get(usize::from(note % 12)).copied().unwrap_or("?"), i32::from(note / 12) - 2)
+}
+
+/// A whole number parameter within `lo..=hi` (`default` when absent).
+fn whole_param(p: &Value, id: &str, key: &str, lo: i64, hi: i64, default: i64) -> Result<i64> {
+    match p.get(key) {
+        None => Ok(default),
+        Some(v) => v.as_i64().filter(|n| (lo..=hi).contains(n)).ok_or_else(|| bad(id, format!("`{key}` must be a whole number from {lo} to {hi}"))),
+    }
+}
+
+/// A number parameter within `lo..=hi` (`default` when absent).
+fn number_param(p: &Value, id: &str, key: &str, lo: f64, hi: f64, default: f64) -> Result<f64> {
+    match p.get(key) {
+        None => Ok(default),
+        Some(v) => v.as_f64().filter(|n| (lo..=hi).contains(n)).ok_or_else(|| bad(id, format!("`{key}` must be a number from {lo} to {hi}"))),
+    }
+}
+
+/// The loudest sample of frames `a..b` of `audio`.
+fn peak_in(audio: &[Vec<f32>], a: usize, b: usize) -> f32 {
+    audio.iter().filter_map(|c| c.get(a.min(c.len())..b.min(c.len()))).flatten().fold(0.0f32, |m, v| if v.is_finite() { m.max(v.abs()) } else { m })
+}
+
+fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "track.capture_multisample";
+    let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    let s = e.session_arc();
+    let tr = s.track(t).ok_or_else(|| bad(id, "no track"))?;
+    if !tr.kind.is_midi() || tr.instrument.is_none() {
+        return Err(bad(id, format!("`{}` plays no instrument to capture", tr.name)));
+    }
+    if tr.frozen {
+        return Err(bad(id, super::freeze::UNFREEZE_TO_EDIT));
+    }
+    let low = whole_param(p, id, "low", 0, 127, 21)?;
+    let high = whole_param(p, id, "high", 0, 127, 108)?;
+    if low > high {
+        return Err(bad(id, "`low` is above `high`"));
+    }
+    let step = whole_param(p, id, "step", 1, 12, 3)? as usize;
+    let robins = whole_param(p, id, "robins", 1, ROBINS as i64, 1)? as usize;
+    let velocities: BTreeSet<u8> = match p.get("velocities") {
+        Some(v) => {
+            let list = v.as_array().filter(|a| !a.is_empty()).ok_or_else(|| bad(id, "`velocities` must be a list of velocities, 1 to 127"))?;
+            let read = |v: &Value| v.as_u64().filter(|n| (1..=127).contains(n)).map(|n| n as u8);
+            list.iter().map(read).collect::<Option<_>>().ok_or_else(|| bad(id, "`velocities` must be a list of velocities, 1 to 127"))?
+        }
+        None => {
+            let n = whole_param(p, id, "layers", 1, LAYERS as i64, 12)?;
+            (1..=n).map(|i| ((127 * i + n / 2) / n).clamp(1, 127) as u8).collect()
+        }
+    };
+    if velocities.len() > LAYERS {
+        return Err(bad(id, format!("{LAYERS} velocities at most")));
+    }
+    let hold = number_param(p, id, "hold", 0.05, 60.0, 8.0)?;
+    let hold_high = number_param(p, id, "hold_high", 0.05, 60.0, hold.min(3.0))?;
+    let tail = number_param(p, id, "tail", 0.0, 30.0, 4.0)?;
+    let silence = number_param(p, id, "silence", -120.0, -20.0, -72.0)?;
+    let mono = bool_or(p, "mono", false);
+    let name = str_param(p, "name").map_or_else(|| format!("{} Pantry", tr.name), str::to_string);
+
+    let sr = s.sample_rate;
+    let frames = |secs: f64| usize::try_from(sr.samples(secs).max(0)).unwrap_or(0);
+    let lead = sr.samples(CAPTURE_LEAD_SECS);
+    let strikes = velocities.len() * robins;
+    let longest = sr.samples(CAPTURE_LEAD_SECS + (hold.max(hold_high) + tail) * strikes as f64 + soundcraft_mix::INSTRUMENT_TAIL_MAX_SECS);
+    crate::io::refuse_longer(&s, id, &tr.name, "capture", longest, crate::io::render_limit(2))?;
+    // The track alone, playing one clip: a recorded note's strikes, one after another.
+    let mut scratch = (*s).clone();
+    let lag = soundcraft_mix::midi_lag(&s, tr);
+    let quiet_at = 10f32.powf(silence as f32 / 20.0);
+    let mut taken: Vec<(String, String, AudioBuffer)> = Vec::new();
+    let (mut silent, mut ringing, mut total) = (0usize, 0usize, 0usize);
+    for note in (low..=high).step_by(step).filter_map(|n| u8::try_from(n).ok()) {
+        let along = if high > low { (i64::from(note) - low) as f64 / (high - low) as f64 } else { 0.0 };
+        let held = hold + (hold_high - hold) * along;
+        let (hold_len, slot) = (sr.samples(held).max(1), sr.samples(held + tail).max(1));
+        let mut seq = Sequence::default();
+        let mut starts: Vec<(u8, usize, usize)> = Vec::with_capacity(strikes);
+        let mut at = lead;
+        for &velocity in &velocities {
+            for robin in 1..=robins {
+                let on = scratch.tempo.samples_to_ticks(at, sr);
+                let off = scratch.tempo.samples_to_ticks(at.saturating_add(hold_len), sr);
+                seq.notes.push(Note { pitch: note, velocity, release_velocity: 64, channel: 0, start: on, length: off.saturating_sub(on).max(1) });
+                let sounds = scratch.tempo.tick_to_samples(on, sr).saturating_add(lag);
+                starts.push((velocity, robin, usize::try_from(sounds.max(0)).unwrap_or(0)));
+                at = at.saturating_add(slot);
+            }
+        }
+        seq.sort();
+        let clip = Clip::midi(scratch.new_clip_id(), "Capture", 0, at, seq);
+        match scratch.track_mut(t).and_then(|tr| tr.playlist_mut()) {
+            Some(pl) => pl.clips = vec![clip],
+            None => return Err(bad(id, "the track has no playlist to play from")),
+        }
+        let audio = soundcraft_mix::render_track_frozen(&scratch, t, at, None);
+        let rendered = audio.iter().map(Vec::len).min().unwrap_or(0);
+        // What counts as died away: the level asked for, or just above the chain's own noise.
+        let quiet = quiet_at.max(peak_in(&audio, 0, usize::try_from(lead).unwrap_or(0)) * 1.5);
+        let block = frames(0.005).max(1);
+        for (i, &(velocity, robin, start)) in starts.iter().enumerate() {
+            let last_strike = i + 1 == starts.len();
+            let limit = starts.get(i + 1).map_or(rendered, |next| next.2.min(rendered));
+            if start >= limit || peak_in(&audio, start, limit) <= quiet {
+                silent += 1;
+                continue;
+            }
+            let mut loud = start;
+            let mut k = start;
+            while k < limit {
+                let to = k.saturating_add(block).min(limit);
+                if peak_in(&audio, k, to) > quiet {
+                    loud = to;
+                }
+                k = to;
+            }
+            if loud >= limit && !last_strike {
+                ringing += 1;
+            }
+            let end = loud.saturating_add(frames(CAPTURE_AFTER_SECS)).min(limit);
+            let mut channels: Vec<Vec<f32>> = audio.iter().map(|c| c.get(start..end).map(<[f32]>::to_vec).unwrap_or_default()).collect();
+            if mono && channels.len() > 1 {
+                let n = channels.len() as f32;
+                let len = channels.iter().map(Vec::len).min().unwrap_or(0);
+                channels = vec![(0..len).map(|f| channels.iter().filter_map(|c| c.get(f)).sum::<f32>() / n).collect()];
+            }
+            let fade = frames(CAPTURE_FADE_SECS).max(1);
+            for c in &mut channels {
+                let len = c.len();
+                for (j, x) in c.iter_mut().rev().take(fade).enumerate() {
+                    let g = 0.5 - 0.5 * (std::f32::consts::PI * j as f32 / fade.min(len) as f32).cos();
+                    *x *= g.clamp(0.0, 1.0);
+                }
+            }
+            total = total.saturating_add(channels.iter().map(Vec::len).sum::<usize>());
+            if total > crate::io::MAX_IMPORT_SAMPLES {
+                return Err(bad(id, "too much audio to hold in memory: capture fewer notes or layers, shorter, or in mono"));
+            }
+            let file = format!("{name} {} v{velocity}{}", note_name(note), if robins > 1 { format!(" rr{robin}") } else { String::new() });
+            taken.push((sample_key(note, velocity, robin), file, AudioBuffer { sample_rate: sr.hz(), channels }));
+        }
+    }
+    if taken.is_empty() {
+        return Err(bad(id, format!("`{}` made no sound to capture", tr.name)));
+    }
+    let seconds = sr.seconds(Samples::try_from(taken.iter().map(|(_, _, b)| b.frames()).sum::<usize>()).unwrap_or(Samples::MAX));
+    let notes: BTreeSet<&str> = taken.iter().filter_map(|(k, _, _)| k.split('.').next()).collect();
+    let (count, notes) = (taken.len(), notes.len());
+    let mut ins = pantry_insert();
+    let session = e.session_mut();
+    for (key, file, buf) in taken {
+        ins.samples.insert(key, crate::io::add_source(session, &file, buf, None, FileFormat::Wav));
+    }
+    let made = session.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some(&name));
+    if let Some(track) = session.track_mut(made) {
+        track.instrument = Some(ins);
+        track.mixer.input = Route::Midi(soundcraft_model::MidiIn::all());
+    }
+    session.edit.selected_tracks = vec![made];
+    Ok(json!({"track": made, "samples": count, "notes": notes, "layers": velocities.len(), "seconds": seconds, "silent": silent, "ringing": ringing}))
 }
 
 /// A key-down region of an SFZ file.
@@ -345,6 +547,92 @@ mod tests {
         let other = track(&mut e, "sampler");
         std::fs::write(&sfz, "<region> sample=a.wav key=50\n").unwrap();
         assert!(e.execute("mix.multisample_load", &json!({"track": other.0, "path": sfz.to_string_lossy()})).is_err());
+    }
+
+    #[test]
+    fn capturing_a_track_makes_a_pantry_of_its_notes() {
+        let mut e = Engine::default();
+        let synth = track(&mut e, "subtractive_synth");
+        let v = e
+            .execute(
+                "track.capture_multisample",
+                &json!({"track": synth.0, "low": 48, "high": 60, "step": 6, "layers": 2, "robins": 2, "hold": 0.2, "tail": 0.6, "name": "Keys"}),
+            )
+            .unwrap();
+        assert_eq!((v["samples"].as_u64(), v["notes"].as_u64(), v["layers"].as_u64(), v["silent"].as_u64()), (Some(12), Some(3), Some(2), Some(0)));
+        let made = TrackId(v["track"].as_u64().unwrap());
+        let s = e.session();
+        let tr = s.track(made).unwrap();
+        let ins = tr.instrument.as_ref().unwrap();
+        assert_eq!((tr.name.as_str(), ins.plugin.as_str(), tr.kind), ("Keys", MULTISAMPLER, TrackKind::Instrument));
+        assert_eq!(ins.params.len(), soundcraft_dsp::plugin_info(MULTISAMPLER).unwrap().params.len());
+        let keys: Vec<&str> = ins.samples.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "n48.v127.r1",
+                "n48.v127.r2",
+                "n48.v64.r1",
+                "n48.v64.r2",
+                "n54.v127.r1",
+                "n54.v127.r2",
+                "n54.v64.r1",
+                "n54.v64.r2",
+                "n60.v127.r1",
+                "n60.v127.r2",
+                "n60.v64.r1",
+                "n60.v64.r2"
+            ]
+        );
+        // Each note starts with its sound, holds no more than its slot and ends in silence.
+        let sr = s.sample_rate.hz() as usize;
+        for src in ins.samples.values() {
+            let audio = s.pool.get(*src).unwrap();
+            let ch = audio.channel(0).unwrap();
+            let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            assert!(ch.len() > sr / 10 && ch.len() <= sr * 8 / 10, "{}", ch.len());
+            assert!(peak(&ch[..sr / 20]) > 0.01 && ch.last().copied().unwrap().abs() < 1.0e-4);
+        }
+        // The harder strike is the louder sample.
+        let level = |key: &str| {
+            let audio = s.pool.get(ins.samples[key]).unwrap();
+            audio.channel(0).unwrap().iter().fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        assert!(level("n60.v127.r1") > level("n60.v64.r1") * 1.2);
+        // The new track plays what was captured: capturing it in turn gives the same notes.
+        let again =
+            e.execute("track.capture_multisample", &json!({"track": made.0, "low": 50, "high": 50, "layers": 1, "hold": 0.2, "tail": 0.6})).unwrap();
+        assert_eq!((again["samples"].as_u64(), again["silent"].as_u64()), (Some(1), Some(0)));
+        e.execute("edit.undo", &json!({})).unwrap();
+        let s = e.session();
+        // The source track is as it was, and one undo step takes the capture back.
+        assert!(s.track(synth).unwrap().clips().is_empty());
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().track(made).is_none());
+    }
+
+    #[test]
+    fn capture_refuses_what_it_cannot_play() {
+        let mut e = Engine::default();
+        let audio = TrackId(e.execute("track.new", &json!({})).unwrap()["tracks"][0].as_u64().unwrap());
+        assert!(e.execute("track.capture_multisample", &json!({"track": audio.0})).is_err(), "no instrument");
+        let synth = track(&mut e, "subtractive_synth");
+        for bad in [
+            json!({"low": 70, "high": 60}),
+            json!({"step": 0}),
+            json!({"layers": 17}),
+            json!({"robins": 5}),
+            json!({"velocities": [0]}),
+            json!({"hold": 0}),
+            json!({"tail": 99}),
+        ] {
+            let mut p = bad.clone();
+            p["track"] = json!(synth.0);
+            assert!(e.execute("track.capture_multisample", &p).is_err(), "{bad}");
+        }
+        // An empty Pantry makes no sound.
+        let empty = track(&mut e, MULTISAMPLER);
+        assert!(e.execute("track.capture_multisample", &json!({"track": empty.0, "low": 60, "high": 60, "hold": 0.1, "tail": 0.1})).is_err());
     }
 
     #[test]

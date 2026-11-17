@@ -1,4 +1,4 @@
-//! Multisampler (id `multisampler`): plays an instrument recorded note by note, each note at
+//! Pantry - Multisampler (id `multisampler`): plays an instrument recorded note by note, each note at
 //! several strengths, 96 voices.
 //!
 //! * **Samples** arrive as keyed assets (`Plugin::set_asset`), `n{note}.v{velocity}.r{robin}`:
@@ -83,8 +83,8 @@ static MULTI_PARAMS: [ParamInfo; 10] = [
 
 pub static MULTISAMPLER_INFO: PluginInfo = PluginInfo {
     id: "multisampler",
-    name: "Multisampler",
-    short_name: "Multi",
+    name: "Pantry - Multisampler",
+    short_name: "Pantry",
     category: Category::Instrument,
     params: &MULTI_PARAMS,
     is_instrument: true,
