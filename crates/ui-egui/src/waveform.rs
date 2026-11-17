@@ -28,6 +28,23 @@ pub fn draw_mapped(
     body: Rect,
     wave: Color32,
 ) {
+    // A stretched clip is drawn as it plays: its file samples spread over the clip's length. It
+    // is drawn as an unstretched clip in a space `ratio` times finer (the same start, its
+    // lengths in file samples), so the waveform's file reads stay one sample per position.
+    let ratio = clip.stretch_ratio();
+    if (ratio - 1.0).abs() > 1e-9 && clip.is_audio() {
+        let (tl_x, scroll, spp) = map;
+        let start = clip.start as f64;
+        let fine = (tl_x, start - (start - scroll) / ratio, spp / ratio);
+        let span = |n: Samples| clip.source_span(n);
+        let mut c =
+            Clip { length: span(clip.length), stretch: 1.0, loop_len: span(clip.loop_len), loop_phase: span(clip.loop_phase), ..clip.clone() };
+        c.fade_in.len = span(c.fade_in.len);
+        c.fade_out.len = span(c.fade_out.len);
+        c.gain_env.iter_mut().for_each(|p| p.0 = span(p.0));
+        draw_mapped(painter, s, fine, &c, audio, channels, body, wave);
+        return;
+    }
     // A looped clip (Loop in Place) is drawn one repeat at a time, each the loop's window as a
     // clip of its own (reversed too when the clip is), with the whole clip's gain and fades.
     if clip.loop_len > 0 && clip.is_audio() {

@@ -247,7 +247,7 @@ why they score ◐ for "built-in".
 | Compact files to what is used | ● | ● | ● | ● | **Missing** |
 | "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Missing**: the command only renames the clip "Captured" |
 | Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
-| Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn unstretched |
+| Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn stretched, as it plays |
 
 ## M. Undo and keyboard
 
@@ -417,8 +417,7 @@ None is built yet.
   history) use plus handles; write a new file of those spans and point the clips at it with new
   offsets. Needs a confirmation (it is the one destructive file operation) and runs off the UI
   thread like Commit.
-- **Smaller UI items** (A, B; built in the follow-up except the last: a stretched clip's
-  waveform is still drawn unstretched): a Scissors and a Mute tool (two `Tool` variants: click separates or
+- **Smaller UI items** (A, B; all built in the follow-up): a Scissors and a Mute tool (two `Tool` variants: click separates or
   mutes the clip under the pointer, edit-group aware); separation grab (a Grabber drag inside a range
   selection separates at its edges, then drags the middle); a crossfade made by the Smart Tool at a
   clip boundary (bottom corner zone over two touching clips → `edit.fades_create` over the drag);
