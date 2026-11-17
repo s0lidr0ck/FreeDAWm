@@ -35,9 +35,9 @@ spectrum 7bd7510624190918
 loudness 27102c0c7ab30210
 phase_meter 4ffc0733047242e2
 tuner 7ec4a5ced25d6c77
-subtractive_synth 4d2a352ed1ce8f0d
+subtractive_synth 8289963cb6dfdac6
 drum_synth 478531d398691945
-sampler 3eee6751ea115c67
+sampler 16145a9a705b2929
 juke 9901d923e633ab5f
 fs_sat ad2f990efe8687fb
 fs_comp 5762ae7741ce7ed6
