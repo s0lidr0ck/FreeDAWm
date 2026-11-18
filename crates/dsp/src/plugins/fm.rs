@@ -246,6 +246,8 @@ struct Voice {
     env2: Adsr,
     m: VoiceMod,
     opf: [f32; 4],
+    /// The pitch ratio the matrix gives this voice for the current output sample.
+    bend_m: f32,
 }
 
 impl Voice {
@@ -261,6 +263,7 @@ impl Voice {
             env2: Adsr::new(),
             m: VoiceMod::new(),
             opf: [0.0; 4],
+            bend_m: 1.0,
         }
     }
 
@@ -383,6 +386,8 @@ pub struct FmSynth {
     tick_left: usize,
     lfo_rate_mod: f32,
     rng: u32,
+    /// The next operator step is the first of an output sample (the matrix moved on).
+    frame_start: bool,
 }
 
 impl Default for FmSynth {
@@ -420,6 +425,7 @@ impl FmSynth {
             tick_left: 0,
             lfo_rate_mod: 5.0,
             rng: sm::RANDOM_SEED,
+            frame_start: false,
         };
         s.update();
         s
@@ -429,11 +435,6 @@ impl FmSynth {
     #[inline]
     fn lfo_rate(&self) -> f32 {
         if self.mm.on(D_LFO_RATE) { self.lfo_rate_mod } else { self.p.v(LFO_RATE) }
-    }
-
-    /// Steps of the operators between two evaluations of the matrix.
-    fn tick_len(&self) -> usize {
-        if self.oversample { sm::TICK * 4 } else { sm::TICK }
     }
 
     /// A note starts on voice `i`: its random value, and the matrix evaluated at once.
@@ -446,10 +447,12 @@ impl FmSynth {
         self.tick_left = 0;
     }
 
-    /// See the Subtractive Synth's (per step of the operators).
+    /// See the Subtractive Synth's: once per output sample (the operators' four steps in it
+    /// share the values; the per-voice pitch is worked out on the first of them).
     fn mod_step(&mut self) {
+        self.frame_start = true;
         if self.tick_left == 0 {
-            self.tick_left = self.tick_len();
+            self.tick_left = sm::TICK;
             self.mod_tick();
         }
         self.tick_left -= 1;
@@ -460,7 +463,7 @@ impl FmSynth {
     }
 
     fn mod_tick(&mut self) {
-        let ticks = self.tick_len();
+        let ticks = sm::TICK;
         let inner = self.inner_sr();
         let p = &self.p;
         let macros = [p.v(MACRO1) / 100.0, p.v(MACRO1 + 1) / 100.0, p.v(MACRO1 + 2) / 100.0, p.v(MACRO1 + 3) / 100.0];
@@ -616,9 +619,7 @@ impl FmSynth {
     #[inline]
     fn render_inner(&mut self) -> f32 {
         let modded = self.mm.active();
-        if modded {
-            self.mod_step();
-        }
+        let frame_start = std::mem::take(&mut self.frame_start);
         let sr = self.inner_sr();
         let alg = self.p.choice(ALGORITHM).min(MODULATORS.len() - 1);
         let mods = MODULATORS.get(alg).copied().unwrap_or([0; 4]);
@@ -663,8 +664,11 @@ impl FmSynth {
             let (bend, mod_scale, lfo_amp_v, gain) = if modded {
                 let pick = |d: usize, x: f32| if mm.on(d) { v.m.get(d) } else { x };
                 let bend = if mm.on(D_PITCH) || mm.on(D_LFO_PITCH) {
-                    let c = cents_base + pick(D_LFO_PITCH, self.p.v(LFO_PITCH)) * lfo;
-                    2f32.powf(c / 1200.0) * pick(D_PITCH, 1.0)
+                    if frame_start {
+                        let c = cents_base + pick(D_LFO_PITCH, self.p.v(LFO_PITCH)) * lfo;
+                        v.bend_m = 2f32.powf(c / 1200.0) * pick(D_PITCH, 1.0);
+                    }
+                    v.bend_m
                 } else {
                     bend
                 };
@@ -803,6 +807,9 @@ impl Plugin for FmSynth {
                 let kind = e.kind;
                 self.apply(kind);
                 next += 1;
+            }
+            if self.mm.active() {
+                self.mod_step();
             }
             let y = if self.oversample {
                 for _ in 0..2 {
