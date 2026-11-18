@@ -31,6 +31,7 @@ pub mod engine_ui;
 pub mod extra_windows;
 pub mod fade_dialog;
 mod field_menu;
+pub mod fm_panel;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;

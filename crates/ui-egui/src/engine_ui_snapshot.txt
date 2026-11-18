@@ -41,6 +41,7 @@ sampler 16145a9a705b2929
 juke 04efeb92437600c7
 multisampler 3e3ff005b6e6b96e
 wavetable_synth fe9c7ca0782cd342
+fm_synth e3324f93794b3426
 fs_sat ad2f990efe8687fb
 fs_comp bb6a07c85d256b99
 fs_tape 4014bd718ef468ae

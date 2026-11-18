@@ -184,7 +184,7 @@ fn the_demo_keys_bounce_at_their_playback_level() {
 /// preset name), and a bounce of a track playing one comes out at playback's level.
 #[test]
 fn the_wavetable_and_fm_synths_save_and_bounce_at_their_playback_level() {
-    for (id, preset) in [("wavetable_synth", 3usize)] {
+    for (id, preset) in [("wavetable_synth", 3usize), ("fm_synth", 0)] {
         let mut s = piano_session();
         let t = s.tracks[0].id;
         let info = soundcraft_dsp::plugin_info(id).unwrap();

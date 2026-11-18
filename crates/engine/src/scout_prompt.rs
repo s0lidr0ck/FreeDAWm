@@ -24,8 +24,9 @@ use std::fmt::Write as _;
 /// The Subtractive Synth's filter types, LFO, sub, noise, key tracking and voice mode (400) took it
 /// over; a label that only repeats its id's words is now left out instead (2 300 fewer), which
 /// leaves room under the same cap. Pantry (800: its eleven parameter lines and its line) raised it
-/// to 53 900.
-pub const MAX_CHARS: usize = 53_900;
+/// to 53 900. The Wavetable Synth fitted under it; the FM Synth (1 400: its ten global parameters,
+/// its thirteen per-operator ones collapsed to one line each, and its line) raised it to 55 500.
+pub const MAX_CHARS: usize = 55_500;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -112,6 +113,9 @@ pub fn purpose(id: &str) -> &'static str {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }
         "subtractive_synth" => "Instrument: subtractive synthesizer (oscillators, filter, envelopes).",
+        "fm_synth" => {
+            "Instrument: 4-operator FM synth, 8 algorithms; per operator ratio or fixed Hz, level, envelope, velocity, key scaling, feedback."
+        }
         "wavetable_synth" => "Instrument: wavetable synth, 13 built-in tables; Position moved by Env 2, LFO, velocity, mod wheel; unison, filter.",
         "mend" => "Vocal cleaner. Studio: takes room, noise and clipping off (2.9 s latency, mixing only). Live: noise only, 60 ms.",
         "vault" => "Convolution reverb: plays the sound through an impulse response loaded from a file (its drawer), else a built-in hall.",

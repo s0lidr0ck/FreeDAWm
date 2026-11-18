@@ -39,6 +39,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "imprint" => "Impulse Response Capture",
         "subtractive_synth" => "Analog-Style Synth",
         "wavetable_synth" => "Morphing Tables",
+        "fm_synth" => "Four-Operator Synth",
         "time_shift" => "Track Alignment",
         "trim" => "Input Level for Gain Staging",
         "gain" => "Clean Level Change",
