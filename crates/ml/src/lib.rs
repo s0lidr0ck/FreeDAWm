@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! FreeDAWm local machine-learning audio (desktop only; the web app has no ML).
+//! FreeDAWm local machine-learning audio.
 //!
 //! - [`models`]: the model folder (`%LOCALAPPDATA%\FreeDAWm\models`, or `FREEDAWM_MODELS_DIR`),
 //!   one `<id>/card.json` per model, sha256 checked on first load, installed/missing listing.
