@@ -3,7 +3,7 @@
 //! the controls do, checked by tests for level and range). No samples.
 
 use super::WAVETABLE_INFO;
-use crate::plugins::synth::presets::{SynthPreset, pairs_for, preset};
+use crate::plugins::synth::presets::{PatchedPreset, SynthPreset, pairs_for, patched, patched_pairs_for, preset};
 use std::sync::OnceLock;
 
 // Tables: 0 Classic, 1 Harmonic Sweep, 2 Pulse Width, 3 Sync Saw, 4 Sync Square, 5 Vowels,
@@ -210,8 +210,104 @@ pub static WAVETABLE_PRESETS: [SynthPreset; 12] = [
     ),
 ];
 
+/// The presets that use the modulation matrix, the macros and Warp (after
+/// [`WAVETABLE_PRESETS`] in the menu): starting points written from what each slot does, not
+/// listened to; their levels are tested. Warp: 1 FM, 2 Fold, 3 Bend, 4 Sync.
+pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
+    patched(
+        "Pad",
+        "Glass Sweep",
+        "The Harmonic Sweep table drifting under Env 2 and a slow LFO, a touch of Warp FM breathing with it, each note's spread a little different. Creep moves the position, Shine opens the filter, Drift adds vibrato, Depth the FM.",
+        &[
+            ("table", 1.0),
+            ("position", 25.0),
+            ("unison", 3.0),
+            ("unison_detune", 12.0),
+            ("unison_spread", 70.0),
+            ("cutoff", 6000.0),
+            ("amp_attack", 500.0),
+            ("amp_release", 1500.0),
+            ("env2_attack", 1500.0),
+            ("env2_decay", 3000.0),
+            ("env2_sustain", 40.0),
+            ("lfo_rate", 0.3),
+            ("warp_mode", 1.0),
+            ("warp_amount", 15.0),
+            ("velocity", 30.0),
+            ("level", -10.0),
+        ],
+        &[("env2", "position", 0.3), ("lfo", "position", 0.08), ("lfo", "warp_amount", 0.1), ("random", "unison_spread", 0.1)],
+        &[
+            ("Creep", &[("position", 0.0, 0.5)]),
+            ("Shine", &[("cutoff", -0.1, 0.2)]),
+            ("Drift", &[("lfo_pitch", 0.0, 0.02)]),
+            ("Depth", &[("warp_amount", 0.0, 0.4)]),
+        ],
+    ),
+    patched(
+        "Bass",
+        "Wavefold Bass",
+        "The Classic table folded back on itself: harder keys and the start of each note fold it more, Env 2 letting go. Fold adds more for every note.",
+        &[
+            ("position", 10.0),
+            ("osc_pitch", -12.0),
+            ("sub_level", 30.0),
+            ("cutoff", 3000.0),
+            ("resonance", 15.0),
+            ("env2_decay", 300.0),
+            ("env2_sustain", 0.0),
+            ("amp_sustain", 90.0),
+            ("amp_release", 100.0),
+            ("warp_mode", 2.0),
+            ("warp_amount", 15.0),
+            ("level", -8.0),
+        ],
+        &[("env2", "warp_amount", 0.35), ("velocity", "warp_amount", 0.2)],
+        &[("Fold", &[("warp_amount", 0.0, 0.4)])],
+    ),
+    patched(
+        "Lead",
+        "Sync Lead",
+        "Warp Sync on the Classic table: the mod wheel sweeps the slave up for the classic tearing lead, the LFO moving it a little. Tear pushes it further.",
+        &[
+            ("position", 0.0),
+            ("cutoff", 7000.0),
+            ("resonance", 10.0),
+            ("amp_release", 200.0),
+            ("glide", 30.0),
+            ("lfo_rate", 5.0),
+            ("warp_mode", 4.0),
+            ("warp_amount", 25.0),
+        ],
+        &[("mod_wheel", "warp_amount", 0.4), ("lfo", "warp_amount", 0.05)],
+        &[("Tear", &[("warp_amount", 0.0, 0.35)])],
+    ),
+    patched(
+        "Keys",
+        "Bent Keys",
+        "Warp Bend on the Drawbars table, bent further by harder keys, the filter following the keyboard. Bend adds more to every note.",
+        &[
+            ("table", 7.0),
+            ("position", 40.0),
+            ("cutoff", 2500.0),
+            ("key_track", 50.0),
+            ("amp_decay", 900.0),
+            ("amp_sustain", 30.0),
+            ("amp_release", 300.0),
+            ("warp_mode", 3.0),
+            ("warp_amount", 10.0),
+        ],
+        &[("velocity", "warp_amount", 0.35), ("key", "cutoff", 0.1)],
+        &[("Bend", &[("warp_amount", 0.0, 0.4)])],
+    ),
+];
+
 /// The factory presets as `(name, json)` pairs, in menu order (built once).
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| pairs_for(&WAVETABLE_INFO, &WAVETABLE_PRESETS))
+    BUILT.get_or_init(|| {
+        let mut v = pairs_for(&WAVETABLE_INFO, &WAVETABLE_PRESETS);
+        v.extend(patched_pairs_for(&WAVETABLE_INFO, &PATCHED_PRESETS));
+        v
+    })
 }

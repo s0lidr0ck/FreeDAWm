@@ -773,6 +773,80 @@ mod tests {
         }
     }
 
+    /// The presets that patch the matrix: real parameters in range, every slot and macro target
+    /// usable (none dropped by the compile), names unique among all the synth's presets, the
+    /// JSON parsing with its patch; and played (a chord, the mod wheel and the macros up), no
+    /// clipping and not silent.
+    #[test]
+    fn the_patched_presets_are_well_formed_and_play_at_sensible_levels() {
+        use super::super::{fm, synth, wavetable};
+        let lists: [(&str, &[synth::presets::PatchedPreset], &[synth::presets::SynthPreset]); 3] = [
+            ("subtractive_synth", &synth::presets::PATCHED_PRESETS, &synth::presets::SYNTH_PRESETS),
+            ("wavetable_synth", &wavetable::presets::PATCHED_PRESETS, &wavetable::presets::WAVETABLE_PRESETS),
+            ("fm_synth", &fm::presets::PATCHED_PRESETS, &fm::presets::FM_PRESETS),
+        ];
+        for (id, list, plain) in lists {
+            let info = crate::plugin_info(id).unwrap();
+            let mut names: std::collections::HashSet<String> = plain.iter().map(|p| p.name.to_lowercase()).collect();
+            for p in list {
+                let name = p.preset.name;
+                assert!(names.insert(name.to_lowercase()), "{id}: {name} twice");
+                assert!(!p.preset.group.is_empty() && !p.preset.desc.is_empty());
+                for (k, v) in p.preset.set {
+                    let pi = info.param(k).unwrap_or_else(|| panic!("{name}: {k}"));
+                    assert_eq!(pi.clamp(*v), *v, "{name}: {k}");
+                }
+                assert!(p.slots.len() <= MAX_SLOTS && p.macros.len() <= MAX_MACROS);
+                for (s, d, a) in p.slots {
+                    assert!(check_slot(id, s, d).is_ok() && a.abs() <= 1.0, "{name}: {s} -> {d}");
+                }
+                for (_, t) in p.macros {
+                    assert!(t.len() <= MAX_MACRO_TARGETS);
+                    for (d, f, to) in *t {
+                        assert!(dests(id).contains(d) && f.abs() <= 1.0 && to.abs() <= 1.0, "{name}: {d}");
+                    }
+                }
+                let data = p.compiled(id).unwrap();
+                let mut m = ModMatrix::new();
+                m.load(&data, dests(id).len());
+                assert_eq!((m.n, m.nt), (p.slots.len(), p.macros.iter().map(|(_, t)| t.len()).sum::<usize>()), "{name}: nothing dropped");
+                let json = crate::plugins::fs::factory_presets(id).iter().find(|(n, _)| *n == name).map(|(_, j)| *j).unwrap();
+                let v: serde_json::Value = serde_json::from_str(json).unwrap();
+                assert_eq!(v["modulation"]["slots"].as_array().unwrap().len(), p.slots.len(), "{name}");
+                assert_eq!(v["modulation"]["macros"][0]["name"].as_str(), p.macros.first().map(|(n, _)| *n));
+                // Played with the macros at their preset values, then all at full.
+                for macros_up in [false, true] {
+                    let mut s = crate::create(id).unwrap();
+                    s.prepare(48_000.0, 256, 2);
+                    for (k, v) in p.preset.set {
+                        s.set_param(k, *v);
+                    }
+                    if macros_up {
+                        for m in MACRO_PARAMS {
+                            s.set_param(m, 100.0);
+                        }
+                        s.midi(0, [0xB0, 1, 127]);
+                    }
+                    s.set_prepared_state(&data);
+                    let mut io = vec![vec![0.0f32; 256]; 2];
+                    for (i, n) in [48u8, 55, 60, 64].iter().enumerate() {
+                        s.note_on(i, *n, 110);
+                    }
+                    let mut x = Vec::new();
+                    for _ in 0..(48_000 / 256) {
+                        s.process(&mut io, 256);
+                        x.extend_from_slice(&io[0]);
+                        x.extend_from_slice(&io[1]);
+                    }
+                    let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                    let level = 20.0 * rms(&x[8_000..40_000]).log10();
+                    eprintln!("{id} {name} (macros up: {macros_up}): peak {:.1} dBFS, rms {level:.1} dB", 20.0 * peak.log10());
+                    assert!(peak < 1.0 && level > -40.0, "{id} {name}: peak {peak}, rms {level:.1} dB");
+                }
+            }
+        }
+    }
+
     /// The matrix's cost: 16 voices with 16 slots against none (printed; run with
     /// `--ignored --nocapture`).
     #[test]
