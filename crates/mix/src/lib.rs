@@ -633,9 +633,9 @@ struct Strip {
     /// The track's own delay (`Mixer::delay`), before its inserts; sized in `sync`.
     track_delay: DelayLine,
     outbuf: Vec<Vec<f32>>,
-    /// Mix Engine FX: the strip's output as a summing bus's model shapes it on its way in
-    /// ([`summing::shape_into`]); sized the first time a bus with a model is fed.
-    summed: Vec<Vec<f32>>,
+    /// Mix Engine FX: the summing filter's memory per way into a bus (each send slot, then the
+    /// output) and per bus channel; cleared on reset so a bounce repeats.
+    sum_state: summing::SumState,
     failures: PluginFailures,
     /// Per-module meter values of the last block, parallel to the chain (sized in `sync`).
     mods: Vec<ModuleMeter>,
@@ -900,7 +900,7 @@ impl Strip {
             out_extra: DelayLine::default(),
             track_delay: DelayLine::default(),
             outbuf: Vec::new(),
-            summed: Vec::new(),
+            sum_state: summing::SumState::default(),
             failures: PluginFailures::default(),
             mods: Vec::new(),
             analysis: Vec::new(),
@@ -1953,6 +1953,7 @@ impl MixEngine {
             s.align.clear();
             s.align_pre.clear();
             s.out_extra.clear();
+            s.sum_state.clear();
             for k in &mut s.keys {
                 k.delay.clear();
                 k.main_delay.clear();
@@ -3124,6 +3125,7 @@ impl MixEngine {
         let pre_ignores_mute = s.edit.flag(PRE_SENDS_IGNORE_MUTE);
         // Mix Engine FX: whether any bus has a summing model (none: every source adds as before).
         let any_summing = summing::any(s);
+        let sr = self.sample_rate;
         for (i, snd) in t.mixer.sends.iter().enumerate() {
             let Some(snd) = snd else { continue };
             if strip.silent && !(snd.pre_fader && pre_ignores_mute) {
@@ -3147,16 +3149,11 @@ impl MixEngine {
                 Dest::None => continue,
             };
             let (dst_buf, dst_fmt) = dst;
-            // Mix Engine FX: into a bus with a summing model, the source passes through it first.
-            let src: &[Vec<f32>] = match out_dest(s, &snd.target) {
-                Dest::Bus(b) if any_summing => match summing::of_bus(s, b) {
-                    Some(sm) => {
-                        summing::shape_into(src, &mut strip.summed, sm, t.id, frames);
-                        &strip.summed
-                    }
-                    None => src,
-                },
-                _ => src,
+            // Mix Engine FX: into a bus with a summing model, the send (after its level and pan)
+            // passes through it as it is added.
+            let model = match out_dest(s, &snd.target) {
+                Dest::Bus(b) if any_summing => summing::of_bus(s, b),
+                _ => None,
             };
             let apos = back(if pre_fader { strip.pre_at } else { strip.post_at });
             let follows = as_output || (snd.surround.is_none() && snd.follow_main_pan);
@@ -3186,7 +3183,10 @@ impl MixEngine {
                 let main_sp = if follows { surround_at(t, at) } else { None };
                 let surround = if as_output { main_sp.as_ref() } else { snd.surround.as_ref().or(main_sp.as_ref()) };
                 let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
-                apply_matrix_span(src, span, dst_buf, &m, gain);
+                match (model, strip.sum_state.way(i)) {
+                    (Some(sm), Some(mem)) => summing::add_span(src, span, dst_buf, &m, gain, sm, (t.id, sr), mem),
+                    _ => apply_matrix_span(src, span, dst_buf, &m, gain),
+                }
             }
         }
         // The instrument's extra outputs, each into its bus (a silent strip plays none).
@@ -3227,15 +3227,9 @@ impl MixEngine {
             },
             Dest::None => return,
         };
-        let src: &[Vec<f32>] = match dest {
-            Dest::Bus(b) if any_summing => match summing::of_bus(s, b) {
-                Some(sm) => {
-                    summing::shape_into(src, &mut strip.summed, sm, t.id, frames);
-                    &strip.summed
-                }
-                None => src,
-            },
-            _ => src,
+        let model = match dest {
+            Dest::Bus(b) if any_summing => summing::of_bus(s, b),
+            _ => None,
         };
         // The pan reads where its audio is on the timeline: behind by the strip's delay and the
         // extra wait of a direct output.
@@ -3249,7 +3243,10 @@ impl MixEngine {
             if src.len() == 2 {
                 shape_stereo(&mut m, shape_at(t, AutoParam::Width, t.mixer.width, at), shape_at(t, AutoParam::Balance, t.mixer.balance, at));
             }
-            apply_matrix_span(src, start..end, dst, &m, 1.0);
+            match (model, strip.sum_state.way(soundcraft_model::SEND_SLOTS)) {
+                (Some(sm), Some(mem)) => summing::add_span(src, start..end, dst, &m, 1.0, sm, (t.id, sr), mem),
+                _ => apply_matrix_span(src, start..end, dst, &m, 1.0),
+            }
             start = end;
         }
     }
@@ -6798,7 +6795,7 @@ fn peak(x: &[f32]) -> f32 {
 }
 
 /// Per-block routing gains: `m[src][dst]`.
-type Matrix = [[f32; MAX_CHANNELS]; MAX_CHANNELS];
+pub(crate) type Matrix = [[f32; MAX_CHANNELS]; MAX_CHANNELS];
 
 /// How a source is panned: the stereo pan pair (mono uses `[0]`) and the optional surround pan.
 struct PanSpec<'a> {
@@ -8659,6 +8656,45 @@ mod tests {
         let quiet_gap = driven[0].iter().zip(&off[0]).filter(|(_, o)| o.abs() < 0.05).map(|(d, o)| (d - o).abs()).fold(0.0f32, f32::max);
         assert!(quiet_gap < 0.01, "quiet passes nearly clean: {quiet_gap}");
         assert_ne!(driven[0], driven[1], "the channels' tolerances differ");
+    }
+
+    /// Mix Engine FX: the send level drives the model, as on a console. A sine sent at +6 dB into
+    /// a driven bus is bent much more, for its level, than the same sine sent at -20 dB; at drive
+    /// 0 either send is bit for bit the clean one.
+    #[test]
+    fn a_hotter_send_drives_the_summing_model_harder() {
+        let render = |level_db: f32, summing: Option<soundcraft_model::Summing>| {
+            let mut s = Session::default();
+            s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+            let n = 24_000;
+            let dead = s.add_bus("Nowhere", ChannelFormat::Stereo);
+            let fx = s.add_bus("Fx", ChannelFormat::Stereo);
+            let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+            let wave: Vec<f32> = (0..n).map(|i| 0.4 * (i as f32 * 0.029).sin()).collect();
+            let src = SourceId(930);
+            s.pool.insert(src, Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![wave.clone(), wave] })));
+            let id = s.new_clip_id();
+            let tr = s.track_mut(t).unwrap();
+            tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "w", src, 0, 0, n as i64));
+            tr.mixer.output = Route::Bus(dead);
+            tr.mixer.sends[0] = Some(soundcraft_model::SendSlot { level_db, ..soundcraft_model::SendSlot::new(Route::Bus(fx)) });
+            let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Fx"));
+            s.track_mut(aux).unwrap().mixer.input = Route::Bus(fx);
+            s.track_mut(aux).unwrap().mixer.summing = summing;
+            render_range(&s, Range::new(0, n as i64), 512)
+        };
+        let tape = |drive| Some(soundcraft_model::Summing { model: soundcraft_model::SummingModel::Tape, drive });
+        let rel = |level_db: f32| {
+            let (clean, driven) = (render(level_db, None), render(level_db, tape(1.0)));
+            let peak = clean[0].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            assert!(peak > 0.0);
+            clean[0].iter().zip(&driven[0]).map(|(c, d)| (c - d).abs()).fold(0.0f32, f32::max) / peak
+        };
+        let (hot, low) = (rel(6.0), rel(-20.0));
+        assert!(hot > 5.0 * low, "the hot send is bent more for its level: {hot} vs {low}");
+        for l in [6.0, -20.0] {
+            assert_eq!(render(l, tape(0.0)), render(l, None), "drive 0 at {l} dB: the clean sum");
+        }
     }
 
     #[test]
