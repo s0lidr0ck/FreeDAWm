@@ -124,6 +124,7 @@ mod vocal;
 mod vocal_studio;
 mod vst3;
 pub mod warp;
+pub mod wavetable;
 mod zoom_toggle;
 
 pub use clap::plugin_info;
@@ -243,6 +244,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pattern::specs());
         v.extend(juke::specs());
         v.extend(multisample::specs());
+        v.extend(wavetable::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());

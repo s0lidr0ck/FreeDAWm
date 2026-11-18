@@ -94,9 +94,13 @@ pub(crate) fn prepare_insert(ins: &mut Insert) {
     if soundcraft_dsp::plugins::synth_mod::has_matrix(&ins.plugin) {
         // A built-in synth: its modulation patch (`Insert::modulation`), compiled.
         ins.prepared = super::synth_mod::compile(ins).map(PreparedState::new);
+        // The Wavetable Synth's user table rides beside the patch's numbers.
+        super::wavetable::attach_table(ins);
         return;
     }
     ins.prepared = ins.state_bytes().and_then(|b| soundcraft_dsp::prepare_state(&ins.plugin, &b)).map(PreparedState::new);
+    // The Wavetable Synth's user table, beside whatever else was made ready.
+    super::wavetable::attach_table(ins);
 }
 
 /// [`prepare_insert`] for every module and instrument of a session (one just opened).

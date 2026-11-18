@@ -16,6 +16,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.midi_clear_expression", "Clear the Note's Expression", "", None),
     ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
+    ("ui.wavetable_import", "Import Wavetable...", "", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
@@ -775,6 +776,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         }
         "ui.mix.editors_actual" => when((app.ui.editor_scale - 1.0).abs() > 1e-3, "Plugin editors are at their actual size"),
         i if i.starts_with("ui.mix.width.") => when(crate::channel_width::enabled(app, i), "Select channels in the Mix window"),
+        // Import Wavetable… acts on a selected track playing the Wavetable Synth.
+        "ui.wavetable_import" => when(crate::wavetable_import::target(app).is_some(), "Select a track playing the Wavetable Synth"),
         // Rename… opens its dialog on the first selected track.
         "track.rename" => when(!app.engine.target_tracks().is_empty(), "Select a track"),
         // Clean Vocal's follow-ups act on a cleaned clip only.
@@ -1374,7 +1377,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1384,6 +1387,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
+    }
+    if id == "ui.wavetable_import" {
+        return Some(crate::wavetable_import::open_for_selection(app));
     }
     if id == "window.new_mix" {
         return Some(crate::mix_more::open(app));
