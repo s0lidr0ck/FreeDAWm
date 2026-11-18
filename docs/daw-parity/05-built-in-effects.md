@@ -1,6 +1,6 @@
 # Four-DAW parity, section 5: built-in effects
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (bug fixes and tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 items, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Hardware named below (1176, LA-2A, Pultec and so on) belongs
@@ -126,7 +126,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Tape machine | ◐ | ◐ | ● | ● | **Works**: four machines, wow, flutter, hiss |
 | Tube, transformer and console saturation | ● | ● | ● | ● | **Works** (Sat: five circuits) |
 | Overdrive, distortion and fuzz pedals | ● | ● | ● | ● | **Works** (Dist: twelve) |
-| Oversampling to control aliasing | ● | ● | ● | ● | **Partial**: good in Sat, Tape, Vint, Twine and Amp, and in Dist and Filter since bug 8 (half-band stages); left: the hard clippers (RAT, Fuzz Face, Big Muff) at full drive still alias, which only a higher factor than 4x removes, at twice their processor cost; not done here |
+| Oversampling to control aliasing | ● | ● | ● | ● | **Works**: good in Sat, Tape, Vint, Twine and Amp, and in Dist and Filter since bug 8 (half-band stages). Dist's Oversampling choice runs its circuits at 8x (a third half-band stage, one more sample of latency, twice the processor cost) for the hard clippers (RAT, Fuzz Face, Big Muff) at full drive; it is 4x by default, so saved sessions play the same samples. A test measures what folds back from a 3.66 kHz tone at full drive: at least 6 dB less at 8x for each of the three |
 | Bit and sample-rate reduction | ● | ● | ● | ● | **Works**: Lo-Fi (bit depth 1–24, sample rate down to 500 Hz, noise, mix) is offered under Utilities again, the one stock effect the lists show; Vint's Sampler circuit is a fixed 12-bit model |
 | Exciter / enhancer | ◐ | ◐ | ● | ◐ | **Works** (Vint Enhancer) |
 | Sub-bass generator | ● | ○ | ● | ◐ | **Dropped by the owner** (a plain sub-bass generator) |
@@ -147,7 +147,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Gated / non-linear | ● | ◐ | ● | ◐ | **Dropped by the owner** |
 | Convolution with your own impulse responses | ● | ● | ● | ● | **Works** (Vault): zero latency, true stereo, up to 10 s |
 | Bundled impulse-response library | ● | ● | ● | ● | **Not planned here**: the owner is sourcing the impulse responses; until then one generated hall |
-| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Partial**: a decay envelope only. Reverse, trim and stretch are not built: the response is made from its file path by the asset system, so an edit needs its own key through the engine, the mix and the drawer (design below, about 6–8 h) |
+| Edit the impulse response (reverse, trim, stretch, envelope) | ◐ | ● | ● | ● | **Works**: a decay envelope, and under Vault's response in its drawer Reverse, the trim (from and to, seconds of the file) and the stretch (half to twice as long, read at a changed rate, so longer is also darker) (`mix.module_ir_edit`, one undo step per change). The file is untouched: the edit is stored on the module (`Insert::space_edit`), the response made ready per file and edit, and remade when the session opens. Loading another file starts unedited |
 | Capture your own impulse responses | ○ | ● | ● | ○ | **Works** (Imprint) |
 | Pre-delay synced to tempo | ◐ | ● | ● | ● | **Works** in Reverb; not in Vault or ChamberMade |
 | Freeze, ducking, modulation, damping | ◐ | ◐ | ● | ● | **Works** in Reverb; the duck follows the reverb's own input only |
@@ -352,7 +352,7 @@ de-noise and de-reverb on an insert, and loudness matching against reference tra
 - **Left.** Modulating send levels, pan or the fader (only plug-in parameters); showing the
   movement on the knobs; a modulator keyed from another track.
 
-### Editing Vault's impulse response (not built)
+### Editing Vault's impulse response (built in round four)
 
 Vault's response is made ready off the audio thread from its file path by the asset system
 (`mix.module_ir` → `make_space_ir`), and that path is what a session saves, collects with its
@@ -422,3 +422,5 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Each module shows its processor load |
 | 2026-11-17 | minor | Modulators: LFOs and envelope followers for any plug-in parameter |
 | 2026-11-17 | minor | Designs for the modulators, impulse-response editing and a rack; what is left of oversampling, IR editing and the rack stated |
+| 2026-11-18 | minor | Round four: Vault's impulse response reversed, trimmed and stretched |
+| 2026-11-18 | minor | Round four: Dist's 8x oversampling for the hard clippers, off by default |

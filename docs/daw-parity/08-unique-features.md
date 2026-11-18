@@ -131,7 +131,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | MIDI Remote: scripted controller support with a mapping assistant | **Partial** | MIDI learn for faders, pan, sends and plug-in knobs, Mackie Control and HUI ([section 6](06-midi-recording.md), K); no scripts for other controllers |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
-| Hitpoints, AudioWarp, Time Warp | **Partial** | Detection, Straighten and Conform, and warp markers placed by hand; no Time Warp of the tempo map by dragging |
+| Hitpoints, AudioWarp, Time Warp | **Works** | Detection, Straighten and Conform, and warp markers placed by hand; Time Warp: drag a bar line on the Tempo ruler to where that bar should be, and the tempo before it changes so it lands there while later bars keep their tempo (`event.time_warp`, one undo step; refused inside a tempo ramp) |
 | Direct Offline Processing: an editable offline chain per clip | **Partial** | One-shot Process; Clean Vocal keeps the original with an amount you can change later |
 | Modulators for any parameter | **Works** | Built in [section 5](05-built-in-effects.md): LFOs and envelope followers on a track, each moving up to 8 plug-in parameters |
 | Track Versions, arranger chains, Render in Place | **Partial** | Playlists; commit and bounce; no arranger chains |
@@ -515,3 +515,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-17 | minor | Show page, step 1: Window › Set List plays the session's songs in order, with Go On and a Stage View |
 | 2026-11-18 | minor | Step Sequencer row: melodic step sequences |
 | 2026-11-18 | minor | Note Expression row: per-note expression built |
+| 2026-11-18 | minor | Round four: Time Warp by dragging a bar line on the Tempo ruler |
