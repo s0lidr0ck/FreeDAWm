@@ -17,8 +17,6 @@
 //! bounded by the number of distinct installed plugins actually used. Loaded binaries likewise
 //! stay mapped for the life of the process.
 //!
-//! On `wasm32` the crate compiles to stubs: scans are empty and nothing can be created.
-//!
 //! Plugin state (`clap.state`) round-trips through [`Plugin::save_state`] /
 //! [`Plugin::load_state`] as an opaque blob. Plugin editors (`clap.gui`) open as the plugin's own
 //! floating window ([`Plugin::open_editor`], or [`Plugin::editor`] for a handle usable on the main
@@ -39,15 +37,11 @@
 
 pub mod scan;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
 mod ffi;
-#[cfg(not(target_arch = "wasm32"))]
 mod plugin;
-#[cfg(not(target_arch = "wasm32"))]
 mod registry;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use plugin::ClapPlugin;
 
 use soundcraft_dsp::{Category, Plugin, PluginInfo};
@@ -122,7 +116,6 @@ pub enum ClapError {
     Unsupported,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod api {
     use super::*;
 
@@ -185,60 +178,6 @@ mod api {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod api {
-    use super::*;
-
-    pub fn cached() -> Option<Vec<ClapDescriptor>> {
-        Some(Vec::new())
-    }
-    pub fn scan_with(_opts: &ScanOptions, _progress: &ScanProgress) -> Result<Vec<ClapDescriptor>, String> {
-        Ok(Vec::new())
-    }
-    pub fn set_scan_cache_dir(_dir: Option<PathBuf>) {}
-    pub fn clear_failed() {}
-    pub fn take_lookup_request() -> bool {
-        false
-    }
-    pub fn set_blocking_lookups(_report: Option<fn(usize, usize)>) {}
-    pub fn scan() -> Vec<ClapDescriptor> {
-        Vec::new()
-    }
-    pub fn rescan() -> Vec<ClapDescriptor> {
-        Vec::new()
-    }
-    pub fn add_search_dir(_dir: &Path) -> usize {
-        0
-    }
-    pub fn scan_paths(_dirs: &[PathBuf]) -> Vec<ClapDescriptor> {
-        Vec::new()
-    }
-    pub fn scan_failures() -> Vec<(PathBuf, String)> {
-        Vec::new()
-    }
-    pub fn load_bundle(_path: &Path) -> Result<Vec<ClapDescriptor>, ClapError> {
-        Err(ClapError::Unsupported)
-    }
-    pub fn instantiate(_id: &str) -> Result<Box<dyn Plugin>, ClapError> {
-        Err(ClapError::Unsupported)
-    }
-    pub fn plugin_info(_id: &str) -> Option<&'static PluginInfo> {
-        None
-    }
-    pub fn bundle_loaded(_desc: &ClapDescriptor) -> bool {
-        false
-    }
-    pub fn binary_loaded(_path: &Path) -> bool {
-        false
-    }
-    pub fn presets(_desc: &ClapDescriptor) -> Vec<ClapPreset> {
-        Vec::new()
-    }
-    pub fn preset_state(_id: &str, _preset: &ClapPreset) -> Result<Vec<u8>, String> {
-        Err("CLAP plugins are not supported on this platform".into())
-    }
-}
-
 /// Scans the standard CLAP folders, `CLAP_PATH` and folders added with [`add_search_dir`]
 /// **out of process**: the `freedawm-scan` helper next to the program loads the bundles, a few
 /// per process, so a plugin that crashes or hangs while loading never takes this process down
@@ -289,7 +228,6 @@ pub fn set_blocking_lookups(report: Option<fn(usize, usize)>) {
 /// Runs `f` while holding the scan lock, as a running scan does (tests check that lookups never
 /// wait for a scan).
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub fn with_scan_running<R>(f: impl FnOnce() -> R) -> R {
     registry::with_scan_running(f)
 }
@@ -338,7 +276,6 @@ pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, ClapError> {
 }
 
 /// [`instantiate`] as the concrete type, for its diagnostics (such as [`ClapPlugin::live_value`]).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn instantiate_plugin(id: &str) -> Result<ClapPlugin, ClapError> {
     api::instantiate_plugin(id)
 }
