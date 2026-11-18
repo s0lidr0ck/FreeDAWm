@@ -124,6 +124,10 @@ pub fn multi_mono_unlinked(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<
     Box::new(per_channel::PerChannel::unlinked(first, make))
 }
 
+/// A multi-mono unlinked module's stored state holds every channel's ([`multi_mono_unlinked`]
+/// saves them packed); these read and write that form.
+pub use per_channel::{first_state as multi_mono_first_state, pack_states as multi_mono_pack_states, unpack_states as multi_mono_unpack_states};
+
 /// One instance of a plugin by id, never wrapped.
 fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {

@@ -239,6 +239,10 @@ pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max
         plugin = soundcraft_dsp::plugins::multi_mono(plugin, create_plugin);
     }
     plugin.set_offline(offline);
+    // A state saved while the module ran multi-mono unlinked holds every channel's: a single
+    // instance takes the first channel's (the wrapper reads the whole blob itself).
+    let single = (!multi).then(|| state.and_then(soundcraft_dsp::plugins::multi_mono_first_state)).flatten();
+    let state = if multi { state } else { single.as_deref() };
     let refused_state = state.is_some_and(|st| !plugin.load_state(st));
     if refused_state {
         log::warn!("{id}: the plugin did not accept its stored state");
