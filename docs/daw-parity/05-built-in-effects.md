@@ -233,7 +233,7 @@ Loudness Meter and Phase Meter). All three are in place.
 |---|:-:|:-:|:-:|:-:|---|
 | Purpose-built editor per effect | ● | ● | ● | ● | **Works** for 26 (Keel and Heft among them); Vault and Mend have a drawer with a graph |
 | EQ curve with draggable points; compressor curve and history | ● | ● | ● | ● | **Works** |
-| Resizable or scalable windows | ◐ | ● | ● | ● | **Works**: View › Mix Window Views › Plugin Editors Larger / Smaller / at Actual Size (75–200 %; the editor drawn scaled, gestures mapped back), and the slim layout |
+| Resizable or scalable windows | ◐ | ● | ● | ● | **Works**: View › Plug-in Editors › Plugin Editors Larger / Smaller / at Actual Size (75–200 %; the editor drawn scaled, gestures mapped back), and the slim layout |
 | Several editors open; detach to their own windows | ● | ● | ● | ● | **Works** |
 | Pin on top; follow the selected track | ● | ● | ◐ | ● | **Works**: a plug-in window's Pin keeps it on top (a detached one at the system's level); its Follow moves it to the same plug-in on the track selected next (its first of that plug-in), pin and detach going with it; a track without it leaves the window where it is. Test: `panels` `a_following_plugin_window_moves_with_the_selection` |
 | Type a value into any control | ● | ● | ● | ● | **Works**: Ctrl+click (Cmd+click) a knob or dial in any editor, drawer or tile and type the value as shown (with or without its unit, a choice's name, On/Off) |

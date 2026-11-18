@@ -64,7 +64,7 @@ K-system scales, and the master a loudness meter.
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Options › More › Pan Law, `mix.pan_law`) |
+| Choice of pan law | ● | ● | ● | ● | **Works**: 0, −3, −4.5 or −6 dB, per session (Setup › Preferences… › Mixing › Pan Law, `mix.pan_law`) |
 | Dual pan for stereo tracks | ● | ● | ● | ● | **Works** |
 | Balance, and width or combined panner | ○ | ● | ● | ● | **Works** for stereo tracks: Track › Strip › Width and Balance (`mix.width`, `mix.balance`) on the main output, around the dual pans; automatable (width and balance lanes, on the pan's 64-sample grid; moving the controls counts as a touch for writing, not yet tried in a writing pass) |
 | Link or mirror left and right pans | ● | ◐ | ◐ | ● | **Works**: Track › Strip › Pans: Independent, Linked (the other pan moves by as much, the same way) or Mirrored (the other way, about the centre) (`mix.pan_link`), for every way a pan moves (knobs, surfaces, MIDI learn, groups); saved with the session |
@@ -96,8 +96,8 @@ K-system scales, and the master a loudness meter.
 | Send level, pan and mute, automatable | ● | ● | ● | ● | **Works**: a stereo send's pan balances it; Pan Follows Main in the send's menu makes it take the track's pan and its automation |
 | Send to a bus, a track or a hardware output | ● | ● | ● | ● | **Works**: a send's menu offers busses, Output ▸ (straight to a hardware output) and Track ▸ (the track's input becomes the bus the send feeds) (`mix.send` `output`, `to_track`) |
 | A new send comes with its return | ● | ● | ● | ● | **Works**: a send to a new bus from the Mix window makes its aux (`mix.send` `return: true`) |
-| Default send level setting | ● | ◐ | ● | ◐ | **Works**: silent or 0 dB (Options › More › Default Send Level; any level by `mix.default_send_level`) |
-| Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Options › More › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
+| Default send level setting | ● | ◐ | ● | ◐ | **Works**: silent or 0 dB (Setup › Preferences… › Mixing › Default Send Level; any level by `mix.default_send_level`) |
+| Pre-fader sends that ignore mute, as an option | ● | ◐ | ● | ● | **Works**: Setup › Preferences… › Mixing › Pre-Fader Sends Ignore Mute (`mix.pre_sends_ignore_mute`), also through a solo's mute |
 | Copy the fader into a send (for cue mixes) | ● | ● | ◐ | ● | **Works**: Edit › Automation › Copy to Send copies the volume, and pan and mute when asked (`automation.copy_to_send` `what`), over the edit selection when there is one (what the send had there is replaced, its curve either side kept), else the whole lane; without automation the values themselves; the Control Room's Add Cue Sends makes a pre-fader send to a cue on every track at its fader level (`monitor.cue_sends`) |
 | Busses of any format, output to bus or hardware | ● | ● | ● | ● | **Works** |
 | Several outputs from one track | ● | ○ | ○ | ◐ | **Works**: Add Output in a strip's output selector (`mix.send` `as_output`): another bus or hardware output beside the main one, a post-fader copy at the fader's level with the main pan and its automation, silenced by the track's mute, whatever the slot's own level, pan, mute and lanes; listed there with Remove. It takes one of the ten send slots (Pro Tools' additional outputs do not); it is shown in its send slot like a send |
@@ -110,7 +110,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Groups that link volume, mute, solo and arm | ● | ● | ● | ● | **Works**, relative offsets kept |
 | Choose what a group links (pan, sends, inserts, automation mode) | ● | ◐ | ● | ● | **Works** for volume, mute, solo, record, pan, sends and automation mode, in the Group dialog (Create and Modify) and by command; inserts are not linked |
-| Suspend all groups | ● | ● | ● | ● | **Works**: Options › More › Suspend All Groups |
+| Suspend all groups | ● | ● | ● | ● | **Works**: Options › Suspend All Groups |
 | VCA masters | ● | ● | ● | ● | **Works**: assigned from the track menu (VCA ▸, in the Edit and Mix windows), nested up to eight deep (a VCA follows another; loops refused), each one's fader, mute and solo reaching the members below |
 | Solo in place that follows the signal path | ● | ● | ● | ● | **Works**: effect returns of a soloed source are heard |
 | Solo safe | ● | ● | ● | ● | **Works** |
@@ -156,7 +156,7 @@ K-system scales, and the master a loudness meter.
 | Curved segments | ○ | ● | ● | ● | **Works**: one bend per segment |
 | Pencil shapes (line, triangle, square, random) | ● | ● | ◐ | ● | **Works**: right-click the Pencil in the toolbar for Free Hand, Line, Triangle, Square or Random (`automation.pencil_shape`); a shape goes between the press's value and the pointer's, repeating at the grid's step (`automation.draw` `shape`, `period`); Shift still draws a line |
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
-| Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Options › More › Thin Automation After Pass) |
+| Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Setup › Preferences… › Mixing › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
 | Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Partial** (2026-11-17, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation; `clip.automation_point` adds points. Since 2026-11-18 (6ca37e7) the Edit window draws them: over each clip with a lane of its own, the track's automation lane shows the lane as it plays there (accent colour, the clip's range shaded) with the clip's points on it. Left: editing them there by mouse (adding, dragging and deleting a clip's points), so points are still added by command or by moving track automation in (about 4–6 h) |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
@@ -169,7 +169,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Peak meters that catch every peak | ● | ● | ● | ● | **Works**: each screen update shows the loudest block since the last one |
 | Peak hold and clip lights | ● | ● | ● | ● | **Works**; one bar per channel on surround tracks |
-| Pre-fader metering | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering; track strips only (the master meter stays post-fader) |
+| Pre-fader metering | ● | ● | ● | ● | **Works**: Setup › Preferences… › Mixing › Pre-Fader Metering; track strips only (the master meter stays post-fader) |
 | RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Works**: Preferences › Metering › Scale: peak, RMS (300 ms), peak with RMS inside, VU (0 VU = −18 dBFS), K-20, K-14, K-12, numbered from their reference; release and peak hold beside it; saved with this computer's settings. PPM (EBU, 0 = −18 dBFS) falls 24 dB in 2.8 s as EBU Tech 3205 times it; its rise follows the sample peak (no 10 ms integration) |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
 | Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, loudness range (EBU Tech 3342, from the short-term value every 100 ms), maximum momentary and true peak, with Reset |

@@ -221,7 +221,7 @@ See [`ui-parity.md`](ui-parity.md). ≈ 60–100 h.
 - **Partly addressed (2026-10-20):** every FireStation module (18) opens a wide drawer that is a
   translation of its JUCE VST editor: its layout at the VST's `setSize`, its palette in both themes,
   every gesture, its presets browser, Undo / A-B, dirty star and tooltips (the narrow drawer stays
-  behind View › Mix Window Views › Plugin Editors as in the VST, `ui.mix.wide_editors`; every module also has a slim 280 px layout, View › Mix Window Views › Slim Plugin Editors, `ui.mix.slim_editors`). What the
+  behind View › Plug-in Editors › Plugin Editors as in the VST, `ui.mix.wide_editors`; every module also has a slim 280 px layout, View › Plug-in Editors › Slim Plugin Editors, `ui.mix.slim_editors`). What the
   editors still lack, from their inventories (`docs/superpowers/editors/*.md`), all small:
   - Shale's SC Listen pill sets its parameter but has no effect: the port does not read it
     (engine work). MIDI Out works since 2026-10-28: it feeds any track whose input is MIDI from

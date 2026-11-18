@@ -81,7 +81,7 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Automatic punch at a range, with pre- and post-roll | ● | ● | ● | ● | **Works**: plays in, records the range, plays out and stops |
 | Audio before and after the punch kept, so the edit can be trimmed back | ● | ● | ● | ● | **Works**: the whole pass is in the file |
 | Punch in on the fly | ● | ● | ● | ● | **Works** |
-| Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Works** with Options › QuickPunch: Record while recording punches out (playback goes on, the clips are heard again) and in again, any number of times; the take records throughout, so each punch has handles. Without QuickPunch Record stops, as before. MIDI takes ignore the punches |
+| Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Works** with Transport › QuickPunch: Record while recording punches out (playback goes on, the clips are heard again) and in again, any number of times; the take records throughout, so each punch has handles. Without QuickPunch Record stops, as before. MIDI takes ignore the punches |
 | Crossfades at the punch points | ● | ● | ● | ● | **Works**: 10 ms, centred on each punch point, out of the take's and the old audio's handles (at most half a short punch) |
 | Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Partial**: QuickPunch works (above, back on the Options menu); TrackPunch, DestructivePunch and Destructive Record stay off the menus and store a value nothing reads. Left, and of little use: TrackPunch (QuickPunch armed per track) and recording over the file in place; the other three DAWs record non-destructively with handles, as FreeDAWm does |
 
@@ -96,7 +96,7 @@ what a user can do, apart from punch out on the fly.
 | Loop record, one take per pass | ● | ● | ● | ● | **Works**: one continuous file, split into passes; up to 1,000 |
 | Takes kept as lanes under the track | ● | ● | ● | ● | **Works** on a comping track |
 | Swipe comping | ● | ● | ● | ● | **Works** |
-| Choice of what a new take does to old audio (replace, keep as takes, layer) | ● | ● | ● | ● | **Works**: Options › Record Mode: Replace, Keep Takes as Lanes (the track becomes a comping one) or New Playlist per Take; a comping track always keeps takes. No overlapping "layer" mode as in Cubase's stacked mix |
+| Choice of what a new take does to old audio (replace, keep as takes, layer) | ● | ● | ● | ● | **Works**: Transport › Record Mode: Replace, Keep Takes as Lanes (the track becomes a comping one) or New Playlist per Take; a comping track always keeps takes. No overlapping "layer" mode as in Cubase's stacked mix |
 | Loop record on a track without lanes | ● | ● | ● | ● | **Works**: each pass goes to a new playlist that copies the track's playlist, so only the loop differs |
 | Loop record without a selection (use the loop range) | ● | ● | ● | ● | **Works** |
 | Take names and numbers per track | ● | ● | ● | ● | **Works**: `Vox_01`, `Vox_02`… per track, skipping files already there |
@@ -117,7 +117,7 @@ what a user can do, apart from punch out on the fly.
 | Cue mixes to hardware outputs | ● | ● | ◐ | ● | **Works**: Window › Control Room's cue mixes, fed by pre-fader sends to a hardware output, with a level and mute each (section 3) |
 | Click on its own output | ● | ● | ● | ● | **Works**: Setup › Click/Countoff › Output plays the click (and the count-off) on one hardware output alone, a performer's phones, kept out of the main mix; Main mix is the default |
 | Talkback | ◐ | ◐ | ○ | ● | **Works**: a talkback input into the cues, held (Talk button or F11) or latched, dimming the monitor (Control Room) |
-| Input meters before the fader | ● | ● | ● | ● | **Works**: Options › More › Pre-Fader Metering makes every strip's meter, and so its clip light, read the level after the inserts and before the fader and mute (0.10.0; `pre_fader_metering_reads_the_level_before_the_fader`) |
+| Input meters before the fader | ● | ● | ● | ● | **Works**: Setup › Preferences… › Mixing › Pre-Fader Metering makes every strip's meter, and so its clip light, read the level after the inserts and before the fader and mute (0.10.0; `pre_fader_metering_reads_the_level_before_the_fader`) |
 | Tuner | ● | ● | ● | ● | **Works**: the Chromatic Tuner plug-in (Insert › Utilities), which reads the note and cents and can mute the output while tuning (0.10.0) |
 
 ## F. Latency and placement
@@ -154,7 +154,7 @@ what a user can do, apart from punch out on the fly.
 | Audio captured before Record was pressed | ◐ | ● | ○ | ● | **Works**: Options › Recording › Pre-Record keeps the last 10 seconds of input while the input is open (the output callback writes it into a ring it never waits for: a block the ring is busy for is skipped); at Record the take writer puts them at the front of every take file, and the clip still starts at the Record point with those seconds as a handle before it to trim open. Off by default. Recovered takes are placed the same way. Not for internal (bus) recording only |
 | A lost device or a full disk keeps the take | ● | ● | ● | ● | **Works** |
 | Lock against stopping a take by accident | ○ | ○ | ○ | ● | **Works**: Options › Recording › Lock Record: while recording, the first Stop (Space, the button, a controller) is refused with a message and a second within 2 s stops; Discard Take and Restart Take are not locked |
-| Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Options › Recording › Feedback Protection, on by default: a monitored hardware input that clips (every block peaking at -0.1 dBFS or above) for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. A loud sustained source just under clipping is never silenced. Not yet tried against real feedback through speakers |
+| Feedback protection when monitoring through speakers | ○ | ○ | ● | ○ | **Works** (by level, not Logic's analysis): Setup › Preferences… › Operation › Feedback Protection, on by default: a monitored hardware input that clips (every block peaking at -0.1 dBFS or above) for a second is silenced on its track and the status line says so; turning its monitoring off and on brings it back, and the take records on. A loud sustained source just under clipping is never silenced. Not yet tried against real feedback through speakers |
 
 ## I. Remote recording
 

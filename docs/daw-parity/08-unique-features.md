@@ -231,7 +231,7 @@ sessions kept between visits (12–18): sessions kept **done** (270aee2), record
 (the browser build will not be used; design kept below); talkback and encrypted local links for remote recording
 (10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
 and the scan helper is a start; **first steps built** (3b77990, and round three): CLAP, a
-Preferences option off by default, the helper shipped in every package; see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from Window › More › Tour of FreeDAWm.
+Preferences option off by default, the helper shipped in every package; see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from FreeDAWm › Tour of FreeDAWm.
 
 **Designs for the larger items** (some since built, as each says). Each was judged too big to finish well in the
 same pass as the items above; these are the starting points.
