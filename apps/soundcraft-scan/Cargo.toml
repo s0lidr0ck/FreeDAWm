@@ -15,7 +15,5 @@ workspace = true
 
 [dependencies]
 soundcraft-plugin-scan.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 soundcraft-vst3-host.workspace = true
 soundcraft-clap-host.workspace = true
