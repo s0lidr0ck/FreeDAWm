@@ -366,6 +366,22 @@ pub struct Clip {
     /// bypassed, moved or removed later and the clip made again from there.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<ProcessStep>,
+    /// The ARA plug-in this audio clip is given to ([`ClipAra`]): the plug-in reads the clip's
+    /// audio straight from the session and follows its edits. `None` for every other clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ara: Option<ClipAra>,
+}
+
+/// An ARA plug-in on an audio clip (Clip › ARA Plug-in…). Stage one of ARA hosting: the plug-in
+/// reads the clip's audio and analyses it; the clip still plays its own audio (playback through
+/// the plug-in, and saving the plug-in's edits, come with stage two).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClipAra {
+    /// The plug-in's id (`vst3:<class id>`).
+    pub plugin: String,
+    /// Its name, as shown when the plug-in is not installed.
+    #[serde(default)]
+    pub name: String,
 }
 
 /// One step of a clip's process history ([`Clip::processes`]).
@@ -462,6 +478,7 @@ impl Clip {
             layer: 0,
             notes: String::new(),
             processes: Vec::new(),
+            ara: None,
         }
     }
 

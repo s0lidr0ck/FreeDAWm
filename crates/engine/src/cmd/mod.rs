@@ -12,6 +12,7 @@ pub use auto_write::{
     KEEP_PASS_POINTS, MAX_RETURN_MS, RETURN_MS, RETURN_SECONDS, TOUCH_HOLD_SECONDS, WRITE_ON_STOP, WRITE_ON_STOP_KEY, WRITE_TYPES,
     write_disabled_flag,
 };
+mod ara;
 mod arrangement;
 mod audiosuite;
 pub mod folder_block;
@@ -299,6 +300,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(setup_more::specs());
         v.extend(clap::specs());
         v.extend(vst3::specs());
+        v.extend(ara::specs());
         v.extend(surround::specs());
         v.extend(plugin_state::specs());
         v.extend(module::specs());
