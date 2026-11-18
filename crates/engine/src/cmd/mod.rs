@@ -14,6 +14,7 @@ pub use auto_write::{
 };
 mod arrangement;
 mod audiosuite;
+pub mod folder_block;
 mod sample_edit;
 pub use sample_edit::MAX_DRAWN as MAX_DRAWN_SAMPLES;
 mod automation_edit;
@@ -292,6 +293,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(set_list::specs());
         v.extend(arrangement::specs());
         v.extend(sample_edit::specs());
+        v.extend(folder_block::specs());
         v.extend(event_more::specs());
         v.extend(tempo::specs());
         v.extend(setup_more::specs());

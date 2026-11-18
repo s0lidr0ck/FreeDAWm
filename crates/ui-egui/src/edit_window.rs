@@ -1117,6 +1117,9 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
         }
     }
     lane_interaction(app, ui, track, lane, tl, pitch_claimed, None);
+    if track.is_folder() && !track.folder_open {
+        folder_block_interaction(app, ui, track, lane, tl);
+    }
     if shows_layers(track) {
         comp_layers::layer_lanes(app, ui, track, row, main_h, tl, lane_bg);
     } else if track.view == "playlists" {
@@ -1962,6 +1965,118 @@ pub fn lane_params(
                 || track.auto_lanes.iter().filter_map(|v| AutoParam::parse(v)).any(|v| this(&v, p.id))
         })
         .collect()
+}
+
+/// What a drag on a closed folder's block does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BlockDrag {
+    Move,
+    TrimStart,
+    TrimEnd,
+}
+
+/// A closed folder's blocks under the Grabber, the Trim tool and the Smart Tool (its lower half,
+/// and at an edge): a click selects the block's clips (so Nudge moves them), a drag moves them
+/// (`edit.move_block`), and a drag from an edge trims them (`edit.trim_block`). Over the rest
+/// of the lane the ordinary lane gestures apply.
+fn folder_block_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, tl: Rect) {
+    let s = app.engine.session_arc();
+    let view = Range::new(sample_at(&s, tl, tl.min.x), sample_at(&s, tl, tl.max.x));
+    let tool = s.edit.tool;
+    if !matches!(tool, Tool::Grabber | Tool::Trim | Tool::Smart) {
+        return;
+    }
+    let key = ui.id().with(("folder-block", track.id.0));
+    // The block held, what the drag does, where it was pressed and where the pointer last was.
+    let held: Option<(Range, BlockDrag, f32, f32)> = ui.ctx().data(|d| d.get_temp(key));
+    let hover = ui.ctx().pointer_hover_pos();
+    for (i, b) in folder_blocks(&s, track.id, view).into_iter().enumerate() {
+        let (x0, x1) = (x_of(&s, tl, b.start), x_of(&s, tl, b.end).max(x_of(&s, tl, b.start) + 1.0));
+        let rect = Rect::from_min_max(pos2(x0, lane.min.y), pos2(x1, lane.max.y)).intersect(lane);
+        if rect.width() <= 0.0 {
+            continue;
+        }
+        let mode_at = |p: Pos2| {
+            let near = |x: f32| (p.x - x).abs() < 6.0;
+            match tool {
+                Tool::Trim => Some(if (p.x - x0) < (x1 - p.x) { BlockDrag::TrimStart } else { BlockDrag::TrimEnd }),
+                _ if near(x0) => Some(BlockDrag::TrimStart),
+                _ if near(x1) => Some(BlockDrag::TrimEnd),
+                Tool::Smart if p.y < lane.center().y => None,
+                _ => Some(BlockDrag::Move),
+            }
+        };
+        let mine = held.filter(|(r, ..)| *r == b);
+        let area = rect.expand2(vec2(6.0, 0.0)).intersect(lane);
+        let wants = hover.filter(|p| area.contains(*p)).and_then(mode_at);
+        // Pressed here and not yet a drag: the pointer may leave the area before it becomes one.
+        let pressed = ui.ctx().input(|i| i.pointer.any_down() && i.pointer.press_origin().is_some_and(|o| area.contains(o)));
+        if mine.is_none() && wants.is_none() && !pressed {
+            continue;
+        }
+        let resp = ui.interact(area, key.with(i), Sense::click_and_drag());
+        if let Some(m) = wants.or(mine.map(|x| x.1)) {
+            ui.ctx().set_cursor_icon(if m == BlockDrag::Move { egui::CursorIcon::Grab } else { egui::CursorIcon::ResizeHorizontal });
+        }
+        // What the drag does is decided where it was pressed (it starts a few points later).
+        let press = ui.ctx().input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+        let started = if resp.drag_started()
+            && let Some(o) = press
+            && let Some(m) = mode_at(o)
+        {
+            let x = resp.interact_pointer_pos().map_or(o.x, |p| p.x);
+            ui.ctx().data_mut(|d| d.insert_temp(key, (b, m, o.x, x)));
+            Some((b, m, o.x, x))
+        } else {
+            None
+        };
+        // The pointer is followed while the button is down (the release frame may no longer say
+        // where it was pressed).
+        let mine = match (mine.or(started), resp.interact_pointer_pos()) {
+            (Some((r, m, o, _)), Some(p)) => {
+                ui.ctx().data_mut(|d| d.insert_temp(key, (r, m, o, p.x)));
+                Some((r, m, o, p.x))
+            }
+            (m, _) => m,
+        };
+        let total = mine.map_or(0.0, |(_, _, o, x)| x - o);
+        let by = soundcraft_time::to_samples(f64::from(total) * s.edit.zoom.samples_per_px);
+        if let Some((_, m, ..)) = mine
+            && resp.dragged()
+        {
+            // Where the block will land.
+            let (a, z) = match m {
+                BlockDrag::Move => (b.start + by, b.end + by),
+                BlockDrag::TrimStart => (b.start + by, b.end),
+                BlockDrag::TrimEnd => (b.start, b.end + by),
+            };
+            let ghost = Rect::from_min_max(pos2(x_of(&s, tl, a), lane.min.y + 2.0), pos2(x_of(&s, tl, z), lane.max.y - 2.0));
+            ui.painter().with_clip_rect(lane).rect_stroke(ghost, 2.0, Stroke::new(1.5, Tokens::current().accent), StrokeKind::Inside);
+        }
+        if resp.drag_stopped() {
+            ui.ctx().data_mut(|d| d.remove::<(Range, BlockDrag, f32, f32)>(key));
+            if let Some((_, m, ..)) = mine
+                && by != 0
+            {
+                let r = match m {
+                    BlockDrag::Move => app.run("edit.move_block", json!({"folder": track.id.0, "start": b.start, "end": b.end, "by": by})),
+                    BlockDrag::TrimStart | BlockDrag::TrimEnd => app.run(
+                        "edit.trim_block",
+                        json!({"folder": track.id.0, "start": b.start, "end": b.end, "edge": if m == BlockDrag::TrimStart { "start" } else { "end" }, "to": if m == BlockDrag::TrimStart { b.start + by } else { b.end + by }}),
+                    ),
+                };
+                if let Err(e) = r {
+                    app.ui.status = e;
+                }
+            }
+        } else if resp.clicked() {
+            // Grabbing the block selects its clips: Nudge then moves them.
+            let ids: Vec<u64> = soundcraft_engine::cmd::folder_block::block_clips(&s, track.id, b).iter().map(|c| c.id.0).collect();
+            if let Err(e) = app.run("edit.select", json!({"clips": ids, "tracks": [track.id.0], "start": b.start, "end": b.end})) {
+                app.ui.status = e;
+            }
+        }
+    }
 }
 
 /// A closed folder's blocks over `view`: where any member track (nested ones too) has a clip,

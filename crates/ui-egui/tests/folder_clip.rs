@@ -71,3 +71,49 @@ fn a_closed_folder_shows_blocks_and_a_selection_on_it_takes_the_members() {
     }
     assert!(ed.selection.len() > 40_000, "{:?}", ed.selection);
 }
+
+#[test]
+fn the_grabber_drags_a_closed_folders_block_and_trims_its_edge() {
+    let mut engine = soundcraft_engine::Engine::default();
+    engine.execute("track.new", &json!({"count": 2, "kind": "midi"})).unwrap();
+    let members: Vec<TrackId> = engine.session().tracks.iter().map(|t| t.id).collect();
+    for (t, (a, b)) in members.iter().zip([(48_000, 144_000), (96_000, 192_000)]) {
+        engine.execute("midi.new_clip", &json!({"track": t.0, "start": a, "end": b})).unwrap();
+    }
+    engine.execute("track.move_to_new_folder", &json!({"tracks": [members[0].0, members[1].0]})).unwrap();
+    let folder = engine.session().tracks.iter().find(|t| t.is_folder()).unwrap().id;
+    engine.execute("track.folder_toggle", &json!({"track": folder.0, "open": false})).unwrap();
+    engine.execute("edit.tool", &json!({"tool": "grabber"})).unwrap();
+    engine.execute("edit.mode", &json!({"mode": "slip"})).unwrap();
+    let app = SoundApp::new(engine, None, Services::default());
+    let mut h = Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    steps(&mut h, 6);
+    {
+        let z = &mut h.state_mut().engine.session_mut().edit.zoom;
+        (z.scroll, z.samples_per_px) = (0, 400.0);
+    }
+    steps(&mut h, 4);
+    let starts =
+        |h: &Harness<'_, SoundApp>| -> Vec<i64> { members.iter().map(|m| h.state().engine.session().track(*m).unwrap().clips()[0].start).collect() };
+    let tl = h.state().edit_layout.timeline;
+    let row = h.state().edit_layout.rows.iter().find(|(i, _)| *i == folder.0).map(|(_, r)| *r).unwrap();
+    let y = (row[1] + row[3]) * 0.5;
+    // The block spans 48 000..192 000: 120..480 points in. Grab its middle, drag 50 points right.
+    let mid = pos2(tl[0] + 300.0, y);
+    drag(&mut h, mid, mid + vec2(50.0, 0.0));
+    let moved = starts(&h);
+    assert!(moved[0] > 48_000 && moved[1] - moved[0] == 48_000, "both members moved together: {moved:?} status {:?} tool {:?} sel {:?} journal {:?}", h.state().ui.status, h.state().engine.session().edit.tool, h.state().engine.session().edit.selection, h.state().engine.journal.iter().rev().take(3).collect::<Vec<_>>());
+    // Its start edge dragged 20 points left: the clip on the edge follows, the other stays.
+    let edge = tl[0] + (moved[0] as f32 / 400.0);
+    drag(&mut h, pos2(edge + 1.0, y), pos2(edge - 20.0, y));
+    let trimmed = starts(&h);
+    assert!(trimmed[0] < moved[0], "the clip on the edge trimmed out: {trimmed:?} status {:?} journal {:?}", h.state().ui.status, h.state().engine.journal.iter().rev().take(3).collect::<Vec<_>>());
+    assert_eq!(trimmed[1], moved[1], "the other clip stays");
+}
