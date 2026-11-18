@@ -64,7 +64,10 @@ fn the_wheel_over_a_strip_knob_leaves_it_alone_and_a_drag_still_turns_it() {
     assert!((threshold(&h, module) - before).abs() < 1e-6, "the wheel turned the knob");
     assert_eq!(h.state().engine.undo_history().len(), undo);
     assert!(!soundcraft_ui_egui::widgets::wheel_scrolls(&h.ctx), "only while the strips draw");
-    // Click-and-drag still turns it.
+    // Click-and-drag still turns it (where the wheel left it: a chain too tall for its strip
+    // scrolls).
+    let label = text_at(&h, "Thresh").expect("the Thresh knob's name");
+    let knob = label.center_top() - vec2(0.0, 12.0);
     h.input_mut().events.push(egui::Event::PointerMoved(knob));
     h.run_steps(1);
     h.input_mut().events.push(egui::Event::PointerButton { pos: knob, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
