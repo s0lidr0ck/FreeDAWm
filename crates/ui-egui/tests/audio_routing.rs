@@ -172,7 +172,13 @@ fn io_setup_edits_go_through_setup_io() {
     // The format and channel edits are setup.io actions too.
     h.state_mut().run("setup.io", json!({"action": "set_input_format", "name": "Input 2", "format": "stereo"})).unwrap();
     assert_eq!(inputs(&h)[0].format, ChannelFormat::Stereo);
-    assert!(h.state_mut().run("setup.io", json!({"action": "set_input_format", "name": "Input 2", "format": "5.1"})).is_err());
+    // Multichannel inputs (up to the mixer's 16 channels); wider formats and nonsense are refused.
+    h.state_mut().run("setup.io", json!({"action": "set_input_format", "name": "Input 2", "format": "5.1"})).unwrap();
+    assert_eq!(inputs(&h)[0].format, ChannelFormat::Surround51);
+    for wide in ["4th Order Ambisonics", "nonsense"] {
+        assert!(h.state_mut().run("setup.io", json!({"action": "set_input_format", "name": "Input 2", "format": wide})).is_err(), "{wide}");
+    }
+    assert_eq!(inputs(&h)[0].format, ChannelFormat::Surround51);
     h.state_mut().run("setup.io", json!({"action": "set_output_format", "name": "Out 3-4", "format": "mono"})).unwrap();
     assert_eq!(h.state().engine.session().outputs[1].format, ChannelFormat::Mono);
     for _ in 0..3 {
