@@ -131,7 +131,7 @@ promise more than they do" below.
 | Chord Pads and Chord Assistant | **Partial** | Window › Chord Pads… (`7e0e717`): eight pads, the seven triads of the key on the Key ruler and V7, played and recorded like Musical Typing; a chord picker and a chord stamp for the Pencil ([section 7](07-midi-writing.md)). Left: choosing each pad's chord, voicing and inversion; playing the pads from a MIDI keyboard; suggestions of the chord to play next (the Chord Assistant) |
 | Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
 | Mixer undo history and mixer snapshots | **Works** | Mixer moves are ordinary undo steps; Window › Mix Snapshots stores and recalls the whole mix or parts of it ([section 3](03-mixing.md)) |
-| Logical Editor, Project Logical Editor, macros | **Partial** | For notes: MIDI Operations › Select Notes picks notes by pitch, velocity, length, position, beats of the bar and channel ranges and selects, deletes, mutes, moves or changes them (velocity, transpose, length, channel) in one step ([section 7](07-midi-writing.md), D; rules `a9dec8e`). The owner's lean: stays notes only unless asked. No controller events, no saved rules, no Project Logical Editor (tracks and plug-ins) and no macros |
+| Logical Editor, Project Logical Editor, macros | **Partial** | MIDI Operations › Select Notes picks notes by pitch, velocity, length, position, beats of the bar and channel ranges, or controller events (control changes, pitch bend, pressure, program changes) by kind, number, value, position and channel, and selects, deletes or changes them in one step (notes also moved to a new track, muted, transposed or resized; events' values scaled and offset, CC number and channel set) ([section 7](07-midi-writing.md), D). Left: "not" and either/or conditions, rules saved by name, a Project Logical Editor (tracks and plug-ins) and macros |
 | MIDI Remote: scripted controller support with a mapping assistant | **Partial** | MIDI learn for faders, pan, sends and plug-in knobs, Mackie Control and HUI ([section 6](06-midi-recording.md), K); no scripts for other controllers |
 | Sampler Track with slicing | **Works** | Drop audio on an instrument track or send a selection to the sampler; slices by hits, beats or equal parts |
 | Audio Alignment of stacked takes | **Works** | Vocal Studio's Align timing (Fit to Lead's timing half): each note of a double moves its start and end onto the lead's, with a strength and a largest shift; pitch kept (aee379b) |
@@ -496,6 +496,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Logical Editor row: controller events in Select Notes too |
 | 2026-11-18 | minor | Step Sequencer row: value rows for controllers and the track's parameters (Works) |
 | 2026-11-18 | minor | TrackPunch built (section 2): the Destructive record row Works, destructive modes not planned here |
 | 2026-11-18 | minor | Partial rows checked against the code: Flashback capture Works (audio pre-record); Beat Detective, Chord Pads, offline processing, Track Versions, the score and the instrument set say what is left now; the summary re-counted |

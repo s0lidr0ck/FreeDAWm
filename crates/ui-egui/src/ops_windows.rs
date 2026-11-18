@@ -73,6 +73,16 @@ pub struct OpsState {
     pub rule_change: (i64, f64, i64, f64),
     /// Select Notes: the channels (from 1).
     pub rule_channel: (i64, i64),
+    /// Select Notes on controller events instead of notes (`target: events`).
+    pub rule_events: bool,
+    /// Which kinds of event: control change, pitch bend, channel pressure, poly pressure, program.
+    pub rule_kinds: [bool; 5],
+    /// The controller number (a CC's, a poly pressure's key) and the value ranges.
+    pub rule_number: (i64, i64),
+    pub rule_value: (i64, i64),
+    /// Change them (events): value scaled (percent) and added; a CC's new number and a new
+    /// channel (`None`: kept).
+    pub rule_ev_change: (f64, i64, Option<i64>, Option<i64>),
     pub rtp_velocity: i64,
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
@@ -133,6 +143,11 @@ impl Default for OpsState {
             rule_action: "select",
             rule_change: (0, 100.0, 0, 100.0),
             rule_channel: (1, 16),
+            rule_events: false,
+            rule_kinds: [true; 5],
+            rule_number: (0, 127),
+            rule_value: (-8192, 8191),
+            rule_ev_change: (100.0, 0, None, None),
             rtp_velocity: 0,
             rtp_transpose: 0,
             rtp_duration: 100.0,
@@ -754,6 +769,38 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
         "invert pitches" => ("event.invert_pitch", json!({})),
         "flam" => ("event.flam", json!({"ticks": o.flam_ticks, "velocity": o.flam_velocity})),
         "half or double time" => ("event.time_scale", json!({"factor": if o.half_time { 2.0 } else { 0.5 }})),
+        "select notes" if o.rule_events => {
+            const KINDS: [&str; 5] = ["cc", "pitch_bend", "pressure", "poly_pressure", "program"];
+            let kinds: Vec<&str> = KINDS.iter().zip(o.rule_kinds).filter(|(_, on)| *on).map(|(k, _)| *k).collect();
+            let action = if matches!(o.rule_action, "delete" | "change") { o.rule_action } else { "select" };
+            let mut p = json!({
+                "target": "events", "kinds": kinds,
+                "number_from": o.rule_number.0, "number_to": o.rule_number.1,
+                "value_from": o.rule_value.0, "value_to": o.rule_value.1,
+                "action": action,
+            });
+            if action == "change" {
+                let (scale, add, number, channel) = o.rule_ev_change;
+                p["value_scale"] = json!(scale);
+                p["value_add"] = json!(add);
+                if let Some(n) = number {
+                    p["number_set"] = json!(n);
+                }
+                if let Some(c) = channel {
+                    p["channel_set"] = json!(c);
+                }
+            }
+            if o.rule_channel != (1, 16) {
+                p["channel_from"] = json!(o.rule_channel.0);
+                p["channel_to"] = json!(o.rule_channel.1);
+            }
+            if let Some((a, b)) = o.rule_beats {
+                let q = soundcraft_midi::PPQ as f64;
+                p["in_bar_from"] = json!((((a.min(b) - 1.0) * q).round() as i64).max(0));
+                p["in_bar_to"] = json!((((a.max(b)) * q).round() as i64 - 1).max(0));
+            }
+            ("event.select_split_notes", p)
+        }
         "select notes" => {
             let mut p = json!({
                 "pitch_from": o.rule_pitch.0, "pitch_to": o.rule_pitch.1,
@@ -896,10 +943,15 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             .then(|| crate::midi_editor::target_clip(app))
             .flatten();
         let picked = if app.ops.midi_op == "select notes" { None } else { editor_selection(app) };
+        let events = app.ops.midi_op == "select notes" && app.ops.rule_events;
         let whom = if rule_clip.is_some() && app.ops.rule_action != "select" {
-            "Acts on the matching notes of the clip in the MIDI Editor."
+            if events {
+                "Acts on the matching events of the clip in the MIDI Editor."
+            } else {
+                "Acts on the matching notes of the clip in the MIDI Editor."
+            }
         } else if rule_clip.is_some() {
-            "Selects the matching notes in the MIDI Editor."
+            if events { "Selects the matching events in their lane of the MIDI Editor." } else { "Selects the matching notes in the MIDI Editor." }
         } else if picked.is_some() {
             "Applies to the notes selected in the MIDI Editor."
         } else {
@@ -911,7 +963,11 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                 Some((id, mut p)) if rule_clip.is_some() => {
                     p["clips"] = json!([rule_clip.map(|c| c.0)]);
                     let r = app.run(id, p);
-                    if let Ok(v) = &r {
+                    if app.ops.rule_events {
+                        if let (Ok(v), Some(c)) = (&r, rule_clip) {
+                            select_events(app, c, v);
+                        }
+                    } else if let Ok(v) = &r {
                         // Select picks them; the other actions leave no selection (the notes
                         // may have moved or gone).
                         app.midi.selected = v
@@ -973,8 +1029,103 @@ fn groove_combo(app: &mut SoundApp, ui: &mut egui::Ui, label: &str, field: fn(&m
     });
 }
 
+/// Select Notes on controller events: the MIDI Editor selects the matching points of the first
+/// kind found (its lane shown), as a click in that lane would; the other actions leave none.
+fn select_events(app: &mut SoundApp, clip: soundcraft_model::ClipId, v: &serde_json::Value) {
+    app.midi.ctrl_sel = None;
+    if v.get("action").and_then(|a| a.as_str()) != Some("select") {
+        return;
+    }
+    let indices: Vec<usize> =
+        v.get("indices").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default();
+    let Some(seq) = app.engine.session().find_clip(clip).and_then(|(_, c)| c.midi_playing().cloned()) else { return };
+    let Some(kind) = indices.first().and_then(|i| seq.ctrls.get(*i)).map(|c| c.kind) else { return };
+    let same: Vec<usize> = indices.into_iter().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind)).collect();
+    crate::midi_lanes::toggle(app, kind, true);
+    app.midi.clip = Some(clip);
+    app.midi.ctrl_sel = Some((kind, same));
+}
+
+/// Select Notes' form for controller events: their kinds, number, value and channel ranges, the
+/// beats, and select, delete or change (value, CC number, channel).
+fn events_form(ui: &mut egui::Ui, o: &mut OpsState) {
+    let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(egui::DragValue::new(&mut v.0).range(lo..=hi));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut v.1).range(lo..=hi));
+        });
+    };
+    ui.horizontal_wrapped(|ui| {
+        for (on, name) in o.rule_kinds.iter_mut().zip(["Controllers", "Pitch bend", "Aftertouch", "Poly pressure", "Program change"]) {
+            ui.checkbox(on, name);
+        }
+    });
+    if !o.rule_kinds.iter().any(|k| *k) {
+        o.rule_kinds = [true; 5];
+    }
+    range(ui, "Number", &mut o.rule_number, 0, 127);
+    ui.label(egui::RichText::new("A controller's number, a poly pressure's key").small());
+    range(ui, "Value", &mut o.rule_value, -8192, 8191);
+    ui.label(egui::RichText::new("0 to 127; pitch bend -8192 to 8191").small());
+    range(ui, "Channel", &mut o.rule_channel, 1, 16);
+    let mut beats = o.rule_beats.is_some();
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut beats, "On beats").on_hover_text("Only events in these beats of their bar (1 is the downbeat)").changed() {
+            o.rule_beats = beats.then_some((1.0, 1.0));
+        }
+        if let Some((a, b)) = &mut o.rule_beats {
+            ui.add(egui::DragValue::new(a).range(1.0..=64.0).speed(0.25));
+            ui.label("to");
+            ui.add(egui::DragValue::new(b).range(1.0..=64.0).speed(0.25));
+        }
+    });
+    if !matches!(o.rule_action, "select" | "delete" | "change") {
+        o.rule_action = "select";
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut o.rule_action, "select", "Select them");
+        ui.radio_value(&mut o.rule_action, "delete", "Delete them");
+        ui.radio_value(&mut o.rule_action, "change", "Change them");
+    });
+    if o.rule_action == "change" {
+        let (scale, add, number, channel) = &mut o.rule_ev_change;
+        ui.horizontal(|ui| {
+            ui.label("Value ×");
+            ui.add(egui::DragValue::new(scale).range(0.0..=1000.0).suffix(" %"));
+            ui.label("+");
+            ui.add(egui::DragValue::new(add).range(-16383..=16383));
+        });
+        ui.horizontal(|ui| {
+            let mut set = number.is_some();
+            if ui.checkbox(&mut set, "Controller number").on_hover_text("Moves control changes to this controller").changed() {
+                *number = set.then_some(1);
+            }
+            if let Some(n) = number {
+                ui.add(egui::DragValue::new(n).range(0..=127));
+            }
+            let mut set = channel.is_some();
+            if ui.checkbox(&mut set, "Channel").changed() {
+                *channel = set.then_some(1);
+            }
+            if let Some(c) = channel {
+                ui.add(egui::DragValue::new(c).range(1..=16));
+            }
+        });
+    }
+}
+
 /// Select Notes' form: the ranges a note must fall in, and select or split.
 fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut o.rule_events, false, "Notes");
+        ui.radio_value(&mut o.rule_events, true, "Controller events").on_hover_text("Control changes, pitch bend, aftertouch and program changes");
+    });
+    if o.rule_events {
+        events_form(ui, o);
+        return;
+    }
     let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
         ui.horizontal(|ui| {
             ui.label(label);
@@ -1121,6 +1272,27 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Select Notes on controller events sends `target: events` with the kinds ticked and only
+    /// select, delete or change; on notes it sends what it always did (no target).
+    #[test]
+    fn select_notes_on_events_names_its_target_kinds_and_changes() {
+        let mut o = OpsState { midi_op: "select notes".into(), ..OpsState::default() };
+        let (_, p) = midi_op_params(&o).unwrap();
+        assert!(p.get("target").is_none(), "{p}");
+        o.rule_events = true;
+        o.rule_kinds = [true, true, false, false, false];
+        o.rule_action = "mute";
+        let (id, p) = midi_op_params(&o).unwrap();
+        assert_eq!(id, "event.select_split_notes");
+        assert_eq!((p["target"].as_str(), p["action"].as_str()), (Some("events"), Some("select")), "a notes-only action selects");
+        assert_eq!(p["kinds"], serde_json::json!(["cc", "pitch_bend"]));
+        o.rule_action = "change";
+        o.rule_ev_change = (50.0, 3, Some(11), None);
+        let (_, p) = midi_op_params(&o).unwrap();
+        assert_eq!((p["value_scale"].as_f64(), p["value_add"].as_i64(), p["number_set"].as_i64()), (Some(50.0), Some(3), Some(11)));
+        assert!(p.get("channel_set").is_none());
+    }
 
     #[test]
     fn stretch_uses_start_over_end_and_scale_uses_end_over_start() {

@@ -132,7 +132,7 @@ The gaps are of four kinds:
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
 | Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Works**: strum (up or down), flam (a grace note of the same pitch a set number of ticks before each note, at a share of its velocity; `event.flam`), reverse, invert pitches (mirrored around the middle of their range, or a given pitch; `event.invert_pitch`), half and double time in the MIDI Operations window |
 | Split notes out by pitch or channel | ● | ● | ● | ● | **Works**: MIDI Operations › Select Notes picks notes by pitch, velocity, length, place in the bar and channel, and Move Them to a New Track splits them out (`event.select_split_notes` `action: split`, `channel_from`, `channel_to`); the first version of this page said Flag only, but the pitch split was already built |
-| Rule-based transformer | ◐ | ◐ | ● | ● | **Partial**: for notes. MIDI Operations › Select Notes is a transformer: the notes matching every condition (pitch, velocity, length, start, beats of the bar, channel ranges) are selected, moved to a new track, deleted, muted or unmuted, or changed (velocity scaled and offset, transposed, length scaled or set, channel set): `event.select_split_notes` `action: select|split|delete|mute|unmute|change`, one undo step, on the editor's clip or the selected clips. Not for controller events, no conditions other than ranges (no "not", no either/or), and rules are not saved by name (a9dec8e) |
+| Rule-based transformer | ◐ | ◐ | ● | ● | **Partial**: MIDI Operations › Select Notes is a transformer for notes and, with **Controller events** chosen, for control changes, pitch bend, channel and poly pressure and program changes. Notes: the notes matching every condition (pitch, velocity, length, start, beats of the bar, channel ranges) are selected, moved to a new track, deleted, muted or unmuted, or changed (velocity scaled and offset, transposed, length scaled or set, channel set). Events: the events matching every condition (their kinds, the controller number or poly pressure key, the value in the kind's own range, start, beats of the bar, channel ranges) are selected (in their lane of the MIDI Editor), deleted, or changed (value scaled and offset, clamped to the kind's range; a control change moved to another controller number; channel set). `event.select_split_notes` with `target: notes|events` (notes by default, as before), one undo step, on the editor's clip or the selected clips (a9dec8e; events: test `matching_controller_events_are_selected_deleted_or_changed`). Left: conditions other than ranges (no "not", no either/or), table and random actions, and rules saved by name |
 
 ## E. Scales and chords
 
@@ -354,8 +354,8 @@ to end.
 
 ### Rule-based transformer: what is left (D; doc 08's logical editor)
 
-The note part is built (Select Notes' actions). Left: conditions on controller events (CC
-number and value, bend, pressure, program) with the same actions; "not" and "either/or" between
+The note part is built (Select Notes' actions), and controller events (CC number and value,
+bend, pressure, program) with select, delete and change (2026-11-18). Left: "not" and "either/or" between
 conditions; actions from a table (a velocity curve) and random ranges; rules saved by name
 (`Session::transformers`, and presets in the settings folder) and run from a menu; a project-wide
 editor that acts on tracks and plug-ins (Cubase's Project Logical Editor). Est. 6–8 h.
@@ -611,3 +611,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-18 | minor | Per-note expression: its two commands also in Event › MIDI editing |
 | 2026-11-18 | minor | Rows brought up to the code: score view draws rests, ties and beams; sampler zones Works (Pantry); plug-ins in their own process include VST3 |
 | 2026-11-18 | minor | Wavetable Synth |
+| 2026-11-18 | minor | Rule-based transformer: controller events (CC, bend, pressure, program) selected, deleted or changed |
