@@ -303,6 +303,7 @@ const DIALOG_COMMANDS: &[&str] = &[
     "clip.rename",
     "track.rename",
     "clip.clean_mix",
+    "track.capture_multisample",
 ];
 
 /// The menu bar as shown: see the format at the top of `menubar.txt`.

@@ -137,6 +137,16 @@ impl Element {
 
     /// Parses a document; the root element is returned.
     pub fn parse(text: &str) -> Result<Element, String> {
+        Self::parse_with(text, true)
+    }
+
+    /// [`Element::parse`] for hand-written files that other programs open all the same: an
+    /// attribute given twice keeps its first value, and one that cannot be read is left out.
+    pub fn parse_lenient(text: &str) -> Result<Element, String> {
+        Self::parse_with(text, false)
+    }
+
+    fn parse_with(text: &str, strict: bool) -> Result<Element, String> {
         let mut reader = quick_xml::Reader::from_str(text);
         reader.config_mut().check_end_names = true;
         let mut stack: Vec<Element> = Vec::new();
@@ -154,14 +164,14 @@ impl Element {
                     if count > MAX_ELEMENTS || stack.len() >= MAX_DEPTH {
                         return Err("XML is too large or nested too deeply".into());
                     }
-                    stack.push(open(&e)?);
+                    stack.push(open(&e, strict)?);
                 }
                 Event::Empty(e) => {
                     count += 1;
                     if count > MAX_ELEMENTS || stack.len() >= MAX_DEPTH {
                         return Err("XML is too large or nested too deeply".into());
                     }
-                    let el = open(&e)?;
+                    let el = open(&e, strict)?;
                     match stack.last_mut() {
                         Some(parent) => parent.children.push(el),
                         None => root = Some(el),
@@ -216,14 +226,25 @@ impl Element {
     }
 }
 
-fn open(e: &quick_xml::events::BytesStart<'_>) -> Result<Element, String> {
+fn open(e: &quick_xml::events::BytesStart<'_>, strict: bool) -> Result<Element, String> {
     let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut el = Element::new(name);
-    for a in e.attributes() {
-        let a = a.map_err(|err| format!("XML attribute: {err}"))?;
+    for a in e.attributes().with_checks(strict) {
+        let a = match a {
+            Ok(a) => a,
+            Err(err) if strict => return Err(format!("XML attribute: {err}")),
+            // What is left of the tag cannot be told apart: keep what was read.
+            Err(_) => break,
+        };
         let key = String::from_utf8_lossy(a.key.as_ref()).into_owned();
-        let value = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|err| format!("XML attribute `{key}`: {err}"))?.into_owned();
-        el.attrs.push((key, value));
+        let value = match a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+            Ok(v) => v.into_owned(),
+            Err(err) if strict => return Err(format!("XML attribute `{key}`: {err}")),
+            Err(_) => continue,
+        };
+        if strict || el.attr(&key).is_none() {
+            el.attrs.push((key, value));
+        }
     }
     Ok(el)
 }

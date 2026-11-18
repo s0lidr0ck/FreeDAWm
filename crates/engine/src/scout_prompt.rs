@@ -23,8 +23,9 @@ use std::fmt::Write as _;
 /// parameters and their lines), and from 52 600 for Lo-Fi, listed again, and Comp's Look-ahead (500).
 /// The Subtractive Synth's filter types, LFO, sub, noise, key tracking and voice mode (400) took it
 /// over; a label that only repeats its id's words is now left out instead (2 300 fewer), which
-/// leaves room under the same cap.
-pub const MAX_CHARS: usize = 53_100;
+/// leaves room under the same cap. Pantry (800: its eleven parameter lines and its line) raised it
+/// to 53 900.
+pub const MAX_CHARS: usize = 53_900;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -104,6 +105,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_vint" => "Vintage EQ / colour boxes: seven circuits (four passive/active EQs solved by nodal analysis) plus the MEQ-5.",
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
+        "multisampler" => {
+            "Instrument: Pantry multisampler, an instrument sampled note by note in velocity layers; `track.capture_multisample` makes one from an instrument track, `mix.multisample_load` loads SFZ or Decent Sampler (`docs/pantry.md`)."
+        }
         "juke" => {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }

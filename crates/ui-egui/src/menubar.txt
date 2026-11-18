@@ -352,6 +352,7 @@ Track > ## Freeze & render
 Track > Freeze
 Track > Commit = Track > Commit...
 Track > Bounce = Track > Bounce...
+Track > Capture to Pantry... = @track.capture_multisample
 Track > Extract MIDI to New Track
 Track > ---
 Track > ## Inserts & sends

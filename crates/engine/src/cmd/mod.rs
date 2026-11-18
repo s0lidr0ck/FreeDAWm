@@ -86,6 +86,7 @@ pub(crate) mod ml;
 pub mod modulator;
 pub mod tempo_fit;
 pub mod transpose_track;
+pub mod multisample;
 pub(crate) use mix::restore_plugin_param_ids;
 mod chain;
 pub(crate) mod copyq;
@@ -238,6 +239,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clip::specs());
         v.extend(pattern::specs());
         v.extend(juke::specs());
+        v.extend(multisample::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());

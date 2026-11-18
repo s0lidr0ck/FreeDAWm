@@ -729,7 +729,8 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         let place = if instrument { "instrument".to_string() } else { format!("{}", pos + 1) };
         let juke = instrument && ins.plugin == crate::juke_window::JUKE && info.is_some();
         let sampler = instrument && ins.plugin == crate::sampler_window::SAMPLER;
-        let view = PluginView { tid, key, ins: &ins, info, frozen, tname: &tname, name: &name, hosted, juke, sampler };
+        let pantry = instrument && ins.plugin == crate::pantry::PANTRY;
+        let view = PluginView { tid, key, ins: &ins, info, frozen, tname: &tname, name: &name, hosted, juke, sampler, pantry };
         let open = if app.ui.detached_plugins.contains(&(tid, key)) {
             detached_plugin_window(app, ctx, &view)
         } else {
@@ -794,6 +795,8 @@ struct PluginView<'a> {
     juke: bool,
     /// The Lift sampler's own editor.
     sampler: bool,
+    /// The Pantry multisampler's own editor.
+    pantry: bool,
 }
 
 /// The default size of a plugin's window: Juke's, the sampler editor's, or a parameter list's.
@@ -802,6 +805,8 @@ fn plugin_window_size(v: &PluginView) -> egui::Vec2 {
         crate::juke_window::WINDOW_SIZE
     } else if v.sampler {
         vec2(crate::sampler_window::EDITOR_WIDTH + 24.0, 640.0)
+    } else if v.pantry {
+        vec2(crate::pantry::W + 24.0, 660.0)
     } else {
         vec2(380.0, 520.0)
     }
@@ -821,7 +826,13 @@ fn docked_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginView,
     let mut window = egui::Window::new(format!("{} · {place} · {}", v.tname, v.name))
         .id(wid)
         .open(&mut open)
-        .default_width(if v.sampler { crate::sampler_window::EDITOR_WIDTH } else { 340.0 })
+        .default_width(if v.sampler {
+            crate::sampler_window::EDITOR_WIDTH
+        } else if v.pantry {
+            crate::pantry::W
+        } else {
+            340.0
+        })
         .max_height((screen.height() - 48.0).max(120.0))
         .constrain(true);
     if app.ui.pinned_plugins.contains(&(tid, key)) {
@@ -933,7 +944,7 @@ fn detached_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginVie
         egui::ScrollArea::both().auto_shrink([false, false]).show(&mut inner, |ui| {
             plugin_contents(app, ui, v);
         });
-        if v.sampler {
+        if v.sampler || v.pantry {
             crate::sampler_window::drop_target(app, ui.ctx(), full, tid);
         }
         if own {
@@ -1016,6 +1027,16 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
         ui.label(egui::RichText::new(note).color(Tokens::current().text_dim));
         return;
     };
+    if instrument && ins.plugin == crate::pantry::PANTRY {
+        if frozen {
+            ui.disable();
+        }
+        let r = ui.scope(|ui| crate::pantry::editor(app, ui, tid, ins)).response;
+        if frozen {
+            r.on_disabled_hover_text(read_only.as_str());
+        }
+        return;
+    }
     if instrument && ins.plugin == crate::sampler_window::SAMPLER {
         if frozen {
             ui.disable();

@@ -12,12 +12,13 @@ use std::collections::HashMap;
 /// Click/Countoff… has its window now). The FreeDAWm menu (About, Session Info, Session Audio
 /// Health, Tour of FreeDAWm, Quit) is drawn by hand ahead of these. The 2026-11 layout
 /// (Transport between AI and Options; the More submenus dissolved into named groups; set-once
-/// Options settings moved to Setup › Preferences…) set the counts below.
+/// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
+/// `docs/pantry.md`).
 const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 35),
+    ("Track", 36),
     ("Clip", 28),
     ("Event", 29),
     ("Process", 18),

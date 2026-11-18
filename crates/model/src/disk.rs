@@ -511,6 +511,62 @@ impl DiskFile {
         true
     }
 
+    /// Copies frames `[start, start + out.len())` of channel `ch` that are cached into `out`,
+    /// for the audio thread: no lock, allocation or I/O. What is past the end or not loaded reads
+    /// as silence; a block not loaded is asked for, counts one underrun, and makes the answer
+    /// `false`.
+    pub fn read_cached(&self, ch: usize, start: usize, out: &mut [f32]) -> bool {
+        out.iter_mut().for_each(|x| *x = 0.0);
+        if ch >= self.channels || start >= self.frames {
+            return true;
+        }
+        let n = out.len().min(self.frames - start);
+        let (mut i, mut whole) = (0usize, true);
+        while i < n {
+            let at = start + i;
+            let (block, within) = (at >> BLOCK_SHIFT, at & (BLOCK - 1));
+            let len = (BLOCK - within).min(n - i);
+            let Some(dst) = out.get_mut(i..i + len) else { break };
+            let copied = self.page(ch, block).and_then(|h| {
+                let src = h.data.get(within..within + len)?;
+                for (d, s) in dst.iter_mut().zip(src) {
+                    *d = f32::from_bits(s.load(Ordering::Relaxed));
+                }
+                h.still_valid().then_some(())
+            });
+            if copied.is_none() {
+                dst.iter_mut().for_each(|x| *x = 0.0);
+                ask(self, block);
+                whole = false;
+            }
+            i += len;
+        }
+        whole
+    }
+
+    /// Asks the disk thread for the blocks of frames `[start, start + len)` that are not cached,
+    /// ahead of a reader that will want them (a sampler's voice). Lock- and allocation-free.
+    pub fn want(&self, start: usize, len: usize) {
+        let Some(c) = CACHE.get() else { return };
+        if start >= self.frames || len == 0 {
+            return;
+        }
+        let last = (start.saturating_add(len - 1)).min(self.frames - 1) >> BLOCK_SHIFT;
+        let mut block = start >> BLOCK_SHIFT;
+        while block <= last {
+            if self.cached(block) {
+                block += 1;
+                continue;
+            }
+            let at = c.want_at.fetch_add(1, Ordering::Relaxed) % WANTS;
+            if let Some(w) = c.wants.get(at) {
+                w.store(page_key(self.id, 0, block), Ordering::Release);
+            }
+            // The disk thread loads the block after an asked one with it.
+            block += 2;
+        }
+    }
+
     /// Reads channel `ch` from frame `start` into `out` (blocking: what isn't cached is read now
     /// and kept). Frames past the end read as silence; returns the frames inside the file.
     pub fn read(&self, ch: usize, start: usize, out: &mut [f32]) -> usize {
@@ -1003,6 +1059,47 @@ mod tests {
         let p = d.join("a.wav");
         std::fs::write(&p, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
         p
+    }
+
+    #[test]
+    fn a_sampler_reads_the_head_at_once_and_the_rest_once_it_is_asked_for() {
+        let frames = BLOCK * 3 + 100;
+        let p = wav("sampler", frames);
+        let f = DiskFile::open(&p).unwrap();
+        let audio = crate::SourceAudio::from_disk_scanned(Arc::clone(&f));
+        let expect = |i: usize| (i % 100) as f32 / 100.0 + 0.01;
+        // Nothing is cached after dropping what the scan loaded: a read without a head misses.
+        for b in 0..f.blocks {
+            if let Some(slot) = f.slot(0, b) {
+                slot.store(0, Ordering::Release);
+            }
+        }
+        let mut out = vec![9.0f32; 64];
+        assert!(!audio.read_ready(0, BLOCK * 2 + 10, &mut out));
+        assert!(out.iter().all(|v| *v == 0.0));
+        // The head is in memory: a note starts from it whatever the cache holds.
+        audio.preload_head(1000);
+        assert!(audio.has_head());
+        for b in 0..f.blocks {
+            if let Some(slot) = f.slot(0, b) {
+                slot.store(0, Ordering::Release);
+            }
+        }
+        assert!(audio.read_ready(0, 10, &mut out));
+        assert!(out.iter().enumerate().all(|(i, v)| *v == expect(10 + i)));
+        // Past it, what was asked for arrives from the disk thread.
+        audio.want(1000, frames);
+        let t0 = Instant::now();
+        let mut all = vec![0.0f32; frames - 500];
+        while !audio.read_ready(0, 500, &mut all) {
+            assert!(t0.elapsed() < Duration::from_secs(20), "the disk thread never loaded what was asked for");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(all.iter().enumerate().all(|(i, v)| *v == expect(500 + i)));
+        // Past the end reads as silence, and counts as read.
+        let mut tail = vec![9.0f32; 200];
+        assert!(audio.read_ready(0, frames - 100, &mut tail));
+        assert!(tail[..100].iter().enumerate().all(|(i, v)| *v == expect(frames - 100 + i)) && tail[100..].iter().all(|v| *v == 0.0));
     }
 
     #[test]

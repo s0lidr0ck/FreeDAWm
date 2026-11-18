@@ -6026,8 +6026,9 @@ fn chase_channel(s: &Session, t: &Track, pos: Samples, ch: Option<u8>, inst: &mu
     });
 }
 
-/// Session audio shared with a sample-playing instrument.
-/// The engine keeps sampler sources in memory: one played from disk plays nothing here.
+/// Session audio shared with a sample-playing instrument. Lift and Juke read a sample whole, so
+/// the engine keeps theirs in memory (one played from disk plays nothing there); Pantry plays
+/// one from disk a stretch at a time ([`SampleSource::read`]).
 struct PoolSample(Arc<SourceAudio>);
 
 impl SampleSource for PoolSample {
@@ -6039,6 +6040,26 @@ impl SampleSource for PoolSample {
     }
     fn channel(&self, ch: usize) -> Option<&[f32]> {
         self.0.channel(ch)
+    }
+    fn stream_channels(&self) -> usize {
+        if self.0.in_memory().is_some() { 0 } else { self.0.num_channels() }
+    }
+    fn stream_frames(&self) -> usize {
+        if self.0.in_memory().is_some() { 0 } else { self.0.frames() }
+    }
+    fn read(&self, ch: usize, start: usize, out: &mut [f32]) -> bool {
+        // On the audio thread what is not loaded yet reads as silence; an offline render waits.
+        if on_audio_thread() {
+            self.0.read_ready(ch, start, out)
+        } else {
+            self.0.read(ch, start, out);
+            true
+        }
+    }
+    fn want(&self, start: usize, len: usize) {
+        if on_audio_thread() {
+            self.0.want(start, len);
+        }
     }
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)

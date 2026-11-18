@@ -6,7 +6,8 @@
 #   push a tag `v<version>`   build everything and publish the GitHub Release for that tag
 #                             (a pre-release when the version has a `-suffix`). The tag must match
 #                             `[workspace.package] version` in Cargo.toml.
-#   Actions › Release › Run   build everything and create or update a *draft* release
+#   Actions › Release › Run   build everything (or, with `only`, one platform's packages as a
+#                             test build, no release) and create or update a *draft* release
 #                             `v<version>` (nobody sees it until a maintainer publishes it, on the
 #                             Releases page or with Actions › Publish Release)
 #   pull request touching     build and package everything as a check; no release
@@ -22,6 +23,12 @@ on:
   pull_request:
     paths: [".github/workflows/release.yml", "packaging/**", "assets/app-icon/**"]
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Build one platform's packages only, as a test build (no release)"
+        type: choice
+        default: all
+        options: [all, windows, macos, linux]
 
 permissions:
   contents: read
@@ -59,6 +66,7 @@ jobs:
   linux:
     name: Linux x86_64
     needs: version
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'linux' }}
     # Ubuntu 24.04, not 22.04: ONNX Runtime's prebuilt static library (ort-sys) needs the
     # libstdc++ of GCC 13+. The binaries need glibc >= the build host's (2.39).
     runs-on: ubuntu-24.04
@@ -94,6 +102,7 @@ jobs:
     # Apple silicon only: ONNX Runtime (ort-sys) has no prebuilt x86_64-apple-darwin library.
     name: macOS arm64
     needs: version
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'macos' }}
     runs-on: macos-15
     timeout-minutes: 150
     steps:
@@ -118,6 +127,7 @@ jobs:
   windows:
     name: Windows x64
     needs: version
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'windows' }}
     runs-on: windows-latest
     timeout-minutes: 120
     steps:

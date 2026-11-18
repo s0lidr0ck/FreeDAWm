@@ -271,6 +271,15 @@ fn open(info: &soundcraft_dsp::PluginInfo) -> Result<(SoundApp, Target), String>
     app.ui.wide_editors = true;
     app.ui.slim_editors = false;
     let params = look_params(info)?;
+    if info.id == soundcraft_ui_egui::pantry::PANTRY {
+        // Pantry is pictured with something on its shelves: a capture of the built-in synth.
+        exec(&mut app, "track.new", json!({"kind": "instrument", "name": "Keys"}))?;
+        let capture = json!({"track": "Keys", "low": 33, "high": 96, "step": 3, "layers": 8, "robins": 2, "hold": 0.15, "tail": 0.3});
+        let made = app.run_sync("track.capture_multisample", capture)?;
+        let t = soundcraft_model::TrackId(made["track"].as_u64().ok_or("no captured track")?);
+        app.ui.plugin_windows.push((t, SlotKey::Instrument));
+        return Ok((app, Target::Window(egui::Id::new(("plugin", t.0, SlotKey::Instrument)))));
+    }
     if info.category == soundcraft_dsp::Category::Instrument {
         exec(&mut app, "track.new", json!({"kind": "instrument", "name": "Inst 1"}))?;
         exec(&mut app, "mix.instrument", json!({"track": "Inst 1", "plugin": info.id}))?;

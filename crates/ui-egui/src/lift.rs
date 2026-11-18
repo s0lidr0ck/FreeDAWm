@@ -22,17 +22,17 @@ pub const W: f32 = 1100.0;
 const H: f32 = 860.0;
 
 // The Juke family's palette.
-const WALNUT: Color32 = Color32::from_rgb(0x2A, 0x24, 0x1F);
+pub(crate) const WALNUT: Color32 = Color32::from_rgb(0x2A, 0x24, 0x1F);
 const TOBACCO: Color32 = Color32::from_rgb(0x4A, 0x40, 0x37);
-const TOBACCO_HI: Color32 = Color32::from_rgb(0x55, 0x4A, 0x40);
-const WELL: Color32 = Color32::from_rgb(0x1E, 0x1A, 0x16);
-const WELL_GRID: Color32 = Color32::from_rgb(0x30, 0x2A, 0x24);
-const AMBER: Color32 = Color32::from_rgb(0xF2, 0xB5, 0x44);
-const CREAM: Color32 = Color32::from_rgb(0xEE, 0xE6, 0xD3);
+pub(crate) const TOBACCO_HI: Color32 = Color32::from_rgb(0x55, 0x4A, 0x40);
+pub(crate) const WELL: Color32 = Color32::from_rgb(0x1E, 0x1A, 0x16);
+pub(crate) const WELL_GRID: Color32 = Color32::from_rgb(0x30, 0x2A, 0x24);
+pub(crate) const AMBER: Color32 = Color32::from_rgb(0xF2, 0xB5, 0x44);
+pub(crate) const CREAM: Color32 = Color32::from_rgb(0xEE, 0xE6, 0xD3);
 const CREAM_SHADE: Color32 = Color32::from_rgb(0xC9, 0xBF, 0xA8);
-const INK: Color32 = Color32::from_rgb(0x2A, 0x21, 0x18);
-const TEXT: Color32 = Color32::from_rgb(0xF3, 0xED, 0xE4);
-const DIM: Color32 = Color32::from_rgb(0xB5, 0xAA, 0x9B);
+pub(crate) const INK: Color32 = Color32::from_rgb(0x2A, 0x21, 0x18);
+pub(crate) const TEXT: Color32 = Color32::from_rgb(0xF3, 0xED, 0xE4);
+pub(crate) const DIM: Color32 = Color32::from_rgb(0xB5, 0xAA, 0x9B);
 const PILL: Color32 = Color32::from_rgb(0x2F, 0x28, 0x22);
 const LAMP: Color32 = Color32::from_rgb(0x7C, 0xC4, 0x6A);
 
@@ -78,7 +78,7 @@ pub fn editor(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert) {
 }
 
 /// A rounded button drawn on the painter; returns whether it was clicked.
-fn button(ui: &mut Ui, p: &Painter, r: Rect, text: &str, enabled: bool, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
+pub(crate) fn button(ui: &mut Ui, p: &Painter, r: Rect, text: &str, enabled: bool, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let resp = ui.interact(r, ui.id().with(("lift-btn", id)), sense);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text));
@@ -194,7 +194,7 @@ fn title_bar(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId
 }
 
 /// A card: a tobacco panel with rounded corners.
-fn card(p: &Painter, r: Rect) {
+pub(crate) fn card(p: &Painter, r: Rect) {
     p.rect_filled(r.translate(vec2(0.0, 2.0)), CornerRadius::same(10), Color32::from_black_alpha(70));
     p.rect_filled(r, CornerRadius::same(10), TOBACCO);
 }
@@ -558,7 +558,7 @@ fn slice_lines(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, resp: &egu
 
 /// Paints a cream knob at `c` of radius `rad` showing `norm` (0..1); `hero` adds the segmented
 /// value ring, lit in amber from the start (or from the centre when `bipolar`).
-fn paint_knob(p: &Painter, c: Pos2, rad: f32, norm: f32, hero: bool, bipolar: bool, hot: bool) {
+pub(crate) fn paint_knob(p: &Painter, c: Pos2, rad: f32, norm: f32, hero: bool, bipolar: bool, hot: bool) {
     let norm = if norm.is_finite() { norm.clamp(0.0, 1.0) } else { 0.0 };
     let angle = |t: f32| (-135.0 + 270.0 * t).to_radians();
     let dir = |a: f32| vec2(a.sin(), -a.cos());
@@ -866,7 +866,7 @@ fn filter_env(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackI
 }
 
 /// A section title in the side card.
-fn section(p: &Painter, at: Pos2, name: &str) {
+pub(crate) fn section(p: &Painter, at: Pos2, name: &str) {
     p.text(at, Align2::LEFT_CENTER, name, bold(15.5), TEXT);
 }
 

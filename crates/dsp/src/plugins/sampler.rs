@@ -97,7 +97,7 @@ const fn slice(id: &'static str, name: &'static str) -> ParamInfo {
     }
 }
 
-fn pan_display(v: f32) -> String {
+pub(super) fn pan_display(v: f32) -> String {
     let v = v.round();
     if v.abs() < 0.5 {
         "C".to_string()

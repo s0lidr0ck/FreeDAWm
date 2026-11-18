@@ -662,6 +662,31 @@ pub trait SampleSource: Send + Sync {
     fn frames(&self) -> usize {
         (0..self.num_channels()).filter_map(|c| self.channel(c)).map(<[f32]>::len).min().unwrap_or(0)
     }
+    /// Channels of a source played from disk (0: held in memory, read through [`Self::channel`]).
+    /// Such a source gives no [`Self::channel`]; a plugin that plays it reads it a stretch at a
+    /// time through [`Self::read`] and says what it will need through [`Self::want`].
+    fn stream_channels(&self) -> usize {
+        0
+    }
+    /// Frames of a source played from disk (see [`Self::stream_channels`]).
+    fn stream_frames(&self) -> usize {
+        0
+    }
+    /// Copies frames `[start, start + out.len())` of channel `ch` into `out`, silence past the
+    /// end. On the audio thread it never waits: frames not loaded yet read as silence and the
+    /// answer is `false`. The default reads [`Self::channel`].
+    fn read(&self, ch: usize, start: usize, out: &mut [f32]) -> bool {
+        out.iter_mut().for_each(|x| *x = 0.0);
+        if let Some(src) = self.channel(ch).and_then(|c| c.get(start.min(c.len())..)) {
+            for (d, v) in out.iter_mut().zip(src) {
+                *d = *v;
+            }
+        }
+        true
+    }
+    /// Says frames `[start, start + len)` will be read soon, so a source played from disk has
+    /// them loaded by then. Lock- and allocation-free.
+    fn want(&self, _start: usize, _len: usize) {}
     /// The concrete source, for a plugin that takes a richer, prepared asset (FireStation Amp's
     /// `ImpulseAsset` carries its partition spectra); `None` by default.
     fn as_any(&self) -> Option<&dyn std::any::Any> {
