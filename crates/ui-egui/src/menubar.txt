@@ -463,6 +463,8 @@ Event > Remove Duplicate Notes
 Event > Change Velocity... = @event.change_velocity
 Event > Select/Split Notes... = Event > MIDI Operations > Select/Split Notes...
 Event > Snap Notes to Scale = @midi.snap_to_scale
+Event > Give Notes Their Own Channels = @ui.midi_own_channels
+Event > Clear the Note's Expression = @ui.midi_clear_expression
 Event > ---
 Event > ## MIDI recording
 Event > Input Quantize... = Event > MIDI Operations > Input Quantize...

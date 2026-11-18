@@ -12,6 +12,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
     ("ui.midi_undo_pass", "Undo Last Pass", "Event > More MIDI > Undo Last Pass", None),
     ("ui.midi_erase_held", "Erase Held Notes", "Event > More MIDI > Erase Held Notes", None),
+    ("ui.midi_own_channels", "Give Notes Their Own Channels", "", None),
+    ("ui.midi_clear_expression", "Clear the Note's Expression", "", None),
     ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
@@ -778,6 +780,9 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         // Clean Vocal's follow-ups act on a cleaned clip only.
         i if i.starts_with("clip.clean_") => when(cleaned_clip_selected(app), "Select a clip cleaned by Clean Vocal"),
         // Undo Last Pass and Erase Held Notes act on a MIDI loop recording under way.
+        // The MIDI Editor's per-note expression (also in its Lanes menu).
+        "ui.midi_own_channels" => crate::midi_lanes::own_channels_available(app),
+        "ui.midi_clear_expression" => crate::midi_lanes::clear_expression_available(app),
         "ui.midi_undo_pass" | "ui.midi_erase_held" => {
             when(app.engine.transport.recording && app.midi_loop_preview.is_some(), "Works while loop recording MIDI")
         }
@@ -1398,6 +1403,12 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.midi_erase_held" {
         return Some(crate::midi_devices::erase_held_notes(app));
+    }
+    if id == "ui.midi_own_channels" {
+        return Some(crate::midi_lanes::own_channels(app));
+    }
+    if id == "ui.midi_clear_expression" {
+        return Some(crate::midi_lanes::clear_expression(app));
     }
     if id == "ui.quantize_audio" {
         app.dialogs.open = Some(crate::dialogs::Dialog::QuantizeAudio { strength: 100.0, swing: 0.0 });

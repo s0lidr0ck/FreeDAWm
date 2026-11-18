@@ -13,14 +13,16 @@ use std::collections::HashMap;
 /// Health, Tour of FreeDAWm, Quit) is drawn by hand ahead of these. The 2026-11 layout
 /// (Transport between AI and Options; the More submenus dissolved into named groups; set-once
 /// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
-/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › New Mix Window… (2026-11-18).
+/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › New Mix Window… (2026-11-18),
+/// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
+/// (2026-11-18, before only in the MIDI Editor's Lanes menu).
 const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
     ("Track", 38),
     ("Clip", 29),
-    ("Event", 29),
+    ("Event", 31),
     ("Process", 18),
     ("AI", 12),
     ("Transport", 27),

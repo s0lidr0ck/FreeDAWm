@@ -340,26 +340,19 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     .response
     .on_hover_text("The channel the lanes show and new points go on");
     // The selected note's own expression (MPE): channels of its own, and clearing it.
-    if let Some(cid) = app.midi.clip {
-        let one = match app.midi.selected.as_slice() {
-            [i] => Some(*i),
-            _ => None,
-        };
-        let shared = one.is_some_and(|i| soundcraft_midi::note_expr::shares_channel(seq, i));
+    if app.midi.clip.is_some() {
         let r = ui.add_enabled(!seq.notes.is_empty(), egui::Button::new("Give Notes Their Own Channels"));
         let r = r.on_hover_text("Each note on a channel of its own (2-16), so each carries its own bend, pressure and brightness (MPE)");
         if r.clicked() {
-            if let Err(e) = app.run("midi.own_channels", serde_json::json!({"clip": cid.0})) {
+            if let Err(e) = own_channels(app) {
                 app.ui.status = e;
             }
             ui.close();
         }
-        let r = ui.add_enabled(one.is_some() && !shared, egui::Button::new("Clear the Note's Expression"));
+        let r = ui.add_enabled(clear_expression_available(app).is_ok(), egui::Button::new("Clear the Note's Expression"));
         let r = r.on_disabled_hover_text("Select one note on a channel of its own");
-        if r.clicked()
-            && let Some(i) = one
-        {
-            if let Err(e) = app.run("midi.note_expr_set", serde_json::json!({"clip": cid.0, "index": i, "kind": "all", "points": []})) {
+        if r.clicked() {
+            if let Err(e) = clear_expression(app) {
                 app.ui.status = e;
             }
             ui.close();
@@ -383,6 +376,49 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
 }
 
 /// The Lanes menu's channel item.
+/// The MIDI Editor's clip and its notes, when one is open.
+fn editor_clip(app: &SoundApp) -> Option<(ClipId, &Sequence)> {
+    let cid = app.midi.clip?;
+    match &app.engine.session().find_clip(cid)?.1.content {
+        soundcraft_model::ClipContent::Midi { sequence } => Some((cid, sequence)),
+        _ => None,
+    }
+}
+
+/// Give Notes Their Own Channels (the Lanes menu and Event menu): whether it can run, or why not.
+pub(crate) fn own_channels_available(app: &SoundApp) -> Result<(), String> {
+    match editor_clip(app) {
+        None => Err("Open a MIDI clip in the MIDI Editor".into()),
+        Some((_, seq)) if seq.notes.is_empty() => Err("The clip in the MIDI Editor has no notes".into()),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Puts each note of the MIDI Editor's clip on a channel of its own (`midi.own_channels`).
+pub(crate) fn own_channels(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    own_channels_available(app)?;
+    let cid = app.midi.clip.ok_or("Open a MIDI clip in the MIDI Editor")?;
+    app.run("midi.own_channels", serde_json::json!({"clip": cid.0}))
+}
+
+/// Clear the Note's Expression: whether it can run, or why not.
+pub(crate) fn clear_expression_available(app: &SoundApp) -> Result<(), String> {
+    let Some((_, seq)) = editor_clip(app) else { return Err("Open a MIDI clip in the MIDI Editor".into()) };
+    match app.midi.selected.as_slice() {
+        [i] if !soundcraft_midi::note_expr::shares_channel(seq, *i) => Ok(()),
+        [_] => Err("The selected note shares its channel: give notes their own channels first".into()),
+        _ => Err("Select one note on a channel of its own".into()),
+    }
+}
+
+/// Clears the selected note's own bend, pressure and brightness (`midi.note_expr_set`).
+pub(crate) fn clear_expression(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    clear_expression_available(app)?;
+    let (Some(cid), [i]) = (app.midi.clip, app.midi.selected.as_slice()) else { return Err("Select one note on a channel of its own".into()) };
+    let i = *i;
+    app.run("midi.note_expr_set", serde_json::json!({"clip": cid.0, "index": i, "kind": "all", "points": []}))
+}
+
 pub fn channel_menu_label(ch: Option<u8>) -> String {
     match ch {
         Some(c) => format!("Channel: {}", u16::from(c) + 1),
