@@ -638,6 +638,14 @@ impl Dialogs {
                     suffix: "×".into(),
                 }
             }
+            // Track › More › Write Trim Automation…: a relative volume trim over the selection.
+            "track.trim_automation_write" => Dialog::Number {
+                cmd: id.into(),
+                title: "Write Trim Automation over the selection".into(),
+                key: "db".into(),
+                value: -3.0,
+                suffix: "dB".into(),
+            },
             "clip.loop_in_place" => {
                 Dialog::Number { cmd: id.into(), title: "Loop in Place".into(), key: "count".into(), value: 4.0, suffix: "times".into() }
             }

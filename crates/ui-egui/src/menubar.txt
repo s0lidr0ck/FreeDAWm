@@ -137,6 +137,8 @@ Edit > Selection > Move Edit Selection To Marker Lane Above
 Edit > Selection > Move Edit Selection To Marker Lane Below
 Edit > Selection > Extend Edit Selection To Marker Lane Above
 Edit > Selection > Extend Edit Selection To Marker Lane Below
+Edit > Selection > Go to Next Marker = @markers.next
+Edit > Selection > Go to Previous Marker = @markers.previous
 Edit > ---
 Edit > ## Clip editing
 Edit > Separate > At Selection
@@ -398,10 +400,12 @@ Track > More > ---
 Track > More > Write MIDI Real-Time Properties = Track > Write MIDI Real-Time Properties
 Track > More > Set Record Tracks to Input Only = Track > Set Record Tracks to Input Only
 Track > More > Clear All Clip Indicators = Track > Clear All Clip Indicators
+Track > More > Clear All Mutes = @mix.clear_mutes
 Track > More > ---
 Track > More > Coalesce VCA Controller Automation = Track > Coalesce VCA Controller Automation
 Track > More > Coalesce Trim Automation = Track > Coalesce Trim Automation
 Track > More > Clear Trim Automation = Track > Clear Trim Automation
+Track > More > Write Trim Automation... = @track.trim_automation_write
 
 Clip > ## Create
 Clip > New MIDI Clip
@@ -574,6 +578,8 @@ Options > Recording > Pre-Record = @options.pre_record
 Options > Recording > Wait for Note = @options.wait_for_note
 Options > Recording > Input Only Monitoring = @options.input_only_monitoring
 Options > Recording > Feedback Protection = @options.feedback_protection
+Options > Recording > Discard Take = @transport.discard_take
+Options > Recording > Restart Take = @transport.restart_take
 Options > Pre/Post-Roll... = Options > Pre/Post-Roll
 Options > Low Latency Monitoring
 Options > Monitoring > Ear Correction = @monitor.ear

@@ -605,6 +605,49 @@ fn the_wordmark_is_four_fifths_of_the_menu_text_height() {
     assert!((wordmark.center().y - file.center().y).abs() < 1.0, "{wordmark:?} vs {file:?}");
 }
 
+/// Commands nothing in the UI reached have their menu items, each in the group it belongs to.
+#[test]
+fn the_unreachable_commands_have_menu_items() {
+    let extra = menus::ui_aliases();
+    let id_at = |shown: &str| {
+        let (_, n) = all_leaves().into_iter().find(|(p, n)| format!("{p} > {}", n.label) == shown).unwrap_or_else(|| panic!("no item {shown}"));
+        menus::command_for_path(&n.path, &extra).unwrap()
+    };
+    for (shown, id) in [
+        ("Edit > Selection > Go to Next Marker", "markers.next"),
+        ("Edit > Selection > Go to Previous Marker", "markers.previous"),
+        ("Track > More > Clear All Mutes", "mix.clear_mutes"),
+        ("Track > More > Write Trim Automation...", "track.trim_automation_write"),
+        ("Options > Recording > Discard Take", "transport.discard_take"),
+        ("Options > Recording > Restart Take", "transport.restart_take"),
+    ] {
+        assert_eq!(id_at(shown), id, "{shown}");
+    }
+
+    let mut app = demo_app();
+    // Clear All Mutes unmutes every track.
+    app.run("mix.mute", json!({"track": "Kick"})).unwrap();
+    menus::invoke_menu(&mut app, "mix.clear_mutes", "Track > More > Clear All Mutes");
+    assert!(app.engine.session().tracks.iter().all(|t| !t.mixer.mute));
+    // Discard Take and Restart Take act on a take under way: greyed out, and say so, otherwise.
+    for id in ["transport.discard_take", "transport.restart_take"] {
+        assert_eq!(menus::availability(&app, id), Err("nothing is recording".into()), "{id}");
+    }
+    // Write Trim Automation… asks for the trim, then writes it over the selection.
+    app.run("edit.select", json!({"tracks": ["Kick"], "start": {"seconds": 2.0}, "end": {"seconds": 4.0}})).unwrap();
+    menus::invoke_menu(&mut app, "track.trim_automation_write", "Track > More > Write Trim Automation...");
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { key, value, .. }) = &mut app.dialogs.open else {
+        panic!("Write Trim Automation… did not open its dialog");
+    };
+    assert_eq!(key, "db");
+    *value = -6.0;
+    let mut h = harness(app);
+    click_ok(&mut h);
+    let s = h.state().engine.session();
+    let lane = s.track_by_name("Kick").unwrap().lane(&soundcraft_model::AutoParam::Trim).cloned().expect("a trim lane");
+    assert!(lane.points.iter().any(|p| (p.value + 6.0).abs() < 1e-3), "{:?}", lane.points);
+}
+
 /// Clip › Elastic Properties… asks for the stretch ratio (it ran with none, 1.0, and did nothing):
 /// OK stretches the selected clip, in one undo step, and the dialog opens on the ratio it has.
 #[test]

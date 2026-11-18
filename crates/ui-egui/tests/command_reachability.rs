@@ -12,15 +12,11 @@ use std::path::Path;
 /// Give each one a UI path and remove it from this list; don't add to it.
 const KNOWN_UNREACHED: &[&str] = &[
     "event.midi_note",
-    "markers.next",
-    "markers.previous",
-    "mix.clear_mutes",
     "mix.send_surround_pan",
     "setup.hardware",        // menu opens the Playback Engine window, which doesn't run it
     "setup.playback_engine", // same
     "setup.reset_edit_state",
     "track.pin",
-    "track.trim_automation_write",
     "transport.status",
     "video.offset",
     "view.sub_counter",
