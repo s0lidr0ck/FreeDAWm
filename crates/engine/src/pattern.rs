@@ -88,18 +88,21 @@ pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: sou
     }
     let take_tick = s.tempo.samples_to_ticks(range.start, s.sample_rate);
     let mut pattern = pc.pattern.clone();
-    let width = pattern.lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16);
     for n in take.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
         let at = take_tick.saturating_add(n.start).saturating_sub(clip_tick).saturating_add(phase);
-        let lane = match pattern.lanes.iter().position(|l| l.note == n.pitch) {
+        // Into the variation the bar the note lands in plays.
+        let v = pattern.variation_at_bar(at.div_euclid(ticks_per_bar.max(1)));
+        let Some(lanes) = pattern.lanes_of_mut(v) else { continue };
+        let width = lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16);
+        let lane = match lanes.iter().position(|l| l.note == n.pitch) {
             Some(i) => i,
-            None if pattern.lanes.len() < MAX_LANES => {
-                pattern.lanes.push(Lane::new(n.pitch, width));
-                pattern.lanes.len() - 1
+            None if lanes.len() < MAX_LANES => {
+                lanes.push(Lane::new(n.pitch, width));
+                lanes.len() - 1
             }
             None => continue,
         };
-        let Some(l) = pattern.lanes.get_mut(lane) else { continue };
+        let Some(l) = lanes.get_mut(lane) else { continue };
         // The nearest step on the lane's own grid (half or double rate), and the step that plays
         // there (a reversed or ping-pong lane plays its steps in another order).
         let k = (at as f64 / soundcraft_midi::pattern::step_ticks(l, grid)).round() as i64;

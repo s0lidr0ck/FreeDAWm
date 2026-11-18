@@ -142,6 +142,27 @@ fn the_step_grid_shows_a_pattern_clip_and_its_bar_edits_it() {
 }
 
 #[test]
+fn the_variation_tabs_edit_one_variation_and_the_switch_lane_picks_per_bar() {
+    let (mut h, clip) = grid();
+    h.get_by_label("+").click();
+    h.run_steps(2);
+    assert_eq!(pattern(&h, clip).variation_count(), 2);
+    // The grid now edits B: a lane mute lands on B, not A.
+    h.get_all_by_label("Mute the lane").next().unwrap().click();
+    h.run_steps(2);
+    let p = pattern(&h, clip);
+    assert!(p.variations[0][0].mute && !p.lanes[0].mute);
+    // Back on A; a bar of the switch lane set to B.
+    h.get_by_label("Variation A").click();
+    h.run_steps(2);
+    h.get_by_label("Bar 2 variation").click();
+    h.run_steps(2);
+    h.get_by_label("B").click();
+    h.run_steps(2);
+    assert_eq!(pattern(&h, clip).switches, vec![None, Some(1)]);
+}
+
+#[test]
 fn the_midi_editor_sends_a_pattern_clip_to_the_juke_window() {
     let (mut h, clip) = grid();
     let tid = h.state().engine.session().find_clip(clip).map(|(t, _)| t).unwrap();

@@ -1,6 +1,6 @@
 # Four-DAW parity, section 7: writing MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (bug fixes and tier-2 items over three rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 items over three rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Third-party instruments named below belong to their makers.
@@ -156,7 +156,7 @@ The gaps are of four kinds:
 | Step sequencer with pattern clips | ○ | ● | ● | ● | **Works** (Juke Steps) |
 | Per-step velocity, probability, repeats, nudge | ○ | ● | ● | ● | **Works**, plus flam, accent and conditions (every Nth, fills) |
 | Rows of different lengths, rates and directions | ○ | ● | ● | ◐ | **Works**, up to 64 steps |
-| Pattern variations | ○ | ● | ● | ● | **Partial**: fills and conditions only. Left: up to eight variations (A–H) per pattern clip and a per-bar switch lane (design below, est. 4–6 h); not reached |
+| Pattern variations | ○ | ● | ● | ● | **Works**: a pattern clip holds up to eight variations, A–H, each a full step grid of its own (tabs over the step grid pick the one edited; + adds a copy; right-click plays one in the clip or removes it). The clip plays its chosen variation, and a switch lane beside the tabs (a cell per bar) can name another for any bar. Fills and conditions work in every variation; recording into a pattern clip lands on the variation its bar plays. Variation A keeps its dice, so existing patterns play exactly as before (`pattern.variation_add`, `pattern.variation_remove`, `pattern.play`, `pattern.switch`; tests `variations_play_where_the_clip_and_its_switch_lane_say`, `variations_are_grids_of_their_own_and_the_switch_lane_picks_per_bar`) |
 | Turn a pattern into ordinary notes | ○ | ● | ● | ● | **Works** |
 | Step patterns for melodic instruments | ○ | ● | ● | ● | **Partial**: the drum machine's step sequencer; for a melodic part the MIDI Editor's grid and Write Arpeggio. Left: a step-pattern clip whose steps hold a pitch, on any instrument (design below, est. 4–6 h); not reached |
 
@@ -597,3 +597,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Write Arpeggio and Write Progression |
 | 2026-11-17 | minor | Score parts on their own pages and a staff size |
 | 2026-11-17 | minor | End states for the last open rows: MPE, pattern variations and melodic steps, chord track and audio, wavetable and FM, sampler zones (Pantry), synth editor, layer and split |
+| 2026-11-18 | minor | Pattern variations A–H and a per-bar switch lane |

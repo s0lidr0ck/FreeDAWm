@@ -122,6 +122,13 @@ generator seeded by `(pattern seed, bar number)`. So the dice roll differently f
 **the same every playback and bounce**. A **Re-roll** command changes the seed. The **Fill** condition
 plays on bars the clip marks as fills, or the last bar of every N.
 
+**Variations:** a pattern holds up to eight variations, A–H, each a full grid of its own lanes
+(`Pattern::lanes` is A, `Pattern::variations` B–H). The clip plays one (`Pattern::play`), and its
+switch lane (`Pattern::switches`, one cell per bar of the pattern) may name another for any bar.
+Variation A draws its dice as a pattern without variations does, so adding variations changes
+nothing that played before. Recording into a pattern clip lands each note on the variation its bar
+plays.
+
 **Editing:** the step grid edits the pattern; the clip's notes follow. Editing the expanded notes in
 the piano roll detaches the clip (it becomes a plain MIDI clip; undo puts the pattern back), and the
 piano roll says so first. **Convert to MIDI** detaches deliberately. Splits, trims, copies and loops
@@ -148,6 +155,9 @@ Everything is a command, so the UI, MCP and the control channel share it:
 - `pattern.new` `{track, start, bars?, steps?}`: a pattern clip, empty or from a starter pattern
 - `pattern.step` `{clip, lane, step, on?, velocity?, accent?, probability?, offset?, roll?, flam?, condition?}`
 - `pattern.lane` `{clip, lane, note?, length?, direction?, rate?, mute?}` / `pattern.settings` `{clip, steps?, shuffle?, accent?}`
+- `pattern.variation_add` `{clip, from?}` / `pattern.variation_remove` `{clip, variation}` /
+  `pattern.play` `{clip, variation}` / `pattern.switch` `{clip, bar, variation|null}`; `pattern.step`,
+  `pattern.paint`, `pattern.lane`, `pattern.lane_add` and `pattern.lane_remove` take `variation?: A-H`
 - `pattern.reroll` `{clip}`, `pattern.generate` `{clip, style?, density?}` (phase 2), `pattern.to_midi` `{clip}`
 
 Instrument parameters go through the existing `mix.instrument_param`.

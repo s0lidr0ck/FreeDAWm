@@ -7,7 +7,9 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_midi::pattern::{Condition, Direction, Lane, MAX_LANES, MAX_ROLL, MAX_STEPS, Pattern, Rate, STEPS_PER_BAR, Step};
+use soundcraft_midi::pattern::{
+    Condition, Direction, Lane, MAX_LANES, MAX_ROLL, MAX_STEPS, MAX_SWITCH_BARS, MAX_VARIATIONS, Pattern, Rate, STEPS_PER_BAR, Step, variation_name,
+};
 use soundcraft_model::{Clip, PatternClip, TrackKind};
 
 /// The lanes a new pattern starts with: a General MIDI drum kit's core, which Juke's default kit,
@@ -33,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Step",
             [],
             None,
-            "{clip, lane, step, on?, toggle?, velocity?: 1-127, accent?, probability?: 0-100, offset?: -50-50, roll?: 1-4, flam?, condition?: always|first|not_first|fill|not_fill|\"n:m\"} -> {step}",
+            "{clip, variation?: A-H (default A), lane, step, on?, toggle?, velocity?: 1-127, accent?, probability?: 0-100, offset?: -50-50, roll?: 1-4, flam?, condition?: always|first|not_first|fill|not_fill|\"n:m\"} -> {step}",
             always,
             step
         ),
@@ -42,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paint Steps",
             [],
             None,
-            "{clip, lane, from, to, on, velocity?: 1-127 (steps turned on), } -> {changed}: turns a run of steps on or off",
+            "{clip, variation?: A-H, lane, from, to, on, velocity?: 1-127 (steps turned on)} -> {changed}: turns a run of steps on or off",
             always,
             paint
         ),
@@ -51,12 +53,48 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Lane",
             [],
             None,
-            "{clip, lane, note?: 0-127, length?: 1-64, direction?: forward|reverse|ping_pong|random, rate?: half|normal|double, mute?} -> {lane}",
+            "{clip, variation?: A-H, lane, note?: 0-127, length?: 1-64, direction?: forward|reverse|ping_pong|random, rate?: half|normal|double, mute?} -> {lane}",
             always,
             lane
         ),
-        cmd!("pattern.lane_add", "Add Lane", [], None, "{clip, note, length?} -> {lane}: a lane at the bottom", always, lane_add),
-        cmd!("pattern.lane_remove", "Remove Lane", [], None, "{clip, lane}", always, lane_remove),
+        cmd!("pattern.lane_add", "Add Lane", [], None, "{clip, variation?: A-H, note, length?} -> {lane}: a lane at the bottom", always, lane_add),
+        cmd!("pattern.lane_remove", "Remove Lane", [], None, "{clip, variation?: A-H, lane}", always, lane_remove),
+        cmd!(
+            "pattern.variation_add",
+            "Add Pattern Variation",
+            [],
+            None,
+            "{clip, from?: A-H (default: the last)} -> {variation}: a new variation (up to H), a copy of `from`",
+            always,
+            variation_add
+        ),
+        cmd!(
+            "pattern.variation_remove",
+            "Remove Pattern Variation",
+            [],
+            None,
+            "{clip, variation: A-H} -> {variations}: the later ones move up a letter; the last one left stays",
+            always,
+            variation_remove
+        ),
+        cmd!(
+            "pattern.play",
+            "Play Pattern Variation",
+            [],
+            None,
+            "{clip, variation: A-H} -> {variation}: the variation the clip plays where its switch lane names none",
+            always,
+            play
+        ),
+        cmd!(
+            "pattern.switch",
+            "Switch Variation at Bar",
+            [],
+            None,
+            "{clip, bar: from 0 (the pattern's first bar), variation: A-H or null (the clip's own)} -> {switches}: the switch lane",
+            always,
+            switch
+        ),
         cmd!(
             "pattern.settings",
             "Pattern Settings",
@@ -109,10 +147,38 @@ fn index(p: &Value, key: &str, cmd: &str) -> Result<usize> {
     p.get(key).and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, format!("`{key}` (a number from 0) required")))
 }
 
+/// A variation as a letter (`"A"`–`"H"`, either case) or a number from 0; `None` when `key` is absent.
+fn variation_param(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
+    let err = || bad(cmd, format!("`{key}` must be a variation letter A-H (or 0-7)"));
+    let v = match p.get(key) {
+        None => return Ok(None),
+        Some(Value::String(t)) => match t.trim().as_bytes() {
+            [c] if c.to_ascii_uppercase().is_ascii_uppercase() => usize::from(c.to_ascii_uppercase() - b'A'),
+            _ => return Err(err()),
+        },
+        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(err)?,
+    };
+    if v >= MAX_VARIATIONS { Err(err()) } else { Ok(Some(v)) }
+}
+
+/// The lanes of the variation `p` names (A when it names none).
+fn lanes_mut<'a>(pat: &'a mut Pattern, p: &Value, cmd: &str) -> Result<&'a mut Vec<Lane>> {
+    let v = variation_param(p, "variation", cmd)?.unwrap_or(0);
+    let n = pat.variation_count();
+    pat.lanes_of_mut(v)
+        .ok_or_else(|| bad(cmd, format!("variation {} does not exist (the pattern has A-{})", variation_name(v), variation_name(n - 1))))
+}
+
+fn lanes_of<'a>(pat: &'a Pattern, p: &Value, cmd: &str) -> Result<&'a Vec<Lane>> {
+    let v = variation_param(p, "variation", cmd)?.unwrap_or(0);
+    pat.lanes_of(v).ok_or_else(|| bad(cmd, format!("variation {} does not exist", variation_name(v))))
+}
+
 fn lane_mut<'a>(pat: &'a mut Pattern, p: &Value, cmd: &str) -> Result<&'a mut Lane> {
     let i = index(p, "lane", cmd)?;
-    let n = pat.lanes.len();
-    pat.lanes.get_mut(i).ok_or_else(|| bad(cmd, format!("lane {i} is out of range (the pattern has {n})")))
+    let lanes = lanes_mut(pat, p, cmd)?;
+    let n = lanes.len();
+    lanes.get_mut(i).ok_or_else(|| bad(cmd, format!("lane {i} is out of range (the pattern has {n})")))
 }
 
 fn ranged(p: &Value, key: &str, lo: i64, hi: i64, cmd: &str) -> Result<Option<i64>> {
@@ -272,7 +338,7 @@ fn paint(e: &mut Engine, p: &Value) -> Result<Value> {
     // Count first: a paint that changes nothing leaves the session (and the undo history) alone.
     let pc = pattern_clip(e, clip, id)?;
     let lane_i = index(p, "lane", id)?;
-    let lane = pc.pattern.lanes.get(lane_i).ok_or_else(|| bad(id, format!("lane {lane_i} is out of range")))?;
+    let lane = lanes_of(&pc.pattern, p, id)?.get(lane_i).ok_or_else(|| bad(id, format!("lane {lane_i} is out of range")))?;
     let (lo, hi) = (from.min(to), from.max(to).min(lane.steps.len().saturating_sub(1)));
     if lo >= lane.steps.len() {
         return Err(bad(id, format!("step {lo} is out of range (the lane has {})", lane.steps.len())));
@@ -329,25 +395,116 @@ fn lane_add(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "pattern.lane_add";
     let clip = clip_id(p, id)?;
     let note = ranged(p, "note", 0, 127, id)?.ok_or_else(|| bad(id, "`note` required"))?;
+    let length = ranged(p, "length", 1, MAX_STEPS as i64, id)?;
     let pat = pattern_mut(e, clip, id)?;
-    if pat.lanes.len() >= MAX_LANES {
+    let length = length.map_or(usize::from(pat.steps_per_bar), |n| n as usize);
+    let lanes = lanes_mut(pat, p, id)?;
+    if lanes.len() >= MAX_LANES {
         return Err(bad(id, format!("a pattern holds at most {MAX_LANES} lanes")));
     }
-    let length = ranged(p, "length", 1, MAX_STEPS as i64, id)?.map_or(usize::from(pat.steps_per_bar), |n| n as usize);
-    pat.lanes.push(Lane::new(note as u8, length));
-    Ok(json!({"lane": pat.lanes.len() - 1}))
+    lanes.push(Lane::new(note as u8, length));
+    Ok(json!({"lane": lanes.len() - 1}))
 }
 
 fn lane_remove(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "pattern.lane_remove";
     let clip = clip_id(p, id)?;
     let i = index(p, "lane", id)?;
-    let pat = pattern_mut(e, clip, id)?;
-    if i >= pat.lanes.len() {
-        return Err(bad(id, format!("lane {i} is out of range (the pattern has {})", pat.lanes.len())));
+    let lanes = lanes_mut(pattern_mut(e, clip, id)?, p, id)?;
+    if i >= lanes.len() {
+        return Err(bad(id, format!("lane {i} is out of range (the pattern has {})", lanes.len())));
     }
-    pat.lanes.remove(i);
-    Ok(json!({"lanes": pat.lanes.len()}))
+    lanes.remove(i);
+    Ok(json!({"lanes": lanes.len()}))
+}
+
+fn variation_add(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.variation_add";
+    let clip = clip_id(p, id)?;
+    let from = variation_param(p, "from", id)?;
+    let pat = pattern_clip(e, clip, id)?.pattern.clone();
+    if pat.variation_count() >= MAX_VARIATIONS {
+        return Err(bad(id, format!("a pattern holds at most {MAX_VARIATIONS} variations (A-H)")));
+    }
+    let from = from.unwrap_or(pat.variation_count() - 1);
+    let lanes = pat.lanes_of(from).cloned().ok_or_else(|| bad(id, format!("variation {} does not exist", variation_name(from))))?;
+    let pat = pattern_mut(e, clip, id)?;
+    pat.variations.push(lanes);
+    let v = pat.variation_count() - 1;
+    Ok(json!({"variation": variation_name(v).to_string()}))
+}
+
+fn variation_remove(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.variation_remove";
+    let clip = clip_id(p, id)?;
+    let v = variation_param(p, "variation", id)?.ok_or_else(|| bad(id, "`variation` required"))?;
+    let pat = &pattern_clip(e, clip, id)?.pattern;
+    if v >= pat.variation_count() {
+        return Err(bad(id, format!("variation {} does not exist", variation_name(v))));
+    }
+    if pat.variation_count() == 1 {
+        return Err(bad(id, "a pattern keeps at least one variation"));
+    }
+    let pat = pattern_mut(e, clip, id)?;
+    if v == 0 {
+        pat.lanes = pat.variations.remove(0);
+    } else {
+        pat.variations.remove(v - 1);
+    }
+    // Later letters move up one; what played the removed one plays the clip's own.
+    let shift = |x: u8| -> Option<u8> {
+        match usize::from(x).cmp(&v) {
+            std::cmp::Ordering::Less => Some(x),
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some(x - 1),
+        }
+    };
+    pat.play = shift(pat.play).unwrap_or(0);
+    for s in &mut pat.switches {
+        *s = s.and_then(shift);
+    }
+    pat.sanitize();
+    Ok(json!({"variations": pat.variation_count()}))
+}
+
+fn play(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.play";
+    let clip = clip_id(p, id)?;
+    let v = variation_param(p, "variation", id)?.ok_or_else(|| bad(id, "`variation` required"))?;
+    if v >= pattern_clip(e, clip, id)?.pattern.variation_count() {
+        return Err(bad(id, format!("variation {} does not exist", variation_name(v))));
+    }
+    let pat = pattern_mut(e, clip, id)?;
+    pat.play = v as u8;
+    Ok(json!({"variation": variation_name(v).to_string()}))
+}
+
+fn switch(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.switch";
+    let clip = clip_id(p, id)?;
+    let bar = ranged(p, "bar", 0, MAX_SWITCH_BARS as i64 - 1, id)?.ok_or_else(|| bad(id, "`bar` (from 0) required"))? as usize;
+    let v = match p.get("variation") {
+        Some(Value::Null) | None => None,
+        Some(_) => variation_param(p, "variation", id)?,
+    };
+    let pat = &pattern_clip(e, clip, id)?.pattern;
+    if let Some(v) = v
+        && v >= pat.variation_count()
+    {
+        return Err(bad(id, format!("variation {} does not exist", variation_name(v))));
+    }
+    if pat.switches.get(bar).copied().flatten() == v.map(|v| v as u8) {
+        return Ok(json!({"switches": pat.switches}));
+    }
+    let pat = pattern_mut(e, clip, id)?;
+    if pat.switches.len() <= bar {
+        pat.switches.resize(bar + 1, None);
+    }
+    if let Some(s) = pat.switches.get_mut(bar) {
+        *s = v.map(|v| v as u8);
+    }
+    pat.sanitize();
+    Ok(json!({"switches": pat.switches}))
 }
 
 fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -428,7 +585,8 @@ pub(crate) fn groove(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     let pat = pattern_mut(e, clip, id)?;
     let fresh = crate::juke_styles::pattern(g, pat.seed);
-    *pat = Pattern { accent: pat.accent, humanize: pat.humanize, fill_every: pat.fill_every, ..fresh };
+    let (variations, play, switches) = (std::mem::take(&mut pat.variations), pat.play, std::mem::take(&mut pat.switches));
+    *pat = Pattern { accent: pat.accent, humanize: pat.humanize, fill_every: pat.fill_every, variations, play, switches, ..fresh };
     Ok(json!({"clip": clip.0, "style": style.name, "groove": g.name}))
 }
 
@@ -664,6 +822,64 @@ mod tests {
         assert!(e.session().find_clip(ClipId(c)).unwrap().1.pattern.is_none());
         assert_eq!(notes(&e, c), kept);
         assert!(e.execute("pattern.reroll", &json!({"clip": c})).is_err());
+    }
+
+    #[test]
+    fn variations_are_grids_of_their_own_and_the_switch_lane_picks_per_bar() {
+        let (mut e, t) = engine();
+        let c = new_clip(&mut e, t, json!({"bars": 4}));
+        e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 0, "on": true})).unwrap();
+        let v = e.execute("pattern.variation_add", &json!({"clip": c})).unwrap();
+        assert_eq!(v["variation"], "B");
+        // B starts as a copy of A; change it: snare instead of kick.
+        e.execute("pattern.step", &json!({"clip": c, "variation": "B", "lane": 0, "step": 0, "on": false})).unwrap();
+        e.execute("pattern.step", &json!({"clip": c, "variation": "b", "lane": 1, "step": 0, "on": true})).unwrap();
+        let per_bar = |e: &Engine| -> Vec<u8> { notes(e, c).iter().map(|n| n.1).collect() };
+        assert_eq!(per_bar(&e), vec![36, 36, 36, 36], "the clip plays A");
+        let before = e.history_sessions().len();
+        e.execute("pattern.switch", &json!({"clip": c, "bar": 3, "variation": "B"})).unwrap();
+        assert_eq!(e.history_sessions().len(), before + 1, "one undo step");
+        assert_eq!(per_bar(&e), vec![36, 36, 36, 38], "bar 4 switches to B");
+        e.execute("pattern.play", &json!({"clip": c, "variation": 1})).unwrap();
+        e.execute("pattern.switch", &json!({"clip": c, "bar": 3, "variation": null})).unwrap();
+        assert_eq!(per_bar(&e), vec![38, 38, 38, 38]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(per_bar(&e), vec![38, 38, 38, 38], "the switch to B is back; B plays everywhere");
+        assert!(e.execute("pattern.step", &json!({"clip": c, "variation": "C", "lane": 0, "step": 0, "on": true})).is_err());
+        assert!(e.execute("pattern.play", &json!({"clip": c, "variation": "Z"})).is_err());
+        assert!(e.execute("pattern.switch", &json!({"clip": c, "bar": 0, "variation": "D"})).is_err());
+        // Up to H, then refused.
+        for _ in 0..6 {
+            e.execute("pattern.variation_add", &json!({"clip": c, "from": "A"})).unwrap();
+        }
+        assert!(e.execute("pattern.variation_add", &json!({"clip": c})).is_err());
+        // Removing B: the clip played B, so it plays A again; C becomes B.
+        e.execute("pattern.variation_remove", &json!({"clip": c, "variation": "B"})).unwrap();
+        let pc = pattern_clip(&e, ClipId(c), "t").unwrap();
+        assert_eq!((pc.pattern.variation_count(), pc.pattern.play), (7, 0));
+        assert_eq!(per_bar(&e), vec![36, 36, 36, 36]);
+        // Recording into a variation's bar lands on that variation's lanes.
+        e.execute("pattern.switch", &json!({"clip": c, "bar": 1, "variation": "B"})).unwrap();
+        let sr = e.session().sample_rate;
+        let bar = e.session().tempo.tick_to_samples(BAR, sr);
+        let mut take = soundcraft_midi::Sequence::default();
+        take.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 42,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel: 9,
+            start: 0,
+            length: PPQ as i64 / 4,
+        });
+        let range = soundcraft_time::Range::new(bar, 2 * bar);
+        let mut s = e.session().clone();
+        assert!(crate::pattern::record_into(&mut s, soundcraft_model::TrackId(t), range, &take).is_some());
+        let (_, clip) = s.find_clip(ClipId(c)).unwrap();
+        let pat = &clip.pattern.as_ref().unwrap().pattern;
+        assert!(pat.variations[0].iter().any(|l| l.note == 42 && l.steps[0].on), "the hat went into B");
+        assert!(pat.lanes.iter().all(|l| l.note != 42 || !l.steps[0].on), "A is untouched");
     }
 
     #[test]

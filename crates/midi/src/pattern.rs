@@ -21,6 +21,10 @@ pub const STEPS_PER_BAR: [u8; 5] = [8, 12, 16, 24, 32];
 pub const MAX_ROLL: u8 = 4;
 /// The MIDI channel pattern notes are written on (channel 10, drums).
 pub const CHANNEL: u8 = 9;
+/// Most variations (A–H) a pattern holds, `lanes` (A) among them.
+pub const MAX_VARIATIONS: usize = 8;
+/// Most bars the switch lane names a variation for.
+pub const MAX_SWITCH_BARS: usize = 1024;
 
 /// The order a lane plays its steps in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,13 +167,44 @@ pub struct Pattern {
     pub seed: u64,
     /// Fill bars come every this many bars (the last of each group); 0: none.
     pub fill_every: u8,
+    /// Variation A's lanes (a pattern without variations has only these).
     pub lanes: Vec<Lane>,
+    /// Variations B–H, each a full grid of its own lanes (at most [`MAX_VARIATIONS`] − 1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<Vec<Lane>>,
+    /// The variation the clip plays (0 = A), where the switch lane names none.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub play: u8,
+    /// The switch lane: per bar of the pattern (from its first bar), the variation that bar plays
+    /// instead of `play`; `None` (or a bar past the end) plays `play`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<Option<u8>>,
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 impl Default for Pattern {
     fn default() -> Pattern {
-        Pattern { steps_per_bar: 16, shuffle: 0, accent: 20, humanize: 0, seed: 1, fill_every: 0, lanes: Vec::new() }
+        Pattern {
+            steps_per_bar: 16,
+            shuffle: 0,
+            accent: 20,
+            humanize: 0,
+            seed: 1,
+            fill_every: 0,
+            lanes: Vec::new(),
+            variations: Vec::new(),
+            play: 0,
+            switches: Vec::new(),
+        }
     }
+}
+
+/// A variation's letter (0 = A … 7 = H).
+pub fn variation_name(v: usize) -> char {
+    char::from(b'A' + (v.min(25) as u8))
 }
 
 impl Pattern {
@@ -181,15 +216,52 @@ impl Pattern {
         self.shuffle = self.shuffle.min(100);
         self.accent = self.accent.min(127);
         self.humanize = self.humanize.min(100);
-        self.lanes.truncate(MAX_LANES);
-        for lane in &mut self.lanes {
-            lane.note = lane.note.min(127);
-            lane.steps.truncate(MAX_STEPS);
-            if lane.steps.is_empty() {
-                lane.steps.push(Step::default());
+        self.variations.truncate(MAX_VARIATIONS - 1);
+        for lanes in std::iter::once(&mut self.lanes).chain(self.variations.iter_mut()) {
+            lanes.truncate(MAX_LANES);
+            for lane in lanes {
+                lane.note = lane.note.min(127);
+                lane.steps.truncate(MAX_STEPS);
+                if lane.steps.is_empty() {
+                    lane.steps.push(Step::default());
+                }
+                lane.steps.iter_mut().for_each(Step::sanitize);
             }
-            lane.steps.iter_mut().for_each(Step::sanitize);
         }
+        let count = self.variation_count();
+        if usize::from(self.play) >= count {
+            self.play = 0;
+        }
+        self.switches.truncate(MAX_SWITCH_BARS);
+        for s in &mut self.switches {
+            if s.is_some_and(|v| usize::from(v) >= count) {
+                *s = None;
+            }
+        }
+        while self.switches.last() == Some(&None) {
+            self.switches.pop();
+        }
+    }
+
+    /// How many variations the pattern has (A counts: at least 1).
+    pub fn variation_count(&self) -> usize {
+        1 + self.variations.len()
+    }
+
+    /// Variation `v`'s lanes (0 = A).
+    pub fn lanes_of(&self, v: usize) -> Option<&Vec<Lane>> {
+        if v == 0 { Some(&self.lanes) } else { self.variations.get(v - 1) }
+    }
+
+    pub fn lanes_of_mut(&mut self, v: usize) -> Option<&mut Vec<Lane>> {
+        if v == 0 { Some(&mut self.lanes) } else { self.variations.get_mut(v - 1) }
+    }
+
+    /// The variation pattern bar `bar` plays (bars before the first play `play`).
+    pub fn variation_at_bar(&self, bar: i64) -> usize {
+        let named = usize::try_from(bar).ok().and_then(|b| self.switches.get(b).copied().flatten());
+        let v = usize::from(named.unwrap_or(self.play));
+        if v < self.variation_count() { v } else { 0 }
     }
 
     /// A new seed, so every chance is drawn again.
@@ -269,10 +341,15 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
     let grid = at.ticks_per_bar as f64 / f64::from(p.steps_per_bar);
     let flam_ticks = f64::from(PPQ) / 16.0;
     let humanize = f64::from(p.humanize) / 100.0;
-    'lanes: for (li, lane) in p.lanes.iter().enumerate() {
+    // Only the variations some bar plays are expanded; each keeps the hits of the bars it plays.
+    let several = p.variation_count() > 1;
+    let lanes = (0..p.variation_count()).flat_map(|v| p.lanes_of(v).into_iter().flatten().enumerate().map(move |(li, l)| (v, li, l)));
+    'lanes: for (v, li, lane) in lanes {
         if lane.mute {
             continue;
         }
+        // Variation A draws its dice as a pattern without variations does.
+        let li = li + v * MAX_LANES;
         let step_len = grid * lane.rate.factor();
         let len = lane.steps.len();
         // Positions whose (nudged) hits can land in the clip: one step of slack each side.
@@ -288,6 +365,9 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
             }
             let start = k as f64 * step_len;
             let bar = (start / at.ticks_per_bar as f64).floor() as i64;
+            if several && p.variation_at_bar(bar) != v {
+                continue;
+            }
             let fill = p.fill_every > 0 && (bar + 1).rem_euclid(i64::from(p.fill_every)) == 0;
             let plays = match step.condition {
                 Condition::Always => true,
@@ -447,6 +527,54 @@ mod tests {
         // About half the steps play.
         let n = a.notes.len() as f64 / (16.0 * 16.0);
         assert!((0.35..0.65).contains(&n), "{n}");
+    }
+
+    #[test]
+    fn variations_play_where_the_clip_and_its_switch_lane_say() {
+        let mut b = Lane::new(38, 16);
+        b.steps[0] = Step::hit(90);
+        let mut p = four_on_the_floor();
+        p.variations.push(vec![b]);
+        let bars = |p: &Pattern| -> Vec<(i64, u8)> {
+            let seq = expand(p, &at(3));
+            let mut v: Vec<(i64, u8)> = seq.notes.iter().map(|n| (n.start / BAR, n.pitch)).collect();
+            v.dedup();
+            v
+        };
+        assert_eq!(bars(&p), vec![(0, 36), (1, 36), (2, 36)], "A plays where nothing says otherwise");
+        p.switches = vec![None, Some(1)];
+        assert_eq!(bars(&p), vec![(0, 36), (1, 38), (2, 36)], "the switch lane plays B in bar 2 only");
+        p.play = 1;
+        assert_eq!(bars(&p), vec![(0, 38), (1, 38), (2, 38)]);
+        p.switches = vec![Some(0)];
+        assert_eq!(bars(&p), vec![(0, 36), (1, 38), (2, 38)]);
+        // Variation A's dice do not move when variations are added.
+        let mut chance = Pattern::default();
+        let mut hats = Lane::new(42, 16);
+        hats.steps.iter_mut().for_each(|s| *s = Step { probability: 50, ..Step::hit(90) });
+        chance.lanes.push(hats.clone());
+        let plain = expand(&chance, &at(4));
+        chance.variations.push(vec![hats]);
+        assert_eq!(expand(&chance, &at(4)), plain);
+        chance.play = 1;
+        assert_ne!(expand(&chance, &at(4)), plain, "B draws its own dice");
+    }
+
+    #[test]
+    fn hostile_variations_are_sanitized() {
+        let mut p = four_on_the_floor();
+        p.variations = vec![vec![Lane { steps: Vec::new(), ..Lane::default() }]; 20];
+        p.play = 30;
+        p.switches = vec![Some(12); 5000];
+        p.sanitize();
+        assert_eq!(p.variation_count(), MAX_VARIATIONS);
+        assert_eq!(p.play, 0);
+        assert!(p.switches.is_empty(), "switches to missing variations are dropped");
+        assert!(p.variations.iter().flatten().all(|l| !l.steps.is_empty()));
+        let json = r#"{"lanes":[],"play":1}"#;
+        let q: Pattern = serde_json::from_str(json).unwrap_or_default();
+        assert_eq!(q.variation_at_bar(0), 0, "a missing variation plays A");
+        assert_eq!(variation_name(7), 'H');
     }
 
     #[test]

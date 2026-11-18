@@ -13,6 +13,11 @@
 //!   nudge sliders, Roll 1–4, Accent and Flam, and when it plays. Right-click a lane's header for
 //!   its rate, direction, note and removal.
 //!
+//! * The variation strip under the pattern bar: tabs A–H pick the variation the grid edits (+ adds
+//!   one, a copy of the one shown); right-click a tab to play it in the clip or remove it. Beside
+//!   it, the switch lane: a cell per bar of the clip showing the variation that bar plays; click a
+//!   cell to pick another (or the clip's own).
+//!
 //! Every edit is a `pattern.*` command, so it undoes and scripts like any other.
 
 use crate::SoundApp;
@@ -21,7 +26,7 @@ use crate::widgets::{self, KnobStyle};
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use serde_json::{Value, json};
 use soundcraft_dsp::{ParamInfo, Taper, Unit};
-use soundcraft_midi::pattern::{Condition, Direction, Lane, Pattern, Rate, Step};
+use soundcraft_midi::pattern::{Condition, Direction, Lane, MAX_VARIATIONS, Pattern, Rate, Step, variation_name};
 use soundcraft_model::{Clip, ClipId, DrumFamily, Insert, TrackId};
 
 /// The New steps velocity tiers: Full, 75, 50 and 25 %.
@@ -30,6 +35,7 @@ pub const TIERS: [(&str, u8); 4] = [("Full", 127), ("75", 95), ("50", 64), ("25"
 const HEADER_W: f32 = 196.0;
 const BAR_H: f32 = 54.0;
 const NUMBERS_H: f32 = 20.0;
+const VARIATIONS_H: f32 = 28.0;
 const HINT_H: f32 = 18.0;
 const CREAM: Color32 = Color32::from_rgb(0xF6, 0xEE, 0xDF);
 const AMBER: Color32 = Color32::from_rgb(0xF0, 0xB2, 0x4A);
@@ -137,6 +143,8 @@ struct State {
     details: Option<(usize, usize)>,
     /// Where that step was drawn: the popover hangs from it.
     anchor: Option<Rect>,
+    /// The variation the grid shows and edits (0 = A).
+    variation: usize,
 }
 
 fn state_id(cid: ClipId) -> egui::Id {
@@ -197,32 +205,177 @@ pub fn lane_extra(choke: Option<u8>, lane: &Lane) -> String {
 struct Out {
     /// Commands, each optionally merged into one undo step by its key.
     cmds: Vec<(&'static str, Value, Option<String>)>,
+    /// The variation the grid edits: lane and step edits name it.
+    variation: usize,
 }
 
+/// The commands that act on one variation's lanes.
+const PER_VARIATION: [&str; 5] = ["pattern.step", "pattern.paint", "pattern.lane", "pattern.lane_add", "pattern.lane_remove"];
+
 impl Out {
+    fn with_variation(&self, id: &str, mut p: Value) -> Value {
+        if self.variation > 0 && PER_VARIATION.contains(&id) {
+            p["variation"] = json!(variation_name(self.variation).to_string());
+        }
+        p
+    }
     fn run(&mut self, id: &'static str, p: Value) {
+        let p = self.with_variation(id, p);
         self.cmds.push((id, p, None));
     }
     fn merged(&mut self, id: &'static str, p: Value, key: String) {
+        let p = self.with_variation(id, p);
+        let key = if self.variation > 0 { format!("{key}:{}", self.variation) } else { key };
         self.cmds.push((id, p, Some(key)));
+    }
+}
+
+/// The pattern as the grid shows it: variation `v`'s lanes in place of A's.
+pub fn variation_view(pattern: &Pattern, v: usize) -> Pattern {
+    let mut view = pattern.clone();
+    if let Some(lanes) = pattern.lanes_of(v) {
+        view.lanes = lanes.clone();
+    }
+    view
+}
+
+/// The clip's bars, as pattern bars (the switch lane's numbering): first and count.
+fn clip_bars(app: &SoundApp, clip: &Clip, phase: i64) -> (i64, i64) {
+    let s = app.engine.session();
+    let sr = s.sample_rate;
+    let t0 = s.tempo.samples_to_ticks(clip.start, sr);
+    let len = (s.tempo.samples_to_ticks(clip.end(), sr) - t0).max(1);
+    let per_bar = s.tempo.meter_at_tick(t0).ticks_per_bar().max(1);
+    let first = phase.div_euclid(per_bar);
+    let last = (phase + len - 1).div_euclid(per_bar);
+    (first, (last - first + 1).clamp(1, 512))
+}
+
+/// The variation tabs and the switch lane.
+fn variation_strip(ui: &mut Ui, r: Rect, cid: ClipId, pattern: &Pattern, bars: (i64, i64), st: &mut State, out: &mut Out) {
+    let p = ui.painter().clone();
+    let count = pattern.variation_count();
+    p.text(pos2(r.min.x, r.center().y), Align2::LEFT_CENTER, "Variation", regular(11.0), LABEL);
+    let mut x = r.min.x + 62.0;
+    for v in 0..count {
+        let cell = Rect::from_min_size(pos2(x, r.min.y + 2.0), vec2(30.0, r.height() - 4.0));
+        x += 32.0;
+        let plays = usize::from(pattern.play) == v;
+        let label = variation_name(v).to_string();
+        let resp = ui.interact(cell, egui::Id::new(("variation-tab", cid.0, v)), Sense::click());
+        let tip = if plays { format!("Edit variation {label} (the clip plays it)") } else { format!("Edit variation {label}") };
+        let resp = resp.on_hover_text(format!("{tip} · right-click: play it, remove it"));
+        let on = st.variation == v;
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, format!("Variation {label}")));
+        let fill = if on {
+            AMBER
+        } else if resp.hovered() {
+            Color32::from_white_alpha(14)
+        } else {
+            WELL
+        };
+        p.rect_filled(cell, 6.0, fill);
+        p.text(cell.center(), Align2::CENTER_CENTER, &label, bold(12.0), if on { DARK } else { CREAM });
+        if plays {
+            p.circle_filled(pos2(cell.max.x - 5.0, cell.min.y + 5.0), 2.5, if on { DARK } else { AMBER });
+        }
+        if resp.clicked() {
+            st.variation = v;
+        }
+        egui::Popup::context_menu(&resp).show(|ui| {
+            if ui.add_enabled(!plays, egui::Button::new(format!("Play {label} in the Clip"))).clicked() {
+                out.run("pattern.play", json!({"clip": cid.0, "variation": label}));
+                ui.close();
+            }
+            if ui.add_enabled(count < MAX_VARIATIONS, egui::Button::new(format!("Duplicate {label}"))).clicked() {
+                out.run("pattern.variation_add", json!({"clip": cid.0, "from": label}));
+                st.variation = count;
+                ui.close();
+            }
+            ui.separator();
+            if ui.add_enabled(count > 1, egui::Button::new(format!("Remove {label}"))).clicked() {
+                out.run("pattern.variation_remove", json!({"clip": cid.0, "variation": label}));
+                st.variation = st.variation.min(count.saturating_sub(2));
+                ui.close();
+            }
+        });
+    }
+    if count < MAX_VARIATIONS {
+        let add = Rect::from_min_size(pos2(x, r.min.y + 2.0), vec2(30.0, r.height() - 4.0));
+        x += 32.0;
+        let resp = ui.put(add, egui::Button::new(egui::RichText::new("+").font(bold(13.0)).color(CREAM)).fill(BUTTON).corner_radius(6.0));
+        if resp.on_hover_text("Add a variation: a copy of the one shown").clicked() {
+            out.run("pattern.variation_add", json!({"clip": cid.0, "from": variation_name(st.variation).to_string()}));
+            st.variation = count;
+        }
+    }
+    // The switch lane: one cell per bar of the clip.
+    x += 18.0;
+    p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, "Bars", regular(11.0), LABEL);
+    x += 36.0;
+    let (first, n) = bars;
+    let w = ((r.max.x - x) / n as f32 - 2.0).clamp(10.0, 30.0);
+    for k in 0..n {
+        let bar = first + k;
+        let cell = Rect::from_min_size(pos2(x + k as f32 * (w + 2.0), r.min.y + 2.0), vec2(w, r.height() - 4.0));
+        if cell.max.x > r.max.x {
+            break;
+        }
+        let named = usize::try_from(bar).ok().and_then(|b| pattern.switches.get(b).copied().flatten());
+        let plays = pattern.variation_at_bar(bar);
+        let resp = ui.interact(cell, egui::Id::new(("variation-bar", cid.0, bar)), Sense::click());
+        let resp = resp.on_hover_text(format!(
+            "Bar {} plays {}{} · click to switch",
+            k + 1,
+            variation_name(plays),
+            if named.is_some() { "" } else { " (the clip's)" }
+        ));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Bar {} variation", k + 1)));
+        p.rect_filled(cell, 4.0, if named.is_some() { BUTTON } else { WELL });
+        if plays == st.variation {
+            p.rect_stroke(cell, 4.0, Stroke::new(1.0, AMBER), StrokeKind::Inside);
+        }
+        let c = if named.is_some() { CREAM } else { DIM };
+        p.text(cell.center(), Align2::CENTER_CENTER, variation_name(plays).to_string(), bold(11.0), c);
+        if bar < 0 {
+            continue;
+        }
+        egui::Popup::menu(&resp).show(|ui| {
+            if ui.add_enabled(named.is_some(), egui::Button::new(format!("The Clip's ({})", variation_name(usize::from(pattern.play))))).clicked() {
+                out.run("pattern.switch", json!({"clip": cid.0, "bar": bar, "variation": null}));
+                ui.close();
+            }
+            for v in 0..count {
+                let label = variation_name(v).to_string();
+                if ui.add_enabled(named != Some(v as u8), egui::Button::new(&label)).clicked() {
+                    out.run("pattern.switch", json!({"clip": cid.0, "bar": bar, "variation": label}));
+                    ui.close();
+                }
+            }
+        });
     }
 }
 
 /// Draws clip `cid`'s step grid in `r`. `clip` must be a pattern clip.
 pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipId, clip: &Clip) {
     let Some(pc) = clip.pattern.as_ref() else { return };
-    let pattern = &pc.pattern;
     let ctx = ui.ctx().clone();
     let mut st: State = ctx.data(|d| d.get_temp(state_id(cid))).unwrap_or_default();
-    let mut out = Out::default();
+    st.variation = st.variation.min(pc.pattern.variation_count() - 1);
+    let mut out = Out { variation: st.variation, ..Out::default() };
+    // The grid shows the variation it edits.
+    let view = variation_view(&pc.pattern, st.variation);
+    let pattern = &view;
     ui.painter().rect_filled(r, 0.0, GROUND);
     let juke = app.engine.session().track(track).and_then(|t| t.instrument.clone()).filter(|i| i.plugin == soundcraft_engine::cmd::juke::JUKE);
     let bar = Rect::from_min_size(r.min, vec2(r.width(), BAR_H));
     pattern_bar(ui, bar, cid, pattern, &mut st, &mut out);
-    let playhead = playhead_steps(app, clip, pc.phase, pattern);
+    let strip = Rect::from_min_max(pos2(r.min.x + 12.0, bar.max.y + 4.0), pos2(r.max.x - 12.0, bar.max.y + 4.0 + VARIATIONS_H));
+    variation_strip(ui, strip, cid, &pc.pattern, clip_bars(app, clip, pc.phase), &mut st, &mut out);
+    let playhead = playhead_steps(app, clip, pc.phase, pattern, st.variation);
     let columns = pattern.lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16).max(1);
     let beat = usize::from((pattern.steps_per_bar / 4).max(1));
-    let inner = Rect::from_min_max(pos2(r.min.x + 10.0, bar.max.y + 4.0), pos2(r.max.x - 10.0, r.max.y - HINT_H));
+    let inner = Rect::from_min_max(pos2(r.min.x + 10.0, strip.max.y + 4.0), pos2(r.max.x - 10.0, r.max.y - HINT_H));
     // Step numbers, the beat's first brighter, the playing step bold.
     let steps_x = inner.min.x + HEADER_W + 10.0;
     let numbers = Rect::from_min_max(pos2(steps_x, inner.min.y), pos2(inner.max.x - 12.0, inner.min.y + NUMBERS_H));
@@ -289,7 +442,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
 }
 
 /// Per lane, the step the playhead is on while the transport plays inside the clip.
-fn playhead_steps(app: &SoundApp, clip: &Clip, phase: i64, pattern: &Pattern) -> Vec<Option<usize>> {
+fn playhead_steps(app: &SoundApp, clip: &Clip, phase: i64, pattern: &Pattern, variation: usize) -> Vec<Option<usize>> {
     let n = pattern.lanes.len();
     if !app.is_playing() {
         return vec![None; n];
@@ -305,6 +458,10 @@ fn playhead_steps(app: &SoundApp, clip: &Clip, phase: i64, pattern: &Pattern) ->
     let per_bar = s.tempo.meter_at_tick(t0).ticks_per_bar();
     let step_ticks = (per_bar as f64 / f64::from(pattern.steps_per_bar.max(1))).max(1.0);
     let at = (now - t0 + phase) as f64;
+    // Only while the bar playing plays the variation shown.
+    if pattern.variation_at_bar((now - t0 + phase).div_euclid(per_bar.max(1))) != variation {
+        return vec![None; n];
+    }
     pattern
         .lanes
         .iter()
