@@ -81,6 +81,19 @@ pub enum Dialog {
         name: String,
         chain: bool,
     },
+    /// Pantry › Save…: a name for the instrument in the Library's Pantry folder.
+    SavePantry {
+        track: TrackId,
+        name: String,
+    },
+    /// Pantry › Load…: the Library's instruments (newest first), any SFZ file, or a folder of
+    /// captured samples.
+    LoadPantry {
+        track: TrackId,
+        path: String,
+        /// The Pantry folder as it was when the dialog opened.
+        saved: Vec<crate::user_files::UserFile>,
+    },
     /// Load Track Preset… and Load Plug-in Chain… (`chain`): the Library's presets (newest first)
     /// or any preset file.
     LoadTrackPreset {
@@ -174,6 +187,9 @@ pub enum Dialog {
         pre_ms: f64,
         post_ms: f64,
     },
+    /// Track › Capture to Pantry…: what to play on the track's instrument and how long to listen
+    /// (`track.capture_multisample`'s settings, `docs/pantry.md`).
+    CapturePantry(CapturePantry),
     // `id: None` creates (Track › Group…); `id: Some` modifies that group (Groups list › Modify Group…).
     Group {
         id: Option<GroupId>,
@@ -290,6 +306,8 @@ impl Dialogs {
             Dialog::NewSession(_) => "new_session",
             Dialog::SaveTrackPreset { .. } => "save_track_preset",
             Dialog::LoadTrackPreset { .. } => "load_track_preset",
+            Dialog::SavePantry { .. } => "save_pantry",
+            Dialog::LoadPantry { .. } => "load_pantry",
             Dialog::Bounce { .. } => "bounce",
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
@@ -304,6 +322,7 @@ impl Dialogs {
             Dialog::Spot(_) => "spot",
             Dialog::Fades(_) => "fades",
             Dialog::StripSilence { .. } => "strip_silence",
+            Dialog::CapturePantry(_) => "capture_pantry",
             Dialog::QuantizeAudio { .. } => "quantize_audio",
             Dialog::ChangeVelocity(_) => "change_velocity",
             Dialog::Group { id: None, .. } => "group",
@@ -471,6 +490,12 @@ impl Dialogs {
             "edit.fades_create" => Dialog::Fades(Default::default()),
             "event.change_velocity" => Dialog::ChangeVelocity(VelocityDialog::default()),
             "edit.strip_silence" => Dialog::StripSilence { threshold: -48.0, min_ms: 50.0, pre_ms: 5.0, post_ms: 20.0 },
+            "track.capture_multisample" => {
+                // Only a track that plays an instrument has anything to capture.
+                let t = e.target_tracks().first().and_then(|id| e.session().track(*id));
+                let Some(t) = t.filter(|t| t.kind.is_midi() && t.instrument.is_some()) else { return false };
+                Dialog::CapturePantry(CapturePantry::new(t.id, &t.name))
+            }
             "track.group" => {
                 self.open_new_group(e, &e.session().edit.selected_tracks.clone());
                 return true;
@@ -671,6 +696,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::bounce::show(app, ctx);
     crate::render::show(app, ctx);
     crate::split_progress::show(app, ctx);
+    crate::capture_progress::show(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     crate::ml_ui::show(app, ctx);
     crate::tempo_ui::show(app, ctx);
@@ -708,6 +734,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::SaveTrackPreset { chain: false, .. } => "Save Track Preset",
         Dialog::LoadTrackPreset { chain: false, .. } => "Load Track Preset",
         Dialog::SaveTrackPreset { chain: true, .. } => "Save Plug-in Chain",
+        Dialog::SavePantry { .. } => "Save to Library",
+        Dialog::LoadPantry { .. } => "Load into Pantry",
         Dialog::LoadTrackPreset { chain: true, .. } => "Load Plug-in Chain",
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
@@ -724,6 +752,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::Spot(_) => "Spot",
         Dialog::Fades(_) => "Fades",
         Dialog::StripSilence { .. } => "Strip Silence",
+        Dialog::CapturePantry(_) => "Capture to Pantry",
         Dialog::QuantizeAudio { .. } => "Quantize Audio",
         Dialog::ChangeVelocity(_) => "Change Velocity",
         Dialog::Group { id: None, .. } => "Create Group",
@@ -809,6 +838,72 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         let cmd = if *chain { "track.save_chain" } else { "track.save_preset" };
                         action = Some((cmd.into(), json!({"path": f.to_string_lossy(), "track": track.0})));
+                    }
+                }
+                Dialog::SavePantry { track, name } => {
+                    ui.label("Instrument name");
+                    name_field(ui, name);
+                    let file = app.dialogs.dirs.pantry.clone().map(|d| d.join(format!("{}.sfz", crate::user_files::file_name(name))));
+                    let replaces = file.as_ref().is_some_and(|f| f.exists());
+                    if replaces {
+                        ui.label(format!("“{}” is already in the Library. Do you want to replace it?", crate::user_files::file_name(name)));
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Saved as an SFZ file with its samples, in the Library's Pantry folder.")
+                                .color(Tokens::current().text_dim),
+                        );
+                    }
+                    if buttons_enabled(ui, if replaces { "Replace" } else { "Save" }, enter && !replaces, file.is_some() && !name.trim().is_empty())
+                        && let Some(f) = file
+                    {
+                        if let Some(parent) = f.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        action = Some(("mix.multisample_save".into(), json!({"track": track.0, "path": f.to_string_lossy(), "replace": replaces})));
+                    }
+                }
+                Dialog::LoadPantry { track, path, saved } => {
+                    if saved.is_empty() {
+                        ui.label(egui::RichText::new("No instruments in the Library yet: Save… keeps one there.").color(Tokens::current().text_dim));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            for f in saved.iter() {
+                                let on = std::path::Path::new(path.as_str()) == f.path;
+                                if ui.selectable_label(on, f.name.as_str()).clicked() {
+                                    *path = f.path.to_string_lossy().into_owned();
+                                }
+                            }
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("File");
+                        ui.add(
+                            egui::TextEdit::singleline(path).desired_width(360.0).hint_text("an instrument (.sfz, .dspreset, .dslibrary) anywhere"),
+                        );
+                        if let Some(pick) = &app.services.pick_open
+                            && ui.button("Browse…").clicked()
+                            && let Some(p) = pick("mix.multisample_load", &["sfz", "dspreset", "dslibrary"])
+                        {
+                            *path = p;
+                        }
+                    });
+                    // Captured samples need no file of their own: their names say where they go.
+                    if let Some(pick) = &app.services.pick_folder {
+                        ui.horizontal(|ui| {
+                            ui.label("Or captured samples, placed by the note and velocity in their names:");
+                            if ui.button("Import a Folder…").clicked()
+                                && let Some(folder) = pick("mix.multisample_import")
+                            {
+                                action = Some(("mix.multisample_import".into(), json!({"track": track.0, "folder": folder})));
+                            }
+                        });
+                    }
+                    ui.label(
+                        egui::RichText::new("Sample files and folders dropped on Pantry's window import the same way.")
+                            .color(Tokens::current().text_dim),
+                    );
+                    if buttons_enabled(ui, "Load", enter, !path.trim().is_empty()) {
+                        action = Some(("mix.multisample_load".into(), json!({"track": track.0, "path": path})));
                     }
                 }
                 Dialog::LoadTrackPreset { tracks, chain, path, presets } => {
@@ -1127,6 +1222,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             "edit.strip_silence".into(),
                             json!({"threshold_db": threshold, "min_length_ms": min_ms, "pad_before_ms": pre_ms, "pad_after_ms": post_ms}),
                         ));
+                    }
+                }
+                Dialog::CapturePantry(c) => {
+                    capture_fields(ui, c);
+                    if buttons_enabled(ui, "Capture", enter, c.ready()) {
+                        action = Some(("track.capture_multisample".into(), c.params()));
                     }
                 }
                 Dialog::Group { id, name, edit, mix, members, attributes } => {
@@ -1514,6 +1615,154 @@ fn buttons_enabled(ui: &mut egui::Ui, ok: &str, enter: bool, ready: bool) -> boo
     pressed
 }
 
+/// Track › Capture to Pantry…'s settings, as `track.capture_multisample` takes them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapturePantry {
+    pub track: TrackId,
+    pub name: String,
+    pub low: u8,
+    pub high: u8,
+    pub step: u8,
+    pub layers: u8,
+    pub robins: u8,
+    pub hold: f64,
+    pub hold_high: f64,
+    pub tail: f64,
+    pub silence: f64,
+    pub mono: bool,
+    /// Also capture what sounds when a key comes up, and the sustain pedal's own noises.
+    pub release: bool,
+    pub pedal: bool,
+}
+
+impl CapturePantry {
+    /// The command's defaults: a piano's range in minor thirds, twelve velocities.
+    pub fn new(track: TrackId, track_name: &str) -> Self {
+        Self {
+            track,
+            name: format!("{track_name} Pantry"),
+            low: 21,
+            high: 108,
+            step: 3,
+            layers: 12,
+            robins: 1,
+            hold: 8.0,
+            hold_high: 3.0,
+            tail: 4.0,
+            silence: -72.0,
+            mono: false,
+            release: true,
+            pedal: true,
+        }
+    }
+
+    pub fn ready(&self) -> bool {
+        self.low <= self.high && !self.name.trim().is_empty()
+    }
+
+    /// Notes captured, samples made, and the most audio rendered for them (seconds).
+    pub fn size(&self) -> (u32, u32, f64) {
+        let notes = if self.low <= self.high { u32::from(self.high - self.low) / u32::from(self.step.max(1)) + 1 } else { 0 };
+        let strikes = u32::from(self.layers) * u32::from(self.robins);
+        let each = (self.hold + self.hold_high) / 2.0 + self.tail;
+        // Two short strikes a note for its releases (one when there is one layer); 4 s for the pedal.
+        let releases = if self.release { notes * if self.layers > 1 { 2 } else { 1 } } else { 0 };
+        let more = f64::from(releases) * (0.3 + self.tail) + if self.pedal { 4.5 } else { 0.0 };
+        (notes, notes * strikes + releases + if self.pedal { 2 } else { 0 }, f64::from(notes) * (0.5 + f64::from(strikes) * each) + more)
+    }
+
+    pub fn params(&self) -> Value {
+        json!({
+            "track": self.track.0,
+            "name": self.name.trim(),
+            "low": self.low,
+            "high": self.high,
+            "step": self.step,
+            "layers": self.layers,
+            "robins": self.robins,
+            "hold": self.hold,
+            "hold_high": self.hold_high,
+            "tail": self.tail,
+            "silence": self.silence,
+            "mono": self.mono,
+            "release": self.release,
+            "pedal": self.pedal,
+        })
+    }
+}
+
+fn capture_fields(ui: &mut egui::Ui, c: &mut CapturePantry) {
+    let note = |v: f64, _: std::ops::RangeInclusive<usize>| soundcraft_midi::note_name(v.clamp(0.0, 127.0) as u8);
+    egui::Grid::new("capture_pantry").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+        ui.label("Name");
+        ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(200.0));
+        ui.end_row();
+        ui.label("Notes");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut c.low).range(0..=127).custom_formatter(note));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut c.high).range(0..=127).custom_formatter(note));
+            ui.label("every");
+            ui.add(egui::DragValue::new(&mut c.step).range(1..=12));
+            ui.label(if c.step == 1 { "semitone" } else { "semitones" });
+        });
+        ui.end_row();
+        ui.label("Velocity layers");
+        ui.add(egui::DragValue::new(&mut c.layers).range(1..=16));
+        ui.end_row();
+        ui.label("Round-robins");
+        ui.add(egui::DragValue::new(&mut c.robins).range(1..=4));
+        ui.end_row();
+        ui.label("Hold");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut c.hold).range(0.05..=60.0).speed(0.1).suffix(" s"));
+            ui.label("at the lowest note,");
+            ui.add(egui::DragValue::new(&mut c.hold_high).range(0.05..=60.0).speed(0.1).suffix(" s"));
+            ui.label("at the highest");
+        });
+        ui.end_row();
+        ui.label("Tail");
+        ui.add(egui::DragValue::new(&mut c.tail).range(0.0..=30.0).speed(0.1).suffix(" s"));
+        ui.end_row();
+        ui.label("Silence level");
+        ui.add(egui::DragValue::new(&mut c.silence).range(-120.0..=-20.0).speed(0.5).suffix(" dB"));
+        ui.end_row();
+        ui.label("Also capture");
+        ui.horizontal(|ui| {
+            crate::widgets::checkbox(ui, &mut c.release, "Release samples")
+                .on_hover_text("What sounds when a key comes up, played back when you let a note go");
+            crate::widgets::checkbox(ui, &mut c.pedal, "Pedal noises").on_hover_text("What the sustain pedal itself sounds like going down and up");
+        });
+        ui.end_row();
+        ui.label("");
+        crate::widgets::checkbox(ui, &mut c.mono, "Mono");
+        ui.end_row();
+    });
+    let (notes, samples, secs) = c.size();
+    let secs = secs.round() as u64;
+    ui.label(format!("{notes} notes, up to {samples} samples: up to {}:{:02} of audio to render.", secs / 60, secs % 60));
+}
+
+/// The status line after `track.capture_multisample` returned `v`.
+pub fn capture_status(v: &Value) -> String {
+    let n = |k: &str| v[k].as_u64().unwrap_or(0);
+    let plural = |n: u64| if n == 1 { "" } else { "s" };
+    let mut s = format!("Captured {} sample{} of {} note{}", n("samples"), plural(n("samples")), n("notes"), plural(n("notes")));
+    if n("release") > 0 {
+        s.push_str(&format!(", {} release sample{}", n("release"), plural(n("release"))));
+    }
+    if n("pedal") > 0 {
+        s.push_str(&format!(", {} pedal noise{}", n("pedal"), plural(n("pedal"))));
+    }
+    if n("silent") > 0 {
+        s.push_str(&format!("; {} made no sound", n("silent")));
+    }
+    if n("ringing") > 0 {
+        s.push_str(&format!("; {} were still ringing when the next began (try a longer tail)", n("ringing")));
+    }
+    s
+}
+
 /// Set once the open dialog's name field has selected its text.
 const NAME_SELECTED: &str = "dialog-name-selected";
 
@@ -1665,6 +1914,30 @@ fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRang
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_to_pantry_opens_for_an_instrument_track_with_the_commands_defaults() {
+        let mut e = soundcraft_engine::Engine::default();
+        let mut d = Dialogs::default();
+        e.execute("track.new", &json!({"name": "Vox"})).unwrap();
+        assert!(!d.open_for_command(&e, "track.capture_multisample"), "an audio track plays no instrument");
+        let t = e.execute("track.new", &json!({"kind": "instrument", "name": "Piano"})).unwrap()["tracks"][0].as_u64().unwrap();
+        assert!(d.open_for_command(&e, "track.capture_multisample"));
+        let Some(Dialog::CapturePantry(mut c)) = d.open.take() else { panic!("no dialog") };
+        assert_eq!((c.track, c.name.as_str(), c.layers, c.ready()), (TrackId(t), "Piano Pantry", 12, true));
+        // 30 notes of 12 strikes, each 5.5 s held on average and 4 s of tail, after half a second.
+        let (notes, samples, secs) = c.size();
+        assert_eq!((notes, samples), (30, 360 + 60 + 2));
+        assert!((secs - (30.0 * (0.5 + 12.0 * 9.5) + 60.0 * 4.3 + 4.5)).abs() < 1.0e-6);
+        (c.release, c.pedal) = (false, false);
+        assert_eq!((c.size().1, (c.size().2 - 30.0 * (0.5 + 12.0 * 9.5)).abs() < 1.0e-6), (360, true));
+        // What it sends is what the command takes: a short capture runs.
+        (c.low, c.high, c.layers, c.hold, c.hold_high, c.tail) = (60, 60, 2, 0.1, 0.1, 0.3);
+        let v = e.execute("track.capture_multisample", &c.params()).unwrap();
+        assert_eq!(capture_status(&v), "Captured 2 samples of 1 note");
+        (c.low, c.high) = (61, 60);
+        assert!(!c.ready());
+    }
 
     #[test]
     fn file_commands_get_path_prompts_with_sensible_names() {

@@ -20,8 +20,9 @@ use std::fmt::Write as _;
 /// and from 49 500 for Vault (600: its seven parameters and its line) on top of CopyQ, and from
 /// 50 500 for Mend (350), and from 50 850 for the four meters, Channel Tool and Dither (550: their
 /// sixteen parameters and their lines), and from 51 500 for Keel and Heft (1 100: their sixteen
-/// parameters and their lines).
-pub const MAX_CHARS: usize = 52_600;
+/// parameters and their lines), and from 52 600 for Pantry (800: its eleven parameter lines and
+/// its line).
+pub const MAX_CHARS: usize = 53_400;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -101,6 +102,9 @@ pub fn purpose(id: &str) -> &'static str {
         "fs_vint" => "Vintage EQ / colour boxes: seven circuits (four passive/active EQs solved by nodal analysis) plus the MEQ-5.",
         "drum_synth" => "Instrument: synthesized drum kit (kick, snare, hats, toms) played from MIDI.",
         "sampler" => "Instrument: plays an audio sample across the keyboard from MIDI.",
+        "multisampler" => {
+            "Instrument: Pantry multisampler, an instrument sampled note by note in velocity layers; `track.capture_multisample` makes one from an instrument track, `mix.multisample_load` loads SFZ or Decent Sampler (`docs/pantry.md`)."
+        }
         "juke" => {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }

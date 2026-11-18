@@ -63,9 +63,34 @@ pub fn subfolder_of(path: &str) -> Option<&'static str> {
     (above == "Audio Files").then(|| SUBFOLDERS.iter().copied().find(|s| *s == name)).flatten()
 }
 
-/// Sources a sample-playing instrument plays: kept in memory (it reads them whole).
-fn sampled(s: &Session) -> HashSet<SourceId> {
-    s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).flat_map(|i| i.sources()).collect()
+/// Frames of a sample Pantry plays from disk that are kept in memory (a third of a second at
+/// 48 kHz): a note starts from them while the disk thread reads on.
+pub const SAMPLER_HEAD: usize = 1 << 14;
+
+/// The instrument that plays its samples from disk (`soundcraft_dsp`'s multisampler, Pantry).
+const STREAMING_SAMPLER: &str = "multisampler";
+
+/// Sources a sample-playing instrument reads whole (Lift, Juke): kept in memory. Pantry's are
+/// not among them: it plays them from disk ([`preload_heads`]).
+pub(crate) fn sampled(s: &Session) -> HashSet<SourceId> {
+    s.tracks
+        .iter()
+        .flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref()))
+        .filter(|i| i.plugin != STREAMING_SAMPLER)
+        .flat_map(|i| i.sources())
+        .collect()
+}
+
+/// Reads into memory the first frames ([`SAMPLER_HEAD`]) of every sample a Pantry plays from
+/// disk, where that is not done yet (blocking; a sample in memory needs none).
+pub(crate) fn preload_heads(s: &Session) {
+    for ins in s.tracks.iter().flat_map(|t| t.mixer.inserts.iter().chain(t.instrument.as_ref())).filter(|i| i.plugin == STREAMING_SAMPLER) {
+        for audio in ins.sources().filter_map(|id| s.pool.get(id)) {
+            if !audio.has_head() {
+                audio.preload_head(SAMPLER_HEAD);
+            }
+        }
+    }
 }
 
 /// A stored source path, relative ones taken from `base`.
@@ -125,34 +150,42 @@ pub(crate) fn named_on_disk(project: &Path, autosave_root: Option<&Path>) -> Opt
 /// Writes the generated audio of the step labelled `label` to disk (see the module docs) and
 /// swaps each source for its file. Write errors leave the audio in memory (saved later as before).
 pub(crate) fn spill(e: &mut Engine, label: &str) {
+    spill_sources(e, label, None);
+}
+
+/// [`spill`] for the sources `only` alone when given, whether or not they have a file already (a
+/// sample decoded from a compressed file, or resampled, gets one it can play from). Returns the
+/// files written.
+pub(crate) fn spill_sources(e: &mut Engine, label: &str, only: Option<&[SourceId]>) -> Vec<PathBuf> {
     if !soundcraft_model::disk::streaming_enabled() {
-        return;
+        return Vec::new();
     }
     let s = e.session();
     let todo: Vec<SourceId> = {
         let keep = sampled(s);
         s.sources
             .iter()
-            .filter(|src| src.unsaved && !keep.contains(&src.id))
+            .filter(|src| only.map_or(src.unsaved, |ids| ids.contains(&src.id)) && !keep.contains(&src.id))
             .filter(|src| s.pool.get(src.id).is_some_and(|a| a.in_memory().is_some() && a.frames().saturating_mul(a.num_channels()) >= MIN_SAMPLES))
             .map(|src| src.id)
             .collect()
     };
     if todo.is_empty() {
-        return;
+        return Vec::new();
     }
     // A saved session writes into its project; one never saved under its autosave folder.
     let (base, in_project) = match (e.path.as_ref(), e.session().folder.as_ref()) {
         (Some(_), Some(folder)) => (folder.clone(), true),
         _ => match &e.unsaved_audio_root {
             Some(root) => (root.join(crate::io::sanitize_name(&e.session().name)), false),
-            None => return,
+            None => return Vec::new(),
         },
     };
     let sub = subfolder_for(label);
     let dir = sub.map_or_else(|| base.join("Audio Files"), |sub| base.join("Audio Files").join(sub));
     let rate = e.session().sample_rate.hz();
     let mut done: Vec<(SourceId, Arc<SourceAudio>, String)> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
     let mut written: Vec<(*const SourceAudio, Arc<SourceAudio>, String)> = Vec::new();
     for id in todo {
         let s = e.session();
@@ -181,11 +214,12 @@ pub(crate) fn spill(e: &mut Engine, label: &str) {
         if in_project {
             crate::peak_cache::store(&base, &file, rate, &streamed.peaks);
         }
+        files.push(file);
         written.push((Arc::as_ptr(audio), Arc::clone(&streamed), stored.clone()));
         done.push((id, streamed, stored));
     }
     if done.is_empty() {
-        return;
+        return files;
     }
     let s = e.session_mut();
     for (id, audio, stored) in done {
@@ -197,6 +231,7 @@ pub(crate) fn spill(e: &mut Engine, label: &str) {
             src.unsaved = !in_project;
         }
     }
+    files
 }
 
 /// Deletes the generated files in `project`'s generated subfolders that nothing names: not a

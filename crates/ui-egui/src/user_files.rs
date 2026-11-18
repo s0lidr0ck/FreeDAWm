@@ -32,6 +32,8 @@ pub struct UserDirs {
     /// Plugin presets, a folder per plugin.
     pub presets: Option<PathBuf>,
     pub juke_presets: Option<PathBuf>,
+    /// Pantry instruments: an `.sfz` file each, its samples in a folder of its name.
+    pub pantry: Option<PathBuf>,
 }
 
 impl UserDirs {
@@ -44,6 +46,7 @@ impl UserDirs {
             chains: Some(root.join("Chains")),
             presets: Some(root.join("Presets")),
             juke_presets: Some(root.join("Juke Presets")),
+            pantry: Some(root.join("Pantry")),
         }
     }
 }
@@ -91,6 +94,11 @@ pub fn list_any(dir: Option<&Path>, exts: &[&str]) -> Vec<UserFile> {
 /// The track presets, newest first.
 pub fn track_presets(dirs: &UserDirs) -> Vec<UserFile> {
     list(dirs.track_presets.as_deref(), TRACK_PRESET_EXT)
+}
+
+/// The Library's Pantry instruments, newest first.
+pub fn pantry(dirs: &UserDirs) -> Vec<UserFile> {
+    list(dirs.pantry.as_deref(), "sfz")
 }
 
 /// The plug-in chains, newest first.

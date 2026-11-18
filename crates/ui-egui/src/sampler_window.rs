@@ -108,6 +108,10 @@ impl SoundApp {
             }
         }
         let Some((track, kit)) = self.drop_track(pos) else { return files };
+        let pantry = self.engine.session().track(track).and_then(|t| t.instrument.as_ref()).is_some_and(|i| i.plugin == crate::pantry::PANTRY);
+        if kit.is_none() && pantry {
+            return self.import_to_pantry(track, files);
+        }
         let mut rest = Vec::new();
         let mut claimed = 0;
         // A Juke cell takes several files along its row (round-robins); the sampler takes one.
@@ -175,6 +179,35 @@ impl SoundApp {
         if !paths.is_empty() {
             let r = self.run("mix.kit_import", json!({"track": track.0, "paths": paths}));
             self.ui.status = crate::juke_window::kit_import_status(r);
+        }
+        rest
+    }
+
+    /// Imports dropped samples into `track`'s Pantry by their names (`mix.multisample_import`):
+    /// audio files, and folders of them. Returns the files it did not take.
+    fn import_to_pantry(&mut self, track: TrackId, files: Vec<egui::DroppedFileHandle>) -> Vec<egui::DroppedFileHandle> {
+        let (mut paths, mut folders, mut rest) = (Vec::new(), Vec::new(), Vec::new());
+        for f in files {
+            let path = f.path().to_string_lossy().into_owned();
+            if !f.path().is_absolute() {
+                rest.push(f);
+            } else if is_audio_name(&path) {
+                paths.push(path);
+            } else if f.path().is_dir() {
+                folders.push(path);
+            } else {
+                rest.push(f);
+            }
+        }
+        let mut imports: Vec<serde_json::Value> = folders.into_iter().map(|d| json!({"track": track.0, "folder": d})).collect();
+        if !paths.is_empty() {
+            imports.push(json!({"track": track.0, "paths": paths}));
+        }
+        for params in imports {
+            // The status line is set where every run of the command sets it.
+            if let Err(e) = self.run("mix.multisample_import", params) {
+                self.ui.status = e;
+            }
         }
         rest
     }

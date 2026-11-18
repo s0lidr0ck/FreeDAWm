@@ -13,6 +13,7 @@ pub mod lull;
 pub mod mend;
 pub mod meters;
 pub mod modulation;
+pub mod multisampler;
 mod per_channel;
 pub mod pitch;
 pub mod reverb;
@@ -29,7 +30,7 @@ pub mod vault;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 41] = [
+const BUILTINS: [&PluginInfo; 42] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -71,6 +72,7 @@ const BUILTINS: [&PluginInfo; 41] = [
     &drums::DRUM_INFO,
     &sampler::SAMPLER_INFO,
     &juke::JUKE_INFO,
+    &multisampler::MULTISAMPLER_INFO,
 ];
 
 /// Every built-in plugin, in menu order: [`BUILTINS`], then the FireStation engines by their
@@ -151,6 +153,7 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "drum_synth" => Box::new(drums::DrumSynth::new()),
         "sampler" => Box::new(sampler::Sampler::new()),
         "juke" => Box::new(juke::Juke::new()),
+        "multisampler" => Box::new(multisampler::Multisampler::new()),
         #[cfg(feature = "test-plugins")]
         "test_link" => Box::new(test_link::TestLink::new()),
         #[cfg(feature = "test-plugins")]
@@ -205,6 +208,7 @@ mod tests {
         "drum_synth",
         "sampler",
         "juke",
+        "multisampler",
         "fs_sat",
         "fs_comp",
         "fs_tape",

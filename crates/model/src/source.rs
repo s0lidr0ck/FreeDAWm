@@ -65,6 +65,9 @@ impl VideoSource {
 pub struct SourceAudio {
     data: SourceData,
     pub peaks: Vec<Peaks>,
+    /// The first frames of a file played from disk, kept in memory for a sampler that plays it
+    /// ([`Self::preload_head`]): a note starts at once, before the disk thread has read anything.
+    head: std::sync::OnceLock<Vec<Vec<f32>>>,
 }
 
 #[derive(Debug)]
@@ -76,7 +79,7 @@ enum SourceData {
 impl SourceAudio {
     pub fn new(buffer: AudioBuffer) -> Self {
         let peaks = buffer.channels.iter().map(|c| Peaks::build(c)).collect();
-        SourceAudio { data: SourceData::Memory(buffer), peaks }
+        SourceAudio { data: SourceData::Memory(buffer), peaks, head: Default::default() }
     }
     /// With overviews made before (the waveform cache): one per channel, each of that channel's
     /// length, else the buffer back.
@@ -84,7 +87,7 @@ impl SourceAudio {
         if peaks.len() != buffer.channels.len() || peaks.iter().zip(&buffer.channels).any(|(p, c)| p.len_samples() != c.len()) {
             return Err(buffer);
         }
-        Ok(SourceAudio { data: SourceData::Memory(buffer), peaks })
+        Ok(SourceAudio { data: SourceData::Memory(buffer), peaks, head: Default::default() })
     }
     /// Played from disk, with its overviews (one per channel, each the file's length), else the
     /// file back.
@@ -92,7 +95,7 @@ impl SourceAudio {
         if peaks.len() != file.channels() || peaks.iter().any(|p| p.len_samples() != file.frames()) {
             return Err(file);
         }
-        Ok(SourceAudio { data: SourceData::Disk(file), peaks })
+        Ok(SourceAudio { data: SourceData::Disk(file), peaks, head: Default::default() })
     }
     /// Played from disk, its overviews built by reading the file through once (blocking).
     pub fn from_disk_scanned(file: Arc<crate::disk::DiskFile>) -> Self {
@@ -102,7 +105,7 @@ impl SourceAudio {
                 b.push(ch.get(..n).unwrap_or_default());
             }
         });
-        SourceAudio { data: SourceData::Disk(file), peaks: builders.into_iter().map(|b| b.finish()).collect() }
+        SourceAudio { data: SourceData::Disk(file), peaks: builders.into_iter().map(|b| b.finish()).collect(), head: Default::default() }
     }
     pub fn frames(&self) -> usize {
         match &self.data {
@@ -134,6 +137,58 @@ impl SourceAudio {
         match &self.data {
             SourceData::Memory(_) => None,
             SourceData::Disk(f) => Some(f),
+        }
+    }
+    /// Reads the first `frames` frames of a file played from disk into memory, once (blocking;
+    /// not on the audio thread), for [`Self::read_ready`]. Nothing for audio held in memory.
+    pub fn preload_head(&self, frames: usize) {
+        if let SourceData::Disk(f) = &self.data {
+            self.head.get_or_init(|| {
+                let n = frames.min(f.frames());
+                (0..f.channels())
+                    .map(|ch| {
+                        let mut v = vec![0.0; n];
+                        f.read(ch, 0, &mut v);
+                        v
+                    })
+                    .collect()
+            });
+        }
+    }
+    /// Whether a file played from disk has its first frames in memory ([`Self::preload_head`]).
+    pub fn has_head(&self) -> bool {
+        self.head.get().is_some()
+    }
+    /// Reads channel `ch` from frame `start` into `out` without waiting, for a sampler on the
+    /// audio thread: from memory, from the preloaded head, or from what the disk cache holds.
+    /// Frames outside the audio, and frames of a file not loaded yet, read as silence; `false`
+    /// when some were not loaded (they are asked for).
+    pub fn read_ready(&self, ch: usize, start: usize, out: &mut [f32]) -> bool {
+        match &self.data {
+            SourceData::Memory(_) => {
+                self.read(ch, start, out);
+                true
+            }
+            SourceData::Disk(f) => {
+                let head = self.head.get().and_then(|h| h.get(ch)).map_or(&[][..], Vec::as_slice);
+                let from_head = head.len().saturating_sub(start).min(out.len());
+                let (a, b) = out.split_at_mut(from_head);
+                if let Some(src) = head.get(start..start + from_head) {
+                    a.copy_from_slice(src);
+                }
+                b.is_empty() || f.read_cached(ch, start + from_head, b)
+            }
+        }
+    }
+    /// Says frames `[start, start + len)` will be read soon ([`Self::read_ready`]), so a file
+    /// played from disk has them loaded by then. Lock- and allocation-free.
+    pub fn want(&self, start: usize, len: usize) {
+        if let SourceData::Disk(f) = &self.data {
+            let head = self.head.get().and_then(|h| h.first()).map_or(0, Vec::len);
+            let end = start.saturating_add(len);
+            if end > head {
+                f.want(start.max(head), end - start.max(head));
+            }
         }
     }
     /// One channel held in memory (`None` when played from disk or out of range).
