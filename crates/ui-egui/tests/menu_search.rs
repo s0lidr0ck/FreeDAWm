@@ -60,7 +60,8 @@ fn an_insert_menu_searches_as_soon_as_it_opens() {
     assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(reverbs[0])).is_some(), "typing went to the search");
     assert!(h.query_by_label_contains("Utilities").is_none(), "the matches replace the groups");
 
-    h.get_by_role(Role::TextInput).click();
+    // The menu's field (the Mix window's Find field is a text input too).
+    h.get_by(|n| n.role() == Role::TextInput && n.value().as_deref() == Some("tr")).click();
     h.run_steps(3);
     assert!(h.query_by_label(&soundcraft_ui_egui::plugin_titles::titled(reverbs[0])).is_some(), "a click in the field keeps the menu open");
 
