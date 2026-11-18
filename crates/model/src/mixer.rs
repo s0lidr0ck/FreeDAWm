@@ -910,6 +910,12 @@ pub struct Insert {
     /// ready per reference and edit (`AssetPool::get_edited`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub space_edit: String,
+    /// A built-in synth's modulation patch (the Subtractive, Wavetable and FM synths): its
+    /// matrix slots and its macros' names and targets. Empty for every other module, and for a
+    /// synth with nothing patched (it then plays as it always did). Made ready for the audio
+    /// thread into `prepared` by the engine.
+    #[serde(default, skip_serializing_if = "crate::SynthMod::is_empty")]
+    pub modulation: crate::SynthMod,
 }
 
 /// An edit of Vault's impulse response, made when it is read: the file's `start`..`end`
@@ -1262,6 +1268,7 @@ impl Insert {
             state_load: 0,
             foreign: None,
             space_edit: String::new(),
+            modulation: crate::SynthMod::default(),
         }
     }
 

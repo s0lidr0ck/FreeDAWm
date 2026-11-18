@@ -30,6 +30,7 @@ mod sheet;
 mod snapshot;
 mod solo;
 mod source;
+mod synth_mod;
 mod track;
 pub mod vocal;
 
@@ -79,6 +80,7 @@ pub use sheet::{
 pub use snapshot::{MAX_SNAPSHOTS, MixSnapshot, SNAPSHOT_SECTIONS, SnapshotStrip};
 pub use solo::SoloScope;
 pub use source::{AssetData, AssetPool, SampleCursor, Source, SourceAudio, SourcePool, VideoSource};
+pub use synth_mod::{MAX_MACRO_NAME, MAX_MACRO_TARGETS, MAX_MACROS, MAX_MOD_SLOTS, MacroTarget, ModSlot, SynthMacro, SynthMod};
 pub use track::{
     Articulation, Articulations, FrozenAudio, InstrumentOut, MAX_ARTICULATIONS, MpeZone, Playlist, TRACK_COLORS, Track, TrackHeight, TrackKind,
 };

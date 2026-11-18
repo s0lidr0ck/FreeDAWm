@@ -51,6 +51,12 @@ pub fn factory_recall(info: &PluginInfo, list_name: &str, json: &str) -> Option<
     Some((name, params_of(info, &p)))
 }
 
+/// A factory preset's modulation patch (`"modulation"` beside its values: a built-in synth's
+/// matrix slots and macros, as `mix.instrument` takes it), if it has one.
+pub fn factory_modulation(json: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(json).ok()?.get("modulation").filter(|m| !m.is_null()).cloned()
+}
+
 /// A plugin's factory presets in one group: `(group, [(name, json)])`.
 pub type FactoryGroup = (String, Vec<(&'static str, &'static str)>);
 
@@ -131,10 +137,15 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
                         crate::audition::preset(app, voice, name);
                     }
                     if ui.button(*name).clicked() {
-                        if let Some((_, params)) = factory_recall(info, name, json)
-                            && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
-                        {
-                            app.ui.status = e;
+                        if let Some((_, params)) = factory_recall(info, name, json) {
+                            let mut args = json!({"track": track.0, "plugin": info.id, "params": params});
+                            // A built-in synth's preset may patch its modulation matrix too.
+                            if let Some(m) = factory_modulation(json) {
+                                args["modulation"] = m;
+                            }
+                            if let Err(e) = app.run("mix.instrument", args) {
+                                app.ui.status = e;
+                            }
                         }
                         ui.close();
                     }

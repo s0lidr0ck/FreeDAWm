@@ -110,6 +110,7 @@ mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
+pub mod synth_mod;
 mod tab;
 pub mod tap_tempo;
 pub mod tempo;
@@ -303,6 +304,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plugin_state::specs());
         v.extend(module::specs());
         v.extend(module_ceiling::specs());
+        v.extend(synth_mod::specs());
         v.extend(copyq::specs());
         v.extend(module_asset::specs());
         v.extend(module_link::specs());
