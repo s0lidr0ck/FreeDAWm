@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Note, PPQ, Sequence, XorShift};
+use crate::{CtrlEvent, CtrlKind, CtrlShape, Note, PPQ, Sequence, XorShift};
 
 /// Most lanes a pattern holds.
 pub const MAX_LANES: usize = 32;
@@ -31,6 +31,142 @@ pub const DEFAULT_GATE: u8 = 50;
 pub const MAX_VARIATIONS: usize = 8;
 /// Most bars the switch lane names a variation for.
 pub const MAX_SWITCH_BARS: usize = 1024;
+/// Most value rows (controller and parameter rows) a pattern holds.
+pub const MAX_ROWS: usize = 16;
+/// Most characters of a parameter row's automation id.
+pub const MAX_ROW_ID: usize = 256;
+
+/// What a value row sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum RowTarget {
+    /// A control change (0–127) on the pattern's channel.
+    Cc(u8),
+    /// Pitch bend, -8192–8191 (0: none), on the pattern's channel.
+    PitchBend,
+    /// Channel pressure (aftertouch), 0–127, on the pattern's channel.
+    Pressure,
+    /// An automatable parameter of the clip's track, by its automation id (`plugin:m3:cutoff`,
+    /// `volume`, …): the value is the parameter's own. The engine writes it as the clip's
+    /// automation lane for that parameter.
+    Param(String),
+}
+
+impl RowTarget {
+    /// The range a step's value is clamped to (a parameter's is any finite value).
+    pub fn range(&self) -> (f32, f32) {
+        match self {
+            RowTarget::Cc(_) | RowTarget::Pressure => (0.0, 127.0),
+            RowTarget::PitchBend => (-8192.0, 8191.0),
+            RowTarget::Param(_) => (-1.0e9, 1.0e9),
+        }
+    }
+
+    /// The controller kind a MIDI row writes (`None` for a parameter row).
+    pub fn ctrl_kind(&self) -> Option<CtrlKind> {
+        match self {
+            RowTarget::Cc(n) => Some(CtrlKind::Cc(*n)),
+            RowTarget::PitchBend => Some(CtrlKind::PitchBend),
+            RowTarget::Pressure => Some(CtrlKind::ChannelPressure),
+            RowTarget::Param(_) => None,
+        }
+    }
+}
+
+/// A value row: a value per step for a controller or a parameter, looping over its own length at
+/// its own rate like a note lane. An empty step holds the value before it; the values step (no
+/// glide).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ValueRow {
+    pub target: RowTarget,
+    /// A value per step (`None`: the value before it holds); their count is the row's loop
+    /// length (1–[`MAX_STEPS`]).
+    pub steps: Vec<Option<f32>>,
+    pub direction: Direction,
+    pub rate: Rate,
+    pub mute: bool,
+}
+
+impl Default for ValueRow {
+    fn default() -> ValueRow {
+        ValueRow { target: RowTarget::Cc(1), steps: vec![None; 16], direction: Direction::Forward, rate: Rate::Normal, mute: false }
+    }
+}
+
+impl ValueRow {
+    /// An empty row of `length` steps for `target`.
+    pub fn new(target: RowTarget, length: usize) -> ValueRow {
+        ValueRow { target, steps: vec![None; length.clamp(1, MAX_STEPS)], ..ValueRow::default() }
+    }
+
+    pub fn sanitize(&mut self) {
+        match &mut self.target {
+            RowTarget::Cc(n) => *n = (*n).min(127),
+            RowTarget::Param(id) => {
+                if id.len() > MAX_ROW_ID {
+                    let mut end = MAX_ROW_ID;
+                    while !id.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    id.truncate(end);
+                }
+            }
+            RowTarget::PitchBend | RowTarget::Pressure => {}
+        }
+        self.steps.truncate(MAX_STEPS);
+        if self.steps.is_empty() {
+            self.steps.push(None);
+        }
+        let (lo, hi) = self.target.range();
+        let midi = self.target.ctrl_kind().is_some();
+        for v in &mut self.steps {
+            *v = v.filter(|x| x.is_finite()).map(|x| {
+                let x = x.clamp(lo, hi);
+                if midi { x.round() } else { x }
+            });
+        }
+    }
+}
+
+/// A value row's values over a clip: `(tick, value)` where the value changes, ticks in
+/// `0..at.length`, the first at tick 0 when any value is in effect there.
+pub fn row_values(pattern: &Pattern, row: &ValueRow, at: &Expand) -> Vec<(i64, f32)> {
+    let mut out: Vec<(i64, f32)> = Vec::new();
+    if row.mute || at.length <= 0 || at.ticks_per_bar <= 0 || !STEPS_PER_BAR.contains(&pattern.steps_per_bar) {
+        return out;
+    }
+    let grid = at.ticks_per_bar as f64 / f64::from(pattern.steps_per_bar);
+    let step_len = grid * row.rate.factor();
+    let len = row.steps.len().max(1) as i64;
+    // From a whole loop before the clip, so a value set earlier holds at its start.
+    let first = ((at.phase as f64) / step_len).floor() as i64 - len;
+    let last = (((at.phase + at.length) as f64) / step_len).ceil() as i64;
+    let mut held: Option<f32> = None;
+    for k in first..=last {
+        let mut rng = step_rng(pattern.seed, MAX_LANES * MAX_VARIATIONS, k, 2);
+        let idx = lane_index(row.direction, row.steps.len(), k, &mut rng);
+        let Some(v) = row.steps.get(idx).copied().flatten() else { continue };
+        let tick = (k as f64 * step_len - at.phase as f64).round() as i64;
+        if tick >= at.length {
+            break;
+        }
+        if tick <= 0 {
+            held = Some(v);
+            continue;
+        }
+        if let Some(h) = held.take() {
+            out.push((0, h));
+        }
+        if out.last().is_none_or(|(_, last)| *last != v) && out.len() < at.max_notes {
+            out.push((tick, v));
+        }
+    }
+    if let Some(h) = held {
+        out.insert(0, (0, h));
+    }
+    out
+}
 
 /// The order a lane plays its steps in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +348,10 @@ pub struct Pattern {
     /// instead of `play`; `None` (or a bar past the end) plays `play`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub switches: Vec<Option<u8>>,
+    /// Value rows (controllers and parameters), shared by every variation (at most
+    /// [`MAX_ROWS`]). Patterns saved before rows existed have none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<ValueRow>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -232,6 +372,7 @@ impl Default for Pattern {
             variations: Vec::new(),
             play: 0,
             switches: Vec::new(),
+            rows: Vec::new(),
         }
     }
 }
@@ -275,6 +416,8 @@ impl Pattern {
         while self.switches.last() == Some(&None) {
             self.switches.pop();
         }
+        self.rows.truncate(MAX_ROWS);
+        self.rows.iter_mut().for_each(ValueRow::sanitize);
     }
 
     /// How many variations the pattern has (A counts: at least 1).
@@ -449,6 +592,15 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                     break 'lanes;
                 }
             }
+        }
+    }
+    for row in &p.rows {
+        let Some(kind) = row.target.ctrl_kind() else { continue };
+        for (tick, v) in row_values(&p, row, at) {
+            if seq.ctrls.len() >= at.max_notes {
+                break;
+            }
+            seq.ctrls.push(CtrlEvent { tick, channel, kind, value: v as i32, shape: CtrlShape::Step });
         }
     }
     seq.sort();
@@ -662,6 +814,73 @@ mod tests {
         };
         assert_eq!(p.steps_per_bar, 16);
         assert_eq!(p.lanes[0].steps[0], Step { on: true, ..Step::default() });
+    }
+
+    #[test]
+    fn value_rows_write_controllers_where_their_values_change() {
+        let mut p = four_on_the_floor();
+        let mut row = ValueRow::new(RowTarget::Cc(74), 4);
+        row.steps[0] = Some(10.0);
+        row.steps[2] = Some(100.0);
+        p.rows.push(row);
+        let mut bend = ValueRow::new(RowTarget::PitchBend, 8);
+        bend.rate = Rate::Half;
+        bend.steps[1] = Some(-9000.0);
+        p.rows.push(bend);
+        p.sanitize();
+        let seq = expand(&p, &at(1));
+        let step = BAR / 16;
+        let cc: Vec<(i64, i32)> = seq.ctrls.iter().filter(|c| c.kind == CtrlKind::Cc(74)).map(|c| (c.tick, c.value)).collect();
+        // A 4-step loop: 10 at steps 0, 4, 8, 12 and 100 at 2, 6, 10, 14.
+        let want: Vec<(i64, i32)> = (0..8).map(|i| (i * 2 * step, if i % 2 == 0 { 10 } else { 100 })).collect();
+        assert_eq!(cc, want);
+        // The bend row's only value holds from one loop to the next, so it is written once, at
+        // the clip's start, clamped.
+        let pb: Vec<(i64, i32)> = seq.ctrls.iter().filter(|c| c.kind == CtrlKind::PitchBend).map(|c| (c.tick, c.value)).collect();
+        assert_eq!(pb, vec![(0, -8192)]);
+        assert!(seq.ctrls.iter().all(|c| c.channel == CHANNEL));
+        // The notes are those of the pattern without rows.
+        assert_eq!(seq.notes, expand(&four_on_the_floor(), &at(1)).notes);
+    }
+
+    #[test]
+    fn a_trimmed_clip_starts_with_the_value_in_effect() {
+        let mut p = Pattern::default();
+        let mut row = ValueRow::new(RowTarget::Pressure, 16);
+        row.steps[0] = Some(64.0);
+        p.rows.push(row);
+        let step = BAR / 16;
+        let seq = expand(&p, &Expand { phase: 3 * step, ..at(1) });
+        let v: Vec<(i64, i32)> = seq.ctrls.iter().map(|c| (c.tick, c.value)).collect();
+        assert_eq!(v, vec![(0, 64)]);
+        // Parameter rows make no controller events; their values come from row_values.
+        let mut q = Pattern::default();
+        let mut row = ValueRow::new(RowTarget::Param("plugin:m1:cutoff".into()), 2);
+        row.steps = vec![Some(0.25), Some(0.75)];
+        q.rows.push(row.clone());
+        assert!(expand(&q, &at(1)).ctrls.is_empty());
+        assert_eq!(row_values(&q, &row, &at(1)).len(), 16);
+    }
+
+    #[test]
+    fn hostile_rows_are_sanitized_and_old_patterns_have_none() {
+        let mut p = Pattern::default();
+        for _ in 0..40 {
+            p.rows.push(ValueRow { target: RowTarget::Cc(200), steps: vec![Some(f32::NAN), Some(1e9), Some(-5.0)], ..ValueRow::default() });
+        }
+        p.rows.push(ValueRow { steps: Vec::new(), ..ValueRow::default() });
+        p.sanitize();
+        assert_eq!(p.rows.len(), MAX_ROWS);
+        assert_eq!(p.rows[0].target, RowTarget::Cc(127));
+        assert_eq!(p.rows[0].steps, vec![None, Some(127.0), Some(0.0)]);
+        let old: Pattern = serde_json::from_str(r#"{"lanes":[]}"#).unwrap_or_default();
+        assert!(old.rows.is_empty());
+        let saved = serde_json::to_string(&old).unwrap_or_default();
+        assert!(!saved.contains("rows"));
+        let mut r = Pattern::default();
+        r.rows.push(ValueRow::new(RowTarget::Param("volume".into()), 4));
+        let back: Pattern = serde_json::from_str(&serde_json::to_string(&r).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(back.rows, r.rows);
     }
 
     fn arb_step() -> impl Strategy<Value = Step> {

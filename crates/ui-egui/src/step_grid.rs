@@ -22,6 +22,11 @@
 //!   it; dragging a lit step up or down changes its note a semitone at a time (velocity: keys
 //!   1–4 and the details). The details add Pitch for it, and Gate for every pattern.
 //!
+//! * Value rows under the lanes (+ Row: a controller, pitch bend, pressure or a parameter of the
+//!   track's instrument or inserts): a bar per set step; click or drag to set values (one undo
+//!   step per drag), right-click a step to clear it; the header has length and mute, and
+//!   right-click for rate, direction and removal.
+//!
 //! Every edit is a `pattern.*` command, so it undoes and scripts like any other.
 
 use crate::SoundApp;
@@ -382,7 +387,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
     let strip = Rect::from_min_max(pos2(r.min.x + 12.0, bar.max.y + 4.0), pos2(r.max.x - 12.0, bar.max.y + 4.0 + VARIATIONS_H));
     variation_strip(ui, strip, cid, &pc.pattern, clip_bars(app, clip, pc.phase), &mut st, &mut out);
     let playhead = playhead_steps(app, clip, pc.phase, pattern, st.variation);
-    let columns = pattern.lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16).max(1);
+    let columns = pattern.lanes.iter().map(|l| l.steps.len()).chain(pattern.rows.iter().map(|r| r.steps.len())).max().unwrap_or(16).max(1);
+    // The value rows' names and ranges, and what "+ Row" offers, from the clip's track.
+    let (rows, row_choices) = row_looks(app, track, pattern);
     let beat = usize::from((pattern.steps_per_bar / 4).max(1));
     let inner = Rect::from_min_max(pos2(r.min.x + 10.0, strip.max.y + 4.0), pos2(r.max.x - 10.0, r.max.y - HINT_H));
     // Step numbers, the beat's first brighter, the playing step bold.
@@ -409,7 +416,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
     let lane_h = ((body.height() - 34.0) / n.max(1) as f32).clamp(30.0, 44.0);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
     egui::ScrollArea::vertical().id_salt(("step-lanes", cid.0)).auto_shrink([false, false]).show(&mut child, |ui| {
-        let h = n as f32 * lane_h + 34.0;
+        let h = n as f32 * lane_h + 34.0 + pattern.rows.len() as f32 * ROW_H + 34.0;
         let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
         let cols = Columns::new(Rect::from_min_max(pos2(steps_x, area.min.y), pos2(area.max.x - 12.0, area.max.y)), columns, beat);
         for (i, lane) in pattern.lanes.iter().enumerate() {
@@ -431,6 +438,65 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
         if resp.on_hover_text("Add a lane for the next pad").clicked() {
             out.run("pattern.lane_add", json!({"clip": cid.0, "note": next.unwrap_or(36)}));
         }
+        // The value rows: a controller or parameter value per step.
+        let top = add.max.y + 8.0;
+        for (i, (row, look)) in pattern.rows.iter().zip(&rows).enumerate() {
+            let r = Rect::from_min_size(pos2(area.min.x, top + i as f32 * ROW_H), vec2(area.width(), ROW_H - 6.0));
+            row_header(ui, Rect::from_min_size(r.min, vec2(HEADER_W, r.height())), cid, i, row, look, &mut out);
+            row_steps(ui, r.y_range(), &cols, cid, i, row, look, &mut out);
+        }
+        let add_row = Rect::from_min_size(pos2(area.min.x, top + pattern.rows.len() as f32 * ROW_H), vec2(HEADER_W, 26.0));
+        // A stable id, so the menu it opens stays open from one frame to the next.
+        let resp = ui.interact(add_row, egui::Id::new(("row-add", cid.0)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "+ Row"));
+        ui.painter().rect_filled(add_row, 7.0, if resp.hovered() { BUTTON.gamma_multiply(1.3) } else { BUTTON });
+        ui.painter().text(add_row.center(), Align2::CENTER_CENTER, "+ Row", regular(12.0), CREAM);
+        let resp = resp.on_hover_text(
+            "Add a value row: a controller (mod wheel, bend, pressure, any CC) or a parameter of this track's instrument or inserts, set per step",
+        );
+        egui::Popup::menu(&resp).show(|ui| {
+            ui.set_min_width(200.0);
+            for (label, target) in ROW_CONTROLLERS {
+                if ui.button(label).clicked() {
+                    out.run("pattern.row_add", json!({"clip": cid.0, "target": target}));
+                    ui.close();
+                }
+            }
+            ui.menu_button("Other CC", |ui| {
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for n in 0..=127u8 {
+                        if ui.button(cc_name(n)).clicked() {
+                            out.run("pattern.row_add", json!({"clip": cid.0, "target": format!("cc:{n}")}));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            ui.separator();
+            let mut groups: Vec<&str> = Vec::new();
+            for (group, id, label) in &row_choices {
+                match group {
+                    None => {
+                        if ui.button(label).clicked() {
+                            out.run("pattern.row_add", json!({"clip": cid.0, "target": id}));
+                            ui.close();
+                        }
+                    }
+                    Some(g) if !groups.contains(&g.as_str()) => groups.push(g),
+                    Some(_) => {}
+                }
+            }
+            for g in groups {
+                ui.menu_button(g, |ui| {
+                    for (_, id, label) in row_choices.iter().filter(|(gr, ..)| gr.as_deref() == Some(g)) {
+                        if ui.button(label).clicked() {
+                            out.run("pattern.row_add", json!({"clip": cid.0, "target": id}));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
     });
     ui.painter().text(
         pos2(r.min.x + 12.0, r.max.y - HINT_H * 0.5),
@@ -454,6 +520,219 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
         }
     }
     ctx.data_mut(|d| d.insert_temp(state_id(cid), st));
+}
+
+/// A value row's height in the grid.
+const ROW_H: f32 = 40.0;
+/// The controllers "+ Row" offers first.
+const ROW_CONTROLLERS: [(&str, &str); 5] = [
+    ("Mod Wheel (CC 1)", "cc:1"),
+    ("Expression (CC 11)", "cc:11"),
+    ("Brightness (CC 74)", "cc:74"),
+    ("Pitch Bend", "pitch_bend"),
+    ("Pressure", "pressure"),
+];
+const ROW_COLOR: Color32 = Color32::from_rgb(0x8C, 0xC4, 0xB8);
+
+/// A controller's name in the row menu and header.
+fn cc_name(n: u8) -> String {
+    let name = match n {
+        1 => "Mod Wheel",
+        2 => "Breath",
+        7 => "Volume",
+        10 => "Pan",
+        11 => "Expression",
+        64 => "Sustain",
+        71 => "Resonance",
+        74 => "Brightness",
+        _ => return format!("CC {n}"),
+    };
+    format!("{name} (CC {n})")
+}
+
+/// How a value row shows: its name, the values from bottom to top, whether 0 sits in the middle
+/// (bend), and whether its values are whole numbers.
+pub struct RowLook {
+    pub name: String,
+    pub range: (f32, f32),
+    pub centered: bool,
+    pub whole: bool,
+}
+
+/// Each row's look, and the parameters "+ Row" offers (group, lane id, label), from `track`.
+fn row_looks(app: &SoundApp, track: TrackId, pattern: &Pattern) -> (Vec<RowLook>, Vec<(Option<String>, String, String)>) {
+    use soundcraft_midi::pattern::RowTarget;
+    let s = app.engine.session();
+    let Some(t) = s.track(track) else { return (Vec::new(), Vec::new()) };
+    let looks = pattern
+        .rows
+        .iter()
+        .map(|r| match &r.target {
+            RowTarget::Cc(n) => RowLook { name: cc_name(*n), range: (0.0, 127.0), centered: false, whole: true },
+            RowTarget::PitchBend => RowLook { name: "Pitch Bend".into(), range: (-8192.0, 8191.0), centered: true, whole: true },
+            RowTarget::Pressure => RowLook { name: "Pressure".into(), range: (0.0, 127.0), centered: false, whole: true },
+            RowTarget::Param(id) => {
+                let range = soundcraft_model::AutoParam::parse(id).map_or((0.0, 1.0), |p| crate::edit_window::lane_range(t, &p));
+                RowLook { name: crate::edit_window::view_label(t, id), range, centered: false, whole: false }
+            }
+        })
+        .collect();
+    let choices = crate::auto_lanes::choices(s, t)
+        .into_iter()
+        .filter(|c| !matches!(c.param, soundcraft_model::AutoParam::Mute | soundcraft_model::AutoParam::SendMute(_)) && !c.param.is_bypass())
+        .map(|c| (c.group, c.param.id(), c.label))
+        .collect();
+    (looks, choices)
+}
+
+/// A value shown on a step or in the header.
+fn row_value_text(look: &RowLook, v: f32) -> String {
+    if look.whole {
+        format!("{}", v.round() as i32)
+    } else if (look.range.1 - look.range.0).abs() > 20.0 {
+        format!("{v:.1}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+fn row_header(ui: &mut Ui, r: Rect, cid: ClipId, i: usize, row: &soundcraft_midi::pattern::ValueRow, look: &RowLook, out: &mut Out) {
+    let p = ui.painter().clone();
+    let c = if row.mute { ROW_COLOR.gamma_multiply(0.45) } else { ROW_COLOR };
+    p.rect_filled(r, 8.0, c);
+    let name_r = Rect::from_min_max(r.min, pos2(r.max.x - 96.0, r.max.y));
+    let mut extra: Vec<&str> = Vec::new();
+    match row.rate {
+        Rate::Half => extra.push("½× rate"),
+        Rate::Double => extra.push("2× rate"),
+        Rate::Normal => {}
+    }
+    match row.direction {
+        Direction::Reverse => extra.push("Reverse"),
+        Direction::PingPong => extra.push("Ping-pong"),
+        Direction::Random => extra.push("Random"),
+        Direction::Forward => {}
+    }
+    let clip = p.with_clip_rect(name_r);
+    if extra.is_empty() {
+        clip.text(pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, &look.name, bold(12.0), DARK);
+    } else {
+        clip.text(pos2(r.min.x + 10.0, r.center().y + 1.0), Align2::LEFT_BOTTOM, &look.name, bold(12.0), DARK);
+        clip.text(pos2(r.min.x + 10.0, r.center().y + 1.0), Align2::LEFT_TOP, extra.join(" · "), regular(10.0), DARK.gamma_multiply(0.75));
+    }
+    let len_r = Rect::from_min_size(pos2(r.max.x - 92.0, r.center().y - 10.0), vec2(58.0, 20.0));
+    let mut len = row.steps.len() as i32;
+    let resp = ui
+        .put(len_r, egui::DragValue::new(&mut len).range(1..=soundcraft_midi::pattern::MAX_STEPS as i32).suffix(" steps"))
+        .on_hover_text("The row's length in steps: a shorter row loops on its own");
+    if resp.changed() && len != row.steps.len() as i32 {
+        out.merged("pattern.row", json!({"clip": cid.0, "row": i, "length": len}), format!("pattern_row_len:{}:{i}", cid.0));
+    }
+    let mute_r = Rect::from_min_size(pos2(r.max.x - 30.0, r.center().y - 11.0), vec2(26.0, 22.0));
+    let resp = ui.interact(mute_r, egui::Id::new(("row-mute", cid.0, i)), Sense::click()).on_hover_text("Mute the row");
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, row.mute, "Mute the row"));
+    p.rect_filled(mute_r, 6.0, if row.mute { DARK } else { Color32::from_black_alpha(22) });
+    p.text(mute_r.center(), Align2::CENTER_CENTER, "M", bold(11.0), if row.mute { ROW_COLOR } else { DARK });
+    if resp.clicked() {
+        out.run("pattern.row", json!({"clip": cid.0, "row": i, "mute": !row.mute}));
+    }
+    let head = ui
+        .interact(name_r, egui::Id::new(("row-head", cid.0, i)), Sense::click())
+        .on_hover_text("Right-click for the row's rate, direction and removal");
+    head.context_menu(|ui| {
+        ui.label(egui::RichText::new(&look.name).strong());
+        ui.menu_button("Rate", |ui| {
+            for (rate, label, arg) in
+                [(Rate::Half, "Half speed", "half"), (Rate::Normal, "Normal", "normal"), (Rate::Double, "Double speed", "double")]
+            {
+                if ui.selectable_label(row.rate == rate, label).clicked() {
+                    out.run("pattern.row", json!({"clip": cid.0, "row": i, "rate": arg}));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("Direction", |ui| {
+            for (d, label, arg) in [
+                (Direction::Forward, "Forward", "forward"),
+                (Direction::Reverse, "Reverse", "reverse"),
+                (Direction::PingPong, "Ping-pong", "ping_pong"),
+                (Direction::Random, "Random", "random"),
+            ] {
+                if ui.selectable_label(row.direction == d, label).clicked() {
+                    out.run("pattern.row", json!({"clip": cid.0, "row": i, "direction": arg}));
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+        if ui.button("Remove Row").clicked() {
+            out.run("pattern.row_remove", json!({"clip": cid.0, "row": i}));
+            ui.close();
+        }
+    });
+}
+
+/// A value row's steps: a bar per set step, its height the value. Click or drag to set values
+/// (one undo step per drag); right-click a step to clear it (the value before it holds).
+#[allow(clippy::too_many_arguments)]
+fn row_steps(
+    ui: &mut Ui,
+    y: egui::Rangef,
+    cols: &Columns,
+    cid: ClipId,
+    i: usize,
+    row: &soundcraft_midi::pattern::ValueRow,
+    look: &RowLook,
+    out: &mut Out,
+) {
+    let len = row.steps.len().max(1);
+    let r = Rect::from_min_max(pos2(cols.x(0), y.min), pos2(cols.x(cols.n - 1) + cols.w, y.max));
+    let p = ui.painter().clone();
+    let resp = ui.interact(r, egui::Id::new(("row-steps", cid.0, i)), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("{} values", look.name)));
+    let (lo, hi) = look.range;
+    let span = (hi - lo).max(1e-6);
+    let k_of = |v: f32| ((v - lo) / span).clamp(0.0, 1.0);
+    let base_k = if look.centered { k_of(0.0) } else { 0.0 };
+    for c in 0..cols.n {
+        let cell = cols.cell(c, y.min..=y.max);
+        if c >= len {
+            p.rect_filled(cell, 4.0, WELL.gamma_multiply(0.4));
+            continue;
+        }
+        p.rect_filled(cell, 4.0, WELL);
+        let inner = cell.shrink(2.0);
+        let Some(v) = row.steps.get(c).copied().flatten() else { continue };
+        let y_of = |k: f32| inner.max.y - k * inner.height();
+        let (a, b) = (y_of(base_k), y_of(k_of(v)));
+        let bar = Rect::from_min_max(pos2(inner.min.x, a.min(b)), pos2(inner.max.x, a.max(b).max(a.min(b) + 2.0)));
+        p.rect_filled(bar, 3.0, if row.mute { ROW_COLOR.gamma_multiply(0.4) } else { ROW_COLOR });
+        if cols.w >= 26.0 {
+            p.text(pos2(cell.center().x, cell.min.y + 2.0), Align2::CENTER_TOP, row_value_text(look, v), regular(9.0), CREAM);
+        }
+    }
+    let Some(pos) = resp.interact_pointer_pos() else { return };
+    let c = cols.at(pos.x);
+    if c >= len {
+        return;
+    }
+    let cell = cols.cell(c, y.min..=y.max).shrink(2.0);
+    if resp.secondary_clicked() {
+        if row.steps.get(c).copied().flatten().is_some() {
+            out.run("pattern.row_step", json!({"clip": cid.0, "row": i, "step": c, "value": null}));
+        }
+        return;
+    }
+    if resp.clicked() || resp.dragged() {
+        let k = ((cell.max.y - pos.y) / cell.height().max(1.0)).clamp(0.0, 1.0);
+        let mut v = lo + span * k;
+        if look.whole {
+            v = v.round();
+        }
+        if row.steps.get(c).copied().flatten() != Some(v) {
+            out.merged("pattern.row_step", json!({"clip": cid.0, "row": i, "step": c, "value": v}), format!("pattern_row_paint:{}:{i}", cid.0));
+        }
+    }
 }
 
 /// Per lane, the step the playhead is on while the transport plays inside the clip.

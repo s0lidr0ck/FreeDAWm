@@ -3100,7 +3100,7 @@ fn points_in_band(s: &Session, tl: Rect, lane: Rect, track: &Track, p: &AutoPara
 }
 
 /// The values an automation lane spans, bottom to top.
-fn lane_range(track: &Track, p: &AutoParam) -> (f32, f32) {
+pub(crate) fn lane_range(track: &Track, p: &AutoParam) -> (f32, f32) {
     if matches!(p, AutoParam::Volume | AutoParam::SendLevel(_)) {
         (-60.0, 12.0)
     } else if *p == AutoParam::Trim {

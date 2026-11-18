@@ -119,7 +119,7 @@ promise more than they do" below.
 | Round trip with the tablet edition and with MainStage | **Not planned here** | Apple's own apps and formats |
 | Chord ID from audio | **Works** | Detect Chords writes the chord lane |
 | Flashback capture | **Works** | MIDI: Capture MIDI makes a take of what was just played ([section 6](06-midi-recording.md#g-punch-count-in-and-capture)). Audio: with Options › Recording › Pre-Record on, the last 10 seconds of input before Record are kept at the front of the take as a handle to trim open (`40601d7`, [section 2](02-recording-audio.md), D); there is no separate capture command for audio, so Record is pressed (and can be stopped at once) to keep them |
-| Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer, and step sequences with a pitch per step for any instrument ([section 7](07-midi-writing.md)); no automation rows. Articulation sets are a track's articulations now (Studio Pro's row) |
+| Step Sequencer with note and automation rows; articulation sets | **Works** | Drum step sequencer, and step sequences with a pitch per step for any instrument ([section 7](07-midi-writing.md)). Value rows under the note rows (+ Row in the step grid; `pattern.row_add`, `pattern.row`, `pattern.row_step`, `pattern.row_remove`, one undo step each, a drag one step): each sets a value per step for a CC, pitch bend or pressure (controller events in the clip, on the pattern's channel) or for a parameter of the same track's instrument or inserts, or its volume, pan or a send (the clip's own automation lane, kept in step with the row); its own length, rate, direction and mute like a note row, an empty step holding the value before it. Playback, bounces and freezes read the same events and lanes; saved with the clip; patterns saved before have no rows and play and save as they did (tests `value_rows_write_controllers_and_the_tracks_parameters_heard_as_bounced`, `a_parameter_row_is_heard_in_the_render`, `value_rows_are_added_painted_and_muted_from_the_grid`). Values step, no glide between steps. Articulation sets are a track's articulations now (Studio Pro's row) |
 | Assistant that operates the app from a prompt (13, by subscription) | **Partial** | No assistant inside the app; an outside agent can operate every command (section F) |
 
 ## D. Cubase
@@ -496,6 +496,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Step Sequencer row: value rows for controllers and the track's parameters (Works) |
 | 2026-11-18 | minor | TrackPunch built (section 2): the Destructive record row Works, destructive modes not planned here |
 | 2026-11-18 | minor | Partial rows checked against the code: Flashback capture Works (audio pre-record); Beat Detective, Chord Pads, offline processing, Track Versions, the score and the instrument set say what is left now; the summary re-counted |
 | 2026-11-18 | minor | A PC's first pairing proves both PCs' keys with the code by a password-authenticated key exchange (SPAKE2); the code is never sent; older FreeDAWm on either side is told to update |

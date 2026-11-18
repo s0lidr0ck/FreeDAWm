@@ -100,12 +100,16 @@ pub struct PatternClip {
     /// edited by hand, and the clip becomes a plain MIDI clip rather than lose the edit.
     #[serde(default)]
     pub expanded: u64,
+    /// The automation lane ids (`plugin:m3:cutoff`, …) the pattern's parameter rows wrote onto the
+    /// clip's own automation: kept in step with the rows, and taken off when a row goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned: Vec<String>,
 }
 
 impl PatternClip {
     /// A pattern clip that has not been expanded yet.
     pub fn new(pattern: soundcraft_midi::pattern::Pattern, phase: i64) -> PatternClip {
-        PatternClip { pattern, phase, seen: None, expanded: 0 }
+        PatternClip { pattern, phase, seen: None, expanded: 0, owned: Vec::new() }
     }
 
     pub fn sanitize(&mut self) {

@@ -129,6 +129,15 @@ Variation A draws its dice as a pattern without variations does, so adding varia
 nothing that played before. Recording into a pattern clip lands each note on the variation its bar
 plays.
 
+**Value rows:** under the lanes, up to 16 rows (`Pattern::rows`, shared by every variation) each
+set a value per step for a controller (any CC, pitch bend, channel pressure: written into the
+clip's notes as controller events on the pattern's channel) or for an automatable parameter of the
+clip's own track (the instrument's or an insert's parameters, volume, pan, a send: written as the
+clip's own automation lane for it, `PatternClip::owned` naming the lanes the rows keep in step).
+A row has its own length, rate, direction and mute like a lane; an empty step holds the value
+before it, and the values step (no glide). Playback, bounces and freezes read the same notes and
+lanes, so they hear the same. Patterns saved before rows existed have none and save as before.
+
 **Editing:** the step grid edits the pattern; the clip's notes follow. Editing the expanded notes in
 the piano roll detaches the clip (it becomes a plain MIDI clip; undo puts the pattern back), and the
 piano roll says so first. **Convert to MIDI** detaches deliberately. Splits, trims, copies and loops
@@ -158,6 +167,9 @@ Everything is a command, so the UI, MCP and the control channel share it:
 - `pattern.variation_add` `{clip, from?}` / `pattern.variation_remove` `{clip, variation}` /
   `pattern.play` `{clip, variation}` / `pattern.switch` `{clip, bar, variation|null}`; `pattern.step`,
   `pattern.paint`, `pattern.lane`, `pattern.lane_add` and `pattern.lane_remove` take `variation?: A-H`
+- `pattern.row_add` `{clip, target: cc:<n>|pitch_bend|pressure|<lane id>, length?}` /
+  `pattern.row` `{clip, row, length?, direction?, rate?, mute?}` / `pattern.row_step`
+  `{clip, row, step, value|null}` / `pattern.row_remove` `{clip, row}`: value rows
 - `pattern.reroll` `{clip}`, `pattern.generate` `{clip, style?, density?}` (phase 2), `pattern.to_midi` `{clip}`
 
 Instrument parameters go through the existing `mix.instrument_param`.
